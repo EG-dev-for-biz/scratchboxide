@@ -152,57 +152,10 @@ export {
     synthesizeComprehensiveDocument,
     synthesizeMediaDocument
 };
+import { useChatStore, selectActiveSession } from './state/chatStore';
+import { DEFAULT_WORKSPACE_FILES, DEFAULT_WORKSPACE_GIT_STATUS } from './state/studio-defaults';
+import { loadInitialChatState, loadSavedAppearance, usePersistedChatState } from './hooks/usePersistedChatState';
 
-const DEFAULT_SESSIONS: ChatSession[] = [
-    {
-        id: 'sess-active-agent',
-        title: 'New Agent',
-        fileType: 'chat',
-        layoutMode: 'chat',
-        workspaceId: 'proj-scratchbox-ide',
-        workspaceName: 'scratchbox-ide-master',
-        relativeTime: '1m',
-        dateCategory: 'Today',
-        updatedAt: '1m ago',
-        messages: [],
-        artifactHistory: []
-    },
-    {
-        id: 'sess-active-threejs',
-        title: 'three.js bullet impact ...',
-        fileType: 'chat',
-        layoutMode: 'chat',
-        workspaceId: 'proj-scratchbox-ide',
-        workspaceName: 'scratchbox-ide-master',
-        relativeTime: '20h',
-        dateCategory: 'Today',
-        updatedAt: '20h ago',
-        messages: [],
-        artifactHistory: []
-    },
-    {
-        id: 'sess-test-generative',
-        title: 'New Agent',
-        fileType: 'chat',
-        layoutMode: 'chat',
-        workspaceId: 'proj-test-workspace',
-        workspaceName: 'scratchbox-test-workspace',
-        relativeTime: '1m',
-        dateCategory: 'Today',
-        updatedAt: '1m ago',
-        messages: [],
-        artifactHistory: []
-    }
-];
-
-const DEFAULT_APPEARANCE_CONFIG: StudioAppearanceConfig = {
-    glassBlur: 'standard',
-    canvasDensity: 'standard',
-    enableSpringMotion: true,
-    showLineNumbersInCode: false,
-    autoAttachSuperpowers: true,
-    hapticFeedback: true
-};
 
 export interface FileTreeNode {
     name: string;
@@ -380,140 +333,6 @@ export const POSE_3D_TREE: FileTreeNode[] = [
     }
 ];
 
-const LS_SESSIONS_KEY = 'scratchbox_studio_sessions_v10';
-const LS_CURRENT_SESSION_KEY = 'scratchbox_studio_current_session_id_v10';
-const LS_VERSIONS_KEY = 'scratchbox_studio_artifact_versions_v10';
-const LS_APPEARANCE_KEY = 'scratchbox_studio_appearance_v6';
-
-const loadSavedSessions = (): ChatSession[] => {
-    if (typeof window !== 'undefined') {
-        try {
-            const raw = localStorage.getItem(LS_SESSIONS_KEY);
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    return parsed;
-                }
-            }
-        } catch (e) {
-            console.warn('Failed to load saved sessions', e);
-        }
-    }
-    return DEFAULT_SESSIONS;
-};
-
-const loadInitialSessionId = (allSessions: ChatSession[]): string | undefined => {
-    if (typeof window !== 'undefined') {
-        try {
-            const savedId = localStorage.getItem(LS_CURRENT_SESSION_KEY);
-            if (savedId && allSessions.some(s => s.id === savedId)) {
-                return savedId;
-            }
-        } catch (e) {
-            // ignore
-        }
-    }
-    return allSessions[0]?.id;
-};
-
-const loadSavedVersions = (): Record<string, CanvasArtifact[]> => {
-    if (typeof window !== 'undefined') {
-        try {
-            const saved = localStorage.getItem(LS_VERSIONS_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed && typeof parsed === 'object') {
-                    return parsed;
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-    }
-    const initial: Record<string, CanvasArtifact[]> = {};
-    if (typeof window !== 'undefined') {
-        try {
-            const saved = localStorage.getItem(LS_VERSIONS_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed && typeof parsed === 'object') {
-                    Object.assign(initial, parsed);
-                }
-            }
-            // Harvest from saved sessions
-            const savedSessions = localStorage.getItem(LS_SESSIONS_KEY);
-            if (savedSessions) {
-                const parsedSess = JSON.parse(savedSessions);
-                if (Array.isArray(parsedSess)) {
-                    parsedSess.forEach((sess: ChatSession) => {
-                        if (sess.activeArtifact) {
-                            const list = initial[sess.activeArtifact.id] || [];
-                            if (!list.some(v => (v.version || 1) === (sess.activeArtifact!.version || 1))) {
-                                initial[sess.activeArtifact.id] = [...list, sess.activeArtifact!].sort((a, b) => (a.version || 1) - (b.version || 1));
-                            }
-                        }
-                        if (sess.artifactHistory) {
-                            sess.artifactHistory.forEach(art => {
-                                const list = initial[art.id] || [];
-                                if (!list.some(v => (v.version || 1) === (art.version || 1))) {
-                                    initial[art.id] = [...list, art].sort((a, b) => (a.version || 1) - (b.version || 1));
-                                }
-                            });
-                        }
-                        if (sess.messages) {
-                            sess.messages.forEach(m => {
-                                if (m.artifacts) {
-                                    m.artifacts.forEach(art => {
-                                        const list = initial[art.id] || [];
-                                        if (!list.some(v => (v.version || 1) === (art.version || 1))) {
-                                            initial[art.id] = [...list, art].sort((a, b) => (a.version || 1) - (b.version || 1));
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                    });
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-    }
-    DEFAULT_SESSIONS.forEach(sess => {
-        if (sess.activeArtifact) {
-            const list = initial[sess.activeArtifact.id] || [];
-            if (!list.some(v => (v.version || 1) === (sess.activeArtifact!.version || 1))) {
-                initial[sess.activeArtifact.id] = [...list, sess.activeArtifact];
-            }
-        }
-        if (sess.artifactHistory) {
-            sess.artifactHistory.forEach(art => {
-                const list = initial[art.id] || [];
-                if (!list.some(v => (v.version || 1) === (art.version || 1))) {
-                    initial[art.id] = [...list, art];
-                }
-            });
-        }
-    });
-    return initial;
-};
-
-const loadSavedAppearance = (): StudioAppearanceConfig => {
-    if (typeof window !== 'undefined') {
-        try {
-            const saved = localStorage.getItem(LS_APPEARANCE_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed && typeof parsed === 'object') {
-                    return { ...DEFAULT_APPEARANCE_CONFIG, ...parsed };
-                }
-            }
-        } catch (e) {
-            // ignore
-        }
-    }
-    return DEFAULT_APPEARANCE_CONFIG;
-};
 
 // ==========================================
 // Multimedia & Geospatial Rendering Cards
@@ -1234,17 +1053,24 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     onOpenKeyboardShortcuts,
     onExecuteCommand
 }) => {
-    const initialSessions = React.useMemo(() => loadSavedSessions(), []);
-    const initialCurrentId = React.useMemo(() => loadInitialSessionId(initialSessions), [initialSessions]);
-    const initialActiveSession = React.useMemo(
-        () => initialSessions.find(s => s.id === initialCurrentId) || initialSessions[0],
-        [initialSessions, initialCurrentId]
-    );
-
-    // Chat Sessions & Sidebar State
-    const [sessions, setSessions] = React.useState<ChatSession[]>(initialSessions);
-    const [currentSessionId, setCurrentSessionId] = React.useState<string | undefined>(initialCurrentId);
-    const activeSession = sessions.find(s => s.id === currentSessionId) || sessions[0];
+    // Chat Sessions, active conversation & canvas state live in the reducer-backed chat store
+    const initialChatState = React.useMemo(() => {
+        const loaded = loadInitialChatState();
+        return { ...loaded, layoutMode: sanitizeLayoutMode(loaded.layoutMode, loaded.activeArtifact) };
+    }, []);
+    const chatStore = useChatStore(initialChatState);
+    const {
+        state: chatState,
+        setSessions,
+        setCurrentSessionId,
+        setMessages,
+        setActiveArtifact,
+        setArtifactHistory,
+        setArtifactVersions,
+        setLayoutMode
+    } = chatStore;
+    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, artifactVersions, layoutMode } = chatState;
+    const activeSession = selectActiveSession(chatState);
     const [isSidebarOpen, setIsSidebarOpen] = React.useState<boolean>(() =>
         typeof window !== 'undefined' ? window.innerWidth > 1024 : true
     );
@@ -1288,21 +1114,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setTimeout(() => setGlobalToast(undefined), 3200);
     }, []);
 
-    // Active conversation & canvas state
-    const [messages, setMessages] = React.useState<ChatMessage[]>(initialActiveSession?.messages || []);
+    // Composer & generation state
     const [inputValue, setInputValue] = React.useState<string>('');
     const [checkpointFeedback, setCheckpointFeedback] = React.useState<Record<string, string>>({});
     const [isGenerating, setIsGenerating] = React.useState<boolean>(false);
-    const [activeArtifact, setActiveArtifact] = React.useState<CanvasArtifact | undefined>(initialActiveSession?.activeArtifact);
-    const [artifactHistory, setArtifactHistory] = React.useState<CanvasArtifact[]>(() => {
-        if (initialActiveSession?.artifactHistory && initialActiveSession.artifactHistory.length > 0) {
-            return initialActiveSession.artifactHistory;
-        }
-        if (initialActiveSession?.activeArtifact) {
-            return [initialActiveSession.activeArtifact];
-        }
-        return [];
-    });
     const [isVoiceActive, setIsVoiceActive] = React.useState<boolean>(false);
     const speechRecognitionRef = React.useRef<any>(null);
 
@@ -1326,15 +1141,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const [liveStreamedText, setLiveStreamedText] = React.useState<string>('');
     const [activeStreamingSectionId, setActiveStreamingSectionId] = React.useState<string | undefined>(undefined);
 
-    // Layout Modes & Artifact Version History
-    const [layoutMode, setLayoutMode] = React.useState<StudioLayoutMode>(() =>
-        sanitizeLayoutMode(initialActiveSession?.layoutMode, initialActiveSession?.activeArtifact)
-    );
+    // Layout Modes (layoutMode itself lives in the chat store)
     const [aiInteractionMode, setAiInteractionMode] = React.useState<'agent' | 'ask' | 'plan'>('agent');
     const [stageLayoutMode, setStageLayoutMode] = React.useState<StageLayoutMode>('single');
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
-    const [artifactVersions, setArtifactVersions] = React.useState<Record<string, CanvasArtifact[]>>(() => loadSavedVersions());
 
     // Switch dedicated workspace layout mode (Chat, Code/Sandbox, Document/Spec, Kanban)
     const handleSwitchMode = (targetMode: StudioLayoutMode) => {
@@ -1678,41 +1489,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const [activeTerminalError, setActiveTerminalError] = React.useState<TerminalExecutionError | undefined>(undefined);
     const [showTerminalErrorToast, setShowTerminalErrorToast] = React.useState<boolean>(false);
 
-    // Mock/Live Workspace file list for @file autocomplete
-    const [workspaceFilesList] = React.useState<string[]>([
-        'src/browser/generative-canvas/GenerativeCanvasStudio.tsx',
-        'src/browser/generative-canvas/canvas-types.ts',
-        'src/browser/generative-canvas/context-mention-engine.ts',
-        'src/browser/generative-canvas/multi-file-diff-engine.ts',
-        'src/browser/generative-canvas/terminal-debug-bridge.ts',
-        'src/browser/generative-canvas/SpotlightLauncherModal.tsx',
-        'src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive.tsx',
-        'src/browser/generative-canvas/primitives/McpHubPrimitive.tsx',
-        'src/browser/generative-canvas/primitives/KanbanBoardPrimitive.tsx',
-        'src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive.tsx',
-        'src/browser/generative-canvas/primitives/NodeGraphPrimitive.tsx',
-        'src/node/workspace-config-service.ts',
-        'src/node/gemini-endpoint.ts',
-        'src/node/gemini-service.ts',
-        'package.json',
-        'tsconfig.json',
-        'README.md'
-    ]);
-
-    const [workspaceGitStatus] = React.useState<{ branch: string; modified: string[]; staged: string[]; untracked: string[] }>({
-        branch: 'feature/vibe-coding',
-        modified: [
-            'src/browser/generative-canvas/GenerativeCanvasStudio.tsx',
-            'src/browser/generative-canvas/canvas-types.ts'
-        ],
-        staged: [
-            'src/browser/generative-canvas/context-mention-engine.ts',
-            'src/browser/generative-canvas/multi-file-diff-engine.ts'
-        ],
-        untracked: [
-            'src/browser/generative-canvas/SpotlightLauncherModal.tsx'
-        ]
-    });
+    // Mock/Live Workspace file list & git status for @file / @git autocomplete
+    const workspaceFilesList = DEFAULT_WORKSPACE_FILES;
+    const workspaceGitStatus = DEFAULT_WORKSPACE_GIT_STATUS;
 
     const [workspaces, setWorkspaces] = React.useState<ProjectItem[]>(DEFAULT_RECENT_PROJECTS);
     const [activeWorkspace, setActiveWorkspace] = React.useState<ProjectItem>(DEFAULT_RECENT_PROJECTS[0]);
@@ -2711,56 +2490,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isCanvasVersionMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    React.useEffect(() => {
-        if (typeof window === 'undefined') return;
-        const timer = setTimeout(() => {
-            try {
-                if (currentSessionId) {
-                    setSessions(prev => {
-                        const updated = prev.map(s => {
-                            if (s.id === currentSessionId) {
-                                return {
-                                    ...s,
-                                    messages,
-                                    activeArtifact,
-                                    artifactHistory,
-                                    layoutMode,
-                                    updatedAt: 'Just now'
-                                };
-                            }
-                            return s;
-                        });
-                        try {
-                            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(updated));
-                        } catch (err) {
-                            // ignore quota error
-                        }
-                        return updated;
-                    });
-                    localStorage.setItem(LS_CURRENT_SESSION_KEY, currentSessionId);
-                } else {
-                    localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(sessions));
-                }
-                localStorage.setItem(LS_VERSIONS_KEY, JSON.stringify(artifactVersions));
-                localStorage.setItem(LS_APPEARANCE_KEY, JSON.stringify(appearanceConfig));
-            } catch (e) {
-                console.warn('Failed to persist studio session state', e);
-            }
-        }, 400);
-
-        return () => clearTimeout(timer);
-    }, [messages, activeArtifact, artifactHistory, layoutMode, artifactVersions, appearanceConfig, currentSessionId]);
-
-    const persistSessionsImmediately = React.useCallback((updatedSessions: ChatSession[]) => {
-        try {
-            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(updatedSessions));
-            if (currentSessionId) {
-                localStorage.setItem(LS_CURRENT_SESSION_KEY, currentSessionId);
-            }
-        } catch (err) {
-            // ignore quota error
-        }
-    }, [currentSessionId]);
+    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig);
 
     const recordArtifactVersion = (art: CanvasArtifact) => {
         setArtifactVersions(prev => {
@@ -3461,20 +3191,18 @@ ${content}
 
     const handleCloseArtifactTab = React.useCallback((e: React.MouseEvent, artId: string) => {
         e.stopPropagation();
-        setArtifactHistory(prev => {
-            const next = prev.filter(a => a.id !== artId);
-            if (activeArtifact?.id === artId) {
-                const remaining = next[0] || null;
-                setActiveArtifact(remaining);
-                if (remaining) {
-                    setLayoutMode(resolveModeForArtifact(remaining.type));
-                } else {
-                    setLayoutMode('document');
-                }
+        const next = artifactHistory.filter(a => a.id !== artId);
+        setArtifactHistory(next);
+        if (activeArtifact?.id === artId) {
+            const remaining = next[0] || undefined;
+            setActiveArtifact(remaining);
+            if (remaining) {
+                setLayoutMode(resolveModeForArtifact(remaining.type));
+            } else {
+                setLayoutMode('document');
             }
-            return next;
-        });
-    }, [activeArtifact]);
+        }
+    }, [activeArtifact, artifactHistory]);
 
     const handleCreateNewSandboxTab = React.useCallback(() => {
         const newTab: CanvasArtifact = {
