@@ -7,4 +7,4 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-@import "../../../extensions/product/src/browser/style/index.css";
+@import "./browser/style/index.css";

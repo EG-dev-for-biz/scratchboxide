@@ -1,0 +1,15 @@
+node_modules
+**/node_modules
+**/dist
+**/dist-electron
+.git
+docs
+*.md
+secrets.json
+service-account.json
+.env
+.env.*
+*.pem
+*.key
+coverage
+.scratchbox
