@@ -26,11 +26,81 @@ export interface ProxyFetchResult {
 export interface BrowserProxyRequestPolicy {
     capability?: 'browser.fetch' | 'browser.proxy';
     allowedOrigins?: string[];
+    /**
+     * @deprecated Ignored. Private-network access is a server-side decision
+     * (constructor option / `SCRATCHBOX_PROXY_ALLOW_PRIVATE=1`) and never
+     * honoured from a request body.
+     */
     allowPrivateNetwork?: boolean;
 }
+
+export interface ResolvedAddress {
+    address: string;
+    family: number;
+}
+
+export type HostnameResolver = (hostname: string) => Promise<ResolvedAddress[]>;
+
+export interface BrowserProxyServiceOptions {
+    /** Allow loopback / RFC1918 / link-local targets. Defaults to `SCRATCHBOX_PROXY_ALLOW_PRIVATE === '1'`. */
+    allowPrivateNetwork?: boolean;
+    /** Custom DNS resolver (tests). Defaults to `dns.promises.lookup(host, { all: true })`. */
+    resolver?: HostnameResolver;
+}
+
+export interface ValidatedTarget {
+    url: URL;
+    addresses: ResolvedAddress[];
+}
+
+/** Request headers from the caller that are never forwarded to the upstream target. */
+const STRIPPED_REQUEST_HEADERS = new Set([
+    // Credentials for *our* API, not the upstream.
+    'authorization',
+    'proxy-authorization',
+    'cookie',
+    'x-scratchbox-token',
+    // Hop-by-hop (RFC 7230 §6.1) and connection-specific headers.
+    'connection',
+    'keep-alive',
+    'proxy-connection',
+    'proxy-authenticate',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+    // Request-specific values that must be recomputed for the upstream request.
+    'host',
+    'origin',
+    'referer',
+    'content-length',
+    'accept-encoding'
+]);
+
+const METADATA_HOSTS = new Set([
+    'metadata.google.internal',
+    'metadata',
+    '169.254.169.254',
+    '100.100.100.200',
+    'fd00:ec2::254',
+    'metadata.azure.com',
+    'metadata.oraclecloud.com'
+]);
+
 export class BrowserProxyService {
     protected readonly DEFAULT_USER_AGENT =
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+    protected readonly allowPrivateNetwork: boolean;
+    protected readonly resolver: HostnameResolver;
+
+    constructor(options: BrowserProxyServiceOptions = {}) {
+        this.allowPrivateNetwork = options.allowPrivateNetwork ?? process.env.SCRATCHBOX_PROXY_ALLOW_PRIVATE === '1';
+        this.resolver = options.resolver || (async hostname => {
+            const entries = await dns.promises.lookup(hostname, { all: true });
+            return entries.map(entry => ({ address: entry.address, family: entry.family }));
+        });
+    }
 
     // In-memory active browser session state
     public activeState = {
@@ -596,15 +666,30 @@ export class BrowserProxyService {
         } = {}
     ): Promise<ProxyFetchResult> {
         const normalized = this.normalizeUrl(targetUrl);
-        await this.validateTarget(normalized, options.policy);
+        let validated = await this.validateTarget(normalized, options.policy);
         const maxRedirects = options.maxRedirects ?? 10;
         let currentUrl = normalized;
         let redirectsCount = 0;
+
+        // Serialize the body once so we can send an accurate Content-Length.
+        let bodyBuffer: Buffer | undefined;
+        if (options.body !== undefined && options.body !== null && options.body !== '') {
+            if (Buffer.isBuffer(options.body)) {
+                bodyBuffer = options.body;
+            } else if (typeof options.body === 'string') {
+                bodyBuffer = Buffer.from(options.body, 'utf8');
+            } else if (typeof options.body === 'object' && Object.keys(options.body).length === 0) {
+                bodyBuffer = undefined;
+            } else {
+                bodyBuffer = Buffer.from(JSON.stringify(options.body), 'utf8');
+            }
+        }
 
         while (redirectsCount < maxRedirects) {
             const parsedUrl = url.parse(currentUrl);
             const isHttps = parsedUrl.protocol === 'https:';
             const protocolClient = isHttps ? https : http;
+            const pinned = validated.addresses[0];
 
             const requestHeaders: Record<string, string> = {
                 'User-Agent': this.DEFAULT_USER_AGENT,
@@ -618,28 +703,27 @@ export class BrowserProxyService {
                 'Sec-Fetch-Site': 'cross-site',
                 'Sec-Fetch-User': '?1',
                 'Upgrade-Insecure-Requests': '1',
-                ...(options.headers || {})
+                ...this.sanitizeRequestHeaders(options.headers)
             };
-
-            // Remove host/origin from forwarded headers to avoid conflicting upstream
-            delete requestHeaders['host'];
-            delete requestHeaders['Host'];
-            delete requestHeaders['origin'];
-            delete requestHeaders['Origin'];
-            delete requestHeaders['referer'];
-            delete requestHeaders['Referer'];
+            if (bodyBuffer) {
+                requestHeaders['Content-Length'] = String(bodyBuffer.length);
+            }
 
             const result = await new Promise<ProxyFetchResult>((resolve, reject) => {
                 const req = protocolClient.request(
                     {
                         protocol: parsedUrl.protocol,
                         hostname: parsedUrl.hostname,
+                        // Pin the connection to the address we just validated so a
+                        // DNS answer cannot change between validation and connect.
+                        lookup: this.createPinnedLookup(pinned),
+                        servername: isHttps ? parsedUrl.hostname || undefined : undefined,
                         port: parsedUrl.port || (isHttps ? 443 : 80),
                         path: parsedUrl.path || '/',
                         method: options.method || 'GET',
                         headers: requestHeaders,
                         rejectUnauthorized: false // Allow self-signed or local dev certs
-                    },
+                    } as https.RequestOptions,
                     res => {
                         const statusCode = res.statusCode || 200;
                         const statusText = res.statusMessage;
@@ -732,12 +816,8 @@ export class BrowserProxyService {
                     reject(err);
                 });
 
-                if (options.body) {
-                    if (Buffer.isBuffer(options.body) || typeof options.body === 'string') {
-                        req.write(options.body);
-                    } else {
-                        req.write(JSON.stringify(options.body));
-                    }
+                if (bodyBuffer) {
+                    req.write(bodyBuffer);
                 }
 
                 req.end();
@@ -748,7 +828,7 @@ export class BrowserProxyService {
                 (result.statusCode === 301 || result.statusCode === 302 || result.statusCode === 303 || result.statusCode === 307 || result.statusCode === 308) &&
                 result.resolvedUrl !== currentUrl
             ) {
-                await this.validateTarget(result.resolvedUrl, options.policy);
+                validated = await this.validateTarget(result.resolvedUrl, options.policy);
                 currentUrl = result.resolvedUrl;
                 redirectsCount++;
                 continue;
@@ -760,7 +840,28 @@ export class BrowserProxyService {
         throw new Error(`Exceeded maximum redirect limit (${maxRedirects}) while fetching ${targetUrl}`);
     }
 
-    async validateTarget(targetUrl: string, policy: BrowserProxyRequestPolicy = {}): Promise<void> {
+    /**
+     * Drops caller headers that must never reach the upstream target: our own
+     * API credentials, hop-by-hop headers, and request-specific values.
+     */
+    sanitizeRequestHeaders(headers: Record<string, string | string[] | undefined> = {}): Record<string, string> {
+        const result: Record<string, string> = {};
+        for (const [key, value] of Object.entries(headers)) {
+            if (value === undefined || value === null) continue;
+            const lower = key.toLowerCase();
+            if (STRIPPED_REQUEST_HEADERS.has(lower)) continue;
+            if (lower.startsWith('proxy-') || lower.startsWith('sec-fetch-')) continue;
+            result[key] = Array.isArray(value) ? value.join(', ') : String(value);
+        }
+        return result;
+    }
+
+    /**
+     * Validates the target URL scheme/credentials/policy, resolves its hostname
+     * and rejects private, loopback, link-local and cloud-metadata destinations
+     * unless the server was configured to allow private networks.
+     */
+    async validateTarget(targetUrl: string, policy: BrowserProxyRequestPolicy = {}): Promise<ValidatedTarget> {
         const parsed = new URL(targetUrl);
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
             throw new Error(`Unsupported browser proxy protocol: ${parsed.protocol}`);
@@ -774,37 +875,109 @@ export class BrowserProxyService {
         if (policy.allowedOrigins?.length && !policy.allowedOrigins.includes(parsed.origin)) {
             throw new Error(`Browser proxy origin is not granted: ${parsed.origin}`);
         }
-        const host = parsed.hostname.toLowerCase();
-        if (host === 'metadata.google.internal' || host === '169.254.169.254') {
+
+        const host = this.normalizeHostname(parsed.hostname);
+        if (METADATA_HOSTS.has(host) || host.endsWith('.internal')) {
             throw new Error('Cloud metadata targets are blocked');
         }
-        const localDevelopmentHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-        if (localDevelopmentHost || policy.allowPrivateNetwork) {
-            return;
+
+        let addresses: ResolvedAddress[];
+        if (net.isIP(host)) {
+            addresses = [{ address: host, family: net.isIP(host) }];
+        } else {
+            try {
+                addresses = await this.resolver(host);
+            } catch (err: any) {
+                throw new Error(`Browser proxy target could not be resolved: ${host} (${err?.code || err?.message || 'lookup failed'})`);
+            }
         }
-        const addresses = net.isIP(host)
-            ? [{ address: host }]
-            : await dns.promises.lookup(host, { all: true });
-        if (addresses.some(entry => this.isPrivateAddress(entry.address))) {
-            throw new Error(`Private network browser proxy target is blocked: ${host}`);
+        if (!addresses.length) {
+            throw new Error(`Browser proxy target could not be resolved: ${host}`);
         }
+
+        // Metadata endpoints are blocked even when private networking is enabled.
+        if (addresses.some(entry => METADATA_HOSTS.has(this.normalizeHostname(entry.address)))) {
+            throw new Error('Cloud metadata targets are blocked');
+        }
+
+        if (!this.allowPrivateNetwork) {
+            if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+                throw new Error(`Private network browser proxy target is blocked: ${host}`);
+            }
+            const offending = addresses.find(entry => this.isPrivateAddress(entry.address));
+            if (offending) {
+                throw new Error(`Private network browser proxy target is blocked: ${host} (${offending.address})`);
+            }
+        }
+
+        return { url: parsed, addresses };
+    }
+
+    private normalizeHostname(hostname: string): string {
+        let host = (hostname || '').toLowerCase().replace(/\.$/, '');
+        if (host.startsWith('[') && host.endsWith(']')) {
+            host = host.slice(1, -1);
+        }
+        return host;
+    }
+
+    /**
+     * Builds a `lookup` implementation for `http.request` that always answers
+     * with the address validated a moment ago (prevents DNS rebinding).
+     */
+    private createPinnedLookup(pinned: ResolvedAddress): any {
+        return (_hostname: string, optionsOrCb: any, maybeCb?: any) => {
+            const cb = typeof optionsOrCb === 'function' ? optionsOrCb : maybeCb;
+            const opts = typeof optionsOrCb === 'function' ? {} : (optionsOrCb || {});
+            const family = pinned.family || net.isIP(pinned.address) || 4;
+            if (opts.all) {
+                cb(null, [{ address: pinned.address, family }]);
+            } else {
+                cb(null, pinned.address, family);
+            }
+        };
     }
 
     private isPrivateAddress(address: string): boolean {
-        const normalized = address.toLowerCase();
-        if (normalized === '::1' || normalized.startsWith('fe80:') || normalized.startsWith('fc') || normalized.startsWith('fd')) {
-            return true;
+        const normalized = this.normalizeHostname(address);
+
+        // IPv6 checks
+        if (normalized.includes(':')) {
+            if (normalized === '::1' || normalized === '::' || normalized === '0:0:0:0:0:0:0:1' || normalized === '0:0:0:0:0:0:0:0') {
+                return true;
+            }
+            if (normalized.startsWith('fe80:') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb')) {
+                return true; // link-local fe80::/10
+            }
+            if (/^f[cd][0-9a-f]{2}:/.test(normalized)) {
+                return true; // unique local fc00::/7
+            }
+            const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+            if (mapped) {
+                return this.isPrivateAddress(mapped[1]);
+            }
+            const mappedHex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+            if (mappedHex) {
+                const hi = parseInt(mappedHex[1], 16);
+                const lo = parseInt(mappedHex[2], 16);
+                return this.isPrivateAddress(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+            }
+            return false;
         }
-        const ipv4 = normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized;
-        const parts = ipv4.split('.').map(Number);
-        if (parts.length !== 4 || parts.some(part => !Number.isInteger(part))) {
+
+        const parts = normalized.split('.').map(Number);
+        if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
             return false;
         }
         return parts[0] === 10 ||
             parts[0] === 127 ||
+            parts[0] === 0 ||
             (parts[0] === 169 && parts[1] === 254) ||
             (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
             (parts[0] === 192 && parts[1] === 168) ||
-            parts[0] === 0;
+            (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) || // CGNAT 100.64/10
+            (parts[0] === 192 && parts[1] === 0 && parts[2] === 0) ||
+            (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) ||
+            parts[0] >= 224; // multicast / reserved
     }
 }
