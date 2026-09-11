@@ -13,7 +13,7 @@ import { TileBoundAligner, LocalTileBounds, SlippyTileXYZ } from './TileBoundAli
 import { TileClayProcessor, ClayPresetId, CLAY_PRESETS } from './TileClayProcessor';
 
 export type { ClayPresetId };
-import { GoogleMapsService, GeocodeResult } from '../google-maps-service';
+import { GoogleMapsService, GeocodeResult } from './google-maps-service';
 import type { Media4DObject, Scene3DData } from '../canvas-types';
 
 export interface TileIngestionOptions {

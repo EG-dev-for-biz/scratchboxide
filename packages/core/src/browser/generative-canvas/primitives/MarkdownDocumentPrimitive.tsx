@@ -54,6 +54,7 @@ import { InlineMarkdown } from '../ChatMarkdownRenderer';
 import { NANO_BANANA_STYLES, synthesizeContextualNanoBananaPrompt } from '../nano-banana-service';
 import { beautifyLocationSection } from '../services/location-beautify-service';
 import { MediaGenerationClient } from '../media-generation-client';
+import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
 export { NANO_BANANA_STYLES };
 
 export interface MarkdownDocumentPrimitiveProps {
@@ -289,6 +290,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
     streamingBadgeText,
     workspacePath
 }) => {
+    const mediaJobPoller = useMediaJobPoller();
     const sanitizeDoc = (raw: MarkdownDocumentData): MarkdownDocumentData => {
         const rawTitle = raw?.title || (raw as any)?.docTitle || (raw as any)?.name || (raw as any)?.summary;
         let t = rawTitle && rawTitle !== 'Markdown Document' && !/^untitled/i.test(rawTitle)
@@ -654,51 +656,40 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             });
 
             if (job) {
-                const pollInterval = setInterval(async () => {
-                    try {
-                        const updatedJob = await client.get(job.id, wsPath);
-                        if (updatedJob.status === 'completed' && updatedJob.result?.asset?.uri) {
-                            clearInterval(pollInterval);
-                            const resultUrl = client.contentUrl(job.id, wsPath);
-                            handleUpdateSection(section.id, {
-                                imageUrl: resultUrl,
-                                thumbnailUrl: resultUrl,
-                                videoUrl: isVideo ? resultUrl : undefined,
-                                stylePreset: synth.styleLabel,
-                                visualPrompt: activePrompt,
-                                attribution: isVideo ? 'Generated with Google Omni 1.1' : 'Generated with Google Nano Banana 2',
-                                imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
-                                caption: section.caption || synth.caption
-                            });
-                            setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                        } else if (updatedJob.status === 'failed') {
-                            clearInterval(pollInterval);
-                            // Fallback to contextual synthesized asset on quota/auth limit
-                            handleUpdateSection(section.id, {
-                                imageUrl: synth.curatedImageUrl,
-                                thumbnailUrl: synth.curatedImageUrl,
-                                stylePreset: synth.styleLabel,
-                                visualPrompt: activePrompt,
-                                attribution: synth.attribution,
-                                imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
-                                caption: section.caption || synth.caption
-                            });
-                            setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                        }
-                    } catch {
-                        clearInterval(pollInterval);
+                // Fallback to the contextual synthesized asset on failure / quota / transport errors.
+                const applyCuratedFallback = () => {
+                    handleUpdateSection(section.id, {
+                        imageUrl: synth.curatedImageUrl,
+                        thumbnailUrl: synth.curatedImageUrl,
+                        stylePreset: synth.styleLabel,
+                        visualPrompt: activePrompt,
+                        attribution: synth.attribution,
+                        imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
+                        caption: section.caption || synth.caption
+                    });
+                    setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
+                };
+                // Polling is owned by useMediaJobPoller: aborted + interval cleared on unmount.
+                mediaJobPoller.startPolling({
+                    jobId: job.id,
+                    workspaceRoot: wsPath,
+                    intervalMs: 2000,
+                    onComplete: () => {
+                        const resultUrl = client.contentUrl(job.id, wsPath);
                         handleUpdateSection(section.id, {
-                            imageUrl: synth.curatedImageUrl,
-                            thumbnailUrl: synth.curatedImageUrl,
+                            imageUrl: resultUrl,
+                            thumbnailUrl: resultUrl,
+                            videoUrl: isVideo ? resultUrl : undefined,
                             stylePreset: synth.styleLabel,
                             visualPrompt: activePrompt,
-                            attribution: synth.attribution,
+                            attribution: isVideo ? 'Generated with Google Omni 1.1' : 'Generated with Google Nano Banana 2',
                             imageTitle: section.imageTitle || section.videoTitle || synth.imageTitle,
                             caption: section.caption || synth.caption
                         });
                         setRegeneratingImages(prev => ({ ...prev, [section.id]: false }));
-                    }
-                }, 2000);
+                    },
+                    onError: applyCuratedFallback
+                });
                 return;
             }
         } catch (genErr) {

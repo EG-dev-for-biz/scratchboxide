@@ -21,13 +21,7 @@ import {
     KanbanColumn,
     PrimitiveType
 } from '../canvas-types';
-
-function slugify(text: string): string {
-    return text
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)+/g, '') || 'item';
-}
+import { slugify } from '../services/text-utils';
 
 export class KanbanTaskLens implements CodebaseLens<KanbanBoardData> {
     readonly primitiveType: PrimitiveType = 'kanban-board';

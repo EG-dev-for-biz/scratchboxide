@@ -125,7 +125,7 @@ async function runGeospatialRoutingTests() {
     // Test 4: Google Maps Landmark Ground Truth Waypoint Resolution
     // -------------------------------------------------------------
     console.log('  Testing Google Maps Ground Truth Waypoint Resolution & Spatial Anchoring...');
-    const { GoogleMapsService } = await import('../src/browser/generative-canvas/google-maps-service');
+    const { GoogleMapsService } = await import('../src/browser/generative-canvas/services/google-maps-service');
     const mapsService = GoogleMapsService.getInstance();
     
     // Resolve landmark locations for dynamic 3D scene placement

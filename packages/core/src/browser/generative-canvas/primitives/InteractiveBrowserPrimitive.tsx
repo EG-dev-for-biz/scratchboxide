@@ -240,13 +240,27 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
         }, '*');
     }, []);
 
-    // Polling hook to fetch pending actions from server and dispatch to iframe bridge
+    // Polling hook to fetch pending actions from server and dispatch to iframe bridge.
+    // Runs only while this primitive is mounted AND the document is visible; in-flight requests
+    // are aborted and the interval cleared on unmount or when the tab is hidden.
     React.useEffect(() => {
-        const interval = setInterval(async () => {
+        if (typeof document === 'undefined') return;
+        let cancelled = false;
+        let inFlight = false;
+        let interval: ReturnType<typeof setInterval> | null = null;
+        let controller: AbortController | null = null;
+
+        const isVisible = () => document.visibilityState !== 'hidden';
+
+        const pollOnce = async () => {
+            if (cancelled || inFlight || !isVisible()) return;
+            inFlight = true;
+            controller = new AbortController();
             try {
-                const res = await fetch('/api/browser/pending-actions');
-                if (!res.ok) return;
+                const res = await fetch('/api/browser/pending-actions', { signal: controller.signal });
+                if (cancelled || !res.ok) return;
                 const actions = await res.json();
+                if (cancelled) return;
                 if (Array.isArray(actions) && actions.length > 0) {
                     for (const action of actions) {
                         const iframe = iframeRef.current;
@@ -308,10 +322,41 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
                         }
                     }
                 }
-            } catch (e) {}
-        }, 1000);
+            } catch (e) {
+                // Aborted or transport error: nothing to dispatch this tick.
+            } finally {
+                inFlight = false;
+                controller = null;
+            }
+        };
 
-        return () => clearInterval(interval);
+        const startInterval = () => {
+            if (interval || cancelled) return;
+            interval = setInterval(pollOnce, 1000);
+        };
+        const stopInterval = () => {
+            if (interval) {
+                clearInterval(interval);
+                interval = null;
+            }
+            controller?.abort();
+        };
+        const handleVisibilityChange = () => {
+            if (isVisible()) {
+                startInterval();
+            } else {
+                stopInterval();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        if (isVisible()) startInterval();
+
+        return () => {
+            cancelled = true;
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            stopInterval();
+        };
     }, [currentUrl, triggerSnapshotFetch]);
 
     // Synchronize props when external updates occur (e.g. AI prompt mutating state)

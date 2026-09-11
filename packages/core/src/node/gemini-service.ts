@@ -44,6 +44,7 @@ import { CodebasePatternEngine } from './codebase-pattern-engine';
 import { LspDiagnosticFeedbackService } from './lsp-diagnostic-feedback-service';
 import { ConversationDiffMemoryService } from './conversation-diff-memory-service';
 import { ContainerSandboxService } from './container-sandbox-service';
+import { FileKeyStore, defaultCredentialsPath } from './key-store';
 import {
     SubagentPoolService,
     SubagentDAGPlan,
@@ -305,18 +306,30 @@ export class GeminiService {
             } catch {
                 // If not raw JSON, check if it is an API key string
                 if (credentialsRaw.trim().startsWith('AIza')) {
-                    const configDir = path.join(os.homedir(), '.scratchbox-ide');
-                    fs.ensureDirSync(configDir);
-                    const configPath = path.join(configDir, 'config.json');
-                    const existingConfig = fs.existsSync(configPath) ? fs.readJSONSync(configPath) : {};
-                    existingConfig.apiKey = credentialsRaw.trim();
-                    fs.writeJSONSync(configPath, existingConfig, { spaces: 2 });
-                    process.env.GEMINI_API_KEY = credentialsRaw.trim();
+                    // Persist through the encrypted key store instead of plaintext config.json.
+                    const apiKey = credentialsRaw.trim();
+                    const keyStore = new FileKeyStore();
+                    await keyStore.setPassword('scratchbox-ide.google-genai', 'api-key', apiKey);
+                    process.env.GEMINI_API_KEY = apiKey;
+
+                    // Remove any legacy plaintext copy left by older builds.
+                    const legacyConfigPath = path.join(os.homedir(), '.scratchbox-ide', 'config.json');
+                    if (fs.existsSync(legacyConfigPath)) {
+                        try {
+                            const legacy = fs.readJSONSync(legacyConfigPath);
+                            if (legacy && legacy.apiKey) {
+                                delete legacy.apiKey;
+                                fs.writeJSONSync(legacyConfigPath, legacy, { spaces: 2, mode: 0o600 });
+                            }
+                        } catch {
+                            // Ignore unreadable legacy config
+                        }
+                    }
 
                     return {
                         success: true,
                         authMethod: 'api-key',
-                        savedPath: configPath
+                        savedPath: defaultCredentialsPath()
                     };
                 }
                 throw new Error('Invalid JSON format. Expected Google Cloud Service Account JSON object.');
@@ -552,8 +565,12 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
      */
     async streamGenerate(
         request: GeminiGenerateRequest,
-        onEvent: (event: GeminiStreamEvent) => void
+        onEvent: (event: GeminiStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
+        if (signal?.aborted) {
+            throw new Error('Request aborted by client');
+        }
         if (!this.auth || !this.cachedProjectId) {
             this.initAuth();
         }
@@ -618,12 +635,16 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                     this.cachedProjectId,
                     token,
                     request,
-                    onEvent
+                    onEvent,
+                    signal
                 );
                 this.preferredModel = targetModel;
                 return response;
             } catch (err: any) {
                 lastError = err;
+                if (signal?.aborted) {
+                    throw err;
+                }
                 // If model not found (404), try the next fallback model candidate
                 if (err.message && (err.message.includes('404') || err.message.includes('not found'))) {
                     continue;
@@ -948,7 +969,8 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
         projectId: string,
         token: string,
         request: GeminiGenerateRequest,
-        onEvent: (event: GeminiStreamEvent) => void
+        onEvent: (event: GeminiStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
         const url = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/${model}:streamGenerateContent?alt=sse`;
 
@@ -1024,6 +1046,9 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
 
         // Multi-turn ReAct Loop
         while (currentTurn < maxTurns) {
+            if (signal?.aborted) {
+                throw new Error('Request aborted by client');
+            }
             currentTurn++;
             const turnDetectedToolCalls: any[] = [];
             let turnText = '';
@@ -1034,7 +1059,8 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal
             });
 
             if (!response.ok) {
@@ -3936,7 +3962,7 @@ export default function App() {
 
         // Check if query is 3D scene / 3D model / 3D plane / spatial scene
         const isSandboxOrAppRequest = !isMediaRequest && (
-            /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt) ||
+            /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt) ||
             lower.includes('preview') || lower.includes('sandbox') || lower.includes('calculator') || lower.includes('landing page') ||
             lower.includes('web app') || lower.includes('react app') || lower.includes('dashboard') || lower.includes('widget') ||
             lower.includes('interactive') || lower.includes('simulator')

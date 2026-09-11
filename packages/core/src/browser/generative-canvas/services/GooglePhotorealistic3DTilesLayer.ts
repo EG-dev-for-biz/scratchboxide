@@ -9,7 +9,7 @@
 
 import * as THREE from 'three';
 import type { LatLngAlt } from '../../../common/coordinate/LocalTangentPlane';
-import { GoogleMapsService } from '../google-maps-service';
+import { GoogleMapsService } from './google-maps-service';
 import { ClayPresetId, CLAY_PRESETS } from './TileClayProcessor';
 import { TerrainManager } from './TerrainManager';
 import { PhotorealCachePlugin } from './tiles/PhotorealCachePlugin';

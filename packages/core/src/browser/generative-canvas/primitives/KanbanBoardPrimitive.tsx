@@ -7,7 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// @ts-nocheck
 import * as React from 'react';
 import {
     CanvasArtifact,

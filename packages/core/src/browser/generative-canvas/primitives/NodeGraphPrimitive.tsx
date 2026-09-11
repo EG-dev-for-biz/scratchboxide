@@ -40,6 +40,7 @@ import {
     IconMic
 } from '../canvas-icons';
 import { MediaGenerationClient } from '../media-generation-client';
+import { useMediaJobPoller } from '../hooks/useMediaJobPolling';
 
 export interface NodeGraphPrimitiveProps {
     data: NodeGraphData;
@@ -341,6 +342,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
 }) => {
     const [showLibraryPanel, setShowLibraryPanel] = React.useState<boolean>(true);
     const [librarySearchQuery, setLibrarySearchQuery] = React.useState<string>('');
+    const mediaJobPoller = useMediaJobPoller();
 
     const sanitizeGraph = (raw: NodeGraphData): NodeGraphData => ({
         title: raw?.title || (raw as any)?.graphTitle || 'Interactive Node Graph',
@@ -1219,35 +1221,38 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             }
 
             if (job) {
-                const pollInterval = setInterval(async () => {
-                    try {
-                        const updatedJob = await client.get(job.id, wsPath);
-                        if (updatedJob.status === 'completed' && updatedJob.result?.asset?.uri) {
-                            clearInterval(pollInterval);
-                            const resultUrl = client.contentUrl(job.id, wsPath);
+                // Polling is owned by useMediaJobPoller: aborted + interval cleared on unmount.
+                mediaJobPoller.startPolling({
+                    jobId: job.id,
+                    workspaceRoot: wsPath,
+                    intervalMs: 1000,
+                    onComplete: () => {
+                        const resultUrl = client.contentUrl(job.id, wsPath);
+                        handleUpdateNode(node.id, {
+                            parameters: {
+                                ...node.parameters,
+                                isGenerating: false,
+                                mediaUrl: resultUrl,
+                                imageUrl: resultUrl,
+                                videoUrl: resultUrl,
+                                audioUrl: resultUrl
+                            },
+                            outputData: { url: resultUrl }
+                        });
+                    },
+                    onError: (pollErr, failedJob) => {
+                        if (failedJob) {
+                            // The job itself reported failure: surface the service error.
                             handleUpdateNode(node.id, {
                                 parameters: {
                                     ...node.parameters,
                                     isGenerating: false,
-                                    mediaUrl: resultUrl,
-                                    imageUrl: resultUrl,
-                                    videoUrl: resultUrl,
-                                    audioUrl: resultUrl
-                                },
-                                outputData: { url: resultUrl }
-                            });
-                        } else if (updatedJob.status === 'failed') {
-                            clearInterval(pollInterval);
-                            handleUpdateNode(node.id, {
-                                parameters: {
-                                    ...node.parameters,
-                                    isGenerating: false,
-                                    generationError: updatedJob.error?.message || 'Media generation failed'
+                                    generationError: pollErr.message || 'Media generation failed'
                                 }
                             });
+                            return;
                         }
-                    } catch (pollErr) {
-                        clearInterval(pollInterval);
+                        // Transport error while polling: fall back to a placeholder asset.
                         const mockUrl = node.category?.includes('image')
                             ? 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1600&q=85'
                             : node.category?.includes('video')
@@ -1266,7 +1271,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                             outputData: { url: mockUrl }
                         });
                     }
-                }, 1000);
+                });
             } else {
                 throw new Error('Could not start media job');
             }

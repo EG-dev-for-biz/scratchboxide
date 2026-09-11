@@ -12,7 +12,7 @@ import * as assert from 'assert';
 import {
     GoogleMapsService,
     StaticMapOptions
-} from '../src/browser/generative-canvas/google-maps-service';
+} from '../src/browser/generative-canvas/services/google-maps-service';
 
 async function runGoogleMapsServiceTests() {
     console.log('🧪 Running Google Maps Client & Geospatial Intelligence Test Suite...\n');

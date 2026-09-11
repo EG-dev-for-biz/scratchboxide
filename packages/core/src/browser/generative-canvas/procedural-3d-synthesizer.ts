@@ -126,6 +126,9 @@ export function initializeSceneOperatorStack(scene: Scene3DData): Scene3DData {
     if (scene.environment?.lighting) {
         engine.dispatch('sb_setup_lighting', {
             preset: scene.environment.lighting,
+            // Preserve the skybox the synthesizer chose (e.g. 'space-stars' for solar systems);
+            // otherwise the lighting preset would overwrite it with its own default sky.
+            skybox: scene.environment.skybox,
             latitude: scene.geoAnchor?.lat,
             longitude: scene.geoAnchor?.lng
         });
@@ -255,8 +258,11 @@ function synthesizeRawContextual3DScene(
         ...(hasControlSurfaces ? { controlSurfaces: true } : {})
     };
 
-    // Check if the prompt asks for a real-world location or landmark
-    const realWorldLoc = detectRealWorldLocationIntent(prompt, context);
+    // Check if the prompt asks for a real-world location or landmark.
+    // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
+    // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
+    // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
+    const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
     if (realWorldLoc && realWorldLoc.isRealWorld) {
         // Extract clay preset preference if specified
         let clayPreset: ClayPresetId = 'warm-clay';
@@ -286,33 +292,7 @@ function synthesizeRawContextual3DScene(
             ...(tileResult.buildingMeshes || [])
         ];
 
-        // If historical battlefield or tactical context, ground thematic actor figures on top of the real 3D tiles
-        if (theme === 'battlefield') {
-            customMeshes.push(
-                {
-                    id: 'mesh-minutemen-line',
-                    name: 'Colonial Minutemen Militia Formation',
-                    type: 'cylinder' as any,
-                    position: [-8, 1.2, 5],
-                    rotation: [0, Math.PI / 4, 0],
-                    scale: [12, 2.2, 1.5],
-                    material: { color: 0x2b4c7e, roughness: 0.6, metalness: 0.2 }
-                },
-                {
-                    id: 'mesh-british-regiment',
-                    name: 'British 10th Regiment of Foot Formation',
-                    type: 'box' as any,
-                    position: [12, 1.2, -5],
-                    rotation: [0, -Math.PI / 6, 0],
-                    scale: [14, 2.4, 2.0],
-                    material: { color: 0xc82a2a, roughness: 0.5, metalness: 0.1 }
-                }
-            );
-        }
-
-        const sceneTitle = theme === 'battlefield'
-            ? `Battle of ${realWorldLoc.landmarkName} (1775) — 3D Photorealistic Map Tile & Historical Model`
-            : `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
+        const sceneTitle = `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
 
         return {
             title: sceneTitle,
