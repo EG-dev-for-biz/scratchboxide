@@ -81,7 +81,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const normalizedInitialTab = initialTab === 'guide' ? 'general' : initialTab;
     const [activeTab, setActiveTab] = React.useState<StudioSettingsTab>(normalizedInitialTab);
     const [searchQuery, setSearchQuery] = React.useState<string>('');
-    const avatarInputRef = React.useRef<HTMLInputElement | null>(null);
+    const avatarInputRef = React.useRef<HTMLInputElement>(null);
 
     // All per-control settings live in one reducer-backed store (see settings/settingsReducer.ts)
     const { state: settingsState, setters: settingsSetters } = useSettingsStore({ propGoogleSearchGrounding });
@@ -165,7 +165,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }, [isOpen, onClose]);
 
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

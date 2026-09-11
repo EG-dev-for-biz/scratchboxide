@@ -51,7 +51,6 @@ export const SkillsManagerPrimitive: React.FC<SkillsManagerPrimitiveProps> = ({
     const [customPrompt, setCustomPrompt] = React.useState<string>('');
     const [customInstructions, setCustomInstructions] = React.useState<string>('');
 
-    /* eslint-disable-next-line no-null/no-null */
     const fileInputRef = React.useRef<HTMLInputElement>(null);
 
     // Synchronize if controlled prop updates

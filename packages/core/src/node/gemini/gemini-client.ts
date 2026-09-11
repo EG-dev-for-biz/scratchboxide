@@ -132,7 +132,7 @@ export function resolveFetch(): FetchLike {
     if (typeof globalFetch === 'function') {
         return globalFetch as FetchLike;
     }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     return require('node-fetch') as FetchLike;
 }
 

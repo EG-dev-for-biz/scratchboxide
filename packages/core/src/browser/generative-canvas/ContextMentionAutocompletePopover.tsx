@@ -48,7 +48,6 @@ export const ContextMentionAutocompletePopover: React.FC<ContextMentionAutocompl
     maxHeight = '240px'
 }) => {
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

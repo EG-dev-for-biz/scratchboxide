@@ -104,8 +104,8 @@ export class DeepWriteService {
             });
 
             // 3. Sequential Stage Execution with Interactive Gates
-            let historyContext: Record<string, any> = {};
-            let filesContext = { ...scaffoldFiles };
+            const historyContext: Record<string, any> = {};
+            const filesContext = { ...scaffoldFiles };
 
             await this.executeStagesFromIndex(
                 sessionId,
@@ -353,7 +353,7 @@ export class DeepWriteService {
         }
 
         // 4. Synthesize Final Coordinated Deliverable Bundle
-        let finalBundle = this.synthesizer.synthesizeBundle(
+        const finalBundle = this.synthesizer.synthesizeBundle(
             plan.goal,
             plan,
             historyContext,

@@ -80,8 +80,8 @@ export function decompressLZW(compressed: Uint8Array): Uint8Array {
   }
 
   let dictSize = 256;
-  let currCode = codes[0] as number;
-  let val = dict.get(currCode);
+  const currCode = codes[0] as number;
+  const val = dict.get(currCode);
   if (val === undefined) return new Uint8Array(0);
 
   const result: string[] = [val];

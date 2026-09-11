@@ -229,7 +229,7 @@ export class BrowserProxyService {
         const effectiveUrl = resolvedUrl || originalUrl;
 
         // Strip any <meta http-equiv="Content-Security-Policy"> or <meta http-equiv="X-Frame-Options"> tags
-        let processedHtml = html.replace(
+        const processedHtml = html.replace(
             /<meta[^>]*http-equiv=["']?(content-security-policy|x-frame-options|frame-options)["']?[^>]*>/gi,
             ''
         );

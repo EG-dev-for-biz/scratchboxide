@@ -187,11 +187,11 @@ export function synthesizeFresh3DScene(text: string, activeArtifact: CanvasArtif
         docContent: docContentExtract
     });
     fallbackGen = {
-        id: (isExisting3D ? activeArtifact.id : undefined) || `art-3d-${Date.now()}`,
+        id: (isExisting3D ? activeArtifact?.id : undefined) || `art-3d-${Date.now()}`,
         type: '3d-scene' as const,
         title: synthesized3D.title,
         summary: synthesized3D.subtitle || `Interactive 3D scene generated for "${synthesized3D.title}".`,
-        version: isExisting3D ? (activeArtifact.version || 1) + 1 : 1,
+        version: isExisting3D ? (activeArtifact?.version || 1) + 1 : 1,
         createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         data: synthesized3D
     };
@@ -684,7 +684,7 @@ export function synthesizeSandboxFallback(text: string, activeArtifact: CanvasAr
                 }
             ]
         };
-        let explanation = `Updated code in sandbox according to prompt: "${text}". Live preview recompiled.`;
+        const explanation = `Updated code in sandbox according to prompt: "${text}". Live preview recompiled.`;
         fallbackGen = {
             id: activeArtifact?.id || `art-code-${Date.now()}`,
             type: 'live-code-sandbox' as const,
@@ -733,7 +733,7 @@ export function synthesizeDocumentFallback(text: string, activeArtifact: CanvasA
     );
 
     let updatedDoc: MarkdownDocumentData;
-    let docTitle = currentDoc.title && currentDoc.title !== 'Markdown Document'
+    const docTitle = currentDoc.title && currentDoc.title !== 'Markdown Document'
         ? currentDoc.title
         : (activeArtifact?.title && activeArtifact.title !== 'Markdown Document' ? activeArtifact.title : extractDocumentTitleFromPrompt(text));
 

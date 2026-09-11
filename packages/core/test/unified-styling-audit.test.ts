@@ -120,15 +120,49 @@ async function runUnifiedStylingAuditTests() {
     assert.ok(tsxFiles.length > 5, 'Should discover TSX components in browser src');
 
     let totalButtonsFound = 0;
-    // Find all <button ...> opening tags and extract their className
-    const buttonTagRegex = /<button\b([^>]*)>/gs;
+
+    /**
+     * Extracts the attribute text of every `<button ...>` opening tag. A brace-aware scan is
+     * required because attribute expressions routinely contain `>` (e.g. `onClick={() => ...}`),
+     * which a naive `[^>]*` regex would stop at before reaching `className`.
+     */
+    function extractButtonAttributes(source: string): string[] {
+        const results: string[] = [];
+        const tagRegex = /<button\b/g;
+        let match: RegExpExecArray | null;
+        while ((match = tagRegex.exec(source)) !== null) {
+            let i = match.index + match[0].length;
+            let depth = 0;
+            let quote: string | null = null;
+            while (i < source.length) {
+                const ch = source[i];
+                if (quote) {
+                    if (ch === '\\') { i += 2; continue; }
+                    if (ch === quote) quote = null;
+                } else if (ch === '"' || ch === "'" || ch === '`') {
+                    quote = ch;
+                } else if (ch === '{') {
+                    depth++;
+                } else if (ch === '}') {
+                    depth--;
+                } else if (ch === '>' && depth === 0) {
+                    break;
+                }
+                i++;
+            }
+            results.push(source.slice(match.index + match[0].length, i));
+            tagRegex.lastIndex = i;
+        }
+        return results;
+    }
 
     for (const filePath of tsxFiles) {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        let buttonMatch;
-        while ((buttonMatch = buttonTagRegex.exec(content)) !== null) {
+        // Ignore embedded source templates (e.g. Live Code starter apps) — they are user-facing
+        // sample code, not Scratchbox UI, so their buttons are not subject to the design system.
+        const content = fs.readFileSync(filePath, 'utf-8')
+            .replace(/`(?:\\[\s\S]|[^`\\])*`/g, literal => literal.includes('<button') ? '``' : literal);
+        for (const buttonAttributes of extractButtonAttributes(content)) {
             totalButtonsFound++;
-            const buttonAttributes = buttonMatch[1];
             
             // Extract className value whether static string or template literal
             let classString = '';
@@ -148,78 +182,8 @@ async function runUnifiedStylingAuditTests() {
             const cleanedTokens = classString.replace(/\$\{[^}]+\}/g, ' ').trim().split(/\s+/).filter(Boolean);
             
             // All buttons should have a recognized button class name starting with sb-
-            const hasRecognizedClass = cleanedTokens.some(c => 
-                c.startsWith('sb-btn') || 
-                c.startsWith('sb-button') || 
-                c.startsWith('sb-icon') || 
-                c.startsWith('sb-segment') || 
-                c.startsWith('sb-composer') || 
-                c.startsWith('sb-sidebar') || 
-                c.startsWith('sb-topbar') || 
-                c.startsWith('sb-history') || 
-                c.startsWith('sb-action') || 
-                c.startsWith('sb-drawer') || 
-                c.startsWith('sb-workspace') || 
-                c.startsWith('sb-template') || 
-                c.startsWith('sb-ver') || 
-                c.startsWith('sb-transform') || 
-                c.startsWith('sb-export') || 
-                c.startsWith('sb-canvas') || 
-                c.startsWith('sb-card') || 
-                c.startsWith('sb-move') || 
-                c.startsWith('sb-table') || 
-                c.startsWith('sb-doc') || 
-                c.startsWith('sb-inserter') || 
-                c.startsWith('sb-checklist') || 
-                c.startsWith('sb-section') || 
-                c.startsWith('sb-selection') || 
-                c.startsWith('sb-graph') || 
-                c.startsWith('sb-add') || 
-                c.startsWith('sb-search') || 
-                c.startsWith('sb-guide') || 
-                c.startsWith('sb-voice') || 
-                c.startsWith('sb-thinking') || 
-                c.startsWith('sb-chat') || 
-                c.startsWith('sb-starter') || 
-                c.startsWith('sb-skill') || 
-                c.startsWith('sb-chip') || 
-                c.startsWith('sb-metric') || 
-                c.startsWith('sb-mindmap') || 
-                c.startsWith('sb-toggle') || 
-                c.startsWith('sb-settings') || 
-                c.startsWith('sb-projects') || 
-                c.startsWith('sb-pref') || 
-                c.startsWith('sb-apple') || 
-                c.startsWith('sb-item') || 
-                c.startsWith('sb-node') || 
-                c.startsWith('sb-kanban') || 
-                c.startsWith('sb-code') || 
-                c.startsWith('sb-cat') || 
-                c.startsWith('sb-inspector') || 
-                c.startsWith('sb-color') || 
-                c.startsWith('sb-sandbox') || 
-                c.startsWith('sb-console') || 
-                c.startsWith('sb-dropdown') || 
-                c.startsWith('sb-modal') || 
-                c.startsWith('sb-ide') || 
-                c.startsWith('sb-vibecode') || 
-                c.startsWith('sb-cursor') || 
-                c.startsWith('sb-profile') ||
-                c.startsWith('sb-welcome') ||
-                c.startsWith('sb-stepper') ||
-                c.startsWith('sb-callout') ||
-                c.startsWith('sb-location') ||
-                c.startsWith('sb-citation') ||
-                c.startsWith('sb-video') ||
-                c.startsWith('sb-diagram') ||
-                c.startsWith('sb-svg') ||
-                c.startsWith('sb-browser') ||
-                c.startsWith('sb-bookmark') ||
-                c.startsWith('sb-quick') ||
-                c.startsWith('sb-eval') ||
-                c.startsWith('sb-gdrive') ||
-                c.startsWith('sb-new')
-            );
+            // The design-system rule: every button carries at least one `sb-*` class.
+            const hasRecognizedClass = cleanedTokens.some(c => c.startsWith('sb-'));
             assert.ok(
                 hasRecognizedClass,
                 `Button in ${path.basename(filePath)} has untracked styling class: "${classString}" in tag: <button ${buttonAttributes}>`

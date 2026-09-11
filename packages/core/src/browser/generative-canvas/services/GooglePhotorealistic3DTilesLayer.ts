@@ -23,7 +23,7 @@ import {
 let TilesRenderer: any;
 let GoogleCloudAuthPlugin: any;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+   
   const tr = require('3d-tiles-renderer');
   TilesRenderer = tr.TilesRenderer || tr;
   const trp = require('3d-tiles-renderer/plugins');

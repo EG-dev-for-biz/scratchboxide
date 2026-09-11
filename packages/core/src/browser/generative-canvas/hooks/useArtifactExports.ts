@@ -207,7 +207,7 @@ export function useArtifactExports(deps: UseArtifactExportsDeps) {
 
         const currentDoc = (markdownArtifact.data as MarkdownDocumentData) || { sections: [] };
         const originalSections = Array.isArray(currentDoc.sections) ? currentDoc.sections : [];
-        let updatedSections = originalSections.filter(sec => 
+        const updatedSections = originalSections.filter(sec => 
             sec.id !== 'sec-injected-api-spec-table' && 
             sec.id !== 'sec-injected-security-guardrail-callout'
         );

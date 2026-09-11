@@ -64,7 +64,6 @@ export const GoogleDriveConnectModal: React.FC<GoogleDriveConnectModalProps> = (
     }, [isOpen, onClose]);
 
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

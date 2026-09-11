@@ -132,7 +132,6 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     const [gitCloneUrl, setGitCloneUrl] = React.useState<string>('');
     const [toastMessage, setToastMessage] = React.useState<string | undefined>(undefined);
 
-    /* eslint-disable-next-line no-null/no-null */
     const searchInputRef = React.useRef<HTMLInputElement>(null);
 
     React.useEffect(() => {
@@ -165,7 +164,6 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     }, [isOpen, showNewProjectDrawer, showCloneDrawer, onClose]);
 
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

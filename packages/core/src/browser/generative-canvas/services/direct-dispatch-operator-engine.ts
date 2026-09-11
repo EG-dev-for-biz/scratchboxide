@@ -918,7 +918,7 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 const obj = found.object;
                 const originType = params.originType || 'center';
                 const scale = obj.scale || [1, 1, 1];
-                let offset = new THREE.Vector3(0, 0, 0);
+                const offset = new THREE.Vector3(0, 0, 0);
 
                 if (originType === 'bottom') {
                     offset.set(0, scale[1] / 2, 0);
@@ -1719,8 +1719,8 @@ export class DirectDispatchOperatorEngine implements IOperatorContext {
                 const scene = ctx.getSceneData();
                 const padding = params.paddingFactor || 1.5;
 
-                let min = new THREE.Vector3(Infinity, Infinity, Infinity);
-                let max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+                const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+                const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
 
                 if (params.targetId) {
                     const found = ctx.findObject(params.targetId);

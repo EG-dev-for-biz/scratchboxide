@@ -273,7 +273,6 @@ export const AutomationsModal: React.FC<AutomationsModalProps> = ({
     const [isConnectingDrive, setIsConnectingDrive] = React.useState<boolean>(false);
     const [driveFeedback, setDriveFeedback] = React.useState<string | null>(null);
 
-    /* eslint-disable-next-line no-null/no-null */
     const searchInputRef = React.useRef<HTMLInputElement>(null);
 
     React.useEffect(() => {
@@ -303,7 +302,6 @@ export const AutomationsModal: React.FC<AutomationsModalProps> = ({
     }, [isOpen, onClose]);
 
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

@@ -781,7 +781,7 @@ Inspect this rendered viewport screenshot and provide your rigorous visual audit
                 files: []
             };
 
-            let updatedFiles = [...(currentData.files || [])];
+            const updatedFiles = [...(currentData.files || [])];
 
             if (fixes.codePatches && fixes.codePatches.length > 0) {
                 for (const patch of fixes.codePatches) {

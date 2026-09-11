@@ -67,19 +67,8 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
                         {canvasArtifactTabs.length > 1 && (
                             <button
                                 type="button"
+                                className="sb-canvas-tab-close"
                                 onClick={(e) => handleCloseArtifactTab(e, art.id)}
-                                style={{
-                                    background: 'transparent',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    color: 'inherit',
-                                    padding: '0 2px',
-                                    opacity: 0.6,
-                                    fontSize: '10px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    borderRadius: '50%'
-                                }}
                                 title="Close tab"
                             >
                                 ✕

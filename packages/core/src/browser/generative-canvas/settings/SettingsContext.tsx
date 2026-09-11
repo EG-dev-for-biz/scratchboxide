@@ -50,7 +50,7 @@ export interface SettingsShellValues {
     searchQuery: string;
     setSearchQuery: React.Dispatch<React.SetStateAction<string>>;
     normalizedInitialTab: StudioSettingsTab;
-    avatarInputRef: React.RefObject<HTMLInputElement | null>;
+    avatarInputRef: React.RefObject<HTMLInputElement>;
     activeUserName: string;
     sidebarNavSections: SettingsNavSection[];
     filteredNavSections: SettingsNavSection[];

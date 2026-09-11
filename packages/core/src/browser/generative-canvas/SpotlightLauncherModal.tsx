@@ -213,7 +213,6 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     };
 
     if (!isOpen) {
-        /* eslint-disable-next-line no-null/no-null */
         return null;
     }
 

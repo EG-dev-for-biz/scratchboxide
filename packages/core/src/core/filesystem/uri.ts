@@ -46,7 +46,7 @@ export class URI implements URIComponents {
         if (match) {
             const scheme = match[1].toLowerCase();
             const authority = match[2] || '';
-            let rawPath = match[3] || '/';
+            const rawPath = match[3] || '/';
             const query = match[4] || '';
             const fragment = match[5] || '';
             return new URI(scheme, authority, rawPath, query, fragment);

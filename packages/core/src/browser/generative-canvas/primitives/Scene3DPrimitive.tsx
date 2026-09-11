@@ -2276,9 +2276,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             ];
 
             const projected = vertices.map(v => {
-                let x = v.x * Math.cos(angle) - v.z * Math.sin(angle);
-                let z = v.x * Math.sin(angle) + v.z * Math.cos(angle);
-                let y = v.y * Math.cos(angle * 0.6) - z * Math.sin(angle * 0.6);
+                const x = v.x * Math.cos(angle) - v.z * Math.sin(angle);
+                const z = v.x * Math.sin(angle) + v.z * Math.cos(angle);
+                const y = v.y * Math.cos(angle * 0.6) - z * Math.sin(angle * 0.6);
                 const d = 3.5 - z * 0.4;
                 return {
                     x: cx + (x * size) / d,
@@ -3044,7 +3044,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                                                 ...s,
                                                 symmetry: { ...s.symmetry, [axis]: !s.symmetry[axis] }
                                             }))}
-                                            className={`w-5 h-5 rounded text-[10px] font-bold uppercase transition-all flex items-center justify-center ${
+                                            className={`sb-3d-btn w-5 h-5 rounded text-[10px] font-bold uppercase transition-all flex items-center justify-center ${
                                                 active
                                                     ? 'bg-blue-600 text-white shadow-[0_0_8px_rgba(59,130,246,0.6)] font-bold'
                                                     : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300 border border-white/5'
@@ -3346,7 +3346,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         <button
                             type="button"
                             onClick={() => setIsOutlinerOpen(false)}
-                            className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all text-xs"
+                            className="sb-3d-btn p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all text-xs"
                             title="Close Outliner"
                         >
                             ✕
@@ -3366,7 +3366,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             <button
                                 type="button"
                                 onClick={() => setOutlinerSearchQuery('')}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-[10px]"
+                                className="sb-3d-btn absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-[10px]"
                             >
                                 ✕
                             </button>
@@ -3416,7 +3416,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                                                     e.stopPropagation();
                                                     handleFocusObject(entity.object);
                                                 }}
-                                                className="p-1 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-all text-[10px]"
+                                                className="sb-3d-btn p-1 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-all text-[10px]"
                                                 title={`Focus Camera on ${entity.name}`}
                                             >
                                                 🎯
@@ -3426,7 +3426,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={(e) => handleToggleObjectVisibility(entity.id, e)}
-                                                className={`p-1 rounded transition-all text-[10px] ${
+                                                className={`sb-3d-btn p-1 rounded transition-all text-[10px] ${
                                                     entity.visible ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-400'
                                                 }`}
                                                 title={entity.visible ? 'Hide Object' : 'Show Object'}
@@ -3467,7 +3467,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         <button
                             type="button"
                             onClick={() => setIsMapTileModalOpen(false)}
-                            className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all text-xs"
+                            className="sb-3d-btn p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all text-xs"
                             title="Close Modal"
                         >
                             ✕
@@ -3509,7 +3509,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                                         setMapTileLng(landmark.lng);
                                         setMapTileElevation(landmark.alt);
                                     }}
-                                    className="px-2 py-0.5 rounded-md bg-zinc-800/80 hover:bg-amber-900/30 text-zinc-300 hover:text-amber-200 border border-white/5 text-[10px] font-medium transition-all"
+                                    className="sb-3d-btn px-2 py-0.5 rounded-md bg-zinc-800/80 hover:bg-amber-900/30 text-zinc-300 hover:text-amber-200 border border-white/5 text-[10px] font-medium transition-all"
                                 >
                                     {landmark.name}
                                 </button>
@@ -3589,7 +3589,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             <button
                                 type="button"
                                 onClick={() => handleApplyClayPresetToScene(mapTileClayPreset)}
-                                className="text-[10px] text-amber-400 hover:text-amber-300 underline font-medium"
+                                className="sb-3d-btn text-[10px] text-amber-400 hover:text-amber-300 underline font-medium"
                                 title="Apply active clay preset across all scene geometries"
                             >
                                 Apply to Scene
@@ -3605,7 +3605,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                                         key={presetKey}
                                         type="button"
                                         onClick={() => setMapTileClayPreset(presetKey)}
-                                        className={`flex items-center gap-2 p-1.5 rounded-lg border text-left transition-all ${
+                                        className={`sb-3d-btn flex items-center gap-2 p-1.5 rounded-lg border text-left transition-all ${
                                             isSelected
                                                 ? 'bg-amber-600/20 border-amber-500/60 shadow-sm'
                                                 : 'bg-zinc-900/70 border-white/5 hover:bg-zinc-800 hover:border-white/10'
@@ -3670,7 +3670,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         type="button"
                         onClick={handleImport3DMapTile}
                         disabled={isIngestingTile}
-                        className="mt-3 w-full py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-semibold text-xs shadow-lg shadow-amber-900/40 flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+                        className="sb-3d-btn mt-3 w-full py-2 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-semibold text-xs shadow-lg shadow-amber-900/40 flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
                     >
                         {isIngestingTile ? (
                             <>

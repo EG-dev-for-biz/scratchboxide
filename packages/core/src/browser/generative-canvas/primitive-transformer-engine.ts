@@ -783,7 +783,7 @@ export function morphSandboxToBrowser(sandbox: LiveCodeSandboxData): Interactive
     const cssFiles = files.filter(f => f.name.endsWith('.css') || f.language === 'css').map(f => f.content).join('\n');
     const jsFiles = files.filter(f => f.name.endsWith('.js') || f.name.endsWith('.ts') || f.name.endsWith('.tsx') || f.name.endsWith('.jsx')).map(f => f.content).join('\n');
 
-    let simulatedHtml = htmlFile?.content || `<!DOCTYPE html>
+    const simulatedHtml = htmlFile?.content || `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">

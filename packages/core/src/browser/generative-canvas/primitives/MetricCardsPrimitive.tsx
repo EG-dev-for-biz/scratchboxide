@@ -46,7 +46,6 @@ export const MetricCardsPrimitive: React.FC<MetricCardsPrimitiveProps> = ({
 
     const renderSparkline = (points?: number[], colorClass: string = 'sb-spark-blue') => {
         if (!points || points.length < 2) {
-            /* eslint-disable-next-line no-null/no-null */
             return null;
         }
         const width = 84;
@@ -101,7 +100,6 @@ export const MetricCardsPrimitive: React.FC<MetricCardsPrimitiveProps> = ({
 
     const renderChart = () => {
         if (!data.chart || activeChartData.length === 0) {
-            /* eslint-disable-next-line no-null/no-null */
             return null;
         }
         const maxVal = Math.max(...activeChartData.map(d => d.value), 1);

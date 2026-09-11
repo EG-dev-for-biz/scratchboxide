@@ -14,7 +14,7 @@
     "build:desktop": "npm --prefix desktop-app run build",
     "start": "npm --prefix desktop-app start",
     "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p desktop-app && tsc --noEmit -p desktop-app/tsconfig.electron.json",
-    "lint": "eslint --ext .ts,.tsx packages/core/src desktop-app/src desktop-app/server desktop-app/electron",
+    "lint": "eslint packages/core/src desktop-app/src desktop-app/server desktop-app/electron --report-unused-disable-directives",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:core": "vitest run packages/core/test",

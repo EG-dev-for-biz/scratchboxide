@@ -48,7 +48,7 @@ export interface UseSettingsHandlersDeps {
     newStyleIsDefault: SettingsState['newStyleIsDefault'];
     newStyleName: SettingsState['newStyleName'];
     newStylePrompt: SettingsState['newStylePrompt'];
-    onGoogleSearchGroundingChange: (enabled: boolean) => void | undefined;
+    onGoogleSearchGroundingChange?: (enabled: boolean) => void;
     propGoogleSearchGrounding: boolean | undefined;
     setActiveTab: React.Dispatch<React.SetStateAction<StudioSettingsTab>>;
     setActiveWritingProfileState: SettingsSetters['setActiveWritingProfileState'];
@@ -126,7 +126,7 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
 
     React.useEffect(() => {
         if (isOpen) {
-            setActiveTab(initialTab === 'guide' ? 'general' : initialTab);
+            setActiveTab(initialTab === 'guide' || !initialTab ? 'general' : initialTab);
             // Load workspace rules & config
             WorkspaceConfigClient.getInstance().fetchWorkspaceConfig().then(cfg => {
                 if (cfg.rules) setWorkspaceRules(cfg.rules);

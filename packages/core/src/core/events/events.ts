@@ -15,9 +15,9 @@ export type Event<T> = (
     disposables?: IDisposable[] | DisposableCollection
 ) => IDisposable;
 
-export namespace Event {
-    export const None: Event<any> = () => ({ dispose() { } });
-}
+export const Event = {
+    None: (() => ({ dispose() { } })) as Event<unknown>
+} as const;
 
 export class Emitter<T> implements IDisposable {
     private _listeners = new Set<{ fn: (e: T) => any; thisArg?: any }>();

@@ -280,7 +280,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     streamGroundingMetadata = event.groundingMetadata;
                 }
                 if (event.artifact) {
-                    let art = event.artifact;
+                    const art = event.artifact;
                     const is3DActive = (layoutMode === '3d' || activeArtifact?.type === '3d-scene');
                     const isAnimPrompt = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(textToSend || '');
                     if (is3DActive && isAnimPrompt && art.type === '3d-scene') {
@@ -426,6 +426,8 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
             steps: liveSteps.length > 0 ? liveSteps : undefined
         };
+    } else {
+        throw new Error('finalizeBackendMessage called without a backend response');
     }
     return finalAssistantMsg;
 }

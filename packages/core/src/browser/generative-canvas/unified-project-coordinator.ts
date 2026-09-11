@@ -791,7 +791,7 @@ export class UnifiedProjectCoordinator {
         const id = artifactId || `lens-proj-${primitiveType}-${this.projectId}`;
         let data: any;
         let title = `${primitiveType} Lens`;
-        let summary = `Reactive projection of ${primitiveType} from canonical project state`;
+        const summary = `Reactive projection of ${primitiveType} from canonical project state`;
 
         switch (primitiveType) {
             case 'markdown-document': {

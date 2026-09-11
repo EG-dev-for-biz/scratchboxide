@@ -303,7 +303,7 @@ export function computeCameraForViewportAngle(
  * Normalize an image string to clean base64 data and mimeType.
  */
 export function parseImagePayload(rawImage: string): { base64Data: string; mimeType: string; dataUrl: string } {
-    let clean = (rawImage || '').trim();
+    const clean = (rawImage || '').trim();
     let mimeType = 'image/png';
     let base64Data = clean;
 
