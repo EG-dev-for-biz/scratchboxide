@@ -16,19 +16,14 @@ import type {
     LocalExecutionOptions,
     SystemCapabilities
 } from '../common/container-sandbox-protocol';
+import { resolveWithinRoot } from './security/path-guard';
+import {
+    assertCommandAllowed,
+    buildScrubbedEnv,
+    SandboxCommandRejectedError
+} from './security/sandbox-policy';
 
-// Critical security guardrail patterns to prevent host destruction
-const DANGEROUS_COMMAND_PATTERNS: RegExp[] = [
-    /\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\s+(\/|\*|~\/?)/i,
-    /\brm\s+-rf\s+(\/|\*)/i,
-    /\b(chmod|chown)\s+(-R\s+)?777\s+\//i,
-    /\bgit\s+reset\s+--hard\b/i,
-    /\bgit\s+push\s+.*(--force|-f)\b/i,
-    /\bdd\s+if=.*of=\/dev\//i,
-    /\bmkfs(\.[a-z0-9]+)?\s+\/dev\//i,
-    /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, // Fork bomb
-    />\s*\/dev\/(sda|hda|nvme|disk)/i
-];
+export { SandboxCommandRejectedError, DEFAULT_COMMAND_ALLOWLIST } from './security/sandbox-policy';
 
 export type {
     ContainerEnvironmentConfig,
@@ -81,28 +76,27 @@ export class ContainerSandboxService {
             throw new Error(`Environment ${environmentId} not found. Please create it first.`);
         }
 
-        const rawCommand = options.command.trim();
+        const rawCommand = (options.command || '').trim();
 
-        // 1. Guardrail Safety Check
-        if (!options.skipGuardrails) {
-            for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
-                if (pattern.test(rawCommand)) {
-                    throw new Error(`Blocked by security guardrail: Command matches dangerous pattern [${pattern.source}]`);
-                }
-            }
-        }
+        // 1. Confine the working directory to the environment's workspace root.
+        //    Throws PathTraversalError (code: 'path_traversal') on escape.
+        const cwd = resolveWithinRoot(env.workspaceRoot, options.cwd || '.');
 
-        const cwd = options.cwd || env.workspaceRoot;
+        // 2. Command policy: allowlist + hard denylist. Throws SandboxCommandRejectedError
+        //    (code: 'command_not_allowed') unless the caller passes confirmedByUser from a real user action.
+        assertCommandAllowed(rawCommand, {
+            cwd,
+            confirmedByUser: options.confirmedByUser === true
+        });
+
         const timeoutMs = options.timeoutMs || env.config.timeoutMs || 30000;
         const maxBuffer = options.maxBufferBytes || 10 * 1024 * 1024; // 10MB default buffer
 
-        const mergedEnv = {
-            ...process.env,
-            ...(env.config.envVars || {}),
-            ...(options.env || {}),
+        // 3. Scrubbed environment: small host allowlist + explicit vars, secrets removed.
+        const mergedEnv = buildScrubbedEnv(process.env, env.config.envVars, options.env, {
             SCRATCHBOX_ISOLATED: 'true',
             SCRATCHBOX_ENV_ID: environmentId
-        };
+        });
 
         const startTime = Date.now();
 

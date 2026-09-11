@@ -69,12 +69,22 @@ export class DeepWriteExecutionBridge {
                 return { success: true, output: 'Verified code structures.' };
             }
 
-            const res = await this.sandboxService.executeCommand(envId, {
-                command: runCmd,
-                cwd: buildDir,
-                timeoutMs: 15000,
-                skipGuardrails: true
-            });
+            let res;
+            try {
+                res = await this.sandboxService.executeCommand(envId, {
+                    command: runCmd,
+                    cwd: buildDir,
+                    timeoutMs: 15000,
+                    // Toolchain runs are agent-initiated; never bypass the sandbox allowlist here.
+                    confirmedByUser: false
+                });
+            } catch (err: any) {
+                if (err?.code === 'command_not_allowed' || err?.code === 'path_traversal') {
+                    onProgress?.(`Toolchain command "${runCmd}" rejected by sandbox policy: ${err.message}`);
+                    return { success: false, output: err.message, repairedFiles: currentFiles };
+                }
+                throw err;
+            }
 
             finalOutput = `${res.stdout}\n${res.stderr}`.trim();
             if (res.exitCode === 0) {

@@ -36,7 +36,11 @@ export interface LocalExecutionOptions {
     env?: Record<string, string>;
     timeoutMs?: number;
     maxBufferBytes?: number;
-    skipGuardrails?: boolean;
+    /**
+     * Set only by a caller acting on an explicit user action. Unlocks commands
+     * outside the default allowlist; destructive commands stay blocked.
+     */
+    confirmedByUser?: boolean;
 }
 
 export interface ExecutionResult {
