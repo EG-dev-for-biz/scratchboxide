@@ -38,6 +38,9 @@ async function runStandaloneServerTests() {
     const fetch: typeof rawFetch = (input: any, init: any = {}) => {
         const headers = new Headers(init.headers || {});
         headers.set('X-Scratchbox-Token', token);
+        // Fresh socket per request: under heavy parallel test load the server's
+        // keep-alive idle timeout can close a pooled socket while undici reuses it (ECONNRESET).
+        headers.set('Connection', 'close');
         return rawFetch(input, { ...init, headers });
     };
 
