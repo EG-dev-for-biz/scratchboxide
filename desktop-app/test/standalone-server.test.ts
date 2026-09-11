@@ -12,12 +12,18 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as os from 'os';
 import http from 'http';
-import { createStandaloneServer } from '../server/app';
+import { createStandaloneServer, createToolsServer } from '../server/app';
 
 async function runStandaloneServerTests() {
     console.log('🧪 Running Standalone Express Server Backend Tests...\n');
 
-    const app = createStandaloneServer({ port: 0 });
+    // Deep-write pipeline test writes into a temp workspace; allow it explicitly.
+    process.env.SCRATCHBOX_WORKSPACE_ROOTS = os.tmpdir();
+    delete process.env.SCRATCHBOX_LAUNCH_TOKEN;
+
+    const app = createStandaloneServer({ port: 0, toolsPort: 3999 });
+    const token: string = app.locals.launchToken;
+    assert.ok(token && token.length >= 64, 'launch token must be exposed on app.locals.launchToken');
     const server = http.createServer(app);
 
     await new Promise<void>((resolve) => {
@@ -26,6 +32,14 @@ async function runStandaloneServerTests() {
 
     const address = server.address() as { port: number; address: string };
     const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    // Every API call carries the per-launch token.
+    const rawFetch = globalThis.fetch;
+    const fetch: typeof rawFetch = (input: any, init: any = {}) => {
+        const headers = new Headers(init.headers || {});
+        headers.set('X-Scratchbox-Token', token);
+        return rawFetch(input, { ...init, headers });
+    };
 
     try {
         // Test 1: Browser Proxy Gateway Status
@@ -174,10 +188,44 @@ async function runStandaloneServerTests() {
         assert.strictEqual(dwResumeRes.status, 500);
         console.log('  ✓ Test 12 Passed: POST /gemini/deep-write/resume handles session validation');
 
+        console.log('  Testing POST /api/tools/export + isolated tools origin ...');
+        const exportRes = await fetch(`${baseUrl}/api/tools/export`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ toolId: 'server-test-tool', title: 'Server Test Tool', html: '<!doctype html><html><body>exported tool body</body></html>' })
+        });
+        assert.strictEqual(exportRes.status, 200, '/api/tools/export should return 200');
+        const exportData = await exportRes.json();
+        assert.strictEqual(exportData.success, true);
+        assert.strictEqual(exportData.url, 'http://127.0.0.1:3999/server-test-tool', 'export URL must point at the tools origin');
+
+        // The API origin no longer serves tool HTML.
+        const toolOnApi = await fetch(`${baseUrl}/tools/server-test-tool`);
+        assert.notStrictEqual(toolOnApi.status, 200, 'API origin must not serve /tools/:id');
+        const toolOnApiBody = await toolOnApi.text();
+        assert.ok(!toolOnApiBody.includes('exported tool body'), 'API origin must not leak tool HTML');
+
+        // The tools server shares the store and applies the sandboxing CSP.
+        const toolsServer = http.createServer(createToolsServer(app.locals.exportedToolsStore));
+        await new Promise<void>(resolve => toolsServer.listen(0, '127.0.0.1', () => resolve()));
+        try {
+            const toolsPort = (toolsServer.address() as { port: number }).port;
+            const toolRes = await rawFetch(`http://127.0.0.1:${toolsPort}/server-test-tool`);
+            assert.strictEqual(toolRes.status, 200);
+            assert.ok((toolRes.headers.get('content-security-policy') || '').includes('sandbox allow-scripts'));
+            assert.strictEqual(toolRes.headers.get('cross-origin-resource-policy'), 'cross-origin');
+            assert.ok((await toolRes.text()).includes('exported tool body'));
+        } finally {
+            (toolsServer as any).closeAllConnections?.();
+            toolsServer.close();
+        }
+        console.log('  ✓ Test 13 Passed: exported tools served from isolated origin with sandbox CSP');
+
         console.log('\n🎉 ALL STANDALONE SERVER BACKEND TESTS PASSED SUCCESSFULLY!\n');
     } finally {
         (server as any).closeAllConnections?.();
         server.close();
+        delete process.env.SCRATCHBOX_WORKSPACE_ROOTS;
     }
 
 }

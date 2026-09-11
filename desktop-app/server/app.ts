@@ -7,11 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import express, { Express, Request, Response } from 'express';
-import cors from 'cors';
+import express, { Express, NextFunction, Request, Response } from 'express';
 import bodyParser from 'body-parser';
+import * as crypto from 'crypto';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { assertWorkspaceRoot, PathTraversalError, resolveWithinRoot } from '../../packages/core/src/node/security/path-guard';
 import {
     WorkspaceConfigService,
     ProjectArtifactStore,
@@ -32,10 +34,7 @@ import {
     UserLearningService,
     WorkspaceFileWatcherService,
     LongRunningAgentService,
-    SubagentPoolService,
-    ContainerSandboxService,
-    LspDiagnosticFeedbackService,
-    ProjectContextGraphService
+    SubagentPoolService
 } from '../../packages/core/src/node';
 import {
     createEmptyProjectGraph,
@@ -48,29 +47,109 @@ import {
 export interface StandaloneServerOptions {
     port?: number;
     staticDir?: string;
+    /** Port the isolated tools origin listens on; used to build export URLs. Defaults to `SCRATCHBOX_TOOLS_PORT` or 3002. */
+    toolsPort?: number;
+    /** Host the tools origin is reachable at from the renderer. Defaults to 127.0.0.1. */
+    toolsHost?: string;
+}
+
+export interface ExportedTool {
+    id: string;
+    title: string;
+    html: string;
+    updatedAt: number;
+}
+
+export type ExportedToolsStore = Map<string, ExportedTool>;
+
+/** Environment variables the server is allowed to hydrate from secrets files. */
+export const SERVER_SECRET_ALLOWLIST = [
+    'GEMINI_API_KEY',
+    'GOOGLE_API_KEY',
+    'GOOGLE_AI_API_KEY',
+    'GOOGLE_CLOUD_API_KEY',
+    'GOOGLE_MAPS_API_KEY',
+    'GOOGLE_SEARCH_ENGINE_ID',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'GOOGLE_CLOUD_PROJECT',
+    'GOOGLE_CLOUD_LOCATION',
+    'GOOGLE_SERVICE_ACCOUNT_JSON',
+    'GOOGLE_OAUTH_CLIENT_ID'
+];
+
+/** Origins allowed to call the API when an Origin header is present. */
+export function resolveAllowedOrigins(): Set<string> {
+    const origins = new Set<string>(['http://127.0.0.1:3000', 'http://localhost:3000']);
+    for (const entry of (process.env.SCRATCHBOX_ALLOWED_ORIGINS || '').split(',')) {
+        const trimmed = entry.trim();
+        if (trimmed) origins.add(trimmed);
+    }
+    return origins;
+}
+
+/** Workspace roots the API may read from / write to. */
+export function resolveAllowedWorkspaceRoots(): string[] {
+    const roots = [
+        process.cwd(),
+        path.join(os.homedir(), 'dev'),
+        path.join(os.homedir(), 'Documents')
+    ];
+    for (const entry of (process.env.SCRATCHBOX_WORKSPACE_ROOTS || '').split(/[,:]/)) {
+        const trimmed = entry.trim();
+        if (trimmed) roots.push(path.resolve(trimmed));
+    }
+    return roots;
 }
 
 function loadEnvironmentSecrets(): void {
-    const candidates = [
-        path.resolve(process.cwd(), '.env'),
+    const homeSecrets = path.join(os.homedir(), '.scratchbox', 'secrets.json');
+    const repoSecrets = [
         path.resolve(process.cwd(), 'secrets.json'),
-        path.resolve(__dirname, '../../.env'),
         path.resolve(__dirname, '../../secrets.json'),
-        path.resolve(__dirname, '../../../.env'),
         path.resolve(__dirname, '../../../secrets.json')
     ];
+    const envFiles = [
+        path.resolve(process.cwd(), '.env'),
+        path.resolve(__dirname, '../../.env'),
+        path.resolve(__dirname, '../../../.env')
+    ];
 
-    for (const file of candidates) {
+    const allowed = new Set(SERVER_SECRET_ALLOWLIST);
+    const applyJson = (file: string): void => {
+        const json = fs.readJSONSync(file);
+        if (!json || typeof json !== 'object') return;
+        for (const [k, v] of Object.entries(json)) {
+            if (!allowed.has(k)) continue;
+            if (typeof v === 'string' && !process.env[k]) {
+                process.env[k] = v;
+            } else if (v && typeof v === 'object' && k === 'GOOGLE_SERVICE_ACCOUNT_JSON' && !process.env[k]) {
+                process.env[k] = JSON.stringify(v);
+            }
+        }
+    };
+
+    // Prefer the per-user secrets file; fall back to a repo-root file (with a warning).
+    let loadedJson = false;
+    if (fs.existsSync(homeSecrets)) {
+        try { applyJson(homeSecrets); loadedJson = true; } catch { /* ignore parse errors */ }
+    }
+    if (!loadedJson) {
+        for (const file of repoSecrets) {
+            if (!fs.existsSync(file)) continue;
+            try {
+                applyJson(file);
+                console.warn(`[Scratchbox] Loaded API secrets from repo-local ${file}; move them to ${homeSecrets} to keep them out of the source tree.`);
+                break;
+            } catch {
+                // Ignore parse errors
+            }
+        }
+    }
+
+    for (const file of envFiles) {
         if (!fs.existsSync(file)) continue;
         try {
-            if (file.endsWith('.json')) {
-                const json = fs.readJSONSync(file);
-                for (const [k, v] of Object.entries(json)) {
-                    if (typeof v === 'string' && !process.env[k]) {
-                        process.env[k] = v;
-                    }
-                }
-            } else if (file.endsWith('.env')) {
+            {
                 const lines = fs.readFileSync(file, 'utf8').split('\n');
                 for (const line of lines) {
                     const trimmed = line.trim();
@@ -82,7 +161,7 @@ function loadEnvironmentSecrets(): void {
                         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
                             val = val.slice(1, -1);
                         }
-                        if (!process.env[key]) {
+                        if (allowed.has(key) && !process.env[key]) {
                             process.env[key] = val;
                         }
                     }
@@ -110,13 +189,153 @@ function loadEnvironmentSecrets(): void {
     }
 }
 
+/** Routes reachable without the launch token. */
+const OPEN_ROUTES: Array<{ method: string; path: string }> = [
+    { method: 'GET', path: '/health' },
+    { method: 'GET', path: '/api/browser/status' }
+];
+
+/** GET routes consumed by EventSource, which cannot set headers: accept `?token=`. */
+const SSE_QUERY_TOKEN_ROUTES = new Set<string>(['/workspace/events/file-change']);
+
+/** Path prefixes that make up the authenticated API surface. */
+const PROTECTED_PREFIXES = ['/gemini', '/workspace', '/media', '/api'];
+
+function safeEqual(a: string, b: string): boolean {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) {
+        return false;
+    }
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+export function resolveLaunchToken(): string {
+    const fromEnv = (process.env.SCRATCHBOX_LAUNCH_TOKEN || '').trim();
+    return fromEnv || crypto.randomBytes(32).toString('hex');
+}
+
+function createCorsMiddleware(allowedOrigins: Set<string>) {
+    return (req: Request, res: Response, next: NextFunction): void => {
+        const origin = req.headers.origin;
+        if (!origin) {
+            // Same-origin, curl, Electron file:// without CORS mode, or server-to-server.
+            next();
+            return;
+        }
+        if (!allowedOrigins.has(origin)) {
+            res.status(403).json({ error: 'origin_not_allowed', message: `Origin ${origin} is not allowed` });
+            return;
+        }
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Scratchbox-Token, Accept');
+        res.setHeader('Access-Control-Expose-Headers', 'X-Scratchbox-Resolved-Url');
+        res.setHeader('Access-Control-Max-Age', '600');
+        if (req.method === 'OPTIONS') {
+            res.status(204).end();
+            return;
+        }
+        next();
+    };
+}
+
+function createLaunchTokenMiddleware(token: string) {
+    return (req: Request, res: Response, next: NextFunction): void => {
+        if (req.method === 'OPTIONS') {
+            next();
+            return;
+        }
+        const routePath = req.path.replace(/\/+$/, '') || '/';
+        if (!PROTECTED_PREFIXES.some(prefix => routePath === prefix || routePath.startsWith(`${prefix}/`))) {
+            // Static assets / SPA fallback are public application code.
+            next();
+            return;
+        }
+        if (OPEN_ROUTES.some(route => route.method === req.method && route.path === routePath)) {
+            next();
+            return;
+        }
+
+        let presented: string | undefined;
+        const authorization = req.headers.authorization;
+        if (typeof authorization === 'string' && /^Bearer\s+/i.test(authorization)) {
+            presented = authorization.replace(/^Bearer\s+/i, '').trim();
+        }
+        const headerToken = req.headers['x-scratchbox-token'];
+        if (!presented && typeof headerToken === 'string') {
+            presented = headerToken.trim();
+        }
+        if (!presented && req.method === 'GET' && SSE_QUERY_TOKEN_ROUTES.has(routePath) && typeof req.query.token === 'string') {
+            presented = req.query.token;
+        }
+
+        if (presented && safeEqual(presented, token)) {
+            next();
+            return;
+        }
+        res.status(401).json({ error: 'unauthorized', message: 'Missing or invalid Scratchbox launch token' });
+    };
+}
+
+function isPathError(err: unknown): err is PathTraversalError {
+    return err instanceof PathTraversalError || (err as any)?.code === 'path_traversal';
+}
+
+/**
+ * Creates the authenticated API application. The per-launch token is exposed
+ * as `app.locals.launchToken`; the exported-tool store shared with
+ * {@link createToolsServer} as `app.locals.exportedToolsStore`.
+ */
 export function createStandaloneServer(options: StandaloneServerOptions = {}): Express {
     loadEnvironmentSecrets();
     const app = express();
 
-    app.use(cors());
+    const launchToken = resolveLaunchToken();
+    const allowedOrigins = resolveAllowedOrigins();
+    const allowedWorkspaceRoots = resolveAllowedWorkspaceRoots();
+    const exportedToolsStore: ExportedToolsStore = new Map();
+    const toolsPort = options.toolsPort ?? parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
+    const toolsHost = options.toolsHost || '127.0.0.1';
+
+    app.locals.launchToken = launchToken;
+    app.locals.exportedToolsStore = exportedToolsStore;
+    app.locals.allowedWorkspaceRoots = allowedWorkspaceRoots;
+    app.disable('x-powered-by');
+
+    app.use(createCorsMiddleware(allowedOrigins));
+
+    // Static assets (production, browser mode) are public application code and
+    // are served before the token gate. API prefixes below always require it.
+    if (options.staticDir && fs.existsSync(options.staticDir)) {
+        app.use(express.static(options.staticDir, { index: 'index.html' }));
+    }
+
+    app.use(createLaunchTokenMiddleware(launchToken));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+
+    app.get('/health', (_req: Request, res: Response) => {
+        res.json({ ok: true, service: 'scratchbox-api', timestamp: Date.now() });
+    });
+
+    /**
+     * Validates a caller-supplied workspace root against the allowlist.
+     * Returns the canonical root or throws PathTraversalError.
+     */
+    const requireWorkspaceRoot = (candidate: unknown): string => {
+        const root = typeof candidate === 'string' && candidate.trim() ? candidate.trim() : process.cwd();
+        return assertWorkspaceRoot(root, allowedWorkspaceRoots);
+    };
+
+    const sendError = (res: Response, err: any, fallbackStatus = 500): void => {
+        if (isPathError(err)) {
+            res.status(403).json({ success: false, error: 'workspace_root_not_allowed', message: err.message });
+            return;
+        }
+        res.status(fallbackStatus).json({ success: false, error: err?.message || 'Internal server error' });
+    };
 
     const workspaceService = new WorkspaceConfigService();
     const artifactStore = new ProjectArtifactStore();
@@ -262,12 +481,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
             const status = await geminiService.getStatus();
             res.json(status);
         } catch (err: any) {
-            res.json({
-                initialized: true,
-                hasKey: true,
-                primaryModel: 'gemini-3.7-flash',
-                subagentModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'],
-                builtInToolsAvailable: ['googleSearch', 'codeExecution']
+            res.status(503).json({
+                initialized: false,
+                hasKey: false,
+                connected: false,
+                error: err?.message || 'Gemini service unavailable'
             });
         }
     });
@@ -281,20 +499,34 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     });
 
-    const handleStream = async (req: Request, res: Response) => {
+    /** Opens an SSE response and returns an AbortController tied to the client connection. */
+    const openSse = (req: Request, res: Response): AbortController => {
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive'
         });
+        const controller = new AbortController();
+        req.on('close', () => controller.abort());
+        return controller;
+    };
+
+    const handleStream = async (req: Request, res: Response) => {
+        const controller = openSse(req, res);
 
         try {
             await geminiService.streamGenerate(req.body, event => {
-                res.write(`data: ${JSON.stringify(event)}\n\n`);
-            });
+                if (!controller.signal.aborted) {
+                    res.write(`data: ${JSON.stringify(event)}\n\n`);
+                }
+            }, controller.signal);
             res.write('data: [DONE]\n\n');
             res.end();
         } catch (err: any) {
+            if (controller.signal.aborted) {
+                res.end();
+                return;
+            }
             res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`);
             res.write('data: [DONE]\n\n');
             res.end();
@@ -325,17 +557,24 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     geminiRouter.post('/credentials', async (req: Request, res: Response) => {
         try {
             const { apiKey } = req.body || {};
-            if (apiKey) {
-                process.env.GEMINI_API_KEY = apiKey;
-                process.env.GOOGLE_API_KEY = apiKey;
-                await mediaCredentials.saveApiKey(apiKey).catch(() => {});
+            if (typeof apiKey !== 'string' || !apiKey.trim()) {
+                res.status(400).json({ success: false, error: 'apiKey is required' });
+                return;
             }
+            // Persist through the encrypted key store; only the running process keeps the env copy.
+            const saved = await mediaCredentials.saveApiKey(apiKey);
+            if (!saved.success) {
+                res.status(400).json({ success: false, error: saved.error || 'Invalid API key' });
+                return;
+            }
+            process.env.GEMINI_API_KEY = apiKey.trim();
             res.json({
                 success: true,
+                authMethod: saved.authMethod,
                 message: 'Credentials updated successfully'
             });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            res.status(500).json({ success: false, error: err.message });
         }
     });
 
@@ -398,29 +637,35 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     // Deep-Write & Intelligent Planning Pipelines
     geminiRouter.post('/deep-write/pipeline', async (req: Request, res: Response) => {
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        });
-
+        const { prompt, sessionId, workspaceRoot, activeArtifact, useGoogleSearch } = req.body || {};
+        if (!prompt) {
+            res.status(400).json({ success: false, error: 'Prompt is required' });
+            return;
+        }
+        let safeRoot: string;
         try {
-            const { prompt, sessionId, workspaceRoot, activeArtifact, useGoogleSearch } = req.body || {};
-            if (!prompt) {
-                res.write(`data: ${JSON.stringify({ type: 'error', error: 'Prompt is required' })}\n\n`);
-                res.end();
-                return;
-            }
+            safeRoot = requireWorkspaceRoot(workspaceRoot);
+        } catch (err: any) {
+            sendError(res, err);
+            return;
+        }
 
+        const controller = openSse(req, res);
+        try {
             await deepWriteService.runPipeline(
-                { prompt, sessionId, workspaceRoot, activeArtifact, useGoogleSearch },
+                { prompt, sessionId, workspaceRoot: safeRoot, activeArtifact, useGoogleSearch },
                 event => {
-                    res.write(`data: ${JSON.stringify(event)}\n\n`);
-                }
+                    if (!controller.signal.aborted) {
+                        res.write(`data: ${JSON.stringify(event)}\n\n`);
+                    }
+                },
+                controller.signal
             );
             res.end();
         } catch (err: any) {
-            res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`);
+            if (!controller.signal.aborted) {
+                res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`);
+            }
             res.end();
         }
     });
@@ -433,9 +678,14 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 return;
             }
 
-            await deepWriteService.resumePipeline(sessionId, feedback, workspaceRoot);
+            const safeRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined;
+            await deepWriteService.resumePipeline(sessionId, feedback, safeRoot);
             res.json({ success: true });
         } catch (err: any) {
+            if (isPathError(err)) {
+                sendError(res, err);
+                return;
+            }
             res.status(500).json({ success: false, error: err.message || 'Failed to resume pipeline' });
         }
     });
@@ -509,25 +759,26 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     });
 
     geminiRouter.post('/agent/stream', async (req: Request, res: Response) => {
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        });
+        const { sessionId } = req.body || {};
+        if (!sessionId) {
+            res.status(400).json({ success: false, error: 'sessionId is required' });
+            return;
+        }
 
+        const controller = openSse(req, res);
         try {
-            const { sessionId } = req.body || {};
-            if (!sessionId) {
-                res.write(`data: ${JSON.stringify({ type: 'error', error: 'sessionId is required' })}\n\n`);
-                res.end();
-                return;
-            }
             await longRunningAgentService.runAutonomousLoop(sessionId, event => {
-                res.write(`data: ${JSON.stringify(event)}\n\n`);
-            });
+                if (!controller.signal.aborted) {
+                    res.write(`data: ${JSON.stringify(event)}\n\n`);
+                }
+            }, controller.signal);
             res.write('data: [DONE]\n\n');
             res.end();
         } catch (err: any) {
+            if (controller.signal.aborted) {
+                res.end();
+                return;
+            }
             res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Autonomous agent execution failed' })}\n\n`);
             res.write('data: [DONE]\n\n');
             res.end();
@@ -566,11 +817,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 scope: scope as any,
                 category: category as any,
                 categoryGroup: categoryGroup as any,
-                workspaceRoot
+                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
             });
             res.json({ success: true, memories });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err.message });
+            sendError(res, err);
         }
     });
 
@@ -587,11 +838,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 value,
                 scope,
                 workspaceId,
-                workspaceRoot
+                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
             });
             res.json({ success: true, memory });
         } catch (err: any) {
-            res.status(500).json({ success: false, error: err.message });
+            sendError(res, err);
         }
     });
 
@@ -645,9 +896,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         waitForCompletion: boolean
     ): Promise<void> => {
         try {
-            const job = await mediaJobs.create(request);
+            const workspaceRoot = requireWorkspaceRoot(request?.workspaceRoot);
+            const job = await mediaJobs.create({ ...request, workspaceRoot });
             if (waitForCompletion) {
-                const completed = await mediaJobs.process(job.id, request.workspaceRoot || process.cwd());
+                const completed = await mediaJobs.process(job.id, workspaceRoot);
                 res.status(completed.status === 'completed' ? 200 : 422).json({
                     success: completed.status === 'completed',
                     job: completed,
@@ -655,9 +907,13 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 });
                 return;
             }
-            mediaJobs.process(job.id, request.workspaceRoot || process.cwd()).catch(() => undefined);
+            mediaJobs.process(job.id, workspaceRoot).catch(() => undefined);
             res.status(202).json({ success: true, job });
         } catch (error) {
+            if (isPathError(error)) {
+                sendError(res, error);
+                return;
+            }
             const detail = (error as any)?.mediaError || classifyMediaGenerationError(error);
             const status = detail.code === 'unauthorized' ? 401
                 : detail.code === 'quota' ? 429
@@ -684,38 +940,48 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     workspaceRouter.get('/config', async (req: Request, res: Response) => {
         try {
-            const root = (req.query.root as string) || process.cwd();
+            const root = requireWorkspaceRoot(req.query.root);
             const config = await workspaceService.loadFullWorkspaceConfig(root);
             res.json(config);
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            sendError(res, err);
         }
     });
 
     workspaceRouter.post('/config', async (req: Request, res: Response) => {
         try {
-            const { workspaceRoot, settings } = req.body;
-            await workspaceService.saveWorkspaceConfig(workspaceRoot || process.cwd(), { settings });
+            const { workspaceRoot, settings } = req.body || {};
+            await workspaceService.saveWorkspaceConfig(requireWorkspaceRoot(workspaceRoot), { settings });
             res.json({ success: true });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            sendError(res, err);
         }
     });
 
     workspaceRouter.post('/sync-artifact', async (req: Request, res: Response) => {
         try {
-            const { workspaceRoot, artifact } = req.body;
-            const result = await workspaceService.syncArtifactToWorkspace(workspaceRoot || process.cwd(), artifact);
+            const { workspaceRoot, artifact } = req.body || {};
+            if (!artifact || typeof artifact !== 'object') {
+                res.status(400).json({ success: false, error: 'artifact is required' });
+                return;
+            }
+            const result = await workspaceService.syncArtifactToWorkspace(requireWorkspaceRoot(workspaceRoot), artifact);
             res.json(result);
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            sendError(res, err);
         }
     });
 
     workspaceRouter.get('/project-artifacts', async (req: Request, res: Response) => {
         const projectId = (req.query.projectId as string) || 'default-project';
+        let root: string;
         try {
-            const root = (req.query.root as string) || process.cwd();
+            root = requireWorkspaceRoot(req.query.root);
+        } catch (err: any) {
+            sendError(res, err);
+            return;
+        }
+        try {
             const graph = await artifactStore.loadOrCreate(root, projectId);
             res.json(graph);
         } catch (err: any) {
@@ -730,22 +996,29 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 res.status(400).json({ error: 'Missing graph body' });
                 return;
             }
-            await artifactStore.save(workspaceRoot || process.cwd(), graph);
+            await artifactStore.save(requireWorkspaceRoot(workspaceRoot), graph);
             res.json({ success: true });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            sendError(res, err);
         }
     });
 
     workspaceRouter.post('/create', async (req: Request, res: Response) => {
         try {
             const { name, path: targetPath, template } = req.body || {};
-            const cleanName = (name || 'new-workspace').trim();
-            const devHome = process.env.HOME ? path.join(process.env.HOME, 'dev') : '/Users/eligreen/dev';
-            const resolvedPath = targetPath 
-                ? path.resolve(targetPath.replace(/^~/, process.env.HOME || '/Users/eligreen'))
+            const cleanName = String(name || 'new-workspace').trim();
+            const home = os.homedir();
+            const devHome = path.join(home, 'dev');
+            const requestedPath = typeof targetPath === 'string' && targetPath.trim()
+                ? path.resolve(targetPath.trim().replace(/^~(?=$|[\\/])/, home))
                 : path.resolve(devHome, cleanName.toLowerCase().replace(/[^a-z0-9_-]/g, '-'));
-            
+
+            // The new workspace must live under an allowed root; once created it becomes one itself.
+            const resolvedPath = assertWorkspaceRoot(requestedPath, allowedWorkspaceRoots);
+            if (!allowedWorkspaceRoots.includes(resolvedPath)) {
+                allowedWorkspaceRoots.push(resolvedPath);
+            }
+
             await fs.ensureDir(resolvedPath);
             await fs.ensureDir(path.join(resolvedPath, '.scratchbox', 'rules'));
             await fs.ensureDir(path.join(resolvedPath, '.scratchbox', 'skills'));
@@ -779,7 +1052,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 }
             });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            sendError(res, err);
         }
     });
 
@@ -791,12 +1064,16 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
         res.write('event: ping\ndata: {"status":"connected"}\n\n');
 
+        // Stream real file-change events from the watcher to this client.
+        fileWatcher.addSSEClient(res);
+
         const keepAlive = setInterval(() => {
             res.write('event: ping\ndata: {"status":"ping"}\n\n');
         }, 30000);
 
         req.on('close', () => {
             clearInterval(keepAlive);
+            fileWatcher.removeSSEClient(res);
         });
     });
 
@@ -836,22 +1113,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                     models: ['gemini-2.5-flash-tts']
                 }
             });
-        } catch {
-            res.json({
-                image: {
-                    supported: true,
-                    models: IMAGE_MODEL_PRIORITY,
-                    primaryModel: 'nano-banana-2'
-                },
-                video: {
-                    supported: true,
-                    models: VIDEO_MODEL_PRIORITY,
-                    primaryModel: 'google/omni-1.1'
-                },
-                audio: {
-                    supported: true,
-                    models: ['gemini-2.5-flash-tts']
-                }
+        } catch (err: any) {
+            res.status(503).json({
+                success: false,
+                error: err?.message || 'Media capabilities unavailable'
             });
         }
     });
@@ -869,24 +1134,37 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     });
 
     mediaRouter.get('/jobs/:id', async (req: Request, res: Response) => {
-        const workspaceRoot = String(req.query.workspaceRoot || process.cwd());
-        const job = await mediaJobs.get(req.params.id, workspaceRoot);
-        if (!job) {
-            res.status(404).json({
-                success: false,
-                error: { code: 'invalid_request', message: 'Media job not found', retryable: false }
-            });
-            return;
+        try {
+            const workspaceRoot = requireWorkspaceRoot(req.query.workspaceRoot);
+            const job = await mediaJobs.get(req.params.id, workspaceRoot);
+            if (!job) {
+                res.status(404).json({
+                    success: false,
+                    error: { code: 'invalid_request', message: 'Media job not found', retryable: false }
+                });
+                return;
+            }
+            res.json({ success: true, job });
+        } catch (error) {
+            if (isPathError(error)) {
+                sendError(res, error);
+                return;
+            }
+            const detail = classifyMediaGenerationError(error);
+            res.status(500).json({ success: false, error: detail });
         }
-        res.json({ success: true, job });
     });
 
     mediaRouter.post('/jobs/:id/cancel', async (req: Request, res: Response) => {
         try {
-            const workspaceRoot = String(req.body?.workspaceRoot || process.cwd());
+            const workspaceRoot = requireWorkspaceRoot(req.body?.workspaceRoot);
             const job = await mediaJobs.cancel(req.params.id, workspaceRoot);
             res.json({ success: true, job });
         } catch (error) {
+            if (isPathError(error)) {
+                sendError(res, error);
+                return;
+            }
             const detail = classifyMediaGenerationError(error);
             res.status(400).json({ success: false, error: detail });
         }
@@ -894,7 +1172,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     mediaRouter.get('/jobs/:id/content', async (req: Request, res: Response) => {
         try {
-            const workspaceRoot = String(req.query.workspaceRoot || process.cwd());
+            const workspaceRoot = requireWorkspaceRoot(req.query.workspaceRoot);
             const job = await mediaJobs.get(req.params.id, workspaceRoot);
             if (!job?.result?.asset || job.status !== 'completed') {
                 res.status(404).json({
@@ -903,11 +1181,16 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 });
                 return;
             }
-            const filePath = mediaAssets.resolve(workspaceRoot, job.result.asset);
+            // Asset paths are derived from stored job data; keep them inside the workspace regardless.
+            const filePath = resolveWithinRoot(workspaceRoot, mediaAssets.resolve(workspaceRoot, job.result.asset));
             res.type(job.result.asset.mimeType);
             res.setHeader('Cache-Control', 'private, immutable, max-age=31536000');
             res.sendFile(filePath);
         } catch (error) {
+            if (isPathError(error)) {
+                sendError(res, error);
+                return;
+            }
             const detail = classifyMediaGenerationError(error);
             res.status(400).json({ success: false, error: detail });
         }
@@ -918,29 +1201,64 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     // ==========================================
     // 5. Standalone Vibe-Coded Tools & Micro-Studios Hub
+    //    Export stays on the (token-protected) API; the HTML itself is served
+    //    by the isolated tools origin (see createToolsServer) so a generated
+    //    tool can never read the launch token or call the API as the user.
     // ==========================================
     const toolsRouter = express.Router();
-    const exportedToolsStore = new Map<string, { id: string; title: string; html: string; updatedAt: number }>();
 
     toolsRouter.post('/export', (req: Request, res: Response) => {
-        const { toolId, title, html } = req.body;
-        const id = toolId || `tool-${Date.now()}`;
+        const { toolId, title, html } = req.body || {};
+        const id = typeof toolId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(toolId) ? toolId : `tool-${Date.now()}`;
         exportedToolsStore.set(id, {
             id,
-            title: title || 'Scratchbox Standalone Tool',
-            html: html || '',
+            title: typeof title === 'string' && title ? title : 'Scratchbox Standalone Tool',
+            html: typeof html === 'string' ? html : '',
             updatedAt: Date.now()
         });
         res.json({
             success: true,
             toolId: id,
-            url: `/tools/${id}`
+            url: `http://${toolsHost}:${toolsPort}/${id}`
         });
     });
 
-    toolsRouter.get('/:toolId', (req: Request, res: Response) => {
+    app.use('/api/tools', toolsRouter);
+
+    // SPA fallback for production browser mode (after all API routes).
+    if (options.staticDir && fs.existsSync(options.staticDir)) {
+        app.get('*', (req: Request, res: Response, next: NextFunction) => {
+            if (PROTECTED_PREFIXES.some(prefix => req.path === prefix || req.path.startsWith(`${prefix}/`))) {
+                next();
+                return;
+            }
+            res.sendFile(path.join(options.staticDir!, 'index.html'));
+        });
+    }
+
+    return app;
+}
+
+/** Content-Security-Policy applied to every exported tool document. */
+export const TOOLS_CONTENT_SECURITY_POLICY =
+    "sandbox allow-scripts; default-src 'self' https://cdn.tailwindcss.com https://esm.sh https://unpkg.com 'unsafe-inline' 'unsafe-eval'";
+
+/**
+ * Creates the isolated origin that serves exported vibe-coded tools.
+ * Must be listened on a different port than the API (default 3002).
+ */
+export function createToolsServer(store: ExportedToolsStore): Express {
+    const toolsApp = express();
+    toolsApp.disable('x-powered-by');
+
+    toolsApp.get('/:toolId', (req: Request, res: Response) => {
         const { toolId } = req.params;
-        const tool = exportedToolsStore.get(toolId);
+        const tool = store.get(toolId);
+        res.setHeader('Content-Security-Policy', TOOLS_CONTENT_SECURITY_POLICY);
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
         if (!tool) {
             return res.status(404).send(`
 <!DOCTYPE html>
@@ -954,8 +1272,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     <div class="text-center p-8 bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md shadow-2xl">
         <div class="w-12 h-12 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto mb-4 font-mono font-bold text-lg">!</div>
         <h1 class="text-xl font-bold mb-2">Standalone Tool Not Found</h1>
-        <p class="text-sm text-zinc-400 mb-6">The requested vibe-coded tool "${toolId}" was not found or has expired.</p>
-        <a href="/" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded-lg transition font-medium">Return to Scratchbox IDE</a>
+        <p class="text-sm text-zinc-400 mb-6">The requested vibe-coded tool "${escapeHtml(toolId)}" was not found or has expired.</p>
     </div>
 </body>
 </html>`);
@@ -964,16 +1281,14 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         res.send(tool.html);
     });
 
-    app.use('/api/tools', toolsRouter);
-    app.use('/tools', toolsRouter);
+    return toolsApp;
+}
 
-    // Serve static files if in production
-    if (options.staticDir && fs.existsSync(options.staticDir)) {
-        app.use(express.static(options.staticDir));
-        app.get('*', (_req: Request, res: Response) => {
-            res.sendFile(path.join(options.staticDir!, 'index.html'));
-        });
-    }
-
-    return app;
+function escapeHtml(value: string): string {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }

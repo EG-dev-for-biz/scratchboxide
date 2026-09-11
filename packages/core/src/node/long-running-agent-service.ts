@@ -248,9 +248,10 @@ export class LongRunningAgentService {
      */
     async runAutonomousLoop(
         sessionId: string,
-        onEvent: (event: AgentStreamEvent) => void
+        onEvent: (event: AgentStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<AgentSessionState> {
-        return this.runMilestoneLoop(sessionId, onEvent);
+        return this.runMilestoneLoop(sessionId, onEvent, signal);
     }
 
     /**
@@ -258,11 +259,22 @@ export class LongRunningAgentService {
      */
     async runMilestoneLoop(
         sessionId: string,
-        onEvent: (event: AgentStreamEvent) => void
+        onEvent: (event: AgentStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<AgentSessionState> {
         const state = this.sessions.get(sessionId);
         if (!state) {
             throw new Error(`Session ${sessionId} not found`);
+        }
+
+        // A dropped SSE connection cancels the session so the loop cannot run unattended.
+        if (signal) {
+            const onAbort = () => this.cancelSignals.set(sessionId, true);
+            if (signal.aborted) {
+                onAbort();
+            } else {
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
         }
 
         state.status = 'running';

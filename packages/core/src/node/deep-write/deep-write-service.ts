@@ -47,12 +47,16 @@ export class DeepWriteService {
      */
     public async runPipeline(
         request: DeepWriteGoalRequest,
-        onEvent: (event: DeepWriteStreamEvent) => void
+        onEvent: (event: DeepWriteStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<void> {
         const sessionId = request.sessionId || `dw-sess-${Date.now()}`;
         const workspaceRoot = request.workspaceRoot || process.cwd();
 
         try {
+            if (signal?.aborted) {
+                return;
+            }
             // 1. Strategic Goal Discovery & Deliverable Formulation
             onEvent({
                 type: 'pipeline_start',
@@ -73,6 +77,10 @@ export class DeepWriteService {
                 plan,
                 message: `Analyzed goal: formulated target platforms [${plan.domains.join(', ')}] and primitives.`
             });
+
+            if (signal?.aborted) {
+                return;
+            }
 
             // 2. Generate Initial Multi-Platform Project Scaffolding
             onEvent({
@@ -106,7 +114,8 @@ export class DeepWriteService {
                 historyContext,
                 filesContext,
                 workspaceRoot,
-                onEvent
+                onEvent,
+                signal
             );
 
         } catch (err: any) {
@@ -210,9 +219,14 @@ export class DeepWriteService {
         historyContext: Record<string, any>,
         filesContext: Record<string, string>,
         workspaceRoot: string,
-        onEvent: (event: DeepWriteStreamEvent) => void
+        onEvent: (event: DeepWriteStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<void> {
         for (let i = startIndex; i < plan.stages.length; i++) {
+            if (signal?.aborted) {
+                // Client disconnected: stop spending model/tool budget on this session.
+                return;
+            }
             const stage = plan.stages[i];
 
             onEvent({
