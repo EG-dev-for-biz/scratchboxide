@@ -25,6 +25,7 @@ import {
 } from '../browser/generative-canvas/canvas-types';
 import { WorkspaceFileWatcherService } from './workspace-file-watcher-service';
 import { createFileChangeHash } from '../common/workspace-sync-protocol';
+import { resolveWithinRoot } from './security/path-guard';
 
 export interface ProjectRule {
     id: string;
@@ -457,11 +458,18 @@ export class WorkspaceConfigService {
             // 1. Live Code Sandbox
             if (artifact.type === 'live-code-sandbox') {
                 const sandboxData = artifact.data as LiveCodeSandboxData;
-                const destDir = path.join(root, targetSubdir || 'src/components');
-                await fs.ensureDir(destDir);
+                const destDir = resolveWithinRoot(root, targetSubdir || 'src/components');
 
-                for (const file of sandboxData.files || []) {
-                    const filePath = path.join(destDir, file.name);
+                // Validate every target path before touching disk so a single
+                // traversal attempt aborts the whole sync without partial writes.
+                const targets = (sandboxData.files || []).map(file => ({
+                    file,
+                    filePath: resolveWithinRoot(root, path.join(destDir, file.name))
+                }));
+
+                await fs.ensureDir(destDir);
+                for (const { file, filePath } of targets) {
+                    await fs.ensureDir(path.dirname(filePath));
                     await fs.writeFile(filePath, file.content, 'utf-8');
                     writtenFiles.push(filePath);
                 }
@@ -476,7 +484,7 @@ export class WorkspaceConfigService {
             // 2. Markdown Document
             if (artifact.type === 'markdown-document') {
                 const docData = artifact.data as MarkdownDocumentData;
-                const destDir = path.join(root, targetSubdir || 'docs');
+                const destDir = resolveWithinRoot(root, targetSubdir || 'docs');
                 await fs.ensureDir(destDir);
 
                 const fileName = `${slug}.md`;
@@ -495,7 +503,7 @@ export class WorkspaceConfigService {
 
             // 3. Visual Node Graph
             if (artifact.type === 'node-graph') {
-                const destDir = path.join(root, targetSubdir || 'workflows');
+                const destDir = resolveWithinRoot(root, targetSubdir || 'workflows');
                 await fs.ensureDir(destDir);
 
                 const fileName = `${slug}.workflow.json`;
@@ -511,7 +519,7 @@ export class WorkspaceConfigService {
             }
 
             // 4. Other Primitives (Kanban, Metrics, etc.)
-            const destDir = path.join(root, targetSubdir || 'docs');
+            const destDir = resolveWithinRoot(root, targetSubdir || 'docs');
             await fs.ensureDir(destDir);
             const fileName = `${slug}.${artifact.type}.json`;
             const filePath = path.join(destDir, fileName);
@@ -544,10 +552,16 @@ export class WorkspaceConfigService {
     ): Promise<{ success: boolean; writtenFiles: string[]; error?: string }> {
         try {
             const writtenFiles: string[] = [];
-            for (const [relPath, content] of Object.entries(files)) {
-                const safePath = path.normalize(relPath).replace(/^(\.\.[\/\\])+/, '');
-                const fullPath = path.join(workspaceRoot, safePath);
+            const root = workspaceRoot || process.cwd();
 
+            // Resolve and validate every path up-front so a traversal attempt
+            // rejects the whole batch before any file is written.
+            const targets = Object.entries(files).map(([relPath, content]) => {
+                const fullPath = resolveWithinRoot(root, relPath);
+                return { safePath: path.relative(root, fullPath) || '.', fullPath, content };
+            });
+
+            for (const { safePath, fullPath, content } of targets) {
                 if (watcherService) {
                     const hash = createFileChangeHash(content);
                     watcherService.registerKnownHash(fullPath, hash);
