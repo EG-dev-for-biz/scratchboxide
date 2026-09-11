@@ -229,10 +229,8 @@ export class GoogleMapsService {
 
         // 1. Check environment variables
         if (typeof process !== 'undefined' && process.env) {
+            // Only the browser-safe Maps/Tiles key is compiled into the bundle (see desktop-app/vite.config.ts `define`).
             resolvedKey = process.env.GOOGLE_MAPS_API_KEY ||
-                          process.env.GOOGLE_MAPS_KEY ||
-                          process.env.GOOGLE_API_KEY ||
-                          process.env.GOOGLE_CLOUD_API_KEY ||
                           process.env.MAP_TILES_API_KEY ||
                           '';
         }
