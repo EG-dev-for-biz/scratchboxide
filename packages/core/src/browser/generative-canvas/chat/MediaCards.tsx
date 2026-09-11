@@ -43,7 +43,7 @@ export const ImageGeneratedCard: React.FC<{
         <div className="sb-multimedia-card sb-image-card">
             <div className="sb-image-grid">
                 {images.map((img, idx) => (
-                    <div key={idx} className="sb-image-wrapper">
+                    <div key={`${img}-${idx}`} className="sb-image-wrapper">
                         <img src={img} alt="Generated asset" className="sb-image-preview" />
                         <div className="sb-image-overlay">
                             <button
@@ -169,7 +169,7 @@ export const AudioNarratedCard: React.FC<{
                 <div className="sb-waveform-container">
                     {STATIC_WAVEFORM_HEIGHTS.map((baseH, idx) => (
                         <div
-                            key={idx}
+                            key={`bar-${baseH}-${idx}`}
                             className={`sb-waveform-bar ${isPlaying ? 'sb-waveform-animated-bar' : ''}`}
                             style={{
                                 height: `${baseH}px`,

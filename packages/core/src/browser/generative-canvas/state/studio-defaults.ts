@@ -54,6 +54,29 @@ export const DEFAULT_WORKSPACE_GIT_STATUS: WorkspaceGitStatusSnapshot = {
 };
 
 
+/** Directory that contains `workspacePath`; falls back to a home-relative dev folder when the root is not known yet. */
+export function parentDirectoryOf(workspacePath: string | undefined): string {
+    const trimmed = (workspacePath || '').replace(/\/+$/, '');
+    if (!trimmed || !trimmed.includes('/')) {
+        return '~/dev';
+    }
+    return trimmed.slice(0, trimmed.lastIndexOf('/')) || '/';
+}
+
+/** Path for a new workspace created next to the active one. */
+export function siblingWorkspacePath(activeWorkspacePath: string | undefined, slug: string): string {
+    return `${parentDirectoryOf(activeWorkspacePath)}/${slug}`;
+}
+
+/** Up to two upper-case initials for an avatar badge. */
+export function initialsOf(name: string): string {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+        return '?';
+    }
+    return parts.slice(0, 2).map(p => p.charAt(0).toUpperCase()).join('');
+}
+
 export const DEFAULT_SESSIONS: ChatSession[] = [
     {
         id: 'sess-active-agent',

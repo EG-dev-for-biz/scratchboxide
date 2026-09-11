@@ -160,6 +160,7 @@ import { WorkspaceSidebar, WorkspaceSidebarProps } from './studio/WorkspaceSideb
 import { StudioTopBar, StudioTopBarProps } from './studio/StudioTopBar';
 import { ArtifactStage, ArtifactStageProps } from './studio/ArtifactStage';
 import { useWorkspaceGraphCoordinator } from './studio/useWorkspaceGraphCoordinator';
+import { useResolvedWorkspaceRoot } from './hooks/useResolvedWorkspaceRoot';
 import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
 import { useArtifactSync } from './hooks/useArtifactSync';
@@ -181,7 +182,7 @@ import {
     getCanvasReopenTabTitle as canvasReopenTabTitle,
     getCanvasReopenIcon as canvasReopenIcon
 } from './studio/canvas-labels';
-import { DEFAULT_WORKSPACE_FILES, DEFAULT_WORKSPACE_GIT_STATUS } from './state/studio-defaults';
+import { DEFAULT_WORKSPACE_FILES, DEFAULT_WORKSPACE_GIT_STATUS, siblingWorkspacePath } from './state/studio-defaults';
 import { loadInitialChatState, loadSavedAppearance, usePersistedChatState } from './hooks/usePersistedChatState';
 
 
@@ -345,13 +346,14 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const [showNewWorkspaceMenu, setShowNewWorkspaceMenu] = React.useState<boolean>(false);
     const [showComposerWorkspaceMenu, setShowComposerWorkspaceMenu] = React.useState<boolean>(false);
     const [newWorkspaceInputName, setNewWorkspaceInputName] = React.useState<string>('');
+    useResolvedWorkspaceRoot(activeWorkspace, setActiveWorkspace, setWorkspaces);
 
     const handleCreateNewWorkspace = React.useCallback(async (workspaceName?: string, customPath?: string) => {
         const rawName = (workspaceName || newWorkspaceInputName || 'scratchbox-test-workspace').trim();
         if (!rawName) return;
 
         const cleanName = rawName.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-        const diskPath = customPath || `/Users/eligreen/dev/${cleanName.toLowerCase().replace(/[\s_]+/g, '-')}`;
+        const diskPath = customPath || siblingWorkspacePath(activeWorkspace.path, cleanName.toLowerCase().replace(/[\s_]+/g, '-'));
 
         try {
             const res = await fetch('/workspace/create', {
@@ -434,7 +436,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setActiveArtifact(undefined);
         setLayoutMode('chat');
         showToast(`Created & switched to workspace "${createdLocal.name}"`, '📁');
-    }, [newWorkspaceInputName, showToast]);
+    }, [newWorkspaceInputName, showToast, activeWorkspace.path]);
 
     const {
         graphControllerRef,

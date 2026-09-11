@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { ChatSession, StudioSettingsTab, WorkspaceFileType } from '../canvas-types';
+import { ChatSession, StudioSettingsTab, WorkspaceFileType, getActiveUserName } from '../canvas-types';
+import { initialsOf } from '../state/studio-defaults';
 import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings } from '../canvas-icons';
 import { ProjectItem } from '../ProjectsModal';
 import { POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
@@ -65,28 +66,29 @@ export interface WorkspaceSidebarProps {
  * explorer, the add-file menu and the account footer. Owns its own search/expansion UI state.
  */
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
+    const activeUserName = getActiveUserName();
     const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
 
     // Cursor-Style Sidebar Layout & Navigation State
-const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
-const [isSidebarSearchOpen, setIsSidebarSearchOpen] = React.useState<boolean>(false);
-const [isWorkspacesExpanded, setIsWorkspacesExpanded] = React.useState<boolean>(true);
-const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = React.useState<Record<string, boolean>>({});
-const [showAddFileMenu, setShowAddFileMenu] = React.useState<boolean>(false);
-const [sidebarViewMode, setSidebarViewMode] = React.useState<'threads' | 'explorer'>('threads');
-const isWorkspaceCollapsed = (workspaceId: string): boolean => {
-    return !!collapsedWorkspaceIds[workspaceId];
-};
+    const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
+    const [isSidebarSearchOpen, setIsSidebarSearchOpen] = React.useState<boolean>(false);
+    const [isWorkspacesExpanded, setIsWorkspacesExpanded] = React.useState<boolean>(true);
+    const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = React.useState<Record<string, boolean>>({});
+    const [showAddFileMenu, setShowAddFileMenu] = React.useState<boolean>(false);
+    const [sidebarViewMode, setSidebarViewMode] = React.useState<'threads' | 'explorer'>('threads');
+    const isWorkspaceCollapsed = (workspaceId: string): boolean => {
+        return !!collapsedWorkspaceIds[workspaceId];
+    };
 
-const toggleWorkspaceCollapse = (workspaceId: string, e?: React.MouseEvent) => {
-    if (e) {
-        e.stopPropagation();
-    }
-    setCollapsedWorkspaceIds(prev => ({
-        ...prev,
-        [workspaceId]: !prev[workspaceId]
-    }));
-};
+    const toggleWorkspaceCollapse = (workspaceId: string, e?: React.MouseEvent) => {
+        if (e) {
+            e.stopPropagation();
+        }
+        setCollapsedWorkspaceIds(prev => ({
+            ...prev,
+            [workspaceId]: !prev[workspaceId]
+        }));
+    };
 
     const handleCreateWorkspaceFile = (type: WorkspaceFileType) => {
         setShowAddFileMenu(false);
@@ -292,7 +294,7 @@ const toggleWorkspaceCollapse = (workspaceId: string, e?: React.MouseEvent) => {
                             style={{ padding: '4px 6px', fontSize: '11px', borderRadius: '6px' }}
                             onClick={() => {
                                 setShowNewWorkspaceMenu(false);
-                                handleCreateNewWorkspace('scratchbox-test-workspace', '/Users/eligreen/dev/scratchbox-test-workspace');
+                                handleCreateNewWorkspace('scratchbox-test-workspace');
                             }}
                         >
                             <IconFolder size={12} className="text-blue-400" />
@@ -564,9 +566,9 @@ const toggleWorkspaceCollapse = (workspaceId: string, e?: React.MouseEvent) => {
         {/* Sidebar Bottom: User Profile & Settings Trigger */}
         <div className="sb-sidebar-profile-footer">
             <div className="sb-profile-avatar-info">
-                <div className="sb-profile-avatar">EG</div>
+                <div className="sb-profile-avatar">{initialsOf(activeUserName)}</div>
                 <div className="sb-profile-text">
-                    <span className="sb-profile-name">Eli Green</span>
+                    <span className="sb-profile-name">{activeUserName}</span>
                 </div>
             </div>
 

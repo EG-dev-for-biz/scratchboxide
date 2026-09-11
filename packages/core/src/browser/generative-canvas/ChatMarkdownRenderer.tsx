@@ -811,7 +811,7 @@ export const ChatCodeBlock: React.FC<{
                 <pre className="sb-chat-code-pre">
                     <code>
                         {tokens.map((token, idx) => (
-                            <span key={idx} className={`sb-tok-${token.type}`}>
+                            <span key={`${token.type}-${idx}-${token.text.length}`} className={`sb-tok-${token.type}`}>
                                 {token.text}
                             </span>
                         ))}

@@ -43,7 +43,8 @@ export const DEFAULT_RECENT_PROJECTS: ProjectItem[] = [
     {
         id: 'proj-scratchbox-ide',
         name: 'scratchbox-ide-master',
-        path: '/Users/eligreen/dev/scratchbox-ide-master',
+        // Resolved at runtime from GET /workspace/config (server default = process.cwd()).
+        path: '',
         lastActive: 'Active now',
         tags: ['TypeScript', 'React', 'Liquid Glass'],
         isActive: true
@@ -58,7 +59,7 @@ export const DEFAULT_RECENT_PROJECTS: ProjectItem[] = [
     {
         id: 'proj-test-workspace',
         name: 'scratchbox-test-workspace',
-        path: '/Users/eligreen/dev/scratchbox-test-workspace',
+        path: '~/dev/scratchbox-test-workspace',
         lastActive: 'Just now',
         tags: ['Testing', 'Sandbox', 'Generative Canvas'],
         isActive: false
@@ -588,7 +589,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                                                                 <span className="sb-active-pill">Active</span>
                                                             )}
                                                         </div>
-                                                        <span className="sb-workspace-path">{proj.path}</span>
+                                                        <span className="sb-workspace-path">{proj.path || 'Current server directory'}</span>
                                                     </div>
                                                 </div>
 

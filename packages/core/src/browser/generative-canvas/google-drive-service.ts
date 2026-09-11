@@ -28,6 +28,8 @@ export interface GoogleDriveConnectionState {
     autoSyncEnabled: boolean;
     storageQuota?: GoogleDriveStorageQuota;
     error?: string;
+    /** True while the OAuth handshake is simulated locally (no Google OAuth client configured). */
+    simulated?: boolean;
 }
 
 export interface GoogleDocsSection {
@@ -87,9 +89,10 @@ export class GoogleDriveService {
     private static instance: GoogleDriveService;
 
     private state: GoogleDriveConnectionState = {
-        status: 'connected',
-        accountEmail: 'eligreenproductions@gmail.com',
-        accountName: 'Eli Green',
+        status: 'disconnected',
+        accountEmail: '',
+        accountName: '',
+        simulated: true,
         accountAvatar: 'https://lh3.googleusercontent.com/a/default-user',
         connectedAt: Date.now() - 3600000 * 24 * 7,
         lastSyncedAt: Date.now() - 60000 * 12,
@@ -164,7 +167,7 @@ export class GoogleDriveService {
         };
     }
 
-    public async connect(email = 'eligreenproductions@gmail.com', name = 'Eli Green'): Promise<GoogleDriveConnectionState> {
+    public async connect(email = '', name = getActiveUserName()): Promise<GoogleDriveConnectionState> {
         this.state = {
             ...this.state,
             status: 'connecting',
@@ -178,6 +181,7 @@ export class GoogleDriveService {
         this.state = {
             ...this.state,
             status: 'connected',
+            simulated: true,
             accountEmail: email,
             accountName: name,
             connectedAt: Date.now(),

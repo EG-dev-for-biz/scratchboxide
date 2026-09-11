@@ -27,6 +27,8 @@ import {
     WritingStyleProfile
 } from './canvas-types';
 import { UserMemoriesClient } from './user-memories-client';
+import { getActiveUserName } from './canvas-types';
+import { initialsOf } from './state/studio-defaults';
 import { McpHubPrimitive } from './primitives/McpHubPrimitive';
 import { SkillsManagerPrimitive } from './primitives/SkillsManagerPrimitive';
 import { ProjectRule, WorkspaceConfigClient, WorkspaceSettings } from './workspace-config-client';
@@ -109,10 +111,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const [privacyMode, setPrivacyMode] = React.useState<boolean>(true);
 
     // Profile Tab States
-    const [profileEmail] = React.useState<string>('eligreenproductions@gmail.com');
-    const [firstName, setFirstName] = React.useState<string>('Eli');
-    const [lastName, setLastName] = React.useState<string>('Green');
-    const [handle, setHandle] = React.useState<string>('eligreen');
+    const [profileEmail] = React.useState<string>('');
+    const [defaultFirstName, ...defaultLastNameParts] = getActiveUserName().split(' ');
+    const [firstName, setFirstName] = React.useState<string>(defaultFirstName || '');
+    const [lastName, setLastName] = React.useState<string>(defaultLastNameParts.join(' '));
+    const [handle, setHandle] = React.useState<string>('');
+    const activeUserName = getActiveUserName(`${firstName} ${lastName}`.trim());
     const [link1, setLink1] = React.useState<string>('');
     const [publicProfile, setPublicProfile] = React.useState<boolean>(false);
     const [profileSavedFeedback, setProfileSavedFeedback] = React.useState<boolean>(false);
@@ -680,9 +684,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="sb-cursor-settings-sidebar-footer">
                         <div className="sb-cursor-settings-user-row">
                             <div className="sb-cursor-user-avatar">
-                                <span>EG</span>
+                                <span>{initialsOf(activeUserName)}</span>
                             </div>
-                            <span className="sb-cursor-user-name">Eli Green</span>
+                            <span className="sb-cursor-user-name">{activeUserName}</span>
                             <button
                                 type="button"
                                 className="sb-cursor-user-settings-btn"
@@ -910,7 +914,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         <div className="sb-cursor-row-info">
                                             <div className="sb-cursor-row-title">Active Workspace Root</div>
                                             <div className="sb-cursor-row-desc font-mono text-[11px] text-zinc-300">
-                                                {activeWorkspace?.path || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '/Users/eligreen/dev/scratchbox-ide-master')}
+                                                {activeWorkspace?.path || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '~')}
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
@@ -2966,7 +2970,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                             <div>
                                                 <h4 className="text-xs font-semibold text-zinc-200">Active Workspace Root</h4>
                                                 <div className="text-[11px] text-zinc-400 font-mono mt-0.5">
-                                                    {activeWorkspace?.path || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '/Users/eligreen/dev/scratchbox-ide-master')}
+                                                    {activeWorkspace?.path || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '~')}
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2">

@@ -12,6 +12,7 @@ import {
     GoogleDriveConnectionState,
     GoogleDriveService
 } from './google-drive-service';
+import { getActiveUserName } from './canvas-types';
 import {
     IconCheck,
     IconClose,
@@ -38,7 +39,7 @@ export const GoogleDriveConnectModal: React.FC<GoogleDriveConnectModalProps> = (
 }) => {
     const driveService = React.useMemo(() => GoogleDriveService.getInstance(), []);
     const [state, setState] = React.useState<GoogleDriveConnectionState>(() => driveService.getState());
-    const [customEmail, setCustomEmail] = React.useState<string>(state.accountEmail || 'eligreenproductions@gmail.com');
+    const [customEmail, setCustomEmail] = React.useState<string>(state.accountEmail || '');
     const [isSubmitting, setIsSubmitting] = React.useState<boolean>(false);
     const [authSuccessMsg, setAuthSuccessMsg] = React.useState<string | null>(null);
 
@@ -73,7 +74,7 @@ export const GoogleDriveConnectModal: React.FC<GoogleDriveConnectModalProps> = (
         setIsSubmitting(true);
         setAuthSuccessMsg(null);
         try {
-            const res = await driveService.connect(customEmail, 'Eli Green');
+            const res = await driveService.connect(customEmail, getActiveUserName());
             setAuthSuccessMsg('✓ Google Drive & Docs successfully connected');
             if (onConnected) {
                 onConnected(res);
@@ -188,6 +189,12 @@ export const GoogleDriveConnectModal: React.FC<GoogleDriveConnectModalProps> = (
                                 )}
                             </div>
                         </div>
+
+                        {state.simulated && (
+                            <div className="sb-gdrive-simulated-note mt-3 pt-3 border-t border-zinc-800/80 text-[11px] text-amber-300/90" role="note">
+                                Simulated connection — Google OAuth is not configured. No data is sent to Google.
+                            </div>
+                        )}
 
                         {/* Storage Quota / Sync Status */}
                         {isConnected && state.storageQuota && (
