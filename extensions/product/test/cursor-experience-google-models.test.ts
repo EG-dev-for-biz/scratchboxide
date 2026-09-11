@@ -1,0 +1,93 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
+
+async function runCursorExperienceAndGoogleModelsTests() {
+    console.log('🧪 Running Cursor Experience & Google Models Privacy Test Suite...\n');
+
+    const studioTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
+    const sideChatTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/VibecodeAiSideChat.tsx');
+    const settingsTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/SettingsModal.tsx');
+    const spotlightTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/SpotlightLauncherModal.tsx');
+    const automationsTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/AutomationsModal.tsx');
+    const nodeGraphTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/NodeGraphPrimitive.tsx');
+    const geminiServicePath = path.resolve(__dirname, '../src/node/gemini-service.ts');
+
+    assert.ok(fs.existsSync(studioTsxPath), 'GenerativeCanvasStudio.tsx must exist');
+    assert.ok(fs.existsSync(sideChatTsxPath), 'VibecodeAiSideChat.tsx must exist');
+    assert.ok(fs.existsSync(settingsTsxPath), 'SettingsModal.tsx must exist');
+    assert.ok(fs.existsSync(geminiServicePath), 'gemini-service.ts must exist');
+
+    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const sideChatSource = fs.readFileSync(sideChatTsxPath, 'utf-8');
+    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const spotlightSource = fs.readFileSync(spotlightTsxPath, 'utf-8');
+    const automationsSource = fs.readFileSync(automationsTsxPath, 'utf-8');
+    const nodeGraphSource = fs.readFileSync(nodeGraphTsxPath, 'utf-8');
+    const serviceSource = fs.readFileSync(geminiServicePath, 'utf-8');
+
+    // -------------------------------------------------------------
+    // Test 1: Backend strictly uses Google Models (gemini-3.7-flash, gemini-3.5-flash-lite, gemini-2.5-pro, etc.)
+    // -------------------------------------------------------------
+    assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash'"), 'Primary model must be Google gemini-3.7-flash');
+    assert.ok(serviceSource.includes("DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite'"), 'Subagent model must be Google gemini-3.5-flash-lite');
+    assert.ok(!serviceSource.includes('claude-') && !serviceSource.includes('gpt-4'), 'Backend must not reference non-Google models');
+    console.log('  ✓ Test 1 Passed: Backend strictly configured with Google Models (Gemini 3.7 Flash & Subagents)');
+
+    // -------------------------------------------------------------
+    // Test 2: UI does not expose raw model slugs to user (Model Privacy)
+    // -------------------------------------------------------------
+    // Settings modal and components should show friendly tier labels like "High Reasoning Engine", "Fast Assistant", etc.
+    assert.ok(settingsSource.includes('High Reasoning Engine'), 'SettingsModal must present capability tier "High Reasoning Engine"');
+    assert.ok(settingsSource.includes('Fast Intelligence'), 'SettingsModal must present capability tier "Fast Intelligence"');
+    assert.ok(!settingsSource.includes('Active Model: gemini-'), 'SettingsModal must not leak raw model slug string in status display');
+    assert.ok(!spotlightSource.includes('Gemini 3.7 reasoning'), 'SpotlightLauncherModal must use generic AI naming in user search');
+    assert.ok(automationsSource.includes('Autonomous AI Agent'), 'AutomationsModal must describe AI node as Autonomous AI Agent');
+    assert.ok(nodeGraphSource.includes('High Reasoning Engine'), 'NodeGraphPrimitive must describe model options as capability tiers');
+    assert.ok(studioSource.includes('GenerativeCanvasStudio'), 'GenerativeCanvasStudio component verified');
+    console.log('  ✓ Test 2 Passed: UI abstracts model identity and presents capability tiers without leaking model names');
+
+    // -------------------------------------------------------------
+    // Test 3: Cursor-style Interaction Modes (Agent, Ask, Plan) in Side Chat
+    // -------------------------------------------------------------
+    assert.ok(sideChatSource.includes('aiInteractionMode'), 'Side chat must support Cursor interaction modes');
+    assert.ok(sideChatSource.includes("'agent'"), 'Side chat must support Agent mode');
+    assert.ok(sideChatSource.includes("'ask'"), 'Side chat must support Ask mode');
+    assert.ok(sideChatSource.includes("'plan'"), 'Side chat must support Plan mode');
+    assert.ok(sideChatSource.includes('sb-cursor-mode-pill'), 'Side chat must render Cursor-style mode selection pills');
+    console.log('  ✓ Test 3 Passed: Cursor-style Interaction Mode Switcher (Agent, Ask, Plan) implemented in Side Chat');
+
+    // -------------------------------------------------------------
+    // Test 4: Cursor-style Codebase Indexing & Project Rules Indicator
+    // -------------------------------------------------------------
+    assert.ok(sideChatSource.includes('sb-cursor-indexing-badge'), 'Side chat must render Codebase Indexing status badge');
+    assert.ok(sideChatSource.includes('sb-cursor-rules-badge'), 'Side chat must render Project Rules active badge');
+    console.log('  ✓ Test 4 Passed: Cursor-style Codebase Indexing and Project Rules HUD badges integrated');
+
+    // -------------------------------------------------------------
+    // Test 5: Interactive Tool Execution Step Badges in Side Chat
+    // -------------------------------------------------------------
+    assert.ok(sideChatSource.includes('sb-cursor-tool-step'), 'Side chat must render interactive tool-execution pills');
+    assert.ok(sideChatSource.includes('expandedToolStepId'), 'Side chat must support expandable/collapsible tool execution details');
+    console.log('  ✓ Test 5 Passed: Interactive Cursor-style Tool Execution Step Badges verified');
+
+    console.log('\n🎉 ALL CURSOR EXPERIENCE & GOOGLE MODELS PRIVACY TESTS PASSED SUCCESSFULLY!');
+}
+
+if (require.main === module) {
+    runCursorExperienceAndGoogleModelsTests().catch(err => {
+        console.error('❌ Test failed:', err);
+        process.exit(1);
+    });
+}
+
+export { runCursorExperienceAndGoogleModelsTests };

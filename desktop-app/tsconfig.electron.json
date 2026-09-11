@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "skipLibCheck": true,
+    "strict": false,
+    "outDir": "dist-electron",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@scratchbox/core": ["../packages/core/src/index.ts"],
+      "@scratchbox/core/*": ["../packages/core/src/*"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["electron", "server"]
+}

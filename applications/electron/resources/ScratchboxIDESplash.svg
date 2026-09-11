@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   version="1.1"
+   id="ScratchboxIDESplash"
+   x="0px"
+   y="0px"
+   viewBox="0 0 445.5 275.34"
+   width="445.5"
+   height="275.34"
+   xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <linearGradient id="iconGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+
+    <linearGradient id="glowGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0" />
+      <stop offset="50%" stop-color="#60a5fa" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Canvas -->
+  <rect width="445.5" height="275.34" rx="18" fill="url(#bgGradient)" />
+  <rect x="1" y="1" width="443.5" height="273.34" rx="17" fill="none" stroke="#334155" stroke-width="1.5" />
+
+  <!-- Ambient Glow Line -->
+  <rect x="40" y="210" width="365.5" height="2" fill="url(#glowGradient)" />
+
+  <!-- Centered Branding Group -->
+  <g transform="translate(222.75, 110)">
+    <!-- Scratchbox Rounded Box Icon -->
+    <g transform="translate(-40, -65)">
+      <rect x="0" y="0" width="80" height="80" rx="18" fill="url(#iconGradient)" />
+      <!-- Brackets & Slash -->
+      <path d="M 28 26 L 18 40 L 28 54" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M 52 26 L 62 40 L 52 54" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+      <line x1="44" y1="23" x2="36" y2="57" stroke="#bfdbfe" stroke-width="4.5" stroke-linecap="round" />
+    </g>
+
+    <!-- Typography -->
+    <text x="0" y="55" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="28" font-weight="900" fill="#f8fafc" text-anchor="middle" letter-spacing="2.5">SCRATCHBOX</text>
+
+    <!-- Pill IDE Badge -->
+    <g transform="translate(-27, 68)">
+      <rect x="0" y="0" width="54" height="22" rx="6" fill="#3b82f6" />
+      <text x="27" y="16" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="800" fill="#ffffff" text-anchor="middle" letter-spacing="1">IDE</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,68 @@
+{
+  "private": true,
+  "name": "scratchbox-ide-product-ext",
+  "version": "1.67.100",
+  "description": "Scratchbox IDE Product Branding",
+  "dependencies": {
+    "@google/genai": "1.32.0",
+    "@theia/core": "1.67.0",
+    "@theia/getting-started": "1.67.0",
+    "@theia/vsx-registry": "1.67.0",
+    "@theia/workspace": "1.67.0",
+    "body-parser": "^1.17.2",
+    "fs-extra": "^9.0.1",
+    "google-auth-library": "^10.5.0",
+    "inversify": "^6.0.1",
+    "three": "^0.150.0",
+    "@types/three": "^0.150.0"
+  },
+  "devDependencies": {
+    "rimraf": "^2.7.1",
+    "tslint": "^5.12.0",
+    "typescript": "^4.5.5"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/scratchbox-ide-frontend-module",
+      "electronMain": "lib/electron-main/scratchbox-ide-main-module",
+      "backend": "lib/node/scratchbox-gemini-backend-module"
+    }
+  ],
+  "keywords": [
+    "theia-extension"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scratchbox/scratchbox-ide.git"
+  },
+  "bugs": {
+    "url": "https://github.com/scratchbox/scratchbox-ide/issues"
+  },
+  "homepage": "https://github.com/scratchbox/scratchbox-ide",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "clean": "rimraf lib *.tsbuildinfo",
+    "build": "tsc -b",
+    "test:intelligence": "ts-node test/semantic-symbol-graph.test.ts && ts-node test/in-context-pattern-matching.test.ts && ts-node test/lsp-diagnostic-feedback.test.ts && ts-node test/multi-turn-diff-memory.test.ts && ts-node test/core-intelligence-systems-integration.test.ts",
+    "test:long-running": "ts-node test/long-running-agent.test.ts",
+    "test:memories": "ts-node test/user-memories.test.ts",
+    "test:media": "ts-node test/media-generation-protocol.test.ts && ts-node test/media-asset-store.test.ts && ts-node test/google-media-credentials-service.test.ts && ts-node test/google-media-generation-service.test.ts && ts-node test/media-generation-job-service.test.ts && ts-node test/media-backend-module.test.ts",
+    "test:visual": "ts-node test/visual-verification-screenshot.test.ts",
+    "test:unified": "ts-node test/unified-project-coordination.test.ts",
+    "test:sculpt": "ts-node test/mesh-sculpting-manipulation.test.ts",
+    "test:atmosphere": "ts-node test/atmosphere-scattering-pipeline.test.ts",
+    "test:aerial": "ts-node test/aerial-perspective-cloud-shadows.test.ts",
+    "test": "ts-node test/vibe-tooling.test.ts && ts-node test/atmosphere-scattering-pipeline.test.ts && ts-node test/mesh-sculpting-manipulation.test.ts && ts-node test/unified-project-coordination.test.ts && ts-node test/contextual-multi-primitive-canvas.test.ts && ts-node test/semantic-symbol-graph.test.ts && ts-node test/in-context-pattern-matching.test.ts && ts-node test/lsp-diagnostic-feedback.test.ts && ts-node test/multi-turn-diff-memory.test.ts && ts-node test/core-intelligence-systems-integration.test.ts && ts-node test/multi-modal-media-cards.test.ts && ts-node test/ai-beautify-location-pipeline.test.ts && ts-node test/codebase-lens-architecture.test.ts && ts-node test/ui-ux-ergonomics-polish.test.ts && ts-node test/project-artifact-graph.test.ts && ts-node test/google-maps-service.test.ts && ts-node test/scratchbox-core-runtime.test.ts && ts-node test/geospatial-routing.test.ts && ts-node test/headless-3d-workspace.test.ts && ts-node test/scene3d-sandbox-bidirectional.test.ts && ts-node test/scene3d-dynamic-execution-pipeline.test.ts && ts-node test/file-explorer.test.ts && ts-node test/gemini-agent-interactions.test.ts && ts-node test/google-search-grounding.test.ts && ts-node test/layout-modes.test.ts && ts-node test/node-graph.test.ts && ts-node test/chat-markdown.test.ts && ts-node test/document-canvas-seamless.test.ts && ts-node test/document-4d-multimodal.test.ts && ts-node test/subagent-service.test.ts && ts-node test/subagent-swarm-orchestration.test.ts && ts-node test/mcp-cli-guardrails.test.ts && ts-node test/surface-artifacts-transition.test.ts && ts-node test/unified-styling-audit.test.ts && ts-node test/container-sandbox.test.ts && ts-node test/self-improvement.test.ts && ts-node test/projects-modal.test.ts && ts-node test/live-code-sandbox.test.ts && ts-node test/long-running-agent.test.ts && ts-node test/workspace-organization.test.ts && ts-node test/cursor-layout.test.ts && ts-node test/automations-canvas-hub.test.ts && ts-node test/advanced-ai-architectures.test.ts && ts-node test/autonomous-goal-engine.test.ts && ts-node test/competitive-features-phases.test.ts && ts-node test/ui-logic-enhancements.test.ts && ts-node test/cross-surface-coordination.test.ts && ts-node test/dsign-attention-architecture.test.ts && ts-node test/workspace-vendoring.test.ts && ts-node test/cursor-experience-google-models.test.ts && ts-node test/cursor-settings-page.test.ts && ts-node test/cursor-styling-comprehensive.test.ts && ts-node test/streamlined-dashboard.test.ts && ts-node test/architectural-refactoring.test.ts && ts-node test/cursor-all-settings-tabs.test.ts && ts-node test/cursor-inline-quick-edit.test.ts && ts-node test/cursor-desktop-streamlined-home.test.ts && ts-node test/unified-settings-entrypoint.test.ts && ts-node test/comprehensive-app-audit.test.ts && ts-node test/google-drive-integration.test.ts && ts-node test/interactive-browser-primitive.test.ts && ts-node test/user-memories.test.ts && ts-node test/visual-verification-screenshot.test.ts",
+    "lint": "eslint --ext js,jsx,ts,tsx src",
+    "lint:fix": "eslint --ext js,jsx,ts,tsx src --fix",
+    "update:framework": "ts-node ../../scripts/update-framework-version.ts",
+    "update:next": "ts-node ../../scripts/update-framework-version.ts next"
+  },
+  "peerDependencies": {
+    "react": "^16.8.0"
+  }
+}

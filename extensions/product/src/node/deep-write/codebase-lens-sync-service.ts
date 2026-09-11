@@ -1,0 +1,70 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { injectable, inject, optional } from '@theia/core/shared/inversify';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import { WorkspaceConfigService } from '../workspace-config-service';
+import { WorkspaceFileWatcherService } from '../workspace-file-watcher-service';
+
+@injectable()
+export class CodebaseLensSyncService {
+    constructor(
+        @inject(WorkspaceConfigService) protected readonly configService: WorkspaceConfigService,
+        @inject(WorkspaceFileWatcherService) @optional() protected readonly fileWatcher?: WorkspaceFileWatcherService
+    ) {}
+
+    /**
+     * Atomically write a set of Deep-Write deliverables directly to the physical filesystem on disk,
+     * registering hashes with the watcher service to suppress echo-update loops.
+     */
+    public async syncBundleToWorkspace(
+        workspaceRoot: string,
+        files: Record<string, string>
+    ): Promise<{ success: boolean; writtenFiles: string[]; error?: string }> {
+        try {
+            console.log(`[CodebaseLensSync] Projecting ${Object.keys(files).length} files to workspace on disk at ${workspaceRoot}`);
+            const result = await this.configService.writeLensFiles(
+                workspaceRoot,
+                files,
+                this.fileWatcher
+            );
+            return result;
+        } catch (err: any) {
+            console.error('[CodebaseLensSync] Failed to sync files:', err);
+            return {
+                success: false,
+                writtenFiles: [],
+                error: err.message || 'Error occurred during codebase lens sync.'
+            };
+        }
+    }
+
+    /**
+     * Read targeted disk files from workspace into a in-memory record to serve as seed context.
+     */
+    public async projectDiskToPrimitive(
+        workspaceRoot: string,
+        filePaths: string[]
+    ): Promise<Record<string, string>> {
+        const result: Record<string, string> = {};
+        for (const relPath of filePaths) {
+            try {
+                const fullPath = path.join(workspaceRoot, relPath);
+                if (await fs.pathExists(fullPath)) {
+                    const content = await fs.readFile(fullPath, 'utf8');
+                    result[relPath] = content;
+                }
+            } catch (err) {
+                console.warn(`[CodebaseLensSync] Failed to read ${relPath} from disk:`, err);
+            }
+        }
+        return result;
+    }
+}

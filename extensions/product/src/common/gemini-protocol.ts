@@ -1,0 +1,259 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import type {
+    CanvasArtifact,
+    GroundingChunk,
+    GroundingMetadata,
+    GroundingSupport,
+    McpExecutionState
+} from '../browser/generative-canvas/canvas-types';
+
+export type {
+    GroundingChunk,
+    GroundingMetadata,
+    GroundingSupport
+};
+
+export interface GeminiStatus {
+    connected: boolean;
+    serviceAccount?: string;
+    projectId?: string;
+    activeModel: string;
+    availableModels: string[];
+    subagentModel?: string;
+    availableSubagentModels?: string[];
+    thinkingBudget: number;
+    authMethod: 'service-account' | 'api-key' | 'unauthenticated';
+    error?: string;
+}
+
+export interface AttachedSkillContext {
+    id: string;
+    name: string;
+    description: string;
+    rawContent?: string;
+    tags?: string[];
+    category?: string;
+}
+
+export interface AttachedMcpToolContext {
+    id: string;
+    serverName: string;
+    name: string;
+    humanTitle: string;
+    description: string;
+    samplePrompt?: string;
+    category?: string;
+}
+
+export type SubagentTaskType =
+    | 'preprocess'
+    | 'skill_match'
+    | 'tool_args'
+    | 'summarize'
+    | 'research'
+    | 'code_snippet';
+
+export interface SubagentRequest {
+    taskType: SubagentTaskType;
+    prompt: string;
+    context?: string;
+    model?: string;
+    enableGoogleSearch?: boolean;
+    attachedSkills?: AttachedSkillContext[];
+    attachedMcpTools?: AttachedMcpToolContext[];
+}
+
+export interface SubagentResponse {
+    success: boolean;
+    result: string;
+    data?: Record<string, any>;
+    groundingMetadata?: GroundingMetadata;
+    modelUsed: string;
+    error?: string;
+}
+
+export interface GeminiGenerateRequest {
+    prompt: string;
+    model?: string;
+    agent?: string;
+    environment?: 'remote' | string;
+    previousInteractionId?: string;
+    subagentModel?: string;
+    enableSubagentPreprocess?: boolean;
+    enableGoogleSearch?: boolean;
+    enableCodeExecution?: boolean;
+    enableBrowserTools?: boolean;
+    enableLensTools?: boolean;
+    thinkingBudget?: number;
+    temperature?: number;
+    systemInstruction?: string;
+    attachedSkills?: AttachedSkillContext[];
+    attachedMcpTools?: AttachedMcpToolContext[];
+    activeArtifact?: CanvasArtifact;
+    chatHistory?: Array<{ role: 'user' | 'model'; text: string }>;
+    enableSemanticGraph?: boolean;
+    enableFewShotPatterns?: boolean;
+    enableLspDiagnostics?: boolean;
+    enableDiffMemory?: boolean;
+    enableWorkspaceTools?: boolean;
+    maxTurns?: number;
+    workspaceRoot?: string;
+    targetFiles?: string[];
+    turnId?: string;
+}
+
+export type GeminiStreamEventType =
+    | 'status'
+    | 'thought'
+    | 'delta'
+    | 'grounding'
+    | 'audio_delta'
+    | 'image_delta'
+    | 'mcp_call'
+    | 'mcp_result'
+    | 'tool_call'
+    | 'tool_result'
+    | 'subagent_start'
+    | 'subagent_thought'
+    | 'subagent_done'
+    | 'artifact_start'
+    | 'artifact_complete'
+    | 'done'
+    | 'error';
+
+export interface GeminiStreamEvent {
+    type: GeminiStreamEventType;
+    text?: string;
+    thought?: string;
+    interactionId?: string;
+    environmentId?: string;
+    audioContent?: string;
+    imageContent?: string;
+    subagentResult?: SubagentResponse;
+    toolCall?: {
+        id: string;
+        name: string;
+        args: Record<string, any>;
+    };
+    toolResult?: {
+        id: string;
+        name: string;
+        result: Record<string, any>;
+    };
+    artifact?: CanvasArtifact;
+    mcpExecution?: McpExecutionState;
+    groundingMetadata?: GroundingMetadata;
+    usage?: {
+        promptTokens?: number;
+        candidateTokens?: number;
+        totalTokens?: number;
+    };
+    modelUsed?: string;
+    error?: string;
+}
+
+export interface GeminiGenerateResponse {
+    success: boolean;
+    text: string;
+    thoughts?: string[];
+    interactionId?: string;
+    environmentId?: string;
+    subagentResult?: SubagentResponse;
+    artifact?: CanvasArtifact;
+    mcpExecutions?: McpExecutionState[];
+    groundingMetadata?: GroundingMetadata;
+    modelUsed: string;
+    usage?: {
+        promptTokens?: number;
+        candidateTokens?: number;
+        totalTokens?: number;
+    };
+    error?: string;
+}
+
+export interface SaveCredentialsRequest {
+    credentialsJson?: string;
+    apiKey?: string;
+    targetPath?: string;
+}
+
+export interface SaveCredentialsResponse {
+    success: boolean;
+    authMethod: 'service-account' | 'api-key' | 'unauthenticated';
+    projectId?: string;
+    serviceAccount?: string;
+    savedPath?: string;
+    error?: string;
+}
+
+export interface McpPingRequest {
+    server: {
+        id: string;
+        name: string;
+        url?: string;
+        command?: string;
+        transport: 'sse' | 'stdio' | 'pipe' | 'stream';
+        tools?: Array<{
+            id: string;
+            name: string;
+            humanTitle: string;
+            description: string;
+        }>;
+    };
+}
+
+export interface McpPingResponse {
+    serverId: string;
+    status: 'online' | 'offline' | 'degraded';
+    latencyMs: number;
+    availableToolsCount: number;
+    error?: string;
+}
+
+export interface AgentSessionCreateRequest {
+    goal: string;
+    maxIterations?: number;
+    maxDurationMs?: number;
+    workspaceRoot?: string;
+}
+
+export interface AgentSessionActionRequest {
+    sessionId: string;
+    action: 'pause' | 'resume' | 'cancel';
+}
+
+export interface GeminiTtsRequest {
+    text: string;
+    voice?: string;
+    speed?: number;
+    stylePrompt?: string;
+}
+
+export interface GeminiTtsResponse {
+    success: boolean;
+    audioContent?: string; // Base64 PCM / MP3
+    error?: string;
+}
+
+export interface GeminiImageGenerateRequest {
+    prompt: string;
+    aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3';
+    style?: string;
+}
+
+export interface GeminiVideoGenerateRequest {
+    prompt: string;
+    durationSeconds?: number;
+}
+
+export * from './deep-write/deep-write-protocol';
+
+

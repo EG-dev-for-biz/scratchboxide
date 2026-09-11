@@ -1,0 +1,19 @@
+{
+    "extends": "../../configs/base.tsconfig",
+    "include": [],
+    "compilerOptions": {
+      "composite": true,
+      "esModuleInterop": true
+    },
+    "references": [
+      {
+        "path": "../../extensions/launcher"
+      },
+      {
+        "path": "../../extensions/product"
+      },
+      {
+        "path": "../../extensions/updater"
+      }
+    ]
+}

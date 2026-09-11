@@ -1,0 +1,37 @@
+{
+  "name": "@scratchbox/core",
+  "version": "1.0.0",
+  "description": "Scratchbox IDE Core Library — Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Services",
+  "main": "dist/packages/core/src/index.js",
+  "module": "dist/packages/core/src/index.js",
+  "types": "dist/packages/core/src/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/packages/core/src/index.d.ts",
+      "import": "./dist/packages/core/src/index.js",
+      "default": "./dist/packages/core/src/index.js"
+    },
+    "./browser": {
+      "types": "./dist/packages/core/src/browser.d.ts",
+      "import": "./dist/packages/core/src/browser.js",
+      "default": "./dist/packages/core/src/browser.js"
+    },
+    "./node": {
+      "types": "./dist/packages/core/src/node.d.ts",
+      "import": "./dist/packages/core/src/node.js",
+      "default": "./dist/packages/core/src/node.js"
+    },
+    "./common": {
+      "types": "./dist/packages/core/src/common.d.ts",
+      "import": "./dist/packages/core/src/common.js",
+      "default": "./dist/packages/core/src/common.js"
+    },
+    "./style.css": "./src/style.css"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT"
+}

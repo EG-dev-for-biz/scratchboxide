@@ -1,0 +1,14 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+export * from './uri';
+export * from './filesystem';
+export * from './memory-provider';
+export * from './disk-provider';
+export * from './workspace';

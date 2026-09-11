@@ -1,0 +1,75 @@
+appId: io.scratchbox.ide
+productName: ScratchboxIDE
+copyright: Copyright © 2020-2026 Scratchbox
+electronDist: ../../node_modules/electron/dist
+electronVersion: 38.4.0
+# Although it is generally not recommended to disable asar, it is required for Scratchbox.
+# Enabling this leads to: process ERROR Error: spawn ENOTDIR
+# because binaries can not be executed from the asar archive.
+# See asar file API limitations: https://www.electronjs.org/docs/tutorial/application-packaging#limitations-of-the-node-api
+asar: false
+nodeGypRebuild: false
+npmRebuild: false
+
+directories:
+  buildResources: resources
+
+# node_modules and package.json are copied automatically
+# Exclude node_modules manually because electron is copied by electron-builder and we are using a bundled backend
+files:
+  - src-gen
+  - lib
+  - resources/icons/WindowIcon/512-512.png
+  - resources/ScratchboxIDESplash.svg
+  - scripts
+  - "!**node_modules/**"
+extraResources:
+  - from: ../../plugins
+    to: app/plugins
+
+win:
+  icon: resources/icons/WindowsLauncherIcon/ScratchboxIDE.ico
+  target:
+    - nsis
+mac:
+  icon: resources/icons/MacLauncherIcon/512-512-2.icns
+  category: public.app-category.developer-tools
+  protocols:
+    - name: scratchbox
+      schemes:
+        - scratchbox
+  darkModeSupport: true
+  target:
+    - dmg
+    - zip
+linux:
+  icon: resources/icons/LinuxLauncherIcons
+  category: Development
+  mimeTypes:
+    - inode/directory
+  vendor: Scratchbox
+  target:
+    - deb
+    - AppImage
+
+nsis:
+  menuCategory: true
+  oneClick: false
+  perMachine: false
+  installerHeaderIcon: resources/icons/WindowsLauncherIcon/ScratchboxIDE.ico
+  installerIcon: resources/icons/WindowsLauncherIcon/ScratchboxIDE.ico
+  uninstallerIcon: resources/icons/WindowsLauncherIcon/ScratchboxIDE.ico
+  installerSidebar: resources/icons/InstallerSidebarImage/164-314Windows.bmp
+  uninstallerSidebar: resources/icons/InstallerSidebarImage/164-314Windows.bmp
+  allowToChangeInstallationDirectory: true
+  runAfterFinish: false
+  artifactName: ${productName}Setup.${ext}
+  license: LICENSE
+dmg:
+  artifactName: ${productName}.${ext}
+deb:
+  artifactName: ${productName}.${ext}
+appImage:
+  artifactName: ${productName}.${ext}
+
+afterPack: ./scripts/after-pack.js

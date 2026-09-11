@@ -1,0 +1,588 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { Endpoint } from './endpoint';
+import {
+    AgentSessionCreateRequest,
+    GeminiGenerateRequest,
+    GeminiGenerateResponse,
+    GeminiStatus,
+    GeminiStreamEvent,
+    McpPingRequest,
+    McpPingResponse,
+    SaveCredentialsRequest,
+    SaveCredentialsResponse,
+    SubagentRequest,
+    SubagentResponse,
+    GeminiTtsRequest,
+    GeminiTtsResponse
+} from '../../common/gemini-protocol';
+import { AgentSessionState, AgentStreamEvent } from '../../common/agent-checkpoint-protocol';
+import { VisualVerificationRequest, VisualAuditResult } from '../../common/visual-verification-protocol';
+
+export class GeminiClient {
+    private static instance: GeminiClient;
+
+    public static getInstance(): GeminiClient {
+        if (!GeminiClient.instance) {
+            GeminiClient.instance = new GeminiClient();
+        }
+        return GeminiClient.instance;
+    }
+
+    protected endpoint(): string {
+        try {
+            const url = new Endpoint({ path: 'gemini' }).getRestUrl().toString();
+            return url.endsWith('/') ? url.slice(0, -1) : url;
+        } catch {
+            return '/gemini';
+        }
+    }
+
+    /**
+     * Check real-time connection status with AI backend service.
+     */
+    async checkStatus(): Promise<GeminiStatus> {
+        try {
+            const res = await fetch(`${this.endpoint()}/status`, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            return {
+                connected: false,
+                activeModel: 'gemini-3.7-flash',
+                availableModels: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                subagentModel: 'gemini-3.5-flash-lite',
+                availableSubagentModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite'],
+                thinkingBudget: 1024,
+                authMethod: 'unauthenticated',
+                error: `HTTP ${res.status}: ${res.statusText}`
+            };
+        } catch (err: any) {
+            return {
+                connected: false,
+                activeModel: 'gemini-3.7-flash',
+                availableModels: ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                subagentModel: 'gemini-3.5-flash-lite',
+                availableSubagentModels: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite'],
+                thinkingBudget: 1024,
+                authMethod: 'unauthenticated',
+                error: err.message || 'Service unreachable'
+            };
+        }
+    }
+
+    /**
+     * Execute subagent task (using Gemini 3.5 Flash Lite / 3.1 Flash Lite).
+     */
+    async executeSubagent(request: SubagentRequest): Promise<SubagentResponse> {
+        const res = await fetch(`${this.endpoint()}/subagent`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Subagent task failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Fetch real-time subagent worker pool metrics (active workers, queued tasks, latency).
+     */
+    async getSubagentPoolMetrics(): Promise<{ success: boolean; metrics: any }> {
+        const res = await fetch(`${this.endpoint()}/subagent/pool-status`, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!res.ok) {
+            return {
+                success: false,
+                metrics: {
+                    maxWorkers: 64,
+                    activeWorkers: 0,
+                    queuedTasks: 0,
+                    completedTasks: 0,
+                    failedTasks: 0,
+                    averageExecutionLatencyMs: 0,
+                    concurrencyUtilizationPercent: 0
+                }
+            };
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Multimodal Vision QA inspection of rendered canvas viewport.
+     */
+    async verifyVisual(request: VisualVerificationRequest): Promise<VisualAuditResult> {
+        const res = await fetch(`${this.endpoint()}/verify-visual`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Visual verification failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Multimodal Vision QA with auto-repair directives applied to artifact.
+     */
+    async verifyAndRepair(request: VisualVerificationRequest, artifact?: any): Promise<{ success: boolean; audit: VisualAuditResult; repairedArtifact?: any }> {
+        const res = await fetch(`${this.endpoint()}/verify-and-repair`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ request, artifact })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Visual verify and repair failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Execute a Directed Acyclic Graph (DAG) of parallel subagent tasks.
+     */
+    async executeSubagentSwarm(dag: any): Promise<any> {
+        const res = await fetch(`${this.endpoint()}/subagent/swarm`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(dag)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Subagent swarm execution failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Execute structured generation (non-streaming).
+     */
+    async generate(request: GeminiGenerateRequest): Promise<GeminiGenerateResponse> {
+        const res = await fetch(`${this.endpoint()}/generate`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Generation failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Stream generation with real-time thoughts, MCP execution telemetry, and canvas artifacts.
+     */
+    async streamGenerate(
+        request: GeminiGenerateRequest,
+        onEvent: (event: GeminiStreamEvent) => void
+    ): Promise<void> {
+        let res: Response;
+        try {
+            res = await fetch(`${this.endpoint()}/generate-stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify(request)
+            });
+            if (res.status === 404) {
+                res = await fetch(`${this.endpoint()}/stream`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream'
+                    },
+                    body: JSON.stringify(request)
+                });
+            }
+        } catch (fetchErr) {
+            res = await fetch(`${this.endpoint()}/stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: JSON.stringify(request)
+            });
+        }
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Stream request failed (${res.status}): ${errText}`);
+        }
+
+        if (!res.body) {
+            throw new Error('Response body is not readable');
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data:')) {
+                    const jsonStr = trimmed.replace(/^data:\s*/, '');
+                    if (jsonStr === '[DONE]') {
+                        return;
+                    }
+                    if (jsonStr) {
+                        try {
+                            const event: GeminiStreamEvent = JSON.parse(jsonStr);
+                            onEvent(event);
+                        } catch {
+                            // ignore partial JSON chunks
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Save Service Account JSON or API Key credentials.
+     */
+    async saveCredentials(request: SaveCredentialsRequest): Promise<SaveCredentialsResponse> {
+        try {
+            const res = await fetch(`${this.endpoint()}/save-credentials`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(request)
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            const errText = await res.text();
+            return {
+                success: false,
+                authMethod: 'unauthenticated',
+                error: `Save failed (${res.status}): ${errText}`
+            };
+        } catch (err: any) {
+            return {
+                success: false,
+                authMethod: 'unauthenticated',
+                error: err.message || 'Network error saving credentials'
+            };
+        }
+    }
+
+    /**
+     * Ping MCP Server to verify live connectivity and latency.
+     */
+    async pingMcp(server: McpPingRequest['server']): Promise<McpPingResponse> {
+        try {
+            const res = await fetch(`${this.endpoint()}/mcp/ping`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({ server })
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            return {
+                serverId: server.id,
+                status: 'offline',
+                latencyMs: 0,
+                availableToolsCount: 0,
+                error: `HTTP ${res.status}`
+            };
+        } catch (err: any) {
+            return {
+                serverId: server.id,
+                status: 'offline',
+                latencyMs: 0,
+                availableToolsCount: 0,
+                error: err.message || 'Ping failed'
+            };
+        }
+    }
+
+    /**
+     * Initialize an Autonomous Long-Running Goal Session.
+     */
+    async createAgentSession(request: AgentSessionCreateRequest): Promise<AgentSessionState> {
+        const res = await fetch(`${this.endpoint()}/agent/session`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Failed to create agent session (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Pause, Resume, or Cancel an active agent session.
+     */
+    async sendAgentAction(sessionId: string, action: 'pause' | 'resume' | 'cancel'): Promise<{ success: boolean; status?: string }> {
+        const res = await fetch(`${this.endpoint()}/agent/action`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ sessionId, action })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Agent action failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+
+    /**
+     * Stream an autonomous long-running agent session with real-time milestones and verification output.
+     */
+    async streamAgentSession(
+        sessionId: string,
+        onEvent: (event: AgentStreamEvent) => void
+    ): Promise<void> {
+        const res = await fetch(`${this.endpoint()}/agent/stream`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream'
+            },
+            body: JSON.stringify({ sessionId })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Agent stream request failed (${res.status}): ${errText}`);
+        }
+
+        if (!res.body) {
+            throw new Error('Response body is not readable');
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('data:')) {
+                    const jsonStr = trimmed.replace(/^data:\s*/, '');
+                    if (jsonStr === '[DONE]') {
+                        return;
+                    }
+                    if (jsonStr) {
+                        try {
+                            const event: AgentStreamEvent = JSON.parse(jsonStr);
+                            onEvent(event);
+                        } catch {
+                            // ignore partial JSON chunks
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Synthesize speech from text.
+     */
+    async synthesizeSpeech(request: GeminiTtsRequest): Promise<GeminiTtsResponse> {
+        const res = await fetch(`${this.endpoint()}/tts`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(request)
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`TTS synthesis failed (${res.status}): ${errText}`);
+        }
+
+        return await res.json();
+    }
+}
+
+export class AudioPlayer {
+    private static audioCtx: AudioContext | null = null;
+    private static activeSourceNode: AudioBufferSourceNode | null = null;
+    private static currentOnEnded: (() => void) | null = null;
+
+    private static getContext(): AudioContext {
+        if (!this.audioCtx) {
+            this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        return this.audioCtx;
+    }
+
+    public static isPlaying(): boolean {
+        return !!this.activeSourceNode;
+    }
+
+    public static stop(): void {
+        if (this.activeSourceNode) {
+            try {
+                this.activeSourceNode.stop();
+            } catch {
+                // Ignore if already stopped
+            }
+            this.activeSourceNode = null;
+        }
+        if (this.currentOnEnded) {
+            const cb = this.currentOnEnded;
+            this.currentOnEnded = null;
+            cb();
+        }
+    }
+
+    private static base64ToArrayBuffer(base64: string): ArrayBuffer {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    public static async playBase64(base64Data: string, onStart?: () => void, onEnded?: () => void): Promise<void> {
+        this.stop();
+
+        const ctx = this.getContext();
+        if (ctx.state === 'suspended') {
+            await ctx.resume();
+        }
+
+        const arrayBuf = this.base64ToArrayBuffer(base64Data);
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuf;
+        source.connect(ctx.destination);
+
+        this.activeSourceNode = source;
+        this.currentOnEnded = onEnded || null;
+
+        source.onended = () => {
+            if (this.activeSourceNode === source) {
+                this.activeSourceNode = null;
+                if (this.currentOnEnded) {
+                    const cb = this.currentOnEnded;
+                    this.currentOnEnded = null;
+                    cb();
+                }
+            }
+        };
+
+        if (onStart) {
+            onStart();
+        }
+        source.start(0);
+    }
+
+    public static async speak(
+        text: string,
+        onStateChange?: (state: 'idle' | 'loading' | 'playing' | 'error') => void
+    ): Promise<void> {
+        try {
+            if (onStateChange) onStateChange('loading');
+            
+            const response = await GeminiClient.getInstance().synthesizeSpeech({ text });
+            if (!response.success || !response.audioContent) {
+                throw new Error(response.error || 'No audio content returned');
+            }
+
+            await this.playBase64(
+                response.audioContent,
+                () => {
+                    if (onStateChange) onStateChange('playing');
+                },
+                () => {
+                    if (onStateChange) onStateChange('idle');
+                }
+            );
+        } catch (err) {
+            console.error('AudioPlayer.speak failed:', err);
+            if (onStateChange) onStateChange('error');
+            setTimeout(() => {
+                if (onStateChange) onStateChange('idle');
+            }, 2000);
+        }
+    }
+}

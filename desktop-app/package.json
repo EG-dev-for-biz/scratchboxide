@@ -1,0 +1,45 @@
+{
+  "name": "scratchbox-desktop-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scratchbox Studio - Standalone Modern React + Vite + Electron Workspace",
+  "main": "dist-electron/desktop-app/electron/main.js",
+  "scripts": {
+    "dev": "concurrently -n server,vite -c blue,magenta \"npm run server:dev\" \"npm run vite:dev\"",
+    "vite:dev": "vite --port 3000 --host 127.0.0.1",
+    "server:dev": "ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register server/index.ts",
+    "build": "tsc && vite build && tsc -p tsconfig.electron.json",
+    "build:client": "vite build",
+    "start": "electron .",
+    "test": "npm run test:arch",
+    "test:all": "ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-app.test.ts && ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-server.test.ts && ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/chat-resilience.test.ts",
+    "test:arch": "ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-app.test.ts"
+  },
+  "dependencies": {
+    "@google/genai": "1.32.0",
+    "@scratchbox/core": "file:../packages/core",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "google-auth-library": "^10.5.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.150.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/three": "^0.150.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^38.4.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12"
+  }
+}
