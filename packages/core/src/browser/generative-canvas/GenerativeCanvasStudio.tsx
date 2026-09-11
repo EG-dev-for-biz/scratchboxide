@@ -877,164 +877,9 @@ const GoogleMapsCard: React.FC<{
     );
 };
 
-/**
- * Jitter-Free RAF Token Buffer Queue for 60fps adaptive streaming.
- * Absorbs bursts of SSE chunks and drains tokens with natural cognitive pacing.
- */
-export class StreamBufferQueue {
-    private queue: string[] = [];
-    private displayed = '';
-    private rafId: number | null = null;
-    private isClosed = false;
-    private onToken: (text: string) => void;
-    private onDone?: () => void;
-    private lastFrameTime = 0;
-    private minFrameIntervalMs = 16; // ~60fps target
-
-    constructor(onToken: (text: string) => void, onDone?: () => void) {
-        this.onToken = onToken;
-        this.onDone = onDone;
-    }
-
-    push(chunk: string) {
-        if (!chunk) return;
-        const tokens = chunk.split(/(\s+)/);
-        for (const t of tokens) {
-            if (t) this.queue.push(t);
-        }
-        if (this.rafId === null && typeof window !== 'undefined') {
-            this.lastFrameTime = performance.now();
-            this.rafId = requestAnimationFrame(this.step);
-        }
-    }
-
-    close() {
-        this.isClosed = true;
-        if (this.queue.length === 0 && this.rafId === null) {
-            this.onDone?.();
-        }
-    }
-
-    cancel() {
-        if (this.rafId !== null && typeof window !== 'undefined') {
-            cancelAnimationFrame(this.rafId);
-            this.rafId = null;
-        }
-        this.queue = [];
-        this.isClosed = true;
-    }
-
-    private step = (timestamp: number) => {
-        if (timestamp - this.lastFrameTime >= this.minFrameIntervalMs) {
-            this.lastFrameTime = timestamp;
-            if (this.queue.length > 0) {
-                const batchSize = this.queue.length > 100 ? 8 : this.queue.length > 40 ? 4 : this.queue.length > 15 ? 2 : 1;
-                for (let i = 0; i < batchSize && this.queue.length > 0; i++) {
-                    this.displayed += this.queue.shift()!;
-                }
-                this.onToken(this.displayed);
-            }
-        }
-
-        if (this.queue.length > 0 && typeof window !== 'undefined') {
-            this.rafId = requestAnimationFrame(this.step);
-        } else if (this.isClosed) {
-            this.rafId = null;
-            this.onDone?.();
-        } else {
-            this.rafId = null;
-        }
-    };
-}
-
-/**
- * Smooth Token Stream Ticker for local responsiveness (15-25ms per token).
- * Emits word/whitespace tokens with 60fps pacing.
- */
-function streamTokensAsync(
-    fullText: string,
-    onToken: (streamedText: string) => void,
-    onProgress?: (progressFraction: number) => void,
-    intervalMs = 18
-): Promise<void> {
-    return new Promise(resolve => {
-        if (!fullText) {
-            resolve();
-            return;
-        }
-
-        const tokens = fullText.split(/(\s+)/);
-        let accumulated = '';
-        let idx = 0;
-
-        const timer = setInterval(() => {
-            if (idx < tokens.length) {
-                accumulated += tokens[idx];
-                idx++;
-                onToken(accumulated);
-                if (onProgress) {
-                    onProgress(idx / tokens.length);
-                }
-            } else {
-                clearInterval(timer);
-                resolve();
-            }
-        }, intervalMs);
-    });
-}
-
-/**
- * Global utility to capture a visual screenshot snapshot frame of the currently active studio canvas.
- */
-export function captureActiveCanvasScreenshot(targetLayoutMode?: StudioLayoutMode): string {
-    if (typeof window !== 'undefined') {
-        if (targetLayoutMode === '3d' || !targetLayoutMode) {
-            const capture3D = (window as any).__scratchbox_capture_active_3d_scene;
-            if (typeof capture3D === 'function') {
-                try {
-                    const res = capture3D();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-        if (targetLayoutMode === 'code' || !targetLayoutMode) {
-            const captureSandbox = (window as any).__scratchbox_capture_active_sandbox;
-            if (typeof captureSandbox === 'function') {
-                try {
-                    const res = captureSandbox();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-        if (targetLayoutMode === 'browser' || !targetLayoutMode) {
-            const captureBrowser = (window as any).__scratchbox_capture_active_browser;
-            if (typeof captureBrowser === 'function') {
-                try {
-                    const res = captureBrowser();
-                    if (res && res.length > 22) return res;
-                } catch (e) {
-                    // ignore
-                }
-            }
-        }
-
-        const canvas = document.querySelector('.sb-3d-stage-wrapper canvas, .sb-ide-iframe-wrapper canvas, .sb-browser-stage-wrapper canvas, canvas') as HTMLCanvasElement;
-        if (canvas && typeof canvas.toDataURL === 'function') {
-            try {
-                const res = canvas.toDataURL('image/png');
-                if (res && res.length > 22) return res;
-            } catch (e) {
-                // ignore
-            }
-        }
-    }
-
-    return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-}
+export { StreamBufferQueue, captureActiveCanvasScreenshot } from './chat/streaming-utils';
+import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } from './chat/streaming-utils';
+import { useSendMessage } from './hooks/useSendMessage';
 
 export interface GenerativeCanvasStudioProps {
     onOpenFolder?: () => void;
@@ -1632,7 +1477,15 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         };
     }, [activeWorkspace.path, activeArtifact?.id]);
 
+    // Latest sessions/activeArtifact are read through refs: the controller must only be
+    // re-created when the workspace changes, not on every chat update.
+    const sessionsRef = React.useRef(sessions);
+    sessionsRef.current = sessions;
+    const activeArtifactRef = React.useRef(activeArtifact);
+    activeArtifactRef.current = activeArtifact;
+
     React.useEffect(() => {
+        let cancelled = false;
         const controller = new ProjectArtifactController(
             activeWorkspace.id,
             { id: 'active-user', displayName: getActiveUserName(), kind: 'user' }
@@ -1646,15 +1499,20 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         });
         unifiedCoordinatorRef.current = coordinator;
 
-        const projectSessions = sessions.filter(session => !session.workspaceId || session.workspaceId === activeWorkspace.id);
+        const projectSessions = sessionsRef.current.filter(session => !session.workspaceId || session.workspaceId === activeWorkspace.id);
         controller.initialize(projectSessions, activeWorkspace.path).then(() => {
-            if (activeArtifact) {
-                controller.registerArtifact(activeArtifact, `studio-initialize-${activeArtifact.id}`);
-                coordinator.mutateFromLens(activeArtifact.type, activeArtifact.id, activeArtifact.data);
+            if (cancelled) return;
+            const currentArtifact = activeArtifactRef.current;
+            if (currentArtifact) {
+                controller.registerArtifact(currentArtifact, `studio-initialize-${currentArtifact.id}`);
+                coordinator.mutateFromLens(currentArtifact.type, currentArtifact.id, currentArtifact.data);
             }
             setGraphEpoch(epoch => epoch + 1);
         }).catch(error => console.warn('Failed to initialize project artifact graph', error));
-    }, [activeWorkspace.id]);
+        return () => {
+            cancelled = true;
+        };
+    }, [activeWorkspace.id, activeWorkspace.path]);
 
     React.useEffect(() => {
         if (!activeArtifact || graphControllerRef.current.projectId !== activeWorkspace.id) {
@@ -2377,12 +2235,15 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // Check Gemini 3.7 Flash Backend Status
     React.useEffect(() => {
+        let cancelled = false;
         GeminiClient.getInstance()
             .checkStatus()
             .then(status => {
+                if (cancelled) return;
                 setGeminiStatus(status);
             })
             .catch(() => {
+                if (cancelled) return;
                 setGeminiStatus({
                     connected: false,
                     activeModel: 'gemini-3.7-flash',
@@ -2394,6 +2255,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
         // Discover and load workspace-specific superpowers (.scratchbox/skills) & MCP servers (.scratchbox/mcp.json)
         WorkspaceConfigClient.getInstance().fetchWorkspaceConfig().then(cfg => {
+            if (cancelled) return;
             if (cfg.settings?.googleSearchGrounding !== undefined) {
                 setGoogleSearchGrounding(cfg.settings.googleSearchGrounding);
             }
@@ -2411,7 +2273,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     return [...newMcp, ...prev];
                 });
             }
+        }).catch(() => {
+            // Workspace config is optional; keep bundled defaults.
         });
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     // Global keyboard shortcuts (⌘K spotlight toggle, ⌘O projects, ⌘, settings, Esc LIFO)
@@ -2631,6 +2498,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             return;
         }
 
+        let cancelled = false;
         const settleTimer = setTimeout(async () => {
             if (isVerifyingVisualRef.current) return;
             isVerifyingVisualRef.current = true;
@@ -2650,6 +2518,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                         sceneData: activeArtifact.type === '3d-scene' ? (activeArtifact.data as any) : undefined
                     }
                 });
+                if (cancelled) {
+                    return;
+                }
 
                 // Attach audit result to latest assistant message in chat
                 setMessages(prev => {
@@ -2715,7 +2586,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             }
         }, 700);
 
-        return () => clearTimeout(settleTimer);
+        return () => {
+            cancelled = true;
+            clearTimeout(settleTimer);
+        };
     }, [activeArtifact, layoutMode, handleUpdateArtifact]);
 
     const triggerMarkdownExport = React.useCallback(() => {
@@ -4380,1295 +4254,53 @@ ${content}
         }
     };
 
-    const handleSendMessage = async (textToSend?: string, targetPrimitiveType?: PrimitiveType) => {
-        const text = textToSend !== undefined ? textToSend : inputValue;
-        if (!text.trim() || isGenerating) {
-            return;
-        }
-
-        const lowerText = text.trim().toLowerCase();
-        const isDeepWrite = 
-            text.trim().startsWith('/plan') ||
-            text.trim().startsWith('/deepwrite') ||
-            text.trim().startsWith('/codebase') ||
-            text.trim().startsWith('/spec') ||
-            text.trim().startsWith('/3d') ||
-            lowerText.includes('deep-write') ||
-            lowerText.includes('deep write') ||
-            lowerText.includes('intensive planning') ||
-            lowerText.includes('plan a codebase');
-
-        if (isDeepWrite) {
-            setInputValue('');
-            const cleanPrompt = text.trim()
-                .replace(/^\/(plan|deepwrite|codebase|spec|3d)\s*/i, '');
-            await executeDeepWritePipeline(cleanPrompt);
-            return;
-        }
-
-        if (
-            text.trim().startsWith('/agent ') ||
-            text.trim().startsWith('agent:') ||
-            text.trim().startsWith('/goal ') ||
-            text.trim().startsWith('goal:') ||
-            text.trim().startsWith('/autonomous ')
-        ) {
-            const goalText = text.trim()
-                .replace(/^\/agent\s+/, '')
-                .replace(/^agent:\s*/, '')
-                .replace(/^\/goal\s+/, '')
-                .replace(/^goal:\s*/, '')
-                .replace(/^\/autonomous\s+/, '');
-            setInputValue('');
-            handleStartAgent(goalText);
-            return;
-        }
-
-        const attachedSkillObjects = skills.filter(s => selectedSkillIds.includes(s.id));
-        const attachedMcpObjects = mcpServers.filter(s => selectedMcpIds.includes(s.id));
-
-        const targetSessionId = currentSessionId || `session-chat-${Date.now()}`;
-        if (!currentSessionId) {
-            setCurrentSessionId(targetSessionId);
-        }
-
-        const userMsg: ChatMessage = {
-            id: `msg-user-${Date.now()}`,
-            sender: 'user',
-            text: text.trim(),
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            attachedSkills: attachedSkillObjects.map(s => s.name),
-            attachedMcpTools: attachedMcpObjects.map(m => m.name)
-        };
-
-        const updatedMessages = [...messages, userMsg];
-        setMessages(updatedMessages);
-        setInputValue('');
-        setAutocompleteType(undefined);
-        setIsGenerating(true);
-        setLiveThinkingText('');
-        setLiveThinkingSeconds(0);
-        setLiveSteps([]);
-        setLiveStreamedText('');
-        setActiveStreamingSectionId(undefined);
-
-        const generationStartTime = Date.now();
-        const thinkingTimer = setInterval(() => {
-            if (activeSessionRef.current === targetSessionId) {
-                setLiveThinkingSeconds(parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1)));
-            }
-        }, 100);
-
-        // Attempt Gemini 3.7 Flash Backend Service First
-        let usedBackend = false;
-        let generatedArtifact: CanvasArtifact | undefined;
-        let fallbackGen: CanvasArtifact | undefined;
-        let finalResponseText = '';
-        let streamGroundingMetadata: GroundingMetadata | undefined;
-        const streamExecs: McpExecutionState[] = [];
-
-        try {
-            const attachedSkillsContext: AttachedSkillContext[] = attachedSkillObjects.map(s => ({
-                id: s.id,
-                name: s.name,
-                description: s.description,
-                rawContent: s.rawContent,
-                tags: s.tags,
-                category: s.category
-            }));
-
-            const attachedMcpContext: AttachedMcpToolContext[] = [];
-            for (const server of attachedMcpObjects) {
-                for (const tool of server.tools) {
-                    attachedMcpContext.push({
-                        id: tool.id,
-                        serverName: server.name,
-                        name: tool.name,
-                        humanTitle: tool.humanTitle,
-                        description: tool.description,
-                        samplePrompt: tool.samplePrompt,
-                        category: tool.category
-                    });
-                }
-            }
-
-            const chatHistory = updatedMessages.slice(-4).map(m => ({
-                role: (m.sender === 'assistant' ? 'model' : 'user') as ('user' | 'model'),
-                text: m.text
-            }));
-
-            await GeminiClient.getInstance().streamGenerate(
-                {
-                    prompt: text.trim(),
-                    model: 'gemini-3.7-flash',
-                    thinkingBudget: 1024,
-                    enableGoogleSearch: googleSearchGrounding !== false,
-                    attachedSkills: attachedSkillsContext,
-                    attachedMcpTools: attachedMcpContext,
-                    activeArtifact,
-                    chatHistory
-                },
-                event => {
-                    usedBackend = true;
-                    if (event.groundingMetadata) {
-                        streamGroundingMetadata = event.groundingMetadata;
-                    }
-                    if (event.artifact) {
-                        let art = event.artifact;
-                        const is3DActive = (layoutMode === '3d' || activeArtifact?.type === '3d-scene');
-                        const isAnimPrompt = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(textToSend || '');
-                        if (is3DActive && isAnimPrompt && art.type === '3d-scene') {
-                            const sceneData = art.data as Scene3DData;
-                            if (sceneData) {
-                                sceneData.timeline = {
-                                    ...(sceneData.timeline || {}),
-                                    isPlaying: true,
-                                    isLooping: true,
-                                    speed: 1.0,
-                                    playbackSpeed: 1.0
-                                };
-                                sceneData.animation = sceneData.animation || (textToSend?.toLowerCase().includes('orbit') ? 'orbit' : 'flight');
-                            }
-                        }
-                        generatedArtifact = art;
-                        const resolvedMode = resolveModeForArtifact(art.type);
-                        setSessions(prev => prev.map(s => {
-                            if (s.id !== targetSessionId) return s;
-                            return {
-                                ...s,
-                                activeArtifact: art,
-                                artifactHistory: [art, ...(s.artifactHistory || []).filter(a => a.id !== art.id)],
-                                layoutMode: resolvedMode,
-                                updatedAt: 'Just now'
-                            };
-                        }));
-                    }
-
-                    // Session isolation guard: only update active UI if user is still on targetSessionId
-                    if (activeSessionRef.current === targetSessionId) {
-                        if (event.thought) {
-                            setLiveThinkingText(prev => (prev ? `${prev}\n${event.thought}` : event.thought || ''));
-                        }
-                        if (event.mcpExecution) {
-                            streamExecs.push(event.mcpExecution);
-                            setMcpExecutions(prev => [event.mcpExecution!, ...prev.filter(e => e.id !== event.mcpExecution!.id)]);
-                            const stepId = event.mcpExecution.id || `mcp-step-${Date.now()}`;
-                            const toolName = event.mcpExecution.toolName || 'MCP Tool';
-                            const status = event.mcpExecution.status === 'completed' ? 'completed'
-                                : event.mcpExecution.status === 'failed' ? 'failed'
-                                : 'running';
-                            setLiveSteps(prev => {
-                                const existingIdx = prev.findIndex(s => s.id === stepId);
-                                const step: AgentExecutionStep = {
-                                    id: stepId,
-                                    title: `Executed tool: ${toolName}`,
-                                    status,
-                                    durationMs: event.mcpExecution!.durationMs,
-                                    durationFormatted: event.mcpExecution!.durationMs ? `${event.mcpExecution!.durationMs}ms` : undefined,
-                                    details: event.mcpExecution!.args ? JSON.stringify(event.mcpExecution!.args, null, 2) : undefined,
-                                    kind: 'tool'
-                                };
-                                if (existingIdx >= 0) {
-                                    const next = [...prev];
-                                    next[existingIdx] = step;
-                                    return next;
-                                }
-                                return [...prev, step];
-                            });
-                        }
-                        if (event.text) {
-                            if (event.type === 'delta') {
-                                finalResponseText += event.text;
-                            } else {
-                                finalResponseText = event.text;
-                            }
-                            setLiveStreamedText(finalResponseText);
-                        }
-                        if (event.artifact) {
-                            setActiveArtifact(event.artifact);
-                            setLayoutMode(resolveModeForArtifact(event.artifact.type));
-                            if (event.artifact.type === 'markdown-document') {
-                                const docData = event.artifact.data as MarkdownDocumentData;
-                                if (docData?.sections && docData.sections.length > 0) {
-                                    setActiveStreamingSectionId(docData.sections[docData.sections.length - 1].id);
-                                }
-                            }
-                            setArtifactHistory(prev => [
-                                event.artifact!,
-                                ...prev.filter(a => a.id !== event.artifact!.id)
-                            ]);
-                        }
-                        if (event.usage) {
-                            setTokenBudget((prev: TokenBudgetMetrics) => ({
-                                ...prev,
-                                promptTokens: event.usage?.promptTokens || prev.promptTokens,
-                                candidateTokens: event.usage?.candidateTokens || prev.candidateTokens,
-                                totalTokens: event.usage?.totalTokens || prev.totalTokens
-                            }));
-                        }
-                    }
-                }
-            );
-        } catch (err: any) {
-            console.warn('Gemini backend streaming fallback to studio synthesis:', err?.message);
-            if (err?.message && (err.message.includes('Command failed') || err.message.includes('Error:') || err.message.includes('TS'))) {
-                setActiveTerminalError({
-                    command: 'Gemini AI Execution',
-                    exitCode: 1,
-                    output: err.message,
-                    stackTrace: err.stack,
-                    timestamp: Date.now()
-                });
-                setShowTerminalErrorToast(true);
-            }
-        }
-
-        // Finalize assistant message
-        let finalAssistantMsg: ChatMessage;
-        const generationElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
-        const backendThinkingDuration = liveThinkingSeconds > 0 ? liveThinkingSeconds : generationElapsedSeconds;
-
-        if (usedBackend && generatedArtifact) {
-            recordArtifactVersion(generatedArtifact);
-            finalAssistantMsg = {
-                id: `msg-assistant-${Date.now()}`,
-                sender: 'assistant',
-                text: cleanMessageText(finalResponseText, generatedArtifact),
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                artifacts: [generatedArtifact],
-                mcpExecutions: streamExecs.length > 0 ? streamExecs : undefined,
-                groundingMetadata: streamGroundingMetadata,
-                thinkingText: liveThinkingText || undefined,
-                thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
-                steps: liveSteps.length > 0 ? liveSteps : undefined
-            };
-        } else if (usedBackend) {
-            finalAssistantMsg = {
-                id: `msg-assistant-${Date.now()}`,
-                sender: 'assistant',
-                text: finalResponseText || 'Response received.',
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                mcpExecutions: streamExecs.length > 0 ? streamExecs : undefined,
-                groundingMetadata: streamGroundingMetadata,
-                thinkingText: liveThinkingText || undefined,
-                thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
-                steps: liveSteps.length > 0 ? liveSteps : undefined
-            };
-        } else {
-            // Local synthesis fallback
-            const lower = text.toLowerCase();
-            const docContentExtract = activeArtifact?.type === 'markdown-document'
-                ? (activeArtifact.data as MarkdownDocumentData)?.sections?.map(s => s.content || s.calloutTitle || '').join(' ')
-                : undefined;
-
-            const isExplicitImage = /create\s+(?:a\s+)?picture|generate\s+(?:a\s+)?picture|picture\s+of|draw\s+(?:a\s+)?picture|image\s+of|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|photo\s+of|photograph\s+of|illustration\s+of|painting\s+of|artwork\s+of|draw\s+(?:an?\s+)?image|make\s+(?:a\s+)?picture|make\s+(?:an?\s+)?image|\bpicture\b|\bphoto\b|\billustration\b|\bpainting\b/i.test(text);
-
-            const isExplicitVideo = /create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(text);
-
-            const isExplicitMedia = isExplicitImage || isExplicitVideo;
-
-            const isExplicit3D = !isExplicitMedia && (targetPrimitiveType === '3d-scene' ||
-                /3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js\s+scene|r3f\s+scene|planetary\s+orbit|solar\s+system|molecular\s+physics|cyberpunk\s+city|architectural\s+blueprint/i.test(text) ||
-                ((lower.includes('3d') || lower.includes('spatial')) && (lower.includes('plane') || lower.includes('airplane') || lower.includes('jet') || lower.includes('aircraft') || lower.includes('flight') || lower.includes('scene') || lower.includes('world') || lower.includes('model') || lower.includes('render') || lower.includes('corridor') || lower.includes('aviation'))) ||
-                lower.includes('cyberpunk branch') ||
-                lower.includes('multiverse branch') ||
-                lower.includes('wireframe mode') ||
-                lower.includes('wasm physics') ||
-                lower.includes('drone route') ||
-                lower.includes('mars colony') ||
-                lower.includes('post-apocalypse'));
-
-            const isExplicitKanban = targetPrimitiveType === 'kanban-board' ||
-                /kanban|roadmap|sprint\s+tasks?|backlog\s+board|todo\s+board|task\s+board|action\s+items/i.test(text);
-
-            const isExplicitGraph = targetPrimitiveType === 'node-graph' ||
-                /node\s+graph|architecture\s+map|system\s+diagram|workflow\s+pipeline|pipeline\s+graph|flow\s+diagram|workflow\s+canvas/i.test(text);
-
-            const isExplicitMetrics = targetPrimitiveType === 'metric-dashboard' ||
-                /metric\s+dashboard|kpis?|telemetry\s+dashboard|analytics\s+dashboard|performance\s+metrics|kpi\s+metrics|summarize\s+into\s+metrics|summarize\s+into\s+kpi/i.test(text);
-
-            const isExplicitSandbox = targetPrimitiveType === 'live-code-sandbox' ||
-                isVibeToolRequest(text) ||
-                /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline|code\s+sandbox|sandbox\s+code|runnable\s+prototype|live\s+code|interactive\s+code|react\s+sandbox|component\s+sandbox|app\s+sandbox/i.test(text);
-
-            const isExplicitDoc = targetPrimitiveType === 'markdown-document' ||
-                isExplicitMedia ||
-                /write|document|paper|research|essay|article|report|guide|brief|memo|spec|specification|overview|summary|proposal|1776|history/i.test(text);
-
-            const is3DRequest = !isExplicitMedia && (isExplicit3D || (!isExplicitKanban && !isExplicitGraph && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === '3d' || activeArtifact?.type === '3d-scene')));
-            const isKanbanRequest = isExplicitKanban || (!isExplicit3D && !isExplicitGraph && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board'));
-            const isGraphRequest = isExplicitGraph || (!isExplicit3D && !isExplicitKanban && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === 'automation' || layoutMode === 'canvas' || activeArtifact?.type === 'node-graph'));
-            const isSandboxRequest = isExplicitSandbox || (!isExplicit3D && !isExplicitKanban && !isExplicitGraph && !isExplicitMetrics && !isExplicitDoc && (layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox'));
-            const isMetricsRequest = isExplicitMetrics;
-
-            if (attachedDataFile && attachedDataFile.rowsCount > 0) {
-                const baseName = attachedDataFile.name.replace(/\.[^/.]+$/, '');
-                fallbackGen = {
-                    id: `art-kpi-${Date.now()}`,
-                    type: 'metric-dashboard' as const,
-                    title: `${baseName} KPI Metric Dashboard`,
-                    summary: `Interactive performance metric dashboard synthesized from ${attachedDataFile.rowsCount} data rows.`,
-                    version: 1,
-                    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    data: {
-                        title: `${baseName} Performance Dashboard`,
-                        subtitle: `Automated analysis of ${attachedDataFile.rowsCount} data rows across ${attachedDataFile.headers.length} dimensions`,
-                        metrics: attachedDataFile.summaryMetrics,
-                        chart: {
-                            title: `Metric Volume by ${attachedDataFile.headers[0] || 'Category'}`,
-                            type: 'bar',
-                            unit: 'Performance Value',
-                            data: attachedDataFile.chartData || []
-                        },
-                        insights: [
-                            `Parsed and verified ${attachedDataFile.rowsCount} rows with 100% schema integrity.`,
-                            `Identified dimensions: ${attachedDataFile.headers.join(', ')}.`,
-                            `Peak performance recorded in dataset: ${attachedDataFile.chartData?.[0]?.value ? attachedDataFile.chartData[0].value.toLocaleString() : '12,450'} units.`,
-                            `Automated distribution analytics computed across ${attachedDataFile.headers.length} attributes.`
-                        ]
-                    }
-                };
-                showToast(`Generated KPI Dashboard from ${attachedDataFile.name}`, '📊');
-            } else if (isExplicitMedia) {
-                const kind = isExplicitVideo ? 'video' : 'image';
-                const synthesizedDoc = synthesizeMediaDocument(text, kind);
-                fallbackGen = {
-                    id: `art-doc-${Date.now()}`,
-                    type: 'markdown-document' as const,
-                    title: synthesizedDoc.title,
-                    summary: kind === 'video'
-                        ? `Generated cinematic video document: "${synthesizedDoc.title}" on the visual canvas.`
-                        : `Generated editorial illustration and visual document: "${synthesizedDoc.title}" on the visual canvas.`,
-                    version: 1,
-                    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    data: synthesizedDoc
-                };
-                showToast(kind === 'video' ? `Generated Video: ${synthesizedDoc.title}` : `Generated Picture: ${synthesizedDoc.title}`, '🎨');
-            } else if (is3DRequest) {
-                const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
-                const is3DTopicRequest = /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior/i.test(text);
-
-                if (!isExisting3D || is3DTopicRequest) {
-                    const synthesized3D = synthesizeContextual3DScene(text, {
-                        activeArtifact,
-                        chatHistory: messages.map(m => ({ role: m.sender === 'assistant' ? 'model' : 'user', text: m.text })),
-                        docTitle: activeArtifact?.title,
-                        docContent: docContentExtract
-                    });
-                    fallbackGen = {
-                        id: (isExisting3D ? activeArtifact.id : undefined) || `art-3d-${Date.now()}`,
-                        type: '3d-scene' as const,
-                        title: synthesized3D.title,
-                        summary: synthesized3D.subtitle || `Interactive 3D scene generated for "${synthesized3D.title}".`,
-                        version: isExisting3D ? (activeArtifact.version || 1) + 1 : 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: synthesized3D
-                    };
-                    showToast(`Generated 3D Scene: ${synthesized3D.title}`, '🪐');
-                } else {
-                const current3D = (activeArtifact.data as Scene3DData) || {
-                    title: activeArtifact?.title && activeArtifact.title !== 'Live Code Sandbox' ? activeArtifact.title : 'Interactive 3D Scene Workspace',
-                    subtitle: 'WebGL viewport with procedural topography, real-time wave solvers, and simulated WASM linear memory heap.',
-                    worldBranch: 'earth/main',
-                    renderMode: 'shaded',
-                    cameraMode: 'orbit',
-                    objects: [],
-                    camera: { position: [15, 12, 15], target: [0, 0, 0] },
-                    environment: { skybox: 'cyberpunk', lighting: 'shaded', ground: true }
-                };
-
-                let explanation = '';
-                const updated3D: Scene3DData = {
-                    ...current3D,
-                    objects: [...(current3D.objects || [])]
-                };
-
-                if (lower.includes('god ray') || lower.includes('crepuscular') || lower.includes('light shaft') || lower.includes('sun ray') || lower.includes('sunlight scattering')) {
-                    updated3D.renderMode = 'pbr';
-                    updated3D.environment = {
-                        ...(current3D.environment || {}),
-                        skybox: 'realistic-sky',
-                        lighting: 'daylight',
-                        ground: true
-                    };
-                    updated3D.features = {
-                        ...(updated3D.features || {}),
-                        godRays: true,
-                        atmosphericScattering: true
-                    };
-                    explanation = `Configured **Volumetric God Rays & Realistic Sunlight Scattering** for ${current3D.title || 'the 3D scene'}.`;
-                } else if (lower.includes('control surface') || lower.includes('aileron') || lower.includes('elevator') || lower.includes('rudder') || lower.includes('flap')) {
-                    updated3D.renderMode = 'pbr';
-                    updated3D.features = {
-                        ...(updated3D.features || {}),
-                        controlSurfaces: true
-                    };
-                    updated3D.timeline = {
-                        ...(updated3D.timeline || {}),
-                        isPlaying: true,
-                        isLooping: true,
-                        speed: 1.0,
-                        playbackSpeed: 1.0,
-                        currentTimeMs: updated3D.timeline?.currentTimeMs ?? 0,
-                        durationMs: updated3D.timeline?.durationMs || 10000
-                    };
-                    updated3D.animation = 'flight';
-                    explanation = `Enabled **Articulated Flight Control Surfaces** with real-time differential aileron roll, elevator pitch, and rudder deflection kinematics.`;
-                } else if (lower.includes('contrail') || lower.includes('vapor') || lower.includes('wingtip vortex') || lower.includes('vortex trail')) {
-                    updated3D.renderMode = 'pbr';
-                    updated3D.features = {
-                        ...(updated3D.features || {}),
-                        contrails: true
-                    };
-                    updated3D.timeline = {
-                        ...(updated3D.timeline || {}),
-                        isPlaying: true,
-                        isLooping: true,
-                        speed: 1.0,
-                        playbackSpeed: 1.0,
-                        currentTimeMs: updated3D.timeline?.currentTimeMs ?? 0,
-                        durationMs: updated3D.timeline?.durationMs || 10000
-                    };
-                    updated3D.animation = 'flight';
-                    explanation = `Added **Dynamic Contrail Vortices** with real-time particle emission, condensation persistence, and turbulence dispersion.`;
-                } else if (lower.includes('terrain') || lower.includes('biome') || lower.includes('canyon') || lower.includes('alpine') || lower.includes('mountain') || lower.includes('coastal') || lower.includes('desert')) {
-                    const biomeType: 'alpine' | 'canyon' | 'coastal' | 'desert' = lower.includes('desert') ? 'desert' : lower.includes('canyon') ? 'canyon' : lower.includes('coastal') ? 'coastal' : 'alpine';
-                    updated3D.renderMode = 'pbr';
-                    updated3D.features = {
-                        ...(updated3D.features || {}),
-                        terrainBiomes: { biomeType }
-                    };
-                    explanation = `Generated **Procedural ${biomeType.charAt(0).toUpperCase() + biomeType.slice(1)} Terrain Biome** with multi-octave elevation and volumetric cloud layers.`;
-                } else if (lower.includes('sky') || lower.includes('atmosphere') || lower.includes('cloud') || lower.includes('realistic sky') || lower.includes('daylight') || lower.includes('sunset') || lower.includes('dusk')) {
-                    const isSunset = lower.includes('sunset') || lower.includes('dusk') || lower.includes('golden');
-                    updated3D.renderMode = 'pbr';
-                    updated3D.environment = {
-                        ...(current3D.environment || {}),
-                        skybox: isSunset ? 'sunset' : 'realistic-sky',
-                        lighting: 'daylight',
-                        ground: true
-                    };
-                    updated3D.features = {
-                        ...(updated3D.features || {}),
-                        atmosphericScattering: true
-                    };
-                    explanation = isSunset 
-                        ? `Configured **Golden Hour Sunset Sky** with warm twilight atmospheric scattering and specular reflections.`
-                        : `Configured **Realistic Atmospheric Skybox** with procedural sunlight Rayleigh scattering, volumetric cloud layers, and physically-based aerial lighting.`;
-                } else if (lower.includes('detail') || lower.includes('detailed')) {
-                    updated3D.renderMode = 'pbr';
-                    updated3D.environment = {
-                        ...(current3D.environment || {}),
-                        skybox: 'realistic-sky',
-                        lighting: 'daylight',
-                        ground: true
-                    };
-                    updated3D.timeline = {
-                        ...(updated3D.timeline || {}),
-                        isPlaying: true,
-                        isLooping: true,
-                        speed: 1.0,
-                        playbackSpeed: 1.0,
-                        currentTimeMs: 0,
-                        durationMs: 10000
-                    };
-                    explanation = `Enhanced **3D Simulation Detail** with advanced shaders, lighting passes, and realistic atmospheric dynamics.`;
-                } else if (lower.includes('animate') || lower.includes('make it fly') || lower.includes('start flight') || lower.includes('play animation') || lower.includes('takeoff') || lower.includes('start motion') || (lower.includes('orbit') && (lower.includes('camera') || lower.includes('scene') || lower.includes('turntable')))) {
-                    updated3D.timeline = {
-                        ...(updated3D.timeline || {}),
-                        isPlaying: true,
-                        isLooping: true,
-                        speed: 1.0,
-                        playbackSpeed: 1.0,
-                        currentTimeMs: 0,
-                        durationMs: updated3D.timeline?.durationMs || 10000
-                    };
-                    updated3D.animation = 'flight';
-                    if (lower.includes('orbit')) {
-                        updated3D.animation = 'orbit';
-                    }
-                    explanation = `Animated 3D flight trajectory: dynamic bank, roll, and engine thrust active.`;
-                } else if (lower.includes('plane') || lower.includes('airplane') || lower.includes('jet') || lower.includes('aircraft') || lower.includes('aviation')) {
-                    updated3D.worldBranch = 'earth/flight-corridor';
-                    updated3D.renderMode = 'pbr';
-                    updated3D.environment = {
-                        skybox: 'realistic-sky',
-                        lighting: 'daylight',
-                        ground: true
-                    };
-                    updated3D.title = '3D Aircraft & Flight Corridor';
-                    updated3D.subtitle = 'Interactive procedural 3D jet aircraft in spatial airspace';
-                    updated3D.camera = { position: [15, 12, 20], target: [0, 2, 0], fov: 45 };
-                    updated3D.objects = [
-                        {
-                            id: 'obj-aircraft-1',
-                            content: {
-                                type: '3d-scene',
-                                durableUri: 'internal:plane',
-                                mimeType: 'model/procedural-aircraft',
-                                metadata: { dims: { width: 12, height: 4, depth: 14 } }
-                            },
-                            space: {
-                                spatial3d: { x: 0, y: 3.5, z: 0, pitch: 0, yaw: 0, roll: 0 }
-                            },
-                            time: { startMs: 0, durationMs: 10000 },
-                            lineage: { version: 1 }
-                        }
-                    ];
-                    explanation = `Generated procedural **3D Jet Aircraft** in spatial flight corridor with swept wings, cockpit canopy, and dual jet engines.`;
-                } else if (lower.includes('cyberpunk') || lower.includes('neon') || lower.includes('2088')) {
-                    updated3D.worldBranch = 'earth/cyberpunk';
-                    updated3D.renderMode = 'pbr';
-                    updated3D.title = 'SF Cyberpunk 2088 Grid';
-                    updated3D.subtitle = 'Dystopian neon spatial layer | Branch earth/cyberpunk';
-                    explanation = `Switched 4D multiverse branch to **earth/cyberpunk** with high-contrast neon emissive shaders and PBR materials.`;
-                } else if (lower.includes('post-apocalypse') || lower.includes('ruin') || lower.includes('overgrown') || lower.includes('decay')) {
-                    updated3D.worldBranch = 'earth/post-apocalypse';
-                    updated3D.renderMode = 'shaded';
-                    updated3D.title = 'SF Post-Apocalypse Ruins';
-                    updated3D.subtitle = 'Eroded vegetation & concrete decay | Branch earth/post-apocalypse';
-                    explanation = `Switched 4D multiverse branch to **earth/post-apocalypse** with eroded concrete topography.`;
-                } else if (lower.includes('mars') || lower.includes('colony') || lower.includes('2150') || lower.includes('red planet')) {
-                    updated3D.worldBranch = 'earth/mars-colony-2150';
-                    updated3D.renderMode = 'solid';
-                    updated3D.title = 'Mars Habitat Colony 2150';
-                    updated3D.subtitle = 'Pressurized dome structures & red dust | Branch earth/mars-colony-2150';
-                    explanation = `Switched 4D multiverse branch to **earth/mars-colony-2150** with red atmospheric scattering and solid normal shaders.`;
-                } else if (lower.includes('wireframe')) {
-                    updated3D.renderMode = 'wireframe';
-                    explanation = `Switched 3D render pipeline to **wireframe mode** for structural mesh topology inspection.`;
-                } else if (lower.includes('pbr') || lower.includes('photoreal') || lower.includes('realistic')) {
-                    updated3D.renderMode = 'pbr';
-                    explanation = `Switched 3D render pipeline to **physically-based rendering (PBR)** with emissive window glow.`;
-                } else if (lower.includes('solid') || lower.includes('normal')) {
-                    updated3D.renderMode = 'solid';
-                    explanation = `Switched 3D render pipeline to **solid normals mode**.`;
-                } else if (lower.includes('shaded') || lower.includes('clay') || lower.includes('lambert')) {
-                    updated3D.renderMode = 'shaded';
-                    explanation = `Switched 3D render pipeline to **smooth shaded lighting mode**.`;
-                } else if (lower.includes('fps') || lower.includes('fly') || lower.includes('wasd') || lower.includes('first-person') || lower.includes('first person')) {
-                    updated3D.cameraMode = 'fps';
-                    explanation = `Switched camera navigation to **First-Person Fly mode (WASD + Q/E altitude controls)**.`;
-                } else if (lower.includes('orbit') || lower.includes('turntable')) {
-                    updated3D.cameraMode = 'orbit';
-                    explanation = `Switched camera navigation to **3D Orbit mode**.`;
-                } else if (lower.includes('wave') || lower.includes('deform') || lower.includes('physics') || lower.includes('wasm') || lower.includes('ripple') || lower.includes('collider')) {
-                    updated3D.wasmPhysics = {
-                        waveActive: true,
-                        deformFactor: 1.5,
-                        statusText: 'WASM Wave Collider active'
-                    };
-                    explanation = `Triggered **WASM 64MB Linear Memory Physics Engine**, solving 60,000 vertex deformations with radial decay wave vectors in ~1.2ms.`;
-                } else if (lower.includes('drone') || lower.includes('route') || lower.includes('flight') || lower.includes('spline') || lower.includes('delivery')) {
-                    if (lower.includes('cancel') || lower.includes('stop') || lower.includes('clear')) {
-                        updated3D.droneRoute = {
-                            pinA: updated3D.droneRoute?.pinA || { lat: 37.7920, lng: -122.4050 },
-                            pinB: updated3D.droneRoute?.pinB || { lat: 37.7980, lng: -122.3950 },
-                            active: false
-                        };
-                        explanation = `Cancelled active drone routing spline simulation.`;
-                    } else {
-                        updated3D.geoAnchor = {
-                            lat: 37.7900,
-                            lng: -122.4000,
-                            elevation: 15.2,
-                            active: true
-                        };
-                        updated3D.droneRoute = {
-                            pinA: { lat: 37.7920, lng: -122.4050 },
-                            pinB: { lat: 37.7980, lng: -122.3950 },
-                            active: true
-                        };
-                        updated3D.timeline = {
-                            isPlaying: true,
-                            currentTimeMs: 0,
-                            durationMs: 10000,
-                            playbackSpeed: 1.0
-                        };
-                        explanation = `Generated **Kinematic Drone Flight Route** between Pin A (37.7920°, -122.4050°) and Pin B (37.7980°, -122.3950°) with 5m terrain clearance over binned elevation topography.`;
-                    }
-                } else if (lower.includes('coit tower')) {
-                    updated3D.geoAnchor = { lat: 37.8024, lng: -122.4058, elevation: 84.0, active: true };
-                    explanation = `Geospatially anchored 3D terrain to **Coit Tower, San Francisco** (Lat 37.8024°, Lng -122.4058°, Alt 84.0m).`;
-                } else if (lower.includes('ferry building')) {
-                    updated3D.geoAnchor = { lat: 37.7955, lng: -122.3937, elevation: 2.0, active: true };
-                    explanation = `Geospatially anchored 3D terrain to **Ferry Building, San Francisco** (Lat 37.7955°, Lng -122.3937°, Alt 2.0m).`;
-                } else if (lower.includes('salesforce') || lower.includes('transbay')) {
-                    updated3D.geoAnchor = { lat: 37.7897, lng: -122.3972, elevation: 326.0, active: true };
-                    explanation = `Geospatially anchored 3D terrain to **Salesforce Tower, SF** (Lat 37.7897°, Lng -122.3972°, Alt 326.0m).`;
-                } else if (lower.includes('geo') || lower.includes('map') || lower.includes('anchor') || lower.includes('san francisco') || lower.includes('sf')) {
-                    updated3D.geoAnchor = { lat: 37.7900, lng: -122.4000, elevation: 15.2, active: true };
-                    explanation = `Loaded procedural 3D map tiles and binned contour elevation for **San Francisco Financial District** (37.7900°N, 122.4000°W).`;
-                } else if (lower.includes('play') || lower.includes('start') || lower.includes('resume')) {
-                    updated3D.timeline = { ...(updated3D.timeline || {}), isPlaying: true };
-                    explanation = `Started 4D temporal simulation playback.`;
-                } else if (lower.includes('pause') || lower.includes('freeze')) {
-                    updated3D.timeline = { ...(updated3D.timeline || {}), isPlaying: false };
-                    explanation = `Paused 4D temporal simulation playback.`;
-                } else if (lower.includes('reset') || lower.includes('rewind')) {
-                    updated3D.timeline = { ...(updated3D.timeline || {}), currentTimeMs: 0, isPlaying: false };
-                    explanation = `Reset 4D timeline playhead to t=0.0s.`;
-                } else {
-                    explanation = `Mutated 3D Scene parameters from prompt: "${text}". Dynamic spatial shader graph updated.`;
-                }
-
-                fallbackGen = {
-                    id: (activeArtifact?.type === '3d-scene' ? activeArtifact.id : undefined) || `art-3d-${Date.now()}`,
-                    type: '3d-scene' as const,
-                    title: updated3D.title || '4D Scene Workspace',
-                    summary: explanation,
-                    version: (activeArtifact?.type === '3d-scene' ? (activeArtifact.version || 1) : 0) + 1,
-                    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    data: updated3D
-                };
-                showToast(`Updated 3D Scene: ${explanation}`, '🪐');
-                }
-            } else if (isKanbanRequest) {
-                if (activeArtifact && activeArtifact.type !== 'kanban-board') {
-                    const morphed = morphArtifact(activeArtifact, 'kanban-board');
-                    fallbackGen = morphed;
-                    showToast(`Generated Kanban Board: ${morphed.title}`, '📋');
-                } else {
-                    const currentBoard = (activeArtifact?.data as KanbanBoardData) || {
-                        title: activeArtifact?.title || 'Sprint Roadmap',
-                        columns: []
-                    };
-                    const newCols = [...(currentBoard.columns || [])];
-                    let explanation = '';
-
-                    if (lower.includes('column') || lower.includes('qa') || lower.includes('review') || lower.includes('stage')) {
-                        explanation = `Added "QA & Review" stage column to the sprint Kanban delivery board.`;
-                        newCols.splice(newCols.length - 1, 0, {
-                            id: `col-qa-${Date.now()}`,
-                            title: 'QA & Review',
-                            color: 'amber',
-                            cards: [
-                                {
-                                    id: `card-qa-${Date.now()}`,
-                                    title: 'Multi-Device Responsive Verification',
-                                    description: 'Verify Mobile 375px and Tablet 768px viewports',
-                                    tag: 'QA',
-                                    tagColor: 'amber',
-                                    priority: 'high',
-                                    completedSubtasks: 3,
-                                    totalSubtasks: 3
-                                }
-                            ]
-                        });
-                    } else if (lower.includes('stripe') || lower.includes('payment') || lower.includes('billing')) {
-                        explanation = `Created high-priority Stripe Webhook Listeners task card in the Backlog.`;
-                        const backlogCol = newCols.find(c => c.id === 'col-backlog') || newCols[0];
-                        if (backlogCol) {
-                            backlogCol.cards = [
-                                {
-                                    id: `card-stripe-${Date.now()}`,
-                                    title: 'Stripe Webhook & Subscription Sync',
-                                    description: 'Automate webhook listeners and reconciliation pipes',
-                                    tag: 'Payments',
-                                    tagColor: 'indigo',
-                                    priority: 'urgent',
-                                    assignee: 'Backend Team',
-                                    completedSubtasks: 1,
-                                    totalSubtasks: 3
-                                },
-                                ...(backlogCol.cards || [])
-                            ];
-                        }
-                    } else {
-                        explanation = `Added new task card: "${text}" to the delivery sprint backlog.`;
-                        const targetCol = newCols[0];
-                        if (targetCol) {
-                            targetCol.cards = [
-                                {
-                                    id: `card-task-${Date.now()}`,
-                                    title: text.charAt(0).toUpperCase() + text.slice(1),
-                                    description: 'Sprint task item generated via AI Assistant',
-                                    tag: 'Sprint',
-                                    tagColor: 'blue',
-                                    priority: 'medium'
-                                },
-                                ...(targetCol.cards || [])
-                            ];
-                        }
-                    }
-
-                    const updatedBoard: KanbanBoardData = { ...currentBoard, columns: newCols };
-                    fallbackGen = {
-                        id: activeArtifact?.id || `art-kanban-${Date.now()}`,
-                        type: 'kanban-board' as const,
-                        title: activeArtifact?.title || 'Sprint Roadmap',
-                        summary: explanation,
-                        version: (activeArtifact?.version || 1) + 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: updatedBoard
-                    };
-                    showToast(`Updated Kanban: ${explanation}`, '📋');
-                }
-            } else if (isGraphRequest) {
-                if (activeArtifact && activeArtifact.type !== 'node-graph') {
-                    const morphed = morphArtifact(activeArtifact, 'node-graph');
-                    fallbackGen = morphed;
-                    showToast(`Generated Node Graph: ${morphed.title}`, '⚡');
-                } else {
-                    const currentGraph = (activeArtifact?.data as NodeGraphData) || {
-                        title: activeArtifact?.title || 'Canvas Workflow',
-                        nodes: [],
-                        edges: []
-                    };
-                    const newNodes = [...(currentGraph.nodes || [])];
-                    const newEdges = [...(currentGraph.edges || [])];
-                    let explanation = '';
-
-                    if (lower.includes('webhook') || lower.includes('trigger') || lower.includes('input')) {
-                        explanation = `Added Webhook Event Trigger node to the visual canvas pipeline.`;
-                        const newNodeId = `node-wh-${Date.now()}`;
-                        newNodes.push({
-                            id: newNodeId,
-                            label: 'Webhook Trigger',
-                            subtitle: 'POST /api/v1/event',
-                            category: 'input',
-                            color: 'blue',
-                            status: 'completed',
-                            x: 80,
-                            y: 120 + newNodes.length * 60
-                        });
-                    } else if (lower.includes('postgres') || lower.includes('database') || lower.includes('db') || lower.includes('sql')) {
-                        explanation = `Added PostgreSQL Database Action node to execute transactions in real time.`;
-                        const newNodeId = `node-db-${Date.now()}`;
-                        newNodes.push({
-                            id: newNodeId,
-                            label: 'PostgreSQL Action',
-                            subtitle: 'INSERT INTO audit_log',
-                            category: 'database',
-                            color: 'amber',
-                            status: 'pending',
-                            x: 750,
-                            y: 160
-                        });
-                    } else {
-                        explanation = `Added new processing step to workflow: "${text}".`;
-                        const newNodeId = `node-step-${Date.now()}`;
-                        newNodes.push({
-                            id: newNodeId,
-                            label: text.slice(0, 24),
-                            subtitle: 'Dynamic Workflow Step',
-                            category: 'process',
-                            color: 'blue',
-                            status: 'pending',
-                            x: 350 + (newNodes.length % 4) * 120,
-                            y: 120 + Math.floor(newNodes.length / 4) * 80
-                        });
-                    }
-
-                    fallbackGen = {
-                        id: activeArtifact?.id || `art-graph-${Date.now()}`,
-                        type: 'node-graph' as const,
-                        title: activeArtifact?.title || 'Canvas Workflow',
-                        summary: explanation,
-                        version: (activeArtifact?.version || 1) + 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: { ...currentGraph, nodes: newNodes, edges: newEdges }
-                    };
-                    showToast(`Updated Node Graph: ${explanation}`, '⚡');
-                }
-            } else if (isMetricsRequest) {
-                if (activeArtifact && activeArtifact.type !== 'metric-dashboard') {
-                    const morphed = morphArtifact(activeArtifact, 'metric-dashboard');
-                    fallbackGen = morphed;
-                    showToast(`Generated KPI Dashboard: ${morphed.title}`, '📊');
-                } else {
-                    const currentMetrics = (activeArtifact?.data as MetricCardsData) || {
-                        title: activeArtifact?.title || 'KPI Metric Dashboard',
-                        metrics: []
-                    };
-                    fallbackGen = {
-                        id: activeArtifact?.id || `art-metrics-${Date.now()}`,
-                        type: 'metric-dashboard' as const,
-                        title: currentMetrics.title,
-                        summary: 'Updated KPI telemetry dashboard with verified analytics.',
-                        version: (activeArtifact?.version || 1) + 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: currentMetrics
-                    };
-                    showToast(`Updated KPI Dashboard: ${fallbackGen.title}`, '📊');
-                }
-            } else if (isSandboxRequest) {
-                if (isVibeToolRequest(text)) {
-                    const synthesized = synthesizeVibeToolSandbox(text);
-                    fallbackGen = {
-                        id: `art-tool-${Date.now()}`,
-                        type: 'live-code-sandbox' as const,
-                        title: synthesized.title,
-                        summary: `Prompt-crafted 3D pre-visualization and micro-studio synthesized for: "${text}".`,
-                        version: 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: synthesized
-                    };
-                    showToast(`Vibe-Coded Micro-Studio: ${synthesized.title}`, '🎬');
-                } else if (activeArtifact && activeArtifact.type !== 'live-code-sandbox') {
-                    const morphed = morphArtifact(activeArtifact, 'live-code-sandbox');
-                    if (morphed.data) {
-                        (morphed.data as LiveCodeSandboxData).viewMode = 'preview';
-                    }
-                    fallbackGen = morphed;
-                    showToast(`Generated Live Preview: ${morphed.title}`, '💻');
-                } else {
-                    const currentSandbox = (activeArtifact?.data as LiveCodeSandboxData) || {
-                        title: activeArtifact?.title || 'Component Sandbox',
-                        files: [
-                            {
-                                id: 'App.tsx',
-                                name: 'App.tsx',
-                                language: 'typescript',
-                                content: `export default function App() {\n  return <div style={{ padding: 24, color: '#fff' }}>Interactive Sandbox</div>;\n}`
-                            }
-                        ]
-                    };
-                    let explanation = `Updated code in sandbox according to prompt: "${text}". Live preview recompiled.`;
-                    fallbackGen = {
-                        id: activeArtifact?.id || `art-code-${Date.now()}`,
-                        type: 'live-code-sandbox' as const,
-                        title: currentSandbox.title,
-                        summary: explanation,
-                        version: (activeArtifact?.version || 1) + 1,
-                        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        data: currentSandbox
-                    };
-                    showToast(`Updated Sandbox: ${explanation}`, '💻');
-                }
-            } else if (layoutMode === 'document' || activeArtifact?.type === 'markdown-document') {
-                const currentDoc = (activeArtifact?.data as MarkdownDocumentData) || {
-                    title: activeArtifact?.title || 'Project Specification & Notes',
-                    sections: []
-                };
-                const existingSections = [...(currentDoc.sections || [])];
-                const lower = text.toLowerCase();
-                let explanation = '';
-
-                // Detect if this prompt is targeting a specific section or excerpt
-                const sectionMatch = text.match(/for section ["'](.*?)["'] in document ["'](.*?)["']/i) || text.match(/for section ["'](.*?)["']/i);
-                const excerptMatch = text.match(/for the selected excerpt: ["'](.*?)["'] in document ["'](.*?)["']/i) || text.match(/for the selected excerpt: ["'](.*?)["']/i);
-                const targetQuery = (sectionMatch ? sectionMatch[1] : (excerptMatch ? excerptMatch[1] : '')).trim().toLowerCase();
-
-                // Check if this is a request to synthesize a brand-new document
-                const isNewDocRequest = !sectionMatch && !excerptMatch && (
-                    lower.startsWith('write') ||
-                    lower.startsWith('create') ||
-                    lower.startsWith('generate') ||
-                    lower.startsWith('draft') ||
-                    lower.startsWith('research') ||
-                    lower.startsWith('paper') ||
-                    lower.includes('1776') ||
-                    lower.includes('battle') ||
-                    lower.includes('technical spec') ||
-                    lower.includes('architecture spec') ||
-                    lower.includes('project proposal') ||
-                    existingSections.length === 0
-                );
-
-                let updatedDoc: MarkdownDocumentData;
-                let docTitle = currentDoc.title && currentDoc.title !== 'Markdown Document'
-                    ? currentDoc.title
-                    : (activeArtifact?.title && activeArtifact.title !== 'Markdown Document' ? activeArtifact.title : extractDocumentTitleFromPrompt(text));
-
-                if (isNewDocRequest) {
-                    updatedDoc = synthesizeComprehensiveDocument(text, docTitle);
-                    explanation = `Synthesized new document: "${updatedDoc.title}" with comprehensive overview, historical/architectural context, comparison tables, and milestone checklists.`;
-                } else if (targetQuery && existingSections.length > 0) {
-                    // Surgical Section Mutation: Locate targeted section and mutate/expand while preserving ALL other sections
-                    let targetIndex = existingSections.findIndex(s => {
-                        const content = (s.content || s.calloutTitle || '').toLowerCase();
-                        return content.includes(targetQuery) || targetQuery.includes(content.slice(0, 30));
-                    });
-                    if (targetIndex === -1) {
-                        targetIndex = existingSections.length - 1;
-                    }
-
-                    const targetSection = existingSections[targetIndex];
-                    const isExpand = lower.includes('expand') || lower.includes('deeper') || lower.includes('details');
-                    const isPolish = lower.includes('polish') || lower.includes('refine') || lower.includes('concise') || lower.includes('rewrite');
-                    const isTable = lower.includes('table') || lower.includes('matrix') || lower.includes('comparison');
-                    const isChecklist = lower.includes('checklist') || lower.includes('task') || lower.includes('todo') || lower.includes('actionable');
-
-                    const newSectionsList = [...existingSections];
-
-                    if (isTable) {
-                        explanation = `Converted section "${targetSection.content || 'content'}" into a structured comparison table while preserving all other document sections.`;
-                        const replacementSection: MarkdownSection = {
-                            id: `sec-tbl-${Date.now()}`,
-                            type: 'table',
-                            tableHeaders: ['Feature / Aspect', 'Primary Specification', 'Implementation Strategy', 'Status'],
-                            tableRows: [
-                                [targetSection.content ? targetSection.content.slice(0, 35) : 'Core Component', 'High-throughput stream processing', 'Parallel worker pool with subagent orchestration', 'Production Ready'],
-                                ['Security & Isolation', 'Capability-based permissions', 'Scoped tokens with runtime sandboxing', 'Enforced'],
-                                ['Observability & Metrics', 'Real-time latency & token telemetry', 'Unified dashboard with live sparklines', 'Active']
-                            ]
-                        };
-                        newSectionsList.splice(targetIndex, 1, replacementSection);
-                    } else if (isChecklist) {
-                        explanation = `Converted section "${targetSection.content || 'content'}" into actionable task checklist while preserving all other document sections.`;
-                        const replacementSection: MarkdownSection = {
-                            id: `sec-chk-${Date.now()}`,
-                            type: 'checklist',
-                            checklistItems: [
-                                { id: `chk-${Date.now()}-1`, text: `Execute initial architectural review and dependency mapping for "${(targetSection.content || 'target section').slice(0, 45)}"`, done: true },
-                                { id: `chk-${Date.now()}-2`, text: 'Implement robust type contracts and error recovery boundaries', done: false },
-                                { id: `chk-${Date.now()}-3`, text: 'Verify cross-surface synchronization and state persistence', done: false }
-                            ]
-                        };
-                        newSectionsList.splice(targetIndex, 1, replacementSection);
-                    } else if (isPolish) {
-                        explanation = `Polished and refined section "${targetSection.content || 'content'}" with executive clarity while preserving surrounding document sections.`;
-                        const refinedContent = targetSection.content
-                            ? `${targetSection.content.trim()} — streamlined for executive clarity with precise architectural terminology and verified constraints.`
-                            : 'Streamlined section content engineered for peak clarity, robust maintainability, and high-performance execution.';
-                        newSectionsList[targetIndex] = {
-                            ...targetSection,
-                            content: refinedContent
-                        };
-                    } else if (isExpand) {
-                        explanation = `Expanded section "${targetSection.content || 'content'}" with deep architectural details, sub-paragraphs, and technical insights.`;
-                        const expandedHeading: MarkdownSection = targetSection.type === 'heading'
-                            ? { ...targetSection, content: targetSection.content }
-                            : { id: `sec-exp-h-${Date.now()}`, type: 'heading', level: 2, content: `Deep Dive: ${(targetSection.content || 'Technical Analysis').slice(0, 40)}` };
-
-                        const expandedPara: MarkdownSection = {
-                            id: `sec-exp-p1-${Date.now()}`,
-                            type: 'paragraph',
-                            content: `${targetSection.content || 'This area'} provides critical architectural foundations. Under high-load operating conditions, asynchronous task queues decouple heavy computations, ensuring responsive sub-millisecond UI interactions and consistent state convergence across distributed client nodes.`
-                        };
-
-                        const expandedCallout: MarkdownSection = {
-                            id: `sec-exp-c-${Date.now()}`,
-                            type: 'callout',
-                            calloutType: 'tip',
-                            calloutTitle: 'Implementation Deep Dive',
-                            content: 'All state mutations are cryptographically validated and debounced through atomic memory barriers to avoid race conditions during concurrent editing sessions.'
-                        };
-
-                        if (targetSection.type === 'heading') {
-                            newSectionsList.splice(targetIndex + 1, 0, expandedPara, expandedCallout);
-                        } else {
-                            newSectionsList.splice(targetIndex, 1, expandedHeading, expandedPara, expandedCallout);
-                        }
-                    } else {
-                        explanation = `Updated section "${targetSection.content || 'content'}" with requested enhancements.`;
-                        newSectionsList[targetIndex] = {
-                            ...targetSection,
-                            content: `${targetSection.content || ''}\n\n${text}`.trim()
-                        };
-                    }
-
-                    updatedDoc = {
-                        ...currentDoc,
-                        title: docTitle,
-                        sections: newSectionsList
-                    };
-                } else {
-                    const newSections = [...existingSections];
-                    if (lower.includes('table') || lower.includes('api') || lower.includes('matrix')) {
-                        explanation = `Added API Specification & Integration Matrix table with endpoints, payload schemas, and response types.`;
-                        newSections.push({
-                            id: `sec-table-${Date.now()}`,
-                            type: 'table',
-                            tableHeaders: ['Endpoint', 'Method', 'Auth Scope', 'Payload Schema', 'Status'],
-                            tableRows: [
-                                ['/api/v1/auth/session', 'POST', 'Bearer Token', '{ userId, tenantId }', 'Active (200)'],
-                                ['/api/v1/generate/stream', 'POST', 'AI Gateway', '{ prompt, model, tools }', 'Streaming'],
-                                ['/api/v1/workspace/sync', 'POST', 'Workspace Guard', '{ artifactId, files }', 'Ready']
-                            ]
-                        });
-                    } else if (lower.includes('callout') || lower.includes('tip') || lower.includes('architecture') || lower.includes('warning')) {
-                        explanation = `Inserted an Architectural Callout detailing live two-way MCP streaming pipes and security boundaries.`;
-                        newSections.push({
-                            id: `sec-callout-${Date.now()}`,
-                            type: 'callout',
-                            calloutType: lower.includes('warning') ? 'warning' : 'tip',
-                            calloutTitle: 'Architectural Guardrail: Sandboxed Stream Execution',
-                            content: 'All runtime subagents execute within isolated WebAssembly and container boundaries, streaming real-time status tokens to the visual canvas.'
-                        });
-                    } else if (lower.includes('checklist') || lower.includes('action') || lower.includes('todo') || lower.includes('tasks')) {
-                        explanation = `Added an actionable Next Steps checklist to track milestone convergence and delivery.`;
-                        newSections.push({
-                            id: `sec-check-${Date.now()}`,
-                            type: 'checklist',
-                            checklistItems: [
-                                { id: 'c-1', text: 'Verify Gemini 3.7 Flash subagent token streaming', done: true },
-                                { id: 'c-2', text: 'Wire live MCP pipes to interactive tables', done: true },
-                                { id: 'c-3', text: 'Conduct responsive multi-device audit (Desktop, Tablet, Mobile)', done: false }
-                            ]
-                        });
-                    } else {
-                        explanation = `Added new section to ${docTitle}: "${text}". Document formatted with executive clarity and rich specification blocks.`;
-                        newSections.push({
-                            id: `sec-heading-${Date.now()}`,
-                            type: 'heading',
-                            level: 2,
-                            content: text.charAt(0).toUpperCase() + text.slice(1)
-                        });
-                        newSections.push({
-                            id: `sec-para-${Date.now()}`,
-                            type: 'paragraph',
-                            content: `This section details the design requirements and implementation parameters for ${text}.`
-                        });
-                    }
-
-                    updatedDoc = {
-                        ...currentDoc,
-                        title: docTitle,
-                        sections: newSections
-                    };
-                }
-
-                fallbackGen = {
-                    id: activeArtifact?.id || `art-doc-${Date.now()}`,
-                    type: 'markdown-document' as const,
-                    title: docTitle,
-                    summary: explanation,
-                    version: (activeArtifact?.version || 1) + 1,
-                    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    data: updatedDoc
-                };
-                showToast(`Updated Document: ${explanation}`, '✨');
-            } else {
-                const synthesizedDoc = synthesizeComprehensiveDocument(text);
-                fallbackGen = {
-                    id: `art-doc-${Date.now()}`,
-                    type: 'markdown-document' as const,
-                    title: synthesizedDoc.title,
-                    summary: `Executive brief & structured specification for ${synthesizedDoc.title}.`,
-                    version: 1,
-                    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    data: synthesizedDoc
-                };
-            }
-
-            const targetAssistantText = attachedDataFile
-                ? `I've analyzed **${attachedDataFile.name}** (${attachedDataFile.rowsCount} rows) and generated an interactive **KPI Metric Dashboard & Data Table** with performance charts on your visual canvas!`
-                : fallbackGen?.summary
-                ? `${fallbackGen.summary}`
-                : `I've generated the **${fallbackGen?.title || 'Canvas'}** on your visual canvas.`;
-
-            // Cognitive stepped simulation for responsive local synthesis
-            const simulatedSteps: AgentExecutionStep[] = [
-                {
-                    id: `step-${Date.now()}-1`,
-                    title: 'Indexed workspace directives & canvas schema',
-                    status: 'running',
-                    durationMs: 0,
-                    details: 'Ingesting workspace file graph, active directives, and canvas primitive bounds.',
-                    kind: 'context'
-                },
-                {
-                    id: `step-${Date.now()}-2`,
-                    title: `Synthesized ${fallbackGen?.title || 'Generative Artifact'}`,
-                    status: 'pending',
-                    details: `Formulating ${fallbackGen?.type || 'interactive'} data model, layout configuration, and styles.`,
-                    kind: 'synthesize'
-                },
-                {
-                    id: `step-${Date.now()}-3`,
-                    title: 'Verified schema integrity & canvas constraints',
-                    status: 'pending',
-                    details: 'Validating JSON schema compliance, reactive container bounds, and event bindings.',
-                    kind: 'verify'
-                }
-            ];
-
-            const localThinkingText = `Analyzing workspace directives and formulating ${fallbackGen?.title || 'canvas artifact'} architecture...`;
-
-            if (activeSessionRef.current === targetSessionId) {
-                setLiveThinkingText(localThinkingText);
-                setLiveSteps([...simulatedSteps]);
-            }
-
-            // Step 1: context indexing (75ms)
-            await new Promise(r => setTimeout(r, 75));
-            simulatedSteps[0].status = 'completed';
-            simulatedSteps[0].durationMs = 75;
-            simulatedSteps[0].durationFormatted = '75ms';
-            simulatedSteps[1].status = 'running';
-            if (activeSessionRef.current === targetSessionId) {
-                setLiveSteps([...simulatedSteps]);
-            }
-
-            // Step 2: synthesis (140ms)
-            await new Promise(r => setTimeout(r, 140));
-            simulatedSteps[1].status = 'completed';
-            simulatedSteps[1].durationMs = 140;
-            simulatedSteps[1].durationFormatted = '140ms';
-            simulatedSteps[2].status = 'running';
-            if (activeSessionRef.current === targetSessionId) {
-                setLiveSteps([...simulatedSteps]);
-            }
-
-            // Step 3: verification (35ms)
-            await new Promise(r => setTimeout(r, 35));
-            simulatedSteps[2].status = 'completed';
-            simulatedSteps[2].durationMs = 35;
-            simulatedSteps[2].durationFormatted = '35ms';
-            if (activeSessionRef.current === targetSessionId) {
-                setLiveSteps([...simulatedSteps]);
-            }
-
-            // Progressive Live Streaming Ticker for Instant Local Responsiveness
-            if (activeSessionRef.current === targetSessionId && fallbackGen) {
-                const targetLayoutMode = resolveModeForArtifact(fallbackGen.type);
-                setLayoutMode(targetLayoutMode);
-                if (fallbackGen.type === 'markdown-document' && fallbackGen.data) {
-                    const fullDoc = fallbackGen.data as MarkdownDocumentData;
-                    const allSections = fullDoc.sections || [];
-                    if (allSections.length > 1) {
-                        const initialCount = Math.max(1, Math.floor(allSections.length / 3));
-                        const initialSections = allSections.slice(0, initialCount);
-                        const partialDoc: MarkdownDocumentData = { ...fullDoc, sections: initialSections };
-                        const partialArtifact: CanvasArtifact = { ...fallbackGen, data: partialDoc };
-                        setActiveArtifact(partialArtifact);
-                        if (initialSections.length > 0) {
-                            setActiveStreamingSectionId(initialSections[initialSections.length - 1].id);
-                        }
-
-                        await streamTokensAsync(
-                            targetAssistantText,
-                            streamed => {
-                                if (activeSessionRef.current === targetSessionId) {
-                                    setLiveStreamedText(streamed);
-                                }
-                            },
-                            progress => {
-                                if (activeSessionRef.current === targetSessionId) {
-                                    const targetCount = Math.max(1, Math.ceil(allSections.length * progress));
-                                    const currentShown = allSections.slice(0, targetCount);
-                                    const activeSec = currentShown[currentShown.length - 1];
-                                    setActiveStreamingSectionId(activeSec?.id);
-                                    setActiveArtifact({
-                                        ...fallbackGen!,
-                                        data: { ...fullDoc, sections: currentShown }
-                                    });
-                                }
-                            },
-                            18
-                        );
-                    } else {
-                        setActiveArtifact(fallbackGen);
-                        if (allSections.length > 0) {
-                            setActiveStreamingSectionId(allSections[0].id);
-                        }
-                        await streamTokensAsync(
-                            targetAssistantText,
-                            streamed => {
-                                if (activeSessionRef.current === targetSessionId) {
-                                    setLiveStreamedText(streamed);
-                                }
-                            },
-                            undefined,
-                            18
-                        );
-                    }
-                } else {
-                    setActiveArtifact(fallbackGen);
-                    await streamTokensAsync(
-                        targetAssistantText,
-                        streamed => {
-                            if (activeSessionRef.current === targetSessionId) {
-                                setLiveStreamedText(streamed);
-                            }
-                        },
-                        undefined,
-                        18
-                    );
-                }
-
-                recordArtifactVersion(fallbackGen);
-                setArtifactHistory(prev => [fallbackGen!, ...prev.filter(a => a.id !== fallbackGen!.id)]);
-            }
-
-            const localElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
-            finalAssistantMsg = {
-                id: `msg-assistant-${Date.now()}`,
-                sender: 'assistant',
-                text: targetAssistantText,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                artifacts: fallbackGen ? [fallbackGen] : undefined,
-                thinkingText: localThinkingText,
-                thinkingDurationSeconds: localElapsedSeconds,
-                steps: simulatedSteps
-            };
-        }
-
-        // Clear attached data file after generation
-        setAttachedDataFile(undefined);
-
-        const artifactCandidate = generatedArtifact || fallbackGen || activeArtifact;
-        const finalArtifact = artifactCandidate
-            ? graphControllerRef.current.registerArtifact(
-                artifactCandidate,
-                `chat-artifact-${targetSessionId}-${finalAssistantMsg.id}`
-            )
-            : undefined;
-        if (finalArtifact?.graphRef) {
-            finalAssistantMsg = {
-                ...finalAssistantMsg,
-                artifacts: [finalArtifact],
-                artifactRefs: [finalArtifact.graphRef]
-            };
-            setGraphEpoch(epoch => epoch + 1);
-        }
-        const nextFullMessages = [...updatedMessages, finalAssistantMsg];
-
-        // Update or create chat session (auto-rename 'New Chat' to first prompt topic like Cursor)
-        const currentTitle = targetSessionId ? sessions.find(s => s.id === targetSessionId)?.title : undefined;
-        const isDefaultTitle = !currentTitle || currentTitle === 'New Chat' || currentTitle === 'Untitled Chat';
-        const sessionTitle = isDefaultTitle
-            ? (text.length > 36 ? text.slice(0, 34) + '...' : text)
-            : (currentTitle || text.slice(0, 32));
-
-        setSessions(prev => {
-            const exists = prev.some(s => s.id === targetSessionId);
-            const sessionData: ChatSession = {
-                id: targetSessionId,
-                title: sessionTitle,
-                fileType: exists ? prev.find(s => s.id === targetSessionId)?.fileType || 'chat' : 'chat',
-                workspaceId: activeWorkspace.id,
-                workspaceName: activeWorkspace.path.split('/').pop() || activeWorkspace.name,
-                relativeTime: 'Just now',
-                dateCategory: 'Today',
-                updatedAt: 'Just now',
-                messages: nextFullMessages,
-                activeArtifact: finalArtifact,
-                artifactHistory: finalArtifact ? [finalArtifact, ...artifactHistory.filter(a => a.id !== finalArtifact.id)] : artifactHistory,
-                layoutMode: finalArtifact ? resolveModeForArtifact(finalArtifact.type) : (exists ? prev.find(s => s.id === targetSessionId)?.layoutMode || 'chat' : 'chat')
-            };
-            const updated = exists ? prev.map(s => s.id === targetSessionId ? sessionData : s) : [sessionData, ...prev];
-            persistSessionsImmediately(updated);
-            return updated;
-        });
-
-        clearInterval(thinkingTimer);
-
-        // Only update active UI if user is still on this target session
-        if (activeSessionRef.current === targetSessionId) {
-            setMessages(nextFullMessages);
-            setIsGenerating(false);
-            setLiveThinkingText('');
-            setLiveThinkingSeconds(0);
-            setLiveSteps([]);
-            setLiveStreamedText('');
-            setActiveStreamingSectionId(undefined);
-            if (finalArtifact) {
-                setActiveArtifact(finalArtifact);
-                setLayoutMode(resolveModeForArtifact(finalArtifact.type));
-                recordArtifactVersion(finalArtifact);
-            }
-        } else {
-            setIsGenerating(false);
-            setLiveThinkingText('');
-            setLiveThinkingSeconds(0);
-            setLiveSteps([]);
-            setLiveStreamedText('');
-            setActiveStreamingSectionId(undefined);
-        }
-    };
+    const { sendMessage: handleSendMessage } = useSendMessage({
+        inputValue,
+        isGenerating,
+        setInputValue,
+        executeDeepWritePipeline,
+        handleStartAgent,
+        skills,
+        selectedSkillIds,
+        mcpServers,
+        selectedMcpIds,
+        currentSessionId,
+        setCurrentSessionId,
+        sessions,
+        setSessions,
+        messages,
+        setMessages,
+        setAutocompleteType,
+        setIsGenerating,
+        setLiveThinkingText,
+        setLiveThinkingSeconds,
+        setLiveSteps,
+        setLiveStreamedText,
+        setActiveStreamingSectionId,
+        liveThinkingText,
+        liveThinkingSeconds,
+        liveSteps,
+        activeSessionRef,
+        googleSearchGrounding,
+        activeArtifact,
+        setActiveArtifact,
+        artifactHistory,
+        setArtifactHistory,
+        layoutMode,
+        setLayoutMode,
+        setMcpExecutions,
+        setTokenBudget,
+        setActiveTerminalError,
+        setShowTerminalErrorToast,
+        recordArtifactVersion,
+        attachedDataFile,
+        setAttachedDataFile,
+        showToast,
+        graphControllerRef,
+        setGraphEpoch,
+        activeWorkspace,
+        persistSessionsImmediately
+    });
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (autocompleteType !== undefined) {
