@@ -1,0 +1,349 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/**
+ * useLayoutModeSwitch
+ *
+ * Switching the dedicated workspace layout mode (chat / code / document / kanban / canvas) and creating empty canvases of a given primitive type.
+ *
+ * Extracted verbatim from GenerativeCanvasStudio.tsx.
+ */
+import * as React from 'react';
+import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, StudioLayoutMode, getActiveUserName } from '../canvas-types';
+import { resolveModeForArtifact } from '../guardrails-service';
+import { useCapabilities } from '../hooks/useCapabilities';
+import { ChatState, ChatStore } from '../state/chatStore';
+
+export interface UseLayoutModeSwitchDeps {
+    activeArtifact: ChatState['activeArtifact'];
+    artifactHistory: ChatState['artifactHistory'];
+    recordArtifactVersion: (art: CanvasArtifact) => void;
+    setActiveArtifact: ChatStore['setActiveArtifact'];
+    setArtifactHistory: ChatStore['setArtifactHistory'];
+    setDocumentPaneState: React.Dispatch<React.SetStateAction<'split' | 'collapsed' | 'expanded'>>;
+    setLayoutMode: ChatStore['setLayoutMode'];
+    showToast: (text: string, icon?: string) => void;
+    skills: ReturnType<typeof useCapabilities>['skills'];
+}
+
+export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
+    const { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, showToast, skills } = deps;
+
+    // Switch dedicated workspace layout mode (Chat, Code/Sandbox, Document/Spec, Kanban)
+    const handleSwitchMode = (targetMode: StudioLayoutMode) => {
+        const effectiveMode = targetMode === 'canvas' ? 'code' : targetMode;
+        setLayoutMode(effectiveMode);
+        if (effectiveMode !== 'chat') {
+            setDocumentPaneState(prev => prev === 'collapsed' ? 'split' : prev);
+        }
+        if (effectiveMode === 'chat') {
+            return;
+        }
+
+        const typeMap: Record<string, PrimitiveType[]> = {
+            code: ['live-code-sandbox'],
+            canvas: ['node-graph', 'live-code-sandbox', 'metric-dashboard', 'mind-map', 'skills-hub', 'mcp-hub'],
+            document: ['markdown-document', 'checklist', 'interactive-form'],
+            kanban: ['kanban-board'],
+            automation: ['node-graph'],
+            '3d': ['3d-scene'],
+            browser: ['interactive-browser', 'browser']
+        };
+
+        const targetTypes = typeMap[effectiveMode] || [];
+
+        // If activeArtifact matches the target mode, keep it
+        if (activeArtifact && targetTypes.includes(activeArtifact.type)) {
+            return;
+        }
+
+        // Check if there is an artifact in history matching this mode
+        const matchingFromHistory = artifactHistory.find(a => targetTypes.includes(a.type));
+        if (matchingFromHistory) {
+            setActiveArtifact(matchingFromHistory);
+            return;
+        }
+
+        // Contextual defaults for immediate visualization
+        if (effectiveMode === 'code') {
+            const defaultSandbox: CanvasArtifact = {
+                id: `art-sandbox-${Date.now()}`,
+                type: 'live-code-sandbox',
+                title: 'Interactive React 19 UI Playground',
+                summary: 'Live editable multi-tab code runner with hot reload, CDN packages & runtime console.',
+                version: 1,
+                createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                data: {
+                    title: 'Interactive React 19 UI Playground',
+                    subtitle: 'Multi-tab live code runner with hot reload & runtime console',
+                    template: 'react',
+                    files: [
+                        {
+                            id: 'file-app',
+                            name: 'App.tsx',
+                            language: 'react',
+                            content: `import React, { useState } from 'react';\nimport { Sparkles, Play, CheckCircle2 } from 'lucide-react';\nimport confetti from 'canvas-confetti';\n\nexport default function App() {\n  const [count, setCount] = useState(0);\n\n  const handleCelebrate = () => {\n    setCount(prev => prev + 1);\n    confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });\n    console.log('Celebration action triggered! Count:', count + 1);\n  };\n\n  return (\n    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-zinc-950 text-zinc-100 selection:bg-blue-500 selection:text-white">\n      <div className="w-full max-w-md p-8 bg-zinc-900/80 backdrop-blur-xl border border-zinc-800/80 rounded-3xl shadow-2xl space-y-6 text-center">\n        <div className="inline-flex p-3 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 shadow-inner">\n          <Sparkles className="w-8 h-8 animate-pulse" />\n        </div>\n        <div className="space-y-2">\n          <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-400 bg-clip-text text-transparent">Scratchbox Live UI Sandbox</h1>\n          <p className="text-sm text-zinc-400">Interactive React 19 + Tailwind CSS playground with hot reload and live console streams.</p>\n        </div>\n        <div className="p-4 bg-zinc-950/60 rounded-2xl border border-zinc-800/50 flex items-center justify-around">\n          <div><div className="text-xs text-zinc-500 font-medium">Interactions</div><div className="text-3xl font-extrabold text-blue-400">{count}</div></div>\n          <div className="h-8 w-px bg-zinc-800"></div>\n          <div><div className="text-xs text-zinc-500 font-medium">Status</div><div className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1"><CheckCircle2 className="w-4 h-4" /> Live</div></div>\n        </div>\n        <button onClick={handleCelebrate} className="sb-btn sb-btn-primary w-full py-3.5 px-6 rounded-xl font-semibold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg shadow-blue-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group">\n          <Play className="w-4 h-4 fill-current transition-transform group-hover:translate-x-0.5" />\n          <span>Trigger Interactive Action</span>\n        </button>\n      </div>\n    </div>\n  );\n}`,
+                            isEntry: true
+                        },
+                        {
+                            id: 'file-css',
+                            name: 'styles.css',
+                            language: 'css',
+                            content: `/* Custom Sandbox Styles */\nbody {\n  margin: 0;\n  padding: 0;\n}`
+                        }
+                    ],
+                    dependencies: {
+                        'lucide-react': '^0.468.0',
+                        'canvas-confetti': '^1.9.3'
+                    },
+                    viewportMode: 'desktop'
+                } as LiveCodeSandboxData
+            };
+            setActiveArtifact(defaultSandbox);
+            setArtifactHistory(prev => [defaultSandbox, ...prev.filter(a => a.id !== defaultSandbox.id)]);
+        } else if (targetMode === 'document') {
+            const defaultDoc: CanvasArtifact = {
+                id: `art-doc-${Date.now()}`,
+                type: 'markdown-document',
+                title: 'Project Specification & Notes',
+                summary: 'Rich document specification with blocks and callouts.',
+                version: 1,
+                createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                data: {
+                    title: 'Project Specification & Notes',
+                    subtitle: 'Rich block document for architecture, roadmap, and specs',
+                    author: getActiveUserName(),
+                    lastUpdated: 'Just now',
+                    tags: ['Specification', 'Architecture', 'DocumentSpec', 'Reasoning'],
+                    sections: [
+                        { id: 'sec-1', type: 'heading', level: 1, content: '1. Overview & Vision' },
+                        { id: 'sec-2', type: 'paragraph', content: 'Scratchbox IDE empowers developers with an AI-native workspace featuring N8N workflow canvases, rich document specs, and Kanban sprint boards.' },
+                        { id: 'sec-3', type: 'callout', calloutType: 'info', calloutTitle: 'Key Architecture Insight', content: 'Subagents running on Gemini Flash Lite handle ultra-fast data preprocessing while Gemini 3.7 Flash powers high-reasoning synthesis.' },
+                        { id: 'sec-4', type: 'heading', level: 2, content: '2. Next Action Items' },
+                        { id: 'sec-5', type: 'checklist', checklistItems: [
+                            { id: 'c1', text: 'Verify N8N canvas node routing & simulation', done: true },
+                            { id: 'c2', text: 'Structure rich document blocks & callouts', done: true },
+                            { id: 'c3', text: 'Verify Kanban sprint columns and drag & drop', done: false }
+                        ]}
+                    ]
+                }
+            };
+            setActiveArtifact(defaultDoc);
+            setArtifactHistory(prev => [defaultDoc, ...prev.filter(a => a.id !== defaultDoc.id)]);
+        } else if (targetMode === 'kanban') {
+            const defaultKanban: CanvasArtifact = {
+                id: `art-kanban-${Date.now()}`,
+                type: 'kanban-board',
+                title: 'Sprint Roadmap Kanban Board',
+                summary: 'Sprint delivery board with Backlog, In Progress, QA Review, and Done.',
+                version: 1,
+                createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                data: {
+                    title: 'Sprint Roadmap Kanban Board',
+                    subtitle: 'Multi-stage delivery board with real-time card synchronization',
+                    columns: [
+                        {
+                            id: 'col-backlog',
+                            title: 'Backlog',
+                            color: 'indigo',
+                            cards: [
+                                { id: 'card-1', title: 'Stripe Webhook Listeners', description: 'Automated subscription reconciliation pipe', tag: 'Backend', tagColor: 'indigo', priority: 'medium', completedSubtasks: 2, totalSubtasks: 4 },
+                                { id: 'card-2', title: 'Multi-tenant Org Switcher', description: 'Team workspace tenancy isolation', tag: 'Core', tagColor: 'purple', priority: 'low' }
+                            ]
+                        },
+                        {
+                            id: 'col-inprogress',
+                            title: 'In Progress',
+                            color: 'blue',
+                            cards: [
+                                { id: 'card-3', title: 'N8N Canvas & Rich Spec Surfaces', description: 'Apple HIG vibrancy and continuous corner curves', tag: 'Design', tagColor: 'blue', priority: 'urgent', completedSubtasks: 3, totalSubtasks: 3 }
+                            ]
+                        },
+                        {
+                            id: 'col-qa',
+                            title: 'QA Review',
+                            color: 'amber',
+                            cards: [
+                                { id: 'card-4', title: 'Subagent Fallback Matrix', description: 'Verify seamless routing across Gemini models', tag: 'AI', tagColor: 'amber', priority: 'high', completedSubtasks: 2, totalSubtasks: 2 }
+                            ]
+                        },
+                        {
+                            id: 'col-done',
+                            title: 'Done',
+                            color: 'emerald',
+                            cards: [
+                                { id: 'card-5', title: 'AI Studio Backend Engine', description: 'Native REST pipe with high-reasoning tokens budget', tag: 'AI Core', tagColor: 'emerald', priority: 'high' }
+                            ]
+                        }
+                    ]
+                }
+            };
+            setActiveArtifact(defaultKanban);
+            setArtifactHistory(prev => [defaultKanban, ...prev.filter(a => a.id !== defaultKanban.id)]);
+        } else if (targetMode === 'browser') {
+            const defaultBrowser: CanvasArtifact = {
+                id: `art-browser-${Date.now()}`,
+                type: 'interactive-browser',
+                title: 'Interactive Web Browser',
+                summary: 'AI-controllable web browser with responsive device frames, live console logs, and dev inspection tools.',
+                version: 1,
+                createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                data: {
+                    url: 'https://example.com',
+                    title: 'Example Domain',
+                    viewportMode: 'desktop',
+                    history: ['https://example.com'],
+                    historyIndex: 0,
+                    isLoading: false,
+                    consoleLogs: [
+                        { type: 'info', text: 'Browser canvas initialized at https://example.com', timestamp: new Date().toLocaleTimeString() },
+                        { type: 'log', text: 'DOM ready. Ready for user navigation and AI agent actions.', timestamp: new Date().toLocaleTimeString() }
+                    ],
+                    inspectMode: false,
+                    deviceScale: 1
+                } as InteractiveBrowserData
+            };
+            setActiveArtifact(defaultBrowser);
+            setArtifactHistory(prev => [defaultBrowser, ...prev.filter(a => a.id !== defaultBrowser.id)]);
+        }
+    };
+
+    return { handleSwitchMode };
+}
+
+/** Creates an empty canvas artifact of the given primitive type and activates it. */
+export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
+    const { recordArtifactVersion, setActiveArtifact, setArtifactHistory, setLayoutMode, showToast } = deps;
+
+    const handleCreateEmptyCanvas = (type: PrimitiveType, customTitle?: string) => {
+        let newArtifact: CanvasArtifact;
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        if (type === 'node-graph') {
+            newArtifact = {
+                id: `art-node-graph-${Date.now()}`,
+                type: 'node-graph',
+                title: customTitle || 'New Canvas Workflow',
+                summary: 'Visual node graph & canvas workflow',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'New Canvas Workflow',
+                    subtitle: 'Drag and connect nodes to create automated execution pipelines',
+                    nodes: [
+                        { id: 'node-1', label: 'Webhook Trigger', subtitle: 'POST /api/v1/event', category: 'input', color: 'blue', x: 100, y: 160, status: 'completed' },
+                        { id: 'node-2', label: 'Reasoning Engine', subtitle: 'Gemini 3.7 Flash', category: 'ai', color: 'purple', x: 440, y: 160, status: 'running' }
+                    ],
+                    edges: [
+                        { id: 'e1', source: 'node-1', target: 'node-2', label: 'Payload', style: 'solid', color: 'purple' }
+                    ]
+                } as NodeGraphData
+            };
+        } else if (type === 'live-code-sandbox') {
+            newArtifact = {
+                id: `art-sandbox-${Date.now()}`,
+                type: 'live-code-sandbox',
+                title: customTitle || 'New Live Code Sandbox',
+                summary: 'Live editable code runner & interactive preview',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'New Live Code Sandbox',
+                    subtitle: 'Interactive hot-reloading playground',
+                    template: 'react',
+                    viewMode: 'preview',
+                    viewportMode: 'desktop',
+                    files: [
+                        { id: 'f1', name: 'App.tsx', language: 'react', content: `import React from 'react';\n\nexport default function App() {\n  return (\n    <div className="flex items-center justify-center min-h-screen bg-zinc-950 text-white p-6">\n      <h1 className="text-2xl font-bold">Hello from Canvas Sandbox</h1>\n    </div>\n  );\n}`, isEntry: true }
+                    ]
+                } as LiveCodeSandboxData
+            };
+        } else if (type === 'markdown-document') {
+            newArtifact = {
+                id: `art-doc-${Date.now()}`,
+                type: 'markdown-document',
+                title: customTitle || 'New Document Specification',
+                summary: 'Structured block spec document with tables and callouts',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'New Document Specification',
+                    subtitle: 'Rich blocks and architecture specifications',
+                    sections: [
+                        { id: 'sec-1', type: 'heading', level: 1, content: '1. Executive Specification' },
+                        { id: 'sec-2', type: 'paragraph', content: 'Draft your project requirements, architecture specifications, and API designs here.' }
+                    ]
+                } as MarkdownDocumentData
+            };
+        } else if (type === 'kanban-board') {
+            newArtifact = {
+                id: `art-kanban-${Date.now()}`,
+                type: 'kanban-board',
+                title: customTitle || 'New Sprint Kanban Board',
+                summary: 'Multi-stage delivery workflow board',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'Sprint Roadmap',
+                    columns: [
+                        { id: 'col-backlog', title: 'Backlog', color: 'indigo', cards: [] },
+                        { id: 'col-inprogress', title: 'In Progress', color: 'blue', cards: [] },
+                        { id: 'col-done', title: 'Done', color: 'emerald', cards: [] }
+                    ]
+                } as KanbanBoardData
+            };
+        } else if (type === 'interactive-browser' || type === 'browser') {
+            newArtifact = {
+                id: `art-browser-${Date.now()}`,
+                type: 'interactive-browser',
+                title: customTitle || 'New Web Browser',
+                summary: 'Interactive AI-controllable web browser primitive',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    url: 'https://example.com',
+                    title: customTitle || 'Example Domain',
+                    viewportMode: 'desktop',
+                    history: ['https://example.com'],
+                    historyIndex: 0,
+                    isLoading: false,
+                    consoleLogs: [
+                        { type: 'info', text: 'Browser canvas initialized at https://example.com', timestamp: new Date().toLocaleTimeString() }
+                    ],
+                    inspectMode: false,
+                    deviceScale: 1
+                } as InteractiveBrowserData
+            };
+        } else {
+            newArtifact = {
+                id: `art-metric-${Date.now()}`,
+                type: 'metric-dashboard',
+                title: customTitle || 'New KPI Metrics Dashboard',
+                summary: 'Real-time telemetry and metric cards',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'Performance Metrics',
+                    metrics: [
+                        { id: 'm1', label: 'Throughput', value: '1,240 req/s', change: '+12%', trend: 'up', color: 'blue' }
+                    ]
+                } as MetricDashboardData
+            };
+        }
+
+        setActiveArtifact(newArtifact);
+        recordArtifactVersion(newArtifact);
+        setArtifactHistory(prev => [newArtifact, ...prev.filter(a => a.id !== newArtifact.id)]);
+        const resolvedSurface = resolveModeForArtifact(newArtifact.type);
+        setLayoutMode(resolvedSurface);
+        showToast(`Created new canvas "${newArtifact.title}"`);
+    };
+
+    return { handleCreateEmptyCanvas };
+}
