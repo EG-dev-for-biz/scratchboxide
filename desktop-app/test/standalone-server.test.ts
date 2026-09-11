@@ -1,3 +1,4 @@
+import { test } from 'vitest';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -178,10 +179,9 @@ async function runStandaloneServerTests() {
         (server as any).closeAllConnections?.();
         server.close();
     }
-    process.exit(0);
+
 }
 
-runStandaloneServerTests().catch(err => {
-    console.error('❌ Standalone Server Test Suite Failed:', err);
-    process.exit(1);
-});
+test('standalone-server.test', async () => {
+    await runStandaloneServerTests();
+}, 180_000);

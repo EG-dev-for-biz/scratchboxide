@@ -8,40 +8,40 @@
  ********************************************************************************/
 
 // AI Intelligence & Gemini Service
-export { GeminiService } from '../../../extensions/product/src/node/gemini-service';
+export { GeminiService } from './node/gemini-service';
 
 // Project Artifact & Config Persistence
-export { ProjectArtifactStore } from '../../../extensions/product/src/node/project-artifact-store';
-export { WorkspaceConfigService } from '../../../extensions/product/src/node/workspace-config-service';
-export { WorkspaceFileWatcherService } from '../../../extensions/product/src/node/workspace-file-watcher-service';
-export { ProjectContextGraphService } from '../../../extensions/product/src/node/project-context-graph-service';
+export { ProjectArtifactStore } from './node/project-artifact-store';
+export { WorkspaceConfigService } from './node/workspace-config-service';
+export { WorkspaceFileWatcherService } from './node/workspace-file-watcher-service';
+export { ProjectContextGraphService } from './node/project-context-graph-service';
 
 // User Memories & Browser Proxy Services
-export { UserMemoriesService } from '../../../extensions/product/src/node/user-memories-service';
-export { BrowserProxyService } from '../../../extensions/product/src/node/browser-proxy-service';
+export { UserMemoriesService } from './node/user-memories-service';
+export { BrowserProxyService } from './node/browser-proxy-service';
 
 // Media Generation Services
-export { MediaAssetStore } from '../../../extensions/product/src/node/media-asset-store';
-export { GoogleMediaGenerationService } from '../../../extensions/product/src/node/google-media-generation-service';
-export { MediaGenerationJobService } from '../../../extensions/product/src/node/media-generation-job-service';
-export { GoogleMediaCredentialsService } from '../../../extensions/product/src/node/google-media-credentials-service';
+export { MediaAssetStore } from './node/media-asset-store';
+export { GoogleMediaGenerationService } from './node/google-media-generation-service';
+export { MediaGenerationJobService } from './node/media-generation-job-service';
+export { GoogleMediaCredentialsService } from './node/google-media-credentials-service';
 
 // Autonomous DeepWrite Services
-export { DeepWriteService } from '../../../extensions/product/src/node/deep-write/deep-write-service';
-export { GoalAnalyzer } from '../../../extensions/product/src/node/deep-write/goal-analyzer';
-export { MultiPlatformScaffolder } from '../../../extensions/product/src/node/deep-write/multi-platform-scaffolder';
-export { DynamicDagPlanner } from '../../../extensions/product/src/node/deep-write/dynamic-dag-planner';
-export { DeepWriteExecutionBridge } from '../../../extensions/product/src/node/deep-write/deep-write-execution-bridge';
-export { CodebaseLensSyncService } from '../../../extensions/product/src/node/deep-write/codebase-lens-sync-service';
-export { PrimitiveSynthesizer } from '../../../extensions/product/src/node/deep-write/primitive-synthesizer';
-export { UserLearningService } from '../../../extensions/product/src/node/deep-write/user-learning-service';
+export { DeepWriteService } from './node/deep-write/deep-write-service';
+export { GoalAnalyzer } from './node/deep-write/goal-analyzer';
+export { MultiPlatformScaffolder } from './node/deep-write/multi-platform-scaffolder';
+export { DynamicDagPlanner } from './node/deep-write/dynamic-dag-planner';
+export { DeepWriteExecutionBridge } from './node/deep-write/deep-write-execution-bridge';
+export { CodebaseLensSyncService } from './node/deep-write/codebase-lens-sync-service';
+export { PrimitiveSynthesizer } from './node/deep-write/primitive-synthesizer';
+export { UserLearningService } from './node/deep-write/user-learning-service';
 
 // Autonomous Agent, Sandbox & Subagent Services
-export { LongRunningAgentService } from '../../../extensions/product/src/node/long-running-agent-service';
-export { SubagentPoolService } from '../../../extensions/product/src/node/subagent-pool-service';
-export { ContainerSandboxService } from '../../../extensions/product/src/node/container-sandbox-service';
-export { LspDiagnosticFeedbackService } from '../../../extensions/product/src/node/lsp-diagnostic-feedback-service';
-export { CodebasePatternEngine } from '../../../extensions/product/src/node/codebase-pattern-engine';
-export { AgentContextCompactor } from '../../../extensions/product/src/node/agent-context-compactor';
-export { ConversationDiffMemoryService } from '../../../extensions/product/src/node/conversation-diff-memory-service';
+export { LongRunningAgentService } from './node/long-running-agent-service';
+export { SubagentPoolService } from './node/subagent-pool-service';
+export { ContainerSandboxService } from './node/container-sandbox-service';
+export { LspDiagnosticFeedbackService } from './node/lsp-diagnostic-feedback-service';
+export { CodebasePatternEngine } from './node/codebase-pattern-engine';
+export { AgentContextCompactor } from './node/agent-context-compactor';
+export { ConversationDiffMemoryService } from './node/conversation-diff-memory-service';
 

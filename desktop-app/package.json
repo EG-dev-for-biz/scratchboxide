@@ -11,9 +11,7 @@
     "build": "tsc && vite build && tsc -p tsconfig.electron.json",
     "build:client": "vite build",
     "start": "electron .",
-    "test": "npm run test:arch",
-    "test:all": "ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-app.test.ts && ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-server.test.ts && ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/chat-resilience.test.ts",
-    "test:arch": "ts-node --transpile-only -P tsconfig.electron.json -r tsconfig-paths/register test/standalone-app.test.ts"
+    "test": "vitest run --root .. desktop-app/test"
   },
   "dependencies": {
     "@google/genai": "1.32.0",

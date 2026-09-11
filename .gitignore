@@ -3,6 +3,7 @@
 **/.browser_modules
 **/dist
 **/lib
+coverage/
 **/src-gen
 **/gen-webpack.config.js
 **/gen-webpack.node.config.js

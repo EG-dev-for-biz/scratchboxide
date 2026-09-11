@@ -8,24 +8,24 @@
  ********************************************************************************/
 
 // 3D Geospatial & Google 3D Tiles Layer
-export { GooglePhotorealistic3DTilesLayer } from '../../../extensions/product/src/browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
-export type { Google3DTilesLayerOptions } from '../../../extensions/product/src/browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
-export { Google3DTileService } from '../../../extensions/product/src/browser/generative-canvas/services/Google3DTileService';
-export { TerrainManager } from '../../../extensions/product/src/browser/generative-canvas/services/TerrainManager';
-export { TileClayProcessor, CLAY_PRESETS } from '../../../extensions/product/src/browser/generative-canvas/services/TileClayProcessor';
-export type { ClayPresetId } from '../../../extensions/product/src/browser/generative-canvas/services/TileClayProcessor';
+export { GooglePhotorealistic3DTilesLayer } from './browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
+export type { Google3DTilesLayerOptions } from './browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
+export { Google3DTileService } from './browser/generative-canvas/services/Google3DTileService';
+export { TerrainManager } from './browser/generative-canvas/services/TerrainManager';
+export { TileClayProcessor, CLAY_PRESETS } from './browser/generative-canvas/services/TileClayProcessor';
+export type { ClayPresetId } from './browser/generative-canvas/services/TileClayProcessor';
 
 // Atmospheric Scattering & Diurnal Lighting Pipeline
 export {
     createAtmosphericSkyDome,
     getPresetLightingState,
     getSunVectorFromAngles
-} from '../../../extensions/product/src/browser/generative-canvas/services/atmosphere';
+} from './browser/generative-canvas/services/atmosphere';
 export type {
     AtmosphericScatteringConfig,
     AtmosphericSkyDomeModule
-} from '../../../extensions/product/src/browser/generative-canvas/services/atmosphere';
-export { AerialPerspectiveEffect } from '../../../extensions/product/src/browser/generative-canvas/services/atmosphere/AerialPerspectiveEffect';
+} from './browser/generative-canvas/services/atmosphere';
+export { AerialPerspectiveEffect } from './browser/generative-canvas/services/atmosphere/AerialPerspectiveEffect';
 
 // 3D Manipulation & Mesh Sculpting Engines
 export {
@@ -34,8 +34,8 @@ export {
     MeshHistoryStack,
     createSculptableGeometry,
     recomputeGeometryNormals
-} from '../../../extensions/product/src/browser/generative-canvas/services/mesh-sculpting-engine';
-export type { SculptBrushOptions } from '../../../extensions/product/src/browser/generative-canvas/services/mesh-sculpting-engine';
+} from './browser/generative-canvas/services/mesh-sculpting-engine';
+export type { SculptBrushOptions } from './browser/generative-canvas/services/mesh-sculpting-engine';
 
 export {
     TransformGizmoEngine,
@@ -43,14 +43,14 @@ export {
     computePlaneTranslation,
     computeRotationAngle,
     computeScaleFactor
-} from '../../../extensions/product/src/browser/generative-canvas/services/transform-gizmo-engine';
-export type { GizmoHandleType } from '../../../extensions/product/src/browser/generative-canvas/services/transform-gizmo-engine';
+} from './browser/generative-canvas/services/transform-gizmo-engine';
+export type { GizmoHandleType } from './browser/generative-canvas/services/transform-gizmo-engine';
 
 export {
     DirectDispatchOperatorEngine,
     createOperatorEngine
-} from '../../../extensions/product/src/browser/generative-canvas/services/direct-dispatch-operator-engine';
+} from './browser/generative-canvas/services/direct-dispatch-operator-engine';
 
 // Client-Side Canvas Controllers & Transformers
-export { ProjectArtifactController } from '../../../extensions/product/src/browser/generative-canvas/project-artifact-controller';
-export { morphArtifact } from '../../../extensions/product/src/browser/generative-canvas/primitive-transformer-engine';
+export { ProjectArtifactController } from './browser/generative-canvas/project-artifact-controller';
+export { morphArtifact } from './browser/generative-canvas/primitive-transformer-engine';

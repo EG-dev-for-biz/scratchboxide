@@ -1,1 +1,0 @@
-import './workspaceConfig.js';

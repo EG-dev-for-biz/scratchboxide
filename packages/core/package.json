@@ -1,7 +1,7 @@
 {
   "name": "@scratchbox/core",
   "version": "1.0.0",
-  "description": "Scratchbox IDE Core Library — Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Services",
+  "description": "Scratchbox IDE Core Library \u2014 Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Services",
   "main": "dist/packages/core/src/index.js",
   "module": "dist/packages/core/src/index.js",
   "types": "dist/packages/core/src/index.d.ts",
@@ -33,5 +33,23 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "1.32.0",
+    "fs-extra": "^11.2.0",
+    "google-auth-library": "^10.5.0",
+    "three": "^0.150.0",
+    "typescript": "^5.3.3"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/three": "^0.150.0"
+  }
 }

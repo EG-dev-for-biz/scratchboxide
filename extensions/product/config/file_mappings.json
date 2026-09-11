@@ -1,1 +1,0 @@
-{ "mappings": { "src/": "dist/", "tests/": "build/tests/", "assets/": "public/" } }

@@ -2,7 +2,7 @@
   "name": "scratchbox-ide",
   "version": "1.0.0",
   "private": true,
-  "description": "Scratchbox IDE — Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Workspace",
+  "description": "Scratchbox IDE \u2014 Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Workspace",
   "workspaces": [
     "packages/*",
     "desktop-app"
@@ -13,10 +13,16 @@
     "build:core": "npm --prefix packages/core run build",
     "build:desktop": "npm --prefix desktop-app run build",
     "start": "npm --prefix desktop-app start",
-    "test": "npm --prefix desktop-app test",
-    "test:arch": "npm --prefix desktop-app run test:arch"
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p desktop-app && tsc --noEmit -p desktop-app/tsconfig.electron.json",
+    "lint": "eslint --ext .ts,.tsx packages/core/src desktop-app/src desktop-app/server desktop-app/electron",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:core": "vitest run packages/core/test",
+    "test:desktop": "vitest run desktop-app/test"
   },
   "devDependencies": {
-    "typescript": "^5.3.3"
+    "@vitest/coverage-v8": "^2.1.9",
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.9"
   }
 }

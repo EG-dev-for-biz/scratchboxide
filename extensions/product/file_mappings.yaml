@@ -1,5 +1,0 @@
-mappings:
-  - source: "./data"
-    target: "/app/data"
-  - source: "./src"
-    target: "/app/src"

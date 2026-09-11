@@ -1,3 +1,4 @@
+import { test } from 'vitest';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -79,7 +80,6 @@ async function runStandaloneAppTests() {
     console.log('\n🎉 ALL STANDALONE APP ARCHITECTURE TESTS PASSED SUCCESSFULLY!\n');
 }
 
-runStandaloneAppTests().catch(err => {
-    console.error('❌ Standalone App Test Suite Failed:', err);
-    process.exit(1);
-});
+test('standalone-app.test', async () => {
+    await runStandaloneAppTests();
+}, 180_000);

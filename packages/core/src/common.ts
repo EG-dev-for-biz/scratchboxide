@@ -8,15 +8,15 @@
  ********************************************************************************/
 
 // Geodetic and Local Tangent Plane Coordinate Systems
-export { GeoFrame } from '../../../extensions/product/src/common/coordinate/GeoFrame';
-export { LocalTangentPlane } from '../../../extensions/product/src/common/coordinate/LocalTangentPlane';
-export type { LatLngAlt } from '../../../extensions/product/src/common/coordinate/LocalTangentPlane';
+export { GeoFrame } from './common/coordinate/GeoFrame';
+export { LocalTangentPlane } from './common/coordinate/LocalTangentPlane';
+export type { LatLngAlt } from './common/coordinate/LocalTangentPlane';
 
 // Common Gemini Protocols & RPC Message Contracts
-export * from '../../../extensions/product/src/common/gemini-protocol';
+export * from './common/gemini-protocol';
 
 // Project Artifact Graph Protocol
-export * from '../../../extensions/product/src/common/project-artifact-graph-protocol';
+export * from './common/project-artifact-graph-protocol';
 
 // Media Generation Protocol (Nano Banana, Omni 1.1, Imagen, Veo)
-export * from '../../../extensions/product/src/common/media-generation-protocol';
+export * from './common/media-generation-protocol';

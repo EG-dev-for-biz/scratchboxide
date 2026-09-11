@@ -1,3 +1,4 @@
+import { test } from 'vitest';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -14,7 +15,7 @@ import {
     parseMarkdownBlocks,
     tokenizeCode,
     isCanvasArtifactJson
-} from '../../extensions/product/lib/browser/generative-canvas/ChatMarkdownRenderer';
+} from '@scratchbox/core/browser/generative-canvas/ChatMarkdownRenderer';
 import { createStandaloneServer } from '../server/app';
 import http from 'http';
 
@@ -177,10 +178,9 @@ print("Hello Scratchbox")
     }
 
     console.log('\n🎉 ALL CHAT RESILIENCE TESTS PASSED SUCCESSFULLY!\n');
-    process.exit(0);
+
 }
 
-runChatResilienceTests().catch(err => {
-    console.error('❌ Chat Resilience Tests Failed:', err);
-    process.exit(1);
-});
+test('chat-resilience.test', async () => {
+    await runChatResilienceTests();
+}, 180_000);

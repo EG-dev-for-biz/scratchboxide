@@ -1,25 +1,7 @@
 {
-  "extends": "./configs/base.tsconfig.json",
-  "include": [],
-  "compilerOptions": {
-    "composite": true,
-    "allowJs": true
-  },
+  "files": [],
   "references": [
-    {
-      "path": "extensions/launcher"
-    },
-    {
-      "path": "extensions/product"
-    },
-    {
-      "path": "extensions/updater"
-    },
-    {
-      "path": "applications/electron"
-    },
-    {
-      "path": "applications/browser"
-    },
+    { "path": "packages/core" },
+    { "path": "desktop-app" }
   ]
 }
