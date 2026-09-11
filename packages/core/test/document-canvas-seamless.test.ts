@@ -1,4 +1,5 @@
 import { test } from 'vitest';
+import { DEFAULT_ACTIVE_USER_NAME } from '../src/browser/generative-canvas/canvas-types';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -65,7 +66,7 @@ async function runDocumentCanvasTests() {
     assert.ok(unifiedCss.includes('var(--sb-font-serif)'), 'unified-ui.css applies serif font in light mode callouts');
     console.log('  ✓ Test 3 Passed: unified-ui.css includes light mode transparent/borderless overrides and editorial serif callout styles');
 
-    // Test 4: Verify Clean Document Header (No Hashtag Pills & Dynamic Signed-In User Attribution to "Eli Green")
+    // Test 4: Verify Clean Document Header (No Hashtag Pills & Dynamic Signed-In User Attribution to the active profile)
     const docPrimitivePath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive.tsx');
     assert.ok(fs.existsSync(docPrimitivePath), 'MarkdownDocumentPrimitive.tsx exists');
     const docPrimitiveContent = fs.readFileSync(docPrimitivePath, 'utf8');
@@ -73,19 +74,19 @@ async function runDocumentCanvasTests() {
     // Ensure hashtags pill row is not rendered in document meta header
     assert.ok(!docPrimitiveContent.includes('<div className="sb-doc-tags-list">'), 'MarkdownDocumentPrimitive header eliminates hashtag pills row');
     assert.ok(!docPrimitiveContent.includes('className="sb-doc-tag-pill"'), 'MarkdownDocumentPrimitive header eliminates sb-doc-tag-pill clutter');
-    assert.ok(docPrimitiveContent.includes('getActiveUserName()') || docPrimitiveContent.includes('Eli Green'), 'MarkdownDocumentPrimitive attributes author to active signed-in user Eli Green');
+    assert.ok(docPrimitiveContent.includes('getActiveUserName(') && docPrimitiveContent.includes('DEFAULT_ACTIVE_USER_NAME'), 'MarkdownDocumentPrimitive attributes author to the active signed-in user');
 
-    // Test 5: Verify Document Synthesis Engine designates creator as active signed-in user "Eli Green"
+    // Test 5: Verify Document Synthesis Engine designates creator as active the signed-in user
     const { synthesizeComprehensiveDocument } = await import('../src/browser/generative-canvas/document-synthesis-engine');
     const synthesized1776 = synthesizeComprehensiveDocument('write a document about 1776');
-    assert.strictEqual(synthesized1776.author, 'Eli Green', '1776 synthesized document creator is designated as active user Eli Green');
+    assert.strictEqual(synthesized1776.author, DEFAULT_ACTIVE_USER_NAME, '1776 synthesized document creator is designated as active the signed-in user');
 
     const synthesizedAuth = synthesizeComprehensiveDocument('create technical spec for oauth authentication');
-    assert.strictEqual(synthesizedAuth.author, 'Eli Green', 'Auth technical spec creator is designated as active user Eli Green');
+    assert.strictEqual(synthesizedAuth.author, DEFAULT_ACTIVE_USER_NAME, 'Auth technical spec creator is designated as active the signed-in user');
 
     const synthesizedGeneral = synthesizeComprehensiveDocument('project proposal for distributed streaming');
-    assert.strictEqual(synthesizedGeneral.author, 'Eli Green', 'General synthesized document creator is designated as active user Eli Green');
-    console.log('  ✓ Tests 4 & 5 Passed: Document header has no hashtag clutter and creator is dynamically attributed to signed-in user "Eli Green"');
+    assert.strictEqual(synthesizedGeneral.author, DEFAULT_ACTIVE_USER_NAME, 'General synthesized document creator is designated as active the signed-in user');
+    console.log('  ✓ Tests 4 & 5 Passed: Document header has no hashtag clutter and creator is dynamically attributed to the signed-in user');
 
     console.log('🎉 ALL DOCUMENT CANVAS SEAMLESS EDITING TESTS PASSED!');
 }

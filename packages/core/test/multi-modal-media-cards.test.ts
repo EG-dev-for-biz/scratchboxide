@@ -1,4 +1,6 @@
 import { test } from 'vitest';
+import * as path from 'path';
+import * as os from 'os';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -33,7 +35,7 @@ async function runMultiModalTests() {
     const audioReq: MediaGenerationRequest = {
         kind: 'audio' as any,
         prompt: 'Warm confident narration for project spec video walkthrough',
-        workspaceRoot: '/Users/eligreen/dev/scratchbox-ide',
+        workspaceRoot: path.join(os.tmpdir(), 'scratchbox-ide-test'),
         idempotencyKey: 'idemp-audio-123'
     };
 
@@ -44,7 +46,7 @@ async function runMultiModalTests() {
     const scene3dReq: MediaGenerationRequest = {
         kind: '3d' as any,
         prompt: 'Generate an interactive low-poly satellite',
-        workspaceRoot: '/Users/eligreen/dev/scratchbox-ide',
+        workspaceRoot: path.join(os.tmpdir(), 'scratchbox-ide-test'),
         idempotencyKey: 'idemp-3d-123'
     };
 

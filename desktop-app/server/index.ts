@@ -13,7 +13,8 @@ import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '.
 
 const PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
-const HOST = '127.0.0.1';
+// Loopback by default; containers set HOST=0.0.0.0 explicitly (see Dockerfile).
+const HOST = process.env.HOST || '127.0.0.1';
 const staticDir = path.resolve(__dirname, '../dist');
 
 // Fail loudly instead of silently continuing with a half-initialised process.

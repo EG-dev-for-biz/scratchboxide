@@ -37,7 +37,7 @@ async function runUnifiedProjectCoordinationTests() {
     const lensController = new CodebaseLensController(registry);
     const artifactController = new ProjectArtifactController(
         'project-unified-test',
-        { id: 'test-user', displayName: 'Eli Green', kind: 'user' }
+        { id: 'test-user', displayName: 'Test User', kind: 'user' }
     );
 
     // =========================================================================

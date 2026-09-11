@@ -1,4 +1,5 @@
 import { test } from 'vitest';
+import { DEFAULT_ACTIVE_USER_NAME } from '../src/browser/generative-canvas/canvas-types';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -36,7 +37,7 @@ async function run4DMultimodalDocumentTests() {
     console.log('\nTest 2: Synthesizing 1776 document with rich 4D multi-modal capabilities...');
     const doc1776: MarkdownDocumentData = synthesizeComprehensiveDocument('write an extensive document on the importance of 1776');
     assert.ok(doc1776.title.includes('1776'), '1776 title set');
-    assert.strictEqual(doc1776.author, 'Eli Green', '1776 document author is attributed to signed-in user Eli Green');
+    assert.strictEqual(doc1776.author, DEFAULT_ACTIVE_USER_NAME, '1776 document author is attributed to the signed-in user');
     assert.ok(doc1776.sections && doc1776.sections.length > 5, 'Comprehensive document has rich section count');
 
     // Check for Location Imagery Section
@@ -71,7 +72,7 @@ async function run4DMultimodalDocumentTests() {
     // Test 3: Technical Architecture 4D Synthesis
     console.log('\nTest 3: Synthesizing Technical Specification with 4D Multi-Modal Blocks...');
     const docAuth: MarkdownDocumentData = synthesizeComprehensiveDocument('create technical architecture spec for zero-trust identity system');
-    assert.strictEqual(docAuth.author, 'Eli Green', 'Technical architecture author is attributed to signed-in user Eli Green');
+    assert.strictEqual(docAuth.author, DEFAULT_ACTIVE_USER_NAME, 'Technical architecture author is attributed to the signed-in user');
     const authSvg: MarkdownSection | undefined = docAuth.sections.find(s => s.type === 'svg-diagram');
     assert.ok(authSvg, 'Technical spec contains architecture SVG diagram');
     assert.ok(authSvg?.svgContent?.includes('<svg'), 'Technical diagram contains valid SVG XML markup');
@@ -84,7 +85,7 @@ async function run4DMultimodalDocumentTests() {
     // Test 4: Adaptive Depth / Pull Back Restraint
     console.log('\nTest 4: Adaptive Depth - Pulling back when concise/text-only is requested...');
     const conciseDoc: MarkdownDocumentData = synthesizeComprehensiveDocument('write a concise, text-only minimal document on the importance of 1776 without images or media');
-    assert.strictEqual(conciseDoc.author, 'Eli Green', 'Concise document author is attributed to signed-in user Eli Green');
+    assert.strictEqual(conciseDoc.author, DEFAULT_ACTIVE_USER_NAME, 'Concise document author is attributed to the signed-in user');
     const hasMediaInConcise = conciseDoc.sections.some(s => s.type === 'location-image' || s.type === 'video' || s.type === 'svg-diagram');
     assert.strictEqual(hasMediaInConcise, false, 'Concise/text-only request omits heavy media and diagram blocks');
     assert.ok(conciseDoc.sections.some(s => s.type === 'heading'), 'Contains clean headings');

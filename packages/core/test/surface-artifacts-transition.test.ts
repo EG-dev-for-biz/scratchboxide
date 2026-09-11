@@ -1,4 +1,5 @@
 import { test } from 'vitest';
+import { DEFAULT_ACTIVE_USER_NAME } from '../src/browser/generative-canvas/canvas-types';
 import * as assert from 'assert';
 import {
     CanvasArtifact,
@@ -324,7 +325,7 @@ async function runSurfaceArtifactTransitionTests() {
     // Test 9: Rich Document Section Synthesis for 1776 (6-Tier Executive Hierarchy)
     const doc1776 = synthesizeComprehensiveDocument('write a document of the significance of 1776');
     assert.strictEqual(doc1776.title, 'The Pivotal Year: 1776 and the Birth of a Nation');
-    assert.strictEqual(doc1776.author, 'Eli Green');
+    assert.strictEqual(doc1776.author, DEFAULT_ACTIVE_USER_NAME);
     assert.ok(Array.isArray(doc1776.tags) && doc1776.tags.includes('american revolution') && doc1776.tags.includes('founding principles'));
 
     // Check Executive Summary (L1 Heading + 2 rich paragraphs)

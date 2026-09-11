@@ -24,7 +24,7 @@ import { CanvasArtifact, ChatSession } from '../src/browser/generative-canvas/ca
 import { ProjectArtifactController } from '../src/browser/generative-canvas/project-artifact-controller';
 import { BrowserProxyService } from '../src/node/browser-proxy-service';
 
-const actor = { id: 'user-eli', displayName: 'Eli Green', kind: 'user' as const };
+const actor = { id: 'user-test', displayName: 'Test User', kind: 'user' as const };
 
 async function runProjectArtifactGraphTests(): Promise<void> {
     console.log('🧪 Running Project Artifact Graph protocol and store tests...');

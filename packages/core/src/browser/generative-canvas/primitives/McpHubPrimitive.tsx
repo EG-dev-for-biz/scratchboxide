@@ -274,7 +274,7 @@ export const McpHubPrimitive: React.FC<McpHubPrimitiveProps> = ({
                     title: 'Open Pull Requests & CI Status',
                     headers: ['PR #', 'Title', 'Author', 'CI Check'],
                     rows: [
-                        ['#142', 'feat: Apple HIG Liquid Glass Studio', 'eligreen', 'Passing (100%)'],
+                        ['#142', 'feat: Apple HIG Liquid Glass Studio', 'octocat', 'Passing (100%)'],
                         ['#141', 'perf: Optimize generative canvas render', 'thegecko', 'Passing'],
                         ['#140', 'fix: Tactile toggle spring curve', 'taylor', 'Passing']
                     ],

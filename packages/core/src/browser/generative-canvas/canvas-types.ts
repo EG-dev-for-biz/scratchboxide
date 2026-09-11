@@ -7,7 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-export const DEFAULT_ACTIVE_USER_NAME = 'Eli Green';
+/** Display name used when no signed-in profile is available. */
+export const DEFAULT_ACTIVE_USER_NAME = 'Scratchbox User';
 
 export function getActiveUserName(customName?: string): string {
     if (customName && customName.trim() && customName.trim() !== 'User') {

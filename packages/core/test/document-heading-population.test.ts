@@ -1,4 +1,5 @@
 import { test } from 'vitest';
+import { DEFAULT_ACTIVE_USER_NAME } from '../src/browser/generative-canvas/canvas-types';
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
@@ -131,7 +132,7 @@ export function sanitizeAndPopulateDoc(raw: any, docContext?: string): MarkdownD
     return {
         title,
         subtitle,
-        author: raw?.author && raw.author !== 'User' ? raw.author : 'Eli Green',
+        author: raw?.author && raw.author !== 'User' ? raw.author : DEFAULT_ACTIVE_USER_NAME,
         lastUpdated: raw?.lastUpdated || 'Just now',
         tags: Array.isArray(raw?.tags) ? raw.tags : ['Specification', 'Documentation'],
         sections

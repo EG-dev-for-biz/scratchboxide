@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import {
+import { DEFAULT_ACTIVE_USER_NAME,
     CanvasArtifact,
     KanbanBoardData,
     MarkdownDocumentData,
@@ -416,7 +416,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
         return {
             title: t || 'Project Specification & Strategic Notes',
             subtitle,
-            author: getActiveUserName(raw?.author) || 'Eli Green',
+            author: getActiveUserName(raw?.author) || DEFAULT_ACTIVE_USER_NAME,
             lastUpdated: raw?.lastUpdated || 'Just now',
             tags: Array.isArray(raw?.tags) ? raw.tags : ['Specification', 'Documentation'],
             sections
@@ -641,7 +641,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
         try {
             const client = MediaGenerationClient.getInstance();
-            const wsPath = workspacePath || (typeof window !== 'undefined' ? (window as any).__scratchbox_active_workspace_path || process.cwd?.() || '/Users/eligreen/dev/scratchbox-ide-master' : '/Users/eligreen/dev/scratchbox-ide-master');
+            const wsPath = workspacePath || (typeof window !== 'undefined' ? (window as any).__scratchbox_active_workspace_path : undefined) || '';
             const idempotencyKey = `doc-media-${section.id}-${Date.now()}`;
 
             const job = await client.start({

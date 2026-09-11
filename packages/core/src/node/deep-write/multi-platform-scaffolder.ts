@@ -490,7 +490,7 @@ CMD ["./main"]
 name = "${name}"
 version = "0.1.0"
 description = "Cloud microservice with fast high-fidelity physics calculations"
-authors = ["Eli Green <eligreen@example.com>"]
+authors = []
 
 [tool.poetry.dependencies]
 python = "^3.10"
