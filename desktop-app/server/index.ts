@@ -7,15 +7,18 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import * as path from 'path';
 import * as http from 'http';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from './app';
+import { resolveRendererDist } from './renderer-dist';
 
 const PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
 // Loopback by default; containers set HOST=0.0.0.0 explicitly (see Dockerfile).
 const HOST = process.env.HOST || '127.0.0.1';
-const staticDir = path.resolve(__dirname, '../dist');
+const staticDir = resolveRendererDist(__dirname);
+if (!staticDir) {
+    console.warn('[Scratchbox] No built renderer found (desktop-app/dist); serving API only. Run `npm run build` or set SCRATCHBOX_STATIC_DIR.');
+}
 
 // Fail loudly instead of silently continuing with a half-initialised process.
 process.on('unhandledRejection', (reason: unknown) => {

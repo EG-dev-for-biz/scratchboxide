@@ -11,6 +11,7 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import * as http from 'http';
 import * as path from 'path';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '../server/app';
+import { resolveRendererDist } from '../server/renderer-dist';
 
 let mainWindow: BrowserWindow | null = null;
 let serverInstance: http.Server | null = null;
@@ -118,7 +119,13 @@ function createWindow(): void {
     if (isDev) {
         mainWindow.loadURL(DEV_RENDERER_URL);
     } else {
-        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+        const rendererDist = resolveRendererDist(__dirname);
+        if (!rendererDist) {
+            console.error('[Electron] Built renderer not found (desktop-app/dist). Run `npm run build` first.');
+            app.exit(1);
+            return;
+        }
+        mainWindow.loadFile(path.join(rendererDist, 'index.html'));
     }
 
     mainWindow.once('ready-to-show', () => {
