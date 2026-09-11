@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources } from './source-helpers';
 
 async function runAllCursorSettingsTabsTests() {
     console.log('🧪 Running Comprehensive 12-Tab Cursor Settings Experience Test Suite...\n');
@@ -21,7 +22,7 @@ async function runAllCursorSettingsTabsTests() {
     assert.ok(fs.existsSync(settingsTsxPath), 'SettingsModal.tsx must exist');
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
 
-    const source = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const source = readSettingsSources();
     const css = fs.readFileSync(unifiedCssPath, 'utf-8');
 
     // -------------------------------------------------------------

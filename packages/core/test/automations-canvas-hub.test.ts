@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runAutomationsCanvasHubTests() {
     console.log('🧪 Running Native Automation Workflow & Workspace File Type Test Suite...');
@@ -23,7 +24,7 @@ async function runAutomationsCanvasHubTests() {
     assert.ok(fs.existsSync(sideChatTsxPath), 'VibecodeAiSideChat.tsx must exist');
     assert.ok(fs.existsSync(nodeGraphPrimitivePath), 'NodeGraphPrimitive.tsx must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const sideChatSource = fs.readFileSync(sideChatTsxPath, 'utf-8');
     const nodeGraphSource = fs.readFileSync(nodeGraphPrimitivePath, 'utf-8');
 

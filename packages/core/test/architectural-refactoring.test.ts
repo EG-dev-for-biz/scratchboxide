@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runArchitecturalRefactoringTests() {
     console.log('🧪 Running Architectural Micro-Refactorings & Domain Boundaries Test Suite...\n');
@@ -39,7 +40,7 @@ async function runArchitecturalRefactoringTests() {
     // Test 2: Usage in VibecodeAiSideChat and GenerativeCanvasStudio
     // -------------------------------------------------------------
     const sideChatSource = fs.readFileSync(sideChatPath, 'utf-8');
-    const studioSource = fs.readFileSync(studioPath, 'utf-8');
+    const studioSource = readStudioSources();
     assert.ok(sideChatSource.includes('ContextMentionAutocompletePopover'), 'VibecodeAiSideChat must use ContextMentionAutocompletePopover');
     assert.ok(studioSource.includes('ContextMentionAutocompletePopover'), 'GenerativeCanvasStudio must use ContextMentionAutocompletePopover');
     console.log('  ✓ Test 2 Passed: Autocomplete popovers deduplicated across SideChat and Main Studio');

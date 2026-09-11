@@ -20,6 +20,7 @@ import {
     PROJECT_CONTEXT_CATEGORIES
 } from '../src/browser/generative-canvas/canvas-types';
 import { UserMemoriesService } from '../src/node/user-memories-service';
+import { readSettingsSources } from './source-helpers';
 
 async function runUserMemoriesTests() {
     console.log('🧪 Running Comprehensive User Memories Subsystem Test Suite...\n');
@@ -284,7 +285,7 @@ async function runUserMemoriesTests() {
         console.log('  Testing SettingsModal and UI Elements Integration...');
         const settingsModalPath = path.resolve(__dirname, '../src/browser/generative-canvas/SettingsModal.tsx');
         assert.ok(fs.existsSync(settingsModalPath), 'SettingsModal.tsx must exist');
-        const settingsSource = fs.readFileSync(settingsModalPath, 'utf-8');
+        const settingsSource = readSettingsSources();
 
         assert.ok(settingsSource.includes("'memories'"), "SettingsModal must register 'memories' tab in sidebarNavSections");
         assert.ok(settingsSource.includes('Memories') || settingsSource.includes('User Memories'), 'SettingsModal must have Memories label');

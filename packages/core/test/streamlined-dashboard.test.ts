@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runStreamlinedDashboardTests() {
     console.log('🧪 Running Streamlined Dashboard & Visual Polish Test Suite...\n');
@@ -23,7 +24,7 @@ async function runStreamlinedDashboardTests() {
     assert.ok(fs.existsSync(metricCardsTsxPath), 'MetricCardsPrimitive.tsx must exist');
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const metricSource = fs.readFileSync(metricCardsTsxPath, 'utf-8');
     const cssSource = fs.readFileSync(unifiedCssPath, 'utf-8');
 

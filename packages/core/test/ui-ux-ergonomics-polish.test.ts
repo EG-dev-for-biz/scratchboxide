@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runUiUxErgonomicsTests() {
     console.log('🧪 Running Comprehensive UI/UX & Ergonomics Polish Test Suite...\n');
@@ -36,7 +37,7 @@ async function runUiUxErgonomicsTests() {
     const spotlightModalSource = fs.readFileSync(spotlightModalPath, 'utf-8');
     const automationsModalSource = fs.readFileSync(automationsModalPath, 'utf-8');
     const projectsModalSource = fs.readFileSync(projectsModalPath, 'utf-8');
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const markdownDocSource = fs.readFileSync(markdownDocPrimitivePath, 'utf-8');
 
     // -------------------------------------------------------------

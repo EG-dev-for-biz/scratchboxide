@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources } from './source-helpers';
 
 async function runCursorSettingsPageTests() {
     console.log('🧪 Running Cursor Settings Page (No-Icon Sidebar & Native Groups) Test Suite...\n');
@@ -23,7 +24,7 @@ async function runCursorSettingsPageTests() {
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
     assert.ok(fs.existsSync(canvasTypesPath), 'canvas-types.ts must exist');
 
-    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const settingsSource = readSettingsSources();
     const cssSource = fs.readFileSync(unifiedCssPath, 'utf-8');
     const typesSource = fs.readFileSync(canvasTypesPath, 'utf-8');
 

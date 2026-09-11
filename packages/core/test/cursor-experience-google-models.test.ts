@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runCursorExperienceAndGoogleModelsTests() {
     console.log('🧪 Running Cursor Experience & Google Models Privacy Test Suite...\n');
@@ -30,9 +31,9 @@ async function runCursorExperienceAndGoogleModelsTests() {
     assert.ok(fs.existsSync(geminiServicePath), 'gemini-service.ts must exist');
     assert.ok(fs.existsSync(path.join(geminiModulesDir, 'gemini-client.ts')), 'gemini/gemini-client.ts must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const sideChatSource = fs.readFileSync(sideChatTsxPath, 'utf-8');
-    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const settingsSource = readSettingsSources();
     const spotlightSource = fs.readFileSync(spotlightTsxPath, 'utf-8');
     const automationsSource = fs.readFileSync(automationsTsxPath, 'utf-8');
     const nodeGraphSource = fs.readFileSync(nodeGraphTsxPath, 'utf-8');

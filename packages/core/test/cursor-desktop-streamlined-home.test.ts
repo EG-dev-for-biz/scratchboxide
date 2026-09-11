@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runCursorDesktopStreamlinedHomeTests() {
     console.log('🧪 Running Unified Main Window Layout & Bottom-Centered Composer Test Suite...\n');
@@ -23,7 +24,7 @@ async function runCursorDesktopStreamlinedHomeTests() {
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
     assert.ok(fs.existsSync(indexCssPath), 'index.css must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const cssSource = fs.readFileSync(unifiedCssPath, 'utf-8') + '\n' + fs.readFileSync(indexCssPath, 'utf-8');
 
     // -------------------------------------------------------------
@@ -42,7 +43,7 @@ async function runCursorDesktopStreamlinedHomeTests() {
     // -------------------------------------------------------------
     assert.ok(studioSource.includes('DepthBox') || studioSource.includes('scratchbox-test-workspace') || studioSource.includes('activeWorkspace'), 'Sidebar must include project folders (e.g. scratchbox-test-workspace)');
     assert.ok(studioSource.includes('Agents') || studioSource.includes('Workspaces'), 'Sidebar must include Workspaces or Agents section');
-    assert.ok(studioSource.includes('Eli Green'), 'Sidebar footer must render user profile');
+    assert.ok(studioSource.includes('sb-profile-name') && studioSource.includes('getActiveUserName'), 'Sidebar footer must render the active user profile');
     assert.ok(!studioSource.includes('sb-sidebar-update-btn'), 'Sidebar footer must NOT render "Update" button');
     assert.ok(!studioSource.includes('Connect Slack'), 'Sidebar footer must NOT render "Connect Slack" button');
     console.log('  ✓ Test 2 Passed: Grouped project hierarchy and clean profile footer without Update / Connect Slack verified');

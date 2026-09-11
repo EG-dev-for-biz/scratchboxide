@@ -14,6 +14,7 @@ import * as path from 'path';
 import { MarkdownDocumentData } from '../src/browser/generative-canvas/canvas-types';
 import { DEFAULT_MCP_SERVERS } from '../src/browser/generative-canvas/canvas-types';
 import { GoogleDriveService } from '../src/browser/generative-canvas/google-drive-service';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runGoogleDriveIntegrationTests() {
     console.log('🧪 Running Google Drive & Google Docs Integration Test Suite...\n');
@@ -195,9 +196,9 @@ async function runGoogleDriveIntegrationTests() {
     assert.ok(fs.existsSync(cssPath), 'unified-ui.css exists');
     assert.ok(fs.existsSync(modalPath), 'GoogleDriveConnectModal.tsx exists');
 
-    const studioSource = fs.readFileSync(studioPath, 'utf8');
+    const studioSource = readStudioSources();
     const docSource = fs.readFileSync(docPath, 'utf8');
-    const settingsSource = fs.readFileSync(settingsPath, 'utf8');
+    const settingsSource = readSettingsSources();
     const automationsSource = fs.readFileSync(automationsPath, 'utf8');
     const iconsSource = fs.readFileSync(iconsPath, 'utf8');
     const cssSource = fs.readFileSync(cssPath, 'utf8');

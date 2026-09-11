@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runCursorStylingComprehensiveTests() {
     console.log('🧪 Running Comprehensive Cursor Styling & Scratchbox Feature Preservation Test Suite...\n');
@@ -33,9 +34,9 @@ async function runCursorStylingComprehensiveTests() {
     assert.ok(fs.existsSync(nodeGraphTsxPath), 'NodeGraphPrimitive.tsx must exist');
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const sideChatSource = fs.readFileSync(sideChatTsxPath, 'utf-8');
-    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const settingsSource = readSettingsSources();
     const sandboxSource = fs.readFileSync(sandboxTsxPath, 'utf-8');
     const docSource = fs.readFileSync(docTsxPath, 'utf-8');
     const kanbanSource = fs.readFileSync(kanbanTsxPath, 'utf-8');

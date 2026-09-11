@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runUnifiedSettingsEntrypointTests() {
     console.log('🧪 Running Unified Settings Entry Points & Trigger Elimination Test Suite...\n');
@@ -25,8 +26,8 @@ async function runUnifiedSettingsEntrypointTests() {
     assert.ok(fs.existsSync(unifiedCssPath), 'unified-ui.css must exist');
     assert.ok(fs.existsSync(indexCssPath), 'index.css must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
-    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
+    const settingsSource = readSettingsSources();
     const unifiedCss = fs.readFileSync(unifiedCssPath, 'utf-8');
     const indexCss = fs.readFileSync(indexCssPath, 'utf-8');
 

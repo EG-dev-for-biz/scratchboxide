@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runFileExplorerTests() {
     console.log('🧪 Running Sidebar Recursive File Explorer & Unified Click Routing Test Suite...\n');
@@ -23,7 +24,7 @@ async function runFileExplorerTests() {
     assert.ok(fs.existsSync(projectsModalPath), 'ProjectsModal.tsx must exist');
     assert.ok(fs.existsSync(canvasIconsPath), 'canvas-icons.tsx must exist');
 
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
     const projectsSource = fs.readFileSync(projectsModalPath, 'utf-8');
     const iconsSource = fs.readFileSync(canvasIconsPath, 'utf-8');
 

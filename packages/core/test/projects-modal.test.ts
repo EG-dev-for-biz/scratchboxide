@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runProjectsModalTests() {
     console.log('🧪 Running Streamlined Workspace Management & Trigger Elimination Test Suite...\n');
@@ -24,8 +25,8 @@ async function runProjectsModalTests() {
     assert.ok(fs.existsSync(settingsTsxPath), 'SettingsModal.tsx must exist');
 
     const projectsSource = fs.readFileSync(projectsModalPath, 'utf-8');
-    const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
-    const settingsSource = fs.readFileSync(settingsTsxPath, 'utf-8');
+    const studioSource = readStudioSources();
+    const settingsSource = readSettingsSources();
 
     // -------------------------------------------------------------
     // Test 1: Recent Projects & Starter Templates HIG Design System naming

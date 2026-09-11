@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readStudioSources } from './source-helpers';
 
 async function runCursorLayoutTests() {
     console.log('🧪 Running Cursor Layout, Workspace File Types & Add Logic Test Suite...');
@@ -18,7 +19,7 @@ async function runCursorLayoutTests() {
     const studioTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
     assert.ok(fs.existsSync(studioTsxPath), 'GenerativeCanvasStudio.tsx must exist');
 
-    const source = fs.readFileSync(studioTsxPath, 'utf-8');
+    const source = readStudioSources();
 
     // Test 1: Top Navigation contains New Chat, Search, and Customize
     assert.ok(source.includes('New Chat'), 'Sidebar must include "New Chat" action');

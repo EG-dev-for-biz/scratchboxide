@@ -3,6 +3,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { StudioLayoutMode } from '../src/browser/generative-canvas/canvas-types';
+import { readStudioSources } from './source-helpers';
 
 async function runLayoutModeTests() {
     console.log('🧪 Running Studio Layout Modes (Chat, Code/Sandbox, Document/Spec, Kanban) Test Suite...');
@@ -42,7 +43,7 @@ async function runLayoutModeTests() {
     // Test 4: Verify ChatGPT-style Split Layout for Document Editing
     const studioTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
     assert.ok(fs.existsSync(studioTsxPath), 'GenerativeCanvasStudio.tsx must exist');
-    const source = fs.readFileSync(studioTsxPath, 'utf-8');
+    const source = readStudioSources();
 
     assert.ok(source.includes('sb-document-split-container'), 'Must render side-by-side flex split layout container');
     assert.ok(source.includes('sb-chatgpt-document-card'), 'Must wrap MarkdownDocumentPrimitive in ChatGPT-style document workspace frame');

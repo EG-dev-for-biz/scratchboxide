@@ -21,6 +21,7 @@ import {
 import { resolveModeForArtifact, sanitizeLayoutMode } from '../src/browser/generative-canvas/guardrails-service';
 import { morphArtifact } from '../src/browser/generative-canvas/primitive-transformer-engine';
 import { BrowserProxyService } from '../src/node/browser-proxy-service';
+import { readStudioSources } from './source-helpers';
 
 async function runInteractiveBrowserTests() {
     console.log('🧪 Running Interactive Web Browser Canvas Primitive Test Suite...');
@@ -182,7 +183,7 @@ async function runInteractiveBrowserTests() {
 
     const studioFilePath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
     assert.ok(fs.existsSync(studioFilePath), 'GenerativeCanvasStudio.tsx file must exist');
-    const studioSource = fs.readFileSync(studioFilePath, 'utf-8');
+    const studioSource = readStudioSources();
 
     assert.ok(studioSource.includes("handleCreateWorkspaceFile('browser')") || studioSource.includes("type === 'browser'"), 'Must support creating browser workspace files');
     assert.ok(studioSource.includes("layoutMode === 'browser'"), 'Must support layout rendering for browser mode');

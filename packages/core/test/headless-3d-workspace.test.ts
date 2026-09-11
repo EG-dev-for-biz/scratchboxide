@@ -15,6 +15,7 @@ import { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { createAirplaneMesh } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { resolveModeForArtifact } from '../src/browser/generative-canvas/guardrails-service';
 import { GeminiService } from '../src/node/gemini-service';
+import { readStudioSources } from './source-helpers';
 
 async function runHeadless3DWorkspaceTests() {
     console.log('🧪 Running Headless 3D Workspace & Chat-Driven Synthesis Test Suite...\n');
@@ -105,7 +106,7 @@ async function runHeadless3DWorkspaceTests() {
     console.log('  Testing GenerativeCanvasStudio.tsx Chat Prompt 3D Synthesis Engine...');
     const studioPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
     assert.ok(fs.existsSync(studioPath), 'GenerativeCanvasStudio.tsx must exist');
-    const studioSource = fs.readFileSync(studioPath, 'utf-8');
+    const studioSource = readStudioSources();
 
     assert.ok(studioSource.includes("layoutMode === '3d'"), 'Studio must support 3d layout mode in chat dispatch');
     assert.ok(studioSource.includes("activeArtifact?.type === '3d-scene'"), 'Studio must support 3d-scene artifact mutations');

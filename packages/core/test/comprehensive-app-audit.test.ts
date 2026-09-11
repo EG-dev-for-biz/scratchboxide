@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runComprehensiveAppAuditTests() {
     console.log('🧪 Running Comprehensive App-Wide Feature & Surface Audit Test Suite...\n');
@@ -31,7 +32,7 @@ async function runComprehensiveAppAuditTests() {
     // -------------------------------------------------------------
     // Section 1: Welcome / New Chat View Verification
     // -------------------------------------------------------------
-    const studioSrc = fs.readFileSync(studioPath, 'utf-8');
+    const studioSrc = readStudioSources();
     assert.ok(studioSrc.includes('sb-unified-composer-capsule'), 'Main studio must render bottom composer capsule');
     assert.ok(studioSrc.includes('sb-cursor-mode-selector'), 'Composer must include mode selector');
     assert.ok(studioSrc.includes('Agent') && studioSrc.includes('Ask') && studioSrc.includes('Plan'), 'Composer must have Agent, Ask, Plan mode pills');
@@ -116,7 +117,7 @@ async function runComprehensiveAppAuditTests() {
     // -------------------------------------------------------------
     // Section 7: Settings Modal & All Tabs Verification
     // -------------------------------------------------------------
-    const settingsSrc = fs.readFileSync(settingsPath, 'utf-8');
+    const settingsSrc = readSettingsSources();
     const requiredSettingsTabs = [
         'general',
         'profile',

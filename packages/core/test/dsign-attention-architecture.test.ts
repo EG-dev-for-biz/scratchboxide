@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readSettingsSources, readStudioSources } from './source-helpers';
 
 async function runDsignAttentionArchitectureTests() {
     console.log('🧪 Running Visual Attention Architecture & Perception Hierarchy (dsign) Test Suite...');
@@ -72,7 +73,7 @@ async function runDsignAttentionArchitectureTests() {
 
     // Test 3: GenerativeCanvasStudio follows 3-tier perceptual layout & eye trace flow
     assert.ok(fs.existsSync(studioPath), 'GenerativeCanvasStudio.tsx must exist');
-    const studioContent = fs.readFileSync(studioPath, 'utf-8');
+    const studioContent = readStudioSources();
     
     assert.ok(
         studioContent.includes('sb-chatgpt-topbar') || studioContent.includes('sb-topbar-right'),
@@ -108,7 +109,7 @@ async function runDsignAttentionArchitectureTests() {
     assert.ok(fs.existsSync(spotlightPath), 'SpotlightLauncherModal.tsx must exist');
     assert.ok(fs.existsSync(settingsPath), 'SettingsModal.tsx must exist');
     const spotlightContent = fs.readFileSync(spotlightPath, 'utf-8');
-    const settingsContent = fs.readFileSync(settingsPath, 'utf-8');
+    const settingsContent = readSettingsSources();
 
     assert.ok(
         spotlightContent.includes('category') && spotlightContent.includes('Actions'),
