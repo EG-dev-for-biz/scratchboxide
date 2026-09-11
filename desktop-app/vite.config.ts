@@ -1,49 +1,103 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, Plugin, ProxyOptions } from 'vite';
 import react from '@vitejs/plugin-react';
+import crypto from 'crypto';
 import path from 'path';
+
+const API_TARGET = `http://127.0.0.1:${process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001'}`;
+
+/**
+ * Renderer Content-Security-Policy. 'unsafe-eval' is only added in dev because
+ * Vite/React Fast Refresh need it; production bundles run without it. In dev the
+ * Fast Refresh preamble is an inline script, so it is authorised via a nonce
+ * (Vite `html.cspNonce`) rather than 'unsafe-inline'.
+ */
+export function buildRendererCsp(isDev: boolean, nonce?: string): string {
+  const remote = 'https://*.googleapis.com https://*.gstatic.com https://tile.googleapis.com https://esm.sh https://unpkg.com https://cdn.tailwindcss.com';
+  const local = 'http://127.0.0.1:* http://localhost:*';
+  const ws = 'ws://127.0.0.1:* ws://localhost:*';
+  const scriptSrc = [
+    '\'self\'',
+    remote,
+    local,
+    isDev ? '\'unsafe-eval\'' : '',
+    isDev && nonce ? `'nonce-${nonce}'` : ''
+  ].filter(Boolean).join(' ');
+  return [
+    `default-src 'self' ${remote} ${local} blob: data:`,
+    `script-src ${scriptSrc}`,
+    `style-src 'self' 'unsafe-inline' ${remote} ${local}`,
+    `img-src 'self' ${remote} ${local} blob: data:`,
+    `font-src 'self' ${remote} ${local} data:`,
+    `connect-src 'self' ${remote} ${local} ${ws} blob: data:`,
+    `worker-src 'self' blob:`,
+    `frame-src 'self' ${local} https://esm.sh https://unpkg.com blob: data:`,
+    `media-src 'self' ${remote} ${local} blob: data:`,
+    `object-src 'none'`,
+    `base-uri 'self'`
+  ].join('; ');
+}
+
+/** Injects the CSP <meta> tag (dev gets 'unsafe-eval'; production does not). */
+function cspPlugin(isDev: boolean, nonce: string): Plugin {
+  return {
+    name: 'scratchbox-csp',
+    transformIndexHtml(html) {
+      const csp = buildRendererCsp(isDev, nonce);
+      const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}" />`;
+      if (/http-equiv=["']Content-Security-Policy["']/i.test(html)) {
+        return html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i, meta);
+      }
+      return html.replace(/<head>/i, `<head>\n    ${meta}`);
+    }
+  };
+}
+
+/**
+ * Dev proxy entry: forwards to the API and injects the per-launch token so the
+ * renderer never has to hold it while running under Vite.
+ */
+function apiProxy(): ProxyOptions {
+  return {
+    target: API_TARGET,
+    changeOrigin: true,
+    configure(proxy) {
+      proxy.on('proxyReq', proxyReq => {
+        const token = process.env.SCRATCHBOX_LAUNCH_TOKEN;
+        if (token && !proxyReq.getHeader('x-scratchbox-token') && !proxyReq.getHeader('authorization')) {
+          proxyReq.setHeader('X-Scratchbox-Token', token);
+        }
+      });
+    }
+  };
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const rootEnv = loadEnv(mode, path.resolve(__dirname, '..'), '');
   const appEnv = loadEnv(mode, __dirname, '');
   const env = { ...rootEnv, ...appEnv };
+  const isDev = mode !== 'production';
+  const cspNonce = crypto.randomBytes(16).toString('base64');
 
-  const googleMapsKey =
-    env.GOOGLE_MAPS_API_KEY ||
-    env.MAP_TILES_API_KEY ||
-    env.GOOGLE_CLOUD_API_KEY ||
-    env.NEXT_PUBLIC_MAP_TILES_API_KEY ||
-    env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ||
-    '';
+  // Only the browser-safe Maps/Tiles key is ever compiled into the bundle.
+  const googleMapsKey = env.GOOGLE_MAPS_API_KEY || env.MAP_TILES_API_KEY || '';
 
   return {
-    plugins: [react()],
+    plugins: [react(), cspPlugin(isDev, cspNonce)],
+    html: isDev ? { cspNonce } : undefined,
     define: {
       'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleMapsKey),
-      'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey),
-      'process.env.GOOGLE_MAPS_KEY': JSON.stringify(googleMapsKey),
-      'process.env.GOOGLE_CLOUD_API_KEY': JSON.stringify(googleMapsKey),
+      'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey)
     },
     server: {
       port: 3000,
       host: '127.0.0.1',
       proxy: {
-        '/gemini': {
-          target: 'http://127.0.0.1:3001',
-          changeOrigin: true
-        },
-        '/workspace': {
-          target: 'http://127.0.0.1:3001',
-          changeOrigin: true
-        },
-        '/media': {
-          target: 'http://127.0.0.1:3001',
-          changeOrigin: true
-        },
-        '/api/browser': {
-          target: 'http://127.0.0.1:3001',
-          changeOrigin: true
-        }
+        '/gemini': apiProxy(),
+        '/workspace': apiProxy(),
+        '/media': apiProxy(),
+        '/api/browser': apiProxy(),
+        '/api/tools': apiProxy()
       }
     },
     resolve: {

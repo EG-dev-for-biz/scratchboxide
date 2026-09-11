@@ -15,6 +15,9 @@ export type { LatLngAlt } from './common/coordinate/LocalTangentPlane';
 // Common Gemini Protocols & RPC Message Contracts
 export * from './common/gemini-protocol';
 
+// API client auth configuration (per-launch token plumbing)
+export * from './common/api-client-config';
+
 // Project Artifact Graph Protocol
 export * from './common/project-artifact-graph-protocol';
 

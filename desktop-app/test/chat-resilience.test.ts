@@ -142,17 +142,27 @@ print("Hello Scratchbox")
 
     // 5. Backend /gemini/generate-stream and /gemini/stream endpoints
     console.log('  Testing Standalone Server /gemini/generate-stream & /gemini/stream endpoints...');
-    const app = createStandaloneServer();
+    const app = createStandaloneServer({ port: 0, toolsPort: 3998 });
+    // Every non-open route requires the per-launch token (see server-auth.test.ts).
+    const authHeaders = { 'Content-Type': 'application/json', 'X-Scratchbox-Token': app.locals.launchToken as string };
     const server = http.createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
     const address = server.address() as any;
     const testPort = address.port;
 
     try {
+        // Unauthenticated streaming must be rejected before any model work happens
+        const resNoToken = await fetch(`http://127.0.0.1:${testPort}/gemini/generate-stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: 'test prompt' })
+        });
+        assert.strictEqual(resNoToken.status, 401, 'stream endpoints must require the launch token');
+
         // Test /gemini/generate-stream
         const resGenStream = await fetch(`http://127.0.0.1:${testPort}/gemini/generate-stream`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
             body: JSON.stringify({ prompt: 'test prompt' })
         });
         assert.strictEqual(resGenStream.status, 200);
@@ -161,7 +171,7 @@ print("Hello Scratchbox")
         // Test /gemini/stream
         const resStream = await fetch(`http://127.0.0.1:${testPort}/gemini/stream`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
             body: JSON.stringify({ prompt: 'test prompt' })
         });
         assert.strictEqual(resStream.status, 200);
