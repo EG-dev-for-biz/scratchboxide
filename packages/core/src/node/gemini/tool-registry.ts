@@ -100,7 +100,7 @@ interface GroupPresentation {
     failurePayload: (message: string) => ToolResultPayload;
 }
 
-const GROUPS: Record<Exclude<ToolGroup, 'mcp'>, GroupPresentation> = {
+const GROUPS: Record<ToolGroup, GroupPresentation> = {
     workspace: {
         prefix: 'workspace_',
         mcpServerId: 'mcp-scratchbox-workspace',
@@ -136,12 +136,26 @@ const GROUPS: Record<Exclude<ToolGroup, 'mcp'>, GroupPresentation> = {
         statusLabel: status => status === 'completed' ? 'success' : 'failed',
         unknownTool: 'noop',
         failurePayload: message => ({ status: 'failed', error: message })
+    },
+    mcp: {
+        prefix: '',
+        mcpServerId: 'mcp-live',
+        mcpName: 'Live MCP Tool',
+        humanTitle: name => `Execute MCP Tool: ${name}`,
+        cardTitle: name => `MCP Execution: ${name}`,
+        stepTitle: name => `Invoke ${name}`,
+        durationMs: { completed: 25, failed: 25 },
+        statusLabel: status => status,
+        unknownTool: 'fail',
+        failurePayload: message => ({ status: 'failed', error: message })
     }
 };
 
+const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 'browser'];
+
 export function inferToolGroup(name: string): ToolGroup {
-    for (const [group, presentation] of Object.entries(GROUPS) as Array<[Exclude<ToolGroup, 'mcp'>, GroupPresentation]>) {
-        if (name.startsWith(presentation.prefix)) return group;
+    for (const group of PREFIXED_GROUPS) {
+        if (name.startsWith(GROUPS[group].prefix)) return group;
     }
     return 'mcp';
 }
@@ -209,7 +223,7 @@ export class ToolRegistry {
     }
 
     private async run(registration: ToolRegistration, args: Record<string, unknown>, ctx: ToolContext): Promise<ToolExecutionResult> {
-        const group = registration.group === 'mcp' ? 'workspace' : registration.group;
+        const group = registration.group;
         try {
             const outcome = await registration.handler(args, ctx);
             return this.wrap(group, registration.name, outcome);
@@ -223,7 +237,7 @@ export class ToolRegistry {
         }
     }
 
-    private wrap(group: Exclude<ToolGroup, 'mcp'>, name: string, outcome: ToolHandlerOutcome): ToolExecutionResult {
+    private wrap(group: ToolGroup, name: string, outcome: ToolHandlerOutcome): ToolExecutionResult {
         const presentation = GROUPS[group];
         const status = outcome.status || 'completed';
         const summaryResult = outcome.summaryResult ?? '';

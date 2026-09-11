@@ -22,11 +22,13 @@ async function runCursorExperienceAndGoogleModelsTests() {
     const automationsTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/AutomationsModal.tsx');
     const nodeGraphTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/NodeGraphPrimitive.tsx');
     const geminiServicePath = path.resolve(__dirname, '../src/node/gemini-service.ts');
+    const geminiModulesDir = path.resolve(__dirname, '../src/node/gemini');
 
     assert.ok(fs.existsSync(studioTsxPath), 'GenerativeCanvasStudio.tsx must exist');
     assert.ok(fs.existsSync(sideChatTsxPath), 'VibecodeAiSideChat.tsx must exist');
     assert.ok(fs.existsSync(settingsTsxPath), 'SettingsModal.tsx must exist');
     assert.ok(fs.existsSync(geminiServicePath), 'gemini-service.ts must exist');
+    assert.ok(fs.existsSync(path.join(geminiModulesDir, 'gemini-client.ts')), 'gemini/gemini-client.ts must exist');
 
     const studioSource = fs.readFileSync(studioTsxPath, 'utf-8');
     const sideChatSource = fs.readFileSync(sideChatTsxPath, 'utf-8');
@@ -34,7 +36,13 @@ async function runCursorExperienceAndGoogleModelsTests() {
     const spotlightSource = fs.readFileSync(spotlightTsxPath, 'utf-8');
     const automationsSource = fs.readFileSync(automationsTsxPath, 'utf-8');
     const nodeGraphSource = fs.readFileSync(nodeGraphTsxPath, 'utf-8');
-    const serviceSource = fs.readFileSync(geminiServicePath, 'utf-8');
+    // The Gemini backend is the facade plus the modules it delegates to (model config lives in gemini-client.ts).
+    const serviceSource = [
+        fs.readFileSync(geminiServicePath, 'utf-8'),
+        ...fs.readdirSync(geminiModulesDir)
+            .filter(name => name.endsWith('.ts'))
+            .map(name => fs.readFileSync(path.join(geminiModulesDir, name), 'utf-8'))
+    ].join('\n');
 
     // -------------------------------------------------------------
     // Test 1: Backend strictly uses Google Models (gemini-3.7-flash, gemini-3.5-flash-lite, gemini-2.5-pro, etc.)

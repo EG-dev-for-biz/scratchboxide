@@ -89,8 +89,9 @@ export interface VertexGenerateContentJson {
     usageMetadata?: GenerateContentResponseUsageMetadata;
 }
 
-export const KEY_STORE_SERVICE = 'scratchbox-ide';
-export const KEY_STORE_GEMINI_ACCOUNT = 'gemini-api-key';
+/** Key-store slot shared with `GeminiService.saveCredentialsDirectly`. */
+export const KEY_STORE_SERVICE = 'scratchbox-ide.google-genai';
+export const KEY_STORE_GEMINI_ACCOUNT = 'api-key';
 
 export function isServiceAccountJson(value: unknown): value is ServiceAccountJson {
     return !!value

@@ -66,6 +66,8 @@ import {
     FALLBACK_GEMINI_MODELS,
     DEFAULT_SUBAGENT_MODEL,
     FALLBACK_SUBAGENT_MODELS,
+    KEY_STORE_SERVICE,
+    KEY_STORE_GEMINI_ACCOUNT,
     isServiceAccountJson,
     maskEmail,
     errorMessage
@@ -304,7 +306,7 @@ export class GeminiService {
                 if (credentialsRaw.trim().startsWith('AIza')) {
                     // Persist through the encrypted key store instead of plaintext ~/.scratchbox-ide/config.json.
                     const apiKey = credentialsRaw.trim();
-                    await new FileKeyStore().setPassword('scratchbox-ide.google-genai', 'api-key', apiKey);
+                    await new FileKeyStore().setPassword(KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT, apiKey);
                     process.env.GEMINI_API_KEY = apiKey;
 
                     // Remove any legacy plaintext copy left by older builds.
