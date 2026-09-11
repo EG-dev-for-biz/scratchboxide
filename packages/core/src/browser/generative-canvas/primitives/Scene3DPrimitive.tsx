@@ -118,6 +118,20 @@ import {
     animateAircraftFrame
 } from '../services/mesh/aircraft';
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
+import { useLatest } from '../hooks/useLatest';
+import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize } from './scene3d/createRendererStack';
+import { syncTilesLayer, snapGroupFiguresToGround } from './scene3d/syncTilesLayer';
+import type { TilesLayerInput } from './scene3d/syncTilesLayer';
+import { syncAtmosphere } from './scene3d/syncAtmosphere';
+import type { AtmosphereInput } from './scene3d/syncAtmosphere';
+import { syncSceneContent, syncWasmMesh } from './scene3d/syncSceneContent';
+import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
+import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
+import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
+import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShaders';
+import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
+import { attachViewportControls, stepCamera } from './scene3d/attachViewportControls';
+import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle } from './scene3d/types';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -1019,18 +1033,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [sceneEntities, setSceneEntities] = React.useState<Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }>>([]);
     const selectionBoxRef = React.useRef<THREE.BoxHelper | null>(null);
 
-    // Sculpting & Gizmo High-Performance Refs
-    const toolModeRef = React.useRef<ViewportToolMode>(toolMode);
-    const sculptSettingsRef = React.useRef<SculptSettings>(sculptSettings);
-    const transformModeRef = React.useRef<TransformGizmoMode>(transformMode);
-    const transformSpaceRef = React.useRef<TransformGizmoSpace>(transformSpace);
-    const selectedObjectIdRef = React.useRef<string | null>(selectedObjectId);
-
-    React.useEffect(() => { toolModeRef.current = toolMode; }, [toolMode]);
-    React.useEffect(() => { sculptSettingsRef.current = sculptSettings; }, [sculptSettings]);
-    React.useEffect(() => { transformModeRef.current = transformMode; }, [transformMode]);
-    React.useEffect(() => { transformSpaceRef.current = transformSpace; }, [transformSpace]);
-    React.useEffect(() => { selectedObjectIdRef.current = selectedObjectId; }, [selectedObjectId]);
+    // Sculpting & Gizmo High-Performance Refs (always-fresh mirrors for the imperative viewport code)
+    const toolModeRef = useLatest(toolMode);
+    const sculptSettingsRef = useLatest(sculptSettings);
+    const transformModeRef = useLatest(transformMode);
+    const transformSpaceRef = useLatest(transformSpace);
 
     const historyStackRef = React.useRef<MeshHistoryStack>(new MeshHistoryStack(30));
     const sculptMeshRef = React.useRef<THREE.Mesh | null>(null);
@@ -1038,18 +1045,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const transformGizmoGroupRef = React.useRef<THREE.Group | null>(null);
     const gizmoEngineRef = React.useRef<TransformGizmoEngine>(new TransformGizmoEngine());
     const selectedObjectRef = React.useRef<THREE.Object3D | null>(null);
-
-    const activeGizmoHandleRef = React.useRef<GizmoHandleType | null>(null);
-    const isSculptingRef = React.useRef<boolean>(false);
-    const lastSculptHitPointRef = React.useRef<THREE.Vector3 | null>(null);
-    const sculptStrokeStartPointRef = React.useRef<THREE.Vector3 | null>(null);
-
-    const isGizmoDraggingRef = React.useRef<boolean>(false);
-    const gizmoDragStartRayRef = React.useRef<{ origin: THREE.Vector3; dir: THREE.Vector3 } | null>(null);
-    const gizmoDragInitialPosRef = React.useRef<THREE.Vector3>(new THREE.Vector3());
-    const gizmoDragInitialQuatRef = React.useRef<THREE.Quaternion>(new THREE.Quaternion());
-    const gizmoDragInitialScaleRef = React.useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1));
-    const gizmoDragStartPointRef = React.useRef<THREE.Vector3>(new THREE.Vector3());
 
     // Geospatial Pinning and Drone Routing states
     const [pinALat, setPinALat] = React.useState<string>('37.7920');
@@ -1059,17 +1054,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [isRoutingActive, setIsRoutingActive] = React.useState<boolean>(false);
 
     // High-performance animation refs for routing
-    const pinALatRef = React.useRef<string>('37.7920');
-    const pinALngRef = React.useRef<string>('-122.4050');
-    const pinBLatRef = React.useRef<string>('37.7980');
-    const pinBLngRef = React.useRef<string>('-122.3950');
-    const isRoutingActiveRef = React.useRef<boolean>(false);
-
-    React.useEffect(() => { pinALatRef.current = pinALat; }, [pinALat]);
-    React.useEffect(() => { pinALngRef.current = pinALng; }, [pinALng]);
-    React.useEffect(() => { pinBLatRef.current = pinBLat; }, [pinBLat]);
-    React.useEffect(() => { pinBLngRef.current = pinBLng; }, [pinBLng]);
-    React.useEffect(() => { isRoutingActiveRef.current = isRoutingActive; }, [isRoutingActive]);
+    const pinALatRef = useLatest(pinALat);
+    const pinALngRef = useLatest(pinALng);
+    const pinBLatRef = useLatest(pinBLat);
+    const pinBLngRef = useLatest(pinBLng);
+    const isRoutingActiveRef = useLatest(isRoutingActive);
 
     // 4D Timeline & Playback States
     const [currentTimeMs, setCurrentTimeMs] = React.useState<number>(0);
@@ -1078,14 +1067,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [playbackSpeed, setPlaybackSpeed] = React.useState<number>(1.0);
 
     const currentTimeMsRef = React.useRef<number>(0);
-    const isPlayingRef = React.useRef<boolean>(false);
-    const playbackSpeedRef = React.useRef<number>(1.0);
-    const durationMsRef = React.useRef<number>(10000);
+    const isPlayingRef = useLatest(isPlaying);
+    const playbackSpeedRef = useLatest(playbackSpeed);
+    const durationMsRef = useLatest(durationMs);
     const lastStateUpdateRef = React.useRef<number>(0);
-
-    React.useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
-    React.useEffect(() => { playbackSpeedRef.current = playbackSpeed; }, [playbackSpeed]);
-    React.useEffect(() => { durationMsRef.current = durationMs; }, [durationMs]);
 
     // WebGL fallbacks
     const [webglError, setWebglError] = React.useState<string | null>(null);
@@ -1358,8 +1343,6 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         distance: 25
     });
 
-    const isDraggingRef = React.useRef<boolean>(false);
-    const previousMousePositionRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const keysPressedRef = React.useRef<Record<string, boolean>>({});
 
     // ---------------------------------------------------------
@@ -1668,644 +1651,138 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [hasGeoCoordinates, lat, lng, elevation, generateProceduralGeoCity]);
 
     // ---------------------------------------------------------
-    // Main Three.js Viewport & Dynamic Execution Loop
+    // Viewport Lifecycle: renderer stack is created ONCE per mount; scene content is
+    // synchronised per-slice (tiles → atmosphere → camera → content → meshes → shaders)
+    // by diffing fingerprints and mutating the live scene through refs.
     // ---------------------------------------------------------
+    const stackRef = React.useRef<RendererStack | null>(null);
+    const atmosphereRef = React.useRef<AtmosphereHandle | null>(null);
+    const tilesHandleRef = React.useRef<TilesLayerHandle | null>(null);
+    const contentRef = React.useRef<SceneContentHandle | null>(null);
+    const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
+    const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
+
+    // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
+    const cameraModeRef = useLatest(cameraMode);
+    const hasGeoCoordinatesRef = useLatest(hasGeoCoordinates);
+    const isWasmActiveRef = useLatest(isWasmActive);
+    const elevationRef = useLatest(elevation);
+    const projectCoordsRef = useLatest(projectCoords);
+    const selectObjectRef = useLatest(selectObject);
+    const mutateSceneDataRef = useLatest(mutateSceneData);
+    const dataRef = useLatest(data);
+    const sceneDataRef = useLatest(sceneData);
+    const selectedShapeRef = useLatest(selectedShape);
+
+    // ---- Slice fingerprints -------------------------------------------------------
+    const has3DTiles = React.useMemo(() => !!(
+        (sceneData.geoAnchor && sceneData.geoAnchor.active !== false) ||
+        sceneData.objects?.some(o => o.content?.type === 'map-3d')
+    ), [sceneData.geoAnchor, sceneData.objects]);
+
+    const tilesInput = React.useMemo<TilesLayerInput>(() => ({
+        has3DTiles,
+        geoAnchor: sceneData.geoAnchor ? { lat: sceneData.geoAnchor.lat, lng: sceneData.geoAnchor.lng, elevation: sceneData.geoAnchor.elevation } : null,
+        renderMode
+    }), [has3DTiles, sceneData.geoAnchor, renderMode]);
+    const tilesFingerprint = React.useMemo(() => JSON.stringify(tilesInput), [tilesInput]);
+    const tilesInputRef = useLatest(tilesInput);
+
+    const atmosphereInput = React.useMemo<AtmosphereInput>(() => ({
+        skybox: sceneData.environment?.skybox,
+        lighting: sceneData.environment?.lighting,
+        ground: sceneData.environment?.ground,
+        title: sceneData.title,
+        dataTitle: data?.title,
+        dataSubtitle: data?.subtitle,
+        worldBranch,
+        renderMode,
+        hasGeoCoordinates,
+        has3DTiles,
+        atmosphericScattering: sceneData.features?.atmosphericScattering,
+        godRays: sceneData.features?.godRays,
+        terrainBiomes: sceneData.features?.terrainBiomes
+    }), [
+        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ground,
+        sceneData.title, data?.title, data?.subtitle, worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
+        sceneData.features?.atmosphericScattering, sceneData.features?.godRays, sceneData.features?.terrainBiomes
+    ]);
+    const atmosphereFingerprint = React.useMemo(() => JSON.stringify(atmosphereInput), [atmosphereInput]);
+    const atmosphereInputRef = useLatest(atmosphereInput);
+
+    const cameraFingerprint = React.useMemo(() => JSON.stringify(sceneData.camera ?? null), [sceneData.camera]);
+
+    const activeScript = sceneData.customScript || sceneData.code;
+    const hasActiveScript = !!(activeScript && activeScript.trim().length > 0);
+    const contentInput = React.useMemo<SceneContentInput>(() => ({
+        sceneType: sceneData.sceneType,
+        title: sceneData.title,
+        worldBranch,
+        isAirplane,
+        hasContrails: !!sceneData.features?.contrails || isAirplane,
+        hasActiveScript,
+        has3DTiles,
+        hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
+        hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
+        selectedShape,
+        sculptWireframe: !!sculptSettings.wireframeOverlay
+    }), [
+        sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
+        has3DTiles, sceneData.customMeshes, sceneData.objects, selectedShape, sculptSettings.wireframeOverlay
+    ]);
+    // Shape / wireframe changes are applied in place by their own handlers, so they are excluded here.
+    const contentFingerprint = React.useMemo(() => JSON.stringify({
+        ...contentInput,
+        selectedShape: undefined,
+        sculptWireframe: undefined,
+        activeScript,
+        tilesFingerprint,
+        // A live script closes over the atmosphere objects; re-run it when they are rebuilt.
+        atmosphere: hasActiveScript ? atmosphereFingerprint : undefined
+    }), [contentInput, activeScript, tilesFingerprint, hasActiveScript, atmosphereFingerprint]);
+    const contentInputRef = useLatest(contentInput);
+    const activeScriptRef = useLatest(activeScript);
+
+    const wantsWasmMesh = !!sceneData.wasmPhysics?.waveActive || isWasmActive;
+    const customMeshesFingerprint = React.useMemo(() => JSON.stringify(sceneData.customMeshes ?? null), [sceneData.customMeshes]);
+    const customMeshesRef = useLatest(sceneData.customMeshes);
+    const shadersFingerprint = React.useMemo(() => JSON.stringify(sceneData.shaders ?? null), [sceneData.shaders]);
+    const shadersRef = useLatest(sceneData.shaders);
+
+    // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
         if (!viewportRef.current) return;
-
         const container = viewportRef.current;
-        const width = container.clientWidth || 500;
-        const height = container.clientHeight || 450;
 
-        const scene = new THREE.Scene();
-        threeSceneRef.current = scene;
-
-        const worldBranch = (sceneData.worldBranch || '').toLowerCase();
-        const isSkySkybox = sceneData.environment?.skybox === 'realistic-sky' || 
-                            sceneData.environment?.skybox === 'daylight' || 
-                            sceneData.environment?.skybox === 'blue-sky' ||
-                            sceneData.environment?.skybox === 'sky' ||
-                            sceneData.environment?.skybox === 'sunset' ||
-                            !!sceneData.features?.atmosphericScattering ||
-                            /sky|realistic|flight|aviation|atmosphere|cloud|plane|aircraft|jet|airplane/i.test(sceneData.title || '') ||
-                            /sky|realistic|flight|aviation|atmosphere|cloud|plane|aircraft|jet|airplane/i.test(data?.subtitle || '') ||
-                            /sky|realistic|flight|aviation|atmosphere|cloud|plane|aircraft|jet|airplane/i.test(data?.title || '') ||
-                            /sky|realistic|flight|aviation|atmosphere|cloud|plane|aircraft|jet|airplane/i.test(data?.subtitle || '');
-
-        const isSunset = sceneData.environment?.skybox === 'sunset' || /sunset|dusk|golden\s*hour/i.test(sceneData.title || '') || /sunset|dusk|golden\s*hour/i.test(data?.title || '');
-        const hasGodRaysFeature = !!sceneData.features?.godRays || /god\s*ray|light\s*shaft|crepuscular/i.test(sceneData.title || '') || /god\s*ray|light\s*shaft|crepuscular/i.test(data?.title || '');
-        const hasContrailsFeature = !!sceneData.features?.contrails || isAirplane;
-        const hasBiomesFeature = !!sceneData.features?.terrainBiomes;
-        const biomeType = (typeof sceneData.features?.terrainBiomes === 'object' && sceneData.features.terrainBiomes && (sceneData.features.terrainBiomes as any).biomeType) ? (sceneData.features.terrainBiomes as any).biomeType : 'alpine';
-
-        let bgHex = isSunset ? 0x1e1b4b : (isSkySkybox ? 0x0284c7 : 0x0a0a0f);
-        if (!isSkySkybox) {
-            if (worldBranch === 'earth/cyberpunk') bgHex = 0x0f0a1c;
-            else if (worldBranch === 'earth/post-apocalypse') bgHex = 0x0c120e;
-            else if (worldBranch === 'earth/mars-colony-2150') bgHex = 0x2a1a15;
-        }
-        scene.background = new THREE.Color(bgHex);
-        scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : (isSkySkybox ? 0xbae6fd : bgHex), isSkySkybox ? 0.005 : 0.015);
-
-        // Perspective Camera
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-        const [px, py, pz] = sceneData.camera?.position || [15, 12, 15];
-        camera.position.set(px, py, pz);
-        threeCameraRef.current = camera;
-
-        // WebGL Renderer
-        let renderer: THREE.WebGLRenderer;
+        let stack: RendererStack;
         try {
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
-            renderer.setSize(width, height);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-            renderer.shadowMap.enabled = true;
-            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-            renderer.toneMapping = THREE.ACESFilmicToneMapping;
-            renderer.toneMappingExposure = 1.0;
-            renderer.domElement.style.width = '100%';
-            renderer.domElement.style.height = '100%';
-            renderer.domElement.style.display = 'block';
-            container.appendChild(renderer.domElement);
-            threeRendererRef.current = renderer;
+            stack = createRendererStack({ container, cameraPosition: sceneDataRef.current.camera?.position });
         } catch (err: any) {
             console.error('WebGL Renderer Creation Failed:', err);
             setWebglError('WebGL is unsupported or disabled in this window/environment. Gracefully falling back to 2D canvas.');
             return;
         }
+        stackRef.current = stack;
+        const { scene, camera, renderer } = stack;
+        // Baseline depth fog for the very first frame; syncAtmosphere replaces it with the skybox-specific FogExp2.
+        scene.fog = new THREE.FogExp2(0x0a0a0f, 0.015);
+        threeSceneRef.current = scene;
+        threeCameraRef.current = camera;
+        threeRendererRef.current = renderer;
+        customGridHelperRef.current = stack.gridHelper;
 
-        // Check if 3D Tiles is active
-        const has3DTiles = (sceneData.geoAnchor && sceneData.geoAnchor.active !== false) ||
-            sceneData.objects?.some(o => o.content?.type === 'map-3d');
-
-        // Grid Helper (only show if not skybox, not biome, and not 3d tiles)
-        const gridHelper = new THREE.GridHelper(30, 30, isSkySkybox ? 0x93c5fd : 0x3f3f5a, isSkySkybox ? 0x60a5fa : 0x1f1f2c);
-        gridHelper.position.y = -1;
-        if (!isSkySkybox && !hasBiomesFeature && !has3DTiles) {
-            scene.add(gridHelper);
-        }
-        customGridHelperRef.current = gridHelper;
-
-        let skyDomeObj: THREE.Mesh | null = null;
-        let sunPos = new THREE.Vector3(40, 60, 40);
-
-        // 1. Atmosphere, Sun & God Rays
-        if (isSkySkybox) {
-            const atmoConfig = (typeof sceneData.features?.atmosphericScattering === 'object' && sceneData.features.atmosphericScattering !== null)
-                ? sceneData.features.atmosphericScattering
-                : {};
-            const skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig);
-            skyDomeModuleRef.current = skyDomeModule;
-            skyDomeObj = skyDomeModule.skyDome;
-
-            // 1.1 Aerial Perspective Post-Pass Effect
-            const hasAerialPerspective = atmoConfig.aerialPerspectiveEnabled !== false;
-            if (hasAerialPerspective) {
-                try {
-                    const aerialEffect = createAerialPerspectiveEffect({
-                        inscatteringIntensity: atmoConfig.inscatteringIntensity ?? 1.0,
-                        aerialPerspectiveRange: atmoConfig.aerialPerspectiveRange ?? 220.0,
-                        rayleigh: atmoConfig.rayleigh ?? 0.5,
-                        mie: atmoConfig.mie ?? 0.002,
-                        turbidity: atmoConfig.turbidity ?? 1.5,
-                        mieDirectionalG: atmoConfig.mieDirectionalG ?? 0.82,
-                        albedoScale: atmoConfig.albedoScale ?? 1.1,
-                        cloudShadowsEnabled: atmoConfig.cloudShadowsEnabled ?? true,
-                        cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
-                        cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
-                        atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
-                        cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
-                        cloudCoverage: atmoConfig.cloudCoverage ?? 0.35,
-                        cloudDensity: atmoConfig.cloudDensity ?? 0.45,
-                        windVector: atmoConfig.windVector ?? [0.05, 0.02]
-                    }, width, height);
-                    aerialPerspectiveRef.current = aerialEffect;
-                } catch (e) {
-                    console.warn('[AerialPerspectiveEffect] Post-pass setup warning:', e);
-                }
-            }
-
-            // 1.2 Terrain Cloud Shadows Engine
-            const hasCloudShadows = atmoConfig.cloudShadowsEnabled !== false;
-            if (hasCloudShadows) {
-                const terrainShadowEngine = createTerrainCloudShadows({
-                    cloudShadowsEnabled: true,
-                    cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
-                    cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
-                    atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
-                    cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
-                    cloudCoverage: atmoConfig.cloudCoverage ?? 0.35,
-                    cloudDensity: atmoConfig.cloudDensity ?? 0.45,
-                    windVector: atmoConfig.windVector ?? [0.05, 0.02]
-                });
-                terrainCloudShadowsRef.current = terrainShadowEngine;
-            }
-
-            const calculatedSunPos = skyDomeModule.sunMesh
-                ? skyDomeModule.sunMesh.position.clone()
-                : new THREE.Vector3(40, 60, 40);
-            sunPos = calculatedSunPos;
-
-            if (hasGodRaysFeature) {
-                const godRaysModule = createVolumetricGodRays(scene, sunPos, isSunset, (typeof sceneData.features?.godRays === 'object' && sceneData.features.godRays !== null) ? sceneData.features.godRays : {});
-                godRaysRef.current = godRaysModule;
-            }
-
-            if (!hasBiomesFeature && !hasGeoCoordinates && !has3DTiles && sceneData.environment?.ground !== false) {
-                const terrainFloorGeo = new THREE.PlaneGeometry(500, 500, 32, 32);
-                terrainFloorGeo.rotateX(-Math.PI / 2);
-                const terrainFloorMat = new THREE.MeshStandardMaterial({
-                    color: isSunset ? 0x1e293b : 0x0284c7,
-                    roughness: 0.2,
-                    metalness: 0.7
-                });
-                if (terrainCloudShadowsRef.current) {
-                    terrainCloudShadowsRef.current.attachToMaterial(terrainFloorMat);
-                }
-                const terrainFloor = new THREE.Mesh(terrainFloorGeo, terrainFloorMat);
-                terrainFloor.position.y = -8.0;
-                scene.add(terrainFloor);
-            }
-        } else {
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
-            scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(15, 30, 10);
-            dirLight.castShadow = true;
-            scene.add(dirLight);
-
-            const pointLight = new THREE.PointLight(0x00f6ff, 1.2, 50);
-            pointLight.position.set(0, 5, 0);
-            scene.add(pointLight);
-
-            const glowLight = new THREE.DirectionalLight(0xff00dd, 0.45);
-            glowLight.position.set(-15, 20, -10);
-            scene.add(glowLight);
-        }
-
-        // 2. Procedural Biome Terrain (only if not using real 3D tiles)
-        if (hasBiomesFeature && !hasGeoCoordinates && !has3DTiles) {
-            const terrainModule = createProceduralBiomeTerrain(scene, biomeType, renderMode, isSunset);
-            terrainBiomeRef.current = terrainModule;
-            if (terrainCloudShadowsRef.current && terrainModule.terrainMesh?.material) {
-                terrainCloudShadowsRef.current.attachToMaterial(terrainModule.terrainMesh.material);
-            }
-        }
-
-        // 2.5 Google Photorealistic 3D Tiles Foundation & Terrain Snapping
-        let terrainManagerInstance: TerrainManager | null = null;
-        if (has3DTiles) {
-            try {
-                const originAnchor = sceneData.geoAnchor || { lat: 37.7749, lng: -122.4194, elevation: 0 };
-                const tilesLayer = new GooglePhotorealistic3DTilesLayer({
-                    origin: { lat: originAnchor.lat, lng: originAnchor.lng, alt: originAnchor.elevation ?? 0 },
-                    renderMode: renderMode === 'pbr' || renderMode === 'shaded' ? 'textured' : 'clay',
-                    clayPreset: 'warm-clay'
-                });
-                scene.add(tilesLayer.group);
-                tilesRendererRef.current = tilesLayer;
-                terrainManagerInstance = tilesLayer.getTerrainManager(scene);
-                terrainManagerRef.current = terrainManagerInstance;
-
-                // When 3D tiles stream in async, re-verify terrain ground alignment for figures
-                tilesLayer.onTileLoaded = () => {
-                    if (proceduralSceneGroup && terrainManagerInstance) {
-                        proceduralSceneGroup.traverse((child: THREE.Object3D) => {
-                            if (
-                                child.name.startsWith('Minuteman Soldier') ||
-                                child.name.startsWith('British Redcoat Soldier') ||
-                                child.name.startsWith('Colonial Elm Tree') ||
-                                child.name.startsWith('Stone Wall Segment') ||
-                                child.name === 'Buckman Tavern' ||
-                                child.name === 'Lexington Meetinghouse' ||
-                                child.name === 'Minutemen Militia Line' ||
-                                child.name === 'British Redcoat Regiment'
-                            ) {
-                                terrainManagerInstance?.snapObjectToGround(child, 0);
-                            }
-                        });
-                    }
-                    if (terrainManagerInstance && cameraTargetRef.current) {
-                        const groundY = terrainManagerInstance.sampleGroundHeight(0, 0);
-                        if (groundY !== null) {
-                            cameraTargetRef.current.y = groundY + 1.5;
-                        }
-                    }
-                };
-            } catch (tileErr) {
-                console.warn('[Google 3D Tiles Layer Init Error]:', tileErr);
-            }
-        } else {
-            terrainManagerInstance = new TerrainManager({ scene });
-            terrainManagerRef.current = terrainManagerInstance;
-        }
-
-        // Initialize Dynamic Ground-Grounded Camera LookAt
-        const initialGroundY = terrainManagerInstance?.sampleGroundHeight(0, 0) ?? 0;
-        const targetLookY = sceneData.camera?.target ? sceneData.camera.target[1] : (initialGroundY + 1.5);
-        cameraTargetRef.current.set(
-            sceneData.camera?.target ? sceneData.camera.target[0] : 0,
-            targetLookY,
-            sceneData.camera?.target ? sceneData.camera.target[2] : 0
-        );
-        camera.lookAt(cameraTargetRef.current);
-
-        // 3. Central Mesh & Contextual Scene Synthesis
-        let airplane: THREE.Group | null = null;
-        let torusKnot: THREE.Mesh | null = null;
-        let torusMat: THREE.Material | null = null;
-        let proceduralSceneGroup: THREE.Group | null = null;
-        let starsMesh: THREE.Points | null = null;
-
-        const sceneType = sceneData.sceneType;
-        const sceneTitle = (sceneData.title || '').toLowerCase();
-        const activeScript = sceneData.customScript || sceneData.code;
-        const hasActiveScript = !!(activeScript && activeScript.trim().length > 0);
-
-        if (hasActiveScript) {
-            // Dynamic script will synthesize and animate custom 3D scene in Section 8
-        } else if (has3DTiles) {
-            // Real-world 3D tiles provides the persistent photorealistic spatial foundation.
-            // Only add thematic character/unit figures (e.g. Minutemen, soldiers, smoke) grounded on the tile surface.
-            if (sceneType === 'battlefield' || /lexington|concord|1776|battle|revolution|minuteman|redcoat/i.test(worldBranch + ' ' + sceneTitle)) {
-                proceduralSceneGroup = createHistoricalBattlefieldScene(scene, THREE, {
-                    ground: false,
-                    tavern: false,
-                    meetinghouse: false,
-                    stoneWalls: false,
-                    trees: false,
-                    minutemenCount: 16,
-                    redcoatCount: 20,
-                    smokeParticles: true
-                });
-            }
-        } else if (isAirplane) {
-            const articulated = createArticulatedAircraft();
-            airplane = articulated.group;
-            airplane.position.set(0, 3.5, 0);
-            scene.add(airplane);
-            airplaneMeshRef.current = airplane;
-
-            if (hasContrailsFeature) {
-                const contrailsModule = createDynamicContrails(scene, 350);
-                contrailsRef.current = contrailsModule;
-            }
-        } else if (sceneType === 'worldbuilder' || /world|terrain|mountain|alpine|canyon|desert|valley|island|citadel|outpost/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createWorldBuilderScene(scene, THREE, {
-                prompt: sceneData.title || 'Scenic mountain valley with architectural settlements',
-                resolution: 32,
-                seed: 1337
-            });
-        } else if (sceneType === 'battlefield' || /lexington|concord|1776|battle|revolution|minuteman|redcoat/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createHistoricalBattlefieldScene(scene, THREE, {
-                tavern: true,
-                meetinghouse: true,
-                stoneWalls: true,
-                minutemenCount: 12,
-                redcoatCount: 16,
-                smokeParticles: true
-            });
-        } else if (sceneType === 'city' || /city|metropolis|urban|cyberpunk-city|skyline/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createProceduralCityScene(scene, THREE, {
-                buildingCount: 28,
-                animatedVehicles: true,
-                cyberpunk: worldBranch.includes('cyberpunk') || sceneTitle.includes('cyberpunk')
-            });
-        } else if (sceneType === 'solar-system' || /solar|planet|space|orbit|celestial/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createSolarSystemScene(scene, THREE, {
-                includeAsteroidBelt: true,
-                includeMoons: true
-            });
-        } else if (sceneType === 'molecular' || /molecular|physics|atom|dna|quantum|chemistry/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createMolecularPhysicsScene(scene, THREE, {
-                latticeType: /dna|helix/i.test(sceneTitle) ? 'dna' : 'caffeine',
-                showElectronCloud: true
-            });
-        } else if (sceneType === 'architecture' || /room|building|interior|blueprint|pavilion/i.test(worldBranch + ' ' + sceneTitle)) {
-            proceduralSceneGroup = createArchitecturalRoomScene(scene, THREE);
-        } else if (Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0) {
-            // Custom meshes instantiated in Section 6
-        } else if (Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh')) {
-            // Non-fallback objects present
-        } else {
-            // High-fidelity procedural spatial focal environment
-            proceduralSceneGroup = createProceduralSpatialScene(scene, THREE);
-        }
-
-        // Automated Ground Snapping for Procedural Scene Figures
-        if (proceduralSceneGroup && terrainManagerInstance) {
-            proceduralSceneGroup.updateMatrixWorld(true);
-
-            // Ground individual unit groups (Minutemen, Redcoats, soldiers, stone walls, tavern, etc.)
-            const groundTargets: THREE.Object3D[] = [];
-            proceduralSceneGroup.traverse((child: THREE.Object3D) => {
-                if (
-                    child.name.startsWith('Minuteman Soldier') ||
-                    child.name.startsWith('British Redcoat Soldier') ||
-                    child.name.startsWith('Colonial Elm Tree') ||
-                    child.name.startsWith('Stone Wall Segment') ||
-                    child.name === 'Buckman Tavern' ||
-                    child.name === 'Lexington Meetinghouse' ||
-                    child.name === 'Minutemen Militia Line' ||
-                    child.name === 'British Redcoat Regiment'
-                ) {
-                    groundTargets.push(child);
-                }
-            });
-
-            if (groundTargets.length > 0) {
-                for (const target of groundTargets) {
-                    terrainManagerInstance.snapObjectToGround(target, 0);
-                }
-            } else if (has3DTiles) {
-                terrainManagerInstance.snapObjectToGround(proceduralSceneGroup, 0);
-            }
-        }
-
-        // 4. Galaxy Starfield (Only for space/night/cyberpunk skyboxes)
-        if (!isSkySkybox) {
-            const pCount = 1200;
-            const pGeo = new THREE.BufferGeometry();
-            const pPos = new Float32Array(pCount * 3);
-            for (let i = 0; i < pCount; i++) {
-                const idx = i * 3;
-                const u = Math.random();
-                const v = Math.random();
-                const theta = u * 2.0 * Math.PI;
-                const phi = Math.acos(2.0 * v - 1.0);
-                const radius = 45 + Math.random() * 55;
-                const sinPhi = Math.sin(phi);
-                pPos[idx] = radius * sinPhi * Math.cos(theta);
-                pPos[idx + 1] = radius * Math.cos(phi);
-                pPos[idx + 2] = radius * sinPhi * Math.sin(theta);
-            }
-            pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-            const pMat = new THREE.PointsMaterial({
-                color: 0xffffff,
-                size: 0.15,
-                transparent: true,
-                opacity: 0.6
-            });
-            const stars = new THREE.Points(pGeo, pMat);
-            scene.add(stars);
-            starsMesh = stars;
-        }
-
-        // 5. WASM Wave Mesh (Only when physics wave deformer is requested)
-        if (sceneData.wasmPhysics?.waveActive || isWasmActive) {
-            const wasmGeo = new THREE.BufferGeometry();
-            const wasmVertices = new Float32Array(3000 * 3);
-            for (let i = 0; i < 3000; i++) {
-                const idx = i * 3;
-                wasmVertices[idx] = ((i % 50) - 25) * 0.4;
-                wasmVertices[idx + 1] = -1.2;
-                wasmVertices[idx + 2] = (Math.floor(i / 50) - 30) * 0.4;
-            }
-            const wasmPosAttr = new THREE.BufferAttribute(wasmVertices, 3);
-            wasmGeo.setAttribute('position', wasmPosAttr);
-            wasmGeo.computeVertexNormals();
-
-            let wasmMeshMat: THREE.Material;
-            if (renderMode === 'wireframe') {
-                wasmMeshMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true });
-            } else if (renderMode === 'solid') {
-                wasmMeshMat = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
-            } else if (renderMode === 'shaded') {
-                wasmMeshMat = new THREE.MeshLambertMaterial({ color: 0x0a4a66, side: THREE.DoubleSide });
-            } else {
-                wasmMeshMat = new THREE.MeshStandardMaterial({
-                    color: 0x0b253a,
-                    roughness: 0.4,
-                    metalness: 0.9,
-                    emissive: 0x00f3ff,
-                    emissiveIntensity: 0.1,
-                    side: THREE.DoubleSide
-                });
-            }
-            const wasmMesh = new THREE.Mesh(wasmGeo, wasmMeshMat);
-            scene.add(wasmMesh);
-            wasmMeshRef.current = wasmMesh;
-            wasmGeometryRef.current = wasmGeo;
-            wasmPositionAttrRef.current = wasmPosAttr;
-        }
-
-        // 6. Custom Meshes from Schema
-        if (Array.isArray(sceneData.customMeshes)) {
-            for (const mDef of sceneData.customMeshes) {
-                try {
-                    let mGeo: THREE.BufferGeometry;
-                    if (mDef.type === 'sphere') mGeo = new THREE.SphereGeometry(1, 16, 16);
-                    else if (mDef.type === 'cylinder') mGeo = new THREE.CylinderGeometry(1, 1, 2, 16);
-                    else if (mDef.type === 'plane') mGeo = new THREE.PlaneGeometry(2, 2);
-                    else if (mDef.type === 'torus') mGeo = new THREE.TorusGeometry(1, 0.4, 16, 50);
-                    else mGeo = new THREE.BoxGeometry(1, 1, 1);
-
-                    const mMat = new THREE.MeshStandardMaterial({
-                        color: mDef.material?.color ? Number(mDef.material.color) : 0x38bdf8,
-                        metalness: mDef.material?.metalness ?? 0.5,
-                        roughness: mDef.material?.roughness ?? 0.5,
-                        wireframe: !!mDef.material?.wireframe
-                    });
-                    const customM = new THREE.Mesh(mGeo, mMat);
-                    if (mDef.id) customM.name = mDef.id;
-                    if (mDef.name) (customM as any).userData.name = mDef.name;
-                    if (mDef.position) customM.position.set(...mDef.position);
-                    if (mDef.rotation) customM.rotation.set(...mDef.rotation);
-                    if (mDef.scale) customM.scale.set(...mDef.scale);
-                    scene.add(customM);
-
-                    // Auto-snap custom mesh to terrain if at default ground level or in 3D tiles mode
-                    if (terrainManagerInstance && (has3DTiles || !mDef.position || mDef.position[1] === 0)) {
-                        terrainManagerInstance.snapObjectToGround(customM);
-                    }
-                } catch (meshErr) {
-                    console.warn('[3D Custom Mesh Error]:', meshErr);
-                }
-            }
-        }
-
-        // 7. Custom Shaders from Schema
-        customShaderMaterialsRef.current = [];
-        if (sceneData.shaders && typeof sceneData.shaders === 'object') {
-            for (const [, shaderDef] of Object.entries(sceneData.shaders)) {
-                if (shaderDef.vertexShader && shaderDef.fragmentShader) {
-                    try {
-                        const customMat = new THREE.ShaderMaterial({
-                            vertexShader: shaderDef.vertexShader,
-                            fragmentShader: shaderDef.fragmentShader,
-                            uniforms: {
-                                uTime: { value: 0 },
-                                uResolution: { value: new THREE.Vector2(width, height) },
-                                uCameraPosition: { value: camera.position },
-                                ...(shaderDef.uniforms || {})
-                            },
-                            transparent: shaderDef.transparent ?? true,
-                            depthWrite: false
-                        });
-                        customShaderMaterialsRef.current.push(customMat);
-                    } catch (sErr) {
-                        console.warn('[3D Custom Shader Compilation Warning]:', sErr);
-                    }
-                }
-            }
-        }
-
-        // 8. Dynamic Script Execution Engine
-        const scriptCleanupFns: Array<() => void> = [];
-        const scriptFrameFns: Array<(time: number, delta: number) => void> = [];
-
-        const dynamicContext: DynamicScriptContext = {
-            scene,
-            camera,
-            renderer,
-            container,
-            THREE,
-            sceneData,
-            aircraft: airplane,
-            terrain: terrainBiomeRef.current?.terrainMesh,
-            skyDome: skyDomeObj,
-            aerialPerspective: aerialPerspectiveRef.current,
-            cloudShadows: terrainCloudShadowsRef.current,
-            godRays: godRaysRef.current?.group,
-            contrails: contrailsRef.current,
-            addCleanup: (fn) => scriptCleanupFns.push(fn),
-            onFrame: (fn) => scriptFrameFns.push(fn),
-            registerUpdate: (fn) => scriptFrameFns.push(fn),
-            createArticulatedAircraft,
-            createVolumetricGodRays,
-            createDynamicContrails,
-            createAtmosphericSkyDome,
-            createAerialPerspectiveEffect,
-            createTerrainCloudShadows,
-            calculateNOAASolarPosition,
-            calculateENUSunVector,
-            getSunVectorFromAngles,
-            computeDiurnalLightingProfile,
-            getDiurnalLightingState,
-            getPresetLightingState,
-            kelvinToRGB,
-            createProceduralBiomeTerrain,
-            createAirplaneMesh,
-            createDroneMesh,
-            createPinMesh,
-            createHistoricalBattlefieldScene,
-            createProceduralCityScene,
-            createSolarSystemScene,
-            createMolecularPhysicsScene,
-            createArchitecturalRoomScene,
-            createProceduralSpatialScene,
-            createWorldBuilderScene,
-            generateNativeBuildingMeshBuffer,
-            buildNativeThreeGeometry,
-            generateProceduralThreeMeshFromPrompt,
-            sculptBuildingFrom3DTiles,
-            snapFootprintsToTerrain,
-            inspectSceneMeshTopology
-        };
-
-        if (activeScript && activeScript.trim().length > 0) {
-            const execResult = executeDynamicThreeScript(activeScript, dynamicContext);
-            if (execResult.error) {
-                setScriptError(execResult.error);
-            } else {
-                setScriptError(null);
-                dynamicScriptHooksRef.current = {
-                    update: (t, d) => {
-                        if (execResult.update) execResult.update(t, d);
-                        for (const frameFn of scriptFrameFns) {
-                            frameFn(t, d);
-                        }
-                    },
-                    dispose: () => {
-                        if (execResult.dispose) execResult.dispose();
-                        for (const cleanupFn of scriptCleanupFns) {
-                            cleanupFn();
-                        }
-                    }
-                };
-            }
-        }
-
-        // Splat Viewer (only populate procedural observation if splats are requested)
-        const splatViewer = new InHouseSplatViewer();
-        scene.add(splatViewer.group);
-        splatViewerRef.current = splatViewer;
-
-        if (worldBranch.includes('splat') || worldBranch.includes('gaussian')) {
-            const proceduralSplats: BakedGaussian[] = [];
-            for (let i = 0; i < 500; i++) {
-                const theta = Math.random() * 2 * Math.PI;
-                const phi = Math.acos(Math.random() * 2 - 1);
-                const radius = Math.random() * 4.0;
-                const sx = Math.sin(phi) * Math.cos(theta) * radius;
-                const sy = Math.cos(phi) * radius + 2.5;
-                const sz = Math.sin(phi) * Math.sin(theta) * radius;
-
-                proceduralSplats.push({
-                    position: [sx, sy, sz],
-                    scale: [0.1 + Math.random() * 0.15, 0.1 + Math.random() * 0.15, 0.1 + Math.random() * 0.15],
-                    quaternion: [0, 0, 0, 1],
-                    colorRgb: [
-                        Math.floor(100 + Math.random() * 155),
-                        Math.floor(50 + Math.random() * 100),
-                        Math.floor(150 + Math.random() * 105)
-                    ],
-                    opacity: 0.3 + Math.random() * 0.5
-                });
-            }
-            splatViewer.loadSplatObservation(proceduralSplats);
-        }
-
-        // 8. Sculptable Mesh & Interactive Overlay Primitives
-        let sculptableMesh: THREE.Mesh | null = null;
-        if (!isAirplane && !has3DTiles && (!proceduralSceneGroup || sceneData.sceneType === 'general' || sceneData.sceneType === 'custom')) {
-            const sGeo = createSculptableGeometry(selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
-            const sMat = new THREE.MeshStandardMaterial({
-                color: 0x60a5fa,
-                roughness: 0.35,
-                metalness: 0.2,
-                side: THREE.DoubleSide,
-                wireframe: !!sculptSettingsRef.current.wireframeOverlay
-            });
-            sculptableMesh = new THREE.Mesh(sGeo, sMat);
-            sculptableMesh.position.set(0, 0, 0);
-            sculptableMesh.name = 'sb-sculptable-mesh';
-            scene.add(sculptableMesh);
-            sculptMeshRef.current = sculptableMesh;
-            selectedObjectRef.current = sculptableMesh;
-            historyStackRef.current.clear();
-            historyStackRef.current.pushState(sGeo);
-            setCanUndo(false);
-            setCanRedo(false);
-        } else if (proceduralSceneGroup) {
-            const candidateMesh = proceduralSceneGroup.getObjectByProperty('type', 'Mesh') as THREE.Mesh;
-            if (candidateMesh && candidateMesh.geometry) {
-                sculptMeshRef.current = candidateMesh;
-                selectedObjectRef.current = candidateMesh;
-                historyStackRef.current.clear();
-                historyStackRef.current.pushState(candidateMesh.geometry);
-                setCanUndo(false);
-                setCanRedo(false);
-            }
-        }
-
-        // 9. Brush Cursor Ring Overlay (Positioned on hovered mesh surface in Sculpt mode)
+        // Brush cursor ring overlay (positioned on the hovered mesh surface in sculpt mode)
         const initRadius = sculptSettingsRef.current.radius || 2.0;
-        const brushCursorGeo = new THREE.RingGeometry(initRadius * 0.96, initRadius, 48);
-        const brushCursorMat = new THREE.MeshBasicMaterial({
-            color: 0x00f0ff,
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 0.85,
-            depthTest: false
-        });
-        const brushCursorMesh = new THREE.Mesh(brushCursorGeo, brushCursorMat);
+        const brushCursorMesh = new THREE.Mesh(
+            new THREE.RingGeometry(initRadius * 0.96, initRadius, 48),
+            new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide, transparent: true, opacity: 0.85, depthTest: false })
+        );
         brushCursorMesh.visible = false;
         brushCursorMesh.renderOrder = 9999;
         scene.add(brushCursorMesh);
         brushCursorMeshRef.current = brushCursorMesh;
 
-        // 10. Transform Gizmo 3D Manipulator Group
+        // Transform gizmo manipulator group
         const gizmoEngine = new TransformGizmoEngine();
         gizmoEngineRef.current = gizmoEngine;
         const gizmoGroup = gizmoEngine.createGizmo(transformModeRef.current);
@@ -2313,20 +1790,37 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         scene.add(gizmoGroup);
         transformGizmoGroupRef.current = gizmoGroup;
 
-        // Populate scene entities for the Outliner & Select Initial Entity
-        const initialEntities = extractSceneOutlinerItems(scene);
-        setSceneEntities(initialEntities);
-        if (initialEntities.length > 0) {
-            const target = initialEntities.find(e => e.id === data?.selectedMeshId || e.name === data?.selectedMeshId) || initialEntities[0];
-            if (target && target.object) {
-                selectObject(target.object);
-            }
-        }
+        const detachControls = attachViewportControls(stack, {
+            cameraMode: cameraModeRef,
+            toolMode: toolModeRef,
+            transformMode: transformModeRef,
+            transformSpace: transformSpaceRef,
+            sculptSettings: sculptSettingsRef,
+            orbit: cameraRotationRef,
+            keysPressed: keysPressedRef,
+            gizmoEngine: gizmoEngineRef,
+            gizmoGroup: transformGizmoGroupRef,
+            selectedObject: selectedObjectRef,
+            sculptMesh: sculptMeshRef,
+            brushCursor: brushCursorMeshRef,
+            selectionBox: selectionBoxRef,
+            ignoredPickObjects: () => [atmosphereRef.current?.starsMesh, stack.gridHelper],
+            history: historyStackRef,
+            resolveSelectableObject,
+            selectObject: selectObjectRef,
+            mutateSceneData: mutateSceneDataRef,
+            setSelectedObjectId,
+            setSelectedObjectName,
+            setCanUndo,
+            setCanRedo
+        });
+        const detachResize = attachViewportResize(stack, (w, h) => aerialPerspectiveRef.current?.setSize(w, h));
 
         // ---------------------------------------------------------
         // Core Animation Loop with Aerodynamics & Articulation
         // ---------------------------------------------------------
         let lastTickTime = performance.now();
+        let lastTerrainSnapTime = 0;
 
         const animate = () => {
             try {
@@ -2335,13 +1829,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 lastTickTime = now;
                 const deltaSec = deltaMs / 1000;
 
-                const currentW = container.clientWidth;
-                const currentH = container.clientHeight;
-                if (currentW > 0 && currentH > 0 && (renderer.domElement.width !== Math.floor(currentW * Math.min(window.devicePixelRatio, 2)) || renderer.domElement.height !== Math.floor(currentH * Math.min(window.devicePixelRatio, 2)))) {
-                    camera.aspect = currentW / currentH;
-                    camera.updateProjectionMatrix();
-                    renderer.setSize(currentW, currentH, false);
-                }
+                reconcileDrawingBufferSize(stack);
 
                 if (isPlayingRef.current) {
                     currentTimeMsRef.current += deltaMs * playbackSpeedRef.current;
@@ -2355,188 +1843,69 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 }
 
                 const t = currentTimeMsRef.current / 1000;
+                const content = contentRef.current;
+                const atmosphere = atmosphereRef.current;
 
-                // 1. Aircraft Aerodynamics & Articulated Control Surface Deflection
+                // 1. Aircraft aerodynamics, articulation, exhaust & contrails
+                const airplane = content?.airplane ?? null;
                 if (airplane) {
-                    const elapsed = t;
-                    const bankAngle = Math.sin(elapsed * 2.0) * 0.15;
-                    const pitchAngle = Math.cos(elapsed * 1.2) * 0.08;
-                    const altitudeBob = Math.sin(elapsed * 2.0) * 0.45;
-                    const yawAngle = elapsed * 0.8;
-
-                    airplane.rotation.z = bankAngle;
-                    airplane.rotation.x = pitchAngle;
-                    airplane.position.y = 3.5 + altitudeBob;
-                    airplane.position.x = Math.sin(yawAngle) * 3.5;
-                    airplane.position.z = Math.cos(yawAngle) * 3.5;
-                    airplane.rotation.y = yawAngle + Math.PI / 2;
-
-                    const ud = airplane.userData;
-                    if (ud) {
-                        // Articulated aileron roll deflections
-                        if (ud.leftAileron && ud.rightAileron) {
-                            ud.leftAileron.rotation.x = bankAngle * 2.0;
-                            ud.rightAileron.rotation.x = -bankAngle * 2.0;
-                        }
-                        // Articulated elevator pitch deflections
-                        if (ud.leftElevator && ud.rightElevator) {
-                            ud.leftElevator.rotation.x = pitchAngle * 2.5;
-                            ud.rightElevator.rotation.x = pitchAngle * 2.5;
-                        }
-                        // Articulated rudder yaw deflections
-                        if (ud.rudder) {
-                            ud.rudder.rotation.y = -Math.cos(elapsed * 2.0) * 0.25;
-                        }
-                        // Turbofan engine spin
-                        if (ud.turbines && Array.isArray(ud.turbines)) {
-                            for (const turb of ud.turbines) {
-                                turb.rotation.z += (deltaMs * 0.04) * playbackSpeedRef.current;
-                            }
-                        }
-                        // Afterburner thruster pulsation
-                        if (ud.thrusterMat && ud.thrusterMat.color) {
-                            const pulse = 0.7 + Math.sin(elapsed * 15.0) * 0.3;
-                            ud.thrusterMat.color.setRGB(0, 0.9 * pulse, 1.0 * pulse);
-                        }
-                        // Jet exhaust particle trail
-                        if (ud.exhausts && Array.isArray(ud.exhausts)) {
-                            for (const exhaust of ud.exhausts) {
-                                const posAttr = exhaust.geometry?.attributes?.position as THREE.BufferAttribute;
-                                if (posAttr) {
-                                    for (let j = 0; j < posAttr.count; j++) {
-                                        let pz = posAttr.getZ(j);
-                                        pz -= (deltaMs * 0.008) * playbackSpeedRef.current;
-                                        if (pz < -3.5) {
-                                            pz = -0.9 + Math.random() * 0.2;
-                                        }
-                                        posAttr.setZ(j, pz);
-                                    }
-                                    posAttr.needsUpdate = true;
-                                }
-                            }
-                        }
-                    }
-
-                    // Update dynamic contrail trails
-                    if (contrailsRef.current && contrailsRef.current.update) {
-                        contrailsRef.current.update(airplane, t, deltaSec);
-                    }
-                } else if (torusKnot && torusMat) {
-                    const tk = torusKnot as THREE.Mesh;
-                    const tm = torusMat as THREE.Material;
-                    tk.position.x = Math.sin(t * 1.2) * 4.0;
-                    tk.position.y = 3.0 + Math.sin(t * 2.0) * 1.2;
-                    tk.position.z = Math.cos(t * 1.2) * 4.0;
-                    tk.rotation.x = t * 0.5;
-                    tk.rotation.y = t * 0.8;
-                    tk.rotation.z = t * 0.3;
-
-                    if (tm instanceof THREE.MeshStandardMaterial) {
-                        tm.emissiveIntensity = 0.4 + Math.sin(t * 4.0) * 0.3;
-                    } else if (tm instanceof THREE.MeshPhongMaterial) {
-                        tm.shininess = 50 + Math.sin(t * 4.0) * 40;
-                    }
+                    animateAircraftFrame(airplane, t, deltaMs, playbackSpeedRef.current);
+                    contrailsRef.current?.update?.(airplane, t, deltaSec);
                 }
 
-                // 1.5. Atmospheric Scattering Sky Dome & Cloud Drift Update
-                if (skyDomeModuleRef.current && skyDomeModuleRef.current.update) {
-                    skyDomeModuleRef.current.update(t, deltaSec);
+                // 1.5–2. Sky dome, cloud shadows, aerial perspective, god rays
+                skyDomeModuleRef.current?.update?.(t, deltaSec);
+                terrainCloudShadowsRef.current?.update(t, skyDomeModuleRef.current?.sunDirection);
+                aerialPerspectiveRef.current?.update(t, deltaSec);
+                godRaysRef.current?.update?.(t, deltaSec);
+
+                // Procedural scene + biome terrain dynamics
+                const proceduralGroup = content?.proceduralSceneGroup ?? null;
+                if (proceduralGroup && typeof proceduralGroup.userData?.update === 'function') {
+                    proceduralGroup.userData.update(t, deltaSec);
+                }
+                terrainBiomeRef.current?.update?.(t, deltaSec);
+
+                // 4. Custom shader uniforms
+                tickCustomShaders(customShaderMaterialsRef.current, t, camera.position);
+
+                // 5. Dynamic script hook
+                dynamicScriptHooksRef.current?.update?.(t, deltaSec);
+
+                // 6. Starfield rotation
+                if (atmosphere?.starsMesh) {
+                    atmosphere.starsMesh.rotation.y = t * 0.05;
                 }
 
-                // 1.6. Terrain Cloud Shadows Engine Update
-                if (terrainCloudShadowsRef.current) {
-                    terrainCloudShadowsRef.current.update(t, skyDomeModuleRef.current?.sunDirection);
-                }
-
-                // 1.7. Aerial Perspective Effect Update
-                if (aerialPerspectiveRef.current) {
-                    aerialPerspectiveRef.current.update(t, deltaSec);
-                }
-
-                // 2. Volumetric God Rays Shimmer
-                if (godRaysRef.current && godRaysRef.current.update) {
-                    godRaysRef.current.update(t, deltaSec);
-                }
-
-                // Procedural scene dynamic updates
-                if (proceduralSceneGroup && proceduralSceneGroup.userData && typeof proceduralSceneGroup.userData.update === 'function') {
-                    proceduralSceneGroup.userData.update(t, deltaSec);
-                }
-
-                // 3. Procedural Biome Clouds & Terrain Animation
-                if (terrainBiomeRef.current && terrainBiomeRef.current.update) {
-                    terrainBiomeRef.current.update(t, deltaSec);
-                }
-
-                // 4. Custom Shaders Uniforms Update
-                for (const cMat of customShaderMaterialsRef.current) {
-                    if (cMat.uniforms.uTime) cMat.uniforms.uTime.value = t;
-                    if (cMat.uniforms.time) cMat.uniforms.time.value = t;
-                    if (cMat.uniforms.uCameraPosition) cMat.uniforms.uCameraPosition.value.copy(camera.position);
-                }
-
-                // 5. Custom Dynamic Script Hook
-                if (dynamicScriptHooksRef.current && dynamicScriptHooksRef.current.update) {
-                    dynamicScriptHooksRef.current.update(t, deltaSec);
-                }
-
-                // 6. Starfield Rotation
-                if (starsMesh) {
-                    starsMesh.rotation.y = t * 0.05;
-                }
-
-                // 7. Pluggable 3D Tiles Update & Continuous Ground Elevation Convergence
+                // 7. 3D tiles streaming + continuous ground convergence for floating figures
                 if (tilesRendererRef.current) {
                     tilesRendererRef.current.update(camera, renderer);
-
-                    // As tiles load asynchronously into LOD, continuously align floating figures to the ground
-                    if (terrainManagerRef.current && (now - (window as any)._lastTerrainSnapTime || 0) > 600) {
-                        (window as any)._lastTerrainSnapTime = now;
+                    if (terrainManagerRef.current && now - lastTerrainSnapTime > 600) {
+                        lastTerrainSnapTime = now;
                         const sampledGround = terrainManagerRef.current.sampleGroundHeight(0, 0);
                         if (sampledGround !== null && Math.abs(sampledGround) > 0.05) {
-                            if (proceduralSceneGroup) {
-                                proceduralSceneGroup.traverse((child: THREE.Object3D) => {
-                                    if (
-                                        child.name.startsWith('Minuteman Soldier') ||
-                                        child.name.startsWith('British Redcoat Soldier') ||
-                                        child.name.startsWith('Stone Wall Segment') ||
-                                        child.name === 'Minutemen Militia Line' ||
-                                        child.name === 'British Redcoat Regiment'
-                                    ) {
-                                        terrainManagerRef.current?.snapObjectToGround(child, 0);
-                                    }
-                                });
-                            }
+                            snapGroupFiguresToGround(proceduralGroup, terrainManagerRef.current);
                         }
                     }
                 }
 
-                // 8. Drone Flight Telemetry
-                if (hasGeoCoordinates && isRoutingActiveRef.current && droneMeshRef.current) {
-                    const duration = durationMsRef.current;
-                    const progress = currentTimeMsRef.current / duration;
-                    const t_norm = Math.max(0, Math.min(1, progress));
-
-                    const latA = parseFloat(pinALatRef.current) || 37.7920;
-                    const lngA = parseFloat(pinALngRef.current) || -122.4050;
-                    const latB = parseFloat(pinBLatRef.current) || 37.7980;
-                    const lngB = parseFloat(pinBLngRef.current) || -122.3950;
-
-                    const pinAPos = projectCoords(latA, lngA);
-                    const pinBPos = projectCoords(latB, lngB);
-
-                    const ppx = pinAPos.x + t_norm * (pinBPos.x - pinAPos.x);
-                    const ppz = pinAPos.z + t_norm * (pinBPos.z - pinAPos.z);
-                    const heightArc = Math.sin(t_norm * Math.PI) * 4.0;
-                    const terrainHeight = getProceduralBinnedHeight(ppx, ppz, parseFloat(elevation) || 15.2);
-                    const droneY = terrainHeight + 0.25 + heightArc;
-
-                    droneMeshRef.current.position.set(ppx, droneY, ppz);
+                // 8. Drone flight telemetry
+                if (hasGeoCoordinatesRef.current && isRoutingActiveRef.current && droneMeshRef.current) {
+                    const progress = currentTimeMsRef.current / durationMsRef.current;
+                    const tNorm = Math.max(0, Math.min(1, progress));
+                    const project = projectCoordsRef.current;
+                    const pinAPos = project(parseFloat(pinALatRef.current) || 37.7920, parseFloat(pinALngRef.current) || -122.4050);
+                    const pinBPos = project(parseFloat(pinBLatRef.current) || 37.7980, parseFloat(pinBLngRef.current) || -122.3950);
+                    const ppx = pinAPos.x + tNorm * (pinBPos.x - pinAPos.x);
+                    const ppz = pinAPos.z + tNorm * (pinBPos.z - pinAPos.z);
+                    const heightArc = Math.sin(tNorm * Math.PI) * 4.0;
+                    const terrainHeight = getProceduralBinnedHeight(ppx, ppz, parseFloat(elevationRef.current) || 15.2);
+                    droneMeshRef.current.position.set(ppx, terrainHeight + 0.25 + heightArc, ppz);
                     droneMeshRef.current.rotation.y = (now / 100) * playbackSpeedRef.current;
                 }
 
-                // 9. WASM Wave Mesh
-                if (wasmGeometryRef.current && wasmPositionAttrRef.current && !isWasmActive) {
+                // 9. WASM wave mesh
+                if (wasmGeometryRef.current && wasmPositionAttrRef.current && !isWasmActiveRef.current) {
                     const pos = wasmGeometryRef.current.attributes.position as THREE.BufferAttribute;
                     const waveFreq = 0.5 + Math.sin(t * 0.5) * 0.25;
                     const waveSpeed = t * 3.0;
@@ -2545,47 +1914,25 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         const tx = pos.getX(i);
                         const tz = pos.getZ(i);
                         const dist = Math.sqrt(tx * tx + tz * tz);
-                        const ty = -1.2 + Math.sin(dist * waveFreq - waveSpeed) * waveAmp * Math.exp(-dist * 0.05);
-                        pos.setY(i, ty);
+                        pos.setY(i, -1.2 + Math.sin(dist * waveFreq - waveSpeed) * waveAmp * Math.exp(-dist * 0.05));
                     }
                     pos.needsUpdate = true;
                     wasmGeometryRef.current.computeVertexNormals();
                 }
 
-                // 10. Camera Calculation
-                if (cameraMode === 'orbit') {
-                    const rot = cameraRotationRef.current;
-                    const target = cameraTargetRef.current || new THREE.Vector3(0, 0, 0);
-                    camera.position.x = target.x + rot.distance * Math.sin(rot.phi) * Math.sin(rot.theta);
-                    camera.position.y = target.y + rot.distance * Math.cos(rot.phi);
-                    camera.position.z = target.z + rot.distance * Math.sin(rot.phi) * Math.cos(rot.theta);
-                    camera.lookAt(target);
-                } else {
-                    const keys = keysPressedRef.current;
-                    const speed = 0.22;
-                    const dir = new THREE.Vector3();
-                    camera.getWorldDirection(dir);
-                    const right = new THREE.Vector3();
-                    right.crossVectors(camera.up, dir).normalize();
+                // 10. Camera (orbit or FPS)
+                stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);
 
-                    if (keys['w'] || keys['W'] || keys['ArrowUp']) camera.position.addScaledVector(dir, speed);
-                    if (keys['s'] || keys['S'] || keys['ArrowDown']) camera.position.addScaledVector(dir, -speed);
-                    if (keys['a'] || keys['A'] || keys['ArrowLeft']) camera.position.addScaledVector(right, speed);
-                    if (keys['d'] || keys['D'] || keys['ArrowRight']) camera.position.addScaledVector(right, -speed);
-                    if (keys['q'] || keys['Q']) camera.position.y -= speed * 0.8;
-                    if (keys['e'] || keys['E']) camera.position.y += speed * 0.8;
-                }
-
-                // 11. Selection Box Helper Update
+                // 11. Selection box helper
                 if (selectionBoxRef.current && selectionBoxRef.current.visible && selectedObjectRef.current) {
                     selectionBoxRef.current.update();
                 }
 
-                // 12. Transform Gizmo Update
+                // 12. Transform gizmo
                 if (transformGizmoGroupRef.current && selectedObjectRef.current) {
                     transformGizmoGroupRef.current.visible = toolModeRef.current === 'transform';
                     if (transformGizmoGroupRef.current.visible) {
-                        gizmoEngine.updateGizmoTransform(
+                        gizmoEngineRef.current.updateGizmoTransform(
                             transformGizmoGroupRef.current,
                             selectedObjectRef.current.position,
                             selectedObjectRef.current.quaternion,
@@ -2615,462 +1962,267 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
         animate();
 
-        // ---------------------------------------------------------
-        // Mouse & Keyboard Controls
-        // ---------------------------------------------------------
-        const mouseRaycaster = new THREE.Raycaster();
-
-        const handleMouseDown = (e: MouseEvent) => {
-            if (!container || !camera || !renderer) return;
-            const rect = container.getBoundingClientRect();
-            const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-            mouseRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-
-            // 1. Check Transform Gizmo Handle Hit
-            if (toolModeRef.current === 'transform' && transformGizmoGroupRef.current && selectedObjectRef.current) {
-                const hit = gizmoEngineRef.current.hitTest(mouseRaycaster, transformGizmoGroupRef.current);
-                if (hit) {
-                    isGizmoDraggingRef.current = true;
-                    isDraggingRef.current = false;
-                    activeGizmoHandleRef.current = hit.handleType;
-                    gizmoDragStartRayRef.current = { origin: mouseRaycaster.ray.origin.clone(), dir: mouseRaycaster.ray.direction.clone() };
-                    gizmoDragInitialPosRef.current.copy(selectedObjectRef.current.position);
-                    gizmoDragInitialQuatRef.current.copy(selectedObjectRef.current.quaternion);
-                    gizmoDragInitialScaleRef.current.copy(selectedObjectRef.current.scale);
-                    gizmoDragStartPointRef.current.copy(hit.hitPoint);
-                    return;
-                }
-            }
-
-            // 2. Raycast Scene Geometry for Object Selection & Sculpt Targeting
-            const intersects = mouseRaycaster.intersectObjects(scene.children, true);
-            const validHit = intersects.find(item => {
-                let cur: THREE.Object3D | null = item.object;
-                if (!cur || !cur.visible) return false;
-                if (cur === transformGizmoGroupRef.current || cur.userData?.isGizmo || cur.userData?.handleType) return false;
-                if (cur === brushCursorMeshRef.current || cur === selectionBoxRef.current || cur === starsMesh || (cur as any) === customGridHelperRef.current) return false;
-                while (cur) {
-                    if (cur.name && (cur.name.startsWith('sb-gizmo-') || cur.name.startsWith('sb-selection-helper'))) return false;
-                    if (cur.userData?.isGizmo) return false;
-                    cur = cur.parent;
-                }
-                return true;
-            });
-
-            // 3. Sculpting Interaction on Clicked Mesh
-            if (toolModeRef.current === 'sculpt') {
-                const targetMesh = (validHit && (validHit.object as any).isMesh) ? (validHit.object as THREE.Mesh) : sculptMeshRef.current;
-                if (targetMesh && targetMesh.geometry && validHit) {
-                    sculptMeshRef.current = targetMesh;
-                    selectedObjectRef.current = targetMesh;
-                    setSelectedObjectId(targetMesh.name || targetMesh.uuid);
-                    setSelectedObjectName(targetMesh.name || 'Sculpt Target Mesh');
-
-                    isSculptingRef.current = true;
-                    isDraggingRef.current = false;
-                    lastSculptHitPointRef.current = validHit.point.clone();
-                    sculptStrokeStartPointRef.current = validHit.point.clone();
-
-                    historyStackRef.current.pushState(targetMesh.geometry);
-                    setCanUndo(historyStackRef.current.canUndo());
-                    setCanRedo(historyStackRef.current.canRedo());
-
-                    const normal = validHit.face ? validHit.face.normal.clone().transformDirection(targetMesh.matrixWorld) : new THREE.Vector3(0, 1, 0);
-                    applySculptStroke(targetMesh.geometry, validHit.point, normal, sculptSettingsRef.current);
-                    return;
-                }
-            }
-
-            // 4. Direct Object Selection in Transform / View Mode
-            if (validHit) {
-                const selectable = resolveSelectableObject(validHit.object, scene);
-                selectObject(selectable);
-            }
-
-            isDraggingRef.current = true;
-            previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
-        };
-
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!container || !camera || !renderer) return;
-            const rect = container.getBoundingClientRect();
-            const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-            mouseRaycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-
-            // 1. Dragging Transform Gizmo
-            if (isGizmoDraggingRef.current && selectedObjectRef.current && gizmoDragStartRayRef.current && activeGizmoHandleRef.current) {
-                const handle = activeGizmoHandleRef.current;
-                const targetPos = gizmoDragInitialPosRef.current;
-                const targetQuat = gizmoDragInitialQuatRef.current;
-                const rayStart = mouseRaycaster.ray.origin;
-                const rayDir1 = gizmoDragStartRayRef.current.dir;
-                const rayDir2 = mouseRaycaster.ray.direction;
-
-                if (handle.startsWith('axis-')) {
-                    let axis = new THREE.Vector3(1, 0, 0);
-                    if (handle === 'axis-y') axis.set(0, 1, 0);
-                    else if (handle === 'axis-z') axis.set(0, 0, 1);
-
-                    if (transformSpaceRef.current === 'local') {
-                        axis.applyQuaternion(targetQuat);
-                    }
-
-                    const deltaT = computeAxisTranslation(rayStart, rayDir1, rayDir2, targetPos, axis);
-                    selectedObjectRef.current.position.copy(targetPos.clone().add(deltaT));
-                } else if (handle.startsWith('plane-')) {
-                    let normal = new THREE.Vector3(0, 0, 1);
-                    if (handle === 'plane-xz') normal.set(0, 1, 0);
-                    else if (handle === 'plane-yz') normal.set(1, 0, 0);
-
-                    if (transformSpaceRef.current === 'local') {
-                        normal.applyQuaternion(targetQuat);
-                    }
-
-                    const deltaT = computePlaneTranslation(rayStart, rayDir1, rayDir2, targetPos, normal);
-                    selectedObjectRef.current.position.copy(targetPos.clone().add(deltaT));
-                } else if (handle.startsWith('rot-')) {
-                    let rotAxis = new THREE.Vector3(1, 0, 0);
-                    if (handle === 'rot-y') rotAxis.set(0, 1, 0);
-                    else if (handle === 'rot-z') rotAxis.set(0, 0, 1);
-
-                    if (transformSpaceRef.current === 'local') {
-                        rotAxis.applyQuaternion(targetQuat);
-                    }
-
-                    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(rotAxis, targetPos);
-                    const p1 = new THREE.Vector3();
-                    const p2 = new THREE.Vector3();
-                    if (new THREE.Ray(rayStart, rayDir1).intersectPlane(plane, p1) && mouseRaycaster.ray.intersectPlane(plane, p2)) {
-                        const angle = computeRotationAngle(p1, p2, targetPos, rotAxis);
-                        const deltaQuat = new THREE.Quaternion().setFromAxisAngle(rotAxis, angle);
-                        selectedObjectRef.current.quaternion.copy(deltaQuat.multiply(targetQuat));
-                    }
-                } else if (handle.startsWith('scale-')) {
-                    const dist2 = mouseRaycaster.ray.origin.distanceTo(targetPos);
-                    const dist1 = gizmoDragStartRayRef.current.origin.distanceTo(targetPos);
-                    const rawScale = computeScaleFactor(dist1, dist2);
-
-                    if (handle === 'scale-uniform') {
-                        selectedObjectRef.current.scale.copy(gizmoDragInitialScaleRef.current.clone().multiplyScalar(rawScale));
-                    } else if (handle === 'scale-x') {
-                        selectedObjectRef.current.scale.x = gizmoDragInitialScaleRef.current.x * rawScale;
-                    } else if (handle === 'scale-y') {
-                        selectedObjectRef.current.scale.y = gizmoDragInitialScaleRef.current.y * rawScale;
-                    } else if (handle === 'scale-z') {
-                        selectedObjectRef.current.scale.z = gizmoDragInitialScaleRef.current.z * rawScale;
-                    }
-                }
-                return;
-            }
-
-            // 2. Continuous Sculpt Stroke
-            if (isSculptingRef.current && sculptMeshRef.current) {
-                const intersects = mouseRaycaster.intersectObject(sculptMeshRef.current, false);
-                if (intersects.length > 0) {
-                    const first = intersects[0];
-                    const mouseDelta = lastSculptHitPointRef.current ? first.point.clone().sub(lastSculptHitPointRef.current) : new THREE.Vector3(0, 0, 0);
-                    const normal = first.face ? first.face.normal.clone().transformDirection(sculptMeshRef.current.matrixWorld) : new THREE.Vector3(0, 1, 0);
-
-                    applySculptStroke(
-                        sculptMeshRef.current.geometry,
-                        first.point,
-                        normal,
-                        {
-                            ...sculptSettingsRef.current,
-                            mouseDelta
-                        }
-                    );
-
-                    lastSculptHitPointRef.current = first.point.clone();
-
-                    if (brushCursorMeshRef.current) {
-                        brushCursorMeshRef.current.position.copy(first.point);
-                        brushCursorMeshRef.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-                        brushCursorMeshRef.current.visible = true;
-                    }
-                }
-                return;
-            }
-
-            // 3. Hovering Brush Cursor Ring in Sculpt mode
-            if (toolModeRef.current === 'sculpt' && sculptMeshRef.current && brushCursorMeshRef.current) {
-                const intersects = mouseRaycaster.intersectObject(sculptMeshRef.current, false);
-                if (intersects.length > 0) {
-                    const first = intersects[0];
-                    const normal = first.face ? first.face.normal.clone().transformDirection(sculptMeshRef.current.matrixWorld) : new THREE.Vector3(0, 1, 0);
-                    brushCursorMeshRef.current.position.copy(first.point);
-                    brushCursorMeshRef.current.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
-                    brushCursorMeshRef.current.visible = true;
-                } else {
-                    brushCursorMeshRef.current.visible = false;
-                }
-            } else if (brushCursorMeshRef.current) {
-                brushCursorMeshRef.current.visible = false;
-            }
-
-            // 4. Default Camera Rotation
-            if (!isDraggingRef.current) return;
-            const deltaX = e.clientX - previousMousePositionRef.current.x;
-            const deltaY = e.clientY - previousMousePositionRef.current.y;
-            previousMousePositionRef.current = { x: e.clientX, y: e.clientY };
-
-            if (cameraMode === 'orbit') {
-                const rot = cameraRotationRef.current;
-                rot.theta -= deltaX * 0.005;
-                rot.phi -= deltaY * 0.005;
-                rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, rot.phi));
-            } else {
-                camera.rotation.order = 'YXZ';
-                camera.rotation.y -= deltaX * 0.003;
-                camera.rotation.x -= deltaY * 0.003;
-                camera.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, camera.rotation.x));
-            }
-        };
-
-        const handleMouseUp = () => {
-            if (isSculptingRef.current) {
-                isSculptingRef.current = false;
-                setCanUndo(historyStackRef.current.canUndo());
-                setCanRedo(historyStackRef.current.canRedo());
-
-                const sculptMesh = sculptMeshRef.current;
-                const objId = sculptMesh?.name || 'sb-sculptable-mesh';
-                mutateSceneData(prev => {
-                    const meshes = Array.isArray(prev.customMeshes) ? [...prev.customMeshes] : [];
-                    const idx = meshes.findIndex(m => m.id === objId || m.name === objId);
-                    const meshData = {
-                        id: objId,
-                        name: sculptMesh?.name || 'Sculpt Mesh',
-                        type: 'custom' as any,
-                        position: sculptMesh ? [sculptMesh.position.x, sculptMesh.position.y, sculptMesh.position.z] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                        rotation: sculptMesh ? [sculptMesh.rotation.x, sculptMesh.rotation.y, sculptMesh.rotation.z] as [number, number, number] : [0, 0, 0] as [number, number, number],
-                        scale: sculptMesh ? [sculptMesh.scale.x, sculptMesh.scale.y, sculptMesh.scale.z] as [number, number, number] : [1, 1, 1] as [number, number, number]
-                    };
-                    if (idx >= 0) meshes[idx] = { ...meshes[idx], ...meshData };
-                    else meshes.push(meshData);
-                    return {
-                        ...prev,
-                        customMeshes: meshes,
-                        sculptSettings: sculptSettingsRef.current
-                    };
-                }, {
-                    operator: 'sb_deform_vertices',
-                    params: {
-                        objectId: objId,
-                        brush: sculptSettingsRef.current.brush,
-                        radius: sculptSettingsRef.current.radius,
-                        strength: sculptSettingsRef.current.strength,
-                        falloff: sculptSettingsRef.current.falloff
-                    }
-                });
-            }
-            if (isGizmoDraggingRef.current && selectedObjectRef.current) {
-                isGizmoDraggingRef.current = false;
-                activeGizmoHandleRef.current = null;
-
-                const selObj = selectedObjectRef.current;
-                const objId = selObj.name || selObj.uuid;
-                const currentMode = transformModeRef.current;
-                const opName = currentMode === 'rotate' ? 'sb_rotate' : currentMode === 'scale' ? 'sb_scale' : 'sb_translate';
-
-                mutateSceneData(prev => {
-                    const meshes = Array.isArray(prev.customMeshes) ? [...prev.customMeshes] : [];
-                    const idx = meshes.findIndex(m => m.id === objId || m.name === objId);
-                    const meshData = {
-                        id: objId,
-                        name: selObj.name || objId,
-                        type: (idx >= 0 && meshes[idx].type) ? meshes[idx].type : 'box' as any,
-                        position: [selObj.position.x, selObj.position.y, selObj.position.z] as [number, number, number],
-                        rotation: [selObj.rotation.x, selObj.rotation.y, selObj.rotation.z] as [number, number, number],
-                        scale: [selObj.scale.x, selObj.scale.y, selObj.scale.z] as [number, number, number]
-                    };
-                    if (idx >= 0) meshes[idx] = { ...meshes[idx], ...meshData };
-                    else meshes.push(meshData);
-
-                    let objects = prev.objects;
-                    if (objects && objects.length > 0) {
-                        objects = objects.map(o => {
-                            if (o.id === objId || o.content?.durableUri === objId) {
-                                return {
-                                    ...o,
-                                    space: {
-                                        ...o.space,
-                                        spatial3d: {
-                                            x: selObj.position.x,
-                                            y: selObj.position.y,
-                                            z: selObj.position.z,
-                                            pitch: selObj.rotation.x,
-                                            yaw: selObj.rotation.y,
-                                            roll: selObj.rotation.z
-                                        }
-                                    }
-                                };
-                            }
-                            return o;
-                        });
-                    }
-
-                    return {
-                        ...prev,
-                        customMeshes: meshes,
-                        objects,
-                        selectedMeshId: objId
-                    };
-                }, {
-                    operator: opName,
-                    params: {
-                        objectId: objId,
-                        position: [selObj.position.x, selObj.position.y, selObj.position.z],
-                        rotation: [selObj.rotation.x, selObj.rotation.y, selObj.rotation.z],
-                        scale: [selObj.scale.x, selObj.scale.y, selObj.scale.z]
-                    }
-                });
-            }
-            isDraggingRef.current = false;
-        };
-
-        const handleWheel = (e: WheelEvent) => {
-            if (cameraMode === 'orbit') {
-                e.preventDefault();
-                const rot = cameraRotationRef.current;
-                rot.distance += e.deltaY * 0.02;
-                rot.distance = Math.max(5, Math.min(120, rot.distance));
-            }
-        };
-
-        const handleKeyDown = (e: KeyboardEvent) => { keysPressedRef.current[e.key] = true; };
-        const handleKeyUp = (e: KeyboardEvent) => { keysPressedRef.current[e.key] = false; };
-
-        const handleResize = () => {
-            if (!container || !camera || !renderer) return;
-            const w = container.clientWidth;
-            const h = container.clientHeight;
-            if (w === 0 || h === 0) return;
-            camera.aspect = w / h;
-            camera.updateProjectionMatrix();
-            renderer.setSize(w, h, false);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-            renderer.domElement.style.width = '100%';
-            renderer.domElement.style.height = '100%';
-            aerialPerspectiveRef.current?.setSize(w, h);
-        };
-
-        container.addEventListener('mousedown', handleMouseDown);
-        container.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-        container.addEventListener('wheel', handleWheel, { passive: false });
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
-        window.addEventListener('resize', handleResize);
-
-        const resizeObserver = new ResizeObserver(handleResize);
-        resizeObserver.observe(container);
-        requestAnimationFrame(handleResize);
-
-        // Cleanup
         return () => {
-            if (aerialPerspectiveRef.current) {
-                aerialPerspectiveRef.current.dispose();
-                aerialPerspectiveRef.current = null;
+            if (animationFrameIdRef.current) {
+                cancelAnimationFrame(animationFrameIdRef.current);
+                animationFrameIdRef.current = null;
             }
-            if (terrainCloudShadowsRef.current) {
-                terrainCloudShadowsRef.current.dispose();
-                terrainCloudShadowsRef.current = null;
-            }
-            if (skyDomeModuleRef.current && skyDomeModuleRef.current.dispose) {
-                skyDomeModuleRef.current.dispose();
-                skyDomeModuleRef.current = null;
-            }
-            if (godRaysRef.current && godRaysRef.current.dispose) {
-                godRaysRef.current.dispose();
-                godRaysRef.current = null;
-            }
-            if (contrailsRef.current && contrailsRef.current.dispose) {
-                contrailsRef.current.dispose();
-                contrailsRef.current = null;
-            }
-            if (terrainBiomeRef.current && terrainBiomeRef.current.dispose) {
-                terrainBiomeRef.current.dispose();
-                terrainBiomeRef.current = null;
-            }
-            if (dynamicScriptHooksRef.current && dynamicScriptHooksRef.current.dispose) {
-                dynamicScriptHooksRef.current.dispose();
-                dynamicScriptHooksRef.current = null;
-            }
-            if (tilesRendererRef.current) {
-                tilesRendererRef.current.dispose();
-                tilesRendererRef.current = null;
-            }
-            if (splatViewerRef.current) {
-                splatViewerRef.current.dispose();
-                splatViewerRef.current = null;
-            }
+            detachControls();
+            detachResize();
             if (selectionBoxRef.current) {
                 scene.remove(selectionBoxRef.current);
                 selectionBoxRef.current.dispose();
                 selectionBoxRef.current = null;
             }
-
-            if (animationFrameIdRef.current) {
-                cancelAnimationFrame(animationFrameIdRef.current);
+            scene.remove(brushCursorMesh);
+            brushCursorMesh.geometry.dispose();
+            (brushCursorMesh.material as THREE.Material).dispose();
+            brushCursorMeshRef.current = null;
+            if (transformGizmoGroupRef.current) {
+                scene.remove(transformGizmoGroupRef.current);
+                transformGizmoGroupRef.current = null;
             }
-            container.removeEventListener('mousedown', handleMouseDown);
-            container.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-            container.removeEventListener('wheel', handleWheel);
-            window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
-            window.removeEventListener('resize', handleResize);
-            resizeObserver.disconnect();
+            stack.dispose();
+            stackRef.current = null;
+            threeSceneRef.current = null;
+            threeCameraRef.current = null;
+            threeRendererRef.current = null;
+            customGridHelperRef.current = null;
+        };
+    // Deliberately mount-once: everything data-driven is synchronised by the slice effects below.
+    }, []);
 
-            if (renderer) {
-                renderer.dispose();
-                if (renderer.domElement && container.contains(renderer.domElement)) {
-                    container.removeChild(renderer.domElement);
+    // ---- 2. Google Photorealistic 3D Tiles + terrain manager --------------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const handle = syncTilesLayer(stack, tilesInputRef.current, {
+            onTileLoaded: (terrainManager) => {
+                snapGroupFiguresToGround(contentRef.current?.proceduralSceneGroup ?? null, terrainManager);
+                const groundY = terrainManager.sampleGroundHeight(0, 0);
+                if (groundY !== null) {
+                    cameraTargetRef.current.y = groundY + 1.5;
                 }
             }
+        });
+        tilesHandleRef.current = handle;
+        tilesRendererRef.current = handle.tilesLayer;
+        terrainManagerRef.current = handle.terrainManager;
+        return () => {
+            handle.dispose();
+            tilesHandleRef.current = null;
+            tilesRendererRef.current = null;
+            terrainManagerRef.current = null;
         };
-    }, [
-        renderMode,
-        cameraMode,
-        hasGeoCoordinates,
-        worldBranch,
-        isAirplane,
-        sceneData.environment?.skybox,
-        sceneData.environment?.lighting,
-        sceneData.title,
-        sceneData.sceneType,
-        sceneData.customScript,
-        sceneData.code,
-        sceneData.features,
-        sceneData.features?.godRays,
-        sceneData.features?.atmosphericScattering,
-        sceneData.features?.contrails,
-        sceneData.features?.terrainBiomes,
-        sceneData.features?.controlSurfaces,
-        sceneData.shaders,
-        sceneData.customMeshes,
-        sceneData.objects,
-        data?.title,
-        data?.subtitle,
-        data?.sceneType,
-        data?.worldBranch,
-        data?.environment?.skybox,
-        data?.environment?.lighting,
-        data?.features,
-        data?.features?.godRays,
-        data?.features?.atmosphericScattering,
-        data?.features?.contrails,
-        data?.features?.terrainBiomes,
-        data?.features?.controlSurfaces,
-        data?.customScript,
-        data?.code,
-        data?.shaders,
-        data?.customMeshes,
-        data?.objects
-    ]);
+    }, [tilesFingerprint]);
+
+    // ---- 3. Atmosphere: background, fog, sky dome, lights, terrain floor, biomes, stars ----
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const handle = syncAtmosphere(stack, atmosphereInputRef.current, {
+            createVolumetricGodRays,
+            createProceduralBiomeTerrain
+        });
+        atmosphereRef.current = handle;
+        skyDomeModuleRef.current = handle.skyDomeModule;
+        aerialPerspectiveRef.current = handle.aerialPerspective;
+        terrainCloudShadowsRef.current = handle.terrainCloudShadows;
+        godRaysRef.current = handle.godRays;
+        terrainBiomeRef.current = handle.terrainBiome;
+        return () => {
+            handle.dispose();
+            atmosphereRef.current = null;
+            skyDomeModuleRef.current = null;
+            aerialPerspectiveRef.current = null;
+            terrainCloudShadowsRef.current = null;
+            godRaysRef.current = null;
+            terrainBiomeRef.current = null;
+        };
+    }, [atmosphereFingerprint]);
+
+    // ---- 4. Camera preset (position / ground-grounded look-at target) ------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const cameraDef = sceneDataRef.current.camera;
+        const groundY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
+        cameraTargetRef.current.set(
+            cameraDef?.target ? cameraDef.target[0] : 0,
+            cameraDef?.target ? cameraDef.target[1] : groundY + 1.5,
+            cameraDef?.target ? cameraDef.target[2] : 0
+        );
+        const [px, py, pz] = cameraDef?.position || [15, 12, 15];
+        stack.camera.position.set(px, py, pz);
+        stack.camera.lookAt(cameraTargetRef.current);
+    }, [cameraFingerprint, tilesFingerprint]);
+
+    // ---- 5. Focal content: procedural theme / aircraft / sculpt mesh / splats / dynamic script ----
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+
+        const executeScript: SceneContentFactories['executeScript'] = ({ aircraft, contrails }) => {
+            const script = activeScriptRef.current;
+            if (!script || !script.trim()) return null;
+            const scriptCleanupFns: Array<() => void> = [];
+            const scriptFrameFns: Array<(time: number, delta: number) => void> = [];
+            const atmosphere = atmosphereRef.current;
+            const dynamicContext: DynamicScriptContext = {
+                scene: stack.scene,
+                camera: stack.camera,
+                renderer: stack.renderer,
+                container: stack.container,
+                THREE,
+                sceneData: sceneDataRef.current,
+                aircraft,
+                terrain: atmosphere?.terrainBiome?.terrainMesh,
+                skyDome: atmosphere?.skyDomeObject ?? null,
+                aerialPerspective: atmosphere?.aerialPerspective,
+                cloudShadows: atmosphere?.terrainCloudShadows,
+                godRays: atmosphere?.godRays?.group,
+                contrails,
+                addCleanup: (fn) => scriptCleanupFns.push(fn),
+                onFrame: (fn) => scriptFrameFns.push(fn),
+                registerUpdate: (fn) => scriptFrameFns.push(fn),
+                createArticulatedAircraft,
+                createVolumetricGodRays,
+                createDynamicContrails,
+                createAtmosphericSkyDome,
+                createAerialPerspectiveEffect,
+                createTerrainCloudShadows,
+                calculateNOAASolarPosition,
+                calculateENUSunVector,
+                getSunVectorFromAngles,
+                computeDiurnalLightingProfile,
+                getDiurnalLightingState,
+                getPresetLightingState,
+                kelvinToRGB,
+                createProceduralBiomeTerrain,
+                createAirplaneMesh,
+                createDroneMesh,
+                createPinMesh,
+                createHistoricalBattlefieldScene,
+                createProceduralCityScene,
+                createSolarSystemScene,
+                createMolecularPhysicsScene,
+                createArchitecturalRoomScene,
+                createProceduralSpatialScene,
+                createWorldBuilderScene,
+                generateNativeBuildingMeshBuffer,
+                buildNativeThreeGeometry,
+                generateProceduralThreeMeshFromPrompt,
+                sculptBuildingFrom3DTiles,
+                snapFootprintsToTerrain,
+                inspectSceneMeshTopology
+            };
+            const execResult = executeDynamicThreeScript(script, dynamicContext);
+            if (execResult.error) return { error: execResult.error };
+            return {
+                update: (time, delta) => {
+                    execResult.update?.(time, delta);
+                    for (const frameFn of scriptFrameFns) frameFn(time, delta);
+                },
+                dispose: () => {
+                    execResult.dispose?.();
+                    for (const cleanupFn of scriptCleanupFns) cleanupFn();
+                }
+            };
+        };
+
+        const handle = syncSceneContent(
+            stack,
+            { ...contentInputRef.current, selectedShape: selectedShapeRef.current, sculptWireframe: !!sculptSettingsRef.current.wireframeOverlay },
+            terrainManagerRef.current,
+            { createDynamicContrails, createSplatViewer: () => new InHouseSplatViewer(), executeScript }
+        );
+        contentRef.current = handle;
+        airplaneMeshRef.current = handle.airplane;
+        contrailsRef.current = handle.contrails;
+        splatViewerRef.current = handle.splatViewer as InHouseSplatViewer;
+        dynamicScriptHooksRef.current = handle.scriptHooks;
+        setScriptError(handle.scriptError);
+
+        // Sculpt target + history reset
+        sculptMeshRef.current = handle.sculptTarget;
+        selectedObjectRef.current = handle.sculptTarget;
+        historyStackRef.current.clear();
+        if (handle.sculptTarget?.geometry) historyStackRef.current.pushState(handle.sculptTarget.geometry);
+        setCanUndo(false);
+        setCanRedo(false);
+
+        // Outliner entities + initial selection
+        const initialEntities = extractSceneOutlinerItems(stack.scene);
+        setSceneEntities(initialEntities);
+        if (initialEntities.length > 0) {
+            const wanted = dataRef.current?.selectedMeshId;
+            const target = initialEntities.find(e => e.id === wanted || e.name === wanted) || initialEntities[0];
+            if (target?.object) selectObjectRef.current(target.object);
+        }
+
+        return () => {
+            if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
+            handle.dispose();
+            contentRef.current = null;
+            airplaneMeshRef.current = null;
+            contrailsRef.current = null;
+            splatViewerRef.current = null;
+            dynamicScriptHooksRef.current = null;
+            if (sculptMeshRef.current === handle.sculptTarget) sculptMeshRef.current = null;
+            if (selectedObjectRef.current === handle.sculptTarget) selectedObjectRef.current = null;
+        };
+    }, [contentFingerprint]);
+
+    // ---- 5b. WASM wave deformer mesh ----------------------------------------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack || !wantsWasmMesh) return;
+        const handle = syncWasmMesh(stack, renderMode);
+        wasmHandleRef.current = handle;
+        wasmMeshRef.current = handle.mesh;
+        wasmGeometryRef.current = handle.geometry;
+        wasmPositionAttrRef.current = handle.positionAttribute;
+        return () => {
+            handle.dispose();
+            wasmHandleRef.current = null;
+            wasmMeshRef.current = null;
+            wasmGeometryRef.current = null;
+            wasmPositionAttrRef.current = null;
+        };
+    }, [wantsWasmMesh, renderMode]);
+
+    // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        syncCustomMeshes(stack, customMeshesRef.current as CustomMeshDefinition[] | undefined, customMeshRegistryRef.current, {
+            terrainManager: terrainManagerRef.current,
+            has3DTiles: tilesInputRef.current.has3DTiles
+        });
+        refreshEntities();
+    }, [customMeshesFingerprint, tilesFingerprint]);
+
+    React.useEffect(() => {
+        // Registry outlives individual syncs; free everything on unmount.
+        const stack = stackRef.current;
+        const registry = customMeshRegistryRef.current;
+        return () => {
+            if (stack) disposeCustomMeshes(stack, registry);
+            else registry.clear();
+        };
+    }, []);
+
+    // ---- 7. Custom shaders from schema ---------------------------------------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const handle = syncCustomShaders(stack, shadersRef.current as Record<string, CustomShaderDefinition> | undefined);
+        customShaderMaterialsRef.current = handle.materials;
+        return () => {
+            handle.dispose();
+            customShaderMaterialsRef.current = [];
+        };
+    }, [shadersFingerprint]);
 
     // ---------------------------------------------------------
     // Fallback Canvas Render (2D Orthographic Mode)

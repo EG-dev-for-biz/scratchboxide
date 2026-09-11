@@ -269,6 +269,16 @@ export function getPresetLightingState(preset: TimeOfDayPreset | string): Diurna
             kelvin = 15000;
             skyboxName = 'space';
             break;
+        case 'deep-space':
+        case 'deep_space':
+        case 'space':
+            // Off-world presets: no sun-lit sky, keep the starfield skybox (solar systems, orreries).
+            elevationDeg = -90.0;
+            azimuthDeg = 0.0;
+            colorHex = '#0a0f1e';
+            kelvin = 15000;
+            skyboxName = 'space-stars';
+            break;
         case 'overcast':
             elevationDeg = 35.0;
             azimuthDeg = 180.0;

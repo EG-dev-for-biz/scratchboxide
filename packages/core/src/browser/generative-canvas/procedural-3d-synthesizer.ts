@@ -126,9 +126,6 @@ export function initializeSceneOperatorStack(scene: Scene3DData): Scene3DData {
     if (scene.environment?.lighting) {
         engine.dispatch('sb_setup_lighting', {
             preset: scene.environment.lighting,
-            // Preserve the skybox the synthesizer chose (e.g. 'space-stars' for solar systems);
-            // otherwise the lighting preset would overwrite it with its own default sky.
-            skybox: scene.environment.skybox,
             latitude: scene.geoAnchor?.lat,
             longitude: scene.geoAnchor?.lng
         });
