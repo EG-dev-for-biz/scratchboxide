@@ -8,28 +8,54 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { CanvasArtifact, ChatMessage, StudioAppearanceConfig, StudioLayoutMode } from '../canvas-types';
+import { CanvasArtifact, ChatMessage, PrimitiveType, StudioAppearanceConfig, StudioLayoutMode, StudioSettingsTab } from '../canvas-types';
 import { ChatStore } from './chatStore';
 
 /**
- * Stable callbacks that deep children need. These are wrapped in `useCallback`/refs by the
- * Studio so the actions context value rarely changes and `React.memo` children stay memoized.
+ * Callbacks that deep children need. `useStableStudioActions` wraps them in identity-stable
+ * proxies so the actions context value never changes and `React.memo` children stay memoized.
  */
 export interface StudioActions {
     showToast: (text: string, icon?: string) => void;
-    sendMessage: (text?: string, options?: { skipUserBubble?: boolean }) => void;
-    handleOpenInAppBrowser: (url: string, title?: string) => void;
-    handlePreviewCodeInCanvas: (code: string, language: string) => void;
-    handleSelectVersion: (version: CanvasArtifact) => void;
-    handleUpdateArtifact: (updated: CanvasArtifact) => void;
-    handleMorphArtifact: (source: CanvasArtifact, targetType: string) => void;
-    handleSurfaceAiPrompt: (prompt: string) => void;
-    openSettingsToTab: (tab: string) => void;
+    sendMessage: (textToSend?: string, targetPrimitiveType?: PrimitiveType) => Promise<void>;
+    handleOpenInAppBrowser: (targetUrl: string, targetTitle?: string) => void;
+    handlePreviewCodeInCanvas: (language: string, content: string) => void;
+    handleSelectVersion: (targetVersion: CanvasArtifact) => void;
+    handleUpdateArtifact: (updatedArtifact: CanvasArtifact) => void;
+    handleMorphArtifact: (morphedArtifact: CanvasArtifact) => void;
+    handleSurfaceAiPrompt: (promptText: string) => void;
+    openSettingsToTab: (tab: StudioSettingsTab) => void;
     onExecuteCommand?: (commandId: string) => void;
+    executeDeepWritePipeline: (promptText: string, planOverride?: any) => Promise<void>;
+    handleDeepWriteResume: (sessionId: string, feedback: string) => Promise<void>;
     setActiveArtifact: ChatStore['setActiveArtifact'];
     setLayoutMode: ChatStore['setLayoutMode'];
     setMessages: ChatStore['setMessages'];
     setCheckpointFeedback: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}
+
+/**
+ * Returns an object with the same keys as `actions` whose functions never change identity;
+ * each call is forwarded to the latest implementation. Missing optional actions stay undefined.
+ */
+export function useStableStudioActions(actions: StudioActions): StudioActions {
+    const latestRef = React.useRef<StudioActions>(actions);
+    latestRef.current = actions;
+    const hasExecuteCommand = typeof actions.onExecuteCommand === 'function';
+    return React.useMemo(() => {
+        const stable: Record<string, unknown> = {};
+        (Object.keys(latestRef.current) as Array<keyof StudioActions>).forEach(key => {
+            if (key === 'onExecuteCommand' && !hasExecuteCommand) {
+                stable[key] = undefined;
+                return;
+            }
+            stable[key] = (...args: unknown[]) => {
+                const impl = latestRef.current[key] as unknown as ((...a: unknown[]) => unknown) | undefined;
+                return impl ? impl(...args) : undefined;
+            };
+        });
+        return stable as unknown as StudioActions;
+    }, [hasExecuteCommand]);
 }
 
 /** Frequently read state. Changes whenever any member changes, so keep it lean. */
