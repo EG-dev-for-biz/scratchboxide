@@ -36,14 +36,14 @@ import {
     ContainerSandboxService,
     LspDiagnosticFeedbackService,
     ProjectContextGraphService
-} from '@scratchbox/core/node';
+} from '../../packages/core/src/node';
 import {
     createEmptyProjectGraph,
     IMAGE_MODEL_PRIORITY,
     VIDEO_MODEL_PRIORITY,
     classifyMediaGenerationError,
     MediaGenerationRequest
-} from '@scratchbox/core/common';
+} from '../../packages/core/src/common';
 
 export interface StandaloneServerOptions {
     port?: number;

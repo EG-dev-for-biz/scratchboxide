@@ -2,30 +2,30 @@
   "name": "@scratchbox/core",
   "version": "1.0.0",
   "description": "Scratchbox IDE Core Library \u2014 Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Services",
-  "main": "dist/packages/core/src/index.js",
-  "module": "dist/packages/core/src/index.js",
-  "types": "dist/packages/core/src/index.d.ts",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "types": "./dist/packages/core/src/index.d.ts",
-      "import": "./dist/packages/core/src/index.js",
-      "default": "./dist/packages/core/src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./browser": {
-      "types": "./dist/packages/core/src/browser.d.ts",
-      "import": "./dist/packages/core/src/browser.js",
-      "default": "./dist/packages/core/src/browser.js"
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "default": "./dist/browser.js"
     },
     "./node": {
-      "types": "./dist/packages/core/src/node.d.ts",
-      "import": "./dist/packages/core/src/node.js",
-      "default": "./dist/packages/core/src/node.js"
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
     },
     "./common": {
-      "types": "./dist/packages/core/src/common.d.ts",
-      "import": "./dist/packages/core/src/common.js",
-      "default": "./dist/packages/core/src/common.js"
+      "types": "./dist/common.d.ts",
+      "import": "./dist/common.js",
+      "default": "./dist/common.js"
     },
     "./style.css": "./src/style.css"
   },
@@ -38,8 +38,9 @@
     "@google/genai": "1.32.0",
     "fs-extra": "^11.2.0",
     "google-auth-library": "^10.5.0",
-    "three": "^0.150.0",
-    "typescript": "^5.3.3"
+    "three": "^0.186.0",
+    "typescript": "^5.3.3",
+    "3d-tiles-renderer": "^0.5.2"
   },
   "peerDependencies": {
     "react": "^18.2.0",
@@ -50,6 +51,6 @@
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
-    "@types/three": "^0.150.0"
+    "@types/three": "^0.186.0"
   }
 }
