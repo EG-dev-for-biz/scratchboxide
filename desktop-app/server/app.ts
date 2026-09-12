@@ -825,7 +825,9 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     });
 
-    geminiRouter.post('/memories', async (req: Request, res: Response) => {
+    // Contract mirrors packages/core/src/browser/generative-canvas/user-memories-client.ts.
+    // `POST /memories` is kept as an alias of `/memories/create` for older callers.
+    const createMemory = async (req: Request, res: Response): Promise<void> => {
         try {
             const { category, key, value, scope, workspaceId, workspaceRoot } = req.body || {};
             if (!category || !key || !value) {
@@ -841,6 +843,144 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
                 workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
             });
             res.json({ success: true, memory });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    };
+    geminiRouter.post('/memories', createMemory);
+    geminiRouter.post('/memories/create', createMemory);
+
+    geminiRouter.post('/memories/update', async (req: Request, res: Response) => {
+        try {
+            const { id, category, key, value, workspaceRoot } = req.body || {};
+            if (!id) {
+                res.status(400).json({ success: false, error: 'id is required' });
+                return;
+            }
+            const updated = await memoriesService.updateMemory(id, {
+                category,
+                key,
+                value,
+                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
+            });
+            if (!updated) {
+                res.status(404).json({ success: false, error: 'Memory not found' });
+                return;
+            }
+            res.json({ success: true, memory: updated });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.post('/memories/delete', async (req: Request, res: Response) => {
+        try {
+            const { id, workspaceRoot } = req.body || {};
+            if (!id) {
+                res.status(400).json({ success: false, error: 'id is required' });
+                return;
+            }
+            const deleted = await memoriesService.deleteMemory(id, workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined);
+            res.json({ success: deleted });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.post('/memories/clear-category', async (req: Request, res: Response) => {
+        try {
+            const { category, workspaceRoot } = req.body || {};
+            if (!category) {
+                res.status(400).json({ success: false, error: 'category is required' });
+                return;
+            }
+            const clearedCount = await memoriesService.clearCategory(category, workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined);
+            res.json({ success: true, clearedCount });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.get('/memories/writing-profiles', async (req: Request, res: Response) => {
+        try {
+            const raw = req.query.workspaceRoot as string | undefined;
+            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
+            const profiles = await memoriesService.listWritingProfiles(workspaceRoot);
+            const activeProfile = await memoriesService.getActiveWritingProfile(workspaceRoot);
+            res.json({ success: true, profiles, activeProfile });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.post('/memories/writing-profiles', async (req: Request, res: Response) => {
+        try {
+            const { action, id, name, stylePrompt, samples, isActive, scope, workspaceRoot: raw } = req.body || {};
+            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
+            if (action === 'set-active' && id) {
+                res.json({ success: await memoriesService.setActiveWritingProfile(id, workspaceRoot) });
+                return;
+            }
+            if (action === 'delete' && id) {
+                res.json({ success: await memoriesService.deleteWritingProfile(id, workspaceRoot) });
+                return;
+            }
+            if ((action === 'create' || !action) && name && stylePrompt) {
+                const profile = await memoriesService.createWritingProfile({ name, stylePrompt, samples, isActive, scope, workspaceRoot });
+                res.json({ success: true, profile });
+                return;
+            }
+            res.status(400).json({ success: false, error: 'Invalid action or parameters for writing profiles' });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.get('/memories/style-preferences', async (req: Request, res: Response) => {
+        try {
+            const raw = req.query.workspaceRoot as string | undefined;
+            const preferences = await memoriesService.listStylePreferences({
+                category: req.query.category as string | undefined,
+                workspaceRoot: raw ? requireWorkspaceRoot(raw) : undefined
+            });
+            res.json({ success: true, preferences });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.post('/memories/style-preferences', async (req: Request, res: Response) => {
+        try {
+            const { action, id, name, description, stylePrompt, category, isDefault, sortOrder, scope, workspaceRoot: raw } = req.body || {};
+            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
+            if (action === 'delete' && id) {
+                res.json({ success: await memoriesService.deleteStylePreference(id, workspaceRoot) });
+                return;
+            }
+            if ((action === 'create' || !action) && name && stylePrompt) {
+                const preference = await memoriesService.createStylePreference({
+                    name, description, stylePrompt, category, isDefault, sortOrder, scope, workspaceRoot
+                });
+                res.json({ success: true, preference });
+                return;
+            }
+            res.status(400).json({ success: false, error: 'Invalid action or parameters for style preferences' });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.get('/memories/config', async (_req: Request, res: Response) => {
+        try {
+            res.json({ success: true, config: await memoriesService.getConfig() });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    geminiRouter.post('/memories/config', async (req: Request, res: Response) => {
+        try {
+            res.json({ success: true, config: await memoriesService.updateConfig(req.body || {}) });
         } catch (err: any) {
             sendError(res, err);
         }
