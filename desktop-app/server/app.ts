@@ -545,36 +545,98 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         }
     });
 
-    geminiRouter.post('/ping-mcp', async (req: Request, res: Response) => {
+    // `gemini-client.ts` calls `/mcp/ping`; `/ping-mcp` is kept for older callers.
+    const pingMcp = async (req: Request, res: Response): Promise<void> => {
         try {
             const response = await geminiService.pingMcpServer(req.body);
             res.json(response);
         } catch (err: any) {
             res.status(500).json({ error: err.message });
         }
-    });
+    };
+    geminiRouter.post('/ping-mcp', pingMcp);
+    geminiRouter.post('/mcp/ping', pingMcp);
 
-    geminiRouter.post('/credentials', async (req: Request, res: Response) => {
+    // `gemini-client.ts` calls `/save-credentials` with `{ apiKey?, credentialsJson? }`;
+    // `/credentials` is the older API-key-only form. Service-account JSON is always
+    // written to the default per-user location; a caller-supplied `targetPath` is ignored.
+    const saveCredentials = async (req: Request, res: Response): Promise<void> => {
         try {
-            const { apiKey } = req.body || {};
-            if (typeof apiKey !== 'string' || !apiKey.trim()) {
-                res.status(400).json({ success: false, error: 'apiKey is required' });
+            const { apiKey, credentialsJson } = req.body || {};
+            const rawApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+            const rawJson = typeof credentialsJson === 'string' ? credentialsJson.trim() : '';
+            if (!rawApiKey && !rawJson) {
+                res.status(400).json({ success: false, authMethod: 'unauthenticated', error: 'apiKey or credentialsJson is required' });
+                return;
+            }
+            if (rawJson && !rawJson.startsWith('AIza')) {
+                const saved = await mediaCredentials.saveServiceAccount(rawJson);
+                res.status(saved.success ? 200 : 400).json(saved);
                 return;
             }
             // Persist through the encrypted key store; only the running process keeps the env copy.
-            const saved = await mediaCredentials.saveApiKey(apiKey);
+            const key = rawApiKey || rawJson;
+            const saved = await mediaCredentials.saveApiKey(key);
             if (!saved.success) {
-                res.status(400).json({ success: false, error: saved.error || 'Invalid API key' });
+                res.status(400).json({ success: false, authMethod: 'unauthenticated', error: saved.error || 'Invalid API key' });
                 return;
             }
-            process.env.GEMINI_API_KEY = apiKey.trim();
+            process.env.GEMINI_API_KEY = key;
             res.json({
                 success: true,
                 authMethod: saved.authMethod,
                 message: 'Credentials updated successfully'
             });
         } catch (err: any) {
+            res.status(500).json({ success: false, authMethod: 'unauthenticated', error: err.message });
+        }
+    };
+    geminiRouter.post('/credentials', saveCredentials);
+    geminiRouter.post('/save-credentials', saveCredentials);
+
+    geminiRouter.post('/tts', async (req: Request, res: Response) => {
+        try {
+            const { text } = req.body || {};
+            if (typeof text !== 'string' || !text.trim()) {
+                res.status(400).json({ success: false, error: 'text is required' });
+                return;
+            }
+            res.json(await geminiService.synthesizeSpeech(req.body));
+        } catch (err: any) {
             res.status(500).json({ success: false, error: err.message });
+        }
+    });
+
+    geminiRouter.post('/verify-visual', async (req: Request, res: Response) => {
+        try {
+            const request = req.body;
+            if (!request || !request.image || !request.prompt) {
+                res.status(400).json({ success: false, error: 'image and prompt are required' });
+                return;
+            }
+            const audit = await geminiService.verifyVisual(request);
+            res.json({ success: true, ...audit });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err.message || 'Visual verification failed' });
+        }
+    });
+
+    geminiRouter.post('/verify-and-repair', async (req: Request, res: Response) => {
+        try {
+            const { request, artifact } = req.body || {};
+            if (!request || !request.image || !request.prompt) {
+                res.status(400).json({ success: false, error: 'request.image and request.prompt are required' });
+                return;
+            }
+            const verifier = geminiService.getVisualVerificationService();
+            const audit = await verifier.verifyVisual(request);
+            let repairedArtifact = artifact;
+            if (artifact && audit.visualFixes && audit.fidelityScore < 80) {
+                repairedArtifact = verifier.applyVisualAutoRepair(artifact, audit);
+            }
+            res.json({ success: true, audit, repairedArtifact });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err.message || 'Visual verify and repair failed' });
         }
     });
 
@@ -1107,6 +1169,68 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
             }
             const result = await workspaceService.syncArtifactToWorkspace(requireWorkspaceRoot(workspaceRoot), artifact);
             res.json(result);
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    /** Resolves an absolute file path that must sit inside one of the allowed workspace roots. */
+    const requireFileWithinRoots = (candidate: unknown): string => {
+        if (typeof candidate !== 'string' || !candidate.trim()) {
+            throw new PathTraversalError('A file path is required');
+        }
+        for (const root of allowedWorkspaceRoots) {
+            try {
+                return resolveWithinRoot(root, candidate);
+            } catch {
+                // try the next root
+            }
+        }
+        throw new PathTraversalError('Path is outside every allowed workspace root', undefined, candidate);
+    };
+
+    workspaceRouter.post('/write-lens-files', async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, files } = req.body || {};
+            if (!files || typeof files !== 'object' || Array.isArray(files)) {
+                res.status(400).json({ success: false, writtenFiles: [], error: 'files payload is required' });
+                return;
+            }
+            const root = requireWorkspaceRoot(workspaceRoot);
+            // Reject the whole batch up-front (403) rather than relying on the service's soft failure.
+            for (const relPath of Object.keys(files)) {
+                resolveWithinRoot(root, relPath);
+            }
+            const result = await workspaceService.writeLensFiles(root, files, fileWatcher);
+            res.status(result.success ? 200 : 500).json(result);
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    workspaceRouter.post('/register-hash', (req: Request, res: Response) => {
+        try {
+            const { filePath, hash } = req.body || {};
+            if (typeof hash !== 'string' || !hash) {
+                res.status(400).json({ success: false, error: 'hash is required' });
+                return;
+            }
+            fileWatcher.registerKnownHash(requireFileWithinRoots(filePath), hash);
+            res.json({ success: true });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    workspaceRouter.post('/import-mcp', async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, servers } = req.body || {};
+            if (!Array.isArray(servers) || servers.length === 0) {
+                res.status(400).json({ success: false, error: 'No servers provided to import' });
+                return;
+            }
+            const imported = await workspaceService.importExternalMcpServers(requireWorkspaceRoot(workspaceRoot), servers);
+            res.json({ success: true, count: imported.length, servers: imported });
         } catch (err: any) {
             sendError(res, err);
         }
