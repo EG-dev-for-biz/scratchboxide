@@ -1127,11 +1127,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---------------------------------------------------------
     // In-Memory Live Scene Mutation & Synchronization Helper
     // ---------------------------------------------------------
+    // `onUpdate` sets state in the parent Studio, so it must NOT run inside a
+    // `setSceneData(prev => ...)` updater: React executes updaters during this
+    // component's render, which triggers "Cannot update a component while rendering
+    // a different component". Compute `next` from the latest value, commit, then notify.
+    const sceneDataRef = useLatest(sceneData);
     const mutateSceneData = React.useCallback((
         mutator: (prev: Scene3DData) => Scene3DData,
         opInfo?: { operator: string; params?: any }
     ) => {
-        setSceneData(prev => {
+        const prev = sceneDataRef.current;
+        const next = (() => {
             const next = mutator(prev);
             const startTime = Date.now();
 
@@ -1154,13 +1160,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 });
                 next.actionLog = nextLogs;
             }
-
-            if (onUpdate) {
-                onUpdate(next);
-            }
             return next;
-        });
-    }, [onUpdate]);
+        })();
+
+        // Keep the ref current so back-to-back mutations in one tick chain correctly.
+        sceneDataRef.current = next;
+        setSceneData(next);
+        onUpdate?.(next);
+    }, [onUpdate, sceneDataRef]);
 
     // ---------------------------------------------------------
     // Object Selection, Focus & Outliner Helpers
@@ -1671,7 +1678,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const selectObjectRef = useLatest(selectObject);
     const mutateSceneDataRef = useLatest(mutateSceneData);
     const dataRef = useLatest(data);
-    const sceneDataRef = useLatest(sceneData);
+    // sceneDataRef is declared next to mutateSceneData above.
     const selectedShapeRef = useLatest(selectedShape);
 
     // ---- Slice fingerprints -------------------------------------------------------
