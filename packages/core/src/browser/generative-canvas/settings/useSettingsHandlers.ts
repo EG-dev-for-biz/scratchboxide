@@ -20,7 +20,7 @@ import { ProjectItem } from '../ProjectsModal';
 import { StudioSettingsTab, UserMemoryCategory } from '../canvas-types';
 import { GeminiClient } from '../gemini-client';
 import { GoogleDriveService } from '../google-drive-service';
-import { GoogleMapsService } from '../google-maps-service';
+import { GoogleMapsService } from '../services/google-maps-service';
 import { UserMemoriesClient } from '../user-memories-client';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { SettingsSetters, SettingsState } from './settingsReducer';

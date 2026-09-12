@@ -19,7 +19,7 @@ import * as React from 'react';
 import { GeminiStatus } from '../../../common/gemini-protocol';
 import { ImageVideoStylePreference, MemoryCategoryGroup, UserMemoriesConfig, UserMemoryCategory, UserMemoryItem, WritingStyleProfile, getActiveUserName } from '../canvas-types';
 import { GoogleDriveConnectionState, GoogleDriveService } from '../google-drive-service';
-import { GoogleMapsService, GoogleMapsState } from '../google-maps-service';
+import { GoogleMapsService, GoogleMapsState } from '../services/google-maps-service';
 import { ProjectRule, WorkspaceSettings } from '../workspace-config-client';
 
 export type Updater<T> = T | ((prev: T) => T);
