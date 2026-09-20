@@ -1,5 +1,6 @@
 <div id="scratchbox-logo" align="center">
     <br />
+    <img src="./ScratchboxIDE%20logo/ScratchboxIDE.png" alt="Scratchbox IDE Logo" width="120" />
     <h1>Scratchbox IDE</h1>
     <p><strong>Autonomous AI Generative Canvas Studio, Visual Primitives & 3D Geospatial Engine</strong></p>
 </div>
@@ -41,6 +42,7 @@ node desktop-app/dist-electron/desktop-app/server/index.js
 
 ### Docker
 
+**Standalone Web App (Production Hardened)**:
 ```bash
 docker build -t scratchbox-ide .
 docker run -p 3001:3001 -e GEMINI_API_KEY=... -v "$PWD/workspace:/workspace" scratchbox-ide
@@ -49,6 +51,14 @@ docker run -p 3001:3001 -e GEMINI_API_KEY=... -v "$PWD/workspace:/workspace" scr
 The image runs the compiled server as a non-root user, binds `0.0.0.0` inside the
 container and exposes `/health`. Mount a read-only `secrets.json` at
 `/home/scratchbox/.scratchbox/secrets.json` instead of baking credentials into the image.
+
+**Inference Sidecar (GeoBox & DepthBox 6-DOF)**:
+```bash
+docker build -f Dockerfile.inference -t scratchbox-inference .
+docker run -p 8080:8080 scratchbox-inference
+```
+
+Multi-runtime container providing Python 3, PyTorch, OpenCV, Clang C++20 toolchains, and `/api/geobox/health` endpoint.
 
 ### Quality gates
 

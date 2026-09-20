@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+# ------------------------------------------------------------------------------
+# Scratchbox IDE & Neural Model Showcase - Inference Container
+# Multi-runtime image supporting Node.js static/API serving, Python 3 inference,
+# and native Clang C++20 toolchains.
+# ------------------------------------------------------------------------------
+
+FROM node:22-bookworm-slim
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PORT=8080
+ENV PYTHON_BIN=python3
+
+# Install system dependencies: Python 3, pip, Clang C++20 compiler, FFmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    clang \
+    build-essential \
+    ffmpeg \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies for GeoBox & DepthBox 6-DOF pipelines
+RUN pip3 install --no-cache-dir --break-system-packages \
+    torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --no-cache-dir --break-system-packages \
+    pillow \
+    numpy \
+    scipy \
+    opencv-python-headless \
+    requests
+
+# Copy package descriptors first for caching
+COPY package.json package-lock.json* ./
+
+# Install Node dependencies (production only if available)
+RUN npm install --omit=dev --ignore-scripts || npm install --omit=dev
+
+# Copy application directories
+COPY public ./public
+COPY scripts ./scripts
+COPY tools ./tools
+COPY packages ./packages
+
+# Expose Google Cloud Run standard port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/api/geobox/health || exit 1
+
+# Start server
+CMD ["node", "scripts/serve_public.cjs"]

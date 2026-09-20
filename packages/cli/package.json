@@ -1,0 +1,27 @@
+{
+  "name": "@scratchbox/cli",
+  "version": "1.0.0",
+  "description": "Scratchbox CLI (sbox) — Git for the Physical World & Headless 3D Procedural Engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sbox": "./bin/sbox.js",
+    "scratchbox": "./bin/sbox.js"
+  },
+  "scripts": {
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=node --target=node20 --outfile=dist/index.js --external:node-fetch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run test"
+  },
+  "dependencies": {
+    "@scratchbox/core": "file:../core",
+    "fs-extra": "^11.2.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.9"
+  }
+}

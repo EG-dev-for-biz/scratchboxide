@@ -11,6 +11,7 @@
     "build": "tsc && vite build && tsc -p tsconfig.electron.json",
     "build:client": "vite build",
     "start": "electron .",
+    "start:standalone": "SCRATCHBOX_STANDALONE=true electron .",
     "test": "vitest run --root .. desktop-app/test"
   },
   "dependencies": {
@@ -20,8 +21,7 @@
     "express": "^4.19.2",
     "fs-extra": "^11.2.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "three": "^0.150.0"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -30,7 +30,6 @@
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
-    "@types/three": "^0.150.0",
     "@vitejs/plugin-react": "^4.2.1",
     "concurrently": "^8.2.2",
     "electron": "^38.4.0",

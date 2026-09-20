@@ -25,3 +25,28 @@ service-account.json
 # Local Scratchbox cache and artifacts
 .scratchbox/
 dist-electron/
+models/
+build/
+*.ckpt
+*.safetensors
+
+# Transient root artifacts and binary pipeline outputs
+/*.glb
+/*.gltf
+/*.ply
+/*.splat
+/*.o
+/*.obj
+/*.png
+/*.jpg
+/*.jpeg
+/*.mp4
+
+# Temporary experiment scratch directories
+temp_unwrap_rewrap/
+temp-artifacts/
+**/temp-artifacts/
+.chrome-profile/
+scratch/
+qc_debug.json
+packages/.temp-cli-test-*/
