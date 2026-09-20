@@ -208,6 +208,48 @@ export interface Google3DTilesQueryOptions {
   fps?: number;
 }
 
+export interface TileClayBlockoutRunnerRequest {
+  query: string | GeoAnchor;
+  apiKey?: string;
+  clayPreset?: 'studio-grey' | 'warm-clay' | 'alabaster';
+  trajectoryPreset?: 'cinematic_arc' | 'orbit_360' | 'canyon_push';
+  cameraPath?: CameraPathData | string;
+  radiusMeters?: number;
+  fps?: number;
+  durationSec?: number;
+  outputDir?: string;
+  outputVideoPath?: string;
+  outputGlbPath?: string;
+  firstFramePngPath?: string;
+  collisionAvoidance?: boolean;
+  offlineMock?: boolean;
+  port?: number;
+}
+
+export interface TileClayBlockoutRunnerResult {
+  success: boolean;
+  videoRef: '<VIDEO_REF_0>';
+  blockoutVideoPath: string;
+  webmVideoPath?: string;
+  startFramePngPath: string;
+  firstFramePath: string;
+  clayGlbPath: string;
+  glbBuffer?: Buffer;
+  cameraPath: CameraPathData;
+  meshStats: Google3DTileMeshStats;
+  geoAnchor: GeoAnchor;
+  resolvedAddress?: string;
+  frameCount: number;
+  fps: number;
+  durationSec: number;
+  collisionAudit?: {
+    enabled: boolean;
+    violationsDetected: number;
+    minClearanceMeters: number;
+    auditPassed: boolean;
+  };
+}
+
 export interface TileBlockoutPipelineResult {
   success: boolean;
   videoRef: '<VIDEO_REF_0>';
@@ -530,6 +572,108 @@ export class Google3DTileBlockoutPipelineService {
           focalLengthMm,
           apertureFStop,
           dist
+        );
+        depthOfFieldNearMeters = Number(dof.nearFocusLimitMeters.toFixed(3));
+        depthOfFieldFarMeters = Number(dof.farFocusLimitMeters.toFixed(3));
+      }
+
+      frames.push({
+        frame: i,
+        timeSec: Number((i / fps).toFixed(4)),
+        position: camPos,
+        target: targetPos,
+        up: [0, 1, 0],
+        fov,
+        rollDeg: 0.0,
+        focalLengthMm,
+        apertureFStop,
+        focusDistanceMeters,
+        sensorFormat,
+        depthOfFieldNearMeters,
+        depthOfFieldFarMeters
+      });
+    }
+
+    return {
+      fps,
+      durationSec,
+      totalFrames,
+      frames,
+      origin: anchor,
+      environment: 'Google Photorealistic 3D Tiles'
+    };
+  }
+
+  /**
+   * Creates a linear or gentle-curve push-in flight trajectory along a street canyon or facade axis.
+   * Starts further back and higher, smoothly descending and pushing inward toward the landmark.
+   */
+  public createPushInTrajectory(
+    anchor: GeoAnchor,
+    options: {
+      fps?: number;
+      durationSec?: number;
+      corridorDistanceMeters?: number;
+      startAltitudeMeters?: number;
+      endAltitudeMeters?: number;
+      targetElevation?: number;
+      headingDeg?: number;
+      fov?: number;
+      physicalCamera?: PhysicalCameraConfig;
+    } = {}
+  ): CameraPathData {
+    const fps = options.fps ?? 24;
+    const durationSec = options.durationSec ?? 3.0;
+    const totalFrames = Math.round(fps * durationSec);
+    const frames: CameraPoseFrame[] = [];
+
+    const dist = options.corridorDistanceMeters ?? 160.0;
+    const startAlt = options.startAltitudeMeters ?? 75.0;
+    const endAlt = options.endAltitudeMeters ?? 28.0;
+    const targetY = options.targetElevation ?? 20.0;
+    const headingRad = ((options.headingDeg ?? 0) * Math.PI) / 180;
+
+    let fov = options.fov ?? 50.0;
+    if (options.physicalCamera && options.fov === undefined) {
+      const frustum = PhysicalCameraModel.calculateFrustum(options.physicalCamera);
+      fov = Number(frustum.verticalFovDeg.toFixed(2));
+    }
+
+    const dirX = Math.sin(headingRad);
+    const dirZ = Math.cos(headingRad);
+
+    for (let i = 0; i < totalFrames; i++) {
+      const t = i / (totalFrames - 1);
+      const easeT = 0.5 - 0.5 * Math.cos(t * Math.PI);
+      const currentDist = dist * (1.0 - 0.72 * easeT);
+      const posY = startAlt + (endAlt - startAlt) * easeT;
+
+      const posX = dirX * currentDist;
+      const posZ = dirZ * currentDist;
+
+      const camPos: [number, number, number] = [Number(posX.toFixed(3)), Number(posY.toFixed(3)), Number(posZ.toFixed(3))];
+      const targetPos: [number, number, number] = [0, Number(targetY.toFixed(3)), 0];
+
+      let focalLengthMm: number | undefined;
+      let apertureFStop: number | undefined;
+      let focusDistanceMeters: number | undefined;
+      let sensorFormat: string | undefined;
+      let depthOfFieldNearMeters: number | undefined;
+      let depthOfFieldFarMeters: number | undefined;
+
+      if (options.physicalCamera) {
+        focalLengthMm = options.physicalCamera.focalLengthMm ?? 50.0;
+        apertureFStop = options.physicalCamera.apertureFStop ?? 2.8;
+        sensorFormat = options.physicalCamera.sensorFormatPreset || 'custom';
+        const dx = camPos[0] - targetPos[0];
+        const dy = camPos[1] - targetPos[1];
+        const dz = camPos[2] - targetPos[2];
+        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        focusDistanceMeters = Number(distance.toFixed(3));
+        const dof = PhysicalCameraModel.calculateDepthOfField(
+          focalLengthMm,
+          apertureFStop,
+          distance
         );
         depthOfFieldNearMeters = Number(dof.nearFocusLimitMeters.toFixed(3));
         depthOfFieldFarMeters = Number(dof.farFocusLimitMeters.toFixed(3));
@@ -2162,3 +2306,166 @@ export async function getGoogle3DTilesClay(
   const service = new Google3DTileBlockoutPipelineService();
   return service.fetch3DObject(query, 'clay', options);
 }
+
+/**
+ * Convenience helper to create a complete 360-degree orbital flight corridor.
+ */
+export function create3DTilesOrbitTrajectory(
+  anchor: GeoAnchor,
+  options?: {
+    fps?: number;
+    durationSec?: number;
+    corridorRadiusMeters?: number;
+    altitudeMeters?: number;
+    targetElevation?: number;
+    fov?: number;
+    physicalCamera?: PhysicalCameraConfig;
+  }
+): CameraPathData {
+  const service = new Google3DTileBlockoutPipelineService();
+  return service.createFullOrbitTrajectory(anchor, options);
+}
+
+/**
+ * Convenience helper to create a linear or gentle-curve push-in flight corridor along a street canyon or facade axis.
+ */
+export function create3DTilesPushInTrajectory(
+  anchor: GeoAnchor,
+  options?: {
+    fps?: number;
+    durationSec?: number;
+    corridorDistanceMeters?: number;
+    startAltitudeMeters?: number;
+    endAltitudeMeters?: number;
+    targetElevation?: number;
+    headingDeg?: number;
+    fov?: number;
+    physicalCamera?: PhysicalCameraConfig;
+  }
+): CameraPathData {
+  const service = new Google3DTileBlockoutPipelineService();
+  return service.createPushInTrajectory(anchor, options);
+}
+
+/**
+ * Canonical high-level execution API for the Google Maps 3D Tile Clay Blockout Runner.
+ *
+ * Automatically resolves coordinates, generates the requested 6-DoF trajectory,
+ * runs headless WebGL rendering with studio grey clay PBR material and collision avoidance,
+ * and returns <VIDEO_REF_0>, startFramePngPath (Frame 0 PNG for AI Beautify -> <IMAGE_REF_0>),
+ * and the extracted .glb volumetric massing.
+ */
+export async function runTileClayBlockoutRunner(
+  request: TileClayBlockoutRunnerRequest
+): Promise<TileClayBlockoutRunnerResult> {
+  const service = new Google3DTileBlockoutPipelineService();
+  const geoAnchor = await service.resolveAddress(request.query, request.apiKey);
+
+  let cameraPath: CameraPathData | string;
+  if (request.cameraPath) {
+    cameraPath = request.cameraPath;
+  } else {
+    const trajectoryPreset = request.trajectoryPreset || 'cinematic_arc';
+    switch (trajectoryPreset) {
+      case 'orbit_360':
+        cameraPath = service.createFullOrbitTrajectory(geoAnchor, {
+          corridorRadiusMeters: request.radiusMeters,
+          fps: request.fps ?? 24,
+          durationSec: request.durationSec ?? 3.0
+        });
+        break;
+      case 'canyon_push':
+        cameraPath = service.createPushInTrajectory(geoAnchor, {
+          corridorDistanceMeters: request.radiusMeters,
+          fps: request.fps ?? 24,
+          durationSec: request.durationSec ?? 3.0
+        });
+        break;
+      case 'cinematic_arc':
+      default:
+        cameraPath = service.createDefaultTrajectory(geoAnchor, {
+          corridorRadiusMeters: request.radiusMeters,
+          fps: request.fps ?? 24,
+          durationSec: request.durationSec ?? 3.0
+        });
+        break;
+    }
+  }
+
+  const defaultDir = request.outputDir || 'public';
+  const outputVideoPath = request.outputVideoPath
+    ? (path.isAbsolute(request.outputVideoPath) ? request.outputVideoPath : path.join(process.cwd(), request.outputVideoPath))
+    : path.join(process.cwd(), defaultDir, 'videos/google_tiles_clay_blockout_camera.mp4');
+
+  const outputGlbPath = request.outputGlbPath
+    ? (path.isAbsolute(request.outputGlbPath) ? request.outputGlbPath : path.join(process.cwd(), request.outputGlbPath))
+    : path.join(process.cwd(), defaultDir, 'models/google_tiles_clay_area.glb');
+
+  const firstFramePngPath = request.firstFramePngPath
+    ? (path.isAbsolute(request.firstFramePngPath) ? request.firstFramePngPath : path.join(process.cwd(), request.firstFramePngPath))
+    : path.join(process.cwd(), defaultDir, 'images/blockout_frame_00.png');
+
+  const result = await service.run({
+    address: typeof request.query === 'string' ? request.query : undefined,
+    geoAnchor,
+    cameraPath,
+    mode: 'clay',
+    apiKey: request.apiKey,
+    port: request.port,
+    offlineMock: request.offlineMock,
+    collision: {
+      enabled: request.collisionAvoidance ?? true
+    },
+    atmosphere: {
+      renderMode: 'clay',
+      clayPreset: request.clayPreset ?? 'studio-grey'
+    },
+    output: {
+      outputVideoPath,
+      outputGlbPath,
+      firstFramePngPath,
+      fps: request.fps ?? 24
+    }
+  });
+
+  const parsedCameraPath: CameraPathData = typeof cameraPath === 'string'
+    ? service.loadCameraPath(cameraPath)
+    : cameraPath;
+
+  const defaultWebm = outputVideoPath.replace(/\.mp4$/i, '.webm');
+  const webmVideoPath = fs.existsSync(defaultWebm) ? defaultWebm : undefined;
+
+  return {
+    success: result.success,
+    videoRef: '<VIDEO_REF_0>',
+    blockoutVideoPath: result.outputVideoPath,
+    webmVideoPath,
+    startFramePngPath: result.firstFramePngPath,
+    firstFramePath: result.firstFramePath,
+    clayGlbPath: result.glbPath || outputGlbPath,
+    glbBuffer: result.glbBuffer,
+    cameraPath: parsedCameraPath,
+    meshStats: result.mesh || {
+      name: 'Google3DTile_clay',
+      vertexCount: 1024,
+      triangleCount: 512,
+      submeshCount: 1,
+      boundingBox: { min: [-100, -10, -100], max: [100, 200, 100] },
+      boundingSphere: { center: [0, 50, 0], radius: 150 }
+    },
+    geoAnchor: result.geoAnchor,
+    resolvedAddress: result.resolvedAddress,
+    frameCount: result.frameCount,
+    fps: result.fps,
+    durationSec: result.durationSec,
+    collisionAudit: result.collisionAudit
+      ? {
+          enabled: result.collisionAudit.enabled,
+          violationsDetected: result.collisionAudit.violationsDetected,
+          minClearanceMeters: result.collisionAudit.minClearanceMeters,
+          auditPassed: result.collisionAudit.auditPassed
+        }
+      : undefined
+  };
+}
+

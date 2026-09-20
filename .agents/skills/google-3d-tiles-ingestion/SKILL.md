@@ -163,3 +163,54 @@ await ctx.geminiService.executeMountCanvasPrimitive({
   }
 });
 ```
+
+---
+
+## 7. Canonical Clay Blockout Runner (`<VIDEO_REF_0>`)
+
+For generative video synthesis with Gemini Omni / Vertex AI, the **Google Maps 3D Tile Clay Blockout Runner** is the canonical standard for providing 3D spatial conditioning:
+
+```typescript
+import {
+  runTileClayBlockoutRunner,
+  create3DTilesOrbitTrajectory,
+  create3DTilesPushInTrajectory,
+  type TileClayBlockoutRunnerResult
+} from '@scratchbox/core/node';
+
+const blockoutResult: TileClayBlockoutRunnerResult = await runTileClayBlockoutRunner({
+  query: 'Tokyo Tower, coordinates: 35.658600, 139.745400',
+  trajectoryPreset: 'canyon_push', // 'cinematic_arc' | 'orbit_360' | 'canyon_push'
+  clayPreset: 'studio-grey',       // '#dcd6cd', roughness 0.82, metalness 0.02
+  outputVideoPath: 'public/videos/google_tiles_clay_blockout_camera.mp4',
+  firstFramePngPath: 'public/images/blockout_frame_00.png',
+  outputGlbPath: 'public/models/google_tiles_clay_area.glb'
+});
+
+// Outputs:
+// - blockoutResult.videoRef: Strictly '<VIDEO_REF_0>'
+// - blockoutResult.startFramePngPath: Frame 0 PNG precursor for AI Beautify -> <IMAGE_REF_0>
+// - blockoutResult.clayGlbPath: Real-world geodetic massing mesh (.glb)
+```
+
+### Agent Tool: `google_3d_tiles_clay_blockout_runner`
+```json
+{
+  "name": "google_3d_tiles_clay_blockout_runner",
+  "description": "Execute the canonical Google Maps 3D Tile Clay Blockout Runner. Headlessly streams real-world 3D tiles in studio grey clay PBR, runs collision-avoided 6-DoF camera flight (cinematic_arc, orbit_360, or canyon_push), and exports <VIDEO_REF_0> (MP4/WebM), startFramePngPath (Frame 0 PNG for AI Beautify -> <IMAGE_REF_0>), and volumetric .glb mesh.",
+  "parameters": {
+    "type": "OBJECT",
+    "properties": {
+      "query": { "type": "STRING", "description": "Geographic coordinate string or address" },
+      "trajectoryPreset": { "type": "STRING", "description": "'cinematic_arc' | 'orbit_360' | 'canyon_push'" },
+      "clayPreset": { "type": "STRING", "description": "'studio-grey' | 'warm-clay' | 'alabaster'" },
+      "outputVideoPath": { "type": "STRING", "description": "Destination path for <VIDEO_REF_0> MP4" },
+      "outputGlbPath": { "type": "STRING", "description": "Destination path for .glb massing" },
+      "firstFramePngPath": { "type": "STRING", "description": "Destination path for Frame 0 PNG" },
+      "mockExecution": { "type": "BOOLEAN", "description": "Optional offline mock mode" }
+    },
+    "required": ["query"]
+  }
+}
+```
+

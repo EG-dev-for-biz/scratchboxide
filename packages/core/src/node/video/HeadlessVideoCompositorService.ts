@@ -41,6 +41,7 @@ export interface CompositeJobResult {
     stdout?: string;
     stderr?: string;
     error?: string;
+    [key: string]: unknown;
 }
 
 export class HeadlessVideoCompositorService {
@@ -101,10 +102,10 @@ export class HeadlessVideoCompositorService {
 
         // Process each video track from bottom to top
         for (const track of videoTracks) {
-            if (!track.visible) continue;
+            if (track.visible === false) continue;
 
             for (const el of track.elements) {
-                const clipFilePath = customInputs?.[el.id] || el.url;
+                const clipFilePath = customInputs?.[el.id] || el.url || (el as any).sourceUrl || (el as any).src;
                 const isVirtualColor = !clipFilePath || clipFilePath.startsWith('blob:') || clipFilePath.startsWith('data:');
 
                 if (isVirtualColor) {

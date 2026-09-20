@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import {
-    resectImageLocation,
-    GeoBoxPrecisionResectionService,
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere,
     generateCanonicalAmbulatoryFixtures,
     STONE_ALBEDO_PROFILES
 } from '../src/index';
+import {
+    resectImageLocation,
+    GeoBoxPrecisionResectionService
+} from '../src/node';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 

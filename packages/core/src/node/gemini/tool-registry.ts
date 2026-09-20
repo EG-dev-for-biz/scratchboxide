@@ -35,6 +35,8 @@ import {
     panoramaHandlers,
     UTDRA_TOOL_DECLARATIONS,
     utdraHandlers,
+    VFX_VIDEO_TOOL_DECLARATIONS,
+    vfxVideoHandlers,
     AI_BEAUTIFY_TOOL_DECLARATIONS,
     aiBeautifyHandlers,
     NANO_BANANA_TOOL_DECLARATIONS,
@@ -90,6 +92,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('google_3d_tiles_')) return `Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Atmospheric Simulation: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Native Mesh Reshaping: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('vfx_')) return `VFX & Video Engine: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -98,6 +101,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Atmosphere: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Mesh: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('vfx_')) return `VFX: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             return `Workspace: ${name}`;
         },
         stepTitle: name => {
@@ -106,6 +110,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Simulate atmospheric lighting: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Reshape 3D mesh via native C++20 engine: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('vfx_')) return `Execute video & VFX operation: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             return `Invoke ${name}`;
         },
         durationMs: { completed: 25, failed: 25 },
@@ -180,6 +185,7 @@ export function inferToolGroup(name: string): ToolGroup {
         name.startsWith('panorama_') ||
         name.startsWith('nano_banana_') ||
         name.startsWith('algorithmic_uv_') ||
+        name.startsWith('vfx_') ||
         name === 'pbr_material_decompose' ||
         name === 'atlas_maxrects_pack' ||
         name === 'build_beautify_prompt'
@@ -401,8 +407,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
     for (const decl of UTDRA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, utdraHandlers[decl.name], 'workspace');
     }
-    for (const decl of AI_BEAUTIFY_TOOL_DECLARATIONS) {
-        registry.register(decl.name, decl, aiBeautifyHandlers[decl.name], 'workspace');
+    for (const decl of VFX_VIDEO_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, vfxVideoHandlers[decl.name], 'workspace');
     }
     for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');

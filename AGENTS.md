@@ -73,6 +73,19 @@ When implementing 3D (scenes, models, procedural geometry, terrain generation, s
 63:    - Runner files are generated uniquely per run (`s4d_tile_blockout_runner_${timestamp}_${rand}.html`) and automatically unlinked upon pipeline completion or process exit.
 64:    - Headless Chrome and FFmpeg executables are auto-discovered across macOS and Linux standard paths.
 
+### Rule: Google 3D Tiles Clay Mode as Canonical Blockout Runner (<VIDEO_REF_0>)
+When providing 3D spatial blockouts for video generation, camera trajectory conditioning, or generative restyling with Gemini Omni / Vertex AI:
+1. **Google Maps 3D Tiles Clay Mode is Canonical**:
+   - Always prefer the automated headless Google Maps 3D Tile Clay Blockout Runner (`runTileClayBlockoutRunner` / `google_3d_tiles_clay_blockout_runner`) over manual external Blender workflows or textured tile blockouts.
+   - Studio grey clay shading (`#dcd6cd` / `#b0b8c4`, roughness 0.82, metalness 0.02) provides pure geometric massing, occlusion, and parallax without photogrammetric texture baking, burnt-in lighting, or texture boiling in diffusion video synthesis.
+2. **Canonical Contract & Artifact Output**:
+   - `videoRef`: Strictly `<VIDEO_REF_0>` (H.264 MP4 and VP9 WebM camera flight).
+   - `startFramePngPath`: High-resolution Frame 0 PNG (`blockout_frame_00.png`) providing the 1:1 camera pose precursor for AI Beautify (`buildBeautifyPrompt`) to generate `<IMAGE_REF_0>`.
+   - `clayGlbPath`: Standardized binary glTF 2.0 (`.glb`) containing the real-world geodetic volumetric massing for downstream simulation or compositing.
+3. **Trajectory Presets & Raycast Collision Avoidance**:
+   - Supported trajectories: `cinematic_arc` (default 72-frame orbital descent), `orbit_360` (full 360-degree orbital survey), and `canyon_push` (street-level forward push-in).
+   - All trajectories utilize real-time octree raycasting with Catmull-Rom spline altitude compensation to guarantee zero building or terrain penetration.
+
 ## Code Quality & Engineering Principles
 
 1. **Precision & Investigation**: Inspect existing files before editing. Never guess symbol names or file paths.

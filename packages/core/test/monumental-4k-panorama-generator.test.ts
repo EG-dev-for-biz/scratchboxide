@@ -15,7 +15,7 @@ import {
     Google360PanoramaPipelineService,
     generate4KMonumentalPanorama,
     generate360Panorama
-} from '../src/index';
+} from '../src/node';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 

@@ -48,7 +48,12 @@ import {
     tapir4dgsHandlers
 } from './spatial-tools';
 import { ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers } from './atmosphere-tools';
-import { AI_BEAUTIFY_TOOL_DECLARATIONS, aiBeautifyHandlers } from './vfx-video-tools';
+import {
+    VFX_VIDEO_TOOL_DECLARATIONS,
+    vfxVideoHandlers,
+    AI_BEAUTIFY_TOOL_DECLARATIONS,
+    aiBeautifyHandlers
+} from './vfx-video-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -56,7 +61,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
-    ...AI_BEAUTIFY_TOOL_DECLARATIONS,
+    ...VFX_VIDEO_TOOL_DECLARATIONS,
     ...NANO_BANANA_TOOL_DECLARATIONS,
     ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
     ...ATMOSPHERE_TOOL_DECLARATIONS,
@@ -78,7 +83,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...google3DTilesHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
-    ...aiBeautifyHandlers,
+    ...vfxVideoHandlers,
     ...nanoBananaHandlers,
     ...algorithmicUvHandlers,
     ...atmosphereHandlers,

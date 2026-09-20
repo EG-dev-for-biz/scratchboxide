@@ -18,9 +18,12 @@ import {
   DEFAULT_GOOGLE_MAPS_TILES_API_KEY,
   geocode3DTilesAddress,
   create3DTilesTrajectory,
+  create3DTilesOrbitTrajectory,
+  create3DTilesPushInTrajectory,
   runGoogle3DTilesPipeline,
   getGoogle3DTilesFullTexture,
-  getGoogle3DTilesClay
+  getGoogle3DTilesClay,
+  runTileClayBlockoutRunner
 } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import {
   buildBlockoutOmniPipelinePlan
@@ -621,6 +624,60 @@ async function runBlockoutPipelineTests() {
 
     await fs.remove(tmpDir);
     console.log('  ✓ Test 11 Passed: getGoogle3DTilesFullTexture and getGoogle3DTilesClay return verified high-fidelity 3D objects');
+  }
+
+  // =========================================================================
+  // Test 12: Codified Google Maps 3D Tile Clay Blockout Runner (<VIDEO_REF_0>)
+  // =========================================================================
+  console.log('Testing 12: Codified Google Maps 3D Tile Clay Blockout Runner (<VIDEO_REF_0>)...');
+  {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'scratchbox-tile-clay-runner-test-'));
+
+    // A: Test trajectory presets: cinematic_arc, orbit_360, canyon_push
+    const anchor: GeoAnchor = { lat: 35.6586, lng: 139.7454, elevation: 25.0, landmarkName: 'Tokyo Tower' };
+    const orbitPath = create3DTilesOrbitTrajectory(anchor, { corridorRadiusMeters: 200, fps: 24, durationSec: 3.0 });
+    assert.strictEqual(orbitPath.totalFrames, 72);
+    assert.strictEqual(orbitPath.frames.length, 72);
+    assert.strictEqual(orbitPath.origin.landmarkName, 'Tokyo Tower');
+
+    const pushInPath = create3DTilesPushInTrajectory(anchor, { corridorDistanceMeters: 180, fps: 24, durationSec: 3.0 });
+    assert.strictEqual(pushInPath.totalFrames, 72);
+    assert.strictEqual(pushInPath.frames.length, 72);
+    const startDist = Math.hypot(pushInPath.frames[0].position[0], pushInPath.frames[0].position[2]);
+    const endDist = Math.hypot(pushInPath.frames[71].position[0], pushInPath.frames[71].position[2]);
+    assert.ok(endDist < startDist, 'Push-in trajectory must end closer to the target than it started');
+
+    // B: Execute runTileClayBlockoutRunner with canyon_push and studio-grey clay
+    const outVideo = path.join(tmpDir, 'clay_canyon_blockout.mp4');
+    const outGlb = path.join(tmpDir, 'clay_canyon_massing.glb');
+    const outPng = path.join(tmpDir, 'clay_canyon_frame_00.png');
+
+    const runnerRes = await runTileClayBlockoutRunner({
+      query: anchor,
+      trajectoryPreset: 'canyon_push',
+      clayPreset: 'studio-grey',
+      outputVideoPath: outVideo,
+      outputGlbPath: outGlb,
+      firstFramePngPath: outPng,
+      offlineMock: true
+    });
+
+    assert.strictEqual(runnerRes.success, true);
+    assert.strictEqual(runnerRes.videoRef, '<VIDEO_REF_0>', 'videoRef must strictly be <VIDEO_REF_0>');
+    assert.strictEqual(runnerRes.blockoutVideoPath, outVideo);
+    assert.ok(fs.existsSync(runnerRes.blockoutVideoPath), 'Blockout video must exist on disk');
+    assert.strictEqual(runnerRes.startFramePngPath, outPng);
+    assert.ok(fs.existsSync(runnerRes.startFramePngPath), 'Start frame PNG must exist on disk');
+    assert.strictEqual(runnerRes.clayGlbPath, outGlb);
+    assert.ok(fs.existsSync(runnerRes.clayGlbPath), 'Clay GLB massing must exist on disk');
+    assert.strictEqual(runnerRes.frameCount, 72);
+    assert.strictEqual(runnerRes.fps, 24);
+    assert.strictEqual(runnerRes.durationSec, 3.0);
+    assert.ok(runnerRes.meshStats.vertexCount > 0, 'Vertex count must be > 0');
+    assert.strictEqual(runnerRes.geoAnchor.landmarkName, 'Tokyo Tower');
+
+    await fs.remove(tmpDir);
+    console.log('  ✓ Test 12 Passed: Codified Tile Clay Blockout Runner outputs verified <VIDEO_REF_0>, Frame 0 PNG, and GLB massing');
   }
 
   console.log('\n🎉 ALL GOOGLE 3D TILE BLOCKOUT PIPELINE TESTS PASSED!\n');
