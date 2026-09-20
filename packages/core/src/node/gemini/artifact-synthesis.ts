@@ -25,17 +25,83 @@ import {
     synthesizeMediaDocument
 } from '../../browser/generative-canvas/document-synthesis-engine';
 import { synthesizeContextual3DScene } from '../../browser/generative-canvas/procedural-3d-synthesizer';
+import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
+import { synthesizeContextualVideoTimeline } from '../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
+import {
+    classifyDomain,
+    extractPromptEntities,
+    synthesizeAdaptiveKanban,
+    synthesizeAdaptiveNodeGraph,
+    synthesizeAdaptiveMetrics,
+    synthesizeAdaptiveSandbox
+} from '../../browser/generative-canvas/services/adaptive-domain-engine';
+export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
 
 /** Neutral default attribution for synthesized documents. */
 export const DEFAULT_DOCUMENT_AUTHOR = 'Scratchbox Studio';
 
+export interface ExtractedScratchboxTag {
+    matched: boolean;
+    type?: string;
+    title?: string;
+    summary?: string;
+    version?: number;
+    rawPayload?: string;
+    cleanText?: string;
+}
+
 /**
- * Artifact synthesis: turns raw model output (JSON code blocks, markdown, runnable code) into a
- * structured `CanvasArtifact`, with deterministic fallbacks for documents, 3D scenes, graphs and
- * live code sandboxes when the model returns prose only.
+ * Parses canonical <scratchboxPrimitive type="..." title="..." summary="..." version="..."> tags
+ * from model output, providing zero-overhead, deterministic artifact extraction without fragile regex heuristics.
  */
+export function extractScratchboxPrimitiveTag(modelText: string): ExtractedScratchboxTag {
+    if (!modelText || typeof modelText !== 'string') {
+        return { matched: false };
+    }
+    const tagRegex = /<scratchboxPrimitive\s+([^>]*?)>([\s\S]*?)(?:<\/scratchboxPrimitive>|$)/i;
+    const match = modelText.match(tagRegex);
+    if (!match) {
+        return { matched: false };
+    }
+
+    const attrStr = match[1];
+    const rawPayload = match[2].trim();
+
+    // Parse attributes
+    const attrs: Record<string, string> = {};
+    const attrRegex = /([a-zA-Z0-9_-]+)=(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+    let attrMatch: RegExpExecArray | null;
+    while ((attrMatch = attrRegex.exec(attrStr)) !== null) {
+        attrs[attrMatch[1].toLowerCase()] = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? '';
+    }
+
+    const rawType = (attrs.type || '').trim().toLowerCase();
+    let normalizedType = rawType;
+    if (normalizedType === 'action-checklist') normalizedType = 'checklist';
+    if (normalizedType === 'skills-manager') normalizedType = 'skills-hub';
+    if (normalizedType === 'rendered-document' || normalizedType === 'document' || normalizedType === 'doc') normalizedType = 'markdown-document';
+    if (normalizedType === 'flow-graph' || normalizedType === 'graph') normalizedType = 'node-graph';
+    if (normalizedType === 'metrics' || normalizedType === 'dashboard') normalizedType = 'metric-dashboard';
+    if (normalizedType === 'kanban') normalizedType = 'kanban-board';
+    if (normalizedType === 'form') normalizedType = 'interactive-form';
+    if (normalizedType === 'sandbox' || normalizedType === 'code-sandbox' || normalizedType === 'playground' || normalizedType === 'code-playground') normalizedType = 'live-code-sandbox';
+    if (normalizedType === '3d' || normalizedType === 'scene-3d' || normalizedType === 'spatial-scene' || normalizedType === '3d_scene' || normalizedType === '3d-world' || normalizedType === 'r3f-scene') normalizedType = '3d-scene';
+    if (normalizedType === 'video-timeline' || normalizedType === 'video' || normalizedType === 'timeline' || normalizedType === 'video-editor' || normalizedType === 'nle' || normalizedType === 'video_timeline') normalizedType = 'video-timeline';
+
+    const cleanText = modelText.replace(/<scratchboxPrimitive[\s\S]*?(?:<\/scratchboxPrimitive>|$)/gi, '').trim();
+
+    return {
+        matched: true,
+        type: normalizedType || undefined,
+        title: attrs.title || undefined,
+        summary: attrs.summary || undefined,
+        version: attrs.version ? parseInt(attrs.version, 10) : 1,
+        rawPayload,
+        cleanText
+    };
+}
 
 /**
  * Convert markdown string to structured MarkdownSection items.
@@ -55,7 +121,7 @@ export function markdownStringToSections(md: string): MarkdownSection[] {
     const flushParagraph = () => {
         if (currentParagraph.length > 0) {
             const firstLine = currentParagraph[0].trim();
-            // Check for explicit GitHub/Obsidian style callout syntax on first line: > [!NOTE], > [!TIP], > [!INFO], > [!WARNING], > [!IMPORTANT]
+            // Check for explicit GitHub/Markdown style callout syntax on first line: > [!NOTE], > [!TIP], > [!INFO], > [!WARNING], > [!IMPORTANT]
             const calloutMatch = firstLine.match(/^>\s*\[!(NOTE|TIP|INFO|WARNING|IMPORTANT|CAUTION)\](?:\s+(.+))?$/i);
 
             if (calloutMatch) {
@@ -270,11 +336,450 @@ export function markdownStringToSections(md: string): MarkdownSection[] {
 }
 
 /**
+ * Detects whether the prompt or title indicates a 3D procedural/mesh/engine studio request.
+ */
+export function is3DStudioIntent(prompt: string, title: string): boolean {
+    const lower = (prompt + ' ' + title).toLowerCase();
+    return lower.includes('3d') || lower.includes('mesh') || lower.includes('terrain') ||
+        lower.includes('procedural') || lower.includes('marching cubes') ||
+        lower.includes('sdf') || lower.includes('cpp') || lower.includes('c++') ||
+        lower.includes('glb') || lower.includes('gltf') || lower.includes('three');
+}
+
+/**
+ * Generates modern C++20 procedural world generator code adhering to AGENTS.md directives.
+ */
+export function generateNativeCppGenerator(title: string): string {
+    return `// ==============================================================================
+// Scratchbox Native 3D Engine — Procedural World Generator (C++20)
+// Module: ${title}
+// Compiler: Apple Clang (-std=c++20 -O3 -march=native -ffast-math)
+// Target: Binary glTF 2.0 (.glb) direct streaming to Three.js viewport
+// ==============================================================================
+
+#include "scratchbox_engine.hpp"
+#include "scratchbox_math.hpp"
+#include <iostream>
+#include <vector>
+#include <cmath>
+
+using namespace scratchbox;
+
+// Signed Distance Field (SDF) definition combining smooth noise and geometry primitives
+struct ProceduralTerrainSDF {
+    float frequency = 0.08f;
+    float amplitude = 4.5f;
+    int octaves = 5;
+    float roughness = 0.45f;
+    float lacunarity = 2.0f;
+
+    // Evaluates Signed Distance Function at world coordinate p (SIMD Vec3f)
+    inline float evaluate(const Vec3f& p) const {
+        // Base planar distance: y = 0
+        float baseDist = p.y;
+        
+        // Fractal Brownian Motion (FBM) with SIMD vector evaluation
+        float noiseVal = 0.0f;
+        float freq = frequency;
+        float amp = amplitude;
+        for (int i = 0; i < octaves; ++i) {
+            noiseVal += FastNoise3D::Simplex(p.x * freq, p.z * freq, 0.42f) * amp;
+            freq *= lacunarity;
+            amp *= 0.5f;
+        }
+
+        // Combine SDF terrain displacement with smooth sphere bounds
+        float sphereBound = SDF::Sphere(p - Vec3f(0.0f, 0.0f, 0.0f), 24.0f);
+        float terrainSurface = baseDist - noiseVal;
+        return SDF::SmoothUnion(terrainSurface, sphereBound * 0.15f, 1.2f);
+    }
+};
+
+int main(int argc, char** argv) {
+    std::cout << "[Scratchbox Engine] Initializing Native C++20 Mesh Studio..." << std::endl;
+
+    ProceduralTerrainSDF terrain;
+    MarchingCubesVolume volume(Vec3i(48, 32, 48), Vec3f(-12.0f, -4.0f, -12.0f), Vec3f(12.0f, 12.0f, 12.0f));
+
+    // Polygonize volumetric SDF with SIMD Marching Cubes
+    MeshGeometry mesh = volume.Polygonize([&](const Vec3f& pos) {
+        return terrain.evaluate(pos);
+    });
+
+    // Compute analytic surface normals & vertex colors (COLOR_0)
+    mesh.ComputeSmoothNormals();
+    mesh.GenerateProceduralColors([](const Vec3f& pos, const Vec3f& normal) {
+        // Biome gradient: grass / rock / snow based on elevation and slope
+        float slope = 1.0f - normal.y;
+        if (pos.y > 6.0f) return Vec4f(0.95f, 0.95f, 0.98f, 1.0f); // Snow
+        if (slope > 0.45f) return Vec4f(0.45f, 0.42f, 0.38f, 1.0f); // Cliff Rock
+        return Vec4f(0.18f, 0.55f, 0.24f, 1.0f); // Lush Meadow
+    });
+
+    // Setup PBR Metallic-Roughness Material
+    PBRMaterial material;
+    material.metallic = 0.1f;
+    material.roughness = terrain.roughness;
+    material.name = "Scratchbox_PBR_Terrain";
+
+    // Encode and stream binary glTF 2.0 (.glb) to stdout / output buffer
+    GLBOutputStream glbStream;
+    glbStream.AppendMesh("ProceduralMesh", mesh, material);
+    glbStream.Emit();
+
+    std::cout << "[Scratchbox Engine] glTF 2.0 streaming complete. Triangles: " 
+              << mesh.triangleCount() << std::endl;
+    return 0;
+}
+`;
+}
+
+/**
+ * Generates Controls.tsx parameter panel for the 3D Studio.
+ */
+export function generate3DControls(): string {
+    return `import React from 'react';
+import { Sliders, RefreshCw, Wand2, Download, CheckCircle2 } from 'lucide-react';
+
+interface ControlsProps {
+  octaves: number;
+  setOctaves: (v: number) => void;
+  frequency: number;
+  setFrequency: (v: number) => void;
+  roughness: number;
+  setRoughness: (v: number) => void;
+  onRecompile: () => void;
+  isCompiling: boolean;
+}
+
+export default function Controls({
+  octaves,
+  setOctaves,
+  frequency,
+  setFrequency,
+  roughness,
+  setRoughness,
+  onRecompile,
+  isCompiling
+}: ControlsProps) {
+  const [exported, setExported] = React.useState(false);
+
+  const handleExportState = async () => {
+    if (window.scratchbox && window.scratchbox.storage) {
+      await window.scratchbox.storage.exportState({ octaves, frequency, roughness, timestamp: Date.now() });
+      setExported(true);
+      setTimeout(() => setExported(false), 2000);
+    }
+  };
+
+  const handleAiRefine = () => {
+    if (window.scratchbox && window.scratchbox.ai) {
+      window.scratchbox.ai.refine('Add volcanic crater SDF and Worley noise ridges to world_generator.cpp with octaves=' + octaves);
+    }
+  };
+
+  return (
+    <div className="w-80 h-full bg-zinc-900/95 border-l border-zinc-800/80 p-5 flex flex-col justify-between backdrop-blur-xl shadow-2xl z-20">
+      <div className="space-y-6">
+        <div className="flex items-center gap-2 pb-3 border-b border-zinc-800">
+          <Sliders className="w-4 h-4 text-blue-400" />
+          <h2 className="text-sm font-bold text-white tracking-wide">Engine Parameters</h2>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1.5">
+              <span>SDF Noise Octaves</span>
+              <span className="font-mono text-zinc-200">{octaves}</span>
+            </div>
+            <input
+              type="range"
+              min="1"
+              max="8"
+              step="1"
+              value={octaves}
+              onChange={e => setOctaves(parseInt(e.target.value))}
+              className="w-full accent-blue-500 cursor-pointer"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1.5">
+              <span>Spatial Frequency</span>
+              <span className="font-mono text-zinc-200">{frequency.toFixed(3)}</span>
+            </div>
+            <input
+              type="range"
+              min="0.01"
+              max="0.25"
+              step="0.005"
+              value={frequency}
+              onChange={e => setFrequency(parseFloat(e.target.value))}
+              className="w-full accent-cyan-500 cursor-pointer"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1.5">
+              <span>Material Roughness</span>
+              <span className="font-mono text-zinc-200">{roughness.toFixed(2)}</span>
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="1.0"
+              step="0.05"
+              value={roughness}
+              onChange={e => setRoughness(parseFloat(e.target.value))}
+              className="w-full accent-emerald-500 cursor-pointer"
+            />
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onRecompile}
+          disabled={isCompiling}
+          className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20 transition-all cursor-pointer"
+        >
+          <RefreshCw className={\`w-3.5 h-3.5 \${isCompiling ? 'animate-spin' : ''}\`} />
+          <span>{isCompiling ? 'Compiling C++20...' : 'Recompile & Stream glTF'}</span>
+        </button>
+      </div>
+
+      <div className="space-y-2 pt-4 border-t border-zinc-800">
+        <button
+          type="button"
+          onClick={handleExportState}
+          className="w-full py-2 px-3 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center justify-center gap-2 transition cursor-pointer"
+        >
+          {exported ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Download className="w-3.5 h-3.5 text-zinc-400" />}
+          <span>{exported ? 'State Exported to Host!' : 'Export State to Session'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleAiRefine}
+          className="w-full py-2 px-3 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs font-medium flex items-center justify-center gap-2 transition cursor-pointer"
+        >
+          <Wand2 className="w-3.5 h-3.5" />
+          <span>Refine Generator with AI</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+`;
+}
+
+/**
+ * Generates Three.js App.tsx for the Native C++20 3D Studio.
+ */
+export function generate3DStudioApp(title: string): string {
+    return `import React, { useState, useEffect, useRef } from 'react';
+import * as THREE from 'three';
+import Controls from './Controls';
+import { Box, Layers, Cpu } from 'lucide-react';
+
+export default function App() {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [octaves, setOctaves] = useState(5);
+  const [frequency, setFrequency] = useState(0.08);
+  const [roughness, setRoughness] = useState(0.45);
+  const [polyCount, setPolyCount] = useState(12800);
+  const [isCompiling, setIsCompiling] = useState(false);
+  const [compileStatus, setCompileStatus] = useState<string>('Ready (Clang C++20 -O3)');
+  
+  const meshRef = useRef<THREE.Mesh | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+
+  useEffect(() => {
+    const container = mountRef.current;
+    if (!container) return;
+
+    const width = container.clientWidth || 640;
+    const height = container.clientHeight || 480;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x09090b);
+    sceneRef.current = scene;
+
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+    camera.position.set(20, 16, 24);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // Grid & Lighting
+    const grid = new THREE.GridHelper(40, 40, 0x3b82f6, 0x27272a);
+    grid.position.y = -4;
+    scene.add(grid);
+
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x222230, 0.7);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    dirLight.position.set(15, 25, 15);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // Procedural Initial Surface Mesh (fallback / preview)
+    const geom = new THREE.PlaneGeometry(24, 24, 48, 48);
+    geom.rotateX(-Math.PI / 2);
+    const pos = geom.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const y = Math.sin(x * frequency * 2) * Math.cos(z * frequency * 2) * 2.5;
+      pos.setY(i, y);
+    }
+    geom.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      roughness: roughness,
+      metalness: 0.15,
+      wireframe: false,
+      flatShading: true
+    });
+
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    meshRef.current = mesh;
+
+    let animId: number;
+    const animate = () => {
+      animId = requestAnimationFrame(animate);
+      if (meshRef.current) {
+        meshRef.current.rotation.y += 0.003;
+      }
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    const handleResize = () => {
+      if (!container) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      cancelAnimationFrame(animId);
+      window.removeEventListener('resize', handleResize);
+      if (container.contains(renderer.domElement)) {
+        container.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
+    };
+  }, []);
+
+  const handleRecompile = async () => {
+    setIsCompiling(true);
+    setCompileStatus('Compiling C++20 via Clang...');
+    try {
+      const cppSource = '// Scratchbox Engine C++20 Generator\\\\n#include "scratchbox_engine.hpp"\\\\n// Octaves: ' + octaves + ', Freq: ' + frequency;
+      if (window.scratchbox && window.scratchbox.native3d) {
+        const res = await window.scratchbox.native3d.generateGlb(cppSource);
+        if (res.success) {
+          setCompileStatus('Compiled & Streamed glTF 2.0');
+          setPolyCount(res.triangleCount || 16400);
+        } else {
+          setCompileStatus('Native engine fallback (WebGL SDF)');
+        }
+      } else {
+        setCompileStatus('Preview mode: Simulating C++20 SDF');
+      }
+
+      // Update mesh geometry in preview
+      if (meshRef.current) {
+        const geom = meshRef.current.geometry as THREE.PlaneGeometry;
+        const pos = geom.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const x = pos.getX(i);
+          const z = pos.getZ(i);
+          let y = 0;
+          let amp = 3.0;
+          let freq = frequency;
+          for (let o = 0; o < octaves; o++) {
+            y += Math.sin(x * freq + o) * Math.cos(z * freq - o) * amp;
+            amp *= 0.5;
+            freq *= 2.0;
+          }
+          pos.setY(i, y);
+        }
+        geom.computeVertexNormals();
+        pos.needsUpdate = true;
+        (meshRef.current.material as THREE.MeshStandardMaterial).roughness = roughness;
+      }
+    } catch (e: any) {
+      setCompileStatus('Fallback: ' + (e.message || 'Complete'));
+    } finally {
+      setIsCompiling(false);
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden select-none">
+      <div className="flex-1 relative flex flex-col">
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-zinc-900/85 backdrop-blur-md border border-zinc-800/80 px-3.5 py-2 rounded-2xl shadow-xl">
+          <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-400">
+            <Cpu className="w-4 h-4 animate-pulse" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>Scratchbox C++20 3D Studio</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 font-mono">Clang -O3</span>
+            </div>
+            <div className="text-[10px] text-zinc-400 font-mono">{compileStatus}</div>
+          </div>
+        </div>
+
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-3 bg-zinc-900/85 backdrop-blur-md border border-zinc-800/80 px-3.5 py-2 rounded-2xl shadow-xl">
+          <div className="flex items-center gap-1.5 text-xs font-mono text-zinc-300">
+            <Layers className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Triangles: <strong className="text-white">{polyCount.toLocaleString()}</strong></span>
+          </div>
+        </div>
+
+        <div ref={mountRef} className="w-full h-full relative cursor-grab active:cursor-grabbing" />
+      </div>
+
+      <Controls
+        octaves={octaves}
+        setOctaves={setOctaves}
+        frequency={frequency}
+        setFrequency={setFrequency}
+        roughness={roughness}
+        setRoughness={setRoughness}
+        onRecompile={handleRecompile}
+        isCompiling={isCompiling}
+      />
+    </div>
+  );
+}
+`;
+}
+
+/**
  * Synthesizes rich interactive React components tailored to user intent.
  */
 export function generateContextualReactApp(prompt: string, title: string): string {
     const lower = (prompt + ' ' + title).toLowerCase();
     
+    if (is3DStudioIntent(prompt, title)) {
+        return generate3DStudioApp(title);
+    }
+
     if (lower.includes('calculator')) {
         return `import React, { useState } from 'react';
 import { Calculator as CalcIcon, History, Trash2, ArrowLeft } from 'lucide-react';
@@ -558,6 +1063,1004 @@ export default function App() {
 }`;
     }
 
+    if (lower.includes('gravity') || lower.includes('orbit') || lower.includes('physics') || lower.includes('celestial') || lower.includes('planetary') || lower.includes('n-body') || lower.includes('pendulum')) {
+        return `import React, { useState, useEffect, useRef } from 'react';
+import { Play, Pause, RotateCcw, Orbit, Zap } from 'lucide-react';
+
+interface Body {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  mass: number;
+  radius: number;
+  color: string;
+  trail: { x: number; y: number }[];
+}
+
+export default function App() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [isRunning, setIsRunning] = useState(true);
+  const [timeSpeed, setTimeSpeed] = useState(1);
+  const [gravityG, setGravityG] = useState(0.8);
+  const [trailLength, setTrailLength] = useState(40);
+  const [bodyCount, setBodyCount] = useState(4);
+  const bodiesRef = useRef<Body[]>([]);
+
+  const initSystem = () => {
+    const bodies: Body[] = [
+      { x: 300, y: 250, vx: 0, vy: 0, mass: 1000, radius: 14, color: '#f59e0b', trail: [] },
+      { x: 300, y: 150, vx: 2.8, vy: 0, mass: 10, radius: 6, color: '#38bdf8', trail: [] },
+      { x: 300, y: 80, vx: 2.1, vy: 0, mass: 25, radius: 8, color: '#34d399', trail: [] },
+      { x: 300, y: 20, vx: 1.6, vy: 0, mass: 60, radius: 10, color: '#a855f7', trail: [] }
+    ];
+    bodiesRef.current = bodies;
+    setBodyCount(bodies.length);
+  };
+
+  useEffect(() => {
+    initSystem();
+  }, []);
+
+  useEffect(() => {
+    let animId: number;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const loop = () => {
+      if (isRunning) {
+        const bodies = bodiesRef.current;
+        const dt = 0.5 * timeSpeed;
+
+        for (let i = 0; i < bodies.length; i++) {
+          let fx = 0;
+          let fy = 0;
+          for (let j = 0; j < bodies.length; j++) {
+            if (i === j) continue;
+            const dx = bodies[j].x - bodies[i].x;
+            const dy = bodies[j].y - bodies[i].y;
+            const distSq = dx * dx + dy * dy + 100;
+            const force = (gravityG * bodies[i].mass * bodies[j].mass) / distSq;
+            const dist = Math.sqrt(distSq);
+            fx += force * (dx / dist);
+            fy += force * (dy / dist);
+          }
+          if (bodies[i].mass < 800) {
+            bodies[i].vx += (fx / bodies[i].mass) * dt;
+            bodies[i].vy += (fy / bodies[i].mass) * dt;
+            bodies[i].x += bodies[i].vx * dt;
+            bodies[i].y += bodies[i].vy * dt;
+          }
+
+          bodies[i].trail.push({ x: bodies[i].x, y: bodies[i].y });
+          if (bodies[i].trail.length > trailLength) {
+            bodies[i].trail.shift();
+          }
+        }
+      }
+
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#27272a';
+      ctx.lineWidth = 0.5;
+      for (let x = 0; x < canvas.width; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      const bodies = bodiesRef.current;
+      for (const b of bodies) {
+        if (b.trail.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(b.trail[0].x, b.trail[0].y);
+          for (let k = 1; k < b.trail.length; k++) {
+            ctx.lineTo(b.trail[k].x, b.trail[k].y);
+          }
+          ctx.strokeStyle = b.color + '44';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      }
+
+      for (const b of bodies) {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fillStyle = b.color;
+        ctx.shadowColor = b.color;
+        ctx.shadowBlur = b.mass > 500 ? 25 : 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#a1a1aa';
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillText(b.mass > 500 ? 'Star' : \`m=\${Math.round(b.mass)}\`, b.x + b.radius + 4, b.y + 3);
+      }
+
+      animId = requestAnimationFrame(loop);
+    };
+
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, [isRunning, timeSpeed, gravityG, trailLength]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const dx = x - 300;
+    const dy = y - 250;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const speed = Math.sqrt((gravityG * 1000) / Math.max(30, dist));
+    const colors = ['#f43f5e', '#ec4899', '#8b5cf6', '#06b6d4', '#10b981'];
+    const chosenColor = colors[bodiesRef.current.length % colors.length];
+
+    bodiesRef.current.push({
+      x,
+      y,
+      vx: -dy / dist * speed,
+      vy: dx / dist * speed,
+      mass: 8 + Math.random() * 15,
+      radius: 5,
+      color: chosenColor,
+      trail: []
+    });
+    setBodyCount(bodiesRef.current.length);
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-950 text-zinc-100 p-4 font-sans select-none">
+      <div className="w-full max-w-4xl bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-2xl backdrop-blur-xl">
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <Orbit className="w-5 h-5 animate-spin" style={{ animationDuration: '10s' }} />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white">Orbital Gravity Simulator</h1>
+              <p className="text-xs text-zinc-400">Interactive Newtonian N-Body Gravitational Physics</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsRunning(!isRunning)}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-1.5 transition"
+            >
+              {isRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              <span>{isRunning ? 'Pause' : 'Resume'}</span>
+            </button>
+            <button
+              onClick={initSystem}
+              className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition"
+              title="Reset Bodies"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="relative border border-zinc-800/80 rounded-2xl overflow-hidden bg-black flex items-center justify-center">
+          <canvas
+            ref={canvasRef}
+            width={640}
+            height={500}
+            onClick={handleCanvasClick}
+            className="cursor-crosshair w-full max-w-[640px] h-[500px]"
+          />
+          <div className="absolute top-3 left-3 bg-zinc-900/80 backdrop-blur border border-zinc-800/80 rounded-lg px-2.5 py-1 text-[11px] text-zinc-300">
+            Click anywhere on the cosmos to spawn a new orbiting body!
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4 mt-5 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80">
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Time Warp</span>
+              <span className="font-mono text-zinc-200">{timeSpeed}x</span>
+            </div>
+            <input
+              type="range"
+              min="0.2"
+              max="3.0"
+              step="0.1"
+              value={timeSpeed}
+              onChange={e => setTimeSpeed(parseFloat(e.target.value))}
+              className="w-full accent-blue-500"
+            />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Gravity (G)</span>
+              <span className="font-mono text-zinc-200">{gravityG.toFixed(1)}</span>
+            </div>
+            <input
+              type="range"
+              min="0.1"
+              max="2.5"
+              step="0.1"
+              value={gravityG}
+              onChange={e => setGravityG(parseFloat(e.target.value))}
+              className="w-full accent-amber-500"
+            />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Trail Length</span>
+              <span className="font-mono text-zinc-200">{trailLength}</span>
+            </div>
+            <input
+              type="range"
+              min="10"
+              max="120"
+              step="5"
+              value={trailLength}
+              onChange={e => setTrailLength(parseInt(e.target.value))}
+              className="w-full accent-purple-500"
+            />
+          </div>
+          <div className="flex items-center justify-between pl-4 border-l border-zinc-800">
+            <div>
+              <div className="text-[11px] text-zinc-500 uppercase tracking-wider">Celestial Bodies</div>
+              <div className="text-xl font-black text-white mt-0.5">{bodyCount}</div>
+            </div>
+            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
+              <Zap className="w-4 h-4" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}`;
+    }
+
+    if (lower.includes('synth') || lower.includes('synthesizer') || lower.includes('audio') || lower.includes('piano') || lower.includes('keyboard') || lower.includes('sound') || lower.includes('music') || lower.includes('sequencer')) {
+        return `import React, { useState, useEffect, useRef } from 'react';
+import { Volume2, Music, Waves, Activity, Sparkles } from 'lucide-react';
+
+interface KeyConfig {
+  note: string;
+  freq: number;
+  isBlack: boolean;
+  keyLabel: string;
+}
+
+const KEYS: KeyConfig[] = [
+  { note: 'C4', freq: 261.63, isBlack: false, keyLabel: 'A' },
+  { note: 'C#4', freq: 277.18, isBlack: true, keyLabel: 'W' },
+  { note: 'D4', freq: 293.66, isBlack: false, keyLabel: 'S' },
+  { note: 'D#4', freq: 311.13, isBlack: true, keyLabel: 'E' },
+  { note: 'E4', freq: 329.63, isBlack: false, keyLabel: 'D' },
+  { note: 'F4', freq: 349.23, isBlack: false, keyLabel: 'F' },
+  { note: 'F#4', freq: 369.99, isBlack: true, keyLabel: 'T' },
+  { note: 'G4', freq: 392.00, isBlack: false, keyLabel: 'G' },
+  { note: 'G#4', freq: 415.30, isBlack: true, keyLabel: 'Y' },
+  { note: 'A4', freq: 440.00, isBlack: false, keyLabel: 'H' },
+  { note: 'A#4', freq: 466.16, isBlack: true, keyLabel: 'U' },
+  { note: 'B4', freq: 493.88, isBlack: false, keyLabel: 'J' },
+  { note: 'C5', freq: 523.25, isBlack: false, keyLabel: 'K' }
+];
+
+export default function App() {
+  const [waveform, setWaveform] = useState<OscillatorType>('sawtooth');
+  const [filterCutoff, setFilterCutoff] = useState(2500);
+  const [attack, setAttack] = useState(0.05);
+  const [release, setRelease] = useState(0.4);
+  const [volume, setVolume] = useState(0.3);
+  const [activeNote, setActiveNote] = useState<string | null>(null);
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const activeOscs = useRef<Map<string, { osc: OscillatorNode; gain: GainNode }>>(new Map());
+
+  const getAudioContext = () => {
+    if (!audioCtxRef.current) {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+      audioCtxRef.current = ctx;
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+    return audioCtxRef.current;
+  };
+
+  const playNote = (note: string, freq: number) => {
+    const ctx = getAudioContext();
+    setActiveNote(note);
+
+    if (activeOscs.current.has(note)) {
+      stopNote(note);
+    }
+
+    const osc = ctx.createOscillator();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+
+    osc.type = waveform;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(filterCutoff, ctx.currentTime);
+
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(volume, now + attack);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    if (analyserRef.current) {
+      gain.connect(analyserRef.current);
+      analyserRef.current.connect(ctx.destination);
+    } else {
+      gain.connect(ctx.destination);
+    }
+
+    osc.start(now);
+    activeOscs.current.set(note, { osc, gain });
+  };
+
+  const stopNote = (note: string) => {
+    const item = activeOscs.current.get(note);
+    if (item && audioCtxRef.current) {
+      const now = audioCtxRef.current.currentTime;
+      item.gain.gain.cancelScheduledValues(now);
+      item.gain.gain.setValueAtTime(item.gain.gain.value, now);
+      item.gain.gain.exponentialRampToValueAtTime(0.0001, now + release);
+      item.osc.stop(now + release + 0.05);
+      activeOscs.current.delete(note);
+    }
+    if (activeNote === note) {
+      setActiveNote(null);
+    }
+  };
+
+  useEffect(() => {
+    let animId: number;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const draw = () => {
+      animId = requestAnimationFrame(draw);
+      const analyser = analyserRef.current;
+      if (!analyser) {
+        ctx.fillStyle = '#09090b';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      analyser.getByteTimeDomainData(dataArray);
+
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+
+      const sliceWidth = canvas.width / bufferLength;
+      let x = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i] / 128.0;
+        const y = (v * canvas.height) / 2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+        x += sliceWidth;
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
+
+    draw();
+    return () => cancelAnimationFrame(animId);
+  }, []);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-950 text-zinc-100 p-4 font-sans select-none">
+      <div className="w-full max-w-3xl bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-2xl backdrop-blur-xl">
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+              <Waves className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white">Web Audio Synthesizer</h1>
+              <p className="text-xs text-zinc-400">Real-time Web Audio API Engine with Visual Oscilloscope</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {(['sawtooth', 'square', 'sine', 'triangle'] as OscillatorType[]).map(type => (
+              <button
+                key={type}
+                onClick={() => setWaveform(type)}
+                className={\`px-3 py-1 rounded-xl text-xs font-semibold capitalize transition \${
+                  waveform === type
+                    ? 'bg-cyan-600 text-white shadow-md shadow-cyan-500/25'
+                    : 'bg-zinc-800/80 text-zinc-400 hover:text-zinc-200'
+                }\`}
+              >
+                {type}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border border-zinc-800/80 rounded-2xl overflow-hidden bg-zinc-950 mb-5 relative">
+          <canvas ref={canvasRef} width={640} height={120} className="w-full h-28" />
+          <div className="absolute top-2 right-3 text-[10px] font-mono text-cyan-400/80 uppercase tracking-widest flex items-center gap-1.5">
+            <Activity className="w-3 h-3" /> Live Oscilloscope
+          </div>
+        </div>
+
+        <div className="relative flex justify-center h-44 bg-zinc-950 p-3 rounded-2xl border border-zinc-800/80 shadow-inner">
+          <div className="relative flex">
+            {KEYS.filter(k => !k.isBlack).map(k => {
+              const isActive = activeNote === k.note;
+              return (
+                <button
+                  key={k.note}
+                  onMouseDown={() => playNote(k.note, k.freq)}
+                  onMouseUp={() => stopNote(k.note)}
+                  onMouseLeave={() => stopNote(k.note)}
+                  className={\`w-12 h-40 border border-zinc-700/60 rounded-b-xl flex flex-col justify-end items-center pb-2 transition-all \${
+                    isActive
+                      ? 'bg-cyan-200 text-zinc-950 shadow-lg shadow-cyan-500/30 translate-y-0.5'
+                      : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-800'
+                  }\`}
+                >
+                  <span className="font-bold text-xs">{k.note}</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">[{k.keyLabel}]</span>
+                </button>
+              );
+            })}
+
+            <div className="absolute top-0 left-0 flex pointer-events-none w-full h-24">
+              <div className="w-8"></div>
+              {KEYS.filter(k => k.isBlack).map((k, idx) => {
+                const isActive = activeNote === k.note;
+                const offsets = [32, 80, 176, 224, 272];
+                return (
+                  <button
+                    key={k.note}
+                    style={{ position: 'absolute', left: \`\${offsets[idx] || 0}px\` }}
+                    onMouseDown={() => playNote(k.note, k.freq)}
+                    onMouseUp={() => stopNote(k.note)}
+                    onMouseLeave={() => stopNote(k.note)}
+                    className={\`pointer-events-auto w-8 h-24 border border-zinc-900 rounded-b-lg flex flex-col justify-end items-center pb-1.5 z-10 transition-all \${
+                      isActive
+                        ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/40 translate-y-0.5'
+                        : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300'
+                    }\`}
+                  >
+                    <span className="font-bold text-[10px]">{k.note}</span>
+                    <span className="text-[9px] text-zinc-400 font-mono">{k.keyLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4 mt-5 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80">
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Filter Cutoff</span>
+              <span className="font-mono text-zinc-200">{filterCutoff}Hz</span>
+            </div>
+            <input
+              type="range"
+              min="200"
+              max="8000"
+              step="50"
+              value={filterCutoff}
+              onChange={e => setFilterCutoff(parseInt(e.target.value))}
+              className="w-full accent-cyan-500"
+            />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Attack</span>
+              <span className="font-mono text-zinc-200">{attack.toFixed(2)}s</span>
+            </div>
+            <input
+              type="range"
+              min="0.01"
+              max="0.5"
+              step="0.01"
+              value={attack}
+              onChange={e => setAttack(parseFloat(e.target.value))}
+              className="w-full accent-blue-500"
+            />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Release</span>
+              <span className="font-mono text-zinc-200">{release.toFixed(2)}s</span>
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="1.5"
+              step="0.05"
+              value={release}
+              onChange={e => setRelease(parseFloat(e.target.value))}
+              className="w-full accent-purple-500"
+            />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Master Volume</span>
+              <span className="font-mono text-zinc-200">{Math.round(volume * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="0.8"
+              step="0.05"
+              value={volume}
+              onChange={e => setVolume(parseFloat(e.target.value))}
+              className="w-full accent-emerald-500"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}`;
+    }
+
+    if (lower.includes('game') || lower.includes('arcade') || lower.includes('pong') || lower.includes('breakout') || lower.includes('retro') || lower.includes('invader') || lower.includes('brick')) {
+        return `import React, { useState, useEffect, useRef } from 'react';
+import { Play, Award, Heart, Sparkles, Gamepad2 } from 'lucide-react';
+import confetti from 'canvas-confetti';
+
+interface Brick {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  points: number;
+  alive: boolean;
+}
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  alpha: number;
+}
+
+export default function App() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [gameState, setGameState] = useState<'start' | 'playing' | 'gameover' | 'victory'>('start');
+
+  const stateRef = useRef({
+    paddleX: 250,
+    paddleW: 90,
+    paddleH: 12,
+    ballX: 300,
+    ballY: 350,
+    ballVx: 3.5,
+    ballVy: -4,
+    ballRadius: 7,
+    bricks: [] as Brick[],
+    particles: [] as Particle[]
+  });
+
+  const initGame = () => {
+    const bricks: Brick[] = [];
+    const colors = ['#f43f5e', '#f59e0b', '#10b981', '#38bdf8', '#8b5cf6'];
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 8; c++) {
+        bricks.push({
+          x: 20 + c * 72,
+          y: 40 + r * 22,
+          w: 64,
+          h: 16,
+          color: colors[r],
+          points: (5 - r) * 10,
+          alive: true
+        });
+      }
+    }
+    stateRef.current.bricks = bricks;
+    stateRef.current.ballX = 300;
+    stateRef.current.ballY = 350;
+    stateRef.current.ballVx = 3.5 * (Math.random() > 0.5 ? 1 : -1);
+    stateRef.current.ballVy = -4;
+    stateRef.current.particles = [];
+    setScore(0);
+    setLives(3);
+    setGameState('playing');
+  };
+
+  useEffect(() => {
+    let animId: number;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const loop = () => {
+      const state = stateRef.current;
+
+      if (gameState === 'playing') {
+        state.ballX += state.ballVx;
+        state.ballY += state.ballVy;
+
+        if (state.ballX - state.ballRadius <= 0 || state.ballX + state.ballRadius >= canvas.width) {
+          state.ballVx = -state.ballVx;
+        }
+        if (state.ballY - state.ballRadius <= 0) {
+          state.ballVy = -state.ballVy;
+        }
+
+        const paddleY = canvas.height - 25;
+        if (
+          state.ballY + state.ballRadius >= paddleY &&
+          state.ballY - state.ballRadius <= paddleY + state.paddleH &&
+          state.ballX >= state.paddleX &&
+          state.ballX <= state.paddleX + state.paddleW
+        ) {
+          const hitOffset = (state.ballX - (state.paddleX + state.paddleW / 2)) / (state.paddleW / 2);
+          state.ballVx = hitOffset * 5.5;
+          state.ballVy = -Math.abs(state.ballVy);
+        }
+
+        if (state.ballY > canvas.height) {
+          setLives(l => {
+            if (l <= 1) {
+              setGameState('gameover');
+              return 0;
+            }
+            state.ballX = state.paddleX + state.paddleW / 2;
+            state.ballY = 350;
+            state.ballVy = -4;
+            return l - 1;
+          });
+        }
+
+        let aliveCount = 0;
+        for (const b of state.bricks) {
+          if (!b.alive) continue;
+          aliveCount++;
+          if (
+            state.ballX + state.ballRadius >= b.x &&
+            state.ballX - state.ballRadius <= b.x + b.w &&
+            state.ballY + state.ballRadius >= b.y &&
+            state.ballY - state.ballRadius <= b.y + b.h
+          ) {
+            b.alive = false;
+            state.ballVy = -state.ballVy;
+            setScore(s => s + b.points);
+
+            for (let p = 0; p < 8; p++) {
+              state.particles.push({
+                x: b.x + b.w / 2,
+                y: b.y + b.h / 2,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6,
+                color: b.color,
+                alpha: 1.0
+              });
+            }
+          }
+        }
+
+        if (aliveCount === 0) {
+          setGameState('victory');
+          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        }
+      }
+
+      ctx.fillStyle = '#09090b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (const b of state.bricks) {
+        if (!b.alive) continue;
+        ctx.fillStyle = b.color;
+        ctx.shadowColor = b.color;
+        ctx.shadowBlur = 8;
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.shadowBlur = 0;
+      }
+
+      for (let i = state.particles.length - 1; i >= 0; i--) {
+        const p = state.particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.03;
+        if (p.alpha <= 0) {
+          state.particles.splice(i, 1);
+          continue;
+        }
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.alpha;
+        ctx.fillRect(p.x, p.y, 3, 3);
+        ctx.globalAlpha = 1.0;
+      }
+
+      const paddleY = canvas.height - 25;
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 12;
+      ctx.fillRect(state.paddleX, paddleY, state.paddleW, state.paddleH);
+      ctx.shadowBlur = 0;
+
+      ctx.beginPath();
+      ctx.arc(state.ballX, state.ballY, state.ballRadius, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 10;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      animId = requestAnimationFrame(loop);
+    };
+
+    animId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animId);
+  }, [gameState]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    stateRef.current.paddleX = Math.max(0, Math.min(canvas.width - stateRef.current.paddleW, mouseX - stateRef.current.paddleW / 2));
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-950 text-zinc-100 p-4 font-sans select-none">
+      <div className="w-full max-w-2xl bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-2xl backdrop-blur-xl">
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">
+              <Gamepad2 className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white">Retro Space Breakout</h1>
+              <p className="text-xs text-zinc-400">Playable 60FPS HTML5 Canvas Arcade Micro-Game</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5 text-rose-400">
+              {Array.from({ length: lives }).map((_, i) => (
+                <Heart key={i} className="w-4 h-4 fill-rose-500 text-rose-500" />
+              ))}
+            </div>
+            <div className="text-sm font-bold text-amber-400 flex items-center gap-1">
+              <Award className="w-4 h-4" /> Score: {score}
+            </div>
+          </div>
+        </div>
+
+        <div className="relative border border-zinc-800/80 rounded-2xl overflow-hidden bg-black flex items-center justify-center">
+          <canvas
+            ref={canvasRef}
+            width={600}
+            height={420}
+            onMouseMove={handleMouseMove}
+            className="cursor-none w-full max-w-[600px] h-[420px]"
+          />
+
+          {gameState !== 'playing' && (
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-4">
+              {gameState === 'victory' ? (
+                <>
+                  <Sparkles className="w-12 h-12 text-emerald-400 animate-spin" />
+                  <h2 className="text-2xl font-black text-emerald-400">VICTORY! All Bricks Cleared!</h2>
+                  <p className="text-xs text-zinc-400">Final Score: {score}</p>
+                </>
+              ) : gameState === 'gameover' ? (
+                <>
+                  <h2 className="text-2xl font-black text-rose-500">GAME OVER</h2>
+                  <p className="text-xs text-zinc-400">You scored {score} points</p>
+                </>
+              ) : (
+                <>
+                  <Gamepad2 className="w-12 h-12 text-blue-400 animate-pulse" />
+                  <h2 className="text-xl font-bold text-white">Ready to Play?</h2>
+                  <p className="text-xs text-zinc-400">Move your mouse across the canvas to steer the paddle.</p>
+                </>
+              )}
+              <button
+                onClick={initGame}
+                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-500/25 flex items-center gap-2 transition"
+              >
+                <Play className="w-4 h-4" />
+                <span>{gameState === 'start' ? 'Start Game' : 'Play Again'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}`;
+    }
+
+    if (lower.includes('sort') || lower.includes('algorithm') || lower.includes('visualizer') || lower.includes('array') || lower.includes('bubble') || lower.includes('quicksort')) {
+        return `import React, { useState, useEffect } from 'react';
+import { Play, Shuffle, BarChart3 } from 'lucide-react';
+import confetti from 'canvas-confetti';
+
+export default function App() {
+  const [array, setArray] = useState<number[]>([]);
+  const [comparing, setComparing] = useState<number[]>([]);
+  const [swapping, setSwapping] = useState<number[]>([]);
+  const [sorted, setSorted] = useState<number[]>([]);
+  const [isSorting, setIsSorting] = useState(false);
+  const [speed, setSpeed] = useState(30);
+  const [comparisons, setComparisons] = useState(0);
+
+  const resetArray = (size = 32) => {
+    const arr: number[] = [];
+    for (let i = 0; i < size; i++) {
+      arr.push(Math.floor(Math.random() * 85) + 10);
+    }
+    setArray(arr);
+    setComparing([]);
+    setSwapping([]);
+    setSorted([]);
+    setComparisons(0);
+    setIsSorting(false);
+  };
+
+  useEffect(() => {
+    resetArray();
+  }, []);
+
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+  const runBubbleSort = async () => {
+    setIsSorting(true);
+    const arr = [...array];
+    let cmpCount = 0;
+    const n = arr.length;
+
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n - i - 1; j++) {
+        setComparing([j, j + 1]);
+        cmpCount++;
+        setComparisons(cmpCount);
+        await sleep(speed);
+
+        if (arr[j] > arr[j + 1]) {
+          setSwapping([j, j + 1]);
+          const temp = arr[j];
+          arr[j] = arr[j + 1];
+          arr[j + 1] = temp;
+          setArray([...arr]);
+          await sleep(speed);
+        }
+      }
+      setSorted(prev => [...prev, n - i - 1]);
+    }
+    setComparing([]);
+    setSwapping([]);
+    setIsSorting(false);
+    confetti({ particleCount: 60, spread: 50, origin: { y: 0.7 } });
+  };
+
+  const handleStartSort = () => {
+    if (isSorting) return;
+    runBubbleSort();
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-zinc-950 text-zinc-100 p-4 font-sans select-none">
+      <div className="w-full max-w-3xl bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-2xl backdrop-blur-xl">
+        <div className="flex items-center justify-between pb-4 mb-4 border-b border-zinc-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <BarChart3 className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white">Algorithm Sorting Visualizer</h1>
+              <p className="text-xs text-zinc-400">Step-by-step Real-time Array Transformation</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleStartSort}
+              disabled={isSorting}
+              className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1.5 transition"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>Sort</span>
+            </button>
+            <button
+              onClick={() => resetArray()}
+              disabled={isSorting}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 flex items-center gap-1.5 transition"
+            >
+              <Shuffle className="w-3.5 h-3.5" />
+              <span>Shuffle</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="h-64 bg-zinc-950 p-4 rounded-2xl border border-zinc-800/80 flex items-end gap-1.5 justify-center shadow-inner">
+          {array.map((val, idx) => {
+            const isCmp = comparing.includes(idx);
+            const isSwp = swapping.includes(idx);
+            const isSrt = sorted.includes(idx);
+
+            let bg = 'bg-blue-600';
+            if (isSwp) bg = 'bg-rose-500 shadow-md shadow-rose-500/50';
+            else if (isCmp) bg = 'bg-amber-400 shadow-md shadow-amber-500/50';
+            else if (isSrt) bg = 'bg-emerald-500';
+
+            return (
+              <div
+                key={idx}
+                style={{ height: \`\${val}%\` }}
+                className={\`flex-1 rounded-t-sm transition-all duration-75 \${bg}\`}
+              />
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-3 gap-4 mt-5 p-4 rounded-2xl bg-zinc-950/60 border border-zinc-800/80">
+          <div>
+            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <span>Speed (Delay)</span>
+              <span className="font-mono text-zinc-200">{speed}ms</span>
+            </div>
+            <input
+              type="range"
+              min="5"
+              max="100"
+              step="5"
+              value={speed}
+              onChange={e => setSpeed(parseInt(e.target.value))}
+              disabled={isSorting}
+              className="w-full accent-emerald-500"
+            />
+          </div>
+          <div className="text-center border-l border-zinc-800">
+            <div className="text-[11px] text-zinc-500 uppercase tracking-wider">Comparisons</div>
+            <div className="text-xl font-black text-amber-400 mt-0.5">{comparisons}</div>
+          </div>
+          <div className="text-center border-l border-zinc-800">
+            <div className="text-[11px] text-zinc-500 uppercase tracking-wider">Array Size</div>
+            <div className="text-xl font-black text-white mt-0.5">{array.length}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}`;
+    }
+
     // Generic modern interactive web preview
     return `import React, { useState } from 'react';
 import { Sparkles, Play, CheckCircle2 } from 'lucide-react';
@@ -701,7 +2204,7 @@ export function extractCodeSandboxArtifact(
         /import\s+React|export\s+default\s+function|<\w+[\s>]|<!DOCTYPE\s+html|<svg/i.test(m.content)
     );
 
-    const isSandboxExplicit = /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt);
+    const isSandboxExplicit = /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt);
 
     if (runnableMatches.length === 0 && !isSandboxExplicit) {
         return null;
@@ -717,7 +2220,9 @@ export function extractCodeSandboxArtifact(
     const files: CodeFileTab[] = [];
     const dependencies: Record<string, string> = {
         'lucide-react': '^0.468.0',
-        'canvas-confetti': '^1.9.3'
+        'canvas-confetti': '^1.9.3',
+        'three': '^0.160.0',
+        'framer-motion': '^11.0.0'
     };
 
     if (runnableMatches.length > 0) {
@@ -802,19 +2307,51 @@ export function extractCodeSandboxArtifact(
     // If no code files extracted but isSandboxExplicit is true, synthesize a rich interactive application
     if (files.length === 0) {
         template = 'react';
-        files.push({
-            id: 'file-app',
-            name: 'App.tsx',
-            language: 'react',
-            content: generateContextualReactApp(prompt, title),
-            isEntry: true
-        });
-        files.push({
-            id: 'file-css',
-            name: 'styles.css',
-            language: 'css',
-            content: `/* Studio Sandbox Styles */\nbody { margin: 0; padding: 0; }`
-        });
+        if (is3DStudioIntent(prompt, title)) {
+            files.push({
+                id: 'file-app',
+                name: 'App.tsx',
+                language: 'react',
+                content: generate3DStudioApp(title),
+                isEntry: true
+            });
+            files.push({
+                id: 'file-controls',
+                name: 'Controls.tsx',
+                language: 'react',
+                content: generate3DControls(),
+                isEntry: false
+            });
+            files.push({
+                id: 'file-cpp',
+                name: 'world_generator.cpp',
+                language: 'cpp',
+                content: generateNativeCppGenerator(title),
+                isEntry: false
+            });
+            files.push({
+                id: 'file-css',
+                name: 'styles.css',
+                language: 'css',
+                content: `/* Studio Sandbox Styles */\nbody { margin: 0; padding: 0; background: #09090b; }`
+            });
+            dependencies['three'] = '^0.160.0';
+            dependencies['lucide-react'] = '^0.468.0';
+        } else {
+            files.push({
+                id: 'file-app',
+                name: 'App.tsx',
+                language: 'react',
+                content: generateContextualReactApp(prompt, title),
+                isEntry: true
+            });
+            files.push({
+                id: 'file-css',
+                name: 'styles.css',
+                language: 'css',
+                content: `/* Studio Sandbox Styles */\nbody { margin: 0; padding: 0; }`
+            });
+        }
     }
 
     const sandboxData: LiveCodeSandboxData = {
@@ -933,8 +2470,135 @@ export function parseOrSynthesizeArtifact(
         }
     };
 
+    // 0. Unified Artifact Tag Architecture (<scratchboxPrimitive type="..." title="..." summary="..." version="...">)
+    const primitiveTag = extractScratchboxPrimitiveTag(modelText);
+    if (primitiveTag.matched && primitiveTag.type) {
+        let tagType = primitiveTag.type as PrimitiveType;
+        const tagPayload = primitiveTag.rawPayload || '';
+
+        // Attempt 1: Inner payload is a JSON code block or raw JSON object
+        const jsonInTag = tagPayload.match(/```json\s*([\s\S]*?)\s*```/) || (tagPayload.startsWith('{') && tagPayload.endsWith('}') ? [null, tagPayload] : null);
+        let parsedTagData: any = null;
+        if (jsonInTag) {
+            try {
+                const parsed = JSON.parse(jsonInTag[1]!);
+                if (parsed) {
+                    parsedTagData = parsed.data !== undefined ? parsed.data : parsed;
+                    if (parsed.type) tagType = parsed.type;
+                }
+            } catch {
+                // Ignore JSON parse error, fall through to specialized tagType synthesizers
+            }
+        }
+
+        // Attempt 2: If live-code-sandbox and inner payload is raw code / component
+        if (tagType === 'live-code-sandbox') {
+            if (!parsedTagData || !parsedTagData.files) {
+                const codeMatch = tagPayload.match(/```(?:tsx|jsx|react|typescript|ts|javascript|js|html)?\s*\n([\s\S]*?)```/) || [null, tagPayload];
+                const rawCode = (codeMatch[1] || tagPayload).trim();
+                const template: SandboxTemplate = rawCode.includes('def ') || rawCode.includes('import numpy') ? 'python' : 'react';
+                const entryName = template === 'python' ? 'main.py' : 'App.tsx';
+                const entryLang = template === 'python' ? 'python' : 'react';
+
+                parsedTagData = {
+                    title: primitiveTag.title || 'Interactive Micro-App',
+                    subtitle: primitiveTag.summary || 'Live interactive micro-app generated by Scratchbox AI',
+                    template,
+                    viewMode: 'preview',
+                    viewportMode: 'desktop',
+                    dependencies: {
+                        'lucide-react': '^0.468.0',
+                        'canvas-confetti': '^1.9.3',
+                        'three': '^0.160.0',
+                        'framer-motion': '^11.0.0'
+                    },
+                    files: (!rawCode && is3DStudioIntent(prompt, primitiveTag.title || 'Interactive Micro-App')) ? [
+                        {
+                            id: 'file-entry',
+                            name: 'App.tsx',
+                            language: 'react',
+                            content: generate3DStudioApp(primitiveTag.title || '3D Mesh Studio'),
+                            isEntry: true
+                        },
+                        {
+                            id: 'file-controls',
+                            name: 'Controls.tsx',
+                            language: 'react',
+                            content: generate3DControls(),
+                            isEntry: false
+                        },
+                        {
+                            id: 'file-cpp',
+                            name: 'world_generator.cpp',
+                            language: 'cpp',
+                            content: generateNativeCppGenerator(primitiveTag.title || '3D Mesh Studio'),
+                            isEntry: false
+                        },
+                        {
+                            id: 'file-css',
+                            name: 'styles.css',
+                            language: 'css',
+                            content: '/* Scratchbox Sandbox Styles */\nbody { margin: 0; padding: 0; background: #09090b; }'
+                        }
+                    ] : [
+                        {
+                            id: 'file-entry',
+                            name: entryName,
+                            language: entryLang,
+                            content: rawCode || generateContextualReactApp(prompt, primitiveTag.title || 'Interactive Micro-App'),
+                            isEntry: true
+                        },
+                        {
+                            id: 'file-css',
+                            name: 'styles.css',
+                            language: 'css',
+                            content: '/* Scratchbox Sandbox Styles */\nbody { margin: 0; padding: 0; }'
+                        }
+                    ],
+                    activeFileId: 'file-entry'
+                };
+            }
+        }
+
+        // Attempt 3: If markdown-document and inner payload is markdown
+        if (tagType === 'markdown-document') {
+            if (!parsedTagData || !parsedTagData.sections) {
+                const docTitle = primitiveTag.title || extractDocumentTitle(prompt, 'Project Specification');
+                const rawSections = markdownStringToSections(tagPayload);
+                const completeSections = rawSections.length > 0 ? ensureCompleteSections(rawSections, docTitle) : synthesizeComprehensiveDocument(prompt, docTitle).sections;
+                parsedTagData = {
+                    title: docTitle,
+                    subtitle: primitiveTag.summary || 'Synthesized with Studio AI Engine',
+                    author: DEFAULT_DOCUMENT_AUTHOR,
+                    lastUpdated: 'Just now',
+                    tags: ['Specification', 'Architecture'],
+                    sections: enrichGroundedCitations(completeSections)
+                };
+            }
+        }
+
+        if (parsedTagData) {
+            const isSameType = request.activeArtifact?.type === tagType;
+            const effectiveVersion = (isSameType && request.activeArtifact) ? (request.activeArtifact.version || 1) + 1 : (primitiveTag.version || 1);
+            const effectiveId = (isSameType && request.activeArtifact) ? request.activeArtifact.id : `art-${tagType}-${Date.now()}`;
+
+            return {
+                id: effectiveId,
+                type: tagType,
+                title: primitiveTag.title || parsedTagData.title || `${tagType} Artifact`,
+                summary: primitiveTag.summary || parsedTagData.subtitle || `Interactive ${tagType} mounted via unified primitive tag.`,
+                version: effectiveVersion,
+                createdAt: timestamp,
+                data: parsedTagData
+            };
+        }
+    }
+
     // Extract clean text and JSON codeblock
-    const cleanContent = modelText.replace(/```json[\s\S]*?```/g, '').trim() || modelText;
+    const cleanContent = modelText
+        .replace(/<scratchboxPrimitive[\s\S]*?(?:<\/scratchboxPrimitive>|$)/gi, '')
+        .replace(/```json[\s\S]*?```/g, '')
+        .trim() || modelText;
     const jsonMatch = modelText.match(/```json\s*([\s\S]*?)\s*```/) || modelText.match(/(\{[\s\S]*"type"[\s\S]*"data"[\s\S]*\})/);
     if (jsonMatch) {
         try {
@@ -950,26 +2614,45 @@ export function parseOrSynthesizeArtifact(
                 if (type === 'form') type = 'interactive-form';
                 if (type === 'sandbox' || type === 'code-sandbox' || type === 'playground' || type === 'code-playground') type = 'live-code-sandbox';
                 if (type === '3d' || type === 'scene-3d' || type === 'spatial-scene' || type === '3d_scene' || type === '3d-world' || type === 'r3f-scene') type = '3d-scene';
+                if (type === 'video-timeline' || type === 'video' || type === 'timeline' || type === 'video-editor' || type === 'nle' || type === 'video_timeline') type = 'video-timeline';
 
                 let data = parsed.data;
+                const isVideoTimelineRequest = type === 'video-timeline' || request.activeArtifact?.type === 'video-timeline' ||
+                    /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap/i.test(prompt) ||
+                    ((prompt.toLowerCase().includes('clip') || prompt.toLowerCase().includes('timeline')) && (prompt.toLowerCase().includes('split') || prompt.toLowerCase().includes('cut') || prompt.toLowerCase().includes('delete') || prompt.toLowerCase().includes('playhead') || prompt.toLowerCase().includes('ripple') || prompt.toLowerCase().includes('track') || prompt.toLowerCase().includes('video') || prompt.toLowerCase().includes('composite') || prompt.toLowerCase().includes('key')));
+
                 const isImageRequest = /create\s+(?:a\s+)?picture|generate\s+(?:a\s+)?picture|picture\s+of|draw\s+(?:a\s+)?picture|image\s+of|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|photo\s+of|photograph\s+of|illustration\s+of|painting\s+of|artwork\s+of|draw\s+(?:an?\s+)?image|make\s+(?:a\s+)?picture|make\s+(?:an?\s+)?image|\bpicture\b|\bphoto\b|\billustration\b|\bpainting\b/i.test(prompt);
-                const isVideoRequest = /create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(prompt);
+                const isVideoRequest = !isVideoTimelineRequest && (/create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(prompt));
                 const isMediaRequest = isImageRequest || isVideoRequest;
 
-                const isSandboxOrAppRequest = /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt);
+                const is3DActive = request.activeArtifact?.type === '3d-scene';
+                const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|god\s*ray|crepuscular|light\s*shaft|contrail|control\s*surface|aileron|elevator|rudder|biome|terrain|atmosphere|scattering|shader/i.test(prompt) ||
+                    prompt.toLowerCase().includes('animate') || prompt.toLowerCase().includes('fly') || prompt.toLowerCase().includes('play') || prompt.toLowerCase().includes('orbit') || prompt.toLowerCase().includes('motion') || prompt.toLowerCase().includes('takeoff');
+
+                const isSandboxOrAppRequest = !isVideoTimelineRequest && !isMediaRequest && (!is3DActive || !is3DFollowUpKeywords) && (/preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator/i.test(prompt));
                 const isDocExplicitRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(prompt);
 
-                const is3DActive = request.activeArtifact?.type === '3d-scene';
-                const is3DFollowUp = !isMediaRequest && !isSandboxOrAppRequest && !isDocExplicitRequest && is3DActive && (
-                    /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|god\s*ray|crepuscular|light\s*shaft|contrail|control\s*surface|aileron|elevator|rudder|biome|terrain|atmosphere|scattering|shader/i.test(prompt) ||
-                    prompt.toLowerCase().includes('animate') || prompt.toLowerCase().includes('fly') || prompt.toLowerCase().includes('play') || prompt.toLowerCase().includes('orbit') || prompt.toLowerCase().includes('motion') || prompt.toLowerCase().includes('takeoff')
+                const is3DFollowUp = !isMediaRequest && !isDocExplicitRequest && !isVideoTimelineRequest && is3DActive && is3DFollowUpKeywords;
+
+                const isExplicit3DIntent = !isVideoTimelineRequest && !isMediaRequest && (
+                    /\b3d\s+(?:car|vehicle|automobile|truck|sports\s*car|plane|scene|model|world|building|robot|character|mesh|room|furniture|object|simulation|asset)\b/i.test(prompt) ||
+                    /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\b/i.test(prompt) ||
+                    /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+)?scene\b/i.test(prompt) ||
+                    /\b(?:three\.js|threejs|webgl|wgsl|mesh|geometry|sdf|marching\s+cubes|pbr\s+material|procedural\s+terrain)\b/i.test(prompt) ||
+                    /planetary\s+orbit|cyberpunk\s+city|architectural\s+blueprint/i.test(prompt)
                 );
 
-                if (is3DFollowUp && type !== '3d-scene') {
+                if (isVideoTimelineRequest && type !== 'video-timeline') {
+                    type = 'video-timeline';
+                } else if (isExplicit3DIntent) {
+                    type = '3d-scene';
+                } else if (isDocExplicitRequest && type === '3d-scene' && !/3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js|threejs/i.test(prompt)) {
+                    type = 'markdown-document';
+                } else if (is3DFollowUp && type !== '3d-scene') {
                     type = '3d-scene';
                 } else if (isMediaRequest && type === '3d-scene') {
                     type = 'markdown-document';
-                } else if (isSandboxOrAppRequest && type === '3d-scene') {
+                } else if (isSandboxOrAppRequest && type === '3d-scene' && !isExplicit3DIntent && !is3DFollowUp) {
                     type = 'live-code-sandbox';
                 }
 
@@ -980,6 +2663,12 @@ export function parseOrSynthesizeArtifact(
                         (data?.title && /plane|airplane|jet\s+aircraft|jet\s+transit/i.test(data.title));
                     
                     const isAnimateOnly = is3DFollowUp && !/new|change|build|create|switch/i.test(prompt) && /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(prompt);
+
+                    const isTopicChange = !isAnimateOnly && (
+                        /build|make|create|generate|new\s+scene|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt) ||
+                        (parsed.title && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(parsed.title)) ||
+                        (active3DData && !/car|vehicle|automobile|truck|sports\s*car|sedan/i.test(active3DData.title || '') && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt))
+                    );
 
                     // Synthesize procedural scene baseline based on prompt & active context
                     const docContent = request.activeArtifact?.type === 'markdown-document'
@@ -1030,52 +2719,59 @@ export function parseOrSynthesizeArtifact(
                         ? (data?.animation || (prompt.toLowerCase().includes('orbit') ? 'orbit' : 'flight'))
                         : (data?.animation || contextualSynthesized.animation);
 
-                    const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric\s*light|sunlight/i.test(prompt) || !!data?.features?.godRays || !!active3DData?.features?.godRays;
-                    const hasAtmosphere = /atmosphere|scattering|rayleigh|mie|realistic\s*sky|sunlight/i.test(prompt) || !!data?.features?.atmosphericScattering || !!active3DData?.features?.atmosphericScattering;
+                    const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric\s*light/i.test(prompt) || !!data?.features?.godRays || !!active3DData?.features?.godRays;
+                    const hasAtmosphere = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective)\b/i.test(prompt) || !!data?.features?.atmosphericScattering || !!active3DData?.features?.atmosphericScattering;
                     const hasContrails = /contrail|vapor|vortex|wingtip\s*trail/i.test(prompt) || !!data?.features?.contrails || !!active3DData?.features?.contrails;
                     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder|flap/i.test(prompt) || !!data?.features?.controlSurfaces || !!active3DData?.features?.controlSurfaces;
                     const hasTerrainBiomes = /biome|terrain|canyon|alpine|mountain|coastal|desert/i.test(prompt) || !!data?.features?.terrainBiomes || !!active3DData?.features?.terrainBiomes;
 
                     const effectiveFeatures = {
                         ...(contextualSynthesized.features || {}),
-                        ...(active3DData?.features || {}),
+                        ...(isTopicChange ? {} : (active3DData?.features || {})),
                         ...(data?.features || {}),
-                        ...(hasGodRays ? { godRays: true } : {}),
+                        ...(hasGodRays && hasAtmosphere ? { godRays: true } : {}),
                         ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
                         ...(hasContrails ? { contrails: true } : {}),
                         ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
                         ...(hasTerrainBiomes ? { terrainBiomes: (data?.features?.terrainBiomes || active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
                     };
 
+                    const isVehicleTheme = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt) || /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(effectiveTitle);
+
                     const scene3DData: Scene3DData = {
                         title: effectiveTitle,
                         subtitle: effectiveSubtitle,
-                        worldBranch: data?.worldBranch || active3DData?.worldBranch || contextualSynthesized.worldBranch,
-                        sceneType: data?.sceneType || active3DData?.sceneType || contextualSynthesized.sceneType,
-                        renderMode: data?.renderMode || active3DData?.renderMode || contextualSynthesized.renderMode || 'pbr',
-                        cameraMode: data?.cameraMode || active3DData?.cameraMode || contextualSynthesized.cameraMode || 'orbit',
+                        worldBranch: isVehicleTheme ? (data?.worldBranch && !/city|urban|street/i.test(data.worldBranch) ? data.worldBranch : 'studio/showroom') : (data?.worldBranch || (isTopicChange ? undefined : active3DData?.worldBranch) || contextualSynthesized.worldBranch),
+                        sceneType: isVehicleTheme ? 'custom' : (data?.sceneType || (isTopicChange ? undefined : active3DData?.sceneType) || contextualSynthesized.sceneType),
+                        renderMode: data?.renderMode || (isTopicChange ? undefined : active3DData?.renderMode) || contextualSynthesized.renderMode || 'pbr',
+                        cameraMode: data?.cameraMode || (isTopicChange ? undefined : active3DData?.cameraMode) || contextualSynthesized.cameraMode || 'orbit',
                         animation: sceneAnimation,
-                        camera: data?.camera || active3DData?.camera || contextualSynthesized.camera || {
+                        camera: data?.camera || (isTopicChange ? contextualSynthesized.camera : (active3DData?.camera || contextualSynthesized.camera)) || {
                             position: [15, 12, 20],
                             target: [0, 2, 0],
                             fov: 45
                         },
-                        environment: {
+                        environment: isTopicChange ? {
+                            lighting: isVehicleTheme ? 'studio' : 'daylight',
+                            ground: true,
+                            ...(contextualSynthesized.environment || {}),
+                            ...(data?.environment || {})
+                        } : {
                             lighting: 'daylight',
                             ground: true,
                             ...(active3DData?.environment || {}),
                             ...(contextualSynthesized.environment || {}),
                             ...(data?.environment || {}),
-                            skybox: data?.environment?.skybox || ((hasAtmosphere || hasGodRays || isExplicitFlight || !!effectiveFeatures.godRays || !!effectiveFeatures.atmosphericScattering || !!effectiveFeatures.contrails) ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'cyberpunk')),
+                            skybox: data?.environment?.skybox || (hasAtmosphere ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'studio')),
                         },
                         timeline: sceneTimeline,
-                        customScript: data?.customScript || data?.code || active3DData?.customScript || contextualSynthesized.customScript,
-                        code: data?.code || data?.customScript || active3DData?.code || contextualSynthesized.code,
-                        shaders: data?.shaders || active3DData?.shaders || contextualSynthesized.shaders,
+                        customScript: data?.customScript || data?.code || (isTopicChange ? undefined : active3DData?.customScript) || contextualSynthesized.customScript,
+                        code: data?.code || data?.customScript || (isTopicChange ? undefined : active3DData?.code) || contextualSynthesized.code,
+                        shaders: data?.shaders || (isTopicChange ? undefined : active3DData?.shaders) || contextualSynthesized.shaders,
                         features: effectiveFeatures,
                         customMeshes: (() => {
                             if (data?.customMeshes && Array.isArray(data.customMeshes) && data.customMeshes.length > 0) {
-                                if (active3DData?.customMeshes && active3DData.customMeshes.length > 0) {
+                                if (!isTopicChange && active3DData?.customMeshes && active3DData.customMeshes.length > 0) {
                                     const map = new Map<string, CustomMesh>();
                                     active3DData.customMeshes.forEach(m => map.set(m.id, m));
                                     (data.customMeshes as CustomMesh[]).forEach(m => map.set(m.id, m));
@@ -1083,19 +2779,39 @@ export function parseOrSynthesizeArtifact(
                                 }
                                 return data.customMeshes;
                             }
-                            return active3DData?.customMeshes || contextualSynthesized.customMeshes;
+                            return isTopicChange ? contextualSynthesized.customMeshes : (active3DData?.customMeshes || contextualSynthesized.customMeshes);
                         })(),
-                        objects: isExplicitFlight ? defaultObjects : (active3DData?.objects && active3DData.objects.length > 0 ? active3DData.objects : defaultObjects),
-                        operatorStack: data?.operatorStack || active3DData?.operatorStack || [],
-                        actionLog: data?.actionLog || active3DData?.actionLog || [],
-                        sculptSettings: data?.sculptSettings || active3DData?.sculptSettings,
-                        selectedMeshId: data?.selectedMeshId || active3DData?.selectedMeshId,
-                        wasmPhysics: data?.wasmPhysics || active3DData?.wasmPhysics || contextualSynthesized.wasmPhysics,
-                        geoAnchor: data?.geoAnchor || active3DData?.geoAnchor || contextualSynthesized.geoAnchor,
-                        droneRoute: data?.droneRoute || active3DData?.droneRoute || contextualSynthesized.droneRoute
+                        objects: isTopicChange ? (contextualSynthesized.objects || []) : (isExplicitFlight ? defaultObjects : (active3DData?.objects && active3DData.objects.length > 0 ? active3DData.objects : defaultObjects)),
+                        operatorStack: data?.operatorStack || (isTopicChange ? [] : active3DData?.operatorStack) || [],
+                        actionLog: data?.actionLog || (isTopicChange ? [] : active3DData?.actionLog) || [],
+                        sculptSettings: data?.sculptSettings || (isTopicChange ? undefined : active3DData?.sculptSettings),
+                        selectedMeshId: data?.selectedMeshId || (isTopicChange ? undefined : active3DData?.selectedMeshId),
+                        wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || contextualSynthesized.wasmPhysics,
+                        geoAnchor: data?.geoAnchor || (isTopicChange ? undefined : active3DData?.geoAnchor) || contextualSynthesized.geoAnchor,
+                        droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || contextualSynthesized.droneRoute,
+                        cppGenerator: data?.cppGenerator || (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator))
                     };
                     data = scene3DData;
                     parsed.title = effectiveTitle;
+                }
+                if (type === 'video-timeline') {
+                    const isVideoActive = request.activeArtifact?.type === 'video-timeline';
+                    const activeVideoData = isVideoActive ? (request.activeArtifact?.data as VideoTimelineData) : undefined;
+                    const timelineData = synthesizeContextualVideoTimeline(
+                        prompt,
+                        parsed.title || data?.title,
+                        data?.tracks && data.tracks.length > 0 ? (data as VideoTimelineData) : activeVideoData
+                    );
+                    if (data && typeof data === 'object') {
+                        if (data.aspectRatio) timelineData.aspectRatio = data.aspectRatio;
+                        if (data.fps) timelineData.fps = data.fps;
+                        if (data.duration) timelineData.duration = data.duration;
+                        if (data.currentTime !== undefined) timelineData.currentTime = data.currentTime;
+                        if (data.tracks && Array.isArray(data.tracks) && data.tracks.length > 0) timelineData.tracks = data.tracks;
+                    }
+                    data = timelineData;
+                    parsed.title = parsed.title || timelineData.title;
+                    parsed.summary = parsed.summary || timelineData.subtitle;
                 }
                 if (type === 'markdown-document') {
                     const fallbackTitle = request.activeArtifact?.title && request.activeArtifact.title !== 'Markdown Document'
@@ -1170,34 +2886,49 @@ export function parseOrSynthesizeArtifact(
 
                                 if (!content || /^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3}|untitled(\s+section)?\.{0,3})$/i.test(content)) {
                                     const num = currentHeadingIdx + 1;
-                                    if (/1776/i.test(effectiveDocTitle)) {
-                                        const fallback1776Headings = [
-                                            '1. Executive Overview: The Genesis of Modern Republicanism',
-                                            '2. Key Pillars & Chronology: From Grievances to Universal Truths',
-                                            '2.1 The Enlightenment’s Crucible & Thomas Paine’s Catalyst',
-                                            '2.2 The Declaration of Independence: Anatomy of a Revolution',
-                                            '3. Strategic & Ideological Impact on Modern Governance'
-                                        ];
-                                        content = fallback1776Headings[currentHeadingIdx] || `${num}. Strategic Historical Analysis & Ideological Turning Points`;
-                                    } else if (/auth|security|identity/i.test(effectiveDocTitle)) {
-                                        const fallbackAuthHeadings = [
-                                            '1. Executive Summary: Identity & Access Architecture',
-                                            '2. Architectural Pillars & Protocol Chronology',
-                                            '2.1 Protocol Specification: OAuth 2.1 & PKCE Handshake',
-                                            '2.2 Token Lifecycle & Revocation Semantics',
-                                            '3. Verification, Automated Guardrails & Compliance'
-                                        ];
-                                        content = fallbackAuthHeadings[currentHeadingIdx] || `${num}. Architectural Specification & Security Verification`;
-                                    } else {
-                                        const genericHeadings = [
-                                            `1. Executive Summary: Strategic Blueprint for ${effectiveDocTitle}`,
-                                            '2. Key Architectural Pillars & System Design',
-                                            '2.1 Modular System Architecture & Data Flow',
-                                            '2.2 Operational Reliability & Automated Guardrails',
-                                            '3. Actionable Milestones & Convergence Checklist'
-                                        ];
-                                        content = genericHeadings[currentHeadingIdx] || `${num}. Implementation Details & Analysis`;
+                                    const titleLower = effectiveDocTitle.toLowerCase();
+
+                                    // Dynamically determine domain-appropriate opening and section headings on the fly
+                                    let h1Prefix = 'Overview & Core Concepts';
+                                    let h2Pillar = 'Theoretical Foundations & Mechanics';
+                                    let h2Sub1 = 'Core Principles & Architecture';
+                                    let h2Sub2 = 'Methodologies & Structural Analysis';
+                                    let h3Milestone = 'Key Findings & Future Trajectory';
+
+                                    if (/science|physics|astronomy|eclipse|biology|chemistry|quantum|genetics/i.test(titleLower)) {
+                                        h1Prefix = 'Overview & Theoretical Foundations';
+                                        h2Pillar = 'Empirical Mechanics & Observational Data';
+                                        h2Sub1 = 'Fundamental Physical Principles';
+                                        h2Sub2 = 'Experimental Verification & Dynamics';
+                                        h3Milestone = 'Research Frontiers & Open Inquiries';
+                                    } else if (/history|revolution|war|treaty|ancient|medieval|empire|century|founding|1776/i.test(titleLower)) {
+                                        h1Prefix = 'Historical Context & Genesis';
+                                        h2Pillar = 'Chronology & Transformational Milestones';
+                                        h2Sub1 = 'Catalysts & Primary Grievances';
+                                        h2Sub2 = 'Institutional Evolution & Legacy';
+                                        h3Milestone = 'Historical Assessment & Modern Impact';
+                                    } else if (/auth|security|identity|zero[- ]trust|crypto|network|infrastructure/i.test(titleLower)) {
+                                        h1Prefix = 'System Overview & Threat Model';
+                                        h2Pillar = 'Protocol Architecture & Trust Boundaries';
+                                        h2Sub1 = 'Handshake Specifications & Token Lifecycles';
+                                        h2Sub2 = 'Automated Verification & Guardrails';
+                                        h3Milestone = 'Deployment Milestones & Convergence Checklist';
+                                    } else if (/strategy|business|proposal|pitch|roadmap|product/i.test(titleLower)) {
+                                        h1Prefix = 'Strategic Overview & Vision';
+                                        h2Pillar = 'Market Pillars & Execution Roadmap';
+                                        h2Sub1 = 'Value Proposition & Architecture';
+                                        h2Sub2 = 'Operational Mechanics & Risk Matrix';
+                                        h3Milestone = 'Key Milestones & Convergence Checklist';
                                     }
+
+                                    const dynamicHeadings = [
+                                        `1. ${h1Prefix}: ${effectiveDocTitle}`,
+                                        `2. ${h2Pillar}`,
+                                        `2.1 ${h2Sub1}`,
+                                        `2.2 ${h2Sub2}`,
+                                        `3. ${h3Milestone}`
+                                    ];
+                                    content = dynamicHeadings[currentHeadingIdx] || `${num}. Analysis & System Specification for ${effectiveDocTitle}`;
                                 }
 
                                 return {
@@ -1292,8 +3023,27 @@ export function parseOrSynthesizeArtifact(
     }
 
     const lower = prompt.toLowerCase();
+    const isVideoTimelineFallback = request.activeArtifact?.type === 'video-timeline' ||
+        /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap/i.test(prompt) ||
+        ((lower.includes('clip') || lower.includes('timeline')) && (lower.includes('split') || lower.includes('cut') || lower.includes('delete') || lower.includes('playhead') || lower.includes('ripple') || lower.includes('track') || lower.includes('video') || lower.includes('composite') || lower.includes('key')));
+
+    if (isVideoTimelineFallback) {
+        const isVideoActive = request.activeArtifact?.type === 'video-timeline';
+        const activeVideoData = isVideoActive ? (request.activeArtifact?.data as VideoTimelineData) : undefined;
+        const timelineData = synthesizeContextualVideoTimeline(prompt, undefined, activeVideoData);
+        return {
+            id: (isVideoActive ? request.activeArtifact?.id : undefined) || `art-video-${Date.now()}`,
+            type: 'video-timeline',
+            title: timelineData.title,
+            summary: timelineData.subtitle || 'Multi-track non-linear video editing timeline with real-time WebGL compositor',
+            version: isVideoActive ? (request.activeArtifact?.version || 1) + 1 : 1,
+            createdAt: timestamp,
+            data: timelineData
+        };
+    }
+
     const isImageRequest = /create\s+(?:a\s+)?picture|generate\s+(?:a\s+)?picture|picture\s+of|draw\s+(?:a\s+)?picture|image\s+of|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|photo\s+of|photograph\s+of|illustration\s+of|painting\s+of|artwork\s+of|draw\s+(?:an?\s+)?image|make\s+(?:a\s+)?picture|make\s+(?:an?\s+)?image|\bpicture\b|\bphoto\b|\billustration\b|\bpainting\b/i.test(prompt);
-    const isVideoRequest = /create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(prompt);
+    const isVideoRequest = !isVideoTimelineFallback && (/create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(prompt));
     const isMediaRequest = isImageRequest || isVideoRequest;
 
     if (isMediaRequest) {
@@ -1312,23 +3062,34 @@ export function parseOrSynthesizeArtifact(
         };
     }
 
+    const is3DActive = request.activeArtifact?.type === '3d-scene';
+    const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust/i.test(prompt) ||
+        lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff');
+
     // Check if query is 3D scene / 3D model / 3D plane / spatial scene
-    const isSandboxOrAppRequest = !isMediaRequest && (
-        /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt) ||
+    const isSandboxOrAppRequest = !isMediaRequest && !isVideoTimelineFallback && (!is3DActive || !is3DFollowUpKeywords) && (
+        /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator/i.test(prompt) ||
         lower.includes('preview') || lower.includes('sandbox') || lower.includes('calculator') || lower.includes('landing page') ||
         lower.includes('web app') || lower.includes('react app') || lower.includes('dashboard') || lower.includes('widget') ||
-        lower.includes('interactive') || lower.includes('simulator')
+        lower.includes('interactive') || lower.includes('simulator') || lower.includes('game') || lower.includes('arcade') ||
+        lower.includes('synth') || lower.includes('synthesizer') || lower.includes('piano') || lower.includes('sorting visualizer') ||
+        lower.includes('gravity') || lower.includes('physics sim')
     );
     const isDocExplicitRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(prompt);
 
-    const is3DActive = request.activeArtifact?.type === '3d-scene';
-    const is3DFollowUp = !isMediaRequest && !isSandboxOrAppRequest && !isDocExplicitRequest && is3DActive && (
-        /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust/i.test(prompt) ||
-        lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff')
+    const is3DFollowUp = !isMediaRequest && !isDocExplicitRequest && is3DActive && is3DFollowUpKeywords;
+    const is3DSceneRequest = !isMediaRequest && !isDocExplicitRequest && (
+        is3DFollowUp ||
+        /3d\s+(?:scene|plane|world|model|flight|visual|mesh|field|generator|simulation|landscape|terrain|engine|orrery|solar|asteroid|molecular|lattice|city|corridor|environment)/i.test(prompt) ||
+        /three\.js|webgl|r3f|airplane|aircraft|flight\s+corridor|asteroid\s+field|solar\s+system|planetary\s+orbit|molecular\s+lattice|cppgenerator|scratchbox_engine/i.test(prompt) ||
+        /god\s*ray|crepuscular|contrail|control\s*surface|terrain\s*biome|volumetric\s*light|aerial\s*perspective/i.test(prompt) ||
+        ((lower.includes('3d') || lower.includes('spatial')) && (
+            lower.includes('scene') || lower.includes('plane') || lower.includes('world') || lower.includes('model') ||
+            lower.includes('flight') || lower.includes('render') || lower.includes('environment') || lower.includes('asteroid') ||
+            lower.includes('orbit') || lower.includes('solar') || lower.includes('mesh') || lower.includes('procedural') ||
+            lower.includes('field') || lower.includes('physics') || lower.includes('generator') || lower.includes('terrain')
+        ))
     );
-    const is3DSceneRequest = !isMediaRequest && !isSandboxOrAppRequest && !isDocExplicitRequest && (is3DFollowUp ||
-        /3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js\s+scene|r3f\s+scene|airplane|aircraft|3d\s+flight|flight\s+corridor|3d\s+visual|god\s*rays?|light\s*shaft|contrails?|control\s*surfaces?|terrain\s*biomes?|atmospheric\s*scattering/i.test(prompt) ||
-        ((lower.includes('3d') || lower.includes('spatial')) && (lower.includes('scene') || lower.includes('plane') || lower.includes('world') || lower.includes('model') || lower.includes('flight') || lower.includes('render') || lower.includes('environment'))));
 
     if (is3DSceneRequest) {
         const active3DData = is3DActive ? (request.activeArtifact?.data as Scene3DData) : undefined;
@@ -1371,8 +3132,8 @@ export function parseOrSynthesizeArtifact(
             ? planeObjects
             : (contextualSynthesized.objects || []);
 
-        const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric\s*light|sunlight/i.test(prompt) || !!active3DData?.features?.godRays;
-        const hasAtmosphere = /atmosphere|scattering|rayleigh|mie|realistic\s*sky|sunlight/i.test(prompt) || !!active3DData?.features?.atmosphericScattering;
+        const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric\s*light/i.test(prompt) || !!active3DData?.features?.godRays;
+        const hasAtmosphere = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective)\b/i.test(prompt) || !!active3DData?.features?.atmosphericScattering;
         const hasContrails = /contrail|vapor|vortex|wingtip\s*trail/i.test(prompt) || !!active3DData?.features?.contrails;
         const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder|flap/i.test(prompt) || !!active3DData?.features?.controlSurfaces;
         const hasTerrainBiomes = /biome|terrain|canyon|alpine|mountain|coastal|desert/i.test(prompt) || !!active3DData?.features?.terrainBiomes;
@@ -1381,7 +3142,7 @@ export function parseOrSynthesizeArtifact(
             ...(contextualSynthesized.features || {}),
             ...(active3DData?.features || {}),
             ...(hasGodRays ? { godRays: true } : {}),
-            ...(hasAtmosphere ? { atmosphericScattering: true } : {}),
+            ...(hasAtmosphere || hasGodRays ? { atmosphericScattering: true } : {}),
             ...(hasContrails ? { contrails: true } : {}),
             ...(hasControlSurfaces ? { controlSurfaces: true } : {}),
             ...(hasTerrainBiomes ? { terrainBiomes: (active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
@@ -1416,7 +3177,7 @@ export function parseOrSynthesizeArtifact(
                 ground: true,
                 ...(active3DData?.environment || {}),
                 ...(contextualSynthesized.environment || {}),
-                skybox: (hasAtmosphere || hasGodRays || isExplicitFlight || !!fallbackFeatures.godRays || !!fallbackFeatures.atmosphericScattering || !!fallbackFeatures.contrails) ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'cyberpunk')
+                skybox: ((hasAtmosphere || hasGodRays) ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'studio'))
             },
             geoAnchor: active3DData?.geoAnchor || contextualSynthesized.geoAnchor || {
                 lat: 37.7900,
@@ -1452,7 +3213,8 @@ export function parseOrSynthesizeArtifact(
             operatorStack: active3DData?.operatorStack || [],
             actionLog: active3DData?.actionLog || [],
             sculptSettings: active3DData?.sculptSettings,
-            selectedMeshId: active3DData?.selectedMeshId
+            selectedMeshId: active3DData?.selectedMeshId,
+            cppGenerator: active3DData?.cppGenerator || contextualSynthesized.cppGenerator
         };
 
         return {
@@ -1468,34 +3230,57 @@ export function parseOrSynthesizeArtifact(
 
     // Check if query is flow/graph
     if (lower.includes('flow') || lower.includes('graph') || lower.includes('pipeline')) {
+        const domain = classifyDomain(prompt);
+        const { subject } = extractPromptEntities(prompt, 'System Architecture');
+        const title = `${subject} - Pipeline & Architecture Flow`;
+        const adaptiveGraph = synthesizeAdaptiveNodeGraph(domain, title, prompt);
         return {
             id: `art-graph-${Date.now()}`,
             type: 'node-graph',
-            title: 'System Architecture & Reasoning Pipeline',
-            summary: 'Interactive node flow graph synthesized with Studio AI Engine.',
+            title: adaptiveGraph.title,
+            summary: `Interactive pipeline flow graph for ${subject} synthesized with Studio AI Engine.`,
             version: 1,
             createdAt: timestamp,
-            data: {
-                title: 'System Architecture & Reasoning Pipeline',
-                subtitle: 'Visual node graph mapping prompt inputs, superpowers, and live MCP pipes',
-                nodes: [
-                    { id: 'n1', label: 'Prompt Composer', subtitle: 'User Input & Context', category: 'input', color: 'blue', x: 80, y: 160, status: 'completed' },
-                    { id: 'n2', label: 'Studio AI Engine', subtitle: 'High Reasoning active', category: 'ai', color: 'purple', x: 460, y: 80, status: 'active' },
-                    { id: 'n3', label: 'MCP Live Integrations', subtitle: 'Stripe & GitHub Tools', category: 'process', color: 'indigo', x: 460, y: 260, status: 'active' },
-                    { id: 'n4', label: 'Liquid Glass Canvas', subtitle: 'Rendered Visual Primitive', category: 'output', color: 'emerald', x: 840, y: 160, status: 'active' }
-                ],
-                edges: [
-                    { id: 'e1', source: 'n1', target: 'n2', label: 'Feeds prompt', style: 'solid', color: 'purple' },
-                    { id: 'e2', source: 'n1', target: 'n3', label: 'Triggers tools', style: 'dashed', color: 'indigo' },
-                    { id: 'e3', source: 'n2', target: 'n4', label: 'Synthesizes stage', style: 'solid', color: 'emerald' },
-                    { id: 'e4', source: 'n3', target: 'n4', label: 'Hydrates data', style: 'solid', color: 'emerald' }
-                ]
-            }
+            data: adaptiveGraph
+        };
+    }
+
+    // Check if query is kanban / sprint board
+    if (lower.includes('kanban') || lower.includes('sprint') || (lower.includes('board') && !lower.includes('keyboard') && !lower.includes('dashboard'))) {
+        const domain = classifyDomain(prompt);
+        const { subject } = extractPromptEntities(prompt, 'Project Roadmap');
+        const title = `${subject} - Roadmap & Sprint Board`;
+        const adaptiveBoard = synthesizeAdaptiveKanban(domain, title, prompt);
+        return {
+            id: `art-kanban-${Date.now()}`,
+            type: 'kanban-board',
+            title: adaptiveBoard.title,
+            summary: `Interactive Kanban board for ${subject} synthesized with Studio AI Engine.`,
+            version: 1,
+            createdAt: timestamp,
+            data: adaptiveBoard
+        };
+    }
+
+    // Check if query is metrics / KPI / telemetry dashboard
+    if (lower.includes('metric') || lower.includes('telemetry') || lower.includes('kpi') || lower.includes('analytics dashboard')) {
+        const domain = classifyDomain(prompt);
+        const { subject } = extractPromptEntities(prompt, 'System Telemetry');
+        const title = `${subject} - Telemetry & Performance Dashboard`;
+        const adaptiveMetrics = synthesizeAdaptiveMetrics(domain, title, prompt);
+        return {
+            id: `art-metrics-${Date.now()}`,
+            type: 'metric-dashboard',
+            title: adaptiveMetrics.title,
+            summary: `Interactive telemetry dashboard for ${subject} synthesized with Studio AI Engine.`,
+            version: 1,
+            createdAt: timestamp,
+            data: adaptiveMetrics
         };
     }
 
     // Check if query is sandbox / live preview / interactive web app OR cleanContent contains runnable code blocks
-    const isSandboxExplicit = isSandboxOrAppRequest || /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt);
+    const isSandboxExplicit = isSandboxOrAppRequest || /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator/i.test(prompt);
 
     const extractedSandbox = extractCodeSandboxArtifact(prompt, cleanContent, request.activeArtifact);
     if (extractedSandbox && (isSandboxExplicit || extractedSandbox.hasRunnableCode)) {

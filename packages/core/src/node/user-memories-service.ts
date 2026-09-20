@@ -81,8 +81,9 @@ export class UserMemoriesService {
     private globalStorePath: string;
     private defaultWorkspaceRoot?: string;
 
-    constructor() {
-        this.globalStorePath = path.join(os.homedir(), '.scratchbox-ide', 'memories.json');
+    constructor(options?: UserMemoriesServiceOptions) {
+        this.globalStorePath = options?.globalStorePath || path.join(os.homedir(), '.scratchbox-ide', 'memories.json');
+        this.defaultWorkspaceRoot = options?.defaultWorkspaceRoot;
     }
 
     public setGlobalStorePath(globalStorePath: string): void {

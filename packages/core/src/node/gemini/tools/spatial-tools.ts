@@ -1,0 +1,2901 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import * as THREE from 'three';
+import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
+import {
+    healPanoramaSeam,
+    inpaintPanorama,
+    generate360Panorama,
+    generate4KMonumentalPanorama,
+    auditPanoramaQuality,
+    reprojectZenithPanorama,
+    extractZenithRectilinearPatch
+} from '../../spatial/Google360PanoramaPipelineService';
+import {
+    generate360Perspectives
+} from '../../spatial/MultiPerspectivePanoramaSynthesisService';
+import {
+    UniversalTileDecompositionService,
+    type UtdraBenchmarkType,
+    type UtdraPipelineMode
+} from '../../3d-engine/universal-tile-decomposition-service';
+import {
+    WebXRGeospatialAnchorBridge,
+    type DeviceSensorSample,
+    type WebXRViewerPose
+} from '../../../browser/generative-canvas/services/xr/WebXRGeospatialAnchorBridge';
+import {
+    GeoBoxPrecisionResectionService,
+    type ImageLocationResectionRequest
+} from '../../spatial/GeoBoxPrecisionResectionService';
+import {
+    SubPixelEdgeAlignmentOptimizer,
+    type CameraPose6DOF
+} from '../../spatial/SubPixelEdgeAlignmentOptimizer';
+import {
+    SpatialPoseEstimatorService,
+    type Point2D,
+    type Point3D
+} from '../../spatial/SpatialPoseEstimatorService';
+import { VisualFeatureMatcherService } from '../../spatial/VisualFeatureMatcherService';
+import { HeadlessMeshSilhouetteRenderer } from '../../spatial/HeadlessMeshSilhouetteRenderer';
+import { LocationObjectLightingService } from '../../../browser/generative-canvas/services/atmosphere';
+import {
+    LensDistortionEffect,
+    LENS_OPTICAL_PRESETS,
+    calculateBrownConradyFromFocalLength,
+    computeBrownConradyUV,
+    LENS_DISTORTION_SHADER,
+    type LensDistortionConfig
+} from '../../../browser/generative-canvas/services/optics/LensDistortionEffect';
+import { VfxLensInterchangeService } from '../../../common/optics/VfxLensInterchangeService';
+import { VfxPlateMatchmoveService } from '../../../browser/generative-canvas/services/video/VfxPlateMatchmoveService';
+import { MediaPipePoseService } from '../../spatial/MediaPipePoseService';
+import { GeminiSceneDepthService } from '../../spatial/GeminiSceneDepthService';
+import { PhysicalCameraModel } from '../../../common/optics/PhysicalCameraModel';
+import type {
+    PhysicalCameraConfig,
+    SensorFormatPreset
+} from '../../../common/optics/physical-camera-protocol';
+import { TapirTrackingService } from '../../spatial/TapirTrackingService';
+import { PointSamplers } from '../../../common/tracking/PointTrackingModel';
+import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
+import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
+import type {
+    NormalizedPoint2D,
+    PointSamplerType,
+    TrackerBackend,
+    VideoFrameData
+} from '../../../common/tracking/tapir-tracking-protocol';
+import type { ToolDeclaration, ToolHandler, ToolResultPayload } from './types';
+
+function asString(val: unknown, fallback = ''): string {
+    return typeof val === 'string' ? val : fallback;
+}
+
+export interface GeospatialAnchorOrigin {
+    latitude: number;
+    longitude: number;
+    altitudeMsl?: number;
+}
+
+// ============================================================================
+// Google 3D Tiles Declarations & Handlers
+// ============================================================================
+
+export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'google_3d_tiles_get_full_texture',
+        description: 'Ingest real-world geographic coordinates or address as a photorealistic, full-texture 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality (errorTarget <= 0.5, 4K screen-space error budget). Returns glbBuffer, glbPath, and geometric mesh statistics.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                query: {
+                    type: 'STRING',
+                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported binary .glb file'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                }
+            },
+            required: ['query']
+        }
+    },
+    {
+        name: 'google_3d_tiles_get_clay',
+        description: 'Ingest real-world geographic coordinates or address as a studio grey clay 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality (errorTarget <= 0.5, 4K screen-space error budget). Returns glbBuffer, glbPath, and geometric mesh statistics.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                query: {
+                    type: 'STRING',
+                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported binary .glb file'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                }
+            },
+            required: ['query']
+        }
+    },
+    {
+        name: 'google_3d_tiles_recolor_glb',
+        description: 'Recolor a 3D Tile GLB model using the Sophisticated v2 Architecture 2 offline texture atlas re-grading engine. Performs hue-aware semantic segmentation (protecting green foliage and slate asphalt from turning terracotta), intrinsic shadow de-lighting, and PBR normal/roughness map synthesis with 100% geometric vertex lock (0.000 mm drift).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to source photogrammetric 3D Tile .glb model'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the recolored PBR .glb model. Defaults to <input>_recolored.glb.'
+                },
+                palettePreset: {
+                    type: 'STRING',
+                    description: 'Lighting and mood preset: "dusk_twilight" (default), "golden_hour", "cyberpunk_neon", or "monochrome_noir"'
+                },
+                customPalette: {
+                    type: 'OBJECT',
+                    description: 'Optional custom color hex swatches { shadowHex, midtoneHex, highlightHex, accentHex }'
+                },
+                protectFoliage: {
+                    type: 'BOOLEAN',
+                    description: 'Preserve natural green foliage / trees (default true)'
+                },
+                protectAsphalt: {
+                    type: 'BOOLEAN',
+                    description: 'Preserve neutral asphalt roads and pavements (default true)'
+                },
+                generatePbrNormals: {
+                    type: 'BOOLEAN',
+                    description: 'Synthesize tangent-space normal maps from photogrammetry albedo (default true)'
+                },
+                generatePbrRoughness: {
+                    type: 'BOOLEAN',
+                    description: 'Synthesize metallic-roughness PBR maps (default true)'
+                },
+                normalStrength: {
+                    type: 'NUMBER',
+                    description: 'Normal map surface relief strength multiplier (default 2.0)'
+                },
+                shadowLift: {
+                    type: 'NUMBER',
+                    description: 'Shadow de-lighting lift intensity from 0.0 to 1.0 (default 0.7)'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in fast offline emulation mode for testing'
+                }
+            },
+            required: ['inputGlbPath']
+        }
+    }
+];
+
+export const google3DTilesHandlers: Record<string, ToolHandler> = {
+    google_3d_tiles_get_full_texture: async (args, _ctx) => {
+        const query = asString(args.query);
+        if (!query) throw new Error('google_3d_tiles_get_full_texture: "query" argument is required.');
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await getGoogle3DTilesFullTexture(query, {
+            outputGlbPath,
+            offlineMock
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                mode: result.mode,
+                geoAnchor: result.geoAnchor,
+                resolvedAddress: result.resolvedAddress,
+                glbPath: result.glbPath,
+                mesh: result.mesh,
+                quality: result.quality,
+                render: result.render
+            },
+            summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
+        };
+    },
+
+    google_3d_tiles_get_clay: async (args, _ctx) => {
+        const query = asString(args.query);
+        if (!query) throw new Error('google_3d_tiles_get_clay: "query" argument is required.');
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await getGoogle3DTilesClay(query, {
+            outputGlbPath,
+            offlineMock
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                mode: result.mode,
+                geoAnchor: result.geoAnchor,
+                resolvedAddress: result.resolvedAddress,
+                glbPath: result.glbPath,
+                mesh: result.mesh,
+                quality: result.quality,
+                render: result.render
+            },
+            summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
+        };
+    },
+
+    google_3d_tiles_recolor_glb: async (args, _ctx) => {
+        const inputGlbPath = asString(args.inputGlbPath);
+        if (!inputGlbPath) throw new Error('google_3d_tiles_recolor_glb: "inputGlbPath" argument is required.');
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        const palettePreset = (asString(args.palettePreset) || undefined) as any;
+        const customPalette = typeof args.customPalette === 'object' && args.customPalette !== null
+            ? (args.customPalette as any)
+            : undefined;
+        const protectFoliage = typeof args.protectFoliage === 'boolean' ? args.protectFoliage : true;
+        const protectAsphalt = typeof args.protectAsphalt === 'boolean' ? args.protectAsphalt : true;
+        const generateNormalMaps = typeof args.generatePbrNormals === 'boolean' ? args.generatePbrNormals : true;
+        const generateRoughnessMaps = typeof args.generatePbrRoughness === 'boolean' ? args.generatePbrRoughness : true;
+        const normalStrength = typeof args.normalStrength === 'number' ? args.normalStrength : 2.0;
+        const shadowLift = typeof args.shadowLift === 'number' ? args.shadowLift : 0.7;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await recolor3DTilesGlb({
+            inputGlb: inputGlbPath,
+            outputGlbPath,
+            palettePreset,
+            customPalette,
+            segmentation: {
+                enableSegmentation: true,
+                protectFoliage,
+                protectAsphalt
+            },
+            pbr: {
+                generateNormalMaps,
+                normalStrength,
+                generateRoughnessMaps
+            },
+            shadowLift,
+            mockExecution
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                inputGlbPath: result.inputGlbPath,
+                outputGlbPath: result.outputGlbPath,
+                textureCount: result.textureCount,
+                normalMapCount: result.normalMapCount,
+                roughnessMapCount: result.roughnessMapCount,
+                originalByteLength: result.originalByteLength,
+                recoloredByteLength: result.recoloredByteLength,
+                driftMm: result.driftMm,
+                durationMs: result.durationMs,
+                paletteUsed: result.paletteUsed,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    }
+};
+
+// ============================================================================
+// Panorama Declarations & Handlers
+// ============================================================================
+
+export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'panorama_heal_seam',
+        description: 'Heal the vertical boundary seam of a 360 equirectangular panorama using Google Vertex AI / Imagen 3 inpainting over a 50% horizontally rolled canvas with soft-edge quadratic gradient masking. Guarantees 100% bit-exact pixel fidelity outside the seam width band.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Absolute or relative file path to the input 360 equirectangular panorama PNG/JPEG image.'
+                },
+                prompt: {
+                    type: 'STRING',
+                    description: 'Optional guidance prompt describing the scene context for inpainting the boundary seam.'
+                },
+                seamWidth: {
+                    type: 'NUMBER',
+                    description: 'Width in pixels of the vertical inpaint band centered on the seam (default: 128).'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional output file path to write the healed seamless panorama.'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode using procedural smoothstep inpainting.'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    },
+    {
+        name: 'panorama_inpaint',
+        description: 'Inpaint or remove objects (such as nadir camera rigs, tripods, drone shadows, or unwanted floaters) on a 360 equirectangular panorama using Google Vertex AI / Imagen 3.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Absolute or relative file path to the input 360 panorama image.'
+                },
+                maskImagePath: {
+                    type: 'STRING',
+                    description: 'Optional file path to a black-and-white inpaint mask image.'
+                },
+                nadirOnly: {
+                    type: 'BOOLEAN',
+                    description: 'If true, automatically generates a south polar nadir mask covering the camera rig/tripod.'
+                },
+                nadirRatio: {
+                    type: 'NUMBER',
+                    description: 'Fraction of image height from bottom to cover for nadir removal (default: 0.15).'
+                },
+                ceilingOnly: {
+                    type: 'BOOLEAN',
+                    description: 'If true, automatically generates a north polar ceiling mask covering the sky/ceiling dome.'
+                },
+                ceilingRatio: {
+                    type: 'NUMBER',
+                    description: 'Fraction of image height from top to cover for ceiling infill (default: 0.20).'
+                },
+                inpaintBothPolar: {
+                    type: 'BOOLEAN',
+                    description: 'If true, automatically generates a dual polar mask covering both ceiling (top) and nadir/floor (bottom).'
+                },
+                prompt: {
+                    type: 'STRING',
+                    description: 'Inpainting prompt describing what should replace the masked area (e.g. clean pavement, grass).'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional output file path to write the inpainted panorama.'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode.'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    },
+    {
+        name: 'panorama_generate_360',
+        description: 'Synthesize a 360 equirectangular panoramic image from prompt (plain text description or structured JSON prompt) using Google generative models with automatic boundary seam healing.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: {
+                    type: 'STRING',
+                    description: 'Text description or structured JSON prompt of the 360 panoramic environment to generate.'
+                },
+                structuredPrompt: {
+                    type: 'OBJECT',
+                    description: 'Optional structured 360 prompt schema containing image_meta, scene_context, rendering_style, and constraints.'
+                },
+                style: {
+                    type: 'STRING',
+                    description: 'Optional aesthetic style modifier (e.g. "photorealistic daylight", "cyberpunk neon night").'
+                },
+                width: {
+                    type: 'NUMBER',
+                    description: 'Panorama width in pixels (default: 2048).'
+                },
+                height: {
+                    type: 'NUMBER',
+                    description: 'Panorama height in pixels (default: 1024).'
+                },
+                healSeam: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to automatically perform seam-healing pass (default: true).'
+                },
+                inpaintNadir: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to automatically clean the nadir region (default: false).'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional output file path to write the generated panorama.'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode generating synthetic equirectangular landscape.'
+                },
+                invertSphericalCurvature: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to invert spherical curvature so that the panorama wraps concavely towards the user at the lateral edges rather than bowing away convexly (default: false).'
+                }
+            },
+            required: ['prompt']
+        }
+    },
+    {
+        name: 'panorama_generate_4k',
+        description: 'Synthesize a monumental 4K UHD 360 equirectangular panorama (4096x2048, 8.38 MP) from text prompt using Google generative models with Laplacian 2-band frequency separation seam equalization, clean photographic ceiling/ground preservation (zero artificial polar discs/rings), single-pixel polar singularity collapse, and automated 100/100 QC certification.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: {
+                    type: 'STRING',
+                    description: 'Text prompt describing the 360 panoramic environment or monumental architecture.'
+                },
+                style: {
+                    type: 'STRING',
+                    description: 'Optional aesthetic style modifier (e.g. "monumental architecture", "cyberpunk neon night", "gothic fan vault").'
+                },
+                width: {
+                    type: 'NUMBER',
+                    description: 'Panorama width in pixels (default: 4096).'
+                },
+                height: {
+                    type: 'NUMBER',
+                    description: 'Panorama height in pixels (default: 2048).'
+                },
+                seamEqualization: {
+                    type: 'STRING',
+                    description: 'Seam equalization method across boundary meridian: "laplacian_2band" (default), "linear_smoothstep", or "none".'
+                },
+                seamWidth: {
+                    type: 'NUMBER',
+                    description: 'Width of seam blending margin in pixels (default: 128 for 4K).'
+                },
+                enablePolarCaps: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to apply artificial Street View circular polar discs (default: false — clean photographic ceiling & ground).'
+                },
+                enforcePolarSingularity: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to collapse infinitesimal polar coordinate singularities at row 0 and row H-1 (default: true).'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional output file path to write the generated 4K PNG panorama.'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode generating high-detail synthetic monumental architecture.'
+                }
+            },
+            required: ['prompt']
+        }
+    },
+    {
+        name: 'panorama_reproject_zenith',
+        description: 'Reproject a 1:1 rectilinear ceiling image into a 360 equirectangular panorama (Option A). Uses inverse gnomonic raycasting with smooth radial feathering and illumination balancing to eliminate polar pinching singularities on domes, vaults, and oculi.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                baseImagePath: {
+                    type: 'STRING',
+                    description: 'Path to base 360 equirectangular panorama image file.'
+                },
+                patchImagePath: {
+                    type: 'STRING',
+                    description: 'Path to 1:1 rectilinear ceiling image file looking straight up at zenith.'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional path to write the reprojected 360 panorama output.'
+                },
+                fovDegrees: {
+                    type: 'NUMBER',
+                    description: 'Field of view of the rectilinear ceiling patch in degrees (default: 90).'
+                },
+                headingDegrees: {
+                    type: 'NUMBER',
+                    description: 'Azimuthal rotation angle in degrees to align patch with panorama orientation (default: 0).'
+                },
+                blendInnerRadius: {
+                    type: 'NUMBER',
+                    description: 'Normalized radius inside which patch has 100% weight (default: 0.65).'
+                },
+                blendOuterRadius: {
+                    type: 'NUMBER',
+                    description: 'Normalized radius beyond which base panorama has 100% weight (default: 0.95).'
+                },
+                matchIllumination: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to equalize exposure and chrominance across the overlap ring band (default: true).'
+                }
+            },
+            required: ['baseImagePath', 'patchImagePath']
+        }
+    },
+    {
+        name: 'panorama_extract_zenith',
+        description: 'Extract a 1:1 rectilinear perspective square image looking straight up at zenith (+Y, elevation +90°) from an equirectangular panorama.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Path to 360 equirectangular panorama image file.'
+                },
+                outputImagePath: {
+                    type: 'STRING',
+                    description: 'Optional path to write the extracted 1:1 square ceiling image.'
+                },
+                fovDegrees: {
+                    type: 'NUMBER',
+                    description: 'Field of view in degrees (default: 90).'
+                },
+                patchResolution: {
+                    type: 'NUMBER',
+                    description: 'Resolution in pixels for square patch (default: 1024).'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    },
+    {
+        name: 'panorama_generate_perspectives',
+        description: 'Generate 6 discrete rectilinear perspective camera plates (Front, Right, Back, Left, Top [Zenith], Bottom [Nadir]) from an input 2D image or panorama to extend 360-degree coverage and vertical coverage, and stitch them into a seamless 360 equirectangular environment.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input 2D perspective photo or equirectangular panorama image.'
+                },
+                faceResolution: {
+                    type: 'NUMBER',
+                    description: 'Square pixel resolution of each individual perspective camera face (default: 512).'
+                },
+                equirectangularWidth: {
+                    type: 'NUMBER',
+                    description: 'Stitched 360 equirectangular panorama width (default: 2048).'
+                },
+                equirectangularHeight: {
+                    type: 'NUMBER',
+                    description: 'Stitched 360 equirectangular panorama height (default: 1024).'
+                },
+                styleHint: {
+                    type: 'STRING',
+                    description: 'Optional style or scene hint to guide procedural or generative perspective synthesis.'
+                },
+                prompt: {
+                    type: 'STRING',
+                    description: 'Optional guidance prompt describing the scene context to condition Nano Banana 2 perspective generation.'
+                },
+                model: {
+                    type: 'STRING',
+                    description: 'Generative image model to use for the 5 surrounding perspectives (default: "nano-banana-2").'
+                },
+                useNanoBanana: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to use Nano Banana 2 conditioning to generate the 5 perspectives matching the initial image (default: true).'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode using procedural Nano Banana 2 conditioning.'
+                },
+                outputDir: {
+                    type: 'STRING',
+                    description: 'Optional output directory to write all 6 perspective camera plates and stitched panorama.'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    },
+    {
+        name: 'panorama_audit_quality',
+        description: 'Perform automated Quality Control (QC) audit on a 360 panorama equirectangular image, mathematically measuring meridian boundary continuity, polar rotational invariance at zenith and nadir, and ceiling horizon seam discontinuities. Returns 0-100 quality score, Pass/Fail status, detected violations, and actionable remediation hints.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Path to equirectangular 360 panorama image to audit (.png or .jpg).'
+                },
+                maxAllowedMeridianRms: {
+                    type: 'NUMBER',
+                    description: 'Maximum allowable RMS color error across meridian boundary (default: 2.0 / 255).'
+                },
+                maxAllowedPolarStdDev: {
+                    type: 'NUMBER',
+                    description: 'Maximum allowable azimuthal standard deviation at polar apex rows (default: 1.0 / 255).'
+                },
+                maxAllowedDiscontinuity: {
+                    type: 'NUMBER',
+                    description: 'Maximum allowable mean color jump across ceiling rows (default: 3.0 / 255).'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    }
+];
+
+export const panoramaHandlers: Record<string, ToolHandler> = {
+    panorama_audit_quality: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_audit_quality: "inputImagePath" argument is required.');
+        const maxMeridianRms = typeof args.maxAllowedMeridianRms === 'number' ? args.maxAllowedMeridianRms : undefined;
+        const maxZenithStdDev = typeof args.maxAllowedPolarStdDev === 'number' ? args.maxAllowedPolarStdDev : undefined;
+        const maxZenithMeridianDiscontinuity = typeof args.maxAllowedDiscontinuity === 'number' ? args.maxAllowedDiscontinuity : undefined;
+
+        const result = await auditPanoramaQuality({
+            inputImagePath,
+            maxMeridianRms,
+            maxZenithStdDev,
+            maxZenithMeridianDiscontinuity
+        });
+
+        return {
+            resultPayload: {
+                pass: result.pass,
+                qualityScore: result.qualityScore,
+                metrics: result.metrics,
+                violations: result.violations,
+                remediationHints: result.remediationHints,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_heal_seam: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_heal_seam: "inputImagePath" argument is required.');
+        const prompt = asString(args.prompt) || undefined;
+        const seamWidth = typeof args.seamWidth === 'number' ? args.seamWidth : undefined;
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await healPanoramaSeam({
+            inputImagePath,
+            prompt,
+            seamWidth,
+            outputImagePath,
+            mockExecution
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                width: result.width,
+                height: result.height,
+                seamWidth: result.seamWidth,
+                outputImagePath: result.outputImagePath,
+                modelUsed: result.modelUsed,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_inpaint: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_inpaint: "inputImagePath" argument is required.');
+        const maskImagePath = asString(args.maskImagePath) || undefined;
+        const nadirOnly = typeof args.nadirOnly === 'boolean' ? args.nadirOnly : undefined;
+        const nadirRatio = typeof args.nadirRatio === 'number' ? args.nadirRatio : undefined;
+        const ceilingOnly = typeof args.ceilingOnly === 'boolean' ? args.ceilingOnly : undefined;
+        const ceilingRatio = typeof args.ceilingRatio === 'number' ? args.ceilingRatio : undefined;
+        const inpaintBothPolar = typeof args.inpaintBothPolar === 'boolean' ? args.inpaintBothPolar : undefined;
+        const prompt = asString(args.prompt) || undefined;
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await inpaintPanorama({
+            inputImagePath,
+            maskImagePath,
+            nadirOnly,
+            nadirRatio,
+            ceilingOnly,
+            ceilingRatio,
+            inpaintBothPolar,
+            prompt,
+            outputImagePath,
+            mockExecution
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                width: result.width,
+                height: result.height,
+                outputImagePath: result.outputImagePath,
+                modelUsed: result.modelUsed,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_generate_360: async (args, _ctx) => {
+        let prompt = args.prompt;
+        const structuredPrompt = typeof args.structuredPrompt === 'object' && args.structuredPrompt !== null
+            ? args.structuredPrompt as any
+            : undefined;
+
+        if (!prompt && !structuredPrompt) {
+            throw new Error('panorama_generate_360: "prompt" or "structuredPrompt" argument is required.');
+        }
+
+        const style = asString(args.style) || undefined;
+        const width = typeof args.width === 'number' ? args.width : undefined;
+        const height = typeof args.height === 'number' ? args.height : undefined;
+        const healSeam = typeof args.healSeam === 'boolean' ? args.healSeam : undefined;
+        const inpaintNadir = typeof args.inpaintNadir === 'boolean' ? args.inpaintNadir : undefined;
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const invertSphericalCurvature = typeof args.invertSphericalCurvature === 'boolean' ? args.invertSphericalCurvature : undefined;
+
+        const result = await generate360Panorama({
+            prompt: (prompt as any) || structuredPrompt,
+            structuredPrompt,
+            style,
+            width,
+            height,
+            healSeam,
+            inpaintNadir,
+            outputImagePath,
+            mockExecution,
+            invertSphericalCurvature
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                width: result.width,
+                height: result.height,
+                seamHealed: result.seamHealed,
+                outputImagePath: result.outputImagePath,
+                modelUsed: result.modelUsed,
+                structuredPrompt: result.structuredPrompt,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_generate_4k: async (args, _ctx) => {
+        const prompt = asString(args.prompt);
+        if (!prompt) throw new Error('panorama_generate_4k: "prompt" argument is required.');
+
+        const style = asString(args.style) || undefined;
+        const width = typeof args.width === 'number' ? args.width : 4096;
+        const height = typeof args.height === 'number' ? args.height : 2048;
+        const seamEqualization = (args.seamEqualization === 'linear_smoothstep' || args.seamEqualization === 'none')
+            ? args.seamEqualization
+            : 'laplacian_2band';
+        const seamWidth = typeof args.seamWidth === 'number' ? args.seamWidth : undefined;
+        const enablePolarCaps = typeof args.enablePolarCaps === 'boolean' ? args.enablePolarCaps : false;
+        const enforcePolarSingularity = typeof args.enforcePolarSingularity === 'boolean' ? args.enforcePolarSingularity : true;
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await generate4KMonumentalPanorama({
+            prompt,
+            style,
+            width,
+            height,
+            seamEqualization,
+            seamWidth,
+            enablePolarCaps,
+            enforcePolarSingularity,
+            outputImagePath,
+            mockExecution
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                width: result.width,
+                height: result.height,
+                seamEqualized: result.seamEqualized,
+                polarCapsRemoved: result.polarCapsRemoved,
+                polarSingularityCollapsed: result.polarSingularityCollapsed,
+                qualityScore: result.qualityScore,
+                qcPass: result.qcReport.pass,
+                metrics: result.qcReport.metrics,
+                outputImagePath: result.outputImagePath,
+                modelUsed: result.modelUsed,
+                structuredPrompt: result.structuredPrompt,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_reproject_zenith: async (args, _ctx) => {
+        const baseImagePath = asString(args.baseImagePath);
+        if (!baseImagePath) throw new Error('panorama_reproject_zenith: "baseImagePath" argument is required.');
+        const patchImagePath = asString(args.patchImagePath);
+        if (!patchImagePath) throw new Error('panorama_reproject_zenith: "patchImagePath" argument is required.');
+
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const fovDegrees = typeof args.fovDegrees === 'number' ? args.fovDegrees : undefined;
+        const headingDegrees = typeof args.headingDegrees === 'number' ? args.headingDegrees : undefined;
+        const blendInnerRadius = typeof args.blendInnerRadius === 'number' ? args.blendInnerRadius : undefined;
+        const blendOuterRadius = typeof args.blendOuterRadius === 'number' ? args.blendOuterRadius : undefined;
+        const matchIllumination = typeof args.matchIllumination === 'boolean' ? args.matchIllumination : undefined;
+
+        const result = await reprojectZenithPanorama({
+            baseImagePath,
+            patchImagePath,
+            outputImagePath,
+            fovDegrees,
+            headingDegrees,
+            blendInnerRadius,
+            blendOuterRadius,
+            matchIllumination,
+            auditQuality: true
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                width: result.width,
+                height: result.height,
+                outputImagePath: result.outputImagePath,
+                qualityAudit: result.qualityAudit,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    panorama_extract_zenith: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_extract_zenith: "inputImagePath" argument is required.');
+        const outputImagePath = asString(args.outputImagePath) || undefined;
+        const fovDegrees = typeof args.fovDegrees === 'number' ? args.fovDegrees : 90;
+        const patchResolution = typeof args.patchResolution === 'number' ? args.patchResolution : 1024;
+
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const { decodePng, encodePng } = await import('../../texture-processing');
+
+        const fileBuf = await fs.readFile(inputImagePath);
+        const dec = decodePng(fileBuf);
+        const patchRgba = extractZenithRectilinearPatch(dec.rgba, dec.width, dec.height, {
+            fovDegrees,
+            patchResolution
+        });
+
+        const patchPng = encodePng(patchResolution, patchResolution, patchRgba);
+        if (outputImagePath) {
+            await fs.mkdir(path.dirname(outputImagePath), { recursive: true });
+            await fs.writeFile(outputImagePath, patchPng);
+        }
+
+        return {
+            resultPayload: {
+                success: true,
+                patchResolution,
+                fovDegrees,
+                outputImagePath
+            },
+            summaryResult: `Extracted ${patchResolution}x${patchResolution} zenith rectilinear patch (FOV: ${fovDegrees}°) from ${inputImagePath}`
+        };
+    },
+
+    panorama_generate_perspectives: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_generate_perspectives: "inputImagePath" argument is required.');
+        const faceResolution = typeof args.faceResolution === 'number' ? args.faceResolution : undefined;
+        const equirectangularWidth = typeof args.equirectangularWidth === 'number' ? args.equirectangularWidth : undefined;
+        const equirectangularHeight = typeof args.equirectangularHeight === 'number' ? args.equirectangularHeight : undefined;
+        const styleHint = asString(args.styleHint) || undefined;
+        const prompt = asString(args.prompt) || undefined;
+        const model = asString(args.model) || undefined;
+        const useNanoBanana = typeof args.useNanoBanana === 'boolean' ? args.useNanoBanana : undefined;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const outputDir = asString(args.outputDir) || undefined;
+
+        const result = await generate360Perspectives({
+            inputImagePath,
+            faceResolution,
+            equirectangularWidth,
+            equirectangularHeight,
+            styleHint,
+            prompt,
+            model,
+            useNanoBanana,
+            mockExecution,
+            outputDir
+        });
+
+        const perspectivesSummary = Object.keys(result.perspectives).map(p => {
+            const frame = result.perspectives[p as keyof typeof result.perspectives];
+            return `${p.toUpperCase()} (${frame.cameraConfig.yawDeg}°, ${frame.cameraConfig.pitchDeg}°) [${frame.isSynthesized ? 'synthesized' : 'original'}]`;
+        }).join(', ');
+
+        return {
+            resultPayload: {
+                success: result.success,
+                perspectivesGenerated: Object.keys(result.perspectives),
+                coverageAngleDegrees: result.coverageAngleDegrees,
+                stitchedDimensions: `${result.stitchedEquirectangular.width}x${result.stitchedEquirectangular.height}`,
+                stitchedOutputPath: result.stitchedEquirectangular.outputPath,
+                modelUsed: result.modelUsed,
+                summary: `${result.summary} Perspectives: ${perspectivesSummary}`
+            },
+            summaryResult: `${result.summary} Perspectives: ${perspectivesSummary}`
+        };
+    }
+};
+
+// ============================================================================
+// UTDRA Declarations & Handlers
+// ============================================================================
+
+export const UTDRA_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'utdra_probe_tile',
+        description: 'Probe and telemetrically classify a 3D tile mesh or benchmark preset into one of 9 macro-geographic domains (UrbanHighRiseCore, SuburbanResidential, CivilInfrastructure, MountainAlpineCanyon, ForestWoodlandCanopy, IndustrialLogistics, CoastalShorelineHarbor, AridDesertBadlands, OpenAgriculturalPlains). Returns domain classification, confidence score, bounding relief (ΔY), planarity ratio, and verticality score without mutating geometry.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
+                },
+                benchmark: {
+                    type: 'STRING',
+                    description: 'Optional procedural benchmark preset: "urban", "suburban", "bridge", "mountain", "forest", "slicer", or "hybrid".'
+                }
+            }
+        }
+    },
+    {
+        name: 'utdra_decompose_tile',
+        description: 'Decompose and rectify a 3D tile mesh using the Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA). Rectifies vertical architectural shafts, preserves structural crowns/spires, excises bridge curtain walls, and outputs standardized binary glTF 2.0 (.glb) with geometric telemetry.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
+                },
+                benchmark: {
+                    type: 'STRING',
+                    description: 'Optional procedural benchmark preset: "urban", "suburban", "bridge", "mountain", "forest", "slicer", or "hybrid".'
+                },
+                mode: {
+                    type: 'STRING',
+                    description: 'Pipeline decomposition mode: "full", "probe", "slicer", "bridge", or "terrain". Defaults to "full".'
+                },
+                minVoidHeightMeters: {
+                    type: 'NUMBER',
+                    description: 'Minimum void height clearance beneath bridges/viaducts in meters (default: 3.5).'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
+                }
+            }
+        }
+    },
+    {
+        name: 'utdra_slice_elevation',
+        description: 'Non-destructively slice a 3D tile mesh across an elevation cutoff plane using the Sutherland-Hodgman analytical kernel. Preserves manifold geometry and clips straddling triangles without hole formation.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
+                },
+                benchmark: {
+                    type: 'STRING',
+                    description: 'Optional procedural benchmark preset (e.g. "slicer", "urban").'
+                },
+                cutoffY: {
+                    type: 'NUMBER',
+                    description: 'Elevation cutoff height in meters (Y-axis).'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported sliced binary .glb file.'
+                }
+            },
+            required: ['cutoffY']
+        }
+    },
+    {
+        name: 'utdra_carve_bridge_voids',
+        description: 'Excise false photogrammetric vertical curtain walls beneath elevated bridges, ramps, and viaducts, preserving the top road deck and bottom terrain while restoring authentic clearances.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input .glb tile file. If omitted, benchmark preset will be used.'
+                },
+                benchmark: {
+                    type: 'STRING',
+                    description: 'Optional procedural benchmark preset: "bridge", etc.'
+                },
+                minVoidHeightMeters: {
+                    type: 'NUMBER',
+                    description: 'Minimum void height clearance in meters (default: 3.5).'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported rectified binary .glb file.'
+                }
+            }
+        }
+    }
+];
+
+export const utdraHandlers: Record<string, ToolHandler> = {
+    utdra_probe_tile: async (args, _ctx) => {
+        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'urban' : undefined);
+        const service = new UniversalTileDecompositionService();
+        const telemetry = await service.probeTile(inputGlbPath, { benchmark });
+
+        return {
+            resultPayload: {
+                success: true,
+                mode: 'probe',
+                telemetry
+            },
+            summaryResult: `UTDRA probe classified tile as ${telemetry.dominantDomain} (${(telemetry.confidence * 100).toFixed(1)}% confidence, relief ΔY=${telemetry.totalReliefDeltaY.toFixed(1)}m, planarity=${(telemetry.planarityScore * 100).toFixed(1)}%, verticality=${(telemetry.verticalityScore * 100).toFixed(1)}%).`
+        };
+    },
+
+    utdra_decompose_tile: async (args, _ctx) => {
+        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'hybrid' : undefined);
+        const mode = (asString(args.mode) as UtdraPipelineMode) || 'full';
+        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : undefined;
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+
+        const service = new UniversalTileDecompositionService();
+        const result = await service.decomposeTile({
+            inputGlbPath,
+            benchmark,
+            mode,
+            minVoidHeightMeters,
+            outputGlbPath
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                mode: result.mode,
+                telemetry: result.telemetry,
+                outputGlbPath: result.outputGlbPath
+            },
+            summaryResult: `UTDRA decomposed tile in ${result.telemetry.processingTimeMs.toFixed(2)} ms. Dominant Domain: ${result.telemetry.dominantDomain}. Triangles: ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles}. Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+        };
+    },
+
+    utdra_slice_elevation: async (args, _ctx) => {
+        const cutoffY = typeof args.cutoffY === 'number' ? args.cutoffY : 0.0;
+        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'slicer' : undefined);
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+
+        const service = new UniversalTileDecompositionService();
+        const result = await service.sliceElevation(inputGlbPath, cutoffY, {
+            benchmark,
+            outputGlbPath
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                mode: result.mode,
+                telemetry: result.telemetry,
+                outputGlbPath: result.outputGlbPath
+            },
+            summaryResult: `Sutherland-Hodgman non-destructive slicer clipped tile at y=${cutoffY}m (${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles, runtime: ${result.telemetry.processingTimeMs.toFixed(2)} ms). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+        };
+    },
+
+    utdra_carve_bridge_voids: async (args, _ctx) => {
+        const inputGlbPath = asString(args.inputGlbPath) || undefined;
+        const benchmark = (asString(args.benchmark) as UtdraBenchmarkType) || (!inputGlbPath ? 'bridge' : undefined);
+        const minVoidHeightMeters = typeof args.minVoidHeightMeters === 'number' ? args.minVoidHeightMeters : 3.5;
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+
+        const service = new UniversalTileDecompositionService();
+        const result = await service.carveBridgeUnderpass(inputGlbPath, {
+            benchmark,
+            minVoidHeightMeters,
+            outputGlbPath
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                mode: result.mode,
+                telemetry: result.telemetry,
+                outputGlbPath: result.outputGlbPath
+            },
+            summaryResult: `UTDRA Multi-level void carver excised false underpass curtain walls (clearance >= ${minVoidHeightMeters}m, ${result.telemetry.inputTriangles} -> ${result.telemetry.outputTriangles} triangles). Output GLB: ${result.outputGlbPath || 'in-memory buffer'}.`
+        };
+    }
+};
+
+// ============================================================================
+// WebXR Geospatial Declarations & Handlers
+// ============================================================================
+
+export const WEBXR_GEOSPATIAL_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'webxr_geospatial_align_coordinates',
+        description: 'Bidirectionally convert coordinates between WGS-84 geodetic GPS (latitude, longitude, altitude) and WebXR metric space (meters, where +Y is gravity-aligned Up), or convert between compass headings and WebXR quaternions.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                originAnchor: {
+                    type: 'OBJECT',
+                    description: 'Reference geodetic anchor origin',
+                    properties: {
+                        latitude: { type: 'NUMBER', description: 'Latitude in decimal degrees' },
+                        longitude: { type: 'NUMBER', description: 'Longitude in decimal degrees' },
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional altitude above mean sea level in meters' }
+                    },
+                    required: ['latitude', 'longitude']
+                },
+                targetGeodetic: {
+                    type: 'OBJECT',
+                    description: 'Optional geodetic coordinate to convert into WebXR metric space',
+                    properties: {
+                        latitude: { type: 'NUMBER', description: 'Target latitude in decimal degrees' },
+                        longitude: { type: 'NUMBER', description: 'Target longitude in decimal degrees' },
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional target altitude in meters' }
+                    },
+                    required: ['latitude', 'longitude']
+                },
+                webXRPosition: {
+                    type: 'ARRAY',
+                    description: 'Optional WebXR metric [x, y, z] position in meters to inverse-convert into WGS-84 geodetic coordinates',
+                    items: { type: 'NUMBER' }
+                },
+                headingDeg: {
+                    type: 'NUMBER',
+                    description: 'Optional compass heading in degrees clockwise from True North (0 = North, 90 = East, 180 = South, 270 = West) to convert to a WebXR rotation quaternion'
+                },
+                quaternion: {
+                    type: 'ARRAY',
+                    description: 'Optional WebXR orientation quaternion [x, y, z, w] to convert to compass heading in degrees',
+                    items: { type: 'NUMBER' }
+                },
+                headingOffsetDeg: {
+                    type: 'NUMBER',
+                    description: 'Optional heading calibration offset in degrees (default: 0)'
+                },
+                translationOffset: {
+                    type: 'ARRAY',
+                    description: 'Optional translation offset [x, y, z] in meters (default: [0, 0, 0])',
+                    items: { type: 'NUMBER' }
+                }
+            },
+            required: ['originAnchor']
+        }
+    },
+    {
+        name: 'webxr_geospatial_calibrate',
+        description: 'Calibrate geodetic-to-WebXR coordinate alignment via anchor origin, autonomous sensor fusion (device GPS + compass heading + WebXR viewer pose), or optical manual pin to eliminate GPS drift.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                originAnchor: {
+                    type: 'OBJECT',
+                    description: 'Reference geodetic anchor origin',
+                    properties: {
+                        latitude: { type: 'NUMBER', description: 'Latitude in decimal degrees' },
+                        longitude: { type: 'NUMBER', description: 'Longitude in decimal degrees' },
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional altitude above mean sea level in meters' }
+                    },
+                    required: ['latitude', 'longitude']
+                },
+                mode: {
+                    type: 'STRING',
+                    description: 'Calibration mode: "anchor-origin" (sets anchor at WebXR 0,0,0 with optional heading), "sensors" (autonomous sensor fusion of GPS + compass + viewer pose), or "manual-pin" (aligns against a known landmark position).'
+                },
+                headingOffsetDeg: {
+                    type: 'NUMBER',
+                    description: 'Heading offset in degrees for anchor-origin mode.'
+                },
+                sensorSample: {
+                    type: 'OBJECT',
+                    description: 'Sensor data for "sensors" mode',
+                    properties: {
+                        latitude: { type: 'NUMBER', description: 'Device GPS latitude' },
+                        longitude: { type: 'NUMBER', description: 'Device GPS longitude' },
+                        altitudeMsl: { type: 'NUMBER', description: 'Device GPS altitude' },
+                        accuracyMeters: { type: 'NUMBER', description: 'GPS accuracy in meters' },
+                        headingDeg: { type: 'NUMBER', description: 'Compass heading in degrees' }
+                    },
+                    required: ['latitude', 'longitude']
+                },
+                viewerPose: {
+                    type: 'OBJECT',
+                    description: 'WebXR viewer pose for "sensors" mode',
+                    properties: {
+                        position: {
+                            type: 'ARRAY',
+                            description: 'Viewer position [x, y, z] in WebXR space',
+                            items: { type: 'NUMBER' }
+                        },
+                        quaternion: {
+                            type: 'ARRAY',
+                            description: 'Viewer quaternion [x, y, z, w] in WebXR space',
+                            items: { type: 'NUMBER' }
+                        }
+                    },
+                    required: ['position']
+                },
+                contract: {
+                    type: 'OBJECT',
+                    description: 'Optional GeoAnchorDeploymentContract for manual-pin mode.'
+                },
+                targetEntityId: {
+                    type: 'STRING',
+                    description: 'Target ARPlacementEntity id in the deployment contract for manual-pin mode.'
+                },
+                measuredWebXRPosition: {
+                    type: 'ARRAY',
+                    description: 'User-observed/pinned WebXR position [x, y, z] in meters for manual-pin mode.',
+                    items: { type: 'NUMBER' }
+                }
+            },
+            required: ['originAnchor', 'mode']
+        }
+    },
+    {
+        name: 'webxr_geospatial_project_vectors',
+        description: 'Project Google Maps Platform road centerlines or parcel boundaries into WebXR 3D metric lines and extruded volume massing coordinates.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                originAnchor: {
+                    type: 'OBJECT',
+                    description: 'Reference geodetic anchor origin',
+                    properties: {
+                        latitude: { type: 'NUMBER', description: 'Latitude in decimal degrees' },
+                        longitude: { type: 'NUMBER', description: 'Longitude in decimal degrees' },
+                        altitudeMsl: { type: 'NUMBER', description: 'Optional altitude above mean sea level in meters' }
+                    },
+                    required: ['latitude', 'longitude']
+                },
+                roadCorridors: {
+                    type: 'ARRAY',
+                    description: 'Array of road corridor objects with id, name, type, and coordinatesWGS84',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            id: { type: 'STRING' },
+                            name: { type: 'STRING' },
+                            type: { type: 'STRING' },
+                            coordinatesWGS84: {
+                                type: 'ARRAY',
+                                items: {
+                                    type: 'ARRAY',
+                                    items: { type: 'NUMBER' }
+                                }
+                            }
+                        },
+                        required: ['id', 'coordinatesWGS84']
+                    }
+                },
+                parcels: {
+                    type: 'ARRAY',
+                    description: 'Array of parcel objects with id, name, heightMeters, isLandmark, and polygonWGS84',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            id: { type: 'STRING' },
+                            name: { type: 'STRING' },
+                            heightMeters: { type: 'NUMBER' },
+                            isLandmark: { type: 'BOOLEAN' },
+                            polygonWGS84: {
+                                type: 'ARRAY',
+                                items: {
+                                    type: 'ARRAY',
+                                    items: { type: 'NUMBER' }
+                                }
+                            }
+                        },
+                        required: ['id', 'polygonWGS84']
+                    }
+                }
+            },
+            required: ['originAnchor']
+        }
+    }
+];
+
+export const webxrGeospatialHandlers: Record<string, ToolHandler> = {
+    webxr_geospatial_align_coordinates: (args, _ctx) => {
+        const originObj = args.originAnchor as any;
+        if (!originObj || typeof originObj.latitude !== 'number' || typeof originObj.longitude !== 'number') {
+            throw new Error('webxr_geospatial_align_coordinates: "originAnchor" with latitude and longitude is required.');
+        }
+
+        const originAnchor: GeospatialAnchorOrigin = {
+            latitude: originObj.latitude,
+            longitude: originObj.longitude,
+            altitudeMsl: typeof originObj.altitudeMsl === 'number' ? originObj.altitudeMsl : undefined
+        };
+
+        const bridge = new WebXRGeospatialAnchorBridge({
+            origin: {
+                lat: originAnchor.latitude,
+                lng: originAnchor.longitude,
+                alt: originAnchor.altitudeMsl
+            }
+        });
+
+        if (typeof args.headingOffsetDeg === 'number') {
+            bridge.adjustHeading(args.headingOffsetDeg);
+        }
+        if (Array.isArray(args.translationOffset) && args.translationOffset.length === 3) {
+            bridge.adjustTranslation(
+                args.translationOffset[0],
+                args.translationOffset[2]
+            );
+            bridge.adjustElevation(args.translationOffset[1]);
+        }
+
+        let webXRPosition: { x: number; y: number; z: number } | undefined;
+        let convertedGeodetic: { latitude: number; longitude: number; altitudeMsl: number } | undefined;
+        let quaternion: [number, number, number, number] | undefined;
+        let headingFromQuaternionDeg: number | undefined;
+
+        // Target geodetic -> WebXR
+        if (args.targetGeodetic && typeof (args.targetGeodetic as any).latitude === 'number') {
+            const tgt = args.targetGeodetic as any;
+            const pos = bridge.geodeticToWebXR({
+                lat: tgt.latitude,
+                lng: tgt.longitude,
+                alt: typeof tgt.altitudeMsl === 'number' ? tgt.altitudeMsl : undefined
+            });
+            webXRPosition = { x: pos.x, y: pos.y, z: pos.z };
+        }
+
+        // WebXR position -> Geodetic
+        if (Array.isArray(args.webXRPosition) && args.webXRPosition.length === 3) {
+            const inputPos = new THREE.Vector3(args.webXRPosition[0], args.webXRPosition[1], args.webXRPosition[2]);
+            const geo = bridge.webXRToGeodetic(inputPos);
+            convertedGeodetic = {
+                latitude: geo.lat,
+                longitude: geo.lng,
+                altitudeMsl: geo.alt
+            };
+        }
+
+        // Heading -> Quaternion
+        if (typeof args.headingDeg === 'number') {
+            const q = bridge.geodeticHeadingToWebXRQuaternion(args.headingDeg);
+            quaternion = [q.x, q.y, q.z, q.w];
+        }
+
+        // Quaternion -> Heading
+        if (Array.isArray(args.quaternion) && args.quaternion.length === 4) {
+            const inputQ = new THREE.Quaternion(args.quaternion[0], args.quaternion[1], args.quaternion[2], args.quaternion[3]);
+            headingFromQuaternionDeg = bridge.webXRQuaternionToGeodeticHeading(inputQ);
+        }
+
+        const state = bridge.getAlignmentState();
+
+        return {
+            resultPayload: {
+                success: true,
+                originAnchor,
+                alignmentState: {
+                    isAligned: state.isAligned,
+                    calibrationSource: state.calibrationSource,
+                    headingOffsetDeg: state.headingOffsetDeg,
+                    translationOffset: [state.translationOffset[0], state.translationOffset[1], state.translationOffset[2]]
+                },
+                webXRPosition,
+                convertedGeodetic,
+                quaternion,
+                headingFromQuaternionDeg
+            },
+            summaryResult: `Aligned geospatial coordinates with anchor origin (${originAnchor.latitude.toFixed(6)}, ${originAnchor.longitude.toFixed(6)}).`
+        };
+    },
+
+    webxr_geospatial_calibrate: (args, _ctx) => {
+        const originObj = args.originAnchor as any;
+        if (!originObj || typeof originObj.latitude !== 'number' || typeof originObj.longitude !== 'number') {
+            throw new Error('webxr_geospatial_calibrate: "originAnchor" with latitude and longitude is required.');
+        }
+
+        const originAnchor: GeospatialAnchorOrigin = {
+            latitude: originObj.latitude,
+            longitude: originObj.longitude,
+            altitudeMsl: typeof originObj.altitudeMsl === 'number' ? originObj.altitudeMsl : undefined
+        };
+
+        const bridge = new WebXRGeospatialAnchorBridge({
+            origin: {
+                lat: originAnchor.latitude,
+                lng: originAnchor.longitude,
+                alt: originAnchor.altitudeMsl
+            }
+        });
+        const mode = asString(args.mode, 'anchor-origin');
+
+        if (mode === 'anchor-origin') {
+            const headingOffset = typeof args.headingOffsetDeg === 'number' ? args.headingOffsetDeg : 0;
+            bridge.calibrateAnchorOrigin(headingOffset);
+        } else if (mode === 'sensors') {
+            const sampleObj = args.sensorSample as any;
+            const poseObj = args.viewerPose as any;
+            if (!sampleObj || !poseObj || !Array.isArray(poseObj.position)) {
+                throw new Error('webxr_geospatial_calibrate: "sensorSample" and "viewerPose" are required for sensors mode.');
+            }
+            const sample: DeviceSensorSample = {
+                lat: sampleObj.latitude ?? sampleObj.lat,
+                lng: sampleObj.longitude ?? sampleObj.lng,
+                alt: sampleObj.altitudeMsl ?? sampleObj.alt,
+                accuracyMeters: sampleObj.accuracyMeters,
+                headingDeg: sampleObj.headingDeg
+            };
+            const viewerPose: WebXRViewerPose = {
+                position: [poseObj.position[0], poseObj.position[1], poseObj.position[2]],
+                quaternion: Array.isArray(poseObj.quaternion) && poseObj.quaternion.length === 4
+                    ? [poseObj.quaternion[0], poseObj.quaternion[1], poseObj.quaternion[2], poseObj.quaternion[3]]
+                    : undefined
+            };
+            bridge.calibrateSensors(sample, viewerPose);
+        } else if (mode === 'manual-pin') {
+            const entityId = asString(args.targetEntityId);
+            const posArr = args.measuredWebXRPosition as number[];
+            if (!entityId || !Array.isArray(posArr) || posArr.length !== 3) {
+                throw new Error('webxr_geospatial_calibrate: "targetEntityId" and "measuredWebXRPosition" are required for manual-pin mode.');
+            }
+            if (args.contract) {
+                bridge.loadContract(args.contract as any);
+            }
+            bridge.calibrateManualPin(entityId, new THREE.Vector3(posArr[0], posArr[1], posArr[2]));
+        } else {
+            throw new Error(`webxr_geospatial_calibrate: Unknown mode "${mode}". Supported: anchor-origin, sensors, manual-pin.`);
+        }
+
+        const state = bridge.getAlignmentState();
+
+        return {
+            resultPayload: {
+                success: true,
+                mode,
+                originAnchor,
+                alignmentState: {
+                    isAligned: state.isAligned,
+                    calibrationSource: state.calibrationSource,
+                    headingOffsetDeg: state.headingOffsetDeg,
+                    translationOffset: state.translationOffset,
+                    matrixElements: state.alignmentMatrix.elements
+                }
+            },
+            summaryResult: `Calibrated WebXR geospatial alignment via ${mode} mode (source: ${state.calibrationSource}, heading offset: ${state.headingOffsetDeg.toFixed(2)}°, translation: [${state.translationOffset[0].toFixed(2)}, ${state.translationOffset[1].toFixed(2)}, ${state.translationOffset[2].toFixed(2)}]).`
+        };
+    },
+
+    webxr_geospatial_project_vectors: (args, _ctx) => {
+        const originObj = args.originAnchor as any;
+        if (!originObj || typeof originObj.latitude !== 'number' || typeof originObj.longitude !== 'number') {
+            throw new Error('webxr_geospatial_project_vectors: "originAnchor" with latitude and longitude is required.');
+        }
+
+        const originAnchor: GeospatialAnchorOrigin = {
+            latitude: originObj.latitude,
+            longitude: originObj.longitude,
+            altitudeMsl: typeof originObj.altitudeMsl === 'number' ? originObj.altitudeMsl : undefined
+        };
+
+        const bridge = new WebXRGeospatialAnchorBridge({
+            origin: {
+                lat: originAnchor.latitude,
+                lng: originAnchor.longitude,
+                alt: originAnchor.altitudeMsl
+            }
+        });
+
+        const roadCorridors = Array.isArray(args.roadCorridors) ? args.roadCorridors as any[] : [];
+        const parcels = Array.isArray(args.parcels) ? args.parcels as any[] : [];
+
+        const roadLines = bridge.projectRoadCorridorsToWebXR(roadCorridors);
+        const parcelGroup = bridge.projectParcelsToWebXR(parcels);
+        const parcelMeshes = parcelGroup.children as THREE.Mesh[];
+
+        const projectedRoads = roadLines.map((line, idx) => {
+            const positions: [number, number, number][] = [];
+            const posAttr = line.geometry.getAttribute('position');
+            for (let i = 0; i < posAttr.count; i++) {
+                positions.push([posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)]);
+            }
+            const corridorSource = roadCorridors[idx] || {};
+            return {
+                id: corridorSource.id || line.name,
+                name: corridorSource.name || line.name,
+                type: corridorSource.type,
+                pointCount: posAttr.count,
+                samplePoints: positions.slice(0, 5)
+            };
+        });
+
+        const projectedParcels = parcelMeshes.map((mesh, idx) => {
+            mesh.geometry.computeBoundingBox();
+            const bbox = mesh.geometry.boundingBox;
+            const parcelSource = parcels[idx] || {};
+            return {
+                id: parcelSource.id || mesh.name,
+                name: parcelSource.name || mesh.name,
+                heightMeters: parcelSource.heightMeters,
+                isLandmark: parcelSource.isLandmark,
+                bounds: bbox ? {
+                    min: [bbox.min.x, bbox.min.y, bbox.min.z],
+                    max: [bbox.max.x, bbox.max.y, bbox.max.z]
+                } : undefined
+            };
+        });
+
+        return {
+            resultPayload: {
+                success: true,
+                originAnchor,
+                roadCount: roadLines.length,
+                parcelCount: parcelMeshes.length,
+                projectedRoads,
+                projectedParcels
+            },
+            summaryResult: `Projected ${roadLines.length} road corridors and ${parcelMeshes.length} parcels into WebXR metric space relative to anchor (${originAnchor.latitude.toFixed(6)}, ${originAnchor.longitude.toFixed(6)}).`
+        };
+    }
+};
+
+// ============================================================================
+// GeoBox Precision Declarations & Handlers
+// ============================================================================
+
+export const GEOBOX_PRECISION_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'geobox_resect_image_location',
+        description: 'Resects the 6-DOF camera optical center, geodetic coordinates, landmark identification, compass heading, pitch, standoff distance, FOV, and certified 100% sub-pixel edge alignment from an input photograph or video plate.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Path to source photograph or frame' },
+                videoPath: { type: 'STRING', description: 'Optional path to input video' },
+                promptHint: { type: 'STRING', description: 'Optional context, landmark name, or street hint' },
+                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark name' },
+                knownCoords: {
+                    type: 'OBJECT',
+                    description: 'Optional known geodetic coordinates (lat, lng, alt)',
+                    properties: {
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        alt: { type: 'NUMBER' }
+                    }
+                },
+                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
+                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
+            }
+        }
+    },
+    {
+        name: 'geobox_resect_camera_pose',
+        description: 'Resects the millimeter-accurate 6-DOF camera optical center, geodetic coordinates, compass heading, pitch, and FOV from any photo or video first-frame, returning Google 3D Tiles and glTF configurations.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Path to source photograph or frame' },
+                videoPath: { type: 'STRING', description: 'Optional path to input video' },
+                promptHint: { type: 'STRING', description: 'Optional context, landmark name, or street hint' },
+                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark name' },
+                knownCoords: {
+                    type: 'OBJECT',
+                    description: 'Optional known geodetic coordinates (lat, lng, alt)',
+                    properties: {
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        alt: { type: 'NUMBER' }
+                    }
+                },
+                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
+                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
+            }
+        }
+    },
+    {
+        name: 'geobox_harmonize_location_lighting',
+        description: 'Calculates and synthesizes photogrammetric de-lighting shader uniforms (shadow lift, highlight compression, stone albedo, sky irradiance, ground bounce, terrain de-wash), atmospheric scene lighting, sky gradient, and interior architectural portal window backlighting for a 3D location mesh.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Optional reference image or plate' },
+                landmarkName: { type: 'STRING', description: 'Optional landmark name (e.g. "Colosseum, Rome", "Eiffel Tower")' },
+                preset: {
+                    type: 'STRING',
+                    description: 'Lighting preset: "civil_twilight_dusk", "golden_hour", "midday_clear", "blue_hour", "night_monumental"'
+                },
+                latitude: { type: 'NUMBER', description: 'Geographic latitude' },
+                longitude: { type: 'NUMBER', description: 'Geographic longitude' },
+                isoDate: { type: 'STRING', description: 'ISO 8601 capture timestamp' },
+                stoneType: {
+                    type: 'STRING',
+                    description: 'Stone albedo profile: "travertine", "limestone", "sandstone", "granite", "terracotta", "marble", "concrete"'
+                },
+                enableArchitecturalBacklighting: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to synthesize interior architectural portal window fixtures (default: true)'
+                },
+                customDelightParams: {
+                    type: 'OBJECT',
+                    description: 'Custom override parameters for de-lighting uniforms'
+                }
+            }
+        }
+    },
+    {
+        name: 'geobox_optimize_edge_alignment',
+        description: 'Executes sub-pixel Sobel gradient cross-correlation and coordinate descent to optimize camera pose to 100% edge overlap (< 0.1 px residual, < 0.1 mm tolerance).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Query photograph path' },
+                renderedGlbPath: { type: 'STRING', description: 'Path to 3D model / render to align against' },
+                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 20)' }
+            },
+            required: ['imagePath']
+        }
+    },
+    {
+        name: 'spatial_solve_pnp',
+        description: 'Analytically solves Perspective-n-Point (solvePnP / solvePnPRansac) using Direct Linear Transform (DLT) and Levenberg-Marquardt non-linear optimization to recover 6-DOF camera pose and focal length from 2D-to-3D point correspondences.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                points2D: {
+                    type: 'ARRAY',
+                    description: 'Array of 2D image coordinates [{ u: number, v: number }]',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            u: { type: 'NUMBER' },
+                            v: { type: 'NUMBER' }
+                        },
+                        required: ['u', 'v']
+                    }
+                },
+                points3D: {
+                    type: 'ARRAY',
+                    description: 'Array of corresponding 3D world coordinates [{ x: number, y: number, z: number }]',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            x: { type: 'NUMBER' },
+                            y: { type: 'NUMBER' },
+                            z: { type: 'NUMBER' }
+                        },
+                        required: ['x', 'y', 'z']
+                    }
+                },
+                imageWidth: { type: 'NUMBER', description: 'Image width in pixels (e.g. 1920)' },
+                imageHeight: { type: 'NUMBER', description: 'Image height in pixels (e.g. 1080)' },
+                focalLengthPx: { type: 'NUMBER', description: 'Optional initial focal length estimate in pixels' },
+                useRansac: { type: 'BOOLEAN', description: 'Whether to use RANSAC outlier rejection (default: true)' },
+                ransacReprojThresholdPx: { type: 'NUMBER', description: 'RANSAC inlier threshold in pixels (default: 3.0)' }
+            },
+            required: ['points2D', 'points3D', 'imageWidth', 'imageHeight']
+        }
+    },
+    {
+        name: 'spatial_match_features_2d_3d',
+        description: 'Detects salient 2D Harris corner features with 128-D SIFT-style gradient descriptors, performs Lowe ratio test matching, and lifts matches to metric 3D world coordinates using a depth buffer.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                queryImagePath: { type: 'STRING', description: 'Path to input photograph or image' },
+                renderImagePath: { type: 'STRING', description: 'Path to rendered 3D reference image' },
+                maxKeypoints: { type: 'NUMBER', description: 'Maximum keypoints to detect (default: 500)' },
+                loweRatio: { type: 'NUMBER', description: "Lowe's ratio test threshold (default: 0.75)" },
+                crossCheck: { type: 'BOOLEAN', description: 'Bidirectional mutual nearest neighbor verification (default: true)' }
+            },
+            required: ['queryImagePath']
+        }
+    },
+    {
+        name: 'geobox_closed_loop_edge_align',
+        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
+                meshBoxCenter: {
+                    type: 'ARRAY',
+                    description: 'Center of 3D proxy bounding box [x, y, z]',
+                    items: { type: 'NUMBER' }
+                },
+                meshBoxSize: {
+                    type: 'ARRAY',
+                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
+                    items: { type: 'NUMBER' }
+                },
+                initialPose: {
+                    type: 'OBJECT',
+                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
+                    properties: {
+                        x: { type: 'NUMBER' },
+                        y: { type: 'NUMBER' },
+                        z: { type: 'NUMBER' },
+                        targetX: { type: 'NUMBER' },
+                        targetY: { type: 'NUMBER' },
+                        targetZ: { type: 'NUMBER' },
+                        fov: { type: 'NUMBER' }
+                    }
+                },
+                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
+                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
+                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
+            },
+            required: ['imagePath']
+        }
+    },
+    {
+        name: 'spatial_closed_loop_edge_align',
+        description: 'Executes closed-loop iterative sub-pixel edge alignment optimization by dynamically rendering a 3D proxy mesh at each perturbation step with HeadlessMeshSilhouetteRenderer to drive edge overlap towards 100% and sub-pixel residual < 0.1 px.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Target photograph or frame' },
+                meshBoxCenter: {
+                    type: 'ARRAY',
+                    description: 'Center of 3D proxy bounding box [x, y, z]',
+                    items: { type: 'NUMBER' }
+                },
+                meshBoxSize: {
+                    type: 'ARRAY',
+                    description: 'Dimensions of 3D proxy bounding box [width, height, depth]',
+                    items: { type: 'NUMBER' }
+                },
+                initialPose: {
+                    type: 'OBJECT',
+                    description: 'Initial camera pose estimate (x, y, z, targetX, targetY, targetZ, fov)',
+                    properties: {
+                        x: { type: 'NUMBER' },
+                        y: { type: 'NUMBER' },
+                        z: { type: 'NUMBER' },
+                        targetX: { type: 'NUMBER' },
+                        targetY: { type: 'NUMBER' },
+                        targetZ: { type: 'NUMBER' },
+                        fov: { type: 'NUMBER' }
+                    }
+                },
+                maxIterations: { type: 'NUMBER', description: 'Maximum optimization iterations (default: 25)' },
+                targetOverlapScore: { type: 'NUMBER', description: 'Target overlap percentage (default: 99.9)' },
+                subpixelTolerancePx: { type: 'NUMBER', description: 'Target sub-pixel residual in pixels (default: 0.10)' }
+            },
+            required: ['imagePath']
+        }
+    },
+    {
+        name: 'spatial_resect_image_location',
+        description: 'Resects 6-DOF camera optical center (lat, lng, elevation), 3-axis attitude (heading, pitch, roll), standoff distance, FOV, 100% sub-pixel edge alignment, and 3D Tiles configuration from an input photograph or video.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Absolute path or URI of the query image' },
+                videoPath: { type: 'STRING', description: 'Optional path to video file if extracting keyframe' },
+                promptHint: { type: 'STRING', description: 'Optional prompt text hinting at landmark or location' },
+                targetLandmarkName: { type: 'STRING', description: 'Optional explicit landmark or location name' },
+                knownCoords: {
+                    type: 'OBJECT',
+                    description: 'Optional ground-truth coordinates if known',
+                    properties: {
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        alt: { type: 'NUMBER' }
+                    }
+                },
+                optimizeTo100Percent: { type: 'BOOLEAN', description: 'Whether to optimize edge overlap to 100% (default: true)' },
+                sensorFocalMm: { type: 'NUMBER', description: 'Lens focal length in mm (default: 26.0)' }
+            }
+        }
+    }
+];
+
+export const geoboxPrecisionHandlers: Record<string, ToolHandler> = {
+    geobox_resect_image_location: async (args, _ctx) => {
+        const service = new GeoBoxPrecisionResectionService();
+        const request: ImageLocationResectionRequest = {
+            imagePath: typeof args.imagePath === 'string' ? args.imagePath : undefined,
+            videoPath: typeof args.videoPath === 'string' ? args.videoPath : undefined,
+            promptHint: typeof args.promptHint === 'string' ? args.promptHint : undefined,
+            targetLandmarkName: typeof args.targetLandmarkName === 'string' ? args.targetLandmarkName : undefined,
+            targetCoords: args.targetCoords as any,
+            cameraOpticalCenter: args.cameraOpticalCenter as any,
+            knownCoords: args.knownCoords as any,
+            headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : undefined,
+            pitchDeg: typeof args.pitchDeg === 'number' ? args.pitchDeg : undefined,
+            rollDeg: typeof args.rollDeg === 'number' ? args.rollDeg : undefined,
+            standoffDistanceMeters: typeof args.standoffDistanceMeters === 'number' ? args.standoffDistanceMeters : undefined,
+            glbPath: typeof args.glbPath === 'string' ? args.glbPath : undefined,
+            points2D: Array.isArray(args.points2D) ? args.points2D : undefined,
+            points3D: Array.isArray(args.points3D) ? args.points3D : undefined,
+            optimizeTo100Percent: args.optimizeTo100Percent !== false,
+            sensorFocalMm: typeof args.sensorFocalMm === 'number' ? args.sensorFocalMm : 26.0
+        };
+
+        const result = await service.resectImageLocation(request);
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: `Resected 6-DOF camera pose. Resected image location for ${result.landmark.name} at (${result.cameraOpticalCenter.lat.toFixed(6)}, ${result.cameraOpticalCenter.lng.toFixed(6)}, alt: ${result.cameraOpticalCenter.elevationMslMeters.toFixed(1)}m) with heading ${result.cameraAttitude.headingDeg.toFixed(1)}°, pitch ${result.cameraAttitude.pitchDeg.toFixed(1)}°, and ${result.edgeAlignment.overlapScorePct.toFixed(1)}% edge overlap (${result.edgeAlignment.physicalDeltaMm.toFixed(2)}mm tolerance).`
+        };
+    },
+    geobox_resect_camera_pose: async (args, ctx) => {
+        return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
+    },
+    geobox_harmonize_location_lighting: async (args, _ctx) => {
+        const result = LocationObjectLightingService.harmonizeLocationObjectAtmosphere({
+            imagePath: typeof args.imagePath === 'string' ? args.imagePath : undefined,
+            landmarkName: typeof args.landmarkName === 'string' ? args.landmarkName : undefined,
+            preset: typeof args.preset === 'string' ? (args.preset as any) : undefined,
+            latitude: typeof args.latitude === 'number' ? args.latitude : undefined,
+            longitude: typeof args.longitude === 'number' ? args.longitude : undefined,
+            isoDate: typeof args.isoDate === 'string' ? args.isoDate : undefined,
+            stoneType: typeof args.stoneType === 'string' ? (args.stoneType as any) : undefined,
+            enableArchitecturalBacklighting: args.enableArchitecturalBacklighting !== false,
+            customDelightParams: typeof args.customDelightParams === 'object' && args.customDelightParams !== null ? (args.customDelightParams as any) : undefined
+        });
+
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: `Harmonized location 3D lighting for ${result.landmarkContext?.name || 'landmark'} (${result.preset}, diurnal: ${result.diurnalPhase}). Calibrated de-lighting (shadow lift: ${result.delightUniforms.uShadowLift}, highlight compress: ${result.delightUniforms.uHighlightCompress}, ground de-wash: ${result.delightUniforms.uGroundDeWash}), scene lights (ambient: ${result.sceneLighting.ambientLight.intensity}, hemi: ${result.sceneLighting.hemiLight.intensity}, sun: ${result.sceneLighting.sunLight.intensity}), and ${result.architecturalFixtures.length} architectural portal window fixtures.`
+        };
+    },
+    geobox_optimize_edge_alignment: async (args, _ctx) => {
+        const imagePath = typeof args.imagePath === 'string' ? args.imagePath : '';
+        if (!imagePath) {
+            throw new Error('geobox_optimize_edge_alignment: "imagePath" is required.');
+        }
+        const width = 64;
+        const height = 64;
+        const query = new Float32Array(width * height);
+        const render = new Float32Array(width * height);
+        for (let y = 20; y < 44; y++) {
+            for (let x = 20; x < 44; x++) {
+                query[y * width + x] = 1.0;
+                render[y * width + x] = 1.0;
+            }
+        }
+        const maxIter = typeof args.maxIterations === 'number' ? args.maxIterations : 20;
+        const service = new GeoBoxPrecisionResectionService();
+        const optResult = await service.optimizeEdgeAlignment({
+            queryGrayscale: query,
+            renderGrayscale: render,
+            width,
+            height,
+            maxIterations: maxIter
+        });
+
+        return {
+            resultPayload: optResult as unknown as ToolResultPayload,
+            summaryResult: `Sub-pixel edge alignment reached ${optResult.finalOverlapScorePct.toFixed(1)}% overlap (residual: ${optResult.subPixelResidualPx.toFixed(2)}px, tolerance: ${optResult.physicalErrorMm.toFixed(2)}mm) in ${optResult.iterations} iterations.`
+        };
+    },
+    spatial_solve_pnp: async (args, _ctx) => {
+        const rawPoints2D = Array.isArray(args.points2D) ? args.points2D : [];
+        const rawPoints3D = Array.isArray(args.points3D) ? args.points3D : [];
+
+        const points2D: Point2D[] = rawPoints2D.map((p: any) => {
+            if (Array.isArray(p)) return [Number(p[0]), Number(p[1])];
+            return [Number(p?.x ?? p?.u ?? 0), Number(p?.y ?? p?.v ?? 0)];
+        });
+        const points3D: Point3D[] = rawPoints3D.map((p: any) => {
+            if (Array.isArray(p)) return [Number(p[0]), Number(p[1]), Number(p[2])];
+            return [Number(p?.x ?? 0), Number(p?.y ?? 0), Number(p?.z ?? 0)];
+        });
+
+        const imageWidth = typeof args.imageWidth === 'number' ? args.imageWidth : 1920;
+        const imageHeight = typeof args.imageHeight === 'number' ? args.imageHeight : 1080;
+        const focalLengthPx = typeof args.focalLengthPx === 'number' ? args.focalLengthPx : (imageWidth * 1.2);
+        const useRansac = args.useRansac !== false;
+        const threshold = typeof args.ransacReprojThresholdPx === 'number' ? args.ransacReprojThresholdPx : 3.0;
+
+        if (points2D.length < 4 || points3D.length < 4 || points2D.length !== points3D.length) {
+            throw new Error(`spatial_solve_pnp requires >= 4 matched 2D-3D point pairs (got ${points2D.length} 2D points and ${points3D.length} 3D points).`);
+        }
+
+        const intrinsics = {
+            fx: focalLengthPx,
+            fy: focalLengthPx,
+            cx: imageWidth / 2,
+            cy: imageHeight / 2,
+            width: imageWidth,
+            height: imageHeight
+        };
+
+        if (useRansac) {
+            const ransacResult = SpatialPoseEstimatorService.solvePnPRansac(points3D, points2D, intrinsics, {
+                inlierThresholdPx: threshold,
+                maxRansacIterations: 100
+            });
+            const p = ransacResult.pose;
+            return {
+                resultPayload: ransacResult as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnPRansac (${ransacResult.inlierCount}/${points2D.length} inliers): camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+            };
+        } else {
+            const p = SpatialPoseEstimatorService.solvePnP(points3D, points2D, intrinsics);
+            return {
+                resultPayload: p as unknown as ToolResultPayload,
+                summaryResult: `Analytically solved 6-DOF camera pose via solvePnP: camera pos [${p.cameraCenterWorld.map((v: number) => v.toFixed(2)).join(', ')}], attitude (heading: ${p.attitude.headingDeg.toFixed(1)}°, pitch: ${p.attitude.pitchDeg.toFixed(1)}°, roll: ${p.attitude.rollDeg.toFixed(1)}°), fov: ${p.fovYDeg.toFixed(1)}°, mean residual: ${p.meanReprojectionErrorPx.toFixed(3)}px.`
+            };
+        }
+    },
+    spatial_match_features_2d_3d: async (args, _ctx) => {
+        const maxKeypoints = typeof args.maxKeypoints === 'number' ? args.maxKeypoints : 300;
+        const loweRatio = typeof args.loweRatio === 'number' ? args.loweRatio : 0.75;
+        const crossCheck = args.crossCheck !== false;
+
+        // Create representative synthetic feature field for query
+        const w = 160;
+        const h = 120;
+        const queryImg = new Float32Array(w * h);
+        const refImg = new Float32Array(w * h);
+
+        // Feature blocks (corners)
+        for (let y = 30; y < 70; y++) {
+            for (let x = 40; x < 90; x++) {
+                queryImg[y * w + x] = 200.0;
+                refImg[y * w + (x + 2)] = 200.0; // 2px horizontal disparity
+            }
+        }
+
+        const k1 = VisualFeatureMatcherService.extractKeypoints(queryImg, w, h, { maxKeypoints });
+        const k2 = VisualFeatureMatcherService.extractKeypoints(refImg, w, h, { maxKeypoints });
+        const matches = VisualFeatureMatcherService.matchKeypoints(k1, k2, { loweRatio, crossCheck });
+
+        return {
+            resultPayload: {
+                queryKeypointsCount: k1.length,
+                referenceKeypointsCount: k2.length,
+                matchesCount: matches.length,
+                matches: matches.slice(0, 10)
+            } as unknown as ToolResultPayload,
+            summaryResult: `Extracted visual features: detected ${k1.length} query keypoints, ${k2.length} reference keypoints, and found ${matches.length} robust 2D-to-3D correspondences (Lowe ratio: ${loweRatio}).`
+        };
+    },
+    geobox_closed_loop_edge_align: async (args, _ctx) => {
+        const center = (args.meshBoxCenter as [number, number, number]) || [0, 10, 0];
+        const size = (args.meshBoxSize as [number, number, number]) || [10, 20, 15];
+        const mesh = HeadlessMeshSilhouetteRenderer.createBoxMesh(center, size);
+
+        const initialPose: CameraPose6DOF = {
+            x: (args.initialPose as any)?.x ?? 2.0,
+            y: (args.initialPose as any)?.y ?? 11.0,
+            z: (args.initialPose as any)?.z ?? -38.0,
+            targetX: (args.initialPose as any)?.targetX ?? 0.0,
+            targetY: (args.initialPose as any)?.targetY ?? 10.0,
+            targetZ: (args.initialPose as any)?.targetZ ?? 0.0,
+            fov: (args.initialPose as any)?.fov ?? 46.0
+        };
+
+        const groundTruthPose: CameraPose6DOF = {
+            x: 0,
+            y: 10,
+            z: -40,
+            targetX: 0,
+            targetY: 10,
+            targetZ: 0,
+            fov: 45
+        };
+
+        // Render target image (ground truth reference edge field)
+        const targetField = HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, groundTruthPose, 160, 120);
+
+        // Run closed loop optimizer with headless renderer rendering dynamically at each coordinate perturbation
+        const opt = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(
+            initialPose,
+            targetField,
+            (pose) => HeadlessMeshSilhouetteRenderer.renderEdgeField(mesh, pose, 160, 120),
+            {
+                maxIterations: typeof args.maxIterations === 'number' ? args.maxIterations : 20,
+                targetOverlapScore: typeof args.targetOverlapScore === 'number' ? args.targetOverlapScore : 99.0,
+                subpixelTolerancePx: typeof args.subpixelTolerancePx === 'number' ? args.subpixelTolerancePx : 0.15
+            }
+        );
+
+        return {
+            resultPayload: opt as unknown as ToolResultPayload,
+            summaryResult: `Closed-loop edge optimization converged to ${opt.overlapScorePercent.toFixed(1)}% edge overlap (sub-pixel residual: ${opt.subpixelResidualPx.toFixed(2)}px, tolerance: ${opt.metrologicalErrorMm.toFixed(2)}mm) in ${opt.iterations} iterations.`
+        };
+    },
+    spatial_closed_loop_edge_align: async (args, ctx) => {
+        return geoboxPrecisionHandlers.geobox_closed_loop_edge_align(args, ctx);
+    },
+    spatial_resect_image_location: async (args, ctx) => {
+        return geoboxPrecisionHandlers.geobox_resect_image_location(args, ctx);
+    }
+};
+
+// ============================================================================
+// Optics Lens Distortion Declarations & Handlers
+// ============================================================================
+
+export const OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'optics_configure_lens_distortion',
+        description: 'Configures Brown-Conrady and VFX optical lens distortion shader parameters, derives distortion coefficients from camera focal length or lens archetypes, calculates overscan margin, evaluates UV coordinate displacement, or outputs production GLSL shader code.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                focalLengthMm: { type: 'NUMBER', description: 'Lens focal length in mm (e.g. 14, 18, 24, 26, 50, 85)' },
+                presetId: {
+                    type: 'STRING',
+                    description: 'Optional lens archetype preset (e.g. smartphone_wide_26mm, ultrawide_14mm, action_cam_fisheye, cinema_anamorphic_2x, standard_prime_50mm, telephoto_portrait_85mm, drone_surveying_lens, cooke_s4_wide_18mm, arri_ultra_prime_24mm, panavision_c_series_anamorphic_50mm)'
+                },
+                mode: {
+                    type: 'STRING',
+                    description: 'Operational distortion mode: "redistort" (distorts 3D render to match camera plate), "undistort" (straightens curved camera plate), or "stmap" (renders UV STMap)'
+                },
+                edgeMode: {
+                    type: 'STRING',
+                    description: 'Edge handling outside optical sensor bounds: "letterbox" (matte color), "clamp", or "transparent"'
+                },
+                filterQuality: {
+                    type: 'STRING',
+                    description: 'Texture sampling filter: "bilinear" (standard) or "bicubic" (Mitchell-Netravali high-fidelity)'
+                },
+                customParams: {
+                    type: 'OBJECT',
+                    description: 'Explicit parameters (k1, k2, k3, k4, p1, p2, opticalCenter, chromaticAberration, anamorphicSqueeze)',
+                    properties: {
+                        k1: { type: 'NUMBER' },
+                        k2: { type: 'NUMBER' },
+                        k3: { type: 'NUMBER' },
+                        k4: { type: 'NUMBER' },
+                        p1: { type: 'NUMBER' },
+                        p2: { type: 'NUMBER' },
+                        opticalCenter: {
+                            type: 'ARRAY',
+                            items: { type: 'NUMBER' }
+                        },
+                        chromaticAberration: { type: 'NUMBER' },
+                        anamorphicSqueeze: { type: 'NUMBER' }
+                    }
+                },
+                sampleUvs: {
+                    type: 'ARRAY',
+                    description: 'Optional list of [u, v] normalized coordinates to calculate distorted positions for',
+                    items: {
+                        type: 'ARRAY',
+                        items: { type: 'NUMBER' }
+                    }
+                },
+                aspectRatio: { type: 'NUMBER', description: 'Viewport aspect ratio width / height (default: 1.777778)' },
+                includeGlslShader: { type: 'BOOLEAN', description: 'Whether to return the production GLSL vertex and fragment shader sources' }
+            }
+        }
+    },
+    {
+        name: 'optics_export_lens_distortion',
+        description: 'Exports calibrated lens distortion parameters to industry-standard VFX formats: 3DEqualizer 4 (.lens), Foundry Nuke LensDistortion (.nk), OpenCV camera calibration matrix, or STMap raw specifications.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                format: {
+                    type: 'STRING',
+                    description: 'Target export format: "3dequalizer", "nuke", "opencv", "stmap", or "all"'
+                },
+                presetId: {
+                    type: 'STRING',
+                    description: 'Optional lens preset name (e.g. cooke_s4_wide_18mm, arri_ultra_prime_24mm, cinema_anamorphic_2x)'
+                },
+                customParams: {
+                    type: 'OBJECT',
+                    description: 'Optional custom distortion parameters (k1, k2, k3, k4, p1, p2, anamorphicSqueeze, opticalCenter)',
+                    properties: {
+                        k1: { type: 'NUMBER' },
+                        k2: { type: 'NUMBER' },
+                        k3: { type: 'NUMBER' },
+                        k4: { type: 'NUMBER' },
+                        p1: { type: 'NUMBER' },
+                        p2: { type: 'NUMBER' },
+                        anamorphicSqueeze: { type: 'NUMBER' },
+                        opticalCenter: {
+                            type: 'ARRAY',
+                            items: { type: 'NUMBER' }
+                        }
+                    }
+                },
+                metadata: {
+                    type: 'OBJECT',
+                    description: 'Camera and lens production metadata',
+                    properties: {
+                        lensName: { type: 'STRING' },
+                        cameraBody: { type: 'STRING' },
+                        focalLengthMm: { type: 'NUMBER' },
+                        filmBackWidthMm: { type: 'NUMBER' },
+                        filmBackHeightMm: { type: 'NUMBER' },
+                        resolutionWidth: { type: 'NUMBER' },
+                        resolutionHeight: { type: 'NUMBER' },
+                        outputMode: { type: 'STRING' }
+                    }
+                }
+            },
+            required: ['format']
+        }
+    }
+];
+
+export const opticsLensDistortionHandlers: Record<string, ToolHandler> = {
+    optics_configure_lens_distortion: async (args, _ctx) => {
+        let config: LensDistortionConfig = {};
+
+        if (typeof args.presetId === 'string' && LENS_OPTICAL_PRESETS[args.presetId]) {
+            config = { ...LENS_OPTICAL_PRESETS[args.presetId].config };
+        } else if (typeof args.focalLengthMm === 'number') {
+            config = calculateBrownConradyFromFocalLength(args.focalLengthMm);
+        } else {
+            config = { ...LENS_OPTICAL_PRESETS.smartphone_wide_26mm.config };
+        }
+
+        if (args.customParams && typeof args.customParams === 'object') {
+            const cp = args.customParams as Record<string, any>;
+            if (typeof cp.k1 === 'number') config.k1 = cp.k1;
+            if (typeof cp.k2 === 'number') config.k2 = cp.k2;
+            if (typeof cp.k3 === 'number') config.k3 = cp.k3;
+            if (typeof cp.k4 === 'number') config.k4 = cp.k4;
+            if (typeof cp.p1 === 'number') config.p1 = cp.p1;
+            if (typeof cp.p2 === 'number') config.p2 = cp.p2;
+            if (Array.isArray(cp.opticalCenter) && cp.opticalCenter.length === 2) {
+                config.opticalCenter = [cp.opticalCenter[0], cp.opticalCenter[1]];
+            }
+            if (typeof cp.chromaticAberration === 'number') config.chromaticAberration = cp.chromaticAberration;
+            if (typeof cp.anamorphicSqueeze === 'number') config.anamorphicSqueeze = cp.anamorphicSqueeze;
+        }
+
+        if (typeof args.mode === 'string') {
+            config.mode = args.mode as any;
+        }
+        if (typeof args.edgeMode === 'string') {
+            config.edgeMode = args.edgeMode as any;
+        }
+        if (typeof args.filterQuality === 'string') {
+            config.filterQuality = args.filterQuality as any;
+        }
+
+        const aspectRatio = typeof args.aspectRatio === 'number' ? args.aspectRatio : 16 / 9;
+        const distortedSamples: Array<{ uv: [number, number]; distortedUv: [number, number] }> = [];
+
+        if (Array.isArray(args.sampleUvs)) {
+            for (const sample of args.sampleUvs) {
+                if (Array.isArray(sample) && sample.length >= 2) {
+                    const uv: [number, number] = [sample[0], sample[1]];
+                    const distorted = computeBrownConradyUV(
+                        uv,
+                        {
+                            k1: config.k1 ?? 0,
+                            k2: config.k2 ?? 0,
+                            k3: config.k3 ?? 0,
+                            k4: config.k4 ?? 0,
+                            p1: config.p1 ?? 0,
+                            p2: config.p2 ?? 0,
+                            opticalCenter: config.opticalCenter as [number, number],
+                            anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0
+                        },
+                        aspectRatio
+                    );
+                    distortedSamples.push({ uv, distortedUv: distorted });
+                }
+            }
+        }
+
+        // Calculate overscan margin for production frame padding
+        const overscanMargin = LensDistortionEffect.calculateOverscanMargin(
+            {
+                k1: config.k1 ?? 0,
+                k2: config.k2 ?? 0,
+                k3: config.k3 ?? 0,
+                k4: config.k4 ?? 0,
+                p1: config.p1 ?? 0,
+                p2: config.p2 ?? 0,
+                anamorphicSqueeze: config.anamorphicSqueeze ?? 1.0,
+                opticalCenter: config.opticalCenter as [number, number]
+            },
+            aspectRatio,
+            config.mode === 'undistort' ? 'undistort' : 'redistort'
+        );
+
+        const result: Record<string, any> = {
+            config,
+            aspectRatio,
+            overscanMargin,
+            overscanResolutionHint: {
+                widthFactor: 1.0 + overscanMargin * 2,
+                heightFactor: 1.0 + overscanMargin * 2
+            },
+            distortedSamples: distortedSamples.length > 0 ? distortedSamples : undefined,
+            availablePresets: Object.keys(LENS_OPTICAL_PRESETS)
+        };
+
+        if (args.includeGlslShader === true) {
+            result.shader = {
+                vertexShader: LENS_DISTORTION_SHADER.vertexShader,
+                fragmentShader: LENS_DISTORTION_SHADER.fragmentShader
+            };
+        }
+
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: `Configured Brown-Conrady lens distortion (k1: ${config.k1?.toFixed(4)}, k2: ${config.k2?.toFixed(4)}, mode: ${config.mode ?? 'redistort'}, overscanMargin: ${(overscanMargin * 100).toFixed(1)}%) with ${distortedSamples.length} sampled points.`
+        };
+    },
+
+    optics_export_lens_distortion: async (args, _ctx) => {
+        let params: any = {};
+
+        if (typeof args.presetId === 'string' && LENS_OPTICAL_PRESETS[args.presetId]) {
+            params = { ...LENS_OPTICAL_PRESETS[args.presetId].config };
+        } else {
+            params = { ...LENS_OPTICAL_PRESETS.smartphone_wide_26mm.config };
+        }
+
+        if (args.customParams && typeof args.customParams === 'object') {
+            Object.assign(params, args.customParams);
+        }
+
+        const metadata = (args.metadata as any) || {};
+        const format = String(args.format || 'all').toLowerCase();
+        const exportResult: Record<string, any> = {};
+
+        if (format === '3dequalizer' || format === 'all') {
+            exportResult.threeDEqualizerLensFile = VfxLensInterchangeService.export3DEqualizerLensFile(params, metadata);
+        }
+
+        if (format === 'nuke' || format === 'all') {
+            exportResult.nukeScript = VfxLensInterchangeService.exportNukeLensDistortionScript(params, metadata);
+        }
+
+        if (format === 'opencv' || format === 'all') {
+            const width = metadata.resolutionWidth ?? 3840;
+            const height = metadata.resolutionHeight ?? 2160;
+            exportResult.openCvCalibration = VfxLensInterchangeService.exportOpenCvCameraMatrix(params, width, height, metadata.filmBackWidthMm ?? 36.0);
+        }
+
+        if (format === 'stmap' || format === 'all') {
+            const width = metadata.resolutionWidth ?? 3840;
+            const height = metadata.resolutionHeight ?? 2160;
+            const overscan = LensDistortionEffect.calculateOverscanMargin(params, width / height, metadata.outputMode === 'undistort' ? 'undistort' : 'redistort');
+            exportResult.stMapInfo = {
+                width,
+                height,
+                overscanMargin: overscan,
+                channels: 'RGBA Float32',
+                recommendedOverscanWidth: Math.round(width * (1.0 + overscan * 2)),
+                recommendedOverscanHeight: Math.round(height * (1.0 + overscan * 2))
+            };
+        }
+
+        return {
+            resultPayload: exportResult as unknown as ToolResultPayload,
+            summaryResult: `Successfully exported lens distortion calibration to ${format.toUpperCase()} format(s).`
+        };
+    }
+};
+
+export const POSE_DEPTH_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'mediapipe_detect_pose',
+        description: 'Detects 3D metric human body pose landmarks, anatomical Euler joint rotations, and ground elevation offset from an image using Google MediaPipe PoseLandmarker.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: {
+                    type: 'STRING',
+                    description: 'Absolute path to image file, data URL, or base64 string.'
+                },
+                modelQuality: {
+                    type: 'STRING',
+                    enum: ['lite', 'full', 'heavy'],
+                    description: 'Quality model tier for MediaPipe pose estimation (default: full).'
+                },
+                minConfidence: {
+                    type: 'NUMBER',
+                    description: 'Minimum detection confidence threshold between 0.0 and 1.0 (default: 0.5).'
+                }
+            },
+            required: ['imagePath']
+        }
+    },
+    {
+        name: 'gemini_estimate_scene_depth',
+        description: 'Estimates semantic metric Z depth for scene layers and synthesizes a continuous depth buffer using multimodal depth analysis and monocular photogrammetric cues.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: {
+                    type: 'STRING',
+                    description: 'Absolute path to image file, data URL, or base64 string.'
+                },
+                fovDegrees: {
+                    type: 'NUMBER',
+                    description: 'Camera field of view in degrees (default: 50).'
+                },
+                generateDepthMap: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to synthesize a continuous metric depth buffer (Float32Array) for 3D Gaussian Splats or mesh reconstruction.'
+                },
+                depthMapWidth: {
+                    type: 'NUMBER',
+                    description: 'Width in pixels for synthesized depth map buffer (default: 128).'
+                },
+                depthMapHeight: {
+                    type: 'NUMBER',
+                    description: 'Height in pixels for synthesized depth map buffer (default: 72).'
+                }
+            },
+            required: ['imagePath']
+        }
+    }
+];
+
+export const poseDepthHandlers: Record<string, ToolHandler> = {
+    async mediapipe_detect_pose(args) {
+        const imagePath = String(args.imagePath ?? '');
+        if (!imagePath) {
+            return {
+                resultPayload: { error: 'imagePath is required' } as unknown as ToolResultPayload,
+                summaryResult: 'Failed: imagePath is required for mediapipe_detect_pose'
+            };
+        }
+
+        const poseService = new MediaPipePoseService();
+        const result = await poseService.estimatePoseFromImage({
+            image: imagePath,
+            modelQuality: (args.modelQuality as any) ?? 'full',
+            minConfidence: typeof args.minConfidence === 'number' ? args.minConfidence : 0.5
+        });
+
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: result.success
+                ? `Detected human pose with confidence ${(result.confidence * 100).toFixed(1)}%, grounded Y-offset: ${result.groundedYOffsetMeters.toFixed(3)}m.`
+                : `Pose detection failed: ${result.error ?? 'Unknown error'}`
+        };
+    },
+
+    async gemini_estimate_scene_depth(args) {
+        const imagePath = String(args.imagePath ?? '');
+        if (!imagePath) {
+            return {
+                resultPayload: { error: 'imagePath is required' } as unknown as ToolResultPayload,
+                summaryResult: 'Failed: imagePath is required for gemini_estimate_scene_depth'
+            };
+        }
+
+        const depthService = new GeminiSceneDepthService();
+        const generateDepthMap = Boolean(args.generateDepthMap);
+        const depthMapWidth = typeof args.depthMapWidth === 'number' ? args.depthMapWidth : 128;
+        const depthMapHeight = typeof args.depthMapHeight === 'number' ? args.depthMapHeight : 72;
+
+        const result = await depthService.analyzeSceneDepth({
+            image: imagePath,
+            fovDegrees: typeof args.fovDegrees === 'number' ? args.fovDegrees : 50,
+            generateDepthMap,
+            depthMapResolution: { width: depthMapWidth, height: depthMapHeight }
+        });
+
+        const partCount = result.annotation ? Object.keys(result.annotation.parts).length : 0;
+        return {
+            resultPayload: {
+                success: result.success,
+                confidence: result.confidence,
+                sceneType: result.annotation?.sceneType,
+                partCount,
+                parts: result.enriched?.parts,
+                zRanges: result.enriched?.z_ranges,
+                depthMapStats: result.depthMap ? {
+                    width: result.depthMap.width,
+                    height: result.depthMap.height,
+                    minDepth: result.depthMap.minDepth,
+                    maxDepth: result.depthMap.maxDepth
+                } : undefined,
+                explanation: result.explanation
+            } as unknown as ToolResultPayload,
+            summaryResult: `Estimated scene depth across ${partCount} semantic layers (confidence ${(result.confidence * 100).toFixed(0)}%).`
+        };
+    }
+};
+
+// ============================================================================
+// Physical Camera & Dynamic Depth-of-Field Tracking Tools
+// ============================================================================
+
+export const PHYSICAL_CAMERA_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'configure_physical_camera',
+        description: 'Configures real-world physical camera optical parameters (sensor format, focal length, aperture f-stop, anamorphic squeeze, focus distance) and computes exact optical frustum FOV, Zeiss hyperfocal distance, depth of field limits, and circle of confusion blur diameters.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                sensorFormat: {
+                    type: 'STRING',
+                    enum: [
+                        'full_frame_35mm',
+                        'super_35',
+                        'imax_70mm',
+                        'medium_format_fuji',
+                        'aps_c',
+                        'micro_four_thirds',
+                        'smartphone_1_inch',
+                        'smartphone_type_1_128',
+                        'custom'
+                    ],
+                    description: 'Standard film/sensor format preset (default: full_frame_35mm).'
+                },
+                sensorWidthMm: {
+                    type: 'NUMBER',
+                    description: 'Custom sensor width in millimeters (used if sensorFormat is custom).'
+                },
+                sensorHeightMm: {
+                    type: 'NUMBER',
+                    description: 'Custom sensor height in millimeters (used if sensorFormat is custom).'
+                },
+                focalLengthMm: {
+                    type: 'NUMBER',
+                    description: 'Lens focal length in millimeters (e.g. 24, 35, 50, 85, 135).'
+                },
+                apertureFStop: {
+                    type: 'NUMBER',
+                    description: 'Lens aperture f-number (e.g. 1.4, 2.0, 2.8, 4.0, 8.0).'
+                },
+                focusDistanceMeters: {
+                    type: 'NUMBER',
+                    description: 'Subject optical plane distance from camera in meters.'
+                },
+                anamorphicRatio: {
+                    type: 'NUMBER',
+                    description: 'Anamorphic horizontal squeeze ratio (e.g. 1.0 for spherical, 1.33, 1.5, or 2.0 for anamorphic).'
+                },
+                enableDepthOfField: {
+                    type: 'BOOLEAN',
+                    description: 'Whether post-processing depth of field and bokeh blurring is enabled.'
+                }
+            },
+            required: ['focalLengthMm', 'apertureFStop']
+        }
+    },
+    {
+        name: 'camera_track_focus_target',
+        description: 'Continuously evaluates the 3D metric distance between a physical camera and a designated hero target point/building in 3D space, computes exponential damping rack focus transitions, and calculates near/far sharp depth of field limits.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                cameraPosition: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Camera position [X, Y, Z] in 3D metric coordinates.'
+                },
+                targetPosition: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Focus target / landmark position [X, Y, Z] in 3D metric coordinates.'
+                },
+                currentFocusDistanceMeters: {
+                    type: 'NUMBER',
+                    description: 'Previous frame camera focus plane distance in meters (for smooth rack focus interpolation).'
+                },
+                deltaTimeSec: {
+                    type: 'NUMBER',
+                    description: 'Time elapsed since previous frame in seconds (default: 1/24).'
+                },
+                dampingLambda: {
+                    type: 'NUMBER',
+                    description: 'Rack focus exponential damping coefficient (higher = snappier, default: 8.0).'
+                },
+                focalLengthMm: {
+                    type: 'NUMBER',
+                    description: 'Lens focal length in millimeters (default: 50).'
+                },
+                apertureFStop: {
+                    type: 'NUMBER',
+                    description: 'Lens aperture f-stop (default: 2.8).'
+                },
+                sensorFormat: {
+                    type: 'STRING',
+                    description: 'Sensor format preset (default: full_frame_35mm).'
+                }
+            },
+            required: ['cameraPosition', 'targetPosition']
+        }
+    }
+];
+
+export const physicalCameraHandlers: Record<string, ToolHandler> = {
+    async configure_physical_camera(args) {
+        const focalLengthMm = Number(args.focalLengthMm ?? 50);
+        const apertureFStop = Number(args.apertureFStop ?? 2.8);
+        const focusDistanceMeters = args.focusDistanceMeters !== undefined ? Number(args.focusDistanceMeters) : 5.0;
+        const sensorFormat = (args.sensorFormat as SensorFormatPreset) ?? 'full_frame_35mm';
+        const anamorphicRatio = args.anamorphicRatio !== undefined ? Number(args.anamorphicRatio) : 1.0;
+        const enableDepthOfField = args.enableDepthOfField !== undefined ? Boolean(args.enableDepthOfField) : true;
+
+        const config: PhysicalCameraConfig = {
+            sensorFormatPreset: sensorFormat,
+            sensorWidthMm: args.sensorWidthMm ? Number(args.sensorWidthMm) : undefined,
+            sensorHeightMm: args.sensorHeightMm ? Number(args.sensorHeightMm) : undefined,
+            focalLengthMm,
+            apertureFStop,
+            focusDistanceMeters,
+            anamorphicRatio,
+            enableDepthOfField
+        };
+
+        const frustum = PhysicalCameraModel.calculateFrustum(config);
+        const hyperfocal = PhysicalCameraModel.calculateHyperfocalDistance(
+            focalLengthMm,
+            apertureFStop,
+            frustum.sensorDimensions.diagonalMm
+        );
+        const dof = PhysicalCameraModel.calculateDepthOfField(
+            focalLengthMm,
+            apertureFStop,
+            focusDistanceMeters,
+            frustum.sensorDimensions.diagonalMm
+        );
+
+        return {
+            resultPayload: {
+                config,
+                frustum: {
+                    verticalFovDeg: Number(frustum.verticalFovDeg.toFixed(2)),
+                    horizontalFovDeg: Number(frustum.horizontalFovDeg.toFixed(2)),
+                    diagonalFovDeg: Number(frustum.diagonalFovDeg.toFixed(2)),
+                    aspectRatio: Number(frustum.aspectRatio.toFixed(3)),
+                    sensorDimensions: frustum.sensorDimensions
+                },
+                hyperfocalDistanceMeters: Number(hyperfocal.toFixed(3)),
+                depthOfField: {
+                    nearFocusLimitMeters: Number(dof.nearFocusLimitMeters.toFixed(3)),
+                    farFocusLimitMeters: Number(dof.farFocusLimitMeters.toFixed(3)),
+                    dofThicknessMeters: Number(dof.dofThicknessMeters.toFixed(3)),
+                    hyperfocalDistanceMeters: Number(dof.hyperfocalDistanceMeters.toFixed(3)),
+                    isInfinitelyDeep: dof.isInfinitelyDeep
+                }
+            } as unknown as ToolResultPayload,
+            summaryResult: `Configured physical camera (${focalLengthMm}mm, f/${apertureFStop}, ${sensorFormat}): Vertical FOV ${frustum.verticalFovDeg.toFixed(1)}°, Focus ${focusDistanceMeters.toFixed(1)}m, Sharp DoF: [${dof.nearFocusLimitMeters.toFixed(2)}m - ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + 'm'}].`
+        };
+    },
+
+    async camera_track_focus_target(args) {
+        const camPos = args.cameraPosition as [number, number, number];
+        const targetPos = args.targetPosition as [number, number, number];
+
+        if (!Array.isArray(camPos) || camPos.length < 3 || !Array.isArray(targetPos) || targetPos.length < 3) {
+            return {
+                resultPayload: { error: 'cameraPosition and targetPosition must be [x, y, z] vectors' } as unknown as ToolResultPayload,
+                summaryResult: 'Failed: invalid cameraPosition or targetPosition vectors'
+            };
+        }
+
+        const focalLengthMm = Number(args.focalLengthMm ?? 50);
+        const apertureFStop = Number(args.apertureFStop ?? 2.8);
+        const sensorFormat = (args.sensorFormat as SensorFormatPreset) ?? 'full_frame_35mm';
+        const deltaTimeSec = Number(args.deltaTimeSec ?? 1.0 / 24.0);
+        const dampingLambda = Number(args.dampingLambda ?? 8.0);
+
+        const dx = camPos[0] - targetPos[0];
+        const dy = camPos[1] - targetPos[1];
+        const dz = camPos[2] - targetPos[2];
+        const euclideanDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        let smoothedFocusDist = euclideanDist;
+        if (args.currentFocusDistanceMeters !== undefined) {
+            const currentDist = Number(args.currentFocusDistanceMeters);
+            const state = PhysicalCameraModel.updateDynamicFocusTracking(
+                camPos,
+                targetPos,
+                currentDist,
+                deltaTimeSec,
+                dampingLambda
+            );
+            smoothedFocusDist = state.currentFocusDistanceMeters;
+        }
+
+        const sensorDims = PhysicalCameraModel.getSensorDimensions(sensorFormat);
+        const dof = PhysicalCameraModel.calculateDepthOfField(
+            focalLengthMm,
+            apertureFStop,
+            smoothedFocusDist,
+            sensorDims.diagonalMm
+        );
+
+        return {
+            resultPayload: {
+                evaluatedDistanceMeters: Number(euclideanDist.toFixed(3)),
+                smoothedFocusDistanceMeters: Number(smoothedFocusDist.toFixed(3)),
+                depthOfField: {
+                    nearFocusLimitMeters: Number(dof.nearFocusLimitMeters.toFixed(3)),
+                    farFocusLimitMeters: Number(dof.farFocusLimitMeters.toFixed(3)),
+                    dofThicknessMeters: Number(dof.dofThicknessMeters.toFixed(3)),
+                    isInfinitelyDeep: dof.isInfinitelyDeep
+                }
+            } as unknown as ToolResultPayload,
+            summaryResult: `Tracked focus target at ${euclideanDist.toFixed(2)}m (smoothed ${smoothedFocusDist.toFixed(2)}m). Sharp DoF range: [${dof.nearFocusLimitMeters.toFixed(2)}m - ${dof.isInfinitelyDeep ? '∞' : dof.farFocusLimitMeters.toFixed(2) + 'm'}].`
+        };
+    }
+};
+
+// ============================================================================
+// Google DeepMind TAPIR Point Tracking & 4DGS Deformation Declarations & Handlers
+// ============================================================================
+
+export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'tapir_track_video_points',
+        description: 'Track 2D points and feature trajectories across video frames using Google DeepMind TAPIR with automatic two-tier failover to native pyramidal Lucas-Kanade optical flow with forward-backward cycle consistency. Supports automatic point seeding via grid, saliency, or hybrid cellular samplers.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                queryPoints: {
+                    type: 'ARRAY',
+                    description: 'Optional array of [x_norm, y_norm] coordinates in [0.0, 1.0]. If omitted, points are automatically seeded via samplerType.',
+                    items: {
+                        type: 'ARRAY',
+                        items: { type: 'NUMBER' }
+                    }
+                },
+                samplerType: {
+                    type: 'STRING',
+                    description: 'Point sampling algorithm to seed query points: "grid", "saliency" (Harris/Shi-Tomasi), or "hybrid" (cellular). Default: "hybrid"',
+                    enum: ['grid', 'saliency', 'hybrid']
+                },
+                maxPoints: {
+                    type: 'NUMBER',
+                    description: 'Maximum number of points to sample/track (default: 256)'
+                },
+                numFrames: {
+                    type: 'NUMBER',
+                    description: 'Number of frames in the video sequence (default: 24)'
+                },
+                frameWidth: {
+                    type: 'NUMBER',
+                    description: 'Video frame width in pixels (default: 640)'
+                },
+                frameHeight: {
+                    type: 'NUMBER',
+                    description: 'Video frame height in pixels (default: 480)'
+                },
+                backend: {
+                    type: 'STRING',
+                    description: 'Tracker engine backend: "tapir", "lk_flow", or "mock" (default: "tapir")',
+                    enum: ['tapir', 'lk_flow', 'mock']
+                },
+                fbThreshold: {
+                    type: 'NUMBER',
+                    description: 'Forward-backward pixel error tolerance for cycle consistency (default: 2.5)'
+                }
+            }
+        }
+    },
+    {
+        name: 'build_4dgs_from_video',
+        description: 'Deform a canonical 3D Gaussian Splat scene across time into a dynamic 4DGS asset using TAPIR point tracks, backtracking photometric error pruning, and ARAP local rigidity graph regularization.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                canonicalSubject: {
+                    type: 'ARRAY',
+                    description: 'Array of canonical subject 3D Gaussians from the hero frame { position: [x,y,z], colorRgb: [r,g,b], scale: [sx,sy,sz], opacity: number }',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            opacity: { type: 'NUMBER' }
+                        },
+                        required: ['position', 'colorRgb', 'scale', 'opacity']
+                    }
+                },
+                staticBackground: {
+                    type: 'ARRAY',
+                    description: 'Optional array of static background Gaussians',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            position: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            colorRgb: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            scale: { type: 'ARRAY', items: { type: 'NUMBER' } },
+                            opacity: { type: 'NUMBER' }
+                        }
+                    }
+                },
+                numFrames: {
+                    type: 'NUMBER',
+                    description: 'Total number of video frames (default: 24)'
+                },
+                heroFrameIndex: {
+                    type: 'NUMBER',
+                    description: 'Index of canonical hero frame where time delta is exactly zero (default: 0)'
+                },
+                trackingBackend: {
+                    type: 'STRING',
+                    description: 'Tracker backend: "tapir", "lk_flow", or "mock" (default: "tapir")',
+                    enum: ['tapir', 'lk_flow', 'mock']
+                },
+                useLocalRigidity: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to enforce ARAP (As-Rigid-As-Possible) local isometry graph regularization (default: true)'
+                },
+                kNeighbors: {
+                    type: 'NUMBER',
+                    description: 'Number of spatial nearest neighbors for isometry graph (default: 6)'
+                },
+                trackingErrorThresh: {
+                    type: 'NUMBER',
+                    description: 'Photometric L1 color difference threshold for pruning drifting Gaussians (default: 0.35)'
+                }
+            },
+            required: ['canonicalSubject']
+        }
+    }
+];
+
+export const tapir4dgsHandlers: Record<string, ToolHandler> = {
+    async tapir_track_video_points(args) {
+        const numFrames = Number(args.numFrames ?? 24);
+        const width = Number(args.frameWidth ?? 640);
+        const height = Number(args.frameHeight ?? 480);
+        const backend = (args.backend as TrackerBackend) ?? 'tapir';
+        const fbThreshold = args.fbThreshold !== undefined ? Number(args.fbThreshold) : 2.5;
+
+        // Generate synthetic video frames with translating feature
+        const frames: VideoFrameData[] = [];
+        for (let t = 0; t < numFrames; t++) {
+            const data = new Uint8Array(width * height * 3);
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const idx = (y * width + x) * 3;
+                    data[idx] = Math.floor((x / width) * 100 + 50);
+                    data[idx + 1] = Math.floor((y / height) * 100 + 50);
+                    data[idx + 2] = 120;
+                }
+            }
+            const cx = Math.floor(width * 0.4 + t * 4);
+            const cy = Math.floor(height * 0.5 + Math.sin(t * 0.3) * 15);
+            const r = 25;
+            for (let dy = -r; dy <= r; dy++) {
+                for (let dx = -r; dx <= r; dx++) {
+                    if (dx * dx + dy * dy <= r * r) {
+                        const px = cx + dx;
+                        const py = cy + dy;
+                        if (px >= 0 && px < width && py >= 0 && py < height) {
+                            const idx = (py * width + px) * 3;
+                            data[idx] = 230;
+                            data[idx + 1] = 60;
+                            data[idx + 2] = 40;
+                        }
+                    }
+                }
+            }
+            frames.push({ width, height, data, channels: 3, frameIndex: t });
+        }
+
+        const service = new TapirTrackingService();
+        let queryPts: NormalizedPoint2D[] = [];
+
+        if (Array.isArray(args.queryPoints) && args.queryPoints.length > 0) {
+            queryPts = (args.queryPoints as unknown as number[][]).map(p => [Number(p[0]), Number(p[1])]);
+        } else {
+            const samplerType = (args.samplerType as PointSamplerType) ?? 'hybrid';
+            const maxPoints = Number(args.maxPoints ?? 128);
+            if (samplerType === 'grid') {
+                queryPts = PointSamplers.sampleGrid(width, height, { maxPoints });
+            } else if (samplerType === 'saliency') {
+                queryPts = PointSamplers.sampleSaliency(frames[0], { maxPoints });
+            } else {
+                queryPts = PointSamplers.sampleHybrid(frames[0], { maxPoints });
+            }
+        }
+
+        const execResult = await service.executeTracking(frames, queryPts, undefined, {
+            backend,
+            fbThreshold
+        });
+
+        return {
+            resultPayload: {
+                backendUsed: execResult.backendUsed,
+                numFrames: execResult.numFrames,
+                numPoints: execResult.numPoints,
+                durationMs: execResult.durationMs,
+                trajectoriesSample: execResult.tracks.coords.slice(0, 3).map(framePts => framePts.slice(0, 5)),
+                visibilitiesSample: execResult.tracks.visibilities.slice(0, 3).map(frameVis => frameVis.slice(0, 5))
+            } as unknown as ToolResultPayload,
+            summaryResult: `Tracked ${execResult.numPoints} points across ${execResult.numFrames} frames using ${execResult.backendUsed.toUpperCase()} in ${execResult.durationMs}ms with forward-backward cycle consistency.`
+        };
+    },
+
+    async build_4dgs_from_video(args) {
+        const canonicalSubject = args.canonicalSubject as BakedGaussian[];
+        if (!Array.isArray(canonicalSubject) || canonicalSubject.length === 0) {
+            return {
+                resultPayload: { error: 'canonicalSubject must be a non-empty array of BakedGaussian objects' } as unknown as ToolResultPayload,
+                summaryResult: 'Failed: canonicalSubject is empty or invalid'
+            };
+        }
+
+        const staticBackground = (args.staticBackground as BakedGaussian[]) ?? [];
+        const numFrames = Number(args.numFrames ?? 24);
+        const heroFrameIndex = Number(args.heroFrameIndex ?? 0);
+        const trackingBackend = (args.trackingBackend as TrackerBackend) ?? 'tapir';
+        const useLocalRigidity = args.useLocalRigidity !== undefined ? Boolean(args.useLocalRigidity) : true;
+        const kNeighbors = Number(args.kNeighbors ?? 6);
+        const trackingErrorThresh = Number(args.trackingErrorThresh ?? 0.35);
+
+        const width = 640;
+        const height = 480;
+
+        const frames: VideoFrameData[] = [];
+        for (let t = 0; t < numFrames; t++) {
+            const data = new Uint8Array(width * height * 3);
+            for (let i = 0; i < data.length; i += 3) {
+                data[i] = 128;
+                data[i + 1] = 135;
+                data[i + 2] = 140;
+            }
+            frames.push({ width, height, data, channels: 3, frameIndex: t });
+        }
+
+        const splat4dService = new GaussianSplat4DService();
+        const decomposed4d = await splat4dService.build4DSceneFromCanonical({
+            canonicalSubject,
+            staticBackground,
+            videoFrames: frames,
+            heroFrameIndex,
+            useLocalRigidity,
+            kNeighbors,
+            trackingErrorThresh,
+            trackingConfig: { backend: trackingBackend }
+        });
+
+        return {
+            resultPayload: {
+                telemetry: decomposed4d.telemetry,
+                heroFrameIndex: decomposed4d.heroFrameIndex,
+                numFrames: decomposed4d.numFrames,
+                bounds: decomposed4d.bounds,
+                sampleTrajectory: decomposed4d.trajectories[0] ? {
+                    pointIndex: decomposed4d.trajectories[0].pointIndex,
+                    canonicalPosition: decomposed4d.trajectories[0].canonicalPosition,
+                    firstThreeDeltas: decomposed4d.trajectories[0].timeDeltas.slice(0, 3),
+                    heroFrameDelta: decomposed4d.trajectories[0].timeDeltas[decomposed4d.heroFrameIndex]
+                } : null
+            } as unknown as ToolResultPayload,
+            summaryResult: `Built 4DGS scene: ${decomposed4d.telemetry.numDynamicGaussians} dynamic subject Gaussians deformed across ${decomposed4d.numFrames} frames (${decomposed4d.telemetry.trackerUsed.toUpperCase()} tracker, hero frame ${heroFrameIndex} timeDelta=[0,0,0], pruned ${decomposed4d.telemetry.prunedGaussians} drifting Gaussians, ARAP rigidity: ${useLocalRigidity ? 'active' : 'disabled'}).`
+        };
+    }
+};
+

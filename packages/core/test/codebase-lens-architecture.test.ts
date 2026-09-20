@@ -329,6 +329,19 @@ Sprint 42 deliverables and backlog.
     assert.strictEqual(updatedSceneObj.title, 'San Francisco Financial Hub (Enhanced)');
     assert.strictEqual(updatedSceneObj.objects.length, 2);
     assert.strictEqual(updatedSceneObj.objects[1].id, 'obj-drone-camera');
+
+    // Test C++ Procedural Engine source file projection into Scene3DWorldLens
+    const cppCode = `#include "scratchbox_engine.hpp"\nint main() { return 0; }`;
+    assert.strictEqual(sceneLens.canHandle('scenes/world_generator.3d.cpp'), true);
+    assert.strictEqual(sceneLens.canHandle('3d/city.cpp'), true);
+    assert.strictEqual(sceneLens.canHandle('model.glb'), true);
+    const cppProj = sceneLens.project({ 'scenes/world_generator.3d.cpp': cppCode });
+    assert.strictEqual(cppProj.data.cppGenerator?.enabled, true);
+    assert.strictEqual(cppProj.data.cppGenerator?.sourceCode, cppCode);
+
+    const cppUnproj = sceneLens.unproject(cppProj.data, { 'scenes/world_generator.3d.cpp': cppCode });
+    assert.strictEqual(cppUnproj.files['scenes/world_generator.3d.cpp'], cppCode);
+    console.log('    ✓ Scene3DWorldLens C++20 engine source projection verified.');
     console.log('    ✓ Scene3DWorldLens 4D spatial composition roundtrip verified.');
 
     // =========================================================================

@@ -27,6 +27,8 @@ export const DEFAULT_COMMAND_ALLOWLIST = [
     'ls', 'cat', 'echo', 'pwd', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'tsc', 'vitest', 'jest',
     'python3', 'python', 'pip', 'git', 'rg', 'grep', 'find', 'head', 'tail', 'wc', 'mkdir', 'touch',
     'cp', 'mv', 'sed', 'which',
+    // C/C++ 3D Engine & Native Procedural Generators
+    'clang', 'clang++', 'gcc', 'g++', 'make', 'cmake',
     // Harmless helpers used by agents and tests.
     'env', 'printenv', 'sleep', 'exit', 'true', 'false'
 ];

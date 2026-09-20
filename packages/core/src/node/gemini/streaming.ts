@@ -36,6 +36,7 @@ import type { McpBridge } from './mcp-bridge';
 import type { LensBridge } from './lens-bridge';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './prompt-builder';
 import { parseOrSynthesizeArtifact } from './artifact-synthesis';
+import { AgentVerificationService } from './agent-verification-service';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
@@ -411,7 +412,13 @@ export class StreamingEngine {
             }
         };
         if (tools && tools.length > 0) {
-            payload.tools = tools;
+            // Vertex AI constraint: Cannot combine googleSearch or other tools with functionDeclarations
+            const hasFunctionDeclarations = tools.some(t => 'functionDeclarations' in t && Array.isArray(t.functionDeclarations) && t.functionDeclarations.length > 0);
+            if (hasFunctionDeclarations) {
+                payload.tools = tools.filter(t => 'functionDeclarations' in t);
+            } else {
+                payload.tools = tools;
+            }
         }
 
         onEvent({
@@ -423,12 +430,16 @@ export class StreamingEngine {
         const fetchFn = resolveFetch();
         const maxTurns = request.maxTurns || 15;
         let currentTurn = 0;
+        const modifiedFiles = new Set<string>();
+        let verificationAttempts = 0;
+        const maxVerificationAttempts = 2;
 
         let accumulatedText = '';
         const accumulatedThoughts: string[] = [];
         const mcpExecutions: McpExecutionState[] = [];
         let accumulatedGroundingMetadata: GroundingMetadata | undefined;
         let finalUsage: UsageMetadata | undefined;
+        let streamMountedArtifact: CanvasArtifact | undefined = undefined;
 
         const mergeGrounding = (g: GroundingMetadata): void => {
             accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
@@ -474,8 +485,56 @@ export class StreamingEngine {
                 }
             });
 
-            // If no tools requested this turn, generation is complete
+            // If no tools requested this turn, check for planning completion or verification
             if (turnDetectedToolCalls.length === 0) {
+                // In plan mode, emit plan_ready event
+                if (request.mode === 'plan') {
+                    onEvent({
+                        type: 'plan_ready',
+                        planApprovalRequired: request.requirePlanApproval !== false,
+                        text: turnText || accumulatedText,
+                        modelUsed: model
+                    });
+                    break;
+                }
+
+                // In agent mode (or if autoVerify is explicitly requested), verify modified files and self-heal
+                const shouldVerify = (request.mode === 'agent' || request.autoVerify) && (modifiedFiles.size > 0 || request.autoVerify);
+                if (shouldVerify && verificationAttempts < maxVerificationAttempts) {
+                    verificationAttempts++;
+                    onEvent({
+                        type: 'verification_start',
+                        modelUsed: model
+                    });
+
+                    const toolCtx = this.toolContext(request);
+                    const verifier = new AgentVerificationService(toolCtx.lsp, toolCtx.sandbox);
+                    const outcome = await verifier.verify({
+                        workspaceRoot: toolCtx.workspaceRoot,
+                        modifiedFiles: Array.from(modifiedFiles),
+                        runTests: !!request.autoVerify
+                    });
+
+                    onEvent({
+                        type: 'verification_result',
+                        verification: outcome,
+                        modelUsed: model
+                    });
+
+                    if (!outcome.passed) {
+                        // Diagnostic errors detected: initiate self-healing turn
+                        const diagSummary = toolCtx.lsp.synthesizeDiagnosticFixPrompt(Array.from(modifiedFiles));
+                        payload.contents.push({ role: 'model', parts: [{ text: turnText || accumulatedText }] });
+                        payload.contents.push({
+                            role: 'user',
+                            parts: [{
+                                text: `[AUTOMATED COMPILER & VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n${diagSummary.promptContext}\n\nPlease autonomously investigate and fix these errors using workspace tools.`
+                            }]
+                        });
+                        continue;
+                    }
+                }
+
                 break;
             }
 
@@ -496,8 +555,25 @@ export class StreamingEngine {
                     }
                 });
 
+                if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
+                    const fp = (toolCall.args as any)?.filePath;
+                    if (typeof fp === 'string') {
+                        modifiedFiles.add(fp);
+                    }
+                }
+
                 const { exec, resultPayload } = await this.executeToolCall({ id: toolCall.id, name: toolName, args: toolCall.args }, request);
                 mcpExecutions.push(exec);
+
+                if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
+                    const mountedArtifact = (resultPayload as any).artifact as CanvasArtifact;
+                    if (mountedArtifact) {
+                        request.activeArtifact = mountedArtifact;
+                        streamMountedArtifact = mountedArtifact;
+                        onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });
+                        onEvent({ type: 'artifact_complete', artifact: mountedArtifact, modelUsed: model });
+                    }
+                }
 
                 const callId = toolCall.id || `call-${Date.now()}`;
                 const toolResult = { id: callId, name: toolName, result: resultPayload };
@@ -526,7 +602,15 @@ export class StreamingEngine {
             });
         }
 
-        const artifact = this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata);
+        const isCodingMode = request.mode === 'agent' || request.mode === 'plan' || request.mode === 'ask';
+        const hasJsonBlock = /```json\s*\{[\s\S]*\}\s*```/.test(accumulatedText);
+        const hasArtifactTag = /<scratchboxPrimitive[\s\S]*?>/i.test(accumulatedText);
+        const isCanvasCreationPrompt = /3d|scene|world|model|asteroid|flight|plane|spatial|terrain|mesh|sandbox|app\b|component|widget|calculator|preview|landing\s*page|doc\b|document|spec\b|proposal|paper|essay|report|board|kanban|graph\b|flow\b|pipeline|diagram|dashboard|picture|video|generate|create|render|build\s+(?:a|an)|design\s+(?:a|an)|clip|timeline|playhead|ripple|razor|nle|audio\s*mix|track/i.test(request.prompt);
+
+        const shouldSynthesize = !isCodingMode || hasJsonBlock || hasArtifactTag || isCanvasCreationPrompt || !!request.activeArtifact;
+        const artifact = streamMountedArtifact || (shouldSynthesize
+            ? this.synthesizeArtifact(request.prompt, accumulatedText, request, mcpExecutions, accumulatedGroundingMetadata)
+            : undefined);
 
         const summary = {
             text: accumulatedText,
@@ -536,7 +620,9 @@ export class StreamingEngine {
             usage: finalUsage,
             modelUsed: model
         };
-        onEvent({ type: 'artifact_complete', ...summary });
+        if (artifact) {
+            onEvent({ type: 'artifact_complete', ...summary });
+        }
         onEvent({ type: 'done', ...summary });
 
         return {

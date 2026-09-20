@@ -11,21 +11,96 @@
 export { GooglePhotorealistic3DTilesLayer } from './browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
 export type { Google3DTilesLayerOptions } from './browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
 export { Google3DTileService } from './browser/generative-canvas/services/Google3DTileService';
+export { GoogleElevationService } from './browser/generative-canvas/services/google-elevation-service';
+export type {
+    ElevationPoint,
+    ElevationResult,
+    ElevationPathRequest,
+    ElevationCacheEntry
+} from './browser/generative-canvas/services/google-elevation-service';
+export { GoogleSolarService } from './browser/generative-canvas/services/google-solar-service';
+export type {
+    SolarLatLng,
+    SolarBoundingBox,
+    RoofSegmentStats,
+    WholeRoofStats,
+    SolarPotential,
+    BuildingInsightsResponse,
+    DataLayersResponse,
+    RoofTier,
+    RoofFacet3D,
+    GoogleSolarServiceOptions
+} from './browser/generative-canvas/services/google-solar-service';
 export { TerrainManager } from './browser/generative-canvas/services/TerrainManager';
 export { TileClayProcessor, CLAY_PRESETS } from './browser/generative-canvas/services/TileClayProcessor';
 export type { ClayPresetId } from './browser/generative-canvas/services/TileClayProcessor';
 
 // Atmospheric Scattering & Diurnal Lighting Pipeline
 export {
+    AtmosphereService,
     createAtmosphericSkyDome,
+    createAerialPerspectiveEffect,
+    AerialPerspectiveEffect,
+    createTerrainCloudShadows,
+    TerrainCloudShadows,
+    createVolumetricGodRays,
+    VolumetricGodRays,
+    calculateNOAASolarPosition,
+    calculateENUSunVector,
+    getSunVectorFromAngles,
+    calculateJulianDay,
+    classifyDiurnalPhase,
+    computeDiurnalLightingProfile,
+    getDiurnalLightingState,
     getPresetLightingState,
-    getSunVectorFromAngles
+    kelvinToRGB,
+    blackbodyKelvinToLinearRgb,
+    marchVolumetrics,
+    SphericalHarmonics9,
+    henyeyGreensteinPhase,
+    rayleighPhase,
+    dualLobePhase,
+    evaluateDensityAtHeight,
+    computeBeerLambertTransmittance,
+    computeInscatteringRadiance,
+    evaluateAerialPerspective,
+    AtmosphereImageEstimationService,
+    fitPlanckianKelvinTemperature,
+    computeSkyAtmosphereMetrics,
+    WELL_KNOWN_ATMOSPHERE_LANDMARKS,
+    LocationObjectLightingService,
+    harmonizeLocationObjectAtmosphere,
+    generateCanonicalAmbulatoryFixtures,
+    STONE_ALBEDO_PROFILES,
+    LOCATION_DELIGHT_FRAGMENT_CHUNK,
+    LOCATION_DELIGHT_VERTEX_CHUNK,
+    LOCATION_DELIGHT_VERTEX_BODY
 } from './browser/generative-canvas/services/atmosphere';
 export type {
     AtmosphericScatteringConfig,
-    AtmosphericSkyDomeModule
+    AtmosphericSkyDomeModule,
+    AtmosphereHandle,
+    AtmosphereServiceAttachOptions,
+    DiurnalPhase,
+    DiurnalLightingProfile,
+    TimeOfDayPreset,
+    SolarCoordinates,
+    VolumetricGodRaysConfig,
+    VolumetricGodRaysModule,
+    VolumetricMedium,
+    VolumetricResult,
+    AerialPerspectiveOptions,
+    CloudShadowConfig,
+    ImageAtmospherePixelOptions,
+    ImageAtmosphereRequest,
+    AtmosphericEstimationResult,
+    StoneType,
+    DelightUniformsConfig,
+    AtmosphereSceneLightingConfig,
+    ArchitecturalPortalFixtureConfig,
+    LocationObjectAtmosphereRequest,
+    LocationObjectAtmosphereResult
 } from './browser/generative-canvas/services/atmosphere';
-export { AerialPerspectiveEffect } from './browser/generative-canvas/services/atmosphere/AerialPerspectiveEffect';
 
 // 3D Manipulation & Mesh Sculpting Engines
 export {
@@ -54,3 +129,76 @@ export {
 // Client-Side Canvas Controllers & Transformers
 export { ProjectArtifactController } from './browser/generative-canvas/project-artifact-controller';
 export { morphArtifact } from './browser/generative-canvas/primitive-transformer-engine';
+
+// Pro Video / NLE Compositor & Timeline Services
+export * from './browser/generative-canvas/services/video';
+
+// Universal COLMAP Vector Reference Pipeline & Dock (Zero Presets)
+export { ColmapVectorPipeline } from './browser/generative-canvas/services/colmap-vector-pipeline';
+export { ColmapVectorDockService } from './browser/generative-canvas/services/colmap-vector-dock-service';
+export * from './common/spatial/colmap-vector-reference-types';
+
+// WebXR Geospatial Spatial Services & Metric Anchor Bridge
+export * from './browser/generative-canvas/services/xr';
+
+// Optics & Brown-Conrady Lens Distortion Shader Engine
+export {
+    LensDistortionEffect,
+    BrownConradyLensDistortionPass,
+    LENS_DISTORTION_SHADER,
+    LENS_OPTICAL_PRESETS,
+    computeBrownConradyUV,
+    calculateBrownConradyFromFocalLength
+} from './browser/generative-canvas/services/optics/LensDistortionEffect';
+export type {
+    LensDistortionUniforms,
+    LensDistortionConfig,
+    LensOpticalProfile,
+    LensDistortionMode,
+    LensDistortionEdgeMode,
+    LensDistortionFilterQuality
+} from './browser/generative-canvas/services/optics/LensDistortionEffect';
+export {
+    VfxLensInterchangeService
+} from './common/optics/VfxLensInterchangeService';
+export type {
+    VfxLensMetadata,
+    OpenCvCameraCalibration
+} from './common/optics/VfxLensInterchangeService';
+
+// Nano Banana Color Transfer Pipeline (Method 2: Two-Step Extract-then-Apply)
+export {
+    NanoBananaColorService,
+    buildExtractPalettePrompt,
+    parseExtractedPalette,
+    buildApplyPalettePrompt,
+    formatPaletteAsMarkdown,
+    executeTwoStepColorTransfer
+} from './browser/generative-canvas/services/nano-banana-color-service';
+export type {
+    ExtractedColorTone,
+    ShadowHighlightProfile,
+    ExtractedColorPalette,
+    ExtractPalettePromptOptions,
+    ApplyPaletteOptions,
+    TwoStepColorTransferOptions,
+    ColorTransferPlan
+} from './browser/generative-canvas/services/nano-banana-color-service';
+
+// Spatial Generative Runtime Services & 5 Proprietary Moats
+export * from './browser/generative-canvas/services/spatial';
+
+// Cinematic Depth-of-Field & Bokeh Pass
+export {
+    CinematicBokehPass,
+    generatePoissonDiskKernel
+} from './browser/generative-canvas/services/optics/CinematicBokehPass';
+export type {
+    BokehPassParams,
+    CinematicBokehPassOptions,
+    CinematicBokehPassConfig,
+    CinematicBokehUniforms
+} from './browser/generative-canvas/services/optics/CinematicBokehPass';
+
+
+

@@ -80,6 +80,8 @@ export interface SubagentResponse {
     error?: string;
 }
 
+export type InteractionMode = 'agent' | 'plan' | 'ask' | 'studio';
+
 export interface GeminiGenerateRequest {
     prompt: string;
     model?: string;
@@ -108,6 +110,9 @@ export interface GeminiGenerateRequest {
     workspaceRoot?: string;
     targetFiles?: string[];
     turnId?: string;
+    mode?: InteractionMode;
+    requirePlanApproval?: boolean;
+    autoVerify?: boolean;
 }
 
 export type GeminiStreamEventType =
@@ -126,8 +131,34 @@ export type GeminiStreamEventType =
     | 'subagent_done'
     | 'artifact_start'
     | 'artifact_complete'
+    | 'plan_ready'
+    | 'verification_start'
+    | 'verification_result'
     | 'done'
     | 'error';
+
+export interface VerificationDiagnostic {
+    file: string;
+    filePath?: string;
+    line?: number;
+    message: string;
+    severity: 'error' | 'warning';
+    source?: string;
+}
+
+export interface VerificationOutcome {
+    passed: boolean;
+    summary?: string;
+    command?: string;
+    diagnostics?: VerificationDiagnostic[];
+    testOutput?: string;
+    durationMs?: number;
+    commandResult?: {
+        exitCode: number;
+        stdout: string;
+        stderr: string;
+    };
+}
 
 export interface GeminiStreamEvent {
     type: GeminiStreamEventType;
@@ -158,6 +189,8 @@ export interface GeminiStreamEvent {
     };
     modelUsed?: string;
     error?: string;
+    verification?: VerificationOutcome;
+    planApprovalRequired?: boolean;
 }
 
 export interface GeminiGenerateResponse {
@@ -249,9 +282,46 @@ export interface GeminiImageGenerateRequest {
     style?: string;
 }
 
-export interface GeminiVideoGenerateRequest {
-    prompt: string;
-    durationSeconds?: number;
+export interface FimCompletionRequest {
+    prefix: string;
+    suffix: string;
+    fileName?: string;
+    language?: string;
+    maxTokens?: number;
+    temperature?: number;
+    stopSequences?: string[];
+    workspaceRoot?: string;
+}
+
+export interface FimCompletionResponse {
+    success: boolean;
+    completion: string;
+    modelUsed: string;
+    latencyMs?: number;
+    error?: string;
+}
+
+export interface QuickEditRequest {
+    originalCode: string;
+    instruction: string;
+    selection?: {
+        startLine: number;
+        endLine: number;
+        selectedText?: string;
+    };
+    fileName?: string;
+    language?: string;
+    workspaceRoot?: string;
+}
+
+export interface QuickEditResponse {
+    success: boolean;
+    proposedCode: string;
+    diffSummary?: string;
+    additions?: number;
+    deletions?: number;
+    modelUsed?: string;
+    error?: string;
 }
 
 export * from './deep-write/deep-write-protocol';

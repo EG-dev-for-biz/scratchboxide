@@ -19,7 +19,8 @@ import {
 } from '../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import {
     detect3DSceneTheme,
-    detectRealWorldLocationIntent
+    detectRealWorldLocationIntent,
+    generateDefaultCpp3DSource
 } from '../../browser/generative-canvas/procedural-3d-synthesizer';
 
 // ============================================================================
@@ -31,9 +32,14 @@ export type Autonomous3DStageType =
     | 'scaffolding'
     | 'base_geometry'
     | 'modifiers_and_edit'
+    | 'mesh_shaping'
+    | 'particles_fx'
+    | 'scene_assembly'
+    | 'nature_ecosystem'
     | 'materials_and_shading'
     | 'lighting_and_atmosphere'
-    | 'camera_framing_and_dynamics';
+    | 'camera_framing_and_dynamics'
+    | 'cpp_native_generation';
 
 export interface Autonomous3DExpectedStateChecks {
     minObjectCount?: number;
@@ -41,6 +47,12 @@ export interface Autonomous3DExpectedStateChecks {
     requiredMaterials?: string[];
     lightingConfigured?: boolean;
     cameraFramed?: boolean;
+    cppGeneratorConfigured?: boolean;
+    meshDeformationsApplied?: boolean;
+    particlesSimulated?: boolean;
+    sceneAssemblyVerified?: boolean;
+    natureGenerated?: boolean;
+    manifoldTopologyValid?: boolean;
     customVerification?: (scene: Scene3DData, stats?: any) => boolean;
 }
 
@@ -187,15 +199,27 @@ export class DynamicDagPlanner {
             });
         }
 
+        // C/C++ First Directive: Attach modern C++20 procedural generator module
+        const cppSource = generateDefaultCpp3DSource(theme, prompt);
+        scaffoldingOps.push({
+            operator: 'sb_set_cpp_generator',
+            params: {
+                filename: 'world_generator.cpp',
+                sourceCode: cppSource,
+                enabled: true
+            }
+        });
+
         stages.push({
             id: 'stage_01_scaffolding',
             type: 'scaffolding',
             name: 'Phase 1: Scene Foundation & Workspace Layout',
-            description: 'Establish viewport coordinate system, render mode, and scene hierarchy.',
+            description: 'Establish viewport coordinate system, render mode, C++20 procedural module, and scene hierarchy.',
             dependencies: [],
             operators: scaffoldingOps,
             expectedStateChecks: {
-                minObjectCount: isIncremental ? reasoning.initialObjectCount : 0
+                minObjectCount: isIncremental ? reasoning.initialObjectCount : 0,
+                cppGeneratorConfigured: true
             }
         });
 
@@ -299,27 +323,337 @@ export class DynamicDagPlanner {
         });
 
         // --------------------------------------------------------------------
+        // Stage 3b: Master 3D Mesh Shaping & Digital Sculpting
+        // --------------------------------------------------------------------
+        const isMeshShaping = theme === 'mesh-shaping' || /\b(?:mesh\s*shaping|sculpt(?:ing|or|ed)?|taper|twist|bend|ffd\s*lattice|lattice\s*deform|loft(?:ing)?|lathe)\b/i.test(prompt);
+        let lastTopologicalStageId = 'stage_03_modifiers_and_edit';
+
+        if (isMeshShaping && meshBlueprints.length > 0) {
+            const shapingOps: BatchCommand[] = [];
+            const targetMesh = meshBlueprints[0];
+            shapingOps.push({
+                operator: 'sb_taper_mesh',
+                params: { objectId: targetMesh.id, axis: 'y', factor: 0.5, power: 1.2 }
+            });
+            shapingOps.push({
+                operator: 'sb_twist_mesh',
+                params: { objectId: targetMesh.id, axis: 'y', angle: Math.PI * 0.5 }
+            });
+            shapingOps.push({
+                operator: 'sb_sculpt_stroke',
+                params: { objectId: targetMesh.id, brush: 'clay', center: [0, 4, 0], radius: 2.0, strength: 0.4 }
+            });
+            shapingOps.push({
+                operator: 'sb_repair_mesh',
+                params: { objectId: targetMesh.id, weldEpsilon: 1e-4, removeDegenerates: true }
+            });
+
+            stages.push({
+                id: 'stage_03b_mesh_shaping',
+                type: 'mesh_shaping',
+                name: 'Phase 3b: Master 3D Mesh Shaping & Digital Sculpting',
+                description: 'Apply non-linear taper and twist deformers, organic sculpt strokes, and manifold topology repair.',
+                dependencies: ['stage_03_modifiers_and_edit'],
+                operators: shapingOps,
+                expectedStateChecks: {
+                    requiredMeshIds: [targetMesh.id],
+                    meshDeformationsApplied: true
+                }
+            });
+            lastTopologicalStageId = 'stage_03b_mesh_shaping';
+        }
+
+        // --------------------------------------------------------------------
+        // Stage 3c: 3D Particle Dynamics & FX Simulation
+        // --------------------------------------------------------------------
+        const isParticleFx = theme === 'particles' || /\b(?:particles?\s*simulation|particle\s*emitter|particle\s*system|particles?\s*physics|fire\s*vortex|smoke|fountain|sparks|nebula|curl\s*noise|particle\s*fx)\b/i.test(prompt);
+
+        if (isParticleFx) {
+            const particleOps: BatchCommand[] = [];
+            const emitterId = 'emitter_primary_sim';
+
+            particleOps.push({
+                operator: 'sb_spawn_particle_emitter',
+                params: {
+                    emitterId,
+                    name: 'Primary Dynamic Particle Vortex',
+                    shape: 'cone',
+                    position: [0, 0, 0],
+                    direction: [0, 1, 0],
+                    rate: 250,
+                    speedMin: 3.0,
+                    speedMax: 7.0,
+                    lifetimeMin: 1.5,
+                    lifetimeMax: 3.0,
+                    temperatureKelvin: 4800,
+                    maxParticles: 3000
+                }
+            });
+
+            particleOps.push({
+                operator: 'sb_add_force_field',
+                params: {
+                    emitterId,
+                    type: 'vortex',
+                    strength: 4.5,
+                    center: [0, 0, 0],
+                    axis: [0, 1, 0]
+                }
+            });
+
+            particleOps.push({
+                operator: 'sb_add_force_field',
+                params: {
+                    emitterId,
+                    type: 'curl_noise',
+                    strength: 2.5
+                }
+            });
+
+            particleOps.push({
+                operator: 'sb_add_particle_collider',
+                params: {
+                    emitterId,
+                    type: 'plane',
+                    position: [0, 0, 0],
+                    normal: [0, 1, 0],
+                    restitution: 0.65,
+                    friction: 0.2
+                }
+            });
+
+            particleOps.push({
+                operator: 'sb_simulate_particles',
+                params: {
+                    emitterId,
+                    dt: 0.016,
+                    steps: 30,
+                    integrator: 'rk4'
+                }
+            });
+
+            particleOps.push({
+                operator: 'sb_bake_particle_cache',
+                params: {
+                    emitterId,
+                    duration: 2.0,
+                    fps: 30
+                }
+            });
+
+            stages.push({
+                id: 'stage_03c_particles_and_fx',
+                type: 'particles_fx',
+                name: 'Phase 3c: 3D Particle Dynamics & FX Simulation',
+                description: 'Spawn vortex particle emitters, attach divergence-free curl noise, enforce plane collisions, and step RK4 integrator.',
+                dependencies: [lastTopologicalStageId],
+                operators: particleOps,
+                expectedStateChecks: {
+                    particlesSimulated: true
+                }
+            });
+            lastTopologicalStageId = 'stage_03c_particles_and_fx';
+        }
+
+        // --------------------------------------------------------------------
+        // Stage 3d: Universal Scene Assembly, Curvature AO & Clutter Scattering
+        // --------------------------------------------------------------------
+        const isUniversalScene = theme === 'universal_scene' || /\b(?:universal\s*scene|entire\s*scene|full\s*scene|scene\s*assembly|build\s*anything|photoreal(?:ism|istic)\s*scene|hero\s*prop|weathering|scatter\s*props|clutter|pedestal)\b/i.test(prompt);
+
+        if (isUniversalScene && meshBlueprints.length > 0) {
+            const assemblyOps: BatchCommand[] = [];
+            const primaryMesh = meshBlueprints[0];
+
+            // 1. Bake Curvature and Crevice AO masks
+            assemblyOps.push({
+                operator: 'sb_bake_curvature_ao',
+                params: {
+                    targetMeshId: primaryMesh.id,
+                    pointinessContrast: 3.5,
+                    cavityContrast: 4.0,
+                    ambientOcclusionStrength: 0.8
+                }
+            });
+
+            // 2. Apply Multi-Layer PBR Weathering (Base coat + worn edge metal + cavity grime)
+            assemblyOps.push({
+                operator: 'sb_apply_multi_layer_weathering',
+                params: {
+                    targetMeshId: primaryMesh.id,
+                    baseColor: '#1e2430',
+                    baseMetallic: 0.2,
+                    baseRoughness: 0.45,
+                    wornEdgeColor: '#ffd700',
+                    wornEdgeMetallic: 0.98,
+                    wornEdgeRoughness: 0.15,
+                    creviceDirtColor: '#0a0806',
+                    creviceDirtRoughness: 0.92,
+                    edgeWearThreshold: 0.35,
+                    creviceDirtThreshold: 0.25
+                }
+            });
+
+            // 3. Scatter Surface Micro-Props & Clutter Debris
+            assemblyOps.push({
+                operator: 'sb_scatter_props',
+                params: {
+                    targetMeshId: primaryMesh.id,
+                    propType: 'box',
+                    count: 32,
+                    minScale: 0.05,
+                    maxScale: 0.16,
+                    spreadRadius: 3.0,
+                    materialPreset: 'rough_basalt_rock'
+                }
+            });
+
+            // 4. Setup Calibrated Cinematic Studio Lighting Rig
+            assemblyOps.push({
+                operator: 'sb_setup_cinematic_lighting',
+                params: {
+                    rigScale: 5.5,
+                    targetCenter: [0, 1.2, 0],
+                    keyKelvin: 5600,
+                    fillRatio: 0.35,
+                    rimIntensity: 2.4
+                }
+            });
+
+            stages.push({
+                id: 'stage_03d_scene_assembly',
+                type: 'scene_assembly',
+                name: 'Phase 3d: Universal Scene Hierarchy, Curvature AO & Clutter Scattering',
+                description: 'Extract vertex curvature AO masks, apply 3-layer PBR weathering, scatter Poisson-disk debris, and configure cinematic 3-point Kelvin lighting.',
+                dependencies: [lastTopologicalStageId],
+                operators: assemblyOps,
+                expectedStateChecks: {
+                    sceneAssemblyVerified: true
+                }
+            });
+            lastTopologicalStageId = 'stage_03d_scene_assembly';
+        }
+
+        // --------------------------------------------------------------------
+        // Stage 3e: Nature & Ecosystem Generation (L-Systems & Stratified Biome)
+        // --------------------------------------------------------------------
+        const isNatureEcosystem = theme === 'nature_atmosphere' || /\b(?:nature|forest|trees?|l_system|vegetation|foliage|leaves|biome|stratified|cliff\s*strata|rock\s*strata|mountain\s*plateau|atmosphere|volumetric|fog|god\s*rays|subsurface|sss|triplanar|moss)\b/i.test(prompt);
+
+        if (isNatureEcosystem) {
+            const natureOps: BatchCommand[] = [];
+
+            // 1. Generate Stratified Biome Terrain
+            natureOps.push({
+                operator: 'sb_generate_biome_terrain',
+                params: {
+                    width: 24.0,
+                    depth: 24.0,
+                    resolution: 48,
+                    maxElevation: 4.2,
+                    rockSlopeThreshold: 36.0,
+                    seed: 777
+                }
+            });
+
+            // 2. Synthesize Stochastic L-System Trees
+            natureOps.push({
+                operator: 'sb_generate_l_system_vegetation',
+                params: {
+                    treeType: 'oak',
+                    position: [-4.5, 1.2, -3.0],
+                    maxDepth: 4,
+                    initialLength: 3.6,
+                    initialRadius: 0.36,
+                    branchAngle: 32.0,
+                    childrenPerNode: 3,
+                    leafSize: 0.42,
+                    seed: 42
+                }
+            });
+
+            natureOps.push({
+                operator: 'sb_generate_l_system_vegetation',
+                params: {
+                    treeType: 'oak',
+                    position: [4.2, 1.4, -2.5],
+                    maxDepth: 4,
+                    initialLength: 3.2,
+                    initialRadius: 0.32,
+                    branchAngle: 30.0,
+                    childrenPerNode: 3,
+                    leafSize: 0.40,
+                    seed: 999
+                }
+            });
+
+            // 3. Transfer Smooth Envelope Normals onto Foliage Cards (Blender Data Transfer technique)
+            natureOps.push({
+                operator: 'sb_transfer_foliage_normals',
+                params: {
+                    targetMeshId: 'foliage_cards',
+                    mixFactor: 1.0,
+                    upwardBias: 0.20
+                }
+            });
+
+            stages.push({
+                id: 'stage_03e_nature_and_ecosystem',
+                type: 'nature_ecosystem',
+                name: 'Phase 3e: Procedural Nature, L-System Vegetation & Biome Terrain',
+                description: 'Generate stratified biome terrain with rock-strata slope masking and stochastic L-system trees with foliage.',
+                dependencies: [lastTopologicalStageId],
+                operators: natureOps,
+                expectedStateChecks: {
+                    natureGenerated: true
+                }
+            });
+            lastTopologicalStageId = 'stage_03e_nature_and_ecosystem';
+        }
+
+        // --------------------------------------------------------------------
         // Stage 4: Materials & PBR Shading
         // --------------------------------------------------------------------
         const materialOps: BatchCommand[] = [];
         const requiredMaterials: string[] = [];
 
         for (const bp of meshBlueprints) {
+            // Generate MikkTSpace orthonormal tangents for high-fidelity normal mapping
+            materialOps.push({
+                operator: 'sb_generate_mikktspace_tangents',
+                params: {
+                    targetId: bp.id
+                }
+            });
+
             if (bp.material) {
                 const matId = `mat-${bp.id}`;
                 requiredMaterials.push(matId);
+                const matAny = bp.material as any;
                 materialOps.push({
                     operator: 'sb_create_material',
                     params: {
                         materialId: matId,
-                        name: `${bp.name} PBR Material`,
+                        id: matId,
+                        name: `${bp.name} Material`,
+                        preset: matAny.preset,
                         color: bp.material.color,
                         roughness: bp.material.roughness,
                         metalness: bp.material.metalness,
                         transmission: bp.material.transmission,
                         ior: bp.material.ior,
                         emissive: bp.material.emissive,
-                        clearcoat: bp.material.clearcoat
+                        clearcoat: bp.material.clearcoat,
+                        clearcoatRoughness: matAny.clearcoatRoughness,
+                        thickness: matAny.thickness,
+                        attenuationColor: matAny.attenuationColor,
+                        attenuationDistance: matAny.attenuationDistance,
+                        sheenColor: matAny.sheenColor,
+                        sheenRoughness: matAny.sheenRoughness,
+                        anisotropy: matAny.anisotropy,
+                        anisotropyRotation: matAny.anisotropyRotation,
+                        iridescence: matAny.iridescence,
+                        iridescenceIor: matAny.iridescenceIor,
+                        iridescenceThicknessMin: matAny.iridescenceThicknessMin,
+                        iridescenceThicknessMax: matAny.iridescenceThicknessMax
                     }
                 });
                 materialOps.push({
@@ -332,12 +666,32 @@ export class DynamicDagPlanner {
             }
         }
 
+        if (isNatureEcosystem) {
+            materialOps.push({
+                operator: 'sb_apply_triplanar_material',
+                params: {
+                    materialType: 'rock_strata',
+                    sharpness: 5.0,
+                    scale: 1.8
+                }
+            });
+            materialOps.push({
+                operator: 'sb_set_subsurface_scattering',
+                params: {
+                    targetMeshId: 'foliage_cards',
+                    profile: 'green_leaf',
+                    thinWall: true,
+                    weight: 1.0
+                }
+            });
+        }
+
         stages.push({
             id: 'stage_04_materials_and_shading',
             type: 'materials_and_shading',
-            name: 'Phase 4: Physically Based Materials & Surface Shading',
-            description: 'Synthesize PBR material assets (microfacet roughness, metallic response, transmission, clearcoat) and assign across scene meshes.',
-            dependencies: ['stage_03_modifiers_and_edit'],
+            name: 'Phase 4: Photorealistic PBR Next Materials & Weathering',
+            description: 'Synthesize microfacet BRDF materials with clearcoat, transmission, sheen, anisotropy, thin-wall foliage transmission, and cavity AO.',
+            dependencies: [lastTopologicalStageId],
             operators: materialOps,
             expectedStateChecks: {
                 requiredMaterials,
@@ -367,6 +721,39 @@ export class DynamicDagPlanner {
                 params: lightingParams
             }
         ];
+
+        // Gap 4: Setup Spherical Harmonics Image-Based Lighting (IBL) & ACES Filmic Tonemapping
+        const iblPreset = theme === 'nature_atmosphere' ? 'golden_hour' :
+                          (theme === 'city' ? 'cyberpunk_neon' : 'clear_daylight');
+        lightingOps.push({
+            operator: 'sb_setup_image_based_lighting',
+            params: {
+                preset: iblPreset,
+                intensity: 1.0
+            }
+        });
+        lightingOps.push({
+            operator: 'sb_apply_aces_tonemapping',
+            params: {
+                curve: 'aces',
+                exposure: 1.05,
+                vignette: 0.32
+            }
+        });
+
+        if (isNatureEcosystem || /\b(?:fog|haze|mist|volumetric|atmosphere|god\s*rays)\b/i.test(prompt)) {
+            lightingOps.push({
+                operator: 'sb_add_volumetric_fog',
+                params: {
+                    density: 0.042,
+                    scatteringColor: '#f5d8a0',
+                    anisotropy: 0.76,
+                    heightScale: 4.5,
+                    groundLevel: 0.0,
+                    godRaysEnabled: true
+                }
+            });
+        }
 
         stages.push({
             id: 'stage_05_lighting_and_atmosphere',
@@ -634,6 +1021,75 @@ export class DynamicDagPlanner {
             };
         }
 
+        // 7. C++ Procedural Generator check (C/C++ First directive)
+        if (checks.cppGeneratorConfigured && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
+            return {
+                passed: false,
+                details: 'C++ procedural generator module was not configured in scene state (C/C++ First directive).',
+                sceneStats
+            };
+        }
+
+        // 8. Mesh Deformations check
+        if (checks.meshDeformationsApplied) {
+            const allMeshes = [...(scene.customMeshes || [])];
+            const hasDeformed = allMeshes.some((m: any) =>
+                (m.deformations && m.deformations.length > 0) ||
+                (m.sculptStrokes && m.sculptStrokes.length > 0) ||
+                m.geometry?.type === 'loop_subdivided' ||
+                m.geometry?.type === 'lofted' ||
+                m.geometry?.type === 'lathed' ||
+                m.topologyCleaned
+            );
+            if (!hasDeformed) {
+                return {
+                    passed: false,
+                    details: 'Expected mesh deformations (taper/twist/bend/lattice/sculpt/subdivision) were not applied to any scene mesh.',
+                    sceneStats
+                };
+            }
+        }
+
+        // 9. Particle Simulation check
+        if (checks.particlesSimulated) {
+            const particleSystems = (scene as any).particleSystems || [];
+            const hasSimulated = particleSystems.some((sys: any) => (sys.simulationTime || 0) > 0 || (sys.particleCount || 0) > 0);
+            if (!hasSimulated) {
+                return {
+                    passed: false,
+                    details: 'Expected particle simulation was not executed or produced 0 active particles.',
+                    sceneStats
+                };
+            }
+        }
+
+        // 10. Universal Scene Assembly & Photorealism check
+        if (checks.sceneAssemblyVerified) {
+            const allMeshes = [...(scene.customMeshes || [])];
+            const hasWeathering = allMeshes.some((m: any) => m.weathering || m.material?.weathering);
+            const hasCurvatureAo = allMeshes.some((m: any) => m.vertexColorMasks?.pointinessBaked || m.vertexColorMasks?.cavityAoBaked);
+            if (!hasWeathering && !hasCurvatureAo) {
+                return {
+                    passed: false,
+                    details: 'Expected scene assembly features (curvature/cavity AO baking or multi-layer PBR weathering) were not applied.',
+                    sceneStats
+                };
+            }
+        }
+
+        // 11. Nature & Ecosystem Generation check
+        if (checks.natureGenerated) {
+            const allMeshes = [...(scene.customMeshes || [])];
+            const hasNatureOrTerrain = allMeshes.some((m: any) => m.generator?.algorithm === 'l_system' || m.terrainParams !== undefined);
+            if (!hasNatureOrTerrain) {
+                return {
+                    passed: false,
+                    details: 'Expected nature and ecosystem features (L-system trees or stratified biome terrain) were not found.',
+                    sceneStats
+                };
+            }
+        }
+
         return {
             passed: true,
             details: `Stage '${stage.name}' successfully verified all invariants.`,
@@ -886,16 +1342,93 @@ export class DynamicDagPlanner {
             ];
         }
 
-        // Default General Spatial Scene Blueprint
+        if (theme === 'mesh-shaping') {
+            return [
+                {
+                    id: `${prefix}-shaped-sculpture`,
+                    name: 'Parametrically Shaped Kinetic Form',
+                    type: 'box',
+                    position: [0, 4, 0],
+                    rotation: [0, 0, 0],
+                    scale: [3, 8, 3],
+                    material: { color: 0x64b5f6, roughness: 0.25, metalness: 0.8 },
+                    subdivisions: 1
+                },
+                {
+                    id: `${prefix}-plinth`,
+                    name: 'Exhibition Plinth',
+                    type: 'cylinder',
+                    position: [0, 0.4, 0],
+                    rotation: [0, 0, 0],
+                    scale: [5, 0.8, 5],
+                    material: { color: 0x1e293b, roughness: 0.7, metalness: 0.2 }
+                }
+            ];
+        }
+
+        if (theme === 'universal_scene') {
+            return [
+                {
+                    id: `${prefix}-reactor-core`,
+                    name: 'Hero Quantum Reactor Core',
+                    type: 'cylinder',
+                    position: [0, 1.2, 0],
+                    rotation: [0, 0, 0],
+                    scale: [0.8, 2.2, 0.8],
+                    material: { color: 0xd0d8e2, roughness: 0.22, metalness: 0.95, preset: 'titanium_grade5' },
+                    subdivisions: 1
+                },
+                {
+                    id: `${prefix}-containment-ring-top`,
+                    name: 'Magnetic Torus Ring Upper',
+                    type: 'cylinder',
+                    position: [0, 1.6, 0],
+                    rotation: [0, 0, 0],
+                    scale: [1.4, 0.22, 1.4],
+                    material: { color: 0xffd700, roughness: 0.15, metalness: 0.98, preset: 'polished_gold_24k' }
+                },
+                {
+                    id: `${prefix}-containment-ring-bottom`,
+                    name: 'Magnetic Torus Ring Lower',
+                    type: 'cylinder',
+                    position: [0, 0.8, 0],
+                    rotation: [0, 0, 0],
+                    scale: [1.4, 0.22, 1.4],
+                    material: { color: 0xffd700, roughness: 0.15, metalness: 0.98, preset: 'polished_gold_24k' }
+                },
+                {
+                    id: `${prefix}-plasma-core`,
+                    name: 'Plasma Energy Core',
+                    type: 'sphere',
+                    position: [0, 1.2, 0],
+                    rotation: [0, 0, 0],
+                    scale: [0.45, 0.45, 0.45],
+                    material: { color: 0x1af0ff, roughness: 0.05, metalness: 0.0, emissive: 0x33ccff }
+                },
+                {
+                    id: `${prefix}-studio-pedestal`,
+                    name: 'Exhibition Studio Pedestal',
+                    type: 'cylinder',
+                    position: [0, -0.125, 0],
+                    rotation: [0, 0, 0],
+                    scale: [3.5, 0.25, 3.5],
+                    material: { color: 0x121418, roughness: 0.25, metalness: 0.06, preset: 'black_onyx' }
+                }
+            ];
+        }
+
+        // Default Contextual Spatial Scene Blueprint
+        const cleanPrompt = prompt.replace(/^[\s\W]*(build|create|generate|make|render)?\s*/i, '').trim();
+        const focalName = cleanPrompt ? `${cleanPrompt.slice(0, 32)} Spatial Anchor` : 'Contextual Spatial Anchor';
         return [
             {
                 id: `${prefix}-spatial-core`,
-                name: 'Central Spatial Monolith',
+                name: focalName,
                 type: 'box',
-                position: [0, 3, 0],
+                position: [0, 2.5, 0],
                 rotation: [0, 0, 0],
-                scale: [4, 6, 4],
-                material: { color: 0x00f3ff, roughness: 0.2, metalness: 0.9 },
+                scale: [3.5, 5, 3.5],
+                material: { color: 0x38bdf8, roughness: 0.3, metalness: 0.7 },
                 subdivisions: 1,
                 modifiers: [{ type: 'bevel', params: { offset: 0.1 } }]
             },
@@ -962,6 +1495,15 @@ export class DynamicDagPlanner {
                     ambientIntensity: 0.6,
                     keyLight: { color: 0xfffaf0, intensity: 1.6, position: [30, 40, 20] },
                     fillLight: { color: 0x38bdf8, intensity: 0.7, position: [-20, 10, -20] }
+                };
+            case 'universal_scene':
+            case 'pbr':
+                return {
+                    preset: 'cinematic_3point_studio',
+                    ambientIntensity: 0.35,
+                    keyLight: { color: 0xfff2e0, intensity: 1.8, position: [3.5, 4.0, 3.5] },
+                    fillLight: { color: 0xc0d8ff, intensity: 0.65, position: [-4.0, 2.0, 2.5] },
+                    rimLight: { color: 0xf0f5ff, intensity: 2.4, position: [-1.5, 4.5, -4.5] }
                 };
             default:
                 return {

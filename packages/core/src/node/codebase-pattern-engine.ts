@@ -26,6 +26,11 @@ import {
 } from '../common/pattern-matching-protocol';
 export class CodebasePatternEngine {
     private analysisCache: Map<string, CodebasePatternAnalysis> = new Map();
+    private lastAnalysis?: CodebasePatternAnalysis;
+
+    public getLastAnalysis(): CodebasePatternAnalysis | undefined {
+        return this.lastAnalysis;
+    }
 
     /**
      * Analyzes codebase conventions across an active workspace directory and returns
@@ -45,38 +50,55 @@ export class CodebasePatternEngine {
 
         const walk = async (dir: string): Promise<void> => {
             if (files.length >= sampleLimit) return;
-            if (!await fs.pathExists(dir)) return;
+            try {
+                if (!await fs.pathExists(dir)) return;
 
-            const entries = await fs.readdir(dir);
-            for (const entry of entries) {
-                if (files.length >= sampleLimit) break;
-                const fullPath = path.join(dir, entry);
-                const relPath = path.relative(workspaceRoot, fullPath).replace(/\\/g, '/');
+                const entries = await fs.readdir(dir);
+                for (const entry of entries) {
+                    if (files.length >= sampleLimit) break;
+                    try {
+                        const fullPath = path.join(dir, entry);
+                        const relPath = path.relative(workspaceRoot, fullPath).replace(/\\/g, '/');
 
-                const stat = await fs.stat(fullPath);
-                if (stat.isDirectory()) {
-                    if (['node_modules', '.git', 'dist', 'lib', 'build', '.cache', '.turbo', '.next'].includes(entry)) {
-                        continue;
-                    }
-                    await walk(fullPath);
-                } else if (stat.isFile()) {
-                    const ext = path.extname(entry).toLowerCase();
-                    if (['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go'].includes(ext)) {
-                        if (options.sampleFiles && !options.sampleFiles.includes(relPath)) {
-                            continue;
+                        const stat = await fs.stat(fullPath);
+                        if (stat.isDirectory()) {
+                            if (['node_modules', '.git', 'dist', 'lib', 'build', '.cache', '.turbo', '.next', '.scratchbox', '.cursor'].includes(entry) || entry.startsWith('.')) {
+                                continue;
+                            }
+                            await walk(fullPath);
+                        } else if (stat.isFile()) {
+                            const ext = path.extname(entry).toLowerCase();
+                            if (['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go'].includes(ext)) {
+                                if (options.sampleFiles && !options.sampleFiles.includes(relPath)) {
+                                    continue;
+                                }
+                                try {
+                                    const content = await fs.readFile(fullPath, 'utf8');
+                                    files.push({ path: relPath, content });
+                                } catch {
+                                    // Skip unreadable files
+                                }
+                            }
                         }
-                        try {
-                            const content = await fs.readFile(fullPath, 'utf8');
-                            files.push({ path: relPath, content });
-                        } catch {
-                            // Skip unreadable files
-                        }
+                    } catch {
+                        // Skip unreadable entries safely
                     }
                 }
+            } catch {
+                // Skip unreadable directories safely
             }
         };
 
-        await walk(workspaceRoot);
+        try {
+            await walk(workspaceRoot);
+        } catch {
+            // Workspace walk failure fallback
+        }
+
+        if (files.length === 0 && this.lastAnalysis) {
+            return this.lastAnalysis;
+        }
+
         const analysis = this.analyzeFilesPatterns(files, workspaceRoot, options);
         this.analysisCache.set(workspaceRoot, analysis);
         return analysis;
@@ -327,7 +349,7 @@ export class CodebasePatternEngine {
 
         const summaryPromptContext = summaryLines.join('\n');
 
-        return {
+        const analysis: CodebasePatternAnalysis = {
             workspaceRoot,
             primaryLanguages: Array.from(languages),
             naming,
@@ -340,6 +362,13 @@ export class CodebasePatternEngine {
             analyzedFilesCount: files.length,
             lastAnalyzed: Date.now()
         };
+
+        this.lastAnalysis = analysis;
+        if (workspaceRoot) {
+            this.analysisCache.set(workspaceRoot, analysis);
+        }
+
+        return analysis;
     }
 
     /**

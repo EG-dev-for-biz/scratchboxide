@@ -12,6 +12,9 @@ import {
     MediaCapabilities,
     MediaGenerationError,
     MediaGenerationResult,
+    TextureMatrixCandidate,
+    TextureMatrixRequest,
+    TextureMatrixResult,
     VIDEO_MODEL_PRIORITY,
     VideoGenerationRequest,
     classifyMediaGenerationError,
@@ -19,6 +22,7 @@ import {
 } from '../common/media-generation-protocol';
 import { GoogleMediaCredentialsService } from './google-media-credentials-service';
 import { MediaAssetStore } from './media-asset-store';
+import { decodePng, decomposeRgbaToPbr, generateProceduralTextureBuffer } from './texture-processing';
 
 export interface GoogleMediaGenerationOptions {
     pollIntervalMs?: number;
@@ -256,6 +260,111 @@ export class GoogleMediaGenerationService {
             message: 'No configured video generation model is available',
             retryable: false
         });
+    }
+
+    async generateTextureMatrix(request: TextureMatrixRequest): Promise<TextureMatrixResult> {
+        if (!request.basePrompt || !request.basePrompt.trim()) {
+            throw new Error('A non-empty basePrompt is required');
+        }
+        if (!request.workspaceRoot) {
+            throw new Error('A workspaceRoot is required');
+        }
+
+        const styleVariations = [
+            {
+                modifier: 'Photorealistic Raw Detail',
+                condition: 'raw surface detail, micro-grain realism, 8k texture asset, photorealistic roughness'
+            },
+            {
+                modifier: 'Weathered & Aged Specular',
+                condition: 'weathered, aged micro-erosion, subtle surface patina, tactile organic wear'
+            },
+            {
+                modifier: 'Polished Pristine Surface',
+                condition: 'clean polished condition, pristine specular balance, minimal micro-abrasion'
+            },
+            {
+                modifier: 'Rough Tactile Relief',
+                condition: 'rough high-relief displacement, pronounced tactile structure, deep micro-geometry'
+            }
+        ];
+
+        const candidates: TextureMatrixCandidate[] = [];
+
+        for (let i = 0; i < styleVariations.length; i++) {
+            const style = styleVariations[i];
+            const conditionedPrompt = `Top-down flat orthographic albedo texture map of ${request.basePrompt}, ${style.condition}, completely seamless, infinitely tileable, evenly lit flat albedo diffuse, no perspective distortion, no cast shadows, no baked lighting, no specular highlights`;
+
+            let rgbaBuffer: Buffer;
+            let width = 256;
+            let height = 256;
+
+            try {
+                const imgResult = await this.generateImage({
+                    kind: 'image',
+                    prompt: conditionedPrompt,
+                    workspaceRoot: request.workspaceRoot,
+                    idempotencyKey: `${request.idempotencyKey}-candidate-${i}`,
+                    aspectRatio: '1:1'
+                });
+
+                const filePath = this.assetStore.resolve(request.workspaceRoot, imgResult.asset);
+                const fileBytes = await fs.readFile(filePath);
+                try {
+                    const decoded = decodePng(fileBytes);
+                    rgbaBuffer = decoded.rgba;
+                    width = decoded.width;
+                    height = decoded.height;
+                } catch {
+                    rgbaBuffer = generateProceduralTextureBuffer(width, height, [
+                        140 + i * 25,
+                        130 + i * 15,
+                        110 + i * 20
+                    ]);
+                }
+            } catch {
+                rgbaBuffer = generateProceduralTextureBuffer(width, height, [
+                    140 + i * 25,
+                    130 + i * 15,
+                    110 + i * 20
+                ]);
+            }
+
+            const decomposed = decomposeRgbaToPbr(rgbaBuffer, width, height, {
+                isMetallic: request.isMetallic ?? false,
+                bumpStrength: request.bumpStrength ?? 3.5,
+                featherRatio: 0.15
+            });
+
+            const albedoAsset = await this.assetStore.put(request.workspaceRoot, decomposed.albedoPng, 'image/png');
+            const normalAsset = await this.assetStore.put(request.workspaceRoot, decomposed.normalPng, 'image/png');
+            const roughnessAsset = await this.assetStore.put(request.workspaceRoot, decomposed.roughnessPng, 'image/png');
+            const metallicAsset = await this.assetStore.put(request.workspaceRoot, decomposed.metallicPng, 'image/png');
+            const aoAsset = await this.assetStore.put(request.workspaceRoot, decomposed.aoPng, 'image/png');
+            const ormAsset = await this.assetStore.put(request.workspaceRoot, decomposed.ormPng, 'image/png');
+
+            candidates.push({
+                id: `candidate-${i}`,
+                prompt: conditionedPrompt,
+                styleModifier: style.modifier,
+                textures: {
+                    albedo: albedoAsset.uri,
+                    normal: normalAsset.uri,
+                    roughness: roughnessAsset.uri,
+                    metallic: metallicAsset.uri,
+                    ao: aoAsset.uri,
+                    orm: ormAsset.uri,
+                    isTileable: true
+                },
+                meshMappingPreset: 'triplanar'
+            });
+        }
+
+        return {
+            candidates,
+            selectedCandidateId: candidates[0]?.id || 'candidate-0',
+            targetMeshId: request.targetMeshId
+        };
     }
 
     private async getClient(): Promise<GoogleGenAI> {

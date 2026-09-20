@@ -34,7 +34,10 @@ async function runDeepWriteIntelligentPlanningTests() {
     await fs.ensureDir(tempWorkspace);
 
     // 1. Initialize Core Supporting Services
-    const memoriesService = new UserMemoriesService();
+    const memoriesService = new UserMemoriesService({
+        globalStorePath: path.join(tempWorkspace, 'memories.json'),
+        defaultWorkspaceRoot: tempWorkspace
+    });
     const contextGraph = new ProjectContextGraphService();
     const configService = new WorkspaceConfigService();
     const watcherService = new WorkspaceFileWatcherService();

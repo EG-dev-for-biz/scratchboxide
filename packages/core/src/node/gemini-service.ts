@@ -11,18 +11,24 @@ import * as os from 'os';
 import * as path from 'path';
 import type { GoogleAuth } from 'google-auth-library';
 import {
+    FimCompletionRequest,
+    FimCompletionResponse,
     GeminiGenerateRequest,
     GeminiGenerateResponse,
     GeminiStatus,
     GeminiStreamEvent,
     GroundingMetadata,
     McpPingResponse,
+    QuickEditRequest,
+    QuickEditResponse,
     SaveCredentialsResponse,
     SubagentRequest,
     SubagentResponse,
     GeminiTtsRequest,
     GeminiTtsResponse
 } from '../common/gemini-protocol';
+import { FimCompletionService } from './fim-completion-service';
+import { QuickEditService } from './quick-edit-service';
 import {
     CanvasArtifact,
     MarkdownDocumentData,
@@ -104,6 +110,8 @@ export class GeminiService {
     private readonly lens: LensBridge = new LensBridge();
     private readonly mcp: McpBridge = new McpBridge();
     private readonly toolRegistry: ToolRegistry = createDefaultToolRegistry();
+    private readonly fimService: FimCompletionService = new FimCompletionService(this.client);
+    private readonly quickEditService: QuickEditService = new QuickEditService(this.client);
     private readonly swarm: SwarmBridge = new SwarmBridge({
         client: this.client,
         subagentExecutor: this,
@@ -251,7 +259,8 @@ export class GeminiService {
             lsp: this.getLspFeedbackService(),
             contextGraph: this.getContextGraphService(),
             browserProxy: this.getBrowserProxy(),
-            lens: this.lens
+            lens: this.lens,
+            executeSubagent: req => this.executeSubagentTask(req)
         };
     }
 
@@ -444,6 +453,20 @@ export class GeminiService {
             throw new Error('Request aborted by client');
         }
         return this.streaming.streamGenerate(request, onEvent, signal);
+    }
+
+    /**
+     * Complete code in-line using Fill-In-The-Middle (Scratchbox Tab Autocomplete).
+     */
+    async completeFim(request: FimCompletionRequest): Promise<FimCompletionResponse> {
+        return this.fimService.complete(request);
+    }
+
+    /**
+     * Transform in-editor code via instruction and return diff (Scratchbox ⌘K Studio Refactor).
+     */
+    async quickEditCode(request: QuickEditRequest): Promise<QuickEditResponse> {
+        return this.quickEditService.executeQuickEdit(request);
     }
 
     // ------------------------------------------------------------------

@@ -81,7 +81,7 @@ export class PrimitiveSynthesizer {
             {
                 id: 'sec-summary',
                 type: 'callout',
-                calloutTitle: 'Executive Summary',
+                calloutTitle: `System Architecture & Strategic Objectives: ${projectName}`,
                 calloutType: 'info',
                 content: `Exhaustive planning spec autonomously compiled for "${projectName}". Includes architectural patterns, platform scopes, and comprehensive deliverables.`
             }

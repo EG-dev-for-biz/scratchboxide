@@ -392,6 +392,119 @@ export class GeminiClient {
         return `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/agents/${agent}:interact?alt=sse`;
     }
 
+    /**
+     * Direct non-streaming request to Vertex AI or AI Studio REST endpoint.
+     * Used by lightweight services such as FIM completion and ⌘K quick edit.
+     */
+    async fetchVertexOrAistudio(
+        model: string,
+        contents: unknown[],
+        systemInstruction?: string,
+        generationConfig?: {
+            temperature?: number;
+            maxOutputTokens?: number;
+            stopSequences?: string[];
+        }
+    ): Promise<VertexGenerateContentJson> {
+        const fetchFn = resolveFetch();
+        const payload: Record<string, unknown> = {
+            contents,
+            generationConfig: {
+                temperature: generationConfig?.temperature ?? 0.2,
+                maxOutputTokens: generationConfig?.maxOutputTokens ?? 2048,
+                ...(generationConfig?.stopSequences ? { stopSequences: generationConfig.stopSequences } : {})
+            }
+        };
+
+        if (systemInstruction) {
+            payload.systemInstruction = {
+                role: 'system',
+                parts: [{ text: systemInstruction }]
+            };
+        }
+
+        // Try Vertex AI first if service account authenticated
+        if (this.ensureAuth() && this.auth && this.cachedProjectId) {
+            try {
+                const { token, projectId } = await this.getAccessToken();
+                const url = this.vertexModelUrl(projectId, model, 'generateContent');
+                const resp = await fetchFn(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                if (resp.ok) {
+                    return (await resp.json()) as VertexGenerateContentJson;
+                }
+            } catch {
+                // Fall through to AI Studio API key
+            }
+        }
+
+        // Fallback to AI Studio Gemini API key
+        const apiKey = await this.resolveApiKey();
+        if (apiKey) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const resp = await fetchFn(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            if (resp.ok) {
+                return (await resp.json()) as VertexGenerateContentJson;
+            }
+            const errText = await resp.text();
+            throw new Error(`AI Studio API error (${resp.status}): ${errText}`);
+        }
+
+        throw new Error('No Google Cloud service account or Gemini API key configured.');
+    }
+
+    /**
+     * Simplified non-streaming content generation with optional multimodal inline data.
+     */
+    async generateContent(options: {
+        model?: string;
+        prompt?: string;
+        systemInstruction?: string;
+        inlineData?: Array<{ mimeType: string; data: string }>;
+        temperature?: number;
+        maxOutputTokens?: number;
+    }): Promise<{ text: string }> {
+        const model = options.model || DEFAULT_GEMINI_MODEL;
+        const parts: any[] = [];
+        if (options.prompt) {
+            parts.push({ text: options.prompt });
+        }
+        if (options.inlineData) {
+            for (const item of options.inlineData) {
+                parts.push({
+                    inline_data: {
+                        mime_type: item.mimeType,
+                        data: item.data
+                    }
+                });
+            }
+        }
+        const contents = [{ role: 'user', parts }];
+        const result = await this.fetchVertexOrAistudio(
+            model,
+            contents,
+            options.systemInstruction,
+            {
+                temperature: options.temperature,
+                maxOutputTokens: options.maxOutputTokens
+            }
+        );
+        const text = result?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        return { text };
+    }
+
     // ------------------------------------------------------------------
     // Retry / fallback
     // ------------------------------------------------------------------

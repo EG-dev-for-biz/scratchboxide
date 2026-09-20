@@ -108,22 +108,49 @@ export class WorkspaceConfigService {
     }
 
     /**
-     * Discovers and parses custom project skills (.scratchbox/skills/*.md).
+     * Discovers and parses custom project skills (.scratchbox/skills and .agents/skills).
      */
     async discoverProjectSkills(workspaceRoot: string): Promise<SkillItem[]> {
         const skills: SkillItem[] = [];
         const root = workspaceRoot || process.cwd();
-        const skillsDir = path.join(root, '.scratchbox', 'skills');
 
-        if (await fs.pathExists(skillsDir)) {
-            const files = await fs.readdir(skillsDir);
+        // 1. Discover .scratchbox/skills/*.md
+        const scratchboxSkillsDir = path.join(root, '.scratchbox', 'skills');
+        if (await fs.pathExists(scratchboxSkillsDir)) {
+            const files = await fs.readdir(scratchboxSkillsDir);
             for (const file of files) {
                 if (file.endsWith('.md') || file.endsWith('.markdown')) {
-                    const filePath = path.join(skillsDir, file);
+                    const filePath = path.join(scratchboxSkillsDir, file);
                     const stat = await fs.stat(filePath);
                     if (stat.isFile()) {
                         const raw = await fs.readFile(filePath, 'utf-8');
                         const skill = this.parseSkillMarkdown(file, raw);
+                        skills.push(skill);
+                    }
+                }
+            }
+        }
+
+        // 2. Discover .agents/skills/*/SKILL.md and .agents/skills/*.md
+        const agentsSkillsDir = path.join(root, '.agents', 'skills');
+        if (await fs.pathExists(agentsSkillsDir)) {
+            const entries = await fs.readdir(agentsSkillsDir);
+            for (const entry of entries) {
+                const entryPath = path.join(agentsSkillsDir, entry);
+                const stat = await fs.stat(entryPath);
+                if (stat.isDirectory()) {
+                    const skillMdPath = path.join(entryPath, 'SKILL.md');
+                    if (await fs.pathExists(skillMdPath)) {
+                        const raw = await fs.readFile(skillMdPath, 'utf-8');
+                        const skill = this.parseSkillMarkdown(entry, raw);
+                        if (!skills.some(s => s.id === skill.id || s.name === skill.name)) {
+                            skills.push(skill);
+                        }
+                    }
+                } else if (stat.isFile() && (entry.endsWith('.md') || entry.endsWith('.markdown'))) {
+                    const raw = await fs.readFile(entryPath, 'utf-8');
+                    const skill = this.parseSkillMarkdown(entry, raw);
+                    if (!skills.some(s => s.id === skill.id || s.name === skill.name)) {
                         skills.push(skill);
                     }
                 }
@@ -137,7 +164,6 @@ export class WorkspaceConfigService {
      * Parses a Markdown file with optional YAML frontmatter into a SkillItem.
      */
     private parseSkillMarkdown(filename: string, content: string): SkillItem {
-        const id = `custom-skill-${filename.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
         let name = filename.replace(/\.(md|markdown)$/i, '');
         let tagline = 'Project-specific custom AI superpower';
         let description = '';
@@ -176,6 +202,9 @@ export class WorkspaceConfigService {
         if (!description) {
             description = bodyContent.slice(0, 180).replace(/[#*`]/g, '').trim();
         }
+
+        const cleanName = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+        const id = `custom-skill-${cleanName}`;
 
         return {
             id,
@@ -642,5 +671,107 @@ export class WorkspaceConfigService {
         }
 
         return parts.join('\n');
+    }
+
+    /**
+     * Recursively scans the workspace directory and builds a FileTreeNode hierarchy.
+     */
+    async getDirectoryTree(workspaceRoot: string, maxDepth: number = 6): Promise<Array<{ name: string; path: string; isFolder: boolean; children?: any[] }>> {
+        const root = path.resolve(workspaceRoot);
+        const IGNORED = new Set([
+            'node_modules', '.git', 'dist', 'build', '.DS_Store', '.next', '.turbo', '.cache'
+        ]);
+
+        const scan = async (currentDir: string, relativePrefix: string, currentDepth: number): Promise<any[]> => {
+            if (currentDepth > maxDepth) return [];
+            let entries: fs.Dirent[];
+            try {
+                entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+            } catch {
+                return [];
+            }
+
+            const nodes: any[] = [];
+            // Sort: folders first, then files alphabetically
+            entries.sort((a, b) => {
+                if (a.isDirectory() && !b.isDirectory()) return -1;
+                if (!a.isDirectory() && b.isDirectory()) return 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            for (const entry of entries) {
+                if (IGNORED.has(entry.name)) continue;
+                if (entry.name.startsWith('.') && entry.name !== '.scratchbox' && entry.name !== '.cursor') continue;
+
+                const entryRelPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+                const fullPath = path.join(currentDir, entry.name);
+
+                if (entry.isDirectory()) {
+                    const children = await scan(fullPath, entryRelPath, currentDepth + 1);
+                    nodes.push({
+                        name: entry.name,
+                        path: entryRelPath,
+                        isFolder: true,
+                        children
+                    });
+                } else if (entry.isFile() || entry.isSymbolicLink()) {
+                    nodes.push({
+                        name: entry.name,
+                        path: entryRelPath,
+                        isFolder: false
+                    });
+                }
+            }
+            return nodes;
+        };
+
+        return scan(root, '', 1);
+    }
+
+    /**
+     * Safely reads a workspace file's content.
+     */
+    async readFileContent(workspaceRoot: string, relativePath: string): Promise<{ content: string; size: number; isBinary: boolean }> {
+        const root = path.resolve(workspaceRoot);
+        const safePath = resolveWithinRoot(root, relativePath);
+        const stat = await fs.promises.stat(safePath);
+        if (stat.isDirectory()) {
+            throw new Error('Target is a directory');
+        }
+
+        const buffer = await fs.promises.readFile(safePath);
+        const isBinary = buffer.slice(0, 512).some(byte => byte === 0);
+        if (isBinary) {
+            return {
+                content: buffer.toString('base64'),
+                size: stat.size,
+                isBinary: true
+            };
+        }
+        return {
+            content: buffer.toString('utf-8'),
+            size: stat.size,
+            isBinary: false
+        };
+    }
+
+    /**
+     * Safely writes or creates a workspace file's content.
+     */
+    async writeFileContent(workspaceRoot: string, relativePath: string, content: string, fileWatcher?: WorkspaceFileWatcherService): Promise<{ success: boolean; path: string; size: number }> {
+        const root = path.resolve(workspaceRoot);
+        const safePath = resolveWithinRoot(root, relativePath);
+        await fs.ensureDir(path.dirname(safePath));
+        if (fileWatcher) {
+            const hash = createFileChangeHash(content);
+            fileWatcher.registerKnownHash(safePath, hash);
+        }
+        await fs.promises.writeFile(safePath, content, 'utf-8');
+        const stat = await fs.promises.stat(safePath);
+        return {
+            success: true,
+            path: relativePath,
+            size: stat.size
+        };
     }
 }

@@ -6,79 +6,58 @@
  *
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
-import * as fs from 'fs-extra';
-import * as path from 'path';
+
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
-import type { SymbolKind } from '../../common/context-graph-protocol';
 import type { McpExecutionState } from '../../browser/generative-canvas/canvas-types';
-import type { ContainerSandboxService } from '../container-sandbox-service';
-import type { LspDiagnosticFeedbackService } from '../lsp-diagnostic-feedback-service';
-import type { ProjectContextGraphService } from '../project-context-graph-service';
-import type { BrowserProxyService } from '../browser-proxy-service';
-import type { LensBridge, LensContext, LensSourceContent, LensSyncMode } from './lens-bridge';
 import { errorMessage } from './gemini-client';
 
-// ----------------------------------------------------------------------
-// Declaration & call shapes (Vertex AI function-calling JSON)
-// ----------------------------------------------------------------------
+// Re-export all tool types, schemas, declarations, and handlers from domain modules
+export * from './tools';
 
-export type ToolParameterType = 'STRING' | 'NUMBER' | 'BOOLEAN' | 'OBJECT' | 'ARRAY';
-
-export interface ToolParameterSchema {
-    type: ToolParameterType;
-    description?: string;
-    properties?: Record<string, ToolParameterSchema>;
-    required?: string[];
-    items?: ToolParameterSchema;
-}
-
-export interface ToolDeclaration {
-    name: string;
-    description: string;
-    parameters?: ToolParameterSchema;
-}
-
-export interface GeminiFunctionCall {
-    id?: string;
-    name: string;
-    args?: Record<string, unknown>;
-}
-
-export type GeminiToolConfig =
-    | { googleSearch: Record<string, never> }
-    | { codeExecution: Record<string, never> }
-    | { functionDeclarations: ToolDeclaration[] };
-
-export type ToolGroup = 'workspace' | 'lens' | 'browser' | 'mcp';
-
-export type ToolResultPayload = Record<string, unknown>;
-
-export interface ToolExecutionResult {
-    exec: McpExecutionState;
-    resultPayload: ToolResultPayload;
-}
-
-/** What a handler returns; the registry wraps it into `McpExecutionState` telemetry. */
-export interface ToolHandlerOutcome {
-    resultPayload: ToolResultPayload;
-    status?: 'completed' | 'failed';
-    summaryResult?: string;
-}
-
-/** Services a tool handler may need. Passed explicitly instead of reaching into `GeminiService`. */
-export interface ToolContext {
-    request: GeminiGenerateRequest;
-    workspaceRoot: string;
-    sandbox: ContainerSandboxService;
-    lsp: LspDiagnosticFeedbackService;
-    contextGraph: ProjectContextGraphService;
-    browserProxy: BrowserProxyService;
-    lens: LensBridge;
-}
-
-export type ToolHandler = (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome> | ToolHandlerOutcome;
-
-export type ToolFallbackHandler = (call: GeminiFunctionCall, ctx: ToolContext) => Promise<ToolExecutionResult> | ToolExecutionResult;
+import {
+    type ToolDeclaration,
+    type ToolGroup,
+    type ToolResultPayload,
+    type ToolExecutionResult,
+    type ToolHandlerOutcome,
+    type ToolContext,
+    type ToolHandler,
+    type ToolFallbackHandler,
+    type GeminiFunctionCall,
+    type GeminiToolConfig,
+    CANVAS_TOOL_DECLARATIONS,
+    canvasHandlers,
+    WORKSPACE_TOOL_DECLARATIONS,
+    workspaceHandlers,
+    GOOGLE_3D_TILES_TOOL_DECLARATIONS,
+    google3DTilesHandlers,
+    PANORAMA_TOOL_DECLARATIONS,
+    panoramaHandlers,
+    UTDRA_TOOL_DECLARATIONS,
+    utdraHandlers,
+    AI_BEAUTIFY_TOOL_DECLARATIONS,
+    aiBeautifyHandlers,
+    NANO_BANANA_TOOL_DECLARATIONS,
+    nanoBananaHandlers,
+    ALGORITHMIC_UV_TOOL_DECLARATIONS,
+    algorithmicUvHandlers,
+    ATMOSPHERE_TOOL_DECLARATIONS,
+    atmosphereHandlers,
+    MESH_SHAPING_TOOL_DECLARATIONS,
+    meshShapingHandlers,
+    WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
+    webxrGeospatialHandlers,
+    GEOBOX_PRECISION_TOOL_DECLARATIONS,
+    geoboxPrecisionHandlers,
+    OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS,
+    opticsLensDistortionHandlers,
+    COMFYUI_TOOL_DECLARATIONS,
+    comfyuiHandlers,
+    LENS_TOOL_DECLARATIONS,
+    lensHandlers,
+    BROWSER_TOOL_DECLARATIONS,
+    browserHandlers
+} from './tools';
 
 interface ToolRegistration {
     name: string;
@@ -105,9 +84,30 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         prefix: 'workspace_',
         mcpServerId: 'mcp-scratchbox-workspace',
         mcpName: 'Scratchbox Workspace',
-        humanTitle: name => `Workspace Action: ${name}`,
-        cardTitle: name => `Workspace: ${name}`,
-        stepTitle: name => `Invoke ${name}`,
+        humanTitle: name => {
+            if (name === 'mount_canvas_primitive') return 'Mount Canvas Primitive';
+            if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR Synthesis';
+            if (name.startsWith('google_3d_tiles_')) return `Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('atmosphere_')) return `Atmospheric Simulation: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('mesh_')) return `Native Mesh Reshaping: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            return `Workspace Action: ${name}`;
+        },
+        cardTitle: (name, _status) => {
+            if (name === 'mount_canvas_primitive') return 'Canvas: Mount Primitive';
+            if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
+            if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('atmosphere_')) return `Atmosphere: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('mesh_')) return `Mesh: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            return `Workspace: ${name}`;
+        },
+        stepTitle: name => {
+            if (name === 'mount_canvas_primitive') return 'Mount canvas primitive on stage';
+            if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
+            if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('atmosphere_')) return `Simulate atmospheric lighting: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('mesh_')) return `Reshape 3D mesh via native C++20 engine: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
+            return `Invoke ${name}`;
+        },
         durationMs: { completed: 25, failed: 25 },
         statusLabel: status => status,
         unknownTool: 'fail',
@@ -137,6 +137,18 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         unknownTool: 'noop',
         failurePayload: message => ({ status: 'failed', error: message })
     },
+    comfyui: {
+        prefix: 'comfyui_',
+        mcpServerId: 'mcp-scratchbox-comfyui',
+        mcpName: 'ComfyUI Pipeline Engine',
+        humanTitle: name => `ComfyUI Pipeline Action: ${name}`,
+        cardTitle: (name, status) => status === 'completed' ? `ComfyUI: ${name}` : `ComfyUI Failed: ${name}`,
+        stepTitle: name => `Execute ComfyUI pipeline: ${name}`,
+        durationMs: { completed: 80, failed: 40 },
+        statusLabel: status => status === 'completed' ? 'success' : 'failed',
+        unknownTool: 'fail',
+        failurePayload: message => ({ status: 'failed', error: message })
+    },
     mcp: {
         prefix: '',
         mcpServerId: 'mcp-live',
@@ -151,9 +163,27 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
     }
 };
 
-const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 'browser'];
+const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 'browser', 'comfyui'];
 
 export function inferToolGroup(name: string): ToolGroup {
+    if (typeof name !== 'string') return 'workspace';
+    if (
+        name === 'invoke_subagent' ||
+        name === 'send_message' ||
+        name === 'mount_canvas_primitive' ||
+        name.startsWith('google_3d_tiles_') ||
+        name.startsWith('utdra_') ||
+        name.startsWith('atmosphere_') ||
+        name.startsWith('mesh_') ||
+        name.startsWith('webxr_geospatial_') ||
+        name.startsWith('geobox_') ||
+        name.startsWith('panorama_') ||
+        name.startsWith('nano_banana_') ||
+        name.startsWith('algorithmic_uv_') ||
+        name === 'pbr_material_decompose' ||
+        name === 'atlas_maxrects_pack' ||
+        name === 'build_beautify_prompt'
+    ) return 'workspace';
     for (const group of PREFIXED_GROUPS) {
         if (name.startsWith(GROUPS[group].prefix)) return group;
     }
@@ -185,6 +215,14 @@ export class ToolRegistry {
 
     has(name: string): boolean {
         return this.tools.has(name);
+    }
+
+    get(name: string): ToolRegistration | undefined {
+        return this.tools.get(name);
+    }
+
+    getTool(name: string): ToolRegistration | undefined {
+        return this.tools.get(name);
     }
 
     names(group?: ToolGroup): string[] {
@@ -300,8 +338,12 @@ export function buildToolDeclarations(
     );
 
     const isWorkspaceNeeded = request.enableWorkspaceTools !== false && (
-        request.enableWorkspaceTools === true || !!request.agent ||
-        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol/i.test(request.prompt))
+        request.enableWorkspaceTools === true ||
+        request.mode === 'agent' ||
+        request.mode === 'plan' ||
+        request.mode === 'ask' ||
+        !!request.agent ||
+        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice/i.test(request.prompt))
     );
 
     const groups: ToolGroup[] = [];
@@ -313,6 +355,19 @@ export function buildToolDeclarations(
         ...(groups.length > 0 ? registry.declarations(groups) : []),
         ...mcpDeclarations
     ];
+
+    // Scratchbox Canvas Architecture: Ensure declarative canvas mounting is accessible for visual primitive synthesis
+    const isCanvasNeeded = request.enableWorkspaceTools !== false && (
+        isWorkspaceNeeded ||
+        !!(request.prompt && /3d|scene|world|model|asteroid|flight|plane|spatial|terrain|mesh|sandbox|app\b|component|widget|calculator|preview|landing\s*page|doc\b|document|spec\b|proposal|paper|essay|report|board|kanban|graph\b|flow\b|pipeline|diagram|dashboard|canvas|mount/i.test(request.prompt))
+    );
+
+    if (isCanvasNeeded && !allFunctionDeclarations.some(d => d.name === 'mount_canvas_primitive')) {
+        const canvasDecl = registry.declarations().find(d => d.name === 'mount_canvas_primitive');
+        if (canvasDecl) {
+            allFunctionDeclarations.push(canvasDecl);
+        }
+    }
 
     const tools: GeminiToolConfig[] = [];
     if (request.enableGoogleSearch !== false) {
@@ -328,548 +383,50 @@ export function buildToolDeclarations(
     return tools.length > 0 ? tools : undefined;
 }
 
-// ----------------------------------------------------------------------
-// Built-in tool declarations
-// ----------------------------------------------------------------------
-
-const IGNORED_DIRS = ['node_modules', '.git', 'dist', 'build', '.next', '.turbo'];
-
-const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
-const asNumber = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
-const resolveInRoot = (root: string, rel: string): string => (path.isAbsolute(rel) ? rel : path.join(root, rel));
-
-export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    {
-        name: 'workspace_read_file',
-        description: 'Read the contents of a file in the workspace. Supports reading specific line ranges.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                filePath: { type: 'STRING', description: 'Relative or absolute file path to read' },
-                startLine: { type: 'NUMBER', description: 'Optional 1-based start line' },
-                endLine: { type: 'NUMBER', description: 'Optional 1-based end line' }
-            },
-            required: ['filePath']
-        }
-    },
-    {
-        name: 'workspace_write_file',
-        description: 'Create or overwrite a file in the workspace with complete content.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                filePath: { type: 'STRING', description: 'Relative or absolute file path to write' },
-                content: { type: 'STRING', description: 'File content to write' }
-            },
-            required: ['filePath', 'content']
-        }
-    },
-    {
-        name: 'workspace_apply_diff',
-        description: 'Replace an exact target block of text within a file with replacement text.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                filePath: { type: 'STRING', description: 'Relative or absolute file path to edit' },
-                targetContent: { type: 'STRING', description: 'The exact string/block to replace in the file' },
-                replacementContent: { type: 'STRING', description: 'The replacement string/block' }
-            },
-            required: ['filePath', 'targetContent', 'replacementContent']
-        }
-    },
-    {
-        name: 'workspace_list_directory',
-        description: 'List files and directories in a workspace directory.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                directoryPath: { type: 'STRING', description: 'Directory path relative to workspace or absolute. Defaults to root if omitted.' },
-                recursive: { type: 'BOOLEAN', description: 'Whether to recursively list directory contents' },
-                maxDepth: { type: 'NUMBER', description: 'Maximum depth when listing recursively (default: 3)' }
-            }
-        }
-    },
-    {
-        name: 'workspace_search',
-        description: 'Search for text or regex patterns across files in the workspace.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                query: { type: 'STRING', description: 'Text or regex search query' },
-                filePattern: { type: 'STRING', description: 'Optional file extension or pattern filter (e.g. "*.ts", "src/**/*.tsx")' }
-            },
-            required: ['query']
-        }
-    },
-    {
-        name: 'workspace_run_command',
-        description: 'Execute a terminal or build command in the workspace safely inside the sandbox.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                command: { type: 'STRING', description: 'Shell command line to execute' },
-                cwd: { type: 'STRING', description: 'Optional working directory' },
-                timeoutMs: { type: 'NUMBER', description: 'Execution timeout in milliseconds (default: 30000)' }
-            },
-            required: ['command']
-        }
-    },
-    {
-        name: 'workspace_get_diagnostics',
-        description: 'Fetch compiler and linter diagnostics for the workspace or a specific file.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                filePath: { type: 'STRING', description: 'Optional file path to filter diagnostics for' }
-            }
-        }
-    },
-    {
-        name: 'workspace_find_symbols',
-        description: 'Find symbol definitions, usages, and references in the workspace AST context graph.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                query: { type: 'STRING', description: 'Symbol name to search for' },
-                kind: { type: 'STRING', description: 'Optional symbol kind (e.g. "function", "class", "interface")' }
-            },
-            required: ['query']
-        }
-    }
-];
-
-export const LENS_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    {
-        name: 'lens_project',
-        description: 'Project disk files or codebase paths into an interactive visual primitive canvas artifact with bidirectional synchronization.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                filePath: { type: 'STRING', description: 'The primary disk file or workspace directory path to project (e.g. docs/spec.md, src/App.tsx, ROADMAP.md, workflows/deploy.workflow.json, scenes/world.scene.json, analytics.csv, session.browser.json)' },
-                options: {
-                    type: 'OBJECT',
-                    description: 'Optional projection options including syncMode, targetSubdirectory, and context metadata'
-                }
-            },
-            required: ['filePath']
-        }
-    },
-    {
-        name: 'lens_unproject',
-        description: 'Unproject modified visual canvas primitive data back into exact, AST/syntax-preserving disk files.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                artifactId: { type: 'STRING', description: 'The unique artifact ID to unproject back to disk files' },
-                diskContent: { type: 'STRING', description: 'Optional baseline disk content string or file map JSON' }
-            },
-            required: ['artifactId']
-        }
-    },
-    {
-        name: 'lens_list_bindings',
-        description: 'List all active file-to-artifact codebase lens bindings and their live synchronization statuses (synced, dirty-ui, dirty-disk).',
-        parameters: {
-            type: 'OBJECT',
-            properties: {}
-        }
-    },
-    {
-        name: 'lens_sync',
-        description: 'Force bidirectional synchronization between disk files and the visual primitive canvas artifact in either direction.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                artifactId: { type: 'STRING', description: 'The unique artifact ID of the binding to synchronize' },
-                direction: { type: 'STRING', description: 'Synchronization direction: "in" (disk -> visual UI) or "out" (visual UI -> disk)' }
-            },
-            required: ['artifactId', 'direction']
-        }
-    }
-];
-
-export const BROWSER_TOOL_DECLARATIONS: ToolDeclaration[] = [
-    {
-        name: 'browser_navigate',
-        description: 'Navigate the active canvas web browser to a specified URL.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                url: { type: 'STRING', description: 'The target absolute HTTP/HTTPS URL' }
-            },
-            required: ['url']
-        }
-    },
-    {
-        name: 'browser_snapshot',
-        description: 'Get the compact accessibility tree and indexed element IDs of the active web page.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {}
-        }
-    },
-    {
-        name: 'browser_extract_content',
-        description: 'Extract the full active web page content converted into clean, readable Markdown.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {}
-        }
-    },
-    {
-        name: 'browser_click',
-        description: 'Perform a mouse click on an interactive element by its numerical data-sb-id or selector.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                elementId: { type: 'STRING', description: 'The data-sb-id of the element to click (obtained from browser_snapshot)' },
-                selector: { type: 'STRING', description: 'Optional CSS selector of the element' }
-            },
-            required: ['elementId']
-        }
-    },
-    {
-        name: 'browser_type',
-        description: 'Type or fill text into an input or textarea element by its numerical data-sb-id.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                elementId: { type: 'STRING', description: 'The data-sb-id of the input/textarea element to fill' },
-                text: { type: 'STRING', description: 'The text value to type/fill' }
-            },
-            required: ['elementId', 'text']
-        }
-    },
-    {
-        name: 'browser_evaluate',
-        description: 'Execute a custom JavaScript expression within the active page context.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                expression: { type: 'STRING', description: 'The JavaScript expression to evaluate' }
-            },
-            required: ['expression']
-        }
-    }
-];
-
-// ----------------------------------------------------------------------
-// Built-in tool handlers
-// ----------------------------------------------------------------------
-
-const workspaceHandlers: Record<string, ToolHandler> = {
-    async workspace_read_file(args, ctx) {
-        const relPath = asString(args.filePath);
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`File not found: ${relPath}`);
-        }
-        const rawContent = await fs.readFile(fullPath, 'utf-8');
-        const lines = rawContent.split('\n');
-        const totalLines = lines.length;
-        const startArg = asNumber(args.startLine);
-        const endArg = asNumber(args.endLine);
-        const startLine = startArg !== undefined ? Math.max(1, startArg) : 1;
-        const endLine = endArg !== undefined ? Math.min(totalLines, endArg) : totalLines;
-        const selectedContent = (args.startLine !== undefined || args.endLine !== undefined)
-            ? lines.slice(startLine - 1, endLine).join('\n')
-            : rawContent;
-
-        return {
-            resultPayload: { status: 'success', filePath: relPath, totalLines, startLine, endLine, content: selectedContent },
-            summaryResult: `Read ${relPath} (lines ${startLine}-${endLine} of ${totalLines}).`
-        };
-    },
-
-    async workspace_write_file(args, ctx) {
-        const relPath = asString(args.filePath);
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
-        const content = args.content !== undefined ? String(args.content) : '';
-        await fs.ensureDir(path.dirname(fullPath));
-        await fs.writeFile(fullPath, content, 'utf-8');
-        const bytesWritten = Buffer.byteLength(content, 'utf-8');
-        return {
-            resultPayload: { status: 'success', filePath: relPath, bytesWritten },
-            summaryResult: `Wrote ${bytesWritten} bytes to ${relPath}.`
-        };
-    },
-
-    async workspace_apply_diff(args, ctx) {
-        const relPath = asString(args.filePath);
-        const fullPath = resolveInRoot(ctx.workspaceRoot, relPath);
-        if (!await fs.pathExists(fullPath)) {
-            throw new Error(`File not found: ${relPath}`);
-        }
-        const current = await fs.readFile(fullPath, 'utf-8');
-        const target = args.targetContent;
-        const replacement = args.replacementContent !== undefined ? String(args.replacementContent) : '';
-
-        if (typeof target !== 'string' || !current.includes(target)) {
-            throw new Error(`Target content block was not found in ${relPath}.`);
-        }
-
-        await fs.writeFile(fullPath, current.replace(target, replacement), 'utf-8');
-        return {
-            resultPayload: { status: 'success', filePath: relPath, message: 'Successfully applied diff patch.' },
-            summaryResult: `Applied diff patch to ${relPath}.`
-        };
-    },
-
-    async workspace_list_directory(args, ctx) {
-        const root = ctx.workspaceRoot;
-        const relDir = asString(args.directoryPath);
-        const targetDir = resolveInRoot(root, relDir);
-        if (!await fs.pathExists(targetDir)) {
-            throw new Error(`Directory not found: ${relDir}`);
-        }
-
-        const maxDepth = Math.min(asNumber(args.maxDepth) || 3, 5);
-        const recursive = !!args.recursive;
-        const results: Array<{ path: string; type: 'file' | 'directory'; size?: number }> = [];
-
-        const scan = async (currentDir: string, currentDepth: number): Promise<void> => {
-            if (currentDepth > maxDepth || results.length >= 200) return;
-            const entries = await fs.readdir(currentDir);
-            for (const entry of entries) {
-                if (results.length >= 200) break;
-                if (IGNORED_DIRS.includes(entry)) continue;
-                const full = path.join(currentDir, entry);
-                const rel = path.relative(root, full).replace(/\\/g, '/');
-                const stat = await fs.stat(full);
-                if (stat.isDirectory()) {
-                    results.push({ path: rel, type: 'directory' });
-                    if (recursive) {
-                        await scan(full, currentDepth + 1);
-                    }
-                } else {
-                    results.push({ path: rel, type: 'file', size: stat.size });
-                }
-            }
-        };
-
-        await scan(targetDir, 1);
-        return {
-            resultPayload: { status: 'success', directory: relDir || '.', entriesCount: results.length, entries: results },
-            summaryResult: `Listed ${results.length} items in ${relDir || '.'}.`
-        };
-    },
-
-    async workspace_search(args, ctx) {
-        const root = ctx.workspaceRoot;
-        const query = asString(args.query);
-        if (!query) throw new Error('Search query is required.');
-        const filePattern = asString(args.filePattern);
-        const fileFilter = filePattern ? new RegExp(filePattern.replace(/\*/g, '.*')) : null;
-        const matches: Array<{ file: string; line: number; content: string }> = [];
-
-        const walkSearch = async (dir: string): Promise<void> => {
-            if (matches.length >= 50) return;
-            const entries = await fs.readdir(dir);
-            for (const entry of entries) {
-                if (matches.length >= 50) break;
-                if (IGNORED_DIRS.includes(entry)) continue;
-                const full = path.join(dir, entry);
-                const stat = await fs.stat(full);
-                if (stat.isDirectory()) {
-                    await walkSearch(full);
-                } else if (stat.isFile()) {
-                    const rel = path.relative(root, full).replace(/\\/g, '/');
-                    if (fileFilter && !fileFilter.test(rel)) continue;
-                    try {
-                        const text = await fs.readFile(full, 'utf-8');
-                        if (text.includes(query)) {
-                            const lines = text.split('\n');
-                            for (let i = 0; i < lines.length; i++) {
-                                if (lines[i].includes(query)) {
-                                    matches.push({ file: rel, line: i + 1, content: lines[i].trim() });
-                                    if (matches.length >= 50) break;
-                                }
-                            }
-                        }
-                    } catch {
-                        // Skip unreadable/binary files
-                    }
-                }
-            }
-        };
-
-        await walkSearch(root);
-        return {
-            resultPayload: { status: 'success', query, matchesCount: matches.length, matches },
-            summaryResult: `Found ${matches.length} matches for "${query}".`
-        };
-    },
-
-    async workspace_run_command(args, ctx) {
-        const root = ctx.workspaceRoot;
-        const cmd = asString(args.command);
-        if (!cmd) throw new Error('command is required.');
-        const timeoutMs = asNumber(args.timeoutMs) || 30000;
-        const cwdArg = asString(args.cwd);
-        const envId = `ws-run-${Date.now()}`;
-        await ctx.sandbox.createEnvironment({
-            environmentId: envId,
-            isolationLevel: 'process-jail',
-            workspaceRoot: root,
-            timeoutMs
-        });
-
-        const res = await ctx.sandbox.executeCommand(envId, {
-            command: cmd,
-            cwd: cwdArg ? resolveInRoot(root, cwdArg) : root,
-            timeoutMs
-        });
-
-        return {
-            resultPayload: {
-                status: res.exitCode === 0 ? 'success' : 'failed',
-                exitCode: res.exitCode,
-                stdout: res.stdout,
-                stderr: res.stderr,
-                timedOut: res.timedOut,
-                durationMs: res.durationMs
-            },
-            status: res.exitCode === 0 ? 'completed' : 'failed',
-            summaryResult: `Executed "${cmd}" (exit code ${res.exitCode}).`
-        };
-    },
-
-    workspace_get_diagnostics(args, ctx) {
-        const filePath = asString(args.filePath);
-        if (filePath) {
-            const fileDiags = ctx.lsp.getDiagnosticsForFile(filePath);
-            return {
-                resultPayload: {
-                    status: 'success',
-                    filePath,
-                    totalCount: fileDiags.length,
-                    errorCount: fileDiags.filter(d => d.severity === 'error').length,
-                    warningCount: fileDiags.filter(d => d.severity === 'warning').length,
-                    diagnostics: fileDiags
-                },
-                summaryResult: `File diagnostics for ${filePath}: ${fileDiags.length} issues.`
-            };
-        }
-        const summary = ctx.lsp.getSummary();
-        return {
-            resultPayload: { status: 'success', ...summary },
-            summaryResult: `Workspace diagnostics: ${summary.errorCount} error(s), ${summary.warningCount} warning(s).`
-        };
-    },
-
-    workspace_find_symbols(args, ctx) {
-        const query = asString(args.query);
-        if (!query) throw new Error('query is required.');
-        const kind = asString(args.kind);
-        const symResult = ctx.contextGraph.retrieveSymbolGraph({
-            query,
-            kinds: kind ? [kind as SymbolKind] : undefined,
-            minRelevanceScore: 0.1,
-            maxSymbols: 25
-        });
-        return {
-            resultPayload: {
-                status: 'success',
-                query,
-                count: symResult.matchingSymbols.length,
-                symbols: symResult.matchingSymbols.map(s => ({ name: s.name, kind: s.kind, filePath: s.filePath, range: s.range }))
-            },
-            summaryResult: `Found ${symResult.matchingSymbols.length} symbol(s) matching "${query}".`
-        };
-    }
-};
-
-const asLensSource = (value: unknown): LensSourceContent | undefined => {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object') return value as Record<string, string>;
-    return undefined;
-};
-
-const lensHandlers: Record<string, ToolHandler> = {
-    async lens_project(args, ctx) {
-        const filePath = asString(args.filePath);
-        const options = (args.options && typeof args.options === 'object')
-            ? args.options as { artifactId?: string; syncMode?: LensSyncMode; context?: LensContext }
-            : undefined;
-        const res = await ctx.lens.executeLensProject(filePath, asLensSource(args.sourceContent), options);
-        return {
-            resultPayload: res as unknown as ToolResultPayload,
-            status: res.success ? 'completed' : 'failed',
-            summaryResult: res.success ? `Projected ${filePath} into canvas.` : (res.error || 'Projection failed')
-        };
-    },
-
-    async lens_unproject(args, ctx) {
-        const artifactId = asString(args.artifactId);
-        const res = await ctx.lens.executeLensUnproject(
-            artifactId,
-            args.primitiveData,
-            asLensSource(args.currentDiskContent),
-            args.context as LensContext | undefined
-        );
-        return {
-            resultPayload: res as unknown as ToolResultPayload,
-            status: res.success ? 'completed' : 'failed',
-            summaryResult: res.success ? `Unprojected ${artifactId} to disk.` : (res.error || 'Unproject failed')
-        };
-    },
-
-    lens_list_bindings(_args, ctx) {
-        const bindings = ctx.lens.executeLensListBindings();
-        return {
-            resultPayload: { success: true, bindings },
-            summaryResult: `Found ${bindings.length} active lens bindings.`
-        };
-    },
-
-    lens_sync(args, ctx) {
-        const artifactId = asString(args.artifactId);
-        const direction = args.direction === 'out' ? 'out' : 'in';
-        const res = ctx.lens.executeLensSync(
-            artifactId,
-            direction,
-            { diskContent: asLensSource(args.diskContent), primitiveData: args.primitiveData },
-            args.context as LensContext | undefined
-        );
-        return {
-            resultPayload: res as unknown as ToolResultPayload,
-            status: res.success ? 'completed' : 'failed',
-            summaryResult: res.success ? `Synced ${artifactId} (${direction}).` : (res.error || 'Sync failed')
-        };
-    }
-};
-
-const browserOutcome = (data: unknown, name: string): ToolHandlerOutcome => ({
-    resultPayload: { status: 'success', data },
-    summaryResult: `Successfully executed ${name}.`
-});
-
-const browserHandlers: Record<string, ToolHandler> = {
-    async browser_navigate(args, ctx) {
-        return browserOutcome(await ctx.browserProxy.queueAction('navigate', { url: asString(args.url) }), 'browser_navigate');
-    },
-    browser_snapshot(_args, ctx) {
-        return browserOutcome(ctx.browserProxy.getActiveState(), 'browser_snapshot');
-    },
-    browser_extract_content(_args, ctx) {
-        return browserOutcome({ markdown: ctx.browserProxy.getActiveState().markdown }, 'browser_extract_content');
-    },
-    async browser_click(args, ctx) {
-        return browserOutcome(await ctx.browserProxy.queueAction('click', { elementId: asString(args.elementId), selector: asString(args.selector) || undefined }), 'browser_click');
-    },
-    async browser_type(args, ctx) {
-        return browserOutcome(await ctx.browserProxy.queueAction('fill', { elementId: asString(args.elementId), text: asString(args.text) }), 'browser_type');
-    },
-    async browser_evaluate(args, ctx) {
-        return browserOutcome(await ctx.browserProxy.queueAction('evaluate', { expression: asString(args.expression) }), 'browser_evaluate');
-    }
-};
-
-/** Registry pre-loaded with the workspace, lens and browser tool suites. */
+/** Registry pre-loaded with the workspace, lens, browser, comfyui, google 3d tiles, utdra, ai beautify, atmosphere, webxr geospatial, geobox, optics and canvas tool suites. */
 export function createDefaultToolRegistry(): ToolRegistry {
     const registry = new ToolRegistry();
+    for (const decl of CANVAS_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, canvasHandlers[decl.name], 'workspace');
+    }
     for (const decl of WORKSPACE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, workspaceHandlers[decl.name], 'workspace');
+    }
+    for (const decl of GOOGLE_3D_TILES_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, google3DTilesHandlers[decl.name], 'workspace');
+    }
+    for (const decl of PANORAMA_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, panoramaHandlers[decl.name], 'workspace');
+    }
+    for (const decl of UTDRA_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, utdraHandlers[decl.name], 'workspace');
+    }
+    for (const decl of AI_BEAUTIFY_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, aiBeautifyHandlers[decl.name], 'workspace');
+    }
+    for (const decl of NANO_BANANA_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, nanoBananaHandlers[decl.name], 'workspace');
+    }
+    for (const decl of ALGORITHMIC_UV_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, algorithmicUvHandlers[decl.name], 'workspace');
+    }
+    for (const decl of ATMOSPHERE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, atmosphereHandlers[decl.name], 'workspace');
+    }
+    for (const decl of MESH_SHAPING_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, meshShapingHandlers[decl.name], 'workspace');
+    }
+    for (const decl of WEBXR_GEOSPATIAL_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, webxrGeospatialHandlers[decl.name], 'workspace');
+    }
+    for (const decl of GEOBOX_PRECISION_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, geoboxPrecisionHandlers[decl.name], 'workspace');
+    }
+    for (const decl of OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, opticsLensDistortionHandlers[decl.name], 'workspace');
+    }
+    for (const decl of COMFYUI_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, comfyuiHandlers[decl.name], 'comfyui');
     }
     for (const decl of LENS_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, lensHandlers[decl.name], 'lens');

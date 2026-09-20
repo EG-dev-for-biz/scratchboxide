@@ -109,6 +109,40 @@ export interface MediaGenerationResult {
     createdAt?: string;
 }
 
+export interface PbrTextureSetUrls {
+    albedo: string;
+    normal: string;
+    roughness: string;
+    metallic: string;
+    ao: string;
+    orm?: string;
+    isTileable: boolean;
+}
+
+export interface TextureMatrixCandidate {
+    id: string;
+    prompt: string;
+    styleModifier: string;
+    textures: PbrTextureSetUrls;
+    previewGlbUrl?: string;
+    meshMappingPreset?: 'triplanar' | 'uv' | 'spherical';
+}
+
+export interface TextureMatrixRequest {
+    basePrompt: string;
+    workspaceRoot: string;
+    idempotencyKey: string;
+    isMetallic?: boolean;
+    bumpStrength?: number;
+    targetMeshId?: string;
+}
+
+export interface TextureMatrixResult {
+    candidates: TextureMatrixCandidate[];
+    selectedCandidateId: string;
+    targetMeshId?: string;
+}
+
 export interface PersistedMediaGenerationRequest {
     kind: MediaKind;
     prompt: string;
