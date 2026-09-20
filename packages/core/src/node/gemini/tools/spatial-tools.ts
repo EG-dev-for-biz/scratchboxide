@@ -950,7 +950,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         if (!inputImagePath) throw new Error('panorama_to_3dgs: "inputImagePath" argument is required.');
 
         const sceneType = (args.sceneType === 'indoor' || args.sceneType === 'outdoor') ? args.sceneType : 'outdoor';
-        const eyeHeight = typeof args.eyeHeight === 'number' ? args.eyeHeight : 1.70;
+        // Unknown for AI panoramas: infer from the metric floor unless the caller knows the rig height
+        const eyeHeightArg: number | 'auto' = typeof args.eyeHeight === 'number' ? args.eyeHeight : 'auto';
         const radius = typeof args.radius === 'number' ? args.radius : 1.25;
         const numPoses = typeof args.numPoses === 'number' ? args.numPoses : 6;
         const voxelSize = typeof args.voxelSize === 'number' ? args.voxelSize : 0.04;
@@ -964,13 +965,14 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const depthService = new PanoramaDepthService();
         const depthRes = await depthService.generatePanoramaDepth(inputImagePath, {
             sceneType,
-            eyeHeight,
+            eyeHeight: eyeHeightArg,
             mock: mockExecution
         });
 
         if (!depthRes.success) {
             throw new Error(`Failed to generate depth map for panorama: ${inputImagePath}`);
         }
+        const eyeHeight = depthRes.eyeHeight;
 
         // Step 2: Run multi-perspective offset view synthesis and inpainting
         const offsetService = new OffsetViewSynthesisService();
@@ -993,9 +995,13 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 originalSplatPath: synthesisRes.originalSplatPath,
                 numOriginalSplats: synthesisRes.numOriginalSplats,
                 numFusedSplats: synthesisRes.numFusedSplats,
-                activePoses: synthesisRes.activePoses
+                activePoses: synthesisRes.activePoses,
+                eyeHeight,
+                eyeHeightInferred: depthRes.eyeHeightInferred,
+                depthModel: depthRes.modelUsed,
+                metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
-            summaryResult: `Successfully built watertight, walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats} splats). Complete standard .SPLAT and Niantic NGSP v2 compressed .SPZ written successfully.`
+            summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'inferred from metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
         };
     },
 

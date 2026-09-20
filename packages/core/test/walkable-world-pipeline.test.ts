@@ -77,6 +77,14 @@ describe('Competitive 3DGS Walkable World Pipeline Integration Tests', () => {
         }
         expect(maxAbs).toBeGreaterThan(1.0);
         expect(maxAbs).toBeLessThan(200.0);
+
+        // Sidecar contract: viewers place the camera at the capture height recorded here
+        expect(await fs.pathExists(synthesisRes.metaPath)).toBe(true);
+        const meta = await fs.readJson(synthesisRes.metaPath);
+        expect(meta.eyeHeight).toBeCloseTo(1.70, 2);
+        expect(meta.walkRadius).toBeCloseTo(1.25, 2);
+        expect(meta.numSplats).toBe(synthesisRes.numFusedSplats);
+        expect(depthRes.eyeHeightInferred).toBe(false); // mock geometry is built at a fixed height
         
         // Clean up test intermediates
         if (await fs.pathExists(testDir)) {

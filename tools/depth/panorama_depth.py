@@ -57,12 +57,18 @@ def get_look_at_matrix(yaw_deg, pitch_deg):
     R = torch.stack([x_c, y_c, z_c], dim=1)
     return R
 
+def _as_fov_list(fov, n):
+    return list(fov) if isinstance(fov, (list, tuple)) else [fov] * n
+
+
 def extract_perspective_faces(equirect_tensor, fov_deg, face_size, rot_params, device):
     """
     Extracts perspective faces from an equirectangular image tensor (3, H, W).
+    fov_deg may be a scalar or a per-face list.
     """
     C, H_eq, W_eq = equirect_tensor.shape
     num_faces = len(rot_params)
+    fovs = _as_fov_list(fov_deg, num_faces)
     
     # Grid of coordinates on the target face
     # target size is (face_size, face_size)
@@ -72,22 +78,21 @@ def extract_perspective_faces(equirect_tensor, fov_deg, face_size, rot_params, d
         indexing='ij'
     )
     
-    f = 0.5 * face_size / math.tan(math.radians(fov_deg) * 0.5)
     cx = (face_size - 1.0) * 0.5
     cy = (face_size - 1.0) * 0.5
 
-    # Local ray vectors
-    rx = x - cx
-    ry = cy - y  # +Y points up in camera space, cy - y because v_f=0 is top
-    rz = torch.full_like(rx, -f)
-    
-    local_rays = torch.stack([rx, ry, rz], dim=-1)  # (face_size, face_size, 3)
-    local_rays = local_rays / torch.linalg.vector_norm(local_rays, dim=-1, keepdim=True)
-    
     # We will sample all faces at once
     face_grids = []
     
-    for yaw_deg, pitch_deg in rot_params:
+    for (yaw_deg, pitch_deg), fov in zip(rot_params, fovs):
+        f = 0.5 * face_size / math.tan(math.radians(fov) * 0.5)
+        # Local ray vectors (+Y up in camera space, v=0 is the top row)
+        rx = x - cx
+        ry = cy - y
+        rz = torch.full_like(rx, -f)
+        local_rays = torch.stack([rx, ry, rz], dim=-1)
+        local_rays = local_rays / torch.linalg.vector_norm(local_rays, dim=-1, keepdim=True)
+
         R = get_look_at_matrix(yaw_deg, pitch_deg).to(device)
         
         # Transform rays from camera local space to world space
@@ -120,92 +125,103 @@ def extract_perspective_faces(equirect_tensor, fov_deg, face_size, rot_params, d
     
     return faces_batch
 
-def stitch_depth_maps(face_depths, fov_deg, face_size, equirect_size, rot_params, device):
+def _project_faces_to_equirect(face_depths, fovs, face_size, equirect_size, rot_params, device):
     """
-    Stitches predicted perspective face depth maps (num_faces, face_size, face_size)
-    back to a single equirectangular depth map of size equirect_size (H_eq, W_eq).
+    Yields (radial_depth, weight) equirect maps for each face. Weight is cos^8 of the angle from the
+    face center multiplied by a border feather that reaches exactly zero at the face edge, so no
+    face can leave a hard cutoff seam.
     """
     H_eq, W_eq = equirect_size
-    num_faces = len(rot_params)
-    
-    # Coordinates of the equirectangular image
     v, u = torch.meshgrid(
         torch.linspace(0, H_eq - 1, H_eq, device=device),
         torch.linspace(0, W_eq - 1, W_eq, device=device),
         indexing='ij'
     )
-    
-    pitch = (0.5 - v / H_eq) * math.pi
-    yaw = (u / W_eq * 2.0 - 1.0) * math.pi
-    
+    pitch = (0.5 - (v + 0.5) / H_eq) * math.pi
+    yaw = ((u + 0.5) / W_eq * 2.0 - 1.0) * math.pi
     cos_pitch = torch.cos(pitch)
-    sin_pitch = torch.sin(pitch)
-    
-    # World ray vectors corresponding to equirect pixels
-    wx = torch.sin(yaw) * cos_pitch
-    wy = sin_pitch
-    wz = -torch.cos(yaw) * cos_pitch
-    
-    world_rays = torch.stack([wx, wy, wz], dim=-1)  # (H_eq, W_eq, 3)
-    
-    f = 0.5 * face_size / math.tan(math.radians(fov_deg) * 0.5)
+    world_rays = torch.stack([torch.sin(yaw) * cos_pitch, torch.sin(pitch), -torch.cos(yaw) * cos_pitch], dim=-1)
+
     cx = (face_size - 1.0) * 0.5
     cy = (face_size - 1.0) * 0.5
-    
-    accum_depth = torch.zeros((H_eq, W_eq), device=device)
-    accum_weight = torch.zeros((H_eq, W_eq), device=device)
-    
-    # Project equirect world rays into each face camera local space
-    for i, (yaw_deg, pitch_deg) in enumerate(rot_params):
+
+    for i, ((yaw_deg, pitch_deg), fov) in enumerate(zip(rot_params, fovs)):
+        f = 0.5 * face_size / math.tan(math.radians(fov) * 0.5)
         R = get_look_at_matrix(yaw_deg, pitch_deg).to(device)
-        
-        # Local rays in camera i space: r_local = R^T * r_world
-        # R is (3, 3), world_rays is (H_eq, W_eq, 3)
-        local_rays = torch.matmul(world_rays, R)  # (H_eq, W_eq, 3)
-        
-        lx = local_rays[..., 0]
-        ly = local_rays[..., 1]
-        lz = local_rays[..., 2]
-        
-        # Visible in camera if lz < -1e-4
-        visible_mask = lz < -1e-4
-        
-        # Project to image plane
+        local_rays = torch.matmul(world_rays, R)  # r_local = R^T r_world
+        lx, ly, lz = local_rays[..., 0], local_rays[..., 1], local_rays[..., 2]
+        visible = lz < -1e-4
+
         t = -f / torch.clamp(lz, max=-1e-4)
-        uf = lx * t + cx
-        vf = cy - ly * t
-        
-        # Coordinates in [-1, 1] range for grid_sample
-        grid_x = 2.0 * uf / (face_size - 1.0) - 1.0
-        grid_y = 2.0 * vf / (face_size - 1.0) - 1.0
-        
-        # Filter pixels inside face bounds
-        in_bounds = (grid_x >= -1.0) & (grid_x <= 1.0) & (grid_y >= -1.0) & (grid_y <= 1.0) & visible_mask
-        
-        # Prepare sampling coordinate grid (1, H_eq, W_eq, 2)
+        grid_x = 2.0 * (lx * t + cx) / (face_size - 1.0) - 1.0
+        grid_y = 2.0 * (cy - ly * t) / (face_size - 1.0) - 1.0
+        in_bounds = (grid_x.abs() <= 1.0) & (grid_y.abs() <= 1.0) & visible
+
         grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-        
-        # Sample planar depth from the face depth map
-        # face_depths[i] has shape (face_size, face_size) -> (1, 1, face_size, face_size)
-        face_depth_tensor = face_depths[i].unsqueeze(0).unsqueeze(0)
-        sampled_planar_depth = F.grid_sample(face_depth_tensor, grid, mode='bilinear', padding_mode='border', align_corners=False).squeeze()
-        
-        # Convert planar depth to radial distance along world ray
-        # radial = planar_depth * ||r_local|| / -lz
+        planar = F.grid_sample(face_depths[i].unsqueeze(0).unsqueeze(0), grid, mode='bilinear', padding_mode='border', align_corners=False).squeeze()
+
         local_norm = torch.linalg.vector_norm(local_rays, dim=-1)
-        sampled_radial_depth = sampled_planar_depth * local_norm / torch.clamp(-lz, min=1e-4)
-        
-        # Weighting function: cos^8 of angle from camera center to prioritize center of faces
-        weight = torch.pow(-lz / torch.clamp(local_norm, min=1e-4), 8.0)
+        radial = planar * local_norm / torch.clamp(-lz, min=1e-4)
+
+        # Border feather: 1 in the interior, smoothly to 0 over the outer 20% of the face
+        edge_dist = 1.0 - torch.maximum(grid_x.abs(), grid_y.abs())
+        feather = torch.clamp(edge_dist / 0.2, 0.0, 1.0)
+        feather = feather * feather * (3.0 - 2.0 * feather)
+        weight = torch.pow(-lz / torch.clamp(local_norm, min=1e-4), 8.0) * feather
         weight = torch.where(in_bounds, weight, torch.zeros_like(weight))
-        
-        accum_depth += sampled_radial_depth * weight
+        yield radial, weight
+
+
+def align_face_scales(face_depths, fovs, face_size, rot_params, device, passes=3, work_res=(512, 1024)):
+    """
+    Monocular metric depth is only consistent up to a per-view scale. Estimate one scalar per face so
+    that overlapping faces agree (median depth ratio in the overlap band), iterating against the
+    running consensus. Works at reduced resolution; returns a list of scale factors.
+    """
+    n = len(rot_params)
+    scales = [1.0] * n
+    maps = list(_project_faces_to_equirect(face_depths, fovs, face_size, work_res, rot_params, device))
+    for _ in range(passes):
+        for i in range(n):
+            # Consensus of all *other* faces at current scales
+            num = torch.zeros(work_res, device=device)
+            den = torch.zeros(work_res, device=device)
+            for j in range(n):
+                if j == i:
+                    continue
+                d, w = maps[j]
+                num += d * scales[j] * w
+                den += w
+            d_i, w_i = maps[i]
+            overlap = (w_i > 0.05) & (den > 0.05) & (d_i > 1e-3)
+            if overlap.sum() < 200:
+                continue
+            consensus = num[overlap] / den[overlap]
+            ratio = consensus / (d_i[overlap] * scales[i])
+            # Robust: median of ratios, damped so a single pass cannot overshoot
+            step = float(torch.median(ratio))
+            scales[i] *= 1.0 + 0.7 * (step - 1.0)
+    # Normalise so the mean scale is 1 (absolute scale is set later by the floor prior)
+    mean_s = sum(scales) / n
+    return [s / mean_s for s in scales]
+
+
+def stitch_depth_maps(face_depths, fov_deg, face_size, equirect_size, rot_params, device, face_scales=None):
+    """
+    Stitches predicted perspective face depth maps (num_faces, face_size, face_size)
+    back to a single equirectangular depth map of size equirect_size (H_eq, W_eq).
+    """
+    n = len(rot_params)
+    fovs = _as_fov_list(fov_deg, n)
+    face_scales = face_scales or [1.0] * n
+
+    accum_depth = torch.zeros(equirect_size, device=device)
+    accum_weight = torch.zeros(equirect_size, device=device)
+    for (radial, weight), s in zip(_project_faces_to_equirect(face_depths, fovs, face_size, equirect_size, rot_params, device), face_scales):
+        accum_depth += radial * s * weight
         accum_weight += weight
-        
-    # Final depth with safe division
+
     final_depth = accum_depth / torch.clamp(accum_weight, min=1e-4)
-    
-    # Fallback for unsampled directions (e.g. extremely peripheral rays, though zenith+nadir covers all)
     final_depth = torch.where(accum_weight > 1e-4, final_depth, torch.full_like(final_depth, 30.0))
     return final_depth
 
@@ -258,7 +274,7 @@ def main():
     parser.add_argument("--output-preview", required=True, help="Output colormapped preview PNG path")
     parser.add_argument("--output-json", required=True, help="Output metadata JSON path")
     parser.add_argument("--scene-type", default="outdoor", choices=["indoor", "outdoor"], help="Scene type to load appropriate metric model")
-    parser.add_argument("--eye-height", type=float, default=1.70, help="Camera eye height in meters (default 1.7)")
+    parser.add_argument("--eye-height", default="auto", help="Camera eye height in meters, or 'auto' to infer it from the metric floor (default auto; mock mode uses 1.7)")
     parser.add_argument("--device", default="auto", help="Execution device (auto, mps, cuda, cpu)")
     parser.add_argument("--mock", action="store_true", help="Force synthetic fallback depth generation")
     
@@ -320,7 +336,10 @@ def main():
                 (0.0, 90.0), (0.0, -90.0)
             ]
             
-            fov_deg = 90.0
+            # Ring faces at 90 deg reach only ~42.7 deg pitch midway between centers, while a 90 deg
+            # polar face starts at 45 deg: zero overlap -> scalloped seam. Widen the poles to 120 deg
+            # (coverage down to ~22-30 deg) so every direction is seen by at least two faces.
+            face_fovs = [90.0] * 8 + [120.0, 120.0]
             face_size = 512
             
             # Convert PIL image to PyTorch tensor (C, H, W) normalized to [0, 1]
@@ -328,7 +347,7 @@ def main():
             
             print(f"[DepthService] Extracting {len(rot_params)} perspective face plates at {face_size}x{face_size}...")
             # Extract face plates on device
-            faces_batch = extract_perspective_faces(img_tensor, fov_deg, face_size, rot_params, device)
+            faces_batch = extract_perspective_faces(img_tensor, face_fovs, face_size, rot_params, device)
             
             # Run inference per face plate
             face_depths = []
@@ -347,9 +366,16 @@ def main():
             face_depths_tensor = torch.stack(face_depths, dim=0)
             
             print(f"[DepthService] Stitching and blending multi-view depth maps back to equirectangular grid...")
-            # Stitch back to equirect
+            # Stitch back to equirect on CPU: grid_sample(padding_mode='border') is not implemented on MPS,
+            # and the stitch is memory-bound rather than compute-bound.
             equirect_size = (H_eq, W_eq)
-            depth_tensor = stitch_depth_maps(face_depths_tensor, fov_deg, face_size, equirect_size, rot_params, device)
+            stitch_device = torch.device("cpu") if device.type == "mps" else device
+            fd = face_depths_tensor.to(stitch_device)
+            # Per-face scale alignment in the overlap bands (monocular metric depth is consistent
+            # only up to a per-view scale); absolute scale is fixed afterwards by the floor prior.
+            face_scales = align_face_scales(fd, face_fovs, face_size, rot_params, stitch_device)
+            print(f"[DepthService] Face scale alignment: " + ", ".join(f"{s:.3f}" for s in face_scales))
+            depth_tensor = stitch_depth_maps(fd, face_fovs, face_size, equirect_size, rot_params, stitch_device, face_scales)
             
             equirect_depth = depth_tensor.cpu().numpy()
             success = True
@@ -357,40 +383,60 @@ def main():
         except Exception as e:
             print(f"[DepthService] WARNING: Hugging Face model inference failed, reverting to synthetic fallback: {e}")
             
+    auto_eye = str(args.eye_height).lower() == "auto"
+    eye_height = 1.70 if auto_eye else float(args.eye_height)
+
     if not success:
         # Fallback to high-fidelity synthetic Room Depth
         print(f"[DepthService] Executing high-fidelity geometric fallback depth generation...")
-        equirect_depth = generate_synthetic_depth(W_eq, H_eq, args.eye_height)
+        equirect_depth = generate_synthetic_depth(W_eq, H_eq, eye_height)
         model_name = "synthetic-fallback-depth"
-        
-    # Apply Floor-Prior Absolute Scale Correction
-    # Fits bottom part of depth map (pixels close to observer) to analytical floor formula d = -eyeHeight / ry
+        auto_eye = False  # synthetic geometry is already built at eye_height
+
+    # Floor band: rows in the lower 80-95% of the frame (pitch ~ -54 .. -81 deg), central half of azimuth.
+    # For each floor pixel the vertical drop is h = -ry * d. If the depth is metric and the camera is
+    # level, h is the eye height. Two modes:
+    #   auto:     trust the metric model, infer eyeHeight = median(h)        (AI panoramas: unknown rig height)
+    #   explicit: trust the given eyeHeight, rescale depth so median(h) == eyeHeight
     lower_v_start = int(0.80 * H_eq)
     lower_v_end = int(0.95 * H_eq)
     center_u_start = int(0.25 * W_eq)
     center_u_end = int(0.75 * W_eq)
-    
-    ratios = []
-    for y in range(lower_v_start, lower_v_end):
-        v_coord = (y + 0.5) / H_eq
-        pitch_rad = (0.5 - v_coord) * math.pi
-        ry_val = math.sin(pitch_rad)
-        if ry_val >= -0.05:
-            continue
-        for x in range(center_u_start, center_u_end):
-            d_pred = equirect_depth[y, x]
-            d_floor = -args.eye_height / ry_val
-            ratios.append(d_floor / d_pred)
-            
-    if len(ratios) > 100:
-        scale_correction = float(np.median(ratios))
-        # Keep scale correction factor bounded to avoid bizarre deformations
-        scale_correction = max(0.4, min(4.0, scale_correction))
-        print(f"[DepthService] Absolute floor-fit scale correction calculated: {scale_correction:.4f}")
+
+    rows = np.arange(lower_v_start, lower_v_end)
+    pitch_rows = (0.5 - (rows + 0.5) / H_eq) * np.pi
+    ry_rows = np.sin(pitch_rows)
+    valid_rows = ry_rows < -0.05
+    band = equirect_depth[rows[valid_rows], center_u_start:center_u_end]
+    drops = (-ry_rows[valid_rows])[:, None] * band  # vertical drop h per floor pixel
+
+    scale_correction = 1.0
+    horizon_tilt_deg = 0.0
+    horizon_tilt_yaw_deg = 0.0
+    if drops.size > 100:
+        median_drop = float(np.median(drops))
+        # Level-camera QC: per-azimuth median floor drop should be flat. A tilted horizon (pitch/roll
+        # baked into the panorama) shows up as a first-harmonic variation h(yaw) = c + a cos + b sin.
+        col_drop = np.median(drops, axis=0)
+        yaws = ((np.arange(center_u_start, center_u_end) + 0.5) / W_eq * 2.0 - 1.0) * np.pi
+        A = np.stack([np.ones_like(yaws), np.cos(yaws), np.sin(yaws)], axis=1)
+        coef, *_ = np.linalg.lstsq(A, col_drop, rcond=None)
+        amp = float(math.hypot(coef[1], coef[2]))
+        # Convert drop modulation to an angle at the mean floor distance of the band
+        mean_floor_dist = float(np.median(band))
+        horizon_tilt_deg = math.degrees(math.atan2(amp, max(1e-3, mean_floor_dist)))
+        horizon_tilt_yaw_deg = math.degrees(math.atan2(coef[2], coef[1]))
+        level_msg = "OK" if horizon_tilt_deg < 2.0 else "WARNING: panorama is not level; regenerate with a level camera or rotate with the SO(3) resampler"
+        print(f"[DepthService] Horizon level QC: tilt {horizon_tilt_deg:.2f} deg toward yaw {horizon_tilt_yaw_deg:.0f} deg -> {level_msg}")
+        if auto_eye:
+            eye_height = float(max(0.5, min(12.0, median_drop)))
+            print(f"[DepthService] Inferred camera eye height from metric floor: {eye_height:.3f} m")
+        else:
+            scale_correction = max(0.25, min(4.0, eye_height / max(1e-3, median_drop)))
+            print(f"[DepthService] Absolute floor-fit scale correction calculated: {scale_correction:.4f} (floor drop {median_drop:.3f} m -> {eye_height:.2f} m)")
     else:
-        print("[DepthService] Floor-fit scale correction skipped: insufficient floor pixels")
-        scale_correction = 1.0
-        
+        print("[DepthService] Floor fit skipped: insufficient floor pixels")
+
     # Scale depth
     equirect_depth = equirect_depth * scale_correction
     
@@ -441,8 +487,12 @@ def main():
         "minDepth": min_d,
         "maxDepth": max_d,
         "averageDepth": avg_d,
-        "eyeHeight": args.eye_height,
-        "groundY": -args.eye_height,
+        "eyeHeight": eye_height,
+        "eyeHeightInferred": auto_eye,
+        "horizonTiltDeg": horizon_tilt_deg,
+        "horizonTiltYawDeg": horizon_tilt_yaw_deg,
+        "levelCameraOk": horizon_tilt_deg < 2.0,
+        "groundY": -eye_height,
         "scaleCorrection": scale_correction,
         "modelUsed": model_name
     }

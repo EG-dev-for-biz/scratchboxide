@@ -16,7 +16,8 @@ const execAsync = promisify(exec);
 
 export interface PanoramaDepthOptions {
     sceneType?: 'indoor' | 'outdoor';
-    eyeHeight?: number;
+    /** Metres, or 'auto' (default) to infer the capture height from the metric floor. */
+    eyeHeight?: number | 'auto';
     device?: string;
     mock?: boolean;
     outDir?: string;
@@ -35,6 +36,8 @@ export interface PanoramaDepthResult {
     eyeHeight: number;
     groundY: number;
     scaleCorrection: number;
+    /** True when eyeHeight was inferred from the metric floor rather than supplied. */
+    eyeHeightInferred: boolean;
     modelUsed: string;
 }
 
@@ -72,9 +75,11 @@ export class PanoramaDepthService {
         const outJson = path.join(outDir, `${baseName}_${timestamp}_meta.json`);
 
         const sceneType = options.sceneType || 'outdoor';
-        const eyeHeight = options.eyeHeight ?? 1.70;
-        const device = options.device || 'auto';
         const forceMock = options.mock ?? false;
+        // Mock geometry is built at a fixed height; real depth infers it unless the caller knows it.
+        const eyeHeightArg: number | 'auto' = options.eyeHeight ?? (forceMock ? 1.70 : 'auto');
+        const eyeHeight = typeof eyeHeightArg === 'number' ? eyeHeightArg : 1.70;
+        const device = options.device || 'auto';
 
         const args: string[] = [
             `--input "${inputImagePath}"`,
@@ -82,7 +87,7 @@ export class PanoramaDepthService {
             `--output-preview "${outPreview}"`,
             `--output-json "${outJson}"`,
             `--scene-type ${sceneType}`,
-            `--eye-height ${eyeHeight}`,
+            `--eye-height ${eyeHeightArg}`,
             `--device ${device}`
         ];
 
@@ -121,6 +126,7 @@ export class PanoramaDepthService {
                     eyeHeight: metaContent.eyeHeight ?? eyeHeight,
                     groundY: metaContent.groundY ?? -eyeHeight,
                     scaleCorrection: metaContent.scaleCorrection ?? 1.0,
+                    eyeHeightInferred: metaContent.eyeHeightInferred === true,
                     modelUsed: metaContent.modelUsed || 'unknown'
                 };
             } else {
@@ -206,6 +212,7 @@ export class PanoramaDepthService {
             maxDepth: 80.0,
             averageDepth: 15.0,
             eyeHeight,
+            eyeHeightInferred: false,
             groundY: -eyeHeight,
             scaleCorrection: 1.0,
             modelUsed: 'typescript-fallback-heuristic'
@@ -225,6 +232,7 @@ export class PanoramaDepthService {
             eyeHeight,
             groundY: -eyeHeight,
             scaleCorrection: 1.0,
+            eyeHeightInferred: false,
             modelUsed: 'typescript-fallback-heuristic'
         };
     }

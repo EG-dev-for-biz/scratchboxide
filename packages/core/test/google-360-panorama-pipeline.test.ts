@@ -484,6 +484,14 @@ describe('Structured 360 Equirectangular Prompt Format (User Specification)', ()
                 projection_behavior: 'Correct equirectangular distortion near poles',
                 depth_of_field: 'Infinite focus (deep focus across entire panorama)'
             },
+            // Geometric contract for panorama-to-3DGS: level camera, known eye height, full vertical coverage
+            camera: {
+                eye_height_meters: 1.7,
+                level: 'Camera on a perfectly level tripod at 1.7 m above the floor; zero pitch, zero roll',
+                horizon: 'The true horizon (eye-level line) lies exactly on the vertical center row of the image',
+                vertical_coverage: 'Full 180-degree vertical field of view: the top row is the zenith directly overhead, the bottom row is the nadir directly underfoot',
+                poles: 'Real floor texture at the nadir and real ceiling or sky at the zenith; no tripod, no flat-colored discs, no vignette'
+            },
             rendering_style: {
                 stitching: 'Seamless 360-degree panorama stitching, no visible seams. The far-left and far-right edges MUST match perfectly for cyclic continuity.',
                 lighting: 'Maintain consistent lighting and shadows from the input image.'
@@ -491,6 +499,7 @@ describe('Structured 360 Equirectangular Prompt Format (User Specification)', ()
             constraints: {
                 must_keep: [
                     'Spherical equirectangular perspective',
+                    'Level camera with the horizon on the center row',
                     'Consistent lighting and weather',
                     'Mathematically identical edges (left and right columns)'
                 ],
@@ -498,11 +507,19 @@ describe('Structured 360 Equirectangular Prompt Format (User Specification)', ()
                     'Blurriness',
                     'Overlaps',
                     'Vertical seams',
-                    'Distorted horizons',
+                    'Distorted or tilted horizons',
+                    'Elevated, aerial, or drone viewpoints',
+                    'Wide rectilinear or fisheye framing stretched to 2:1',
                     'Folds in the view'
                 ]
             }
         });
+    });
+
+    it('buildEquirectangularStructuredPrompt accepts a custom rig eye height', () => {
+        const p = buildEquirectangularStructuredPrompt('Warehouse interior', { eyeHeightMeters: 1.55 });
+        expect(p.camera?.eye_height_meters).toBe(1.55);
+        expect(p.camera?.level).toContain('1.55 m');
     });
 
     it('buildEquirectangularStructuredPrompt allows custom override of lighting, resolution, and constraints', () => {

@@ -35,9 +35,20 @@ export interface OffsetSynthesisResult {
     fusedSplatPath: string;    // Path to the final merged and decimated .splat file
     fusedSpzPath: string;      // Path to the final merged .spz file
     originalSplatPath: string;  // Path to the original un-offset splats
+    metaPath: string;           // Sidecar JSON (eyeHeight, walkRadius, counts) next to the .spz
     numOriginalSplats: number;
     numFusedSplats: number;
     activePoses: Array<{ x: number, y: number, z: number, disocclusionPercent: number }>;
+}
+
+/** Sidecar written next to every produced .spz so viewers can place the camera at the true capture height. */
+export interface SplatWorldMeta {
+    eyeHeight: number;
+    walkRadius: number;
+    numSplats: number;
+    numOriginalSplats: number;
+    poses: Array<{ x: number, y: number, z: number, disocclusionPercent: number }>;
+    sourcePanorama: string;
 }
 
 /**
@@ -71,8 +82,15 @@ export class OffsetViewSynthesisService {
         const baseName = path.basename(sourceRgbPath, path.extname(sourceRgbPath));
         const finalSplatPath = path.join(outDir, `${baseName}_fused_${timestamp}.splat`);
         const finalSpzPath = path.join(outDir, `${baseName}_fused_${timestamp}.spz`);
+        const metaPath = finalSpzPath.replace(/\.spz$/, '.meta.json');
+        const writeMeta = async (numSplats: number, numOriginalSplats: number, poses: SplatWorldMeta['poses']) => {
+            const meta: SplatWorldMeta = {
+                eyeHeight, walkRadius: poses.length > 0 ? radius : 0, numSplats, numOriginalSplats, poses, sourcePanorama: sourceRgbPath
+            };
+            await fs.outputJson(metaPath, meta, { spaces: 2 });
+        };
 
-        const eyeHeight = options.eyeHeight ?? 1.70;
+        const eyeHeight = options.eyeHeight ?? 1.70; // callers should pass PanoramaDepthResult.eyeHeight
         const radius = options.radius ?? 1.25;
         const numPoses = options.numPoses ?? 6;
         const voxelSize = options.voxelSize ?? 0.04;
@@ -94,11 +112,13 @@ export class OffsetViewSynthesisService {
             console.log(`[OffsetSynthesis] Fast path requested. Skipping disocclusion fill.`);
             await fs.copy(originalSplatPath, finalSplatPath);
             await fs.copy(originalSpzPath, finalSpzPath);
+            await writeMeta(originalSplats.length, originalSplats.length, []);
             return {
                 success: true,
                 fusedSplatPath: finalSplatPath,
                 fusedSpzPath: finalSpzPath,
                 originalSplatPath,
+                metaPath,
                 numOriginalSplats: originalSplats.length,
                 numFusedSplats: originalSplats.length,
                 activePoses: []
@@ -215,6 +235,7 @@ export class OffsetViewSynthesisService {
 
         const fusedSpzBuf = SplatService.serializeSpzBuffer(fusedSplats);
         await fs.outputFile(finalSpzPath, fusedSpzBuf);
+        await writeMeta(fusedSplats.length, originalSplats.length, activePosesReport);
 
         console.log(`[OffsetSynthesis] Watertight world complete. Original: ${originalSplats.length} Fused: ${fusedSplats.length} VoxelSize: ${voxelSize}m`);
 
@@ -223,6 +244,7 @@ export class OffsetViewSynthesisService {
             fusedSplatPath: finalSplatPath,
             fusedSpzPath: finalSpzPath,
             originalSplatPath,
+            metaPath,
             numOriginalSplats: originalSplats.length,
             numFusedSplats: fusedSplats.length,
             activePoses: activePosesReport

@@ -69,6 +69,18 @@ export interface EquirectangularStructuredPrompt {
         projection_behavior: string;
         depth_of_field: string;
     };
+    /**
+     * Geometric contract required by the panorama-to-3DGS pipeline (depth unprojection, floor prior,
+     * offset-view synthesis). Without it generators return elevated or tilted viewpoints and stretched
+     * rectilinear framings that are 2:1 in aspect but not spherical in geometry.
+     */
+    camera?: {
+        eye_height_meters: number;
+        level: string;
+        horizon: string;
+        vertical_coverage: string;
+        poles: string;
+    };
     rendering_style: {
         stitching: string;
         lighting: string;
@@ -2759,8 +2771,10 @@ export class Google360PanoramaPipelineService {
             mustKeep?: string[];
             avoid?: string[];
             resolution?: string;
+            eyeHeightMeters?: number;
         }
     ): EquirectangularStructuredPrompt {
+        const eyeHeight = options?.eyeHeightMeters ?? 1.7;
         return {
             image_meta: {
                 type: '360-degree Equirectangular Panorama',
@@ -2773,6 +2787,13 @@ export class Google360PanoramaPipelineService {
                 projection_behavior: options?.projectionBehavior || 'Correct equirectangular distortion near poles',
                 depth_of_field: options?.depthOfField || 'Infinite focus (deep focus across entire panorama)'
             },
+            camera: {
+                eye_height_meters: eyeHeight,
+                level: `Camera on a perfectly level tripod at ${eyeHeight} m above the floor; zero pitch, zero roll`,
+                horizon: 'The true horizon (eye-level line) lies exactly on the vertical center row of the image',
+                vertical_coverage: 'Full 180-degree vertical field of view: the top row is the zenith directly overhead, the bottom row is the nadir directly underfoot',
+                poles: 'Real floor texture at the nadir and real ceiling or sky at the zenith; no tripod, no flat-colored discs, no vignette'
+            },
             rendering_style: {
                 stitching: 'Seamless 360-degree panorama stitching, no visible seams. The far-left and far-right edges MUST match perfectly for cyclic continuity.',
                 lighting: options?.lighting || 'Maintain consistent lighting and shadows from the input image.'
@@ -2780,6 +2801,7 @@ export class Google360PanoramaPipelineService {
             constraints: {
                 must_keep: options?.mustKeep || [
                     'Spherical equirectangular perspective',
+                    'Level camera with the horizon on the center row',
                     'Consistent lighting and weather',
                     'Mathematically identical edges (left and right columns)'
                 ],
@@ -2787,7 +2809,9 @@ export class Google360PanoramaPipelineService {
                     'Blurriness',
                     'Overlaps',
                     'Vertical seams',
-                    'Distorted horizons',
+                    'Distorted or tilted horizons',
+                    'Elevated, aerial, or drone viewpoints',
+                    'Wide rectilinear or fisheye framing stretched to 2:1',
                     'Folds in the view'
                 ]
             }
@@ -2921,7 +2945,7 @@ export class Google360PanoramaPipelineService {
             try {
                 const client = await this.credentialsService.createClient();
                 const fullPrompt = options.useStructuredPrompt === false
-                    ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
+                    ? `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360 equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, 8k resolution, seamless horizontal environment${options.style ? `, ${options.style}` : ''}`
                     : JSON.stringify(structuredPrompt, null, 2);
 
                 const response: any = await client.models.generateContent({
@@ -3089,7 +3113,7 @@ export class Google360PanoramaPipelineService {
         } else {
             try {
                 const client = await this.credentialsService.createClient();
-                const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
+                const fullPrompt = `${typeof options.prompt === 'string' ? options.prompt : structuredPrompt.scene_context.description}, 360-degree equirectangular panoramic spherical projection, level camera on a tripod at eye level with the horizon on the exact vertical center line, full 180-degree vertical coverage from zenith to nadir, monumental architecture, 8k resolution, seamless horizontal environment, crisp ceiling dome, reflection floor${options.style ? `, ${options.style}` : ''}`;
 
                 const response: any = await client.models.generateContent({
                     model: 'gemini-3.1-flash-image',
