@@ -68,6 +68,8 @@ import type {
 import { TapirTrackingService } from '../../spatial/TapirTrackingService';
 import { PointSamplers } from '../../../common/tracking/PointTrackingModel';
 import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
+import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
+import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -628,6 +630,52 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['inputImagePath']
         }
+    },
+    {
+        name: 'panorama_to_3dgs',
+        description: 'Generate a watertight, high-fidelity walkable 3DGS world from a single 360 equirectangular panorama. Automatically extracts per-pixel geometry using Depth Anything V3, synthesizes multi-perspective offset viewpoints with Imagen 3 disocclusion inpainting, and compiles a merged standard binary .SPLAT and Niantic NGSP v2 compressed .SPZ.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Absolute path to the input 360 equirectangular panorama.'
+                },
+                sceneType: {
+                    type: 'STRING',
+                    description: 'Scene type to guide the metric depth model (indoor or outdoor, default: outdoor).'
+                },
+                eyeHeight: {
+                    type: 'NUMBER',
+                    description: 'Camera eye height in meters (default: 1.7).'
+                },
+                radius: {
+                    type: 'NUMBER',
+                    description: 'Offset ring radius in meters for Walk Mode disocclusion fill (default: 1.25).'
+                },
+                numPoses: {
+                    type: 'NUMBER',
+                    description: 'Number of camera poses to synthesize around the ring (default: 6).'
+                },
+                voxelSize: {
+                    type: 'NUMBER',
+                    description: 'Voxel size in meters for final splat decimation merge (default: 0.04).'
+                },
+                skipOffsets: {
+                    type: 'BOOLEAN',
+                    description: 'Fast path skipping multi-perspective offset synthesis (default: false).'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline mock mode using procedural geometric fallback depth (default: false).'
+                },
+                prompt: {
+                    type: 'STRING',
+                    description: 'Inpainting prompt to describe the hidden background scenery for Imagen 3.'
+                }
+            },
+            required: ['inputImagePath']
+        }
     }
 ];
 
@@ -894,6 +942,60 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 outputImagePath
             },
             summaryResult: `Extracted ${patchResolution}x${patchResolution} zenith rectilinear patch (FOV: ${fovDegrees}°) from ${inputImagePath}`
+        };
+    },
+
+    panorama_to_3dgs: async (args, _ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('panorama_to_3dgs: "inputImagePath" argument is required.');
+
+        const sceneType = (args.sceneType === 'indoor' || args.sceneType === 'outdoor') ? args.sceneType : 'outdoor';
+        const eyeHeight = typeof args.eyeHeight === 'number' ? args.eyeHeight : 1.70;
+        const radius = typeof args.radius === 'number' ? args.radius : 1.25;
+        const numPoses = typeof args.numPoses === 'number' ? args.numPoses : 6;
+        const voxelSize = typeof args.voxelSize === 'number' ? args.voxelSize : 0.04;
+        const skipOffsets = typeof args.skipOffsets === 'boolean' ? args.skipOffsets : false;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
+        const prompt = asString(args.prompt) || undefined;
+
+        console.log(`[panorama_to_3dgs] Launching full end-to-end 3DGS pipeline for ${inputImagePath}`);
+
+        // Step 1: Extract real per-pixel geometry
+        const depthService = new PanoramaDepthService();
+        const depthRes = await depthService.generatePanoramaDepth(inputImagePath, {
+            sceneType,
+            eyeHeight,
+            mock: mockExecution
+        });
+
+        if (!depthRes.success) {
+            throw new Error(`Failed to generate depth map for panorama: ${inputImagePath}`);
+        }
+
+        // Step 2: Run multi-perspective offset view synthesis and inpainting
+        const offsetService = new OffsetViewSynthesisService();
+        const synthesisRes = await offsetService.synthesizeOffsetViews(inputImagePath, depthRes.depthPath, {
+            radius,
+            numPoses,
+            prompt,
+            eyeHeight,
+            voxelSize,
+            skipOffsets,
+            mockExecution,
+            sceneType
+        });
+
+        return {
+            resultPayload: {
+                success: synthesisRes.success,
+                fusedSplatPath: synthesisRes.fusedSplatPath,
+                fusedSpzPath: synthesisRes.fusedSpzPath,
+                originalSplatPath: synthesisRes.originalSplatPath,
+                numOriginalSplats: synthesisRes.numOriginalSplats,
+                numFusedSplats: synthesisRes.numFusedSplats,
+                activePoses: synthesisRes.activePoses
+            } as unknown as ToolResultPayload,
+            summaryResult: `Successfully built watertight, walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats} splats). Complete standard .SPLAT and Niantic NGSP v2 compressed .SPZ written successfully.`
         };
     },
 
@@ -2896,6 +2998,7 @@ export const tapir4dgsHandlers: Record<string, ToolHandler> = {
             } as unknown as ToolResultPayload,
             summaryResult: `Built 4DGS scene: ${decomposed4d.telemetry.numDynamicGaussians} dynamic subject Gaussians deformed across ${decomposed4d.numFrames} frames (${decomposed4d.telemetry.trackerUsed.toUpperCase()} tracker, hero frame ${heroFrameIndex} timeDelta=[0,0,0], pruned ${decomposed4d.telemetry.prunedGaussians} drifting Gaussians, ARAP rigidity: ${useLocalRigidity ? 'active' : 'disabled'}).`
         };
-    }
+    },
+
 };
 

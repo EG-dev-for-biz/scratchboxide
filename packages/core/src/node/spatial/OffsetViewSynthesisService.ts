@@ -27,6 +27,7 @@ export interface OffsetSynthesisOptions {
     mockExecution?: boolean;   // Mock mode for testing without real Imagen/GPU
     outDir?: string;
     skipOffsets?: boolean;     // Fast path skipping offset view synthesis
+    sceneType?: 'indoor' | 'outdoor';
 }
 
 export interface OffsetSynthesisResult {
