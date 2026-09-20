@@ -166,7 +166,8 @@ describe('3D Gaussian Splatting Pipeline (Native C++20, SPZ/Splat Codecs & Three
         expect(parsedSpz[0].position[0]).toBeCloseTo(1.25, 1);
         expect(parsedSpz[0].position[1]).toBeCloseTo(-2.5, 1);
         expect(parsedSpz[0].position[2]).toBeCloseTo(3.75, 1);
-        expect(parsedSpz[0].colorRgb[0]).toBe(255);
+        // Niantic SPZ stores colour as SH-DC in u8 (colorScale 0.15): round trip is exact to ~ +/-3/255
+        expect(Math.abs(parsedSpz[0].colorRgb[0] - 255)).toBeLessThanOrEqual(3);
         expect(parsedSpz[0].opacity).toBeCloseTo(0.85, 1);
     });
 

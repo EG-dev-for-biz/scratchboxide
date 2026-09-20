@@ -54,8 +54,15 @@ function findChrome(): string | null {
 
 function startStaticServer(root: string): Promise<{ server: http.Server; port: number }> {
     return new Promise((resolve, reject) => {
+        const HOLD_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
         const server = http.createServer((req, res) => {
             const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+            if (urlPath === '/__hold') {
+                // Deferred 1x1 GIF: keeps the page's load event pending for ?ms= milliseconds
+                const ms = Math.min(60000, Math.max(0, Number(new URL(req.url || '/', 'http://x').searchParams.get('ms')) || 0));
+                setTimeout(() => { res.writeHead(200, { 'Content-Type': 'image/gif' }); res.end(HOLD_GIF); }, ms);
+                return;
+            }
             const filePath = path.join(root, urlPath);
             if (!filePath.startsWith(root) || !fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
                 res.writeHead(404); res.end('not found'); return;
@@ -73,12 +80,15 @@ function startStaticServer(root: string): Promise<{ server: http.Server; port: n
     });
 }
 
-function captureHeadless(chrome: string, url: string, outPng: string, timeoutMs = 90000): Promise<void> {
+function captureHeadless(chrome: string, url: string, outPng: string, timeoutMs = 90000, realTime = false): Promise<void> {
     return new Promise((resolve, reject) => {
         if (fs.existsSync(outPng)) fs.unlinkSync(outPng);
+        // virtual-time-budget fast-forwards timers (fine for our single-threaded viewer); pages that
+        // depend on Web Workers / WASM must wait in real time and defer `load` via the /__hold hook.
+        const timing = realTime ? [`--timeout=${timeoutMs - 5000}`] : ['--virtual-time-budget=15000'];
         const proc = spawn(chrome, [
             '--headless=new', '--hide-scrollbars', '--window-size=1920,1080',
-            '--virtual-time-budget=15000', `--screenshot=${outPng}`, url
+            ...timing, `--screenshot=${outPng}`, url
         ], { stdio: 'ignore' });
         const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`headless chrome timed out after ${timeoutMs}ms`)); }, timeoutMs);
         proc.on('exit', () => {
@@ -215,4 +225,63 @@ describe('Walkable 3DGS viewer: headless visual regression gate', () => {
         expect(holeFraction).toBeLessThan(0.002);
         expect(floorScanlines).toBeLessThan(0.02);
     }, 120000);
+
+    const tilesetPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/pantheon/tileset.json'));
+    const itIfTileset = canRun && tilesetPresent ? it : it.skip;
+
+    itIfTileset('streams the KHR_gaussian_splatting 3D Tiles tileset to the same frame as the single-file asset', async () => {
+        const single = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');
+        const out = path.join(SHOT_DIR, '30_walkable_3dgs_pantheon_3dtiles_stream.png');
+        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/pantheon/tileset.json`, out);
+        const a = toLuminance(fs.readFileSync(single));
+        const b = toLuminance(fs.readFileSync(out));
+        expect(b.w).toBe(a.w);
+        // Same scene, same camera: per-region luminance must agree closely (LOD selection may differ slightly)
+        let diff = 0, n = 0;
+        for (let y = 0; y < a.h; y += 8) for (let x = 0; x < a.w; x += 8) { diff += Math.abs(a.L[y * a.w + x] - b.L[y * b.w + x]); n++; }
+        const meanAbsDiff = diff / n;
+        console.log(`[visual] tileset vs single-file meanAbsDiff=${meanAbsDiff.toFixed(2)}`);
+        expect(meanAbsDiff).toBeLessThan(6);
+        expect(regionMean(b, Math.floor(b.w * 0.2), Math.floor(b.h * 0.15), Math.floor(b.w * 0.8), Math.floor(b.h * 0.45))).toBeGreaterThan(60);
+    }, 120000);
+
+    itIfTileset('bounding-volume discard crops splats outside the box and clamps below the ground plane', async () => {
+        const out = path.join(SHOT_DIR, '31_walkable_3dgs_pantheon_crop_volume.png');
+        // Keep only |x| < 6 m and y > 0.05 m: the apse slab remains, floor and side walls are discarded
+        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/pantheon/tileset.json&crop=-6,-1,-30,6,40,30&groundY=0.05`, out);
+        const img = toLuminance(fs.readFileSync(out));
+        const cx = Math.floor(img.w / 2);
+        const inside = regionMean(img, cx - 60, Math.floor(img.h * 0.2), cx + 60, Math.floor(img.h * 0.5));
+        const leftOutside = regionMean(img, Math.floor(img.w * 0.02), Math.floor(img.h * 0.2), Math.floor(img.w * 0.2), Math.floor(img.h * 0.5));
+        const floorBand = regionMean(img, Math.floor(img.w * 0.2), Math.floor(img.h * 0.85), Math.floor(img.w * 0.8), Math.floor(img.h * 0.98));
+        console.log(`[visual] crop inside=${inside.toFixed(1)} outside=${leftOutside.toFixed(1)} floor=${floorBand.toFixed(1)}`);
+        expect(inside).toBeGreaterThan(60);      // content survives inside the crop box
+        expect(leftOutside).toBeLessThan(12);    // side walls discarded (clear colour)
+        expect(floorBand).toBeLessThan(12);      // floor clamped away
+    }, 120000);
+
+    const interopPresent = tilesetPresent
+        && fs.existsSync(path.join(PUBLIC_DIR, 'splat_tiles_interop.html'))
+        && fs.existsSync(path.join(PUBLIC_DIR, 'js/splat_tiles_interop.js'));
+    const itIfInterop = canRun && interopPresent ? it : it.skip;
+
+    itIfInterop('third-party stack (3d-tiles-renderer + 3dgs-plugin + gaussian-splat-lite) renders our tileset to the same scene', async () => {
+        const single = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');
+        const out = path.join(SHOT_DIR, '32_walkable_3dgs_pantheon_interop_3dtiles_renderer.png');
+        const interopBase = base.replace('spatial_photoreal_3dgs_demo.html', 'splat_tiles_interop.html');
+        await captureHeadless(chrome!, `${interopBase}?hud=0&tileset=/tilesets/pantheon/tileset.json&hold=18000`, out, 60000, true);
+        const a = toLuminance(fs.readFileSync(single));
+        const b = toLuminance(fs.readFileSync(out));
+        const cx0 = Math.floor(b.w * 0.2), cx1 = Math.floor(b.w * 0.8);
+        const wallMean = regionMean(b, cx0, Math.floor(b.h * 0.15), cx1, Math.floor(b.h * 0.45));
+        const blackCols = blackColumnFraction(b, cx0, Math.floor(b.h * 0.15), cx1, Math.floor(b.h * 0.45));
+        let diff = 0, n = 0;
+        for (let y = 0; y < a.h; y += 8) for (let x = 0; x < a.w; x += 8) { diff += Math.abs(a.L[y * a.w + x] - b.L[y * b.w + x]); n++; }
+        const meanAbsDiff = diff / n;
+        console.log(`[visual] interop wallMean=${wallMean.toFixed(1)} blackCols=${blackCols.toFixed(4)} meanAbsDiff vs ours=${meanAbsDiff.toFixed(2)}`);
+        expect(wallMean).toBeGreaterThan(60);     // it drew the scene, not a void
+        expect(blackCols).toBe(0);                 // no missing columns / mis-rotation
+        // Different splat kernel (2.83 sigma, pre-blur) than ours: allow a looser but bounded difference
+        expect(meanAbsDiff).toBeLessThan(30);
+    }, 90000);
 });

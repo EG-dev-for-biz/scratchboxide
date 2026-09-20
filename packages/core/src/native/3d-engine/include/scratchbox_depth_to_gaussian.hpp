@@ -812,9 +812,11 @@ public:
         float eyeHeight = 1.70f,
         float maxRadius = 80.0f,
         float edgeSeveranceTau = 0.08f,
-        // Scale is the Gaussian sigma; renderers draw to 3 sigma, so sigma ~= 0.65 x sample spacing
-        // gives ~2 sample spacings of visible footprint (gapless without washing out detail).
-        float splatScaleMultiplier = 0.65f,
+        // Scale is the Gaussian sigma. Calibrated against an independent renderer (gaussian-splat-lite,
+        // 2.83 sigma kernel, no low-pass dilation): 0.65 leaves a visible row lattice on thin disc
+        // splats; 0.95 halves it while keeping edge detail. Our own viewer adds a small depth-scaled
+        // low-pass, so it is gapless at either value.
+        float splatScaleMultiplier = 0.95f,
         float splatThicknessRatio = 0.22f,
         bool inpaintOcclusion = true
     ) {

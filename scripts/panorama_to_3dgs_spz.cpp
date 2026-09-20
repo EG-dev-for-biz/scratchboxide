@@ -148,6 +148,7 @@ int main(int argc, char** argv) {
     std::string profile = "adaptive";
     int stride = 4; // Stride 4 on 4096x2048 = 1024x512 = 524,288 splats
     float eyeHeight = 1.70f;
+    float sigmaScale = 0.95f; // Gaussian sigma as a fraction of the sample spacing (see convertEquirectangularToGaussianSplats)
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -159,6 +160,7 @@ int main(int argc, char** argv) {
         else if (arg == "--profile" && i + 1 < argc) profile = argv[++i];
         else if (arg == "--stride" && i + 1 < argc) stride = std::stoi(argv[++i]);
         else if (arg == "--eye-height" && i + 1 < argc) eyeHeight = std::stof(argv[++i]);
+        else if (arg == "--sigma-scale" && i + 1 < argc) sigmaScale = std::stof(argv[++i]);
     }
 
     if (inputPath.empty() || (outSpzPath.empty() && outSplatPath.empty())) {
@@ -209,7 +211,10 @@ int main(int argc, char** argv) {
         depthPtr,
         maskPtr,
         stride,
-        eyeHeight
+        eyeHeight,
+        80.0f,
+        0.08f,
+        sigmaScale
     );
 
     std::cout << "[3DGS] Generated " << splats.size() << " Continuous 3D Gaussian Splats." << std::endl;

@@ -25,9 +25,11 @@
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.9",
+    "3d-tiles-rendererjs-3dgs-plugin": "^0.3.0",
     "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "gaussian-splat-lite": "^1.1.1",
     "globals": "^15.15.0",
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.70.0",

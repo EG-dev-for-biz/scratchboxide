@@ -70,6 +70,7 @@ import { PointSamplers } from '../../../common/tracking/PointTrackingModel';
 import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
 import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
+import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -676,6 +677,25 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['inputImagePath']
         }
+    },
+    {
+        name: 'splat_to_3dtiles',
+        description: 'Convert a Gaussian splat cloud (.splat or Niantic .spz) into an OGC 3D Tiles 1.1 tileset: native C++20 Morton octree with LOD simplification, per-tile GLB using KHR_gaussian_splatting + KHR_gaussian_splatting_compression_spz_2, and an optional WGS-84 root transform (from a lat/lng/alt anchor via the ENU tangent plane) so the splats overlay Google Photorealistic 3D Tiles in any 3D Tiles viewer.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: { type: 'STRING', description: 'Path to the input .splat or .spz file.' },
+                outDir: { type: 'STRING', description: 'Output directory for tileset.json and tiles/ (default: build/splat_tiles/<name>).' },
+                latitude: { type: 'NUMBER', description: 'Geodetic latitude of the splat frame origin (degrees). Omit for a local-metres tileset.' },
+                longitude: { type: 'NUMBER', description: 'Geodetic longitude of the splat frame origin (degrees).' },
+                altitude: { type: 'NUMBER', description: 'Altitude of the splat frame origin in metres (default 0).' },
+                headingDeg: { type: 'NUMBER', description: 'Yaw of the splat frame relative to true north, degrees clockwise (default 0).' },
+                maxDepth: { type: 'NUMBER', description: 'Maximum octree depth (default 5).' },
+                leafCapacity: { type: 'NUMBER', description: 'Maximum splats per leaf tile (default 65536).' },
+                interiorBudget: { type: 'NUMBER', description: 'Maximum simplified splats per interior LOD tile (default 32768).' }
+            },
+            required: ['inputPath']
+        }
     }
 ];
 
@@ -1002,6 +1022,40 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
             summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'inferred from metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+        };
+    },
+
+    splat_to_3dtiles: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        if (!inputPath) throw new Error('splat_to_3dtiles: "inputPath" argument is required.');
+        const pathMod = await import('path');
+        const outDir = asString(args.outDir) || pathMod.resolve(process.cwd(), 'build/splat_tiles', pathMod.basename(inputPath).replace(/\.(splat|spz)$/i, ''));
+        const hasOrigin = typeof args.latitude === 'number' && typeof args.longitude === 'number';
+
+        const service = new Splat3DTilesService();
+        const res = await service.convert({
+            inputPath,
+            outDir,
+            origin: hasOrigin ? { lat: args.latitude as number, lng: args.longitude as number, alt: typeof args.altitude === 'number' ? args.altitude : 0 } : undefined,
+            headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : 0,
+            maxDepth: typeof args.maxDepth === 'number' ? args.maxDepth : undefined,
+            leafCapacity: typeof args.leafCapacity === 'number' ? args.leafCapacity : undefined,
+            interiorBudget: typeof args.interiorBudget === 'number' ? args.interiorBudget : undefined
+        });
+        if (!res.success) throw new Error(`splat_to_3dtiles failed: ${res.error}`);
+
+        return {
+            resultPayload: {
+                success: true,
+                tilesetPath: res.tilesetPath,
+                tileCount: res.tileCount,
+                levels: res.levels,
+                numSplats: res.numSplats,
+                tileBytes: res.tileBytes,
+                geodeticallyPlaced: !!res.rootTransform,
+                durationMs: res.durationMs
+            } as unknown as ToolResultPayload,
+            summaryResult: `Tiled ${res.numSplats.toLocaleString()} splats into ${res.tileCount} KHR_gaussian_splatting tiles (${res.levels} LOD levels, ${(res.tileBytes / 1048576).toFixed(1)} MB) in ${res.durationMs} ms${res.rootTransform ? ', placed on WGS-84' : ' (local metres)'}. tileset.json: ${res.tilesetPath}`
         };
     },
 
