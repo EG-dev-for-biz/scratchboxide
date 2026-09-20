@@ -272,9 +272,9 @@ export class SplatService {
         const splats: BakedGaussian[] = [];
 
         if (magic === 0x5053474e) {
-            // Planar NGSP v2 decoder
+            // Planar NGSP v2 decoder (16-byte header: magic, version, numPoints, shDegree, fractionalBits, flags, reserved)
             const numPoints = raw.readUInt32LE(8);
-            const fractionalBits = raw.readUInt8(12);
+            const fractionalBits = raw.readUInt8(13);
             const posScale = 1.0 / (1 << fractionalBits);
 
             const pxOffset = 16;
@@ -391,9 +391,10 @@ export class SplatService {
         uncompressed.writeUInt32LE(0x5053474e, 0); // NGSP magic
         uncompressed.writeUInt32LE(2, 4);          // version 2
         uncompressed.writeUInt32LE(numPoints, 8);  // numPoints
-        uncompressed.writeUInt8(fractionalBits, 12);
-        uncompressed.writeUInt8(0, 13); // flags
-        uncompressed.writeUInt16LE(0, 14); // reserved
+        uncompressed.writeUInt8(0, 12);            // shDegree
+        uncompressed.writeUInt8(fractionalBits, 13);
+        uncompressed.writeUInt8(0, 14);            // flags
+        uncompressed.writeUInt8(0, 15);            // reserved
 
         const posScale = 1 << fractionalBits;
         

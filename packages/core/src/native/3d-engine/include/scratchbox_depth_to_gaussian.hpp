@@ -689,6 +689,38 @@ public:
     }
 
 private:
+    // Right-handed orthonormal basis (T, B, N) with T x B = N -> unit quaternion (Shepperd's method).
+    static Quat quatFromBasis(const Vec3& T, const Vec3& B, const Vec3& N) {
+        float trace = T.x + B.y + N.z;
+        Quat q;
+        if (trace > 0.0f) {
+            float s = 0.5f / std::sqrt(trace + 1.0f);
+            q.w = 0.25f / s;
+            q.x = (B.z - N.y) * s;
+            q.y = (N.x - T.z) * s;
+            q.z = (T.y - B.x) * s;
+        } else if (T.x > B.y && T.x > N.z) {
+            float s = 2.0f * std::sqrt(std::max(1e-4f, 1.0f + T.x - B.y - N.z));
+            q.w = (B.z - N.y) / s;
+            q.x = 0.25f * s;
+            q.y = (T.y + B.x) / s;
+            q.z = (N.x + T.z) / s;
+        } else if (B.y > N.z) {
+            float s = 2.0f * std::sqrt(std::max(1e-4f, 1.0f + B.y - T.x - N.z));
+            q.w = (N.x - T.z) / s;
+            q.x = (T.y + B.x) / s;
+            q.y = 0.25f * s;
+            q.z = (B.z + N.y) / s;
+        } else {
+            float s = 2.0f * std::sqrt(std::max(1e-4f, 1.0f + N.z - T.x - B.y));
+            q.w = (T.y - B.x) / s;
+            q.x = (N.x + T.z) / s;
+            q.y = (B.z + N.y) / s;
+            q.z = 0.25f * s;
+        }
+        return q.normalized();
+    }
+
     static Quat quatFromUnitVectors(const Vec3& from, const Vec3& to) {
         float dot = from.dot(to);
         if (dot >= 0.999999f) {
@@ -780,7 +812,9 @@ public:
         float eyeHeight = 1.70f,
         float maxRadius = 80.0f,
         float edgeSeveranceTau = 0.08f,
-        float splatScaleMultiplier = 2.10f,
+        // Scale is the Gaussian sigma; renderers draw to 3 sigma, so sigma ~= 0.65 x sample spacing
+        // gives ~2 sample spacings of visible footprint (gapless without washing out detail).
+        float splatScaleMultiplier = 0.65f,
         float splatThicknessRatio = 0.22f,
         bool inpaintOcclusion = true
     ) {
@@ -941,18 +975,6 @@ public:
                     }
                 }
 
-                // Compute orientation quaternion aligning (0, 0, 1) with normal
-                Vec3 zAxis(0.0f, 0.0f, 1.0f);
-                Vec3 axis = zAxis.cross(normal);
-                float dot = zAxis.dot(normal);
-
-                Quat rot;
-                if (dot < -0.9999f) {
-                    rot = Quat(0.0f, 1.0f, 0.0f, 0.0f); // 180 deg around Y
-                } else {
-                    rot = Quat(axis.x, axis.y, axis.z, 1.0f + dot).normalized();
-                }
-
                 // Tangential scale proportional to angular subtended arc
                 float deltaYaw = (2.0f * static_cast<float>(M_PI) * x_step) / static_cast<float>(width);
                 float arc = depth * deltaYaw * std::max(0.1f, cosPitch) * splatScaleMultiplier;
@@ -964,7 +986,34 @@ public:
                     alpha *= 0.85f;
                 }
 
-                Vec3 scale(arc, arc, arc * splatThicknessRatio);
+                // Foreshortening compensation: at grazing incidence the surface footprint of one
+                // pixel row is arc / |n.ray| along the ray's tangent-plane projection. Build an
+                // explicit (T_perp, T_fore, N) basis so the splat can be elongated only along the
+                // foreshortened direction (prevents scanline gaps on floors/ceilings/walls).
+                float cosInc = std::abs(normal.dot(ray));
+                // Clamp to 2x: enough to close grazing-row gaps at 3 sigma, without smearing the
+                // floor into radial streaks when the viewer walks off the capture point.
+                float elongation = 1.0f / std::max(0.5f, cosInc);
+                Vec3 tFore = ray - normal * normal.dot(ray);
+                float tForeLen = tFore.length();
+                Quat rot;
+                Vec3 scale;
+                if (tForeLen > 1e-4f && elongation > 1.05f) {
+                    tFore = tFore * (1.0f / tForeLen);
+                    Vec3 tPerp = normal.cross(tFore).normalized();
+                    rot = quatFromBasis(tPerp, tFore, normal);
+                    scale = Vec3(arc, arc * elongation, arc * splatThicknessRatio);
+                } else {
+                    Vec3 zAxis(0.0f, 0.0f, 1.0f);
+                    Vec3 axis = zAxis.cross(normal);
+                    float dot = zAxis.dot(normal);
+                    if (dot < -0.9999f) {
+                        rot = Quat(0.0f, 1.0f, 0.0f, 0.0f); // 180 deg around Y
+                    } else {
+                        rot = Quat(axis.x, axis.y, axis.z, 1.0f + dot).normalized();
+                    }
+                    scale = Vec3(arc, arc, arc * splatThicknessRatio);
+                }
 
                 GaussianSplat s;
                 s.position = pos;

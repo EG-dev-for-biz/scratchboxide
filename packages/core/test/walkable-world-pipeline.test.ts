@@ -64,6 +64,19 @@ describe('Competitive 3DGS Walkable World Pipeline Integration Tests', () => {
         const spzBuf = await fs.readFile(synthesisRes.fusedSpzPath);
         const parsedGaussians = SplatService.parseSpzBuffer(spzBuf);
         expect(parsedGaussians.length).toBe(synthesisRes.numFusedSplats);
+
+        // Cross-decode: a file written by the C++ NGSP encoder must decode in TS to metric-scale positions.
+        // (Guards against header layout drift between scratchbox_spz.hpp and splat-service.ts.)
+        const originalSpzPath = synthesisRes.originalSplatPath.replace(/\.splat$/, '.spz');
+        expect(await fs.pathExists(originalSpzPath)).toBe(true);
+        const cppSpz = SplatService.parseSpzBuffer(await fs.readFile(originalSpzPath));
+        expect(cppSpz.length).toBe(synthesisRes.numOriginalSplats);
+        let maxAbs = 0;
+        for (const g of cppSpz) {
+            for (const c of g.position) maxAbs = Math.max(maxAbs, Math.abs(c));
+        }
+        expect(maxAbs).toBeGreaterThan(1.0);
+        expect(maxAbs).toBeLessThan(200.0);
         
         // Clean up test intermediates
         if (await fs.pathExists(testDir)) {

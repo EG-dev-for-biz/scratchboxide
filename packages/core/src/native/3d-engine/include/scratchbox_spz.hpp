@@ -243,9 +243,10 @@ public:
         uint8_t shDegree{0};
         uint8_t fractionalBits{DEFAULT_FRACTIONAL_BITS};
         uint8_t flags{0};
-        uint16_t reserved{0};
+        uint8_t reserved{0};
     };
 #pragma pack(pop)
+    static_assert(sizeof(SpzHeader) == 16, "NGSP header must be exactly 16 bytes");
 
     static std::vector<uint8_t> encode(const std::vector<GaussianSplat>& splats, uint8_t fractionalBits = DEFAULT_FRACTIONAL_BITS) {
         size_t numPoints = splats.size();
@@ -378,7 +379,9 @@ public:
                 splats.push_back(s);
             }
         } else if (header.magic == SPZ_MAGIC_LEGACY) {
-            float posScale = 1.0f / static_cast<float>(1 << header.fractionalBits);
+            // Legacy SPZ1 layout stored fractionalBits at byte 12 (where NGSP stores shDegree)
+            uint8_t legacyFractionalBits = uncompressed[12];
+            float posScale = 1.0f / static_cast<float>(1 << legacyFractionalBits);
             const uint8_t* ptr = uncompressed.data() + sizeof(SpzHeader);
             size_t availablePoints = (uncompressed.size() - sizeof(SpzHeader)) / 22;
             size_t count = std::min<size_t>(header.numPoints, availablePoints);
