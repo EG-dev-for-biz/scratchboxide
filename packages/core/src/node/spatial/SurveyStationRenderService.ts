@@ -130,7 +130,8 @@ export class SurveyStationRenderService {
         const shaded = HeadlessMeshSilhouetteRenderer.renderShadedMesh(this.mesh, pose, width, height, {
             clayColor: options.clayColor ?? [190, 195, 200],
             bgColor: options.bgColor ?? [118, 150, 190, 255],
-            lightDir: options.lightDir
+            lightDir: options.lightDir,
+            clipNearPlane: true
         });
         return {
             stationId: station.id,
@@ -158,7 +159,7 @@ export class SurveyStationRenderService {
 
         return stations.map(st => {
             const { pose, intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(st, width, height);
-            const { depthBuffer } = HeadlessMeshSilhouetteRenderer.renderMesh(this.mesh!, pose, width, height);
+            const { depthBuffer } = HeadlessMeshSilhouetteRenderer.renderMesh(this.mesh!, pose, width, height, { clipNearPlane: true });
 
             // Standoff: centre pixel, falling back to the nearest filled pixel in a 5x5 window
             let standoff: number | undefined;

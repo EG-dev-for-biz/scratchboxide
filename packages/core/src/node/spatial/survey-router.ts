@@ -12,6 +12,8 @@ import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor, SurveyPatternConfig } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
+import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
+import { SurveySplatPipelineService } from './SurveySplatPipelineService';
 
 /**
  * Framework-agnostic handlers for the Survey Synthesis API, mounted by the desktop server at
@@ -44,12 +46,50 @@ export interface SurveyApiDeps {
     beautifyToSplats?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
 }
 
+/**
+ * Wires the beautify job handlers onto a SurveyApi given an image generator. Kept separate so
+ * servers without Google credentials can still serve synthesis/render/export.
+ */
+export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: StationImageGenerator, workspaceRoot: string): SurveyApiDeps {
+    const resolveGlb = (glbPath: string) => path.isAbsolute(glbPath) ? glbPath : path.resolve(workspaceRoot, glbPath);
+    deps.beautifyStation = async (args, report) => {
+        if (!args?.glbPath || !args?.station) throw new Error('glbPath and station are required');
+        report(0.05, 'Rendering blockout');
+        const renderer = new SurveyStationRenderService();
+        await renderer.loadMesh(resolveGlb(args.glbPath));
+        const [station] = renderer.enrichStations([args.station], { isoDate: args.isoDate });
+        const svc = new BeautifyStationService(renderer, generator);
+        report(0.2, `Generating with ${generator.name}`);
+        const res = await svc.beautify(station, { locationName: args.locationName || args.anchor?.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix }, { width: args.width ?? 1920, maxRerolls: args.maxRerolls });
+        const outDir = path.resolve(workspaceRoot, args.outDir || `build/beautify_stations/${Date.now()}`);
+        await fs.outputFile(path.join(outDir, `station_${station.id}_blockout.png`), res.blockout.png);
+        await fs.outputFile(path.join(outDir, `station_${station.id}_beautified.png`), res.imagePng);
+        report(1, res.accepted ? 'Accepted' : `Rejected: ${res.qc.reason}`);
+        return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation };
+    };
+    deps.beautifyToSplats = async (args, report) => {
+        if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length === 0 || !args?.anchor) throw new Error('glbPath, stations[] and anchor are required');
+        const svc = new SurveySplatPipelineService({ generator });
+        const outDir = path.resolve(workspaceRoot, args.outDir || `public/tilesets/survey_${Date.now()}`);
+        const res = await svc.run({
+            glbPath: resolveGlb(args.glbPath), anchor: args.anchor, stations: args.stations, outDir,
+            beautify: { locationName: args.locationName || args.anchor.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix },
+            mode: args.mode, maxStations: args.maxStations, renderWidth: args.width, bakeStride: args.bakeStride, isoDate: args.isoDate, headingDeg: args.headingDeg, maxRerolls: args.maxRerolls
+        }, report);
+        if (!res.success) throw new Error(res.error || 'pipeline failed');
+        const publicRoot = path.resolve(workspaceRoot, 'public');
+        const rel = path.relative(publicRoot, res.tilesetPath);
+        return { ...res, tilesetUrl: rel && !rel.startsWith('..') ? '/' + rel.split(path.sep).join('/') : undefined };
+    };
+    return deps;
+}
+
 export class SurveyApi {
     readonly engine = new SurveySynthesisEngine();
     private jobs = new Map<string, SurveyJob>();
     private renderers = new Map<string, SurveyStationRenderService>();
 
-    constructor(private deps: SurveyApiDeps = {}) {}
+    constructor(readonly deps: SurveyApiDeps = {}) {}
 
     // ---- helpers ----
 

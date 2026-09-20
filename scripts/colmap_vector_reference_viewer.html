@@ -567,7 +567,7 @@
         const { job } = await surveyPost('/beautify-station', { glbPath: currentClayMetadata.glbPath, station: pose, anchor: currentAnchor });
         const done = await pollJob(job.id, j => { if (cap) cap.textContent = `Beautify #${pose.id}: ${j.status} ${(j.progress * 100).toFixed(0)}% ${j.message || ''}`; });
         if (done.status === 'done' && done.result?.imageBase64) {
-          const img = document.getElementById('blockout-preview'); if (img) img.src = 'data:image/png;base64,' + done.result.imageBase64;
+          const img = document.getElementById('blockout-preview'); if (img) { img.src = 'data:image/png;base64,' + done.result.imageBase64; img.style.display = 'block'; }
         }
       } catch (err) { if (cap) cap.textContent = `Beautify error: ${err.message}`; }
     };

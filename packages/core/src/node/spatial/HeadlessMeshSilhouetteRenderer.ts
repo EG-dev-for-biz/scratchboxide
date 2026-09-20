@@ -35,7 +35,8 @@ export class HeadlessMeshSilhouetteRenderer {
         mesh: RenderMesh3D,
         pose: CameraPose6DOF,
         width: number = 320,
-        height: number = 240
+        height: number = 240,
+        options?: { clipNearPlane?: boolean }
     ): RenderTargetBuffer {
         const size = width * height;
         const depthBuffer = new Float32Array(size);
@@ -113,58 +114,13 @@ export class HeadlessMeshSilhouetteRenderer {
             }
         }
 
-        // 3. Project vertices to Clip Space & Screen Space
-        const vertCount = Math.floor(mesh.vertices.length / 3);
-        const screenX = new Float32Array(vertCount);
-        const screenY = new Float32Array(vertCount);
-        const screenZ = new Float32Array(vertCount);
-        const isVisible = new Uint8Array(vertCount);
-
-        const halfW = width * 0.5;
-        const halfH = height * 0.5;
-
-        for (let i = 0; i < vertCount; i++) {
-            const vx = mesh.vertices[i * 3];
-            const vy = mesh.vertices[i * 3 + 1];
-            const vz = mesh.vertices[i * 3 + 2];
-
-            const cx = VP[0][0] * vx + VP[0][1] * vy + VP[0][2] * vz + VP[0][3];
-            const cy = VP[1][0] * vx + VP[1][1] * vy + VP[1][2] * vz + VP[1][3];
-            const cz = VP[2][0] * vx + VP[2][1] * vy + VP[2][2] * vz + VP[2][3];
-            const cw = VP[3][0] * vx + VP[3][1] * vy + VP[3][2] * vz + VP[3][3];
-
-            if (cw > near && cw < far) {
-                const invW = 1.0 / cw;
-                const ndcX = cx * invW;
-                const ndcY = cy * invW;
-
-                screenX[i] = (ndcX + 1.0) * halfW;
-                screenY[i] = (1.0 - ndcY) * halfH; // Flip Y for screen coords
-                screenZ[i] = cw; // Store positive depth along viewing axis
-                isVisible[i] = 1;
-            } else {
-                isVisible[i] = 0;
-            }
-        }
-
-        // 4. Rasterize Triangles
-        const triCount = Math.floor(mesh.indices.length / 3);
-
-        for (let t = 0; t < triCount; t++) {
-            const i0 = mesh.indices[t * 3];
-            const i1 = mesh.indices[t * 3 + 1];
-            const i2 = mesh.indices[t * 3 + 2];
-
-            if (!isVisible[i0] || !isVisible[i1] || !isVisible[i2]) continue;
-
-            const x0 = screenX[i0]; const y0 = screenY[i0]; const z0 = screenZ[i0];
-            const x1 = screenX[i1]; const y1 = screenY[i1]; const z1 = screenZ[i1];
-            const x2 = screenX[i2]; const y2 = screenY[i2]; const z2 = screenZ[i2];
-
+        // 3+4. Project and rasterize with near-plane clipping (triangles straddling the camera plane
+        // are clipped, not dropped, so street-level ground and facades stay intact)
+        HeadlessMeshSilhouetteRenderer.forEachClippedScreenTriangle(mesh, eye, [rx, ry, rz], [ux, uy, uz], [fx, fy, fz], P00, P11, width, height, near, far, (x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
             // 2D signed area. No winding cull: photogrammetry GLBs have inconsistent winding and the
             // depth test already keeps the nearest surface. Only degenerate triangles are skipped.
             const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            if (Math.abs(area) < 1e-12) continue;
+            if (Math.abs(area) < 1e-12) return;
 
             const invArea = 1.0 / area;
 
@@ -177,13 +133,15 @@ export class HeadlessMeshSilhouetteRenderer {
             for (let py = minY; py <= maxY; py++) {
                 const rowOffset = py * width;
                 for (let px = minX; px <= maxX; px++) {
-                    // Barycentric coordinates
-                    const w0 = ((x1 - px) * (y2 - py) - (y1 - py) * (x2 - px)) * invArea;
-                    const w1 = ((x2 - px) * (y0 - py) - (y2 - py) * (x0 - px)) * invArea;
+                    // Barycentric coordinates sampled at the pixel centre (matches unprojection at u + 0.5)
+                    const sx = px + 0.5, sy = py + 0.5;
+                    const w0 = ((x1 - sx) * (y2 - sy) - (y1 - sy) * (x2 - sx)) * invArea;
+                    const w1 = ((x2 - sx) * (y0 - sy) - (y2 - sy) * (x0 - sx)) * invArea;
                     const w2 = 1.0 - w0 - w1;
 
                     if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-                        const depth = w0 * z0 + w1 * z1 + w2 * z2;
+                        // Perspective-correct depth: 1/z is affine in screen space, z is not
+                        const depth = 1.0 / (w0 / z0 + w1 / z1 + w2 / z2);
                         const idx = rowOffset + px;
 
                         if (depth < depthBuffer[idx]) {
@@ -193,7 +151,7 @@ export class HeadlessMeshSilhouetteRenderer {
                     }
                 }
             }
-        }
+        }, options?.clipNearPlane ? 'clip' : 'cull');
 
         return {
             width,
@@ -436,6 +394,73 @@ export class HeadlessMeshSilhouetteRenderer {
         fs.writeFileSync(outputPath, pngBuf);
     }
 
+
+    /**
+     * Transforms every triangle to camera space, clips it against the near plane (Sutherland-Hodgman,
+     * yielding up to two triangles), projects to screen and invokes `emit`. Far-plane and viewport
+     * culling are left to the depth test and the rasterizer's bounding-box clamp.
+     */
+    private static forEachClippedScreenTriangle(
+        mesh: RenderMesh3D,
+        eye: [number, number, number], right: [number, number, number], up: [number, number, number], fwd: [number, number, number],
+        P00: number, P11: number, width: number, height: number, near: number, far: number,
+        emit: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, i0: number, i1: number, i2: number) => void,
+        /**
+         * 'clip'     : Sutherland-Hodgman clip against the near plane (geometrically correct; use for survey/blockout renders).
+         * 'cull'     : legacy renderMesh behaviour, drop any triangle with a vertex nearer than `near`.
+         * 'cull-ndc' : legacy renderShadedMesh behaviour, also drop triangles with a vertex outside +/-1.2 NDC.
+         * Legacy modes stay the default because mixed-LOD tile dumps contain kilometre-scale skirt
+         * triangles that, rendered correctly, cover the frame; existing resection tests depend on that.
+         */
+        mode: 'clip' | 'cull' | 'cull-ndc' = 'clip'
+    ): void {
+        const vertCount = Math.floor(mesh.vertices.length / 3);
+        const vX = new Float32Array(vertCount), vY = new Float32Array(vertCount), vZ = new Float32Array(vertCount);
+        for (let i = 0; i < vertCount; i++) {
+            const dx = mesh.vertices[i * 3] - eye[0], dy = mesh.vertices[i * 3 + 1] - eye[1], dz = mesh.vertices[i * 3 + 2] - eye[2];
+            vX[i] = dx * right[0] + dy * right[1] + dz * right[2];
+            vY[i] = dx * up[0] + dy * up[1] + dz * up[2];
+            vZ[i] = dx * fwd[0] + dy * fwd[1] + dz * fwd[2];
+        }
+        const halfW = width * 0.5, halfH = height * 0.5;
+        const sx = (x: number, z: number) => (P00 * x / z + 1) * halfW;
+        const sy = (y: number, z: number) => (1 - P11 * y / z) * halfH;
+        const triCount = Math.floor(mesh.indices.length / 3);
+        const poly: number[][] = [];
+        for (let t = 0; t < triCount; t++) {
+            const i0 = mesh.indices[t * 3], i1 = mesh.indices[t * 3 + 1], i2 = mesh.indices[t * 3 + 2];
+            const z0 = vZ[i0], z1 = vZ[i1], z2 = vZ[i2];
+            if (z0 < near && z1 < near && z2 < near) continue;            // fully behind
+            if (z0 > far && z1 > far && z2 > far) continue;               // fully beyond
+            if (z0 >= near && z1 >= near && z2 >= near) {
+                if (mode === 'cull-ndc') {
+                    const inNdc = (x: number, y: number, z: number) => { const nx = P00 * x / z, ny = P11 * y / z; return nx >= -1.2 && nx <= 1.2 && ny >= -1.2 && ny <= 1.2; };
+                    if (!inNdc(vX[i0], vY[i0], z0) || !inNdc(vX[i1], vY[i1], z1) || !inNdc(vX[i2], vY[i2], z2)) continue;
+                }
+                emit(sx(vX[i0], z0), sy(vY[i0], z0), z0, sx(vX[i1], z1), sy(vY[i1], z1), z1, sx(vX[i2], z2), sy(vY[i2], z2), z2, i0, i1, i2);
+                continue;
+            }
+            if (mode !== 'clip') continue; // legacy: a vertex is behind the near plane -> drop
+            // Clip against z = near
+            poly.length = 0;
+            const idx = [i0, i1, i2];
+            for (let k = 0; k < 3; k++) {
+                const a = idx[k], b = idx[(k + 1) % 3];
+                const az = vZ[a], bz = vZ[b];
+                const aIn = az >= near, bIn = bz >= near;
+                if (aIn) poly.push([vX[a], vY[a], az]);
+                if (aIn !== bIn) {
+                    const tt = (near - az) / (bz - az);
+                    poly.push([vX[a] + (vX[b] - vX[a]) * tt, vY[a] + (vY[b] - vY[a]) * tt, near]);
+                }
+            }
+            for (let k = 1; k + 1 < poly.length; k++) {
+                const A = poly[0], B = poly[k], C = poly[k + 1];
+                emit(sx(A[0], A[2]), sy(A[1], A[2]), A[2], sx(B[0], B[2]), sy(B[1], B[2]), B[2], sx(C[0], C[2]), sy(C[1], C[2]), C[2], i0, i1, i2);
+            }
+        }
+    }
+
     /**
      * Rasterizes a 3D mesh with Lambertian directional shading and soft ambient into an RGBA Buffer.
      */
@@ -448,6 +473,8 @@ export class HeadlessMeshSilhouetteRenderer {
             clayColor?: [number, number, number];
             bgColor?: [number, number, number, number];
             lightDir?: [number, number, number];
+            /** Clip triangles at the near plane instead of dropping them (see forEachClippedScreenTriangle). */
+            clipNearPlane?: boolean;
         }
     ): { width: number; height: number; rgba: Buffer; depthBuffer: Float32Array; silhouetteBuffer: Uint8Array } {
         const baseColor = options?.clayColor || [190, 205, 220]; // Studio grey-blue clay
@@ -526,49 +553,10 @@ export class HeadlessMeshSilhouetteRenderer {
             }
         }
 
-        const vertCount = (mesh.vertices.length / 3) | 0;
-        const screenX = new Float32Array(vertCount);
-        const screenY = new Float32Array(vertCount);
-        const screenZ = new Float32Array(vertCount);
-        const isVisible = new Uint8Array(vertCount);
-
-        for (let i = 0; i < vertCount; i++) {
-            const vx = mesh.vertices[i * 3];
-            const vy = mesh.vertices[i * 3 + 1];
-            const vz = mesh.vertices[i * 3 + 2];
-
-            const cx = vx * VP[0] + vy * VP[4] + vz * VP[8] + VP[12];
-            const cy = vx * VP[1] + vy * VP[5] + vz * VP[9] + VP[13];
-            const cz = vx * VP[2] + vy * VP[6] + vz * VP[10] + VP[14];
-            const cw = vx * VP[3] + vy * VP[7] + vz * VP[11] + VP[15];
-
-            if (cw > 0.01) {
-                const invW = 1.0 / cw;
-                const ndcX = cx * invW;
-                const ndcY = cy * invW;
-                screenX[i] = (ndcX * 0.5 + 0.5) * width;
-                screenY[i] = (1.0 - (ndcY * 0.5 + 0.5)) * height;
-                screenZ[i] = cw;
-                if (ndcX >= -1.2 && ndcX <= 1.2 && ndcY >= -1.2 && ndcY <= 1.2) {
-                    isVisible[i] = 1;
-                }
-            }
-        }
-
-        const triCount = (mesh.indices.length / 3) | 0;
-        for (let t = 0; t < triCount; t++) {
-            const i0 = mesh.indices[t * 3];
-            const i1 = mesh.indices[t * 3 + 1];
-            const i2 = mesh.indices[t * 3 + 2];
-
-            if (!isVisible[i0] || !isVisible[i1] || !isVisible[i2]) continue;
-
-            const x0 = screenX[i0], y0 = screenY[i0], z0 = screenZ[i0];
-            const x1 = screenX[i1], y1 = screenY[i1], z1 = screenZ[i1];
-            const x2 = screenX[i2], y2 = screenY[i2], z2 = screenZ[i2];
-
+        const P00 = f / aspect, P11 = f;
+        HeadlessMeshSilhouetteRenderer.forEachClippedScreenTriangle(mesh, [eye[0], eye[1], eye[2]], [rx, ry, rz], [ux, uy, uz], [fx, fy, fz], P00, P11, width, height, zNear, zFar, (x0, y0, z0, x1, y1, z1, x2, y2, z2, i0, i1, i2) => {
             const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            if (Math.abs(area) < 1e-12) continue; // degenerate only; no winding cull (see renderMesh)
+            if (Math.abs(area) < 1e-12) return; // degenerate only; no winding cull (see renderMesh)
 
             // Calculate 3D normal for Lambertian lighting
             const ax = mesh.vertices[i1 * 3] - mesh.vertices[i0 * 3];
@@ -605,15 +593,16 @@ export class HeadlessMeshSilhouetteRenderer {
             for (let py = minY; py <= maxY; py++) {
                 const pyOffset = py * width;
                 for (let px = minX; px <= maxX; px++) {
-                    const w0 = (x1 - px) * (y2 - py) - (y1 - py) * (x2 - px);
-                    const w1 = (x2 - px) * (y0 - py) - (y2 - py) * (x0 - px);
-                    const w2 = (x0 - px) * (y1 - py) - (y0 - py) * (x1 - px);
+                    const sx = px + 0.5, sy = py + 0.5; // pixel-centre sampling
+                    const w0 = (x1 - sx) * (y2 - sy) - (y1 - sy) * (x2 - sx);
+                    const w1 = (x2 - sx) * (y0 - sy) - (y2 - sy) * (x0 - sx);
+                    const w2 = (x0 - sx) * (y1 - sy) - (y0 - sy) * (x1 - sx);
 
                     const b0 = w0 * invArea;
                     const b1 = w1 * invArea;
                     const b2 = w2 * invArea;
                     if (b0 >= 0 && b1 >= 0 && b2 >= 0) {
-                        const z = b0 * z0 + b1 * z1 + b2 * z2;
+                        const z = 1.0 / (b0 / z0 + b1 / z1 + b2 / z2); // perspective-correct
                         const idx = pyOffset + px;
                         if (z < depthBuffer[idx]) {
                             depthBuffer[idx] = z;
@@ -627,7 +616,7 @@ export class HeadlessMeshSilhouetteRenderer {
                     }
                 }
             }
-        }
+        }, options?.clipNearPlane ? 'clip' : 'cull-ndc');
 
         return { width, height, rgba, depthBuffer, silhouetteBuffer };
     }

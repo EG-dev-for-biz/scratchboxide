@@ -123,12 +123,25 @@ export { TemporalSimulationSolver } from './node/spatial/TemporalSimulationSolve
 export { OccSoraBridge, S4DTrajectoryPrompt, S4DTrajectoryWaypoint, S4DInferenceRequest } from './node/spatial/OccSoraBridge';
 export { Synthetic4DDataGenerator, Synthetic4DGenerationConfig, Synthetic4DDatasetItem } from './node/spatial/Synthetic4DDataGenerator';
 
-// Headless Video Compositor Service
+// Headless Video Compositor & Editor Services
 export {
     HeadlessVideoCompositorService,
     CompositeJobRequest,
     CompositeJobResult
 } from './node/video/HeadlessVideoCompositorService';
+
+export {
+    HeadlessVideoEditorService,
+    VideoProbeResult,
+    VideoFilterBakeConfig,
+    QuickEditOptions,
+    ExtractKeyframesOptions,
+    SplitScreenOptions,
+    ConcatClipsOptions,
+    VideoEditorJobResult,
+    resolveBinary,
+    toEven
+} from './node/video/HeadlessVideoEditorService';
 
 // Google 3D Tile Camera Blockout Pipeline Service (<VIDEO_REF_0>)
 export {
@@ -153,7 +166,12 @@ export {
     create3DTilesTrajectory,
     runGoogle3DTilesPipeline,
     getGoogle3DTilesFullTexture,
-    getGoogle3DTilesClay
+    getGoogle3DTilesClay,
+    create3DTilesOrbitTrajectory,
+    create3DTilesPushInTrajectory,
+    runTileClayBlockoutRunner,
+    type TileClayBlockoutRunnerRequest,
+    type TileClayBlockoutRunnerResult
 } from './node/spatial/Google3DTileBlockoutPipelineService';
 
 
@@ -245,8 +263,12 @@ export { SurveySynthesisEngine, stationFromLookAt, stationToPinhole, horizontalF
 export type { PinholeIntrinsics, RankOptions, StationOptics } from './common/spatial/SurveySynthesisEngine';
 export { SurveyStationRenderService, solarAtUtcInstant, EMPTY_DEPTH } from './node/spatial/SurveyStationRenderService';
 export type { StationBlockoutRender, StationBlockoutRenderOptions, StationEnrichOptions } from './node/spatial/SurveyStationRenderService';
-export { SurveyApi, createSurveyRouter, createNodeHttpHandler } from './node/spatial/survey-router';
+export { SurveyApi, createSurveyRouter, createNodeHttpHandler, registerBeautifyHandlers } from './node/spatial/survey-router';
 export type { SurveyApiDeps, SurveyJob } from './node/spatial/survey-router';
+export { BeautifyStationService, warpStationImage, createGoogleStationImageGenerator } from './node/spatial/BeautifyStationService';
+export type { StationImageGenerator, BeautifyStationOptions, BeautifyStationResult, BeautifyQc, StationWarp } from './node/spatial/BeautifyStationService';
+export { SurveySplatPipelineService } from './node/spatial/SurveySplatPipelineService';
+export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplatStationReport } from './node/spatial/SurveySplatPipelineService';
 export { Splat3DTilesService } from './node/spatial/Splat3DTilesService';
 export type { Splat3DTilesOptions, Splat3DTilesResult } from './node/spatial/Splat3DTilesService';
 

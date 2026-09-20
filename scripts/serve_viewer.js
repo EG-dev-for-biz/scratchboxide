@@ -351,6 +351,31 @@ const server = http.createServer(async (req, res) => {
                             return { glbPath: result.glbPath, glbUrl: `/data/colmap_vector_export/${path.basename(result.glbPath)}`, mesh: result.mesh, geoAnchor: result.geoAnchor, quality: result.quality, mode: result.mode };
                         }
                     });
+                    // Beautify jobs on this dev server use the offline recolour generator unless
+                    // SCRATCHBOX_STATION_IMAGE_GENERATOR=google (then Google media credentials are required).
+                    if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'google') {
+                        const media = require(path.resolve(ROOT, 'packages/core/src/node/google-media-generation-service.ts'));
+                        const creds = require(path.resolve(ROOT, 'packages/core/src/node/google-media-credentials-service.ts'));
+                        const store = require(path.resolve(ROOT, 'packages/core/src/node/media-asset-store.ts'));
+                        const beautifyMod = require(path.resolve(ROOT, 'packages/core/src/node/spatial/BeautifyStationService.ts'));
+                        const assetStore = new store.MediaAssetStore();
+                        const credentials = new creds.GoogleMediaCredentialsService();
+                        const mediaService = new media.GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+                        routerMod.registerBeautifyHandlers(api.deps, beautifyMod.createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ROOT }), ROOT);
+                    } else {
+                        const tex = require(path.resolve(ROOT, 'packages/core/src/node/texture-processing.ts'));
+                        routerMod.registerBeautifyHandlers(api.deps, {
+                            name: 'mock-recolour',
+                            async generate(a) {
+                                const b = tex.decodePng(a.blockoutPng); const out = Buffer.alloc(b.rgba.length);
+                                for (let i = 0; i < b.rgba.length; i += 4) {
+                                    const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2]; const sky = bl > 170 && r < 140;
+                                    out[i] = sky ? 135 : Math.min(255, r * 1.1 + 15); out[i + 1] = sky ? 170 : g * 0.95; out[i + 2] = sky ? 215 : bl * 0.75; out[i + 3] = 255;
+                                }
+                                return tex.encodePng(b.width, b.height, out);
+                            }
+                        }, ROOT);
+                    }
                     surveyHandler = routerMod.createNodeHttpHandler(api, '/api/3d/survey');
                 }
                 await surveyHandler(req, res);

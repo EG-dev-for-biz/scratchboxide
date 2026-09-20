@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
-import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay } from '../../spatial/Google3DTileBlockoutPipelineService';
+import { getGoogle3DTilesFullTexture, getGoogle3DTilesClay, runTileClayBlockoutRunner } from '../../spatial/Google3DTileBlockoutPipelineService';
 import { recolor3DTilesGlb } from '../../spatial/GlbTextureRecolorService';
 import {
     healPanoramaSeam,
@@ -141,6 +141,44 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
+        name: 'google_3d_tiles_clay_blockout_runner',
+        description: 'Execute the canonical Google Maps 3D Tile Clay Blockout Runner. Headlessly streams real-world 3D tiles in studio grey clay PBR, runs collision-avoided 6-DoF camera flight (cinematic_arc, orbit_360, or canyon_push), and exports <VIDEO_REF_0> (MP4/WebM), startFramePngPath (Frame 0 PNG for AI Beautify -> <IMAGE_REF_0>), and volumetric .glb mesh.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                query: {
+                    type: 'STRING',
+                    description: 'Geographic coordinate string (e.g. "40.748400, -73.985700") or physical address (e.g. "Midtown Manhattan, coordinates: 40.748400, -73.985700")'
+                },
+                trajectoryPreset: {
+                    type: 'STRING',
+                    description: 'Camera trajectory preset: "cinematic_arc" (default), "orbit_360", or "canyon_push"'
+                },
+                clayPreset: {
+                    type: 'STRING',
+                    description: 'Clay shading preset: "studio-grey" (default), "warm-clay", or "alabaster"'
+                },
+                outputVideoPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported <VIDEO_REF_0> blockout MP4'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the exported binary .glb file'
+                },
+                firstFramePngPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write Frame 0 PNG for AI Beautify'
+                },
+                mockExecution: {
+                    type: 'BOOLEAN',
+                    description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                }
+            },
+            required: ['query']
+        }
+    },
+    {
         name: 'google_3d_tiles_recolor_glb',
         description: 'Recolor a 3D Tile GLB model using the Sophisticated v2 Architecture 2 offline texture atlas re-grading engine. Performs hue-aware semantic segmentation (protecting green foliage and slate asphalt from turning terracotta), intrinsic shadow de-lighting, and PBR normal/roughness map synthesis with 100% geometric vertex lock (0.000 mm drift).',
         parameters: {
@@ -246,6 +284,47 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 render: result.render
             },
             summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
+        };
+    },
+
+    google_3d_tiles_clay_blockout_runner: async (args, _ctx) => {
+        const query = asString(args.query);
+        if (!query) throw new Error('google_3d_tiles_clay_blockout_runner: "query" argument is required.');
+        const trajectoryPreset = asString(args.trajectoryPreset) as any;
+        const clayPreset = asString(args.clayPreset) as any;
+        const outputVideoPath = asString(args.outputVideoPath) || undefined;
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        const firstFramePngPath = asString(args.firstFramePngPath) || undefined;
+        const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+
+        const result = await runTileClayBlockoutRunner({
+            query,
+            trajectoryPreset,
+            clayPreset,
+            outputVideoPath,
+            outputGlbPath,
+            firstFramePngPath,
+            offlineMock
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                videoRef: result.videoRef,
+                blockoutVideoPath: result.blockoutVideoPath,
+                webmVideoPath: result.webmVideoPath,
+                startFramePngPath: result.startFramePngPath,
+                firstFramePath: result.firstFramePath,
+                clayGlbPath: result.clayGlbPath,
+                geoAnchor: result.geoAnchor,
+                resolvedAddress: result.resolvedAddress,
+                frameCount: result.frameCount,
+                fps: result.fps,
+                durationSec: result.durationSec,
+                meshStats: result.meshStats,
+                collisionAudit: result.collisionAudit
+            },
+            summaryResult: `Clay Blockout Runner completed for ${result.resolvedAddress || query}. Generated <VIDEO_REF_0> (${result.blockoutVideoPath}), Frame 0 PNG (${result.startFramePngPath}), and GLB massing (${result.clayGlbPath}, ${result.meshStats.vertexCount} vertices).`
         };
     },
 
@@ -764,8 +843,76 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['glbPath', 'stationsJsonPath', 'stationId', 'outPngPath']
         }
+    },
+    {
+        name: 'survey_beautify_station',
+        description: 'AI Beautify one survey station: pose-exact clay blockout of the GLB -> buildBeautifyPrompt grounded in the station (coordinates, yaw, pitch, lens fov, standoff, horizon, sun) -> Nano Banana image -> geometric QC by closed-loop edge alignment against the mesh (rejects recomposed frames) -> aligned pose. Returns the image path and QC report.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Anchored GLB (e.g. Google 3D Tiles clay).' },
+                stationsJsonPath: { type: 'STRING', description: 'Stations JSON from survey_synthesize_stations.' },
+                stationId: { type: 'NUMBER', description: 'Station to beautify.' },
+                locationName: { type: 'STRING', description: 'Location name for the prompt.' },
+                moodPromptContext: { type: 'STRING', description: 'Optional mood/lighting sentence(s) for the prompt.' },
+                styleSuffix: { type: 'STRING', description: 'Optional style suffix appended verbatim.' },
+                width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
+                outDir: { type: 'STRING', description: 'Output directory for blockout + beautified PNGs.' }
+            },
+            required: ['glbPath', 'stationsJsonPath', 'stationId', 'locationName']
+        }
+    },
+    {
+        name: 'survey_beautify_to_splats',
+        description: 'Full Survey -> Beautify -> Gaussian splat 3D Tiles pipeline: ranks stations against the GLB, beautifies each (chained: every accepted image is warped into the next station as a consistency reference), bakes each accepted image onto the mesh depth as oriented splats (native C++20), fuses across stations, and emits a KHR_gaussian_splatting 3D Tiles tileset with a WGS-84 root transform plus tileset.meta.json (crop box, prompts, QC).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Anchored GLB.' },
+                stationsJsonPath: { type: 'STRING', description: 'Stations JSON (with anchor) from survey_synthesize_stations.' },
+                locationName: { type: 'STRING', description: 'Location name for prompts.' },
+                moodPromptContext: { type: 'STRING', description: 'Mood/lighting sentence(s), identical for all stations.' },
+                styleSuffix: { type: 'STRING', description: 'Style suffix appended verbatim.' },
+                mode: { type: 'STRING', description: "'chained' (default, consistent) or 'fanout' (parallel-friendly)." },
+                maxStations: { type: 'NUMBER', description: 'Keep only the best N ranked stations.' },
+                width: { type: 'NUMBER', description: 'Render/generation width (default 1920).' },
+                bakeStride: { type: 'NUMBER', description: 'Pixel stride when baking (default 1).' },
+                outDir: { type: 'STRING', description: 'Output directory (default public/tilesets/survey_<ts>).' }
+            },
+            required: ['glbPath', 'stationsJsonPath', 'locationName']
+        }
     }
 ];
+
+/**
+ * Station image generator for the survey beautify tools: Nano Banana / Gemini image via the
+ * workspace's Google media credentials. SCRATCHBOX_STATION_IMAGE_GENERATOR=mock swaps in a
+ * geometry-preserving recolour (for offline runs and CI).
+ */
+async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Promise<import('../../spatial/BeautifyStationService').StationImageGenerator> {
+    if (process.env.SCRATCHBOX_STATION_IMAGE_GENERATOR === 'mock') {
+        const { decodePng, encodePng } = await import('../../texture-processing');
+        return {
+            name: 'mock-recolour',
+            async generate(a) {
+                const b = decodePng(a.blockoutPng); const out = Buffer.alloc(b.rgba.length);
+                for (let i = 0; i < b.rgba.length; i += 4) {
+                    const r = b.rgba[i], g = b.rgba[i + 1], bl = b.rgba[i + 2]; const sky = bl > 170 && r < 140;
+                    out[i] = sky ? 135 : Math.min(255, r * 1.1 + 15); out[i + 1] = sky ? 170 : g * 0.95; out[i + 2] = sky ? 215 : bl * 0.75; out[i + 3] = 255;
+                }
+                return encodePng(b.width, b.height, out);
+            }
+        };
+    }
+    const { createGoogleStationImageGenerator } = await import('../../spatial/BeautifyStationService');
+    const { GoogleMediaGenerationService } = await import('../../google-media-generation-service');
+    const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+    const { MediaAssetStore } = await import('../../media-asset-store');
+    const assetStore = new MediaAssetStore();
+    const credentials = new GoogleMediaCredentialsService();
+    const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+    return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: ctx.workspaceRoot || process.cwd() });
+}
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
     panorama_audit_quality: async (args, _ctx) => {
@@ -1189,6 +1336,36 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: { success: true, stationId: res.stationId, width: res.width, height: res.height, intrinsics: res.intrinsics, depthKind: res.depthKind, depthStats: res.depthStats, outPngPath: asString(args.outPngPath) } as unknown as ToolResultPayload,
             summaryResult: `Rendered station ${res.stationId} blockout ${res.width}x${res.height} (fx ${res.intrinsics.fx.toFixed(1)} px, ${(res.depthStats.filledFraction * 100).toFixed(0)}% mesh coverage) -> ${asString(args.outPngPath)}`
+        };
+    },
+
+    survey_beautify_station: async (args, ctx) => {
+        const fsMod = await import('fs-extra');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const station = (data.poses as any[]).find(p => p.id === args.stationId);
+        if (!station) throw new Error(`survey_beautify_station: station ${args.stationId} not found`);
+        const generator = await resolveStationImageGenerator(ctx);
+        const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
+        const deps = registerBeautifyHandlers({}, generator, process.cwd());
+        const res = await deps.beautifyStation!({ ...args, station, anchor: data.anchor, glbPath: asString(args.glbPath) }, () => {});
+        const { imageBase64, ...rest } = res;
+        return {
+            resultPayload: { success: true, ...rest } as unknown as ToolResultPayload,
+            summaryResult: `Station ${res.stationId} ${res.accepted ? 'accepted' : 'rejected (' + res.qc.reason + ')'} after ${res.attempts} attempt(s) with ${generator.name}: yaw drift ${res.qc.deltaYawDeg.toFixed(2)} deg -> ${res.imagePath}`
+        };
+    },
+
+    survey_beautify_to_splats: async (args, ctx) => {
+        const fsMod = await import('fs-extra');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const generator = await resolveStationImageGenerator(ctx);
+        const { registerBeautifyHandlers } = await import('../../spatial/survey-router');
+        const deps = registerBeautifyHandlers({}, generator, process.cwd());
+        const res = await deps.beautifyToSplats!({ ...args, stations: data.poses, anchor: data.anchor, glbPath: asString(args.glbPath) }, () => {});
+        const accepted = res.stations.filter((s: any) => s.accepted).length;
+        return {
+            resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs } as unknown as ToolResultPayload,
+            summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}`
         };
     },
 

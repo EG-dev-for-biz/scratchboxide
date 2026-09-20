@@ -688,8 +688,9 @@ public:
         return glb;
     }
 
-private:
+public:
     // Right-handed orthonormal basis (T, B, N) with T x B = N -> unit quaternion (Shepperd's method).
+    // Public: shared with the station baker (scripts/station_to_splats.cpp).
     static Quat quatFromBasis(const Vec3& T, const Vec3& B, const Vec3& N) {
         float trace = T.x + B.y + N.z;
         Quat q;

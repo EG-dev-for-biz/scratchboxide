@@ -49,6 +49,8 @@ import {
     Google360PanoramaPipelineService,
     SurveyApi,
     createSurveyRouter,
+    registerBeautifyHandlers,
+    createGoogleStationImageGenerator,
     getGoogle3DTilesClay
 } from '../../packages/core/src/node';
 import { GeoFrame } from '../../packages/core/src/common/coordinate/GeoFrame';
@@ -1945,7 +1947,9 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     // Backs the Vector Dock "Survey Synthesis" panel (clay ingestion, rank, render, export).
     // ==========================================
     const surveyWorkspaceRoot = process.cwd();
+    const surveyDeps = registerBeautifyHandlers({}, createGoogleStationImageGenerator({ mediaService: mediaGenerator, assetStore: mediaAssets, workspaceRoot: surveyWorkspaceRoot }), surveyWorkspaceRoot);
     const surveyApi = new SurveyApi({
+        ...surveyDeps,
         workspaceRoot: surveyWorkspaceRoot,
         fetchClayGlb: async (query, options) => {
             const res = await getGoogle3DTilesClay(query as any, { ...(options || {}), outputDir: path.join(surveyWorkspaceRoot, 'public/tiles') });

@@ -110,6 +110,36 @@ function toLuminance(png: Buffer): Lum {
     return { w: dec.width, h: dec.height, L };
 }
 
+function decodeRgba(png: Buffer): Buffer { return decodePng(png).rgba; }
+function rgbaMean(rgba: Buffer, w: number, x0: number, y0: number, x1: number, y1: number): { r: number; g: number; b: number } {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const i = (y * w + x) * 4; r += rgba[i]; g += rgba[i + 1]; b += rgba[i + 2]; n++; }
+    return { r: r / n, g: g / n, b: b / n };
+}
+
+/**
+ * Row-profile oscillation over pixels brighter than minLum only, so a hard coverage edge inside the
+ * band (splats -> background) does not register; horizontal splat-row stripes still do.
+ * Calibrated on the survey box in gaussian-splat-lite: clean 0.0028, grazing-striped 0.0639.
+ */
+function maskedRowOscillation(img: Lum, x0: number, y0: number, x1: number, y1: number, minLum = 60): number {
+    const prof: number[] = [];
+    for (let y = y0; y < y1; y++) {
+        let s = 0, n = 0;
+        for (let x = x0; x < x1; x++) { const v = img.L[y * img.w + x]; if (v > minLum) { s += v; n++; } }
+        if (n > 10) prof.push(s / n);
+    }
+    const k = 9;
+    if (prof.length < 3 * k) return 0;
+    let mean = 0; for (const v of prof) mean += v; mean /= prof.length;
+    let acc = 0, cnt = 0;
+    for (let i = k; i < prof.length - k; i++) {
+        let lp = 0; for (let j = -Math.floor(k / 2); j <= Math.floor(k / 2); j++) lp += prof[i + j]; lp /= k;
+        acc += (prof[i] - lp) ** 2; cnt++;
+    }
+    return Math.sqrt(acc / Math.max(1, cnt)) / Math.max(1, mean);
+}
+
 function regionMean(img: Lum, x0: number, y0: number, x1: number, y1: number): number {
     let s = 0, n = 0;
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { s += img.L[y * img.w + x]; n++; }
@@ -264,6 +294,42 @@ describe('Walkable 3DGS viewer: headless visual regression gate', () => {
         && fs.existsSync(path.join(PUBLIC_DIR, 'splat_tiles_interop.html'))
         && fs.existsSync(path.join(PUBLIC_DIR, 'js/splat_tiles_interop.js'));
     const itIfInterop = canRun && interopPresent ? it : it.skip;
+
+    const surveyPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/survey_box/tileset.json')) && fs.existsSync(path.join(PUBLIC_DIR, 'models/survey_box_ground.glb'));
+    const itIfSurvey = canRun && surveyPresent ? it : it.skip;
+
+    itIfSurvey('survey pipeline tileset: beautified splat skin over the clay GLB, crop box from meta, sky kept (no void)', async () => {
+        const out = path.join(SHOT_DIR, '37_survey_splat_tileset_over_clay.png');
+        await captureHeadless(chrome!, `${base}?hud=0&tileset=/tilesets/survey_box/tileset.json&walk=0,30`, out);
+        const img = toLuminance(fs.readFileSync(out));
+        const rgba = decodeRgba(fs.readFileSync(out));
+        const cx = Math.floor(img.w / 2);
+        // Box occupies the centre column: must be the beautified brick colour, not clay grey
+        const c = rgbaMean(rgba, img.w, cx - 40, Math.floor(img.h * 0.3), cx + 40, Math.floor(img.h * 0.6));
+        expect(c.r).toBeGreaterThan(c.b + 40);
+        // Sky region is not a void
+        expect(regionMean(img, Math.floor(img.w * 0.05), Math.floor(img.h * 0.05), Math.floor(img.w * 0.3), Math.floor(img.h * 0.25))).toBeGreaterThan(60);
+        // Foreground ground is the beautified sand (warm), not grey clay
+        const g = rgbaMean(rgba, img.w, Math.floor(img.w * 0.1), Math.floor(img.h * 0.8), Math.floor(img.w * 0.3), Math.floor(img.h * 0.95));
+        expect(g.r).toBeGreaterThan(g.b + 20);
+    }, 120000);
+
+    const itIfSurveyInterop = canRun && surveyPresent && interopPresent ? it : it.skip;
+    itIfSurveyInterop('survey pipeline tileset renders in the third-party stack with the same colours and no grazing stripes', async () => {
+        const out = path.join(SHOT_DIR, '38_survey_splat_tileset_interop.png');
+        const interopBase = base.replace('spatial_photoreal_3dgs_demo.html', 'splat_tiles_interop.html');
+        await captureHeadless(chrome!, `${interopBase}?hud=0&tileset=/tilesets/survey_box/tileset.json&hold=15000&eye=10&walk=0,45`, out, 60000, true);
+        const img = toLuminance(fs.readFileSync(out));
+        const rgba = decodeRgba(fs.readFileSync(out));
+        const cx = Math.floor(img.w / 2);
+        const c = rgbaMean(rgba, img.w, cx - 40, Math.floor(img.h * 0.35), cx + 40, Math.floor(img.h * 0.65));
+        expect(c.r).toBeGreaterThan(c.b + 40);
+        // Far ground band left of the box: no periodic stripes (grazing splats dropped in the baker).
+        // Threshold 0.02 sits 7x above the clean capture and 3x below the striped control.
+        const osc = maskedRowOscillation(img, 0, Math.floor(img.h * 0.57), Math.floor(img.w * 0.35), Math.floor(img.h * 0.70));
+        console.log(`[visual] survey interop far-ground masked oscillation=${osc.toFixed(4)}`);
+        expect(osc).toBeLessThan(0.02);
+    }, 90000);
 
     itIfInterop('third-party stack (3d-tiles-renderer + 3dgs-plugin + gaussian-splat-lite) renders our tileset to the same scene', async () => {
         const single = path.join(SHOT_DIR, '28_walkable_3dgs_pantheon_capture_point.png');

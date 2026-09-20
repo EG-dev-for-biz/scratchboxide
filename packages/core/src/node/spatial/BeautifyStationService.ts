@@ -1,0 +1,349 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { SurveyStationRenderService, EMPTY_DEPTH, type StationBlockoutRender } from './SurveyStationRenderService';
+import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
+import { SubPixelEdgeAlignmentOptimizer, computeSobelField, evaluateEdgeOverlap, type CameraPose6DOF, type SobelEdgeField } from './SubPixelEdgeAlignmentOptimizer';
+import { buildStationBeautifyPrompt, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
+import { cameraBasis, yawPitchFromForward, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
+import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-reference-types';
+import { decodePng, encodePng } from '../texture-processing';
+
+/** Pluggable image model. The default implementation (createGoogleStationImageGenerator) uses Nano Banana / Gemini image. */
+export interface StationImageGenerator {
+    name: string;
+    generate(args: {
+        prompt: string;
+        blockoutPng: Buffer;
+        referencePng?: Buffer;     // previous accepted station warped into this pose (chained mode)
+        maskPng?: Buffer;          // white = disocclusion (fill), black = keep from reference
+        aspectRatio: string;       // e.g. '16:9'
+        width: number; height: number;
+    }): Promise<Buffer>;           // PNG
+}
+
+export interface BeautifyStationOptions {
+    width?: number;                // default 1920
+    height?: number;               // default from station aspect
+    maxRerolls?: number;           // default 2
+    /** Previous accepted result for chained consistency (its image is warped into this station). */
+    reference?: BeautifyStationResult;
+    qc?: { maxYawDeg?: number; maxPitchDeg?: number; maxPositionM?: number; maxIterations?: number };
+}
+
+export interface BeautifyQc {
+    overlapPercent: number;
+    residualPx: number;
+    deltaYawDeg: number;
+    deltaPitchDeg: number;
+    deltaPositionM: number;
+    passed: boolean;
+    reason?: string;
+}
+
+export interface StationWarp {
+    warpedPng: Buffer;
+    maskPng: Buffer;
+    rgba: Buffer;
+    mask: Uint8Array;              // 255 = hole
+    coveredFraction: number;
+}
+
+export interface BeautifyStationResult {
+    station: ColmapCameraPose;
+    alignedStation: ColmapCameraPose;   // station with the QC-recovered pose delta applied
+    prompt: string;
+    blockout: StationBlockoutRender;
+    imagePng: Buffer;
+    image: { width: number; height: number; rgba: Buffer };
+    qc: BeautifyQc;
+    accepted: boolean;
+    attempts: number;
+    warp?: StationWarp;
+    generator: string;
+}
+
+export interface WarpSource { rgba: Buffer; depth: Float32Array; width: number; height: number; intrinsics: PinholeIntrinsics; station: ColmapCameraPose }
+export interface WarpTarget { intrinsics: PinholeIntrinsics; station: ColmapCameraPose; width: number; height: number }
+
+function basisFor(station: ColmapCameraPose) {
+    const { right, up, forward } = cameraBasis(station.forwardVector, station.upVector || [0, 1, 0]);
+    return { right, up, forward, eye: station.positionLocalENU };
+}
+
+/**
+ * Forward-warps a station image (with camera-z depth) into another station's view, z-buffered with
+ * 2x2 splats; returns the warped RGBA and a disocclusion mask (255 where no source pixel landed).
+ */
+export function warpStationImage(src: WarpSource, dst: WarpTarget): StationWarp {
+    const A = basisFor(src.station), B = basisFor(dst.station);
+    const W = dst.width, H = dst.height;
+    const out = Buffer.alloc(W * H * 4, 0);
+    const zbuf = new Float32Array(W * H).fill(Infinity);
+    const mask = new Uint8Array(W * H).fill(255);
+    for (let y = 0; y < src.height; y++) {
+        for (let x = 0; x < src.width; x++) {
+            const i = y * src.width + x;
+            const z = src.depth[i];
+            if (!(z < EMPTY_DEPTH * 0.5) || z <= 0) continue;
+            // camera A ray (x right, y up, z forward) scaled by camera-z depth
+            const cx = (x + 0.5 - src.intrinsics.cx) / src.intrinsics.fx * z;
+            const cy = -(y + 0.5 - src.intrinsics.cy) / src.intrinsics.fy * z;
+            const wx = A.eye[0] + A.right[0] * cx + A.up[0] * cy + A.forward[0] * z;
+            const wy = A.eye[1] + A.right[1] * cx + A.up[1] * cy + A.forward[1] * z;
+            const wz = A.eye[2] + A.right[2] * cx + A.up[2] * cy + A.forward[2] * z;
+            const dx = wx - B.eye[0], dy = wy - B.eye[1], dz = wz - B.eye[2];
+            const bz = dx * B.forward[0] + dy * B.forward[1] + dz * B.forward[2];
+            if (bz <= 0.05) continue;
+            const bx = dx * B.right[0] + dy * B.right[1] + dz * B.right[2];
+            const by = dx * B.up[0] + dy * B.up[1] + dz * B.up[2];
+            const px = dst.intrinsics.cx + dst.intrinsics.fx * bx / bz;
+            const py = dst.intrinsics.cy - dst.intrinsics.fy * by / bz;
+            const x0 = Math.floor(px - 0.5), y0 = Math.floor(py - 0.5);
+            for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) {
+                const tx = x0 + ox, ty = y0 + oy;
+                if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+                const ti = ty * W + tx;
+                if (bz < zbuf[ti]) {
+                    zbuf[ti] = bz;
+                    out[ti * 4] = src.rgba[i * 4]; out[ti * 4 + 1] = src.rgba[i * 4 + 1]; out[ti * 4 + 2] = src.rgba[i * 4 + 2]; out[ti * 4 + 3] = 255;
+                    mask[ti] = 0;
+                }
+            }
+        }
+    }
+    // Dilate holes by 1 px so seams get regenerated too
+    const dil = new Uint8Array(mask);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (mask[i] === 255) { dil[i - 1] = 255; dil[i + 1] = 255; dil[i - W] = 255; dil[i + W] = 255; }
+    }
+    let covered = 0;
+    for (let i = 0; i < dil.length; i++) if (dil[i] === 0) covered++;
+    const maskRgba = Buffer.alloc(W * H * 4);
+    for (let i = 0; i < dil.length; i++) { maskRgba[i * 4] = maskRgba[i * 4 + 1] = maskRgba[i * 4 + 2] = dil[i]; maskRgba[i * 4 + 3] = 255; }
+    return { warpedPng: encodePng(W, H, out), maskPng: encodePng(W, H, maskRgba), rgba: out, mask: dil, coveredFraction: covered / dil.length };
+}
+
+/**
+ * Beautify one survey station: pose-exact clay blockout -> station-grounded prompt -> image model
+ * (optionally anchored on the previous accepted station warped into this pose) -> geometric QC by
+ * closed-loop edge alignment against the mesh -> aligned pose for splat baking.
+ */
+export class BeautifyStationService {
+    constructor(private renderer: SurveyStationRenderService, private generator: StationImageGenerator) {}
+
+    async beautify(station: ColmapCameraPose, ctx: StationBeautifyContext, options: BeautifyStationOptions = {}): Promise<BeautifyStationResult> {
+        const width = options.width ?? 1920;
+        const height = options.height ?? Math.round(width / (station.aspectRatio || 16 / 9));
+        const blockout = this.renderer.renderStationBlockout(station, { width, height });
+        const aspectRatio = BeautifyStationService.aspectLabel(width / height);
+
+        let warp: StationWarp | undefined;
+        let prompt = buildStationBeautifyPrompt(station, { ...ctx, aspectRatio: ctx.aspectRatio || aspectRatio });
+        if (options.reference) {
+            const ref = options.reference;
+            warp = warpStationImage(
+                { rgba: ref.image.rgba, depth: ref.blockout.depth, width: ref.image.width, height: ref.image.height, intrinsics: ref.blockout.intrinsics, station: ref.alignedStation },
+                { intrinsics: blockout.intrinsics, station, width, height }
+            );
+            prompt += ' Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.';
+        }
+
+        const maxRerolls = options.maxRerolls ?? 2;
+        let attempts = 0;
+        let best: { png: Buffer; qc: BeautifyQc; aligned: ColmapCameraPose; rgba: Buffer } | null = null;
+        while (attempts <= maxRerolls) {
+            attempts++;
+            const png = await this.generator.generate({ prompt, blockoutPng: blockout.png, referencePng: warp?.warpedPng, maskPng: warp?.maskPng, aspectRatio, width, height });
+            const decoded = decodePng(png);
+            const { qc, aligned } = this.runQc(station, blockout, decoded.rgba, decoded.width, decoded.height, options.qc);
+            if (!best || qc.deltaYawDeg + qc.deltaPitchDeg < best.qc.deltaYawDeg + best.qc.deltaPitchDeg) best = { png, qc, aligned, rgba: decoded.rgba };
+            if (qc.passed) break;
+        }
+        const b = best!;
+        const dec = decodePng(b.png);
+        return {
+            station, alignedStation: b.aligned, prompt, blockout, imagePng: b.png,
+            image: { width: dec.width, height: dec.height, rgba: b.rgba },
+            qc: b.qc, accepted: b.qc.passed, attempts, warp, generator: this.generator.name
+        };
+    }
+
+    /** Edge-align the generated image against mesh silhouettes rendered from perturbed poses; report the pose delta. */
+    private runQc(station: ColmapCameraPose, blockout: StationBlockoutRender, rgba: Buffer, width: number, height: number, thresholds: BeautifyStationOptions['qc'] = {}): { qc: BeautifyQc; aligned: ColmapCameraPose } {
+        const maxYaw = thresholds.maxYawDeg ?? 0.5, maxPitch = thresholds.maxPitchDeg ?? 0.5, maxPos = thresholds.maxPositionM ?? 0.8;
+        // Query edges from the generated image (luminance), downsampled for speed
+        const scale = Math.max(1, Math.round(width / 480));
+        const qw = Math.floor(width / scale), qh = Math.floor(height / scale);
+        const gray = new Uint8Array(qw * qh);
+        for (let y = 0; y < qh; y++) for (let x = 0; x < qw; x++) {
+            const i = ((y * scale) * width + x * scale) * 4;
+            gray[y * qw + x] = (rgba[i] * 299 + rgba[i + 1] * 587 + rgba[i + 2] * 114) / 1000;
+        }
+        const queryField = computeSobelField(qw, qh, gray);
+        const mesh = (this.renderer as any).mesh as import('./HeadlessMeshSilhouetteRenderer').RenderMesh3D;
+        const renderCache = new Map<string, SobelEdgeField>();
+        const renderFunc = (pose: CameraPose6DOF): SobelEdgeField => {
+            const key = `${pose.x.toFixed(4)},${pose.y.toFixed(4)},${pose.z.toFixed(4)},${pose.targetX.toFixed(4)},${pose.targetY.toFixed(4)},${pose.targetZ.toFixed(4)},${pose.fov.toFixed(5)}`;
+            const cached = renderCache.get(key);
+            if (cached) return cached;
+            const field = renderStructuralEdges(pose);
+            renderCache.set(key, field);
+            return field;
+        };
+        const renderStructuralEdges = (pose: CameraPose6DOF): SobelEdgeField => {
+            // Structural edges of the mesh as seen from `pose`: depth discontinuities (silhouettes,
+            // mesh/sky boundary, step edges). A photograph's architectural edges follow these; a smooth
+            // depth ramp (ground) must NOT count as an edge, so we do not Sobel the depth image itself.
+            const r = HeadlessMeshSilhouetteRenderer.renderMesh(mesh, pose, qw, qh, { clipNearPlane: true });
+            const d = r.depthBuffer;
+            const mags = new Float32Array(qw * qh);
+            let sum = 0;
+            for (let y = 1; y < qh - 1; y++) for (let x = 1; x < qw - 1; x++) {
+                const i = y * qw + x, z = d[i];
+                const zi = z < EMPTY_DEPTH * 0.5;
+                let e = 0;
+                for (const j of [i - 1, i + 1, i - qw, i + qw]) {
+                    const zj = d[j], zji = zj < EMPTY_DEPTH * 0.5;
+                    if (zi !== zji) { e = 1; break; }                                   // mesh/sky boundary
+                    if (zi && Math.abs(zj - z) / Math.max(z, zj) > 0.04) { e = 1; break; } // depth step
+                }
+                mags[i] = e * 255; sum += mags[i];
+            }
+            return { width: qw, height: qh, magnitudes: mags, gradX: new Float32Array(0), gradY: new Float32Array(0), meanMagnitude: sum / mags.length };
+        };
+        const { pose: initial } = SurveyStationRenderService.stationToCameraPose6DOF(station, qw, qh);
+        // Raw Sobel edges are one pixel wide, so their NCC is flat until the render is within ~1 px of
+        // the photograph: a model that recomposed the frame by tens of pixels would never be detected.
+        // Coarse-to-fine on blurred edge fields widens the basin (blur radius ~ 3x the expected drift),
+        // then sharper passes recover the sub-degree residual. Target steps: 10 m look-at => 1 m ~ 5.7 deg.
+        const fineOpts = { targetOverlapScore: 99.5, subpixelTolerancePx: 0.2, stepSizes: { pos: 0.15, target: 0.12, fov: 0.0001 } };
+        const runSchedule = (start: CameraPose6DOF, schedule: Array<{ blur: number; target: number; pos: number; iters: number }>) => {
+            let pose = start;
+            let last: ReturnType<typeof SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent> | null = null;
+            for (const st of schedule) {
+                const q = st.blur > 0 ? blurField(queryField, st.blur) : queryField;
+                const blurCache = new Map<SobelEdgeField, SobelEdgeField>();
+                const rf = st.blur > 0 ? (p: CameraPose6DOF) => { const f = renderFunc(p); let b = blurCache.get(f); if (!b) { b = blurField(f, st.blur); blurCache.set(f, b); } return b; } : renderFunc;
+                last = SubPixelEdgeAlignmentOptimizer.optimizePoseTo100Percent(pose, q, rf, { maxIterations: st.iters, targetOverlapScore: fineOpts.targetOverlapScore, subpixelTolerancePx: fineOpts.subpixelTolerancePx, stepSizes: { pos: st.pos, target: st.target, fov: 0.0001 } });
+                pose = last.finalPose;
+            }
+            return last!;
+        };
+        // Candidate A: fine-only from the station pose (wins when the model kept the framing).
+        // Candidate B: coarse-to-fine on blurred fields (wins when the model recomposed by many pixels).
+        // Both are scored on the unblurred structural edges; the better NCC decides.
+        const candA = runSchedule(initial, [{ blur: 0, target: 0.12, pos: 0.15, iters: thresholds.maxIterations ?? 6 }]);
+        const candB = runSchedule(initial, [
+            { blur: 14, target: 1.0, pos: 1.0, iters: 5 },
+            { blur: 5, target: 0.35, pos: 0.4, iters: 5 },
+            { blur: 0, target: 0.12, pos: 0.15, iters: thresholds.maxIterations ?? 6 }
+        ]);
+        const scoreA = evaluateEdgeOverlap(queryField, renderFunc(candA.finalPose)).overlapScorePercent;
+        const scoreB = evaluateEdgeOverlap(queryField, renderFunc(candB.finalPose)).overlapScorePercent;
+        const metrics = scoreB > scoreA + 1.0 ? candB : candA;
+        const fp = metrics.finalPose;
+        const f0 = [initial.targetX - initial.x, initial.targetY - initial.y, initial.targetZ - initial.z] as [number, number, number];
+        const f1 = [fp.targetX - fp.x, fp.targetY - fp.y, fp.targetZ - fp.z] as [number, number, number];
+        const a0 = yawPitchFromForward(norm(f0)), a1 = yawPitchFromForward(norm(f1));
+        const dYaw = Math.abs(((a1.yawDegrees - a0.yawDegrees + 540) % 360) - 180);
+        const dPitch = Math.abs(a1.pitchDegrees - a0.pitchDegrees);
+        const dPos = Math.hypot(fp.x - initial.x, fp.y - initial.y, fp.z - initial.z);
+        const reasons: string[] = [];
+        if (dYaw > maxYaw) reasons.push(`yaw moved ${dYaw.toFixed(2)} deg (> ${maxYaw})`);
+        if (dPitch > maxPitch) reasons.push(`pitch moved ${dPitch.toFixed(2)} deg (> ${maxPitch})`);
+        if (dPos > maxPos) reasons.push(`position moved ${dPos.toFixed(2)} m (> ${maxPos})`);
+        const passed = reasons.length === 0;
+        const fwd = norm(f1);
+        const aligned: ColmapCameraPose = {
+            ...station,
+            positionLocalENU: [fp.x, fp.y, fp.z],
+            forwardVector: fwd,
+            yawDegrees: Number(a1.yawDegrees.toFixed(4)),
+            pitchDegrees: Number(a1.pitchDegrees.toFixed(4))
+        };
+        return {
+            qc: { overlapPercent: metrics.overlapScorePercent, residualPx: metrics.subpixelResidualPx, deltaYawDeg: dYaw, deltaPitchDeg: dPitch, deltaPositionM: dPos, passed, reason: reasons.join('; ') || undefined },
+            aligned
+        };
+    }
+
+    static aspectLabel(r: number): string {
+        const known: Array<[number, string]> = [[16 / 9, '16:9'], [9 / 16, '9:16'], [1, '1:1'], [4 / 3, '4:3'], [3 / 2, '3:2'], [21 / 9, '21:9']];
+        for (const [v, l] of known) if (Math.abs(v - r) < 0.02) return l;
+        return '16:9';
+    }
+}
+
+/** Separable box blur (applied twice ~ Gaussian) of an edge field; keeps gradients, recomputes the mean. */
+function blurField(f: SobelEdgeField, radius: number): SobelEdgeField {
+    const { width: W, height: H } = f;
+    const pass = (src: Float32Array, horizontal: boolean): Float32Array => {
+        const out = new Float32Array(src.length);
+        const r = radius, n = 2 * r + 1;
+        if (horizontal) {
+            for (let y = 0; y < H; y++) {
+                let acc = 0;
+                for (let x = -r; x <= r; x++) acc += src[y * W + Math.min(W - 1, Math.max(0, x))];
+                for (let x = 0; x < W; x++) {
+                    out[y * W + x] = acc / n;
+                    acc += src[y * W + Math.min(W - 1, x + r + 1)] - src[y * W + Math.max(0, x - r)];
+                }
+            }
+        } else {
+            for (let x = 0; x < W; x++) {
+                let acc = 0;
+                for (let y = -r; y <= r; y++) acc += src[Math.min(H - 1, Math.max(0, y)) * W + x];
+                for (let y = 0; y < H; y++) {
+                    out[y * W + x] = acc / n;
+                    acc += src[Math.min(H - 1, y + r + 1) * W + x] - src[Math.max(0, y - r) * W + x];
+                }
+            }
+        }
+        return out;
+    };
+    let m = f.magnitudes;
+    for (let i = 0; i < 2; i++) m = pass(pass(m, true), false);
+    let sum = 0; for (let i = 0; i < m.length; i++) sum += m[i];
+    return { width: W, height: H, magnitudes: m, gradX: f.gradX, gradY: f.gradY, meanMagnitude: sum / m.length };
+}
+
+function norm(v: [number, number, number]): [number, number, number] { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; }
+
+/**
+ * Default generator over GoogleMediaGenerationService (Nano Banana / Gemini image models):
+ * the blockout, optional warped reference and mask are passed as reference assets in that order.
+ */
+export function createGoogleStationImageGenerator(deps: {
+    mediaService: { generateImage(req: any): Promise<{ asset: any }> };
+    assetStore: { put(workspaceRoot: string, bytes: Buffer, mimeType: string): Promise<any>; resolve(workspaceRoot: string, asset: any): string };
+    workspaceRoot: string;
+    modelPriority?: string[];
+    imageSize?: '1K' | '2K' | '4K';
+}): StationImageGenerator {
+    return {
+        name: 'google-nano-banana',
+        async generate(args) {
+            const fs = await import('fs-extra');
+            const refs: any[] = [await deps.assetStore.put(deps.workspaceRoot, args.blockoutPng, 'image/png')];
+            if (args.referencePng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.referencePng, 'image/png'));
+            if (args.maskPng) refs.push(await deps.assetStore.put(deps.workspaceRoot, args.maskPng, 'image/png'));
+            const res = await deps.mediaService.generateImage({
+                kind: 'image', prompt: args.prompt, workspaceRoot: deps.workspaceRoot,
+                sourceAsset: refs[0], referenceAssets: refs.slice(1),
+                aspectRatio: args.aspectRatio, imageSize: deps.imageSize ?? '2K', modelPriority: deps.modelPriority
+            });
+            const out = await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset));
+            // Ensure PNG (models may return JPEG): re-encode via decode if needed
+            if (out[0] === 0x89 && out[1] === 0x50) return out;
+            throw new Error('Station image generator returned a non-PNG asset; PNG is required for lossless QC and baking');
+        }
+    };
+}
