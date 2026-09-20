@@ -1,0 +1,12 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.s4d-worker'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/s4d-worker:latest'
+      - '.'
+images:
+  - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/s4d-worker:latest'
+timeout: '1200s'

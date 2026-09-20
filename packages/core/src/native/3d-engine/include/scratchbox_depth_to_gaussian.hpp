@@ -755,6 +755,16 @@ public:
         outRgb.z = albedo.z * (1.0f - relightingMix) + lit.z * relightingMix;
     }
 
+    static inline Vec3 getEquirectRay(int x, int y, int width, int height) {
+        float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
+        float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+        float pitch = (0.5f - v) * static_cast<float>(M_PI);
+        float cosPitch = std::cos(pitch);
+        float sinPitch = std::sin(pitch);
+        float yaw = (u * 2.0f - 1.0f) * static_cast<float>(M_PI);
+        return Vec3(std::sin(yaw) * cosPitch, sinPitch, -std::cos(yaw) * cosPitch);
+    }
+
     /**
      * Converts a 360-degree Equirectangular Panoramic Image into a complete
      * omnidirectional 3D Gaussian Splatting radiance world.
@@ -767,7 +777,11 @@ public:
         const float* optionalMetricDepths = nullptr,
         int stride = 2,
         float eyeHeight = 1.70f,
-        float maxRadius = 80.0f
+        float maxRadius = 80.0f,
+        float edgeSeveranceTau = 0.08f,
+        float splatScaleMultiplier = 2.10f,
+        float splatThicknessRatio = 0.22f,
+        bool inpaintOcclusion = true
     ) {
         std::vector<GaussianSplat> splats;
         if (!rgbBuffer || width <= 0 || height <= 0) return splats;
@@ -775,26 +789,23 @@ public:
         int step = std::max(1, stride);
         splats.reserve((width / step) * (height / step));
 
-        float deltaYaw = (2.0f * static_cast<float>(M_PI) * step) / static_cast<float>(width);
+        std::vector<GaussianSplat> inpaintSplats;
 
         for (int y = 0; y < height; y += step) {
-            float v = static_cast<float>(y) / static_cast<float>(height);
-            // pitch from +pi/2 (zenith) to -pi/2 (nadir)
+            float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
             float pitch = (0.5f - v) * static_cast<float>(M_PI);
             float cosPitch = std::cos(pitch);
             float sinPitch = std::sin(pitch);
 
-            for (int x = 0; x < width; x += step) {
-                float u = static_cast<float>(x) / static_cast<float>(width);
-                // yaw from -pi to +pi
+            // Equal-area sampling: scale horizontal stride relative to latitude cos(pitch)
+            int x_step = std::max(1, static_cast<int>(std::round(step / std::max(0.1f, cosPitch))));
+
+            for (int x = 0; x < width; x += x_step) {
+                float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
                 float yaw = (u * 2.0f - 1.0f) * static_cast<float>(M_PI);
-                float sinYaw = std::sin(yaw);
-                float cosYaw = std::cos(yaw);
 
-                // Unit direction vector
-                Vec3 ray(sinYaw * cosPitch, sinPitch, -cosYaw * cosPitch);
+                Vec3 ray = getEquirectRay(x, y, width, height);
 
-                // Pixel index
                 size_t pIdx = static_cast<size_t>(y) * width + x;
                 size_t cIdx = pIdx * channels;
 
@@ -807,12 +818,10 @@ public:
                 if (optionalMetricDepths != nullptr) {
                     depth = optionalMetricDepths[pIdx];
                 } else {
-                    // Geometric unprojection: Ground plane intersection if ray points down
                     if (ray.y < -0.04f) {
                         float tFloor = -eyeHeight / ray.y;
                         depth = std::min(tFloor, maxRadius);
                     } else {
-                        // Atmospheric/architectural perimeter with luminance relief
                         float baseD = maxRadius * 0.65f;
                         float relief = (1.0f - lum) * (maxRadius * 0.25f);
                         depth = std::min(maxRadius, baseD + relief);
@@ -821,15 +830,111 @@ public:
 
                 if (depth < 0.2f) depth = 0.2f;
 
-                // 3D position: eye + depth * ray
                 Vec3 pos(
                     ray.x * depth,
                     eyeHeight + ray.y * depth,
                     ray.z * depth
                 );
 
-                // Normal facing inward towards observer: N = -ray
                 Vec3 normal = (-ray).normalized();
+                bool isEdge = false;
+                float alpha = 1.0f;
+
+                // 4-connected neighbor sampling for depth gradient normals and edge severance
+                if (optionalMetricDepths != nullptr) {
+                    int xNext = (x + step) % width;
+                    int xPrev = (x - step + width) % width;
+                    int yNext = std::min(height - 1, y + step);
+                    int yPrev = std::max(0, y - step);
+
+                    float dRight = optionalMetricDepths[y * width + xNext];
+                    float dLeft  = optionalMetricDepths[y * width + xPrev];
+                    float dDown  = optionalMetricDepths[yNext * width + x];
+                    float dUp    = optionalMetricDepths[yPrev * width + x];
+
+                    float maxDx = std::max(1e-4f, std::max(dRight, dLeft));
+                    float maxDy = std::max(1e-4f, std::max(dDown, dUp));
+                    float deltaX = std::abs(dRight - dLeft) / maxDx;
+                    float deltaY = std::abs(dDown - dUp) / maxDy;
+
+                    isEdge = (deltaX > edgeSeveranceTau) || (deltaY > edgeSeveranceTau);
+
+                    Vec3 pRight = getEquirectRay(xNext, y, width, height) * dRight;
+                    Vec3 pLeft  = getEquirectRay(xPrev, y, width, height) * dLeft;
+                    Vec3 pDown  = getEquirectRay(x, yNext, width, height) * dDown;
+                    Vec3 pUp    = getEquirectRay(x, yPrev, width, height) * dUp;
+
+                    Vec3 tx = pRight - pLeft;
+                    Vec3 ty = pDown - pUp;
+                    Vec3 gradNorm = tx.cross(ty);
+                    float gradNormLen = gradNorm.length();
+
+                    if (gradNormLen > 1e-6f) {
+                        normal = gradNorm * (1.0f / gradNormLen);
+                        if (normal.dot(ray) > 0.0f) {
+                            normal = -normal;
+                        }
+                    }
+
+                    // Multilayer disocclusion inpainting synthesis
+                    if (inpaintOcclusion) {
+                        float bgDepthSum = 0.0f;
+                        int bgCount = 0;
+                        float fgBgRatio = 1.0f + edgeSeveranceTau * 1.5f;
+                        Vec3 bgAccumColor(0.0f, 0.0f, 0.0f);
+
+                        auto checkNeighbor = [&](int nx, int ny, float nd) {
+                            if (nd > depth * fgBgRatio) {
+                                bgDepthSum += nd;
+                                size_t nIdx = (static_cast<size_t>(ny) * width + nx) * channels;
+                                bgAccumColor.x += rgbBuffer[nIdx + 0] / 255.0f;
+                                bgAccumColor.y += rgbBuffer[nIdx + 1] / 255.0f;
+                                bgAccumColor.z += rgbBuffer[nIdx + 2] / 255.0f;
+                                bgCount++;
+                            }
+                        };
+
+                        checkNeighbor(xNext, y, dRight);
+                        checkNeighbor(xPrev, y, dLeft);
+                        checkNeighbor(x, yNext, dDown);
+                        checkNeighbor(x, yPrev, dUp);
+
+                        if (bgCount > 0) {
+                            float avgBgDepth = (bgDepthSum / static_cast<float>(bgCount)) * 1.04f;
+                            Vec3 avgBgColor = bgAccumColor * (1.0f / static_cast<float>(bgCount));
+
+                            Vec3 bgPos(
+                                ray.x * avgBgDepth,
+                                eyeHeight + ray.y * avgBgDepth,
+                                ray.z * avgBgDepth
+                            );
+
+                            Vec3 bgNormal = -ray;
+                            Vec3 bgZAxis(0.0f, 0.0f, 1.0f);
+                            Vec3 bgAxis = bgZAxis.cross(bgNormal);
+                            float bgDot = bgZAxis.dot(bgNormal);
+                            Quat bgRot;
+                            if (bgDot < -0.9999f) {
+                                bgRot = Quat(0.0f, 1.0f, 0.0f, 0.0f);
+                            } else {
+                                bgRot = Quat(bgAxis.x, bgAxis.y, bgAxis.z, 1.0f + bgDot).normalized();
+                            }
+
+                            float deltaYaw = (2.0f * static_cast<float>(M_PI) * x_step) / static_cast<float>(width);
+                            float arc = avgBgDepth * deltaYaw * std::max(0.1f, cosPitch) * splatScaleMultiplier * 1.35f;
+                            arc = std::max(0.02f, std::min(arc, 4.0f));
+                            Vec3 bgScale(arc, arc, arc * splatThicknessRatio);
+
+                            GaussianSplat bgSplat;
+                            bgSplat.position = bgPos;
+                            bgSplat.scale = bgScale;
+                            bgSplat.rotation = bgRot;
+                            bgSplat.color = avgBgColor;
+                            bgSplat.opacity = 0.85f;
+                            inpaintSplats.push_back(bgSplat);
+                        }
+                    }
+                }
 
                 // Compute orientation quaternion aligning (0, 0, 1) with normal
                 Vec3 zAxis(0.0f, 0.0f, 1.0f);
@@ -844,19 +949,32 @@ public:
                 }
 
                 // Tangential scale proportional to angular subtended arc
-                float arc = depth * deltaYaw * std::max(0.2f, cosPitch) * 2.10f;
+                float deltaYaw = (2.0f * static_cast<float>(M_PI) * x_step) / static_cast<float>(width);
+                float arc = depth * deltaYaw * std::max(0.1f, cosPitch) * splatScaleMultiplier;
                 arc = std::max(0.02f, std::min(arc, 4.0f));
-                Vec3 scale(arc, arc, arc * 0.2f);
+
+                // Sever edges to eliminate stretching artifacts
+                if (isEdge) {
+                    arc *= 0.45f;
+                    alpha *= 0.85f;
+                }
+
+                Vec3 scale(arc, arc, arc * splatThicknessRatio);
 
                 GaussianSplat s;
                 s.position = pos;
                 s.scale = scale;
                 s.rotation = rot;
                 s.color = Vec3(r / 255.0f, g / 255.0f, b / 255.0f);
-                s.opacity = 1.0f;
+                s.opacity = alpha;
 
                 splats.push_back(s);
             }
+        }
+
+        // Insert inpainted disocclusion background layer
+        if (!inpaintSplats.empty()) {
+            splats.insert(splats.end(), inpaintSplats.begin(), inpaintSplats.end());
         }
 
         return splats;

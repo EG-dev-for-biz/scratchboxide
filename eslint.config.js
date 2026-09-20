@@ -10,6 +10,8 @@ module.exports = tseslint.config(
             '**/node_modules/**',
             '**/dist/**',
             '**/dist-electron/**',
+            '**/build/**',
+            '**/.cache/**',
             'docs/**',
             'coverage/**',
             'scripts/**',
