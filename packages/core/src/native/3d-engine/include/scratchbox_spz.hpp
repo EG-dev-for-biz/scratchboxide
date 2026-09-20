@@ -231,15 +231,16 @@ public:
  */
 class SpzCodec {
 public:
-    static constexpr uint32_t SPZ_MAGIC = 0x315a5053; // 'S','P','Z','1'
-    static constexpr uint32_t SPZ_VERSION = 1;
+    static constexpr uint32_t SPZ_MAGIC_LEGACY = 0x315a5053; // 'S','P','Z','1'
+    static constexpr uint32_t SPZ_MAGIC_NIANTIC = 0x5053474e; // 'N','G','S','P'
     static constexpr uint8_t DEFAULT_FRACTIONAL_BITS = 12; // 1/4096 meter precision
 
 #pragma pack(push, 1)
     struct SpzHeader {
-        uint32_t magic{SPZ_MAGIC};
-        uint32_t version{SPZ_VERSION};
+        uint32_t magic{SPZ_MAGIC_NIANTIC};
+        uint32_t version{2};
         uint32_t numPoints{0};
+        uint8_t shDegree{0};
         uint8_t fractionalBits{DEFAULT_FRACTIONAL_BITS};
         uint8_t flags{0};
         uint16_t reserved{0};
@@ -247,68 +248,66 @@ public:
 #pragma pack(pop)
 
     static std::vector<uint8_t> encode(const std::vector<GaussianSplat>& splats, uint8_t fractionalBits = DEFAULT_FRACTIONAL_BITS) {
+        size_t numPoints = splats.size();
+        size_t totalBytes = sizeof(SpzHeader) + numPoints * 22;
+        std::vector<uint8_t> uncompressed(totalBytes);
+
         SpzHeader header;
-        header.numPoints = static_cast<uint32_t>(splats.size());
+        header.numPoints = static_cast<uint32_t>(numPoints);
         header.fractionalBits = fractionalBits;
-
-        // Uncompressed payload
-        // For each point:
-        //   int32 x, y, z (12 bytes)
-        //   int8  log_sx, log_sy, log_sz (3 bytes)
-        //   int8  qx, qy, qz (3 bytes, qw reconstructed)
-        //   uint8 r, g, b (3 bytes)
-        //   uint8 opacity (1 byte)
-        // Total = 22 bytes per point uncompressed (then compressed with gzip to ~6-9 bytes)
-        size_t pointStride = 22;
-        std::vector<uint8_t> uncompressed(sizeof(SpzHeader) + splats.size() * pointStride);
-
         std::memcpy(uncompressed.data(), &header, sizeof(SpzHeader));
+
         uint8_t* ptr = uncompressed.data() + sizeof(SpzHeader);
+        float posScale = static_cast<float>(1 << header.fractionalBits);
 
-        float posScale = static_cast<float>(1 << fractionalBits);
+        int32_t* px_arr = reinterpret_cast<int32_t*>(ptr);
+        int32_t* py_arr = px_arr + numPoints;
+        int32_t* pz_arr = py_arr + numPoints;
 
-        for (const auto& s : splats) {
-            // 1. Quantized position (fixed-point)
-            int32_t ix = static_cast<int32_t>(std::round(s.position.x * posScale));
-            int32_t iy = static_cast<int32_t>(std::round(s.position.y * posScale));
-            int32_t iz = static_cast<int32_t>(std::round(s.position.z * posScale));
-            std::memcpy(ptr, &ix, 4);
-            std::memcpy(ptr + 4, &iy, 4);
-            std::memcpy(ptr + 8, &iz, 4);
-            ptr += 12;
+        int8_t* sx_arr = reinterpret_cast<int8_t*>(pz_arr + numPoints);
+        int8_t* sy_arr = sx_arr + numPoints;
+        int8_t* sz_arr = sy_arr + numPoints;
 
-            // 2. Quantized scale: log scale clamped to [-8.0, 4.0] mapped to [-128..127]
+        int8_t* qx_arr = sz_arr + numPoints;
+        int8_t* qy_arr = qx_arr + numPoints;
+        int8_t* qz_arr = qy_arr + numPoints;
+
+        uint8_t* r_arr = reinterpret_cast<uint8_t*>(qz_arr + numPoints);
+        uint8_t* g_arr = r_arr + numPoints;
+        uint8_t* b_arr = g_arr + numPoints;
+        uint8_t* a_arr = b_arr + numPoints;
+
+        for (size_t i = 0; i < numPoints; ++i) {
+            const auto& s = splats[i];
+
+            px_arr[i] = static_cast<int32_t>(std::round(s.position.x * posScale));
+            py_arr[i] = static_cast<int32_t>(std::round(s.position.y * posScale));
+            pz_arr[i] = static_cast<int32_t>(std::round(s.position.z * posScale));
+
             for (int k = 0; k < 3; ++k) {
                 float val = (k == 0) ? s.scale.x : (k == 1 ? s.scale.y : s.scale.z);
                 float logVal = std::log(std::max(val, 1e-5f));
-                float normVal = (logVal + 8.0f) / 12.0f; // 0..1
+                float normVal = (logVal + 8.0f) / 12.0f;
                 int8_t quant = static_cast<int8_t>(std::clamp(normVal * 255.0f - 128.0f, -128.0f, 127.0f));
-                *ptr++ = static_cast<uint8_t>(quant);
+                if (k == 0) sx_arr[i] = quant;
+                else if (k == 1) sy_arr[i] = quant;
+                else sz_arr[i] = quant;
             }
 
-            // 3. Rotation quaternion (first 3 components, sign normalized so qw >= 0)
             Quat q = s.rotation.normalized();
             if (q.w < 0.0f) {
-                q.x = -q.x;
-                q.y = -q.y;
-                q.z = -q.z;
-                q.w = -q.w;
+                q.x = -q.x; q.y = -q.y; q.z = -q.z; q.w = -q.w;
             }
-            int8_t iqx = static_cast<int8_t>(std::clamp(q.x * 127.0f, -128.0f, 127.0f));
-            int8_t iqy = static_cast<int8_t>(std::clamp(q.y * 127.0f, -128.0f, 127.0f));
-            int8_t iqz = static_cast<int8_t>(std::clamp(q.z * 127.0f, -128.0f, 127.0f));
-            *ptr++ = static_cast<uint8_t>(iqx);
-            *ptr++ = static_cast<uint8_t>(iqy);
-            *ptr++ = static_cast<uint8_t>(iqz);
+            qx_arr[i] = static_cast<int8_t>(std::clamp(q.x * 127.0f, -128.0f, 127.0f));
+            qy_arr[i] = static_cast<int8_t>(std::clamp(q.y * 127.0f, -128.0f, 127.0f));
+            qz_arr[i] = static_cast<int8_t>(std::clamp(q.z * 127.0f, -128.0f, 127.0f));
 
-            // 4. Color & Opacity
-            *ptr++ = static_cast<uint8_t>(std::clamp(s.color.x * 255.0f, 0.0f, 255.0f));
-            *ptr++ = static_cast<uint8_t>(std::clamp(s.color.y * 255.0f, 0.0f, 255.0f));
-            *ptr++ = static_cast<uint8_t>(std::clamp(s.color.z * 255.0f, 0.0f, 255.0f));
-            *ptr++ = static_cast<uint8_t>(std::clamp(s.opacity * 255.0f, 0.0f, 255.0f));
+            r_arr[i] = static_cast<uint8_t>(std::clamp(s.color.x * 255.0f, 0.0f, 255.0f));
+            g_arr[i] = static_cast<uint8_t>(std::clamp(s.color.y * 255.0f, 0.0f, 255.0f));
+            b_arr[i] = static_cast<uint8_t>(std::clamp(s.color.z * 255.0f, 0.0f, 255.0f));
+            a_arr[i] = static_cast<uint8_t>(std::clamp(s.opacity * 255.0f, 0.0f, 255.0f));
         }
 
-        // Gzip compress the entire payload
         return GzipCodec::compress(uncompressed.data(), uncompressed.size());
     }
 
@@ -328,61 +327,155 @@ public:
         SpzHeader header;
         std::memcpy(&header, uncompressed.data(), sizeof(SpzHeader));
 
-        if (header.magic != SPZ_MAGIC) {
-            return {};
-        }
-
-        float posScale = 1.0f / static_cast<float>(1 << header.fractionalBits);
-        const uint8_t* ptr = uncompressed.data() + sizeof(SpzHeader);
-        size_t availablePoints = (uncompressed.size() - sizeof(SpzHeader)) / 22;
-        size_t count = std::min<size_t>(header.numPoints, availablePoints);
-
         std::vector<GaussianSplat> splats;
-        splats.reserve(count);
 
-        for (size_t i = 0; i < count; ++i) {
-            GaussianSplat s;
+        if (header.magic == SPZ_MAGIC_NIANTIC) {
+            size_t count = header.numPoints;
+            float posScale = 1.0f / static_cast<float>(1 << header.fractionalBits);
+            const uint8_t* ptr = uncompressed.data() + sizeof(SpzHeader);
 
-            // Position
-            int32_t ix, iy, iz;
-            std::memcpy(&ix, ptr, 4);
-            std::memcpy(&iy, ptr + 4, 4);
-            std::memcpy(&iz, ptr + 8, 4);
-            s.position = Vec3(ix * posScale, iy * posScale, iz * posScale);
-            ptr += 12;
+            const int32_t* px_arr = reinterpret_cast<const int32_t*>(ptr);
+            const int32_t* py_arr = px_arr + count;
+            const int32_t* pz_arr = py_arr + count;
 
-            // Scale
-            float scales[3];
-            for (int k = 0; k < 3; ++k) {
-                int8_t quant = static_cast<int8_t>(*ptr++);
-                float normVal = (quant + 128.0f) / 255.0f;
-                float logVal = normVal * 12.0f - 8.0f;
-                scales[k] = std::exp(logVal);
+            const int8_t* sx_arr = reinterpret_cast<const int8_t*>(pz_arr + count);
+            const int8_t* sy_arr = sx_arr + count;
+            const int8_t* sz_arr = sy_arr + count;
+
+            const int8_t* qx_arr = sz_arr + count;
+            const int8_t* qy_arr = qx_arr + count;
+            const int8_t* qz_arr = qy_arr + count;
+
+            const uint8_t* r_arr = reinterpret_cast<const uint8_t*>(qz_arr + count);
+            const uint8_t* g_arr = r_arr + count;
+            const uint8_t* b_arr = g_arr + count;
+            const uint8_t* a_arr = b_arr + count;
+
+            splats.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                GaussianSplat s;
+                s.position = Vec3(px_arr[i] * posScale, py_arr[i] * posScale, pz_arr[i] * posScale);
+
+                float sx_norm = (sx_arr[i] + 128.0f) / 255.0f;
+                float sy_norm = (sy_arr[i] + 128.0f) / 255.0f;
+                float sz_norm = (sz_arr[i] + 128.0f) / 255.0f;
+                s.scale = Vec3(
+                    std::exp(sx_norm * 12.0f - 8.0f),
+                    std::exp(sy_norm * 12.0f - 8.0f),
+                    std::exp(sz_norm * 12.0f - 8.0f)
+                );
+
+                float qx = qx_arr[i] / 127.0f;
+                float qy = qy_arr[i] / 127.0f;
+                float qz = qz_arr[i] / 127.0f;
+                float qw2 = 1.0f - (qx * qx + qy * qy + qz * qz);
+                float qw = qw2 > 0.0f ? std::sqrt(qw2) : 0.0f;
+                s.rotation = Quat(qx, qy, qz, qw).normalized();
+
+                s.color = Vec3(r_arr[i] / 255.0f, g_arr[i] / 255.0f, b_arr[i] / 255.0f);
+                s.opacity = a_arr[i] / 255.0f;
+
+                splats.push_back(s);
             }
-            s.scale = Vec3(scales[0], scales[1], scales[2]);
+        } else if (header.magic == SPZ_MAGIC_LEGACY) {
+            float posScale = 1.0f / static_cast<float>(1 << header.fractionalBits);
+            const uint8_t* ptr = uncompressed.data() + sizeof(SpzHeader);
+            size_t availablePoints = (uncompressed.size() - sizeof(SpzHeader)) / 22;
+            size_t count = std::min<size_t>(header.numPoints, availablePoints);
 
-            // Rotation
-            int8_t iqx = static_cast<int8_t>(*ptr++);
-            int8_t iqy = static_cast<int8_t>(*ptr++);
-            int8_t iqz = static_cast<int8_t>(*ptr++);
-            float qx = iqx / 127.0f;
-            float qy = iqy / 127.0f;
-            float qz = iqz / 127.0f;
-            float qw2 = 1.0f - (qx * qx + qy * qy + qz * qz);
-            float qw = qw2 > 0.0f ? std::sqrt(qw2) : 0.0f;
-            s.rotation = Quat(qx, qy, qz, qw).normalized();
+            splats.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                GaussianSplat s;
 
-            // Color & Opacity
-            float cr = *ptr++ / 255.0f;
-            float cg = *ptr++ / 255.0f;
-            float cb = *ptr++ / 255.0f;
-            s.color = Vec3(cr, cg, cb);
-            s.opacity = *ptr++ / 255.0f;
+                // Position
+                int32_t ix, iy, iz;
+                std::memcpy(&ix, ptr, 4);
+                std::memcpy(&iy, ptr + 4, 4);
+                std::memcpy(&iz, ptr + 8, 4);
+                s.position = Vec3(ix * posScale, iy * posScale, iz * posScale);
+                ptr += 12;
 
-            splats.push_back(s);
+                // Scale
+                float scales[3];
+                for (int k = 0; k < 3; ++k) {
+                    int8_t quant = static_cast<int8_t>(*ptr++);
+                    float normVal = (quant + 128.0f) / 255.0f;
+                    float logVal = normVal * 12.0f - 8.0f;
+                    scales[k] = std::exp(logVal);
+                }
+                s.scale = Vec3(scales[0], scales[1], scales[2]);
+
+                // Rotation
+                int8_t iqx = static_cast<int8_t>(*ptr++);
+                int8_t iqy = static_cast<int8_t>(*ptr++);
+                int8_t iqz = static_cast<int8_t>(*ptr++);
+                float qx = iqx / 127.0f;
+                float qy = iqy / 127.0f;
+                float qz = iqz / 127.0f;
+                float qw2 = 1.0f - (qx * qx + qy * qy + qz * qz);
+                float qw = qw2 > 0.0f ? std::sqrt(qw2) : 0.0f;
+                s.rotation = Quat(qx, qy, qz, qw).normalized();
+
+                // Color & Opacity
+                float cr = *ptr++ / 255.0f;
+                float cg = *ptr++ / 255.0f;
+                float cb = *ptr++ / 255.0f;
+                s.color = Vec3(cr, cg, cb);
+                s.opacity = *ptr++ / 255.0f;
+
+                splats.push_back(s);
+            }
         }
 
         return splats;
+    }
+};
+
+class PlyCodec {
+public:
+    static bool saveToPlyFile(const std::string& filepath, const std::vector<GaussianSplat>& splats) {
+        std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) return false;
+
+        out << "ply\n"
+            << "format binary_little_endian 1.0\n"
+            << "element vertex " << splats.size() << "\n"
+            << "property float x\n"
+            << "property float y\n"
+            << "property float z\n"
+            << "property float scale_0\n"
+            << "property float scale_1\n"
+            << "property float scale_2\n"
+            << "property uchar red\n"
+            << "property uchar green\n"
+            << "property uchar blue\n"
+            << "property uchar opacity\n"
+            << "property float rot_0\n"
+            << "property float rot_1\n"
+            << "property float rot_2\n"
+            << "property float rot_3\n"
+            << "end_header\n";
+
+        for (const auto& s : splats) {
+            float pos[3] = {s.position.x, s.position.y, s.position.z};
+            out.write(reinterpret_cast<const char*>(pos), 12);
+
+            float scale[3] = {s.scale.x, s.scale.y, s.scale.z};
+            out.write(reinterpret_cast<const char*>(scale), 12);
+
+            uint8_t rgba[4] = {
+                static_cast<uint8_t>(std::clamp(s.color.x * 255.0f, 0.0f, 255.0f)),
+                static_cast<uint8_t>(std::clamp(s.color.y * 255.0f, 0.0f, 255.0f)),
+                static_cast<uint8_t>(std::clamp(s.color.z * 255.0f, 0.0f, 255.0f)),
+                static_cast<uint8_t>(std::clamp(s.opacity * 255.0f, 0.0f, 255.0f))
+            };
+            out.write(reinterpret_cast<const char*>(rgba), 4);
+
+            float rot[4] = {s.rotation.w, s.rotation.x, s.rotation.y, s.rotation.z};
+            out.write(reinterpret_cast<const char*>(rot), 16);
+        }
+
+        return out.good();
     }
 };
 

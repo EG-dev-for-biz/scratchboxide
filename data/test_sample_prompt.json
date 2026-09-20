@@ -1,0 +1,236 @@
+{
+  "id": "s4d_item_1789657705264",
+  "district": "Manhattan Midtown Canyon",
+  "prompt": {
+    "entityId": "synthetic_agent_1789657705165",
+    "originWGS84": {
+      "lat": 40.7484,
+      "lng": -73.9857,
+      "alt": 15
+    },
+    "timeStepMs": 250,
+    "totalDurationMs": 4000,
+    "waypoints": [
+      {
+        "x": -7.582,
+        "y": -54.893,
+        "z": 13.681,
+        "yawDeg": 180,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 0,
+        "timestampMs": 0
+      },
+      {
+        "x": -5.636,
+        "y": -54.671,
+        "z": 15.802,
+        "yawDeg": 83.50236494650164,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 41.6,
+        "timestampMs": 250
+      },
+      {
+        "x": -3.789,
+        "y": -54.266,
+        "z": 17.601,
+        "yawDeg": 77.6290775145248,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 37.6,
+        "timestampMs": 500
+      },
+      {
+        "x": -2.029,
+        "y": -53.703,
+        "z": 19.113,
+        "yawDeg": 72.25940271640661,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 34.4,
+        "timestampMs": 750
+      },
+      {
+        "x": -0.341,
+        "y": -53.007,
+        "z": 20.376,
+        "yawDeg": 67.58144129202469,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 32,
+        "timestampMs": 1000
+      },
+      {
+        "x": 1.287,
+        "y": -52.203,
+        "z": 21.424,
+        "yawDeg": 63.71595056809599,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 30.2,
+        "timestampMs": 1250
+      },
+      {
+        "x": 2.869,
+        "y": -51.316,
+        "z": 22.292,
+        "yawDeg": 60.72469734244572,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 29,
+        "timestampMs": 1500
+      },
+      {
+        "x": 4.418,
+        "y": -50.372,
+        "z": 23.017,
+        "yawDeg": 58.62957114702999,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 28.1,
+        "timestampMs": 1750
+      },
+      {
+        "x": 5.947,
+        "y": -49.395,
+        "z": 23.635,
+        "yawDeg": 57.432521071551605,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27.6,
+        "timestampMs": 2000
+      },
+      {
+        "x": 7.47,
+        "y": -48.411,
+        "z": 24.18,
+        "yawDeg": 57.130796358978614,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27.3,
+        "timestampMs": 2250
+      },
+      {
+        "x": 8.999,
+        "y": -47.445,
+        "z": 24.688,
+        "yawDeg": 57.725751656936325,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27.1,
+        "timestampMs": 2500
+      },
+      {
+        "x": 10.549,
+        "y": -46.522,
+        "z": 25.196,
+        "yawDeg": 59.2251065471537,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27,
+        "timestampMs": 2750
+      },
+      {
+        "x": 12.131,
+        "y": -45.668,
+        "z": 25.738,
+        "yawDeg": 61.63860838089357,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27.1,
+        "timestampMs": 3000
+      },
+      {
+        "x": 13.761,
+        "y": -44.907,
+        "z": 26.351,
+        "yawDeg": 64.96669011718393,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 27.4,
+        "timestampMs": 3250
+      },
+      {
+        "x": 15.45,
+        "y": -44.265,
+        "z": 27.07,
+        "yawDeg": 69.18219817377627,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 28,
+        "timestampMs": 3500
+      },
+      {
+        "x": 17.212,
+        "y": -43.766,
+        "z": 27.931,
+        "yawDeg": 74.20785168215957,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 29.1,
+        "timestampMs": 3750
+      },
+      {
+        "x": 19.061,
+        "y": -43.437,
+        "z": 28.969,
+        "yawDeg": 79.89710924586842,
+        "pitchDeg": 0,
+        "rollDeg": 0,
+        "speedKmh": 30.9,
+        "timestampMs": 4000
+      }
+    ],
+    "bounds": {
+      "min": [
+        -7.582,
+        -54.893,
+        13.681
+      ],
+      "max": [
+        19.061,
+        -43.437,
+        28.969
+      ]
+    }
+  },
+  "metadata": {
+    "dimensions": [
+      16,
+      64,
+      64,
+      32
+    ],
+    "voxelSizeMeters": [
+      2,
+      2,
+      2
+    ],
+    "originENU": [
+      0,
+      0,
+      15
+    ],
+    "classes": {
+      "0": "Airspace",
+      "1": "Terrain",
+      "2": "Water",
+      "3": "Building Facade",
+      "4": "Building Interior",
+      "5": "Vegetation",
+      "6": "Transit Road",
+      "7": "Dynamic Air Agent",
+      "8": "Dynamic Ground Agent",
+      "9": "Dynamic Hazard"
+    },
+    "timeStepMs": 250
+  },
+  "histogram": {
+    "0": 1511244,
+    "1": 262132,
+    "3": 4416,
+    "4": 319232,
+    "7": 128
+  }
+}

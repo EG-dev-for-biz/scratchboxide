@@ -6,44 +6,38 @@ This file tracks high-friction architectural boundaries in Scratchbox IDE. Do no
 
 ## Active Debt Items
 
-### [DEBT-001] GenerativeCanvasStudio.tsx Monolithic Component Size
+### [DEBT-001] Large Visual Primitive Component Sizes (Scene3DPrimitive & LiveCodeSandboxPrimitive)
 
 - **Evidence**:
-  - `extensions/product/src/browser/generative-canvas/GenerativeCanvasStudio.tsx` (~4,200 lines)
-  - Coordinates layout modes, chat history, prompt enhancement, voice dictation, modal states, token budget HUD popover, artifact version rollbacks, and composer input rendering all in a single React component state tree.
-- **Impact**: Medium. Reading or modifying studio-level logic requires traversing a large file. However, component state encapsulation is currently working cleanly, and 24 comprehensive test suites guarantee its runtime correctness.
+  - `packages/core/src/browser/generative-canvas/primitives/Scene3DPrimitive.tsx` (~221 KB, ~3,500 lines)
+  - `packages/core/src/browser/generative-canvas/primitives/LiveCodeSandboxPrimitive.tsx` (~179 KB, ~3,000 lines)
+  - `packages/core/src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive.tsx` (~181 KB, ~3,100 lines)
+- **Impact**: Medium. Primitives encapsulate extensive interactive logic (3D gizmo controls, camera choreography, ESM sandboxing, AST markdown parsing). While test coverage is comprehensive (227 test suites, 1,043 tests in `packages/core/test`), file sizes make single-module navigation dense.
 - **Suggested Direction**:
-  - Extract sub-controllers into dedicated custom hooks when touching specific subsystems:
-    - `useStudioModals()` for Spotlight, Settings, Projects, and Automations modal state management.
-    - `useStudioComposer()` for autocomplete, voice dictation, and drag-and-drop file attachment.
-    - `useStudioArtifactVersionHistory()` for version stepping and rollback actions.
-- **Do Not Refactor Until**: A user request asks to add a new top-level modal workflow or significantly expand the composer dock capabilities.
+  - Lazily load heavyweight dependencies (Three.js post-processing passes, Monaco Editor workers, Pyodide WASM runtime) via dynamic `React.lazy()` / `import()`.
+  - Extract sub-controllers into dedicated hook modules (e.g., `useScene3DLighting()`, `useSandboxCompiler()`).
+- **Do Not Refactor Until**: Performance profiling shows client bundle size or initial primitive mount latency becoming a bottleneck on lower-end devices.
 
 ---
 
-### [DEBT-002] Duplicated Autocomplete Menus in SideChat and Main Studio
+### [DEBT-002] Standalone Express Server Network Binding & Port Isolation
 
 - **Evidence**:
-  - `extensions/product/src/browser/generative-canvas/GenerativeCanvasStudio.tsx` (`renderComposerInput`)
-  - `extensions/product/src/browser/generative-canvas/VibecodeAiSideChat.tsx` (`handleTextChange` & mention menu)
-- **Impact**: Low. Context mention (@file, @git, etc.) and superpower (/) trigger matching logic is shared through `context-mention-engine.ts`, but the popover JSX structure is instantiated in both places.
-- **Suggested Direction**: Extract a reusable `<ContextMentionAutocompletePopover />` component that accepts `activeCategory`, `query`, `onSelect`, and `position`.
-- **Do Not Refactor Until**: The user requests a new context mention category (e.g. `@database` or `@logs`) or changes the visual design of autocomplete popovers.
-
----
-
-### [DEBT-003] Backend Gemini Client Initialization Path Probing
-
-- **Evidence**:
-  - `extensions/product/src/node/gemini-service.ts` (`initAuth`)
-  - Scans 10 candidate filesystem paths synchronously on initialization to locate service account credentials.
-- **Impact**: Low. Works reliably across dev environments, but path resolution could be consolidated behind `WorkspaceConfigService`.
-- **Suggested Direction**: Delegate credential file location discovery to `WorkspaceConfigService.resolveCredentialsPath()`.
-- **Do Not Refactor Until**: Multi-user cloud container auth or dynamic OAuth2 tokens are requested for Google Cloud backend connections.
+  - `desktop-app/server/app.ts` & `desktop-app/server/index.ts`
+  - Express API gateway binds to `127.0.0.1:3001` with token authentication (`SCRATCHBOX_LAUNCH_TOKEN`).
+- **Impact**: Low. Token authentication, origin validation, and CSP sandboxing are strictly enforced. In sandboxed runner environments, socket connection permissions (`connect EPERM`) require bypass flags for integration test suites.
+- **Suggested Direction**: Provide an in-memory `supertest` mock harness for test suites that bypasses physical TCP socket binding entirely.
+- **Do Not Refactor Until**: Next test infrastructure overhaul.
 
 ---
 
 ## Resolved Debt Items
+
+- **[RESOLVED 2026-09-18]** Adaptive Domain Architecture & Zero Presets — deprecated static `DOMAIN_PROFILES` (~460 lines) and closed domain enums in favor of model-as-domain-engine latent space and AST-grounded document projection (ADR-010).
+- **[RESOLVED 2026-09-14]** C/C++ First 3D Spatial Engine Directive — unified 54 native header-only C++20 modules in `packages/core/src/native/3d-engine/include/` with Apple Clang compilation and streaming binary glTF 2.0 (ADR-009).
+- **[RESOLVED 2026-09-07]** Standalone Clean Vite + React + Electron Architecture — completely removed Theia shell runtime, creating `desktop-app` and first-party `@scratchbox/core` (ADR-007, ADR-008).
+- **[RESOLVED 2026-09-05]** GenerativeCanvasStudio Monolithic Decomposition — reduced from ~4,200 lines to ~1,648 lines by extracting `<ContextMentionAutocompletePopover />`, `useStudioModals()`, and `useArtifactVersionHistory()`.
+- **[RESOLVED 2026-09-05]** Core Primitives Drag-and-Drop & Metric Export — enhanced `KanbanBoardPrimitive` with HTML5 native drag-and-drop & sprint metrics; reactive time-range filtering and CSV/JSON export in `MetricCardsPrimitive`.
 
 - **[RESOLVED 2026-09-02]** Workspace Vendoring for Eclipse Theia dependencies (`vendor/packages/@theia/*` and `scripts/vendor-theia.ts`) — automated local package imports and integrity verification without npm publishing.
 - **[RESOLVED 2026-09-04]** Cursor-Style Settings Page refactored into clean typography-only no-icon sidebar, Customize banner, and grouped settings cards with Apple-green toggles.

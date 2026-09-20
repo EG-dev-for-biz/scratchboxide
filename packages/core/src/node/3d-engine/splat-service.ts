@@ -269,55 +269,110 @@ export class SplatService {
         }
 
         const magic = raw.readUInt32LE(0);
-        // 'S','P','Z','1' = 0x315a5053
-        if (magic !== 0x315a5053) {
-            throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x315a5053)`);
-        }
-
-        const numPoints = raw.readUInt32LE(8);
-        const fractionalBits = raw.readUInt8(12);
-        const posScale = 1.0 / (1 << fractionalBits);
-
-        const POINT_STRIDE = 22;
-        const headerSize = 16;
-        const availablePoints = Math.floor((raw.length - headerSize) / POINT_STRIDE);
-        const count = Math.min(numPoints, availablePoints);
-
         const splats: BakedGaussian[] = [];
-        let offset = headerSize;
 
-        for (let i = 0; i < count; i++) {
-            const ix = raw.readInt32LE(offset);
-            const iy = raw.readInt32LE(offset + 4);
-            const iz = raw.readInt32LE(offset + 8);
-            offset += 12;
+        if (magic === 0x5053474e) {
+            // Planar NGSP v2 decoder
+            const numPoints = raw.readUInt32LE(8);
+            const fractionalBits = raw.readUInt8(12);
+            const posScale = 1.0 / (1 << fractionalBits);
 
-            const sxQuant = raw.readInt8(offset++);
-            const syQuant = raw.readInt8(offset++);
-            const szQuant = raw.readInt8(offset++);
+            const pxOffset = 16;
+            const pyOffset = pxOffset + numPoints * 4;
+            const pzOffset = pyOffset + numPoints * 4;
 
-            const sx = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
-            const sy = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
-            const sz = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
+            const sxOffset = pzOffset + numPoints * 4;
+            const syOffset = sxOffset + numPoints;
+            const szOffset = syOffset + numPoints;
 
-            const qx = raw.readInt8(offset++) / 127.0;
-            const qy = raw.readInt8(offset++) / 127.0;
-            const qz = raw.readInt8(offset++) / 127.0;
-            const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
-            const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
+            const qxOffset = szOffset + numPoints;
+            const qyOffset = qxOffset + numPoints;
+            const qzOffset = qyOffset + numPoints;
 
-            const r = raw.readUInt8(offset++);
-            const g = raw.readUInt8(offset++);
-            const b = raw.readUInt8(offset++);
-            const opacity = raw.readUInt8(offset++) / 255.0;
+            const rOffset = qzOffset + numPoints;
+            const gOffset = rOffset + numPoints;
+            const bOffset = gOffset + numPoints;
+            const aOffset = bOffset + numPoints;
 
-            splats.push({
-                position: [ix * posScale, iy * posScale, iz * posScale],
-                scale: [sx, sy, sz],
-                quaternion: [qx, qy, qz, qw],
-                colorRgb: [r, g, b],
-                opacity
-            });
+            for (let i = 0; i < numPoints; i++) {
+                const ix = raw.readInt32LE(pxOffset + i * 4);
+                const iy = raw.readInt32LE(pyOffset + i * 4);
+                const iz = raw.readInt32LE(pzOffset + i * 4);
+
+                const sxQuant = raw.readInt8(sxOffset + i);
+                const syQuant = raw.readInt8(syOffset + i);
+                const szQuant = raw.readInt8(szOffset + i);
+
+                const sx = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
+                const sy = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
+                const sz = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
+
+                const qx = raw.readInt8(qxOffset + i) / 127.0;
+                const qy = raw.readInt8(qyOffset + i) / 127.0;
+                const qz = raw.readInt8(qzOffset + i) / 127.0;
+                const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
+                const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
+
+                const r = raw.readUInt8(rOffset + i);
+                const g = raw.readUInt8(gOffset + i);
+                const b = raw.readUInt8(bOffset + i);
+                const opacity = raw.readUInt8(aOffset + i) / 255.0;
+
+                splats.push({
+                    position: [ix * posScale, iy * posScale, iz * posScale],
+                    scale: [sx, sy, sz],
+                    quaternion: [qx, qy, qz, qw],
+                    colorRgb: [r, g, b],
+                    opacity
+                });
+            }
+        } else if (magic === 0x315a5053) {
+            // Interleaved legacy SPZ1 decoder
+            const numPoints = raw.readUInt32LE(8);
+            const fractionalBits = raw.readUInt8(12);
+            const posScale = 1.0 / (1 << fractionalBits);
+
+            const POINT_STRIDE = 22;
+            const headerSize = 16;
+            const availablePoints = Math.floor((raw.length - headerSize) / POINT_STRIDE);
+            const count = Math.min(numPoints, availablePoints);
+
+            let offset = headerSize;
+            for (let i = 0; i < count; i++) {
+                const ix = raw.readInt32LE(offset);
+                const iy = raw.readInt32LE(offset + 4);
+                const iz = raw.readInt32LE(offset + 8);
+                offset += 12;
+
+                const sxQuant = raw.readInt8(offset++);
+                const syQuant = raw.readInt8(offset++);
+                const szQuant = raw.readInt8(offset++);
+
+                const sx = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
+                const sy = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
+                const sz = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
+
+                const qx = raw.readInt8(offset++) / 127.0;
+                const qy = raw.readInt8(offset++) / 127.0;
+                const qz = raw.readInt8(offset++) / 127.0;
+                const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
+                const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
+
+                const r = raw.readUInt8(offset++);
+                const g = raw.readUInt8(offset++);
+                const b = raw.readUInt8(offset++);
+                const opacity = raw.readUInt8(offset++) / 255.0;
+
+                splats.push({
+                    position: [ix * posScale, iy * posScale, iz * posScale],
+                    scale: [sx, sy, sz],
+                    quaternion: [qx, qy, qz, qw],
+                    colorRgb: [r, g, b],
+                    opacity
+                });
+            }
+        } else {
+            throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x315a5053 or 0x5053474e)`);
         }
 
         return splats;
@@ -328,55 +383,76 @@ export class SplatService {
      */
     static serializeSpzBuffer(splats: BakedGaussian[], fractionalBits = 12): Buffer {
         const headerSize = 16;
-        const POINT_STRIDE = 22;
-        const uncompressed = Buffer.alloc(headerSize + splats.length * POINT_STRIDE);
+        const numPoints = splats.length;
+        const totalSize = headerSize + numPoints * 22;
+        const uncompressed = Buffer.alloc(totalSize);
 
         // Header
-        uncompressed.writeUInt32LE(0x315a5053, 0); // SPZ1 magic
-        uncompressed.writeUInt32LE(1, 4);          // version 1
-        uncompressed.writeUInt32LE(splats.length, 8); // numPoints
+        uncompressed.writeUInt32LE(0x5053474e, 0); // NGSP magic
+        uncompressed.writeUInt32LE(2, 4);          // version 2
+        uncompressed.writeUInt32LE(numPoints, 8);  // numPoints
         uncompressed.writeUInt8(fractionalBits, 12);
         uncompressed.writeUInt8(0, 13); // flags
         uncompressed.writeUInt16LE(0, 14); // reserved
 
         const posScale = 1 << fractionalBits;
-        let offset = headerSize;
+        
+        // Planar offset pointers
+        const pxOffset = headerSize;
+        const pyOffset = pxOffset + numPoints * 4;
+        const pzOffset = pyOffset + numPoints * 4;
+        
+        const sxOffset = pzOffset + numPoints * 4;
+        const syOffset = sxOffset + numPoints;
+        const szOffset = syOffset + numPoints;
+        
+        const qxOffset = szOffset + numPoints;
+        const qyOffset = qxOffset + numPoints;
+        const qzOffset = qyOffset + numPoints;
+        
+        const rOffset = qzOffset + numPoints;
+        const gOffset = rOffset + numPoints;
+        const bOffset = gOffset + numPoints;
+        const aOffset = bOffset + numPoints;
 
-        for (let i = 0; i < splats.length; i++) {
+        for (let i = 0; i < numPoints; i++) {
             const s = splats[i];
 
-            // 1. Quantized position
-            uncompressed.writeInt32LE(Math.round(s.position[0] * posScale), offset);
-            uncompressed.writeInt32LE(Math.round(s.position[1] * posScale), offset + 4);
-            uncompressed.writeInt32LE(Math.round(s.position[2] * posScale), offset + 8);
-            offset += 12;
+            // 1. Quantized position (int32 planar)
+            uncompressed.writeInt32LE(Math.round(s.position[0] * posScale), pxOffset + i * 4);
+            uncompressed.writeInt32LE(Math.round(s.position[1] * posScale), pyOffset + i * 4);
+            uncompressed.writeInt32LE(Math.round(s.position[2] * posScale), pzOffset + i * 4);
 
-            // 2. Quantized scale
+            // 2. Quantized scale (int8 planar)
             for (let k = 0; k < 3; k++) {
                 const val = s.scale[k];
                 const logVal = Math.log(Math.max(val, 1e-5));
                 const normVal = (logVal + 8.0) / 12.0;
                 const quant = Math.min(127, Math.max(-128, Math.round(normVal * 255.0 - 128.0)));
-                uncompressed.writeInt8(quant, offset++);
+                const sOff = (k === 0 ? sxOffset : (k === 1 ? syOffset : szOffset)) + i;
+                uncompressed.writeInt8(quant, sOff);
             }
 
-            // 3. Rotation quaternion
+            // 3. Rotation quaternion (int8 planar)
             const q = s.quaternion || [0, 0, 0, 1];
-            let [qx, qy, qz, qw] = q;
+            let qx = q[0];
+            let qy = q[1];
+            let qz = q[2];
+            const qw = q[3];
             if (qw < 0) {
                 qx = -qx;
                 qy = -qy;
                 qz = -qz;
             }
-            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qx * 127.0))), offset++);
-            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qy * 127.0))), offset++);
-            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qz * 127.0))), offset++);
+            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qx * 127.0))), qxOffset + i);
+            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qy * 127.0))), qyOffset + i);
+            uncompressed.writeInt8(Math.min(127, Math.max(-128, Math.round(qz * 127.0))), qzOffset + i);
 
-            // 4. Color & Opacity
-            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[0]))), offset++);
-            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[1]))), offset++);
-            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[2]))), offset++);
-            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.opacity * 255.0))), offset++);
+            // 4. Color & Opacity (uint8 planar)
+            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[0]))), rOffset + i);
+            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[1]))), gOffset + i);
+            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.colorRgb[2]))), bOffset + i);
+            uncompressed.writeUInt8(Math.min(255, Math.max(0, Math.round(s.opacity * 255.0))), aOffset + i);
         }
 
         return zlib.gzipSync(uncompressed);

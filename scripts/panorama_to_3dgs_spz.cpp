@@ -98,6 +98,40 @@ std::vector<float> loadDepthFile(const std::string& path) {
     return depths;
 }
 
+std::vector<uint8_t> loadMaskFile(const std::string& path, size_t expectedSize) {
+    std::string rawPath = path;
+    bool isTemp = false;
+    if (path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".jpeg")) {
+        auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        rawPath = "/tmp/sb_mask_read_" + std::to_string(now) + ".raw";
+        std::string cmd = "ffmpeg -y -v error -i \"" + path + "\" -f rawvideo -pix_fmt gray \"" + rawPath + "\"";
+        int ret = std::system(cmd.c_str());
+        if (ret == 0) {
+            isTemp = true;
+        } else {
+            rawPath = path;
+        }
+    }
+
+    std::ifstream f(rawPath, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) return {};
+    std::streamsize size = f.tellg();
+    f.seekg(0, std::ios::beg);
+    std::vector<uint8_t> mask(size);
+    f.read(reinterpret_cast<char*>(mask.data()), size);
+    f.close();
+
+    if (isTemp) {
+        std::remove(rawPath.c_str());
+    }
+
+    if (mask.size() != expectedSize) {
+        std::cerr << "WARNING: Loaded mask size (" << mask.size() << ") does not match expected size (" << expectedSize << "). Mask ignored." << std::endl;
+        return {};
+    }
+    return mask;
+}
+
 void writeBinary(const std::string& path, const std::vector<uint8_t>& bytes) {
     std::ofstream out(path, std::ios::binary);
     if (out.is_open()) {
@@ -110,6 +144,7 @@ int main(int argc, char** argv) {
     std::string outSpzPath;
     std::string outSplatPath;
     std::string depthPath;
+    std::string maskPath;
     std::string profile = "adaptive";
     int stride = 4; // Stride 4 on 4096x2048 = 1024x512 = 524,288 splats
     float eyeHeight = 1.70f;
@@ -120,13 +155,14 @@ int main(int argc, char** argv) {
         else if (arg == "--out-spz" && i + 1 < argc) outSpzPath = argv[++i];
         else if (arg == "--out-splat" && i + 1 < argc) outSplatPath = argv[++i];
         else if (arg == "--depth" && i + 1 < argc) depthPath = argv[++i];
+        else if (arg == "--mask" && i + 1 < argc) maskPath = argv[++i];
         else if (arg == "--profile" && i + 1 < argc) profile = argv[++i];
         else if (arg == "--stride" && i + 1 < argc) stride = std::stoi(argv[++i]);
         else if (arg == "--eye-height" && i + 1 < argc) eyeHeight = std::stof(argv[++i]);
     }
 
     if (inputPath.empty() || (outSpzPath.empty() && outSplatPath.empty())) {
-        std::cerr << "Usage: panorama_to_3dgs_spz --input <panorama.png|bmp|raw> [--out-spz <out.spz>] [--out-splat <out.splat>] [--depth <depth.f32>] [--stride 4] [--eye-height 1.7]" << std::endl;
+        std::cerr << "Usage: panorama_to_3dgs_spz --input <panorama.png|bmp|raw> [--out-spz <out.spz>] [--out-splat <out.splat>] [--depth <depth.f32>] [--mask <mask.png>] [--stride 4] [--eye-height 1.7]" << std::endl;
         return 1;
     }
 
@@ -151,16 +187,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::vector<uint8_t> mask;
+    if (!maskPath.empty()) {
+        mask = loadMaskFile(maskPath, static_cast<size_t>(img.width * img.height));
+        if (!mask.empty()) {
+            std::cout << "[3DGS] Loaded mask-gating PNG: " << maskPath << " (only generating splats in masked region)" << std::endl;
+        }
+    }
+
     std::cout << "[3DGS] Loaded 360 Panorama: " << inputPath << " (" << img.width << "x" << img.height << ")" << std::endl;
 
     // Convert Equirectangular 360 Panorama to continuous 3D Gaussian Splats using native C++ Core
     const float* depthPtr = depths.empty() ? nullptr : depths.data();
+    const uint8_t* maskPtr = mask.empty() ? nullptr : mask.data();
+    
     std::vector<GaussianSplat> splats = depthbox::DepthToGaussianEngine::convertEquirectangularToGaussianSplats(
         img.pixels.data(),
         img.width,
         img.height,
         3, // channels
         depthPtr,
+        maskPtr,
         stride,
         eyeHeight
     );

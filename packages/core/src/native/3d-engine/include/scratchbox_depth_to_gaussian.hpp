@@ -775,6 +775,7 @@ public:
         int height,
         int channels = 3,
         const float* optionalMetricDepths = nullptr,
+        const uint8_t* optionalMask = nullptr,
         int stride = 2,
         float eyeHeight = 1.70f,
         float maxRadius = 80.0f,
@@ -801,12 +802,16 @@ public:
             int x_step = std::max(1, static_cast<int>(std::round(step / std::max(0.1f, cosPitch))));
 
             for (int x = 0; x < width; x += x_step) {
+                size_t pIdx = static_cast<size_t>(y) * width + x;
+                if (optionalMask != nullptr && optionalMask[pIdx] < 128) {
+                    continue;
+                }
+
                 float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
                 float yaw = (u * 2.0f - 1.0f) * static_cast<float>(M_PI);
 
                 Vec3 ray = getEquirectRay(x, y, width, height);
 
-                size_t pIdx = static_cast<size_t>(y) * width + x;
                 size_t cIdx = pIdx * channels;
 
                 uint8_t r = rgbBuffer[cIdx];

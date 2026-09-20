@@ -53,3 +53,7 @@ packages/.temp-cli-test-*/
 scripts/*.png
 scripts/*.glb
 scripts/extracted_textures/
+public/
+data/s4d_dataset/
+**/s4d_tile_blockout_runner_*.html
+*.bak
