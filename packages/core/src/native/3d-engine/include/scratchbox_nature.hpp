@@ -1636,8 +1636,303 @@ public:
     }
 };
 
+/**
+ * Configuration parameters for generating a realistic grass clump / tuft.
+ * Implements botanical morphogenesis with folded V-keel cross sections,
+ * gravitropic Bézier spine curvature, radial clump splay, and biological senescence gradients.
+ */
+struct GrassClumpConfig {
+    int bladeCount{36};                  // Number of individual grass blades per clump
+    float clumpRadius{0.32f};            // Radius of root dispersion from clump anchor (meters)
+    float bladeHeightMin{0.45f};         // Minimum blade length (meters)
+    float bladeHeightMax{0.80f};         // Maximum blade length (meters)
+    float bladeWidthBase{0.032f};        // Width at basal sheath
+    float bladeWidthMid{0.038f};         // Width at mid-lamina flare
+    float keelDepth{0.014f};             // V-creased cross-section depth (splits specular highlights)
+    int segmentsPerBlade{7};             // Spine segments for smooth Bézier curvature (minimum 4)
+    float gravityDroop{0.45f};           // Gravitropic droop factor bending tips toward ground
+    float radialSplay{0.65f};            // Outward flaring factor for peripheral blades
+    float curlStochasticity{0.25f};      // Stochastic axial curl and twist along blade spine
+    float centerHeightBias{0.35f};       // Additional height boost for central blades vs peripheral
+    Vec4 rootColor{0.72f, 0.82f, 0.40f, 1.0f};  // Basal sheath pale yellow-green
+    Vec4 midColor{0.18f, 0.52f, 0.10f, 1.0f};   // Photosynthetic chlorophyll green
+    Vec4 tipColor{0.65f, 0.55f, 0.22f, 1.0f};   // Senescent straw/sun-bleached tip
+    float clumpNormalBlend{0.35f};       // Blend factor between geometric facet normal and spherical envelope normal
+    uint32_t seed{1337};
+};
+
+/**
+ * Configuration for scattering multiple grass clumps across a terrain landscape.
+ */
+struct GrassFieldConfig {
+    int clumpCount{24};                  // Total clumps to scatter
+    Vec2 areaMin{-3.0f, -3.0f};          // Terrain bounds min (X, Z)
+    Vec2 areaMax{3.0f, 3.0f};            // Terrain bounds max (X, Z)
+    float minClumpDistance{0.45f};       // Minimum Poisson-disk separation between clump centers
+    float heightVariationMin{0.80f};     // Global clump scale min
+    float heightVariationMax{1.25f};     // Global clump scale max
+    uint32_t seed{4242};
+};
+
+/**
+ * Procedural Grass Clump & Field Generator.
+ * Abstraction of state-of-the-art botanical grass modeling:
+ * 1. Folded V-keel cross-section creating dual specular highlight facets.
+ * 2. Gravitropic Bézier spine bending under self-weight.
+ * 3. Radial clump splay where outer blades tilt away from clump anchor.
+ * 4. Senescence color gradients (basal sheath -> emerald lamina -> dry tip).
+ * 5. Analytical normal calculation with envelope normal transfer.
+ */
+class GrassClumpGenerator {
+public:
+    /**
+     * Generates a single detailed grass clump/tuft centered at the specified anchor point.
+     */
+    static geometry::Mesh generateClump(const GrassClumpConfig& cfg, const Vec3& center = Vec3(0, 0, 0)) {
+        geometry::Mesh mesh;
+        std::mt19937 rng(cfg.seed);
+        std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
+        std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
+
+        int validSegments = std::max(4, cfg.segmentsPerBlade);
+
+        for (int b = 0; b < cfg.bladeCount; ++b) {
+            // 1. Root dispersion inside clump using uniform disk sampling
+            float u1 = dist0To1(rng);
+            float u2 = dist0To1(rng);
+            float r = cfg.clumpRadius * std::sqrt(u1);
+            float theta = u2 * 2.0f * math::PI;
+
+            Vec3 rootPos = center + Vec3(r * std::cos(theta), 0.0f, r * std::sin(theta));
+            float radRatio = (cfg.clumpRadius > 0.001f) ? (r / cfg.clumpRadius) : 0.0f;
+
+            // Outward radial unit vector
+            Vec3 uRadial = (r > 0.001f) ? Vec3(std::cos(theta), 0.0f, std::sin(theta)) : Vec3(1, 0, 0);
+
+            // 2. Blade height with central dominance
+            float baseH = math::lerp(cfg.bladeHeightMin, cfg.bladeHeightMax, dist0To1(rng));
+            float bladeHeight = baseH * (1.0f + (1.0f - radRatio) * cfg.centerHeightBias);
+
+            // 3. Splay and stochastic curl vectors
+            Vec3 splayVec = uRadial * (radRatio * cfg.radialSplay);
+            float curlAngle = distMinus1To1(rng) * math::PI;
+            Vec3 curlVec = Vec3(std::cos(curlAngle), 0.0f, std::sin(curlAngle)) * cfg.curlStochasticity;
+
+            // 4. Bézier control points
+            Vec3 P0 = rootPos;
+            Vec3 P1 = rootPos + Vec3(0.0f, bladeHeight * 0.50f, 0.0f) + splayVec * (bladeHeight * 0.30f);
+            Vec3 P2 = rootPos + Vec3(0.0f, bladeHeight * 0.95f, 0.0f) + (splayVec + curlVec) * (bladeHeight * 0.80f)
+                      - Vec3(0.0f, bladeHeight * cfg.gravityDroop, 0.0f);
+
+            // We generate (validSegments) rows of 3 vertices, followed by 1 tip vertex
+            // Total vertices for this blade = validSegments * 3 + 1
+            std::vector<uint32_t> leftIndices(validSegments);
+            std::vector<uint32_t> centerIndices(validSegments);
+            std::vector<uint32_t> rightIndices(validSegments);
+            uint32_t tipIndex = 0;
+
+            for (int seg = 0; seg < validSegments; ++seg) {
+                float t = static_cast<float>(seg) / static_cast<float>(validSegments);
+
+                // Quadratic Bézier position: P(t) = (1-t)^2 P0 + 2(1-t)t P1 + t^2 P2
+                float oneMinusT = 1.0f - t;
+                Vec3 Pt = P0 * (oneMinusT * oneMinusT) + P1 * (2.0f * oneMinusT * t) + P2 * (t * t);
+
+                // Derivative for tangent: T(t) = 2(1-t)(P1 - P0) + 2t(P2 - P1)
+                Vec3 T = (P1 - P0) * (2.0f * oneMinusT) + (P2 - P1) * (2.0f * t);
+                Vec3 tanNorm = (T.lengthSquared() > 1e-6f) ? T.normalized() : Vec3(0, 1, 0);
+
+                // Reference Up vector
+                Vec3 upRef(0, 1, 0);
+                if (std::abs(tanNorm.dot(upRef)) > 0.95f) {
+                    upRef = uRadial;
+                }
+
+                // Width axis (Binormal) and Keel axis (Upward normal perpendicular to spine)
+                Vec3 binormal = tanNorm.cross(upRef).normalized();
+                Vec3 keelNormal = binormal.cross(tanNorm).normalized();
+
+                // Width profile: subtle flare at t = 0.25, smooth taper to tip
+                float width = (t < 0.25f)
+                    ? math::lerp(cfg.bladeWidthBase, cfg.bladeWidthMid, t / 0.25f)
+                    : cfg.bladeWidthMid * std::max(0.0f, 1.0f - (t - 0.25f) / 0.75f);
+
+                // Keel crease depth
+                float keel = cfg.keelDepth * (1.0f - t * 0.85f) * (width / std::max(1e-4f, cfg.bladeWidthMid));
+
+                // 3 cross-section positions: Left margin, Recessed center crease, Right margin
+                Vec3 pLeft = Pt - binormal * (width * 0.5f) + keelNormal * (keel * 0.5f);
+                Vec3 pCenter = Pt - keelNormal * (keel * 0.5f);
+                Vec3 pRight = Pt + binormal * (width * 0.5f) + keelNormal * (keel * 0.5f);
+
+                // Biological color gradient
+                Vec4 col;
+                if (t < 0.20f) {
+                    col = math::lerp(cfg.rootColor, cfg.midColor, t / 0.20f);
+                } else if (t < 0.75f) {
+                    col = cfg.midColor;
+                } else {
+                    col = math::lerp(cfg.midColor, cfg.tipColor, (t - 0.75f) / 0.25f);
+                }
+
+                // Analytical normals for left and right facet
+                Vec3 nLeft = (keelNormal + binormal * 0.5f).normalized();
+                Vec3 nRight = (keelNormal - binormal * 0.5f).normalized();
+                Vec3 nCenter = keelNormal;
+
+                // Spherical envelope blend
+                if (cfg.clumpNormalBlend > 0.0f) {
+                    Vec3 envNormLeft = (pLeft - center).normalized();
+                    Vec3 envNormRight = (pRight - center).normalized();
+                    Vec3 envNormCenter = (pCenter - center).normalized();
+
+                    nLeft = math::lerp(nLeft, envNormLeft, cfg.clumpNormalBlend).normalized();
+                    nRight = math::lerp(nRight, envNormRight, cfg.clumpNormalBlend).normalized();
+                    nCenter = math::lerp(nCenter, envNormCenter, cfg.clumpNormalBlend).normalized();
+                }
+
+                uint32_t idxL = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(pLeft);
+                mesh.normals.push_back(nLeft);
+                mesh.uvs.push_back(Vec2(0.0f, t));
+                mesh.vertexColors.push_back(col);
+                leftIndices[seg] = idxL;
+
+                uint32_t idxC = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(pCenter);
+                mesh.normals.push_back(nCenter);
+                mesh.uvs.push_back(Vec2(0.5f, t));
+                mesh.vertexColors.push_back(col);
+                centerIndices[seg] = idxC;
+
+                uint32_t idxR = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(pRight);
+                mesh.normals.push_back(nRight);
+                mesh.uvs.push_back(Vec2(1.0f, t));
+                mesh.vertexColors.push_back(col);
+                rightIndices[seg] = idxR;
+            }
+
+            // Tip vertex (t = 1.0)
+            tipIndex = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(P2);
+            Vec3 tipNorm = (P2 - P1).normalized();
+            if (cfg.clumpNormalBlend > 0.0f) {
+                tipNorm = math::lerp(tipNorm, (P2 - center).normalized(), cfg.clumpNormalBlend).normalized();
+            }
+            mesh.normals.push_back(tipNorm);
+            mesh.uvs.push_back(Vec2(0.5f, 1.0f));
+            mesh.vertexColors.push_back(cfg.tipColor);
+
+            // Connect quads along the spine
+            for (int seg = 0; seg < validSegments - 1; ++seg) {
+                uint32_t L0 = leftIndices[seg];
+                uint32_t C0 = centerIndices[seg];
+                uint32_t R0 = rightIndices[seg];
+
+                uint32_t L1 = leftIndices[seg + 1];
+                uint32_t C1 = centerIndices[seg + 1];
+                uint32_t R1 = rightIndices[seg + 1];
+
+                // Left facet quad (L0, C0, C1, L1) -> 2 triangles
+                mesh.indices.push_back(L0);
+                mesh.indices.push_back(C0);
+                mesh.indices.push_back(C1);
+
+                mesh.indices.push_back(L0);
+                mesh.indices.push_back(C1);
+                mesh.indices.push_back(L1);
+
+                // Right facet quad (C0, R0, R1, C1) -> 2 triangles
+                mesh.indices.push_back(C0);
+                mesh.indices.push_back(R0);
+                mesh.indices.push_back(R1);
+
+                mesh.indices.push_back(C0);
+                mesh.indices.push_back(R1);
+                mesh.indices.push_back(C1);
+            }
+
+            // Connect final segment to single tip vertex
+            uint32_t lastL = leftIndices[validSegments - 1];
+            uint32_t lastC = centerIndices[validSegments - 1];
+            uint32_t lastR = rightIndices[validSegments - 1];
+
+            mesh.indices.push_back(lastL);
+            mesh.indices.push_back(lastC);
+            mesh.indices.push_back(tipIndex);
+
+            mesh.indices.push_back(lastC);
+            mesh.indices.push_back(lastR);
+            mesh.indices.push_back(tipIndex);
+        }
+
+        return mesh;
+    }
+
+    /**
+     * Generates a field of scattered grass clumps across a terrain region.
+     */
+    static geometry::Mesh generateField(
+        const GrassFieldConfig& fieldCfg,
+        const GrassClumpConfig& baseClumpCfg
+    ) {
+        geometry::Mesh combinedMesh;
+        std::mt19937 rng(fieldCfg.seed);
+        std::uniform_real_distribution<float> distX(fieldCfg.areaMin.x, fieldCfg.areaMax.x);
+        std::uniform_real_distribution<float> distZ(fieldCfg.areaMin.y, fieldCfg.areaMax.y);
+        std::uniform_real_distribution<float> distScale(fieldCfg.heightVariationMin, fieldCfg.heightVariationMax);
+        std::uniform_int_distribution<uint32_t> distSeed(1, 100000);
+
+        std::vector<Vec3> clumpCenters;
+        clumpCenters.reserve(fieldCfg.clumpCount);
+
+        int maxAttempts = fieldCfg.clumpCount * 25;
+        for (int attempt = 0; attempt < maxAttempts && clumpCenters.size() < static_cast<size_t>(fieldCfg.clumpCount); ++attempt) {
+            Vec3 candidate(distX(rng), 0.0f, distZ(rng));
+
+            bool tooClose = false;
+            for (const auto& existing : clumpCenters) {
+                if ((candidate - existing).lengthSquared() < fieldCfg.minClumpDistance * fieldCfg.minClumpDistance) {
+                    tooClose = true;
+                    break;
+                }
+            }
+
+            if (!tooClose) {
+                clumpCenters.push_back(candidate);
+            }
+        }
+
+        for (size_t c = 0; c < clumpCenters.size(); ++c) {
+            GrassClumpConfig clumpCfg = baseClumpCfg;
+            float scale = distScale(rng);
+            clumpCfg.bladeHeightMin *= scale;
+            clumpCfg.bladeHeightMax *= scale;
+            clumpCfg.clumpRadius *= (0.85f + 0.30f * (scale - 1.0f));
+            clumpCfg.seed = distSeed(rng);
+
+            geometry::Mesh clumpMesh = generateClump(clumpCfg, clumpCenters[c]);
+
+            // Append into combinedMesh
+            uint32_t baseIdx = static_cast<uint32_t>(combinedMesh.vertices.size());
+            combinedMesh.vertices.insert(combinedMesh.vertices.end(), clumpMesh.vertices.begin(), clumpMesh.vertices.end());
+            combinedMesh.normals.insert(combinedMesh.normals.end(), clumpMesh.normals.begin(), clumpMesh.normals.end());
+            combinedMesh.uvs.insert(combinedMesh.uvs.end(), clumpMesh.uvs.begin(), clumpMesh.uvs.end());
+            combinedMesh.vertexColors.insert(combinedMesh.vertexColors.end(), clumpMesh.vertexColors.begin(), clumpMesh.vertexColors.end());
+
+            for (uint32_t idx : clumpMesh.indices) {
+                combinedMesh.indices.push_back(baseIdx + idx);
+            }
+        }
+
+        return combinedMesh;
+    }
+};
+
 } // namespace nature
 } // namespace scratchbox
 
 #endif // SCRATCHBOX_NATURE_HPP
+
 

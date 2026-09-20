@@ -175,6 +175,12 @@
             <button id="btn-lattice" class="model-toggle-btn" onclick="loadModel('lattice')">
                 🕸️ Voronoi Lattice
             </button>
+            <button id="btn-grass" class="model-toggle-btn" onclick="loadModel('grass')">
+                🌱 Grass Clump (V-Keel)
+            </button>
+            <button id="btn-field" class="model-toggle-btn" onclick="loadModel('field')">
+                🌾 Grass Meadow Field
+            </button>
         </div>
 
         <div id="meta-display">
@@ -260,6 +266,26 @@
                 desc: 'Voronoi dual conversion where primal faces become dual vertices circulating along DCEL half-edges, thickened into a continuous architectural honeycomb strut lattice.',
                 camY: 0.0,
                 camDist: 5.5
+            },
+            grass: {
+                url: '/scripts/models/grass_clump.glb',
+                name: 'Botanical Grass Clump (V-Keel Fold / Gravitropic Droop)',
+                verts: '1,056',
+                tris: '1,248',
+                source: 'Folded V-Keel Geometry + Bézier Spine + Radial Splay',
+                desc: 'Caespitose grass tuft with 48 blades. 3D folded V-creased cross-section splits specular highlight gleams, Bézier spine curves under gravitropic self-weight droop, and biological vertex colors ramp from pale basal sheath to emerald lamina and dry straw tips.',
+                camY: 0.45,
+                camDist: 2.2
+            },
+            field: {
+                url: '/scripts/models/grass_field.glb',
+                name: 'Procedural Grass Meadow Field (Poisson-Disk Multi-Clump)',
+                verts: '21,120',
+                tris: '24,960',
+                source: 'Poisson-Disk Clump Distribution + Senescence Falloff',
+                desc: 'Meadow landscape of 20 clustered grass tufts scattered with Poisson-disk spatial separation, scale variations, and radial splay orientation across the terrain surface.',
+                camY: 0.5,
+                camDist: 5.8
             }
         };
 
@@ -336,6 +362,17 @@
 
             loader.load(cfg.url, (gltf) => {
                 currentModel = gltf.scene;
+
+                // Ensure two-sided rendering and correct material setup for foliage
+                currentModel.traverse((child) => {
+                    if (child.isMesh && child.material) {
+                        child.material.side = THREE.DoubleSide;
+                        if (child.geometry && child.geometry.attributes.color) {
+                            child.material.vertexColors = true;
+                        }
+                    }
+                });
+
                 scene.add(currentModel);
                 overlay.style.display = 'none';
 

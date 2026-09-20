@@ -335,7 +335,55 @@ Six keyframes across the 72-frame flight are extracted and evaluated against the
 
 ---
 
-## 7. Automated Test Suite & Codebase Verification
+## 7. Codified Blockout Hierarchy & Clay Runner Standard
+
+### 7.1 Blockout Methodology Hierarchy
+
+With the codification of the headless Google Maps 3D Tile Clay Blockout Runner, Scratchbox IDE establishes a formal hierarchy for 3D blockout video conditioning:
+
+```mermaid
+graph TD
+    A[Blockout Source Request] --> B{Real-World Location or Geo Coordinates?}
+    B -- Yes --> C[Tier 1: Google Maps 3D Tile Clay Runner]
+    B -- No / Stylized Fantasy Geometry --> D[Tier 2: Native C++20 Astra / Procedural SDF]
+    D -- If manual artist scene provided --> E[Tier 3: External Blender / FBX Camera Solve]
+    
+    C --> C1[runTileClayBlockoutRunner / google_3d_tiles_clay_blockout_runner]
+    C1 --> C2["&lt;VIDEO_REF_0&gt;: 72-frame Clay MP4/WebM"]
+    C1 --> C3[Frame 0 PNG: blockout_frame_00.png]
+    C1 --> C4[Volumetric Massing: .glb]
+    
+    C3 --> F[AI Beautify: buildBeautifyPrompt]
+    F --> G["&lt;IMAGE_REF_0&gt;: Photorealistic Start Frame"]
+    
+    C2 --> H[Vertex AI Omni 1.1 / Gemini Omni Synthesis]
+    G --> H
+    H --> I[Final Photorealistic Video: omni_restyled.mp4]
+```
+
+1. **Tier 1 (Canonical Standard)**: **Google Maps 3D Tiles Clay Mode** (`runTileClayBlockoutRunner`)
+   - **Why Preferred**: 100% automated, zero presets, geodetic WGS-84 coordinate grounding, neutral studio grey PBR shading (`#dcd6cd`), and Catmull-Rom spline trajectory with octree raycast collision avoidance (`smoothingWindow: 8`). Eliminates photogrammetric texture baking and burnt-in lighting that cause texture boiling in diffusion.
+2. **Tier 2**: **Native C++20 Astra Engine / Procedural SDF**
+   - For non-geographic, fictional, or procedural scenes where real-world geodata does not exist.
+3. **Tier 3 (External Legacy)**: **Blender FBX / Alembic / Camera Matchmove**
+   - Retained for artist-authored manual hero assets or custom animated character rigs.
+
+### 7.2 Canonical Codebase APIs & Tools
+
+* **TypeScript Function**: `runTileClayBlockoutRunner(request: TileClayBlockoutRunnerRequest): Promise<TileClayBlockoutRunnerResult>`
+* **Trajectory Helpers**: `create3DTilesTrajectory`, `create3DTilesOrbitTrajectory`, `create3DTilesPushInTrajectory`
+* **Agent Tool**: `google_3d_tiles_clay_blockout_runner` (in `GOOGLE_3D_TILES_TOOL_DECLARATIONS` and `GOOGLE_3D_TILES_TOOL_HANDLERS`)
+* **Typed Output Contract**:
+  - `videoRef: '<VIDEO_REF_0>'`
+  - `blockoutVideoPath: string`
+  - `startFramePngPath: string` (1:1 camera pose precursor for AI Beautify -> `<IMAGE_REF_0>`)
+  - `clayGlbPath: string` (extracted high-fidelity massing mesh)
+  - `meshStats: Google3DTileMeshStats`
+  - `collisionAudit?: { violationsDetected: number; minClearanceMeters: number; auditPassed: boolean }`
+
+---
+
+## 8. Automated Test Suite & Codebase Verification
 
 The implementation is verified by an automated test suite across unit, integration, and gallery asset integrity layers:
 
@@ -344,9 +392,9 @@ The implementation is verified by an automated test suite across unit, integrati
 npx vitest run packages/core/test/omni-video-prompt-pipeline.test.ts
 # Result: 1 passed (1 test file, 100% green)
 
-# 2. Verify Google 3D Tile Blockout Video Pipeline Test Suite
+# 2. Verify Google 3D Tile Blockout Video Pipeline Test Suite (12 Tests including Clay Runner)
 npx vitest run packages/core/test/google-3d-tiles-blockout-pipeline.test.ts
-# Result: 1 passed (1 test file, 100% green)
+# Result: 1 passed (12/12 integration tests green, including Test 12 Clay Runner)
 
 # 3. Verify Gallery Asset Integrity & District Isolation
 npx vitest run packages/core/test/gallery-asset-integrity.test.ts
@@ -359,8 +407,11 @@ npm run build --workspace=@scratchbox/core
 
 ---
 
-## 8. Summary of Relevant Repository Files
+## 9. Summary of Relevant Repository Files
 
+* **Clay Blockout Runner Service & APIs**: [`packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts)
+* **Agent Spatial Tools Declarations & Handlers**: [`packages/core/src/node/gemini/tools/spatial-tools.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node/gemini/tools/spatial-tools.ts)
+* **Node Monorepo Export Entrypoint**: [`packages/core/src/node.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/node.ts)
 * **Prompt Building & Planning Service**: [`packages/core/src/browser/generative-canvas/services/video/omniVideoPromptService.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/browser/generative-canvas/services/video/omniVideoPromptService.ts)
 * **Start-Frame Photorealism Builder**: [`packages/core/src/browser/generative-canvas/services/location-beautify-service.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/browser/generative-canvas/services/location-beautify-service.ts)
 * **Production Vertex AI Runner**: [`scripts/run_real_vertex_omni_execution.cjs`](file:///Users/eligreen/dev/scratchbox-ide-master/scripts/run_real_vertex_omni_execution.cjs)
@@ -368,3 +419,4 @@ npm run build --workspace=@scratchbox/core
 * **Interactive 3D/4D Gallery**: [`public/s4d_multi_gallery.html`](file:///Users/eligreen/dev/scratchbox-ide-master/public/s4d_multi_gallery.html)
 * **Video Timeline Inspector Panel**: [`packages/core/src/browser/generative-canvas/primitives/video/VideoInspectorPanel.tsx`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/browser/generative-canvas/primitives/video/VideoInspectorPanel.tsx)
 * **VFX Plate & Camera Solve Protocol**: [`packages/core/src/common/vfx-plate-protocol.ts`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/src/common/vfx-plate-protocol.ts)
+

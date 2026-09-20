@@ -269,8 +269,99 @@ int main() {
         std::cout << "  [PASS] Topological Dual Mesh & Lattice verified!" << std::endl;
     }
 
+    // ------------------------------------------------------------------------
+    // TEST 6: Grass Clump Generator (V-Keel Fold + Bézier Droop + Radial Splay)
+    // ------------------------------------------------------------------------
+    std::cout << "\n[TEST 6] Procedural Grass Clump & Field Generator (V-Keel / Splay / Senescence)..." << std::endl;
+    {
+        GrassClumpConfig clumpCfg;
+        clumpCfg.bladeCount = 48;
+        clumpCfg.clumpRadius = 0.35f;
+        clumpCfg.bladeHeightMin = 0.50f;
+        clumpCfg.bladeHeightMax = 0.90f;
+        clumpCfg.bladeWidthBase = 0.035f;
+        clumpCfg.bladeWidthMid = 0.042f;
+        clumpCfg.keelDepth = 0.016f;
+        clumpCfg.segmentsPerBlade = 7;
+        clumpCfg.gravityDroop = 0.45f;
+        clumpCfg.radialSplay = 0.70f;
+        clumpCfg.curlStochasticity = 0.25f;
+        clumpCfg.centerHeightBias = 0.40f;
+        clumpCfg.clumpNormalBlend = 0.30f;
+
+        geometry::Mesh clumpRaw = GrassClumpGenerator::generateClump(clumpCfg);
+        geometry::ScratchboxMesh clumpMesh = clumpRaw.toScratchboxMesh();
+
+        std::cout << "  Grass Clump Generated: " << clumpMesh.vertices.size() << " vertices, "
+                  << clumpMesh.indices.size() / 3 << " triangles." << std::endl;
+
+        // Verify minimum geometry constraints
+        assert(clumpMesh.vertices.size() >= 48 * (7 * 3 + 1) && "Clump must have all blades generated");
+        assert(clumpMesh.indices.size() > 2000 && "Indices must cover triangulated V-keels");
+
+        // Verify bounds & height
+        assert(clumpMesh.bounds.max.y > 0.45f && "Clump must have vertical height");
+        assert(clumpMesh.bounds.min.y <= 0.05f && "Clump roots must be at ground level");
+
+        // Verify 3D V-keel fold depth: check non-coplanarity between left, center, and right vertices
+        bool foundVKeelCrease = false;
+        for (size_t i = 0; i + 2 < clumpMesh.vertices.size(); i += 3) {
+            const auto& pL = clumpMesh.vertices[i].position;
+            const auto& pC = clumpMesh.vertices[i + 1].position;
+            const auto& pR = clumpMesh.vertices[i + 2].position;
+
+            math::Vec3 midLR = (pL + pR) * 0.5f;
+            float creaseDist = (pC - midLR).length();
+            if (creaseDist > 0.005f) {
+                foundVKeelCrease = true;
+                break;
+            }
+        }
+        assert(foundVKeelCrease && "Grass blades must possess folded 3D V-keel cross-section crease");
+        std::cout << "  [PASS] 3D V-keel fold crease verified!" << std::endl;
+
+        // Verify senescence color gradient across vertices
+        float minGreen = 1.0f, maxGreen = 0.0f;
+        float minRed = 1.0f, maxRed = 0.0f;
+        for (const auto& v : clumpMesh.vertices) {
+            minGreen = std::min(minGreen, v.color.y);
+            maxGreen = std::max(maxGreen, v.color.y);
+            minRed = std::min(minRed, v.color.x);
+            maxRed = std::max(maxRed, v.color.x);
+        }
+        std::cout << "  Color Channels - Red: [" << minRed << ", " << maxRed << "], Green: ["
+                  << minGreen << ", " << maxGreen << "]" << std::endl;
+        assert(maxGreen - minGreen > 0.15f && "Biological senescence color gradient must differentiate along blade");
+        assert(maxRed - minRed > 0.15f && "Senescent tips / basal sheath must have red channel variation");
+
+        // Serialize single clump to GLB
+        std::vector<uint8_t> glbClump = GlbWriter::writeGlb(clumpMesh);
+        assert(glbClump.size() > 5000 && "Clump GLB must be valid binary container");
+        writeGlbToFile("build/test_grass_clump.glb", glbClump);
+
+        // 6b. Grass Field Generation (Multi-Clump Scatter)
+        GrassFieldConfig fieldCfg;
+        fieldCfg.clumpCount = 20;
+        fieldCfg.areaMin = math::Vec2(-2.5f, -2.5f);
+        fieldCfg.areaMax = math::Vec2(2.5f, 2.5f);
+        fieldCfg.minClumpDistance = 0.50f;
+
+        geometry::Mesh fieldRaw = GrassClumpGenerator::generateField(fieldCfg, clumpCfg);
+        geometry::ScratchboxMesh fieldMesh = fieldRaw.toScratchboxMesh();
+
+        std::cout << "  Grass Field Generated: " << fieldMesh.vertices.size() << " vertices, "
+                  << fieldMesh.indices.size() / 3 << " triangles." << std::endl;
+        assert(fieldMesh.vertices.size() > clumpMesh.vertices.size() * 10 && "Field must contain multiple dispersed clumps");
+
+        std::vector<uint8_t> glbField = GlbWriter::writeGlb(fieldMesh);
+        assert(glbField.size() > 50000 && "Field GLB must be valid");
+        writeGlbToFile("build/test_grass_field.glb", glbField);
+
+        std::cout << "  [PASS] Grass Clump & Field Generator verified!" << std::endl;
+    }
+
     std::cout << "\n===========================================================" << std::endl;
-    std::cout << "  ALL 5 BLENDER ALGORITHMIC ABSTRACTION TESTS PASSED!      " << std::endl;
+    std::cout << "  ALL 6 BLENDER ALGORITHMIC ABSTRACTION TESTS PASSED!      " << std::endl;
     std::cout << "===========================================================" << std::endl;
     return 0;
 }
