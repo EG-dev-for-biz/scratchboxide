@@ -12,26 +12,25 @@ const API_TARGET = `http://127.0.0.1:${process.env.PORT || process.env.SCRATCHBO
  * (Vite `html.cspNonce`) rather than 'unsafe-inline'.
  */
 export function buildRendererCsp(isDev: boolean, nonce?: string): string {
-  const remote = 'https://*.googleapis.com https://*.gstatic.com https://tile.googleapis.com https://esm.sh https://unpkg.com https://cdn.tailwindcss.com';
+  const remote = 'https://*.googleapis.com https://*.gstatic.com https://tile.googleapis.com https://esm.sh https://unpkg.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net';
   const local = 'http://127.0.0.1:* http://localhost:*';
   const ws = 'ws://127.0.0.1:* ws://localhost:*';
   const scriptSrc = [
     '\'self\'',
     remote,
     local,
-    isDev ? '\'unsafe-eval\'' : '',
-    isDev && nonce ? `'nonce-${nonce}'` : ''
+    isDev ? '\'unsafe-eval\' \'unsafe-inline\'' : (nonce ? `'nonce-${nonce}'` : '')
   ].filter(Boolean).join(' ');
   return [
     `default-src 'self' ${remote} ${local} blob: data:`,
     `script-src ${scriptSrc}`,
     `style-src 'self' 'unsafe-inline' ${remote} ${local}`,
-    `img-src 'self' ${remote} ${local} blob: data:`,
+    `img-src 'self' ${remote} https://images.unsplash.com https://*.unsplash.com https://assets.mixkit.co https://*.mixkit.co https: ${local} blob: data:`,
     `font-src 'self' ${remote} ${local} data:`,
     `connect-src 'self' ${remote} ${local} ${ws} blob: data:`,
     `worker-src 'self' blob:`,
-    `frame-src 'self' ${local} https://esm.sh https://unpkg.com blob: data:`,
-    `media-src 'self' ${remote} ${local} blob: data:`,
+    `frame-src 'self' ${local} https://esm.sh https://unpkg.com https://cdn.jsdelivr.net blob: data:`,
+    `media-src 'self' ${remote} ${local} https: blob: data:`,
     `object-src 'none'`,
     `base-uri 'self'`
   ].join('; ');
@@ -61,6 +60,13 @@ function apiProxy(): ProxyOptions {
     target: API_TARGET,
     changeOrigin: true,
     configure(proxy) {
+      proxy.on('error', (err, req, res) => {
+        console.error('[Vite Proxy Error]', req.url, err.message);
+        if (res && 'writeHead' in res && !res.headersSent) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'proxy_error', message: err.message }));
+        }
+      });
       proxy.on('proxyReq', proxyReq => {
         const token = process.env.SCRATCHBOX_LAUNCH_TOKEN;
         if (token && !proxyReq.getHeader('x-scratchbox-token') && !proxyReq.getHeader('authorization')) {
@@ -84,7 +90,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), cspPlugin(isDev, cspNonce)],
-    html: isDev ? { cspNonce } : undefined,
+    html: !isDev && cspNonce ? { cspNonce } : undefined,
     define: {
       'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleMapsKey),
       'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey)
@@ -92,10 +98,18 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '127.0.0.1',
+      fs: {
+        allow: [
+          path.resolve(__dirname, '..')
+        ]
+      },
       proxy: {
         '/gemini': apiProxy(),
         '/workspace': apiProxy(),
         '/media': apiProxy(),
+        '/video': apiProxy(),
+        '/api/video': apiProxy(),
+        '/3d': apiProxy(),
         '/api/browser': apiProxy(),
         '/api/tools': apiProxy()
       }

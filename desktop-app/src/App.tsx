@@ -14,6 +14,16 @@ import '@scratchbox/core/style.css';
 export function App(): JSX.Element {
     const handleOpenFolder = React.useCallback(async () => {
         try {
+            const desktop = (window as any).scratchboxDesktop;
+            if (desktop?.showOpenDialog) {
+                const result = await desktop.showOpenDialog({ properties: ['openDirectory'] });
+                if (!result.canceled && result.filePaths?.[0]) {
+                    const selectedPath = result.filePaths[0];
+                    console.log(`[Scratchbox Desktop] Selected directory: ${selectedPath}`);
+                    window.dispatchEvent(new CustomEvent('scratchbox:workspace-changed', { detail: { path: selectedPath } }));
+                    return;
+                }
+            }
             if ('showDirectoryPicker' in window) {
                 const dirHandle = await (window as any).showDirectoryPicker();
                 if (dirHandle && dirHandle.name) {
@@ -27,10 +37,21 @@ export function App(): JSX.Element {
 
     const handleCreateFile = React.useCallback(() => {
         console.log('[Scratchbox] Create file requested');
+        window.dispatchEvent(new CustomEvent('scratchbox:create-file-requested'));
     }, []);
 
     const handleOpenWorkspace = React.useCallback(async () => {
         try {
+            const desktop = (window as any).scratchboxDesktop;
+            if (desktop?.showOpenDialog) {
+                const result = await desktop.showOpenDialog({ properties: ['openDirectory'] });
+                if (!result.canceled && result.filePaths?.[0]) {
+                    const selectedPath = result.filePaths[0];
+                    console.log(`[Scratchbox Desktop] Selected workspace directory: ${selectedPath}`);
+                    window.dispatchEvent(new CustomEvent('scratchbox:workspace-changed', { detail: { path: selectedPath } }));
+                    return;
+                }
+            }
             if ('showDirectoryPicker' in window) {
                 const dirHandle = await (window as any).showDirectoryPicker();
                 if (dirHandle && dirHandle.name) {
@@ -44,14 +65,26 @@ export function App(): JSX.Element {
 
     const handleOpenPreferences = React.useCallback(() => {
         console.log('[Scratchbox] Open preferences requested');
+        window.dispatchEvent(new CustomEvent('scratchbox:open-preferences'));
     }, []);
 
     const handleOpenKeyboardShortcuts = React.useCallback(() => {
         console.log('[Scratchbox] Open keyboard shortcuts requested');
+        window.dispatchEvent(new CustomEvent('scratchbox:open-shortcuts'));
     }, []);
 
-    const handleExecuteCommand = React.useCallback((cmdId: string) => {
+    const handleExecuteCommand = React.useCallback(async (cmdId: string) => {
         console.log(`[Scratchbox] Execute command: ${cmdId}`);
+        const desktop = (window as any).scratchboxDesktop;
+        if (desktop?.executeCommand) {
+            try {
+                const result = await desktop.executeCommand(cmdId);
+                console.log(`[Scratchbox] Command result:`, result);
+                return result;
+            } catch (err) {
+                console.error(`[Scratchbox] Command execution failed:`, err);
+            }
+        }
     }, []);
 
     return (

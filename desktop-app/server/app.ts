@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs-extra';
+import { exec } from 'child_process';
 import { assertWorkspaceRoot, PathTraversalError, resolveWithinRoot } from '../../packages/core/src/node/security/path-guard';
 import {
     WorkspaceConfigService,
@@ -34,8 +35,20 @@ import {
     UserLearningService,
     WorkspaceFileWatcherService,
     LongRunningAgentService,
-    SubagentPoolService
+    SubagentPoolService,
+    NativeCppCompilerService,
+    HeadlessVideoCompositorService,
+    PhotorealTileCleanupService,
+    DeploymentManifestCompiler,
+    TrainedModelRegistryService,
+    ComfyUiBridgeService,
+    ComfyUiPipelineAgent,
+    ComfyUiCloudRunService,
+    Depthbox360UniverseService,
+    ImageToSplatService,
+    Google360PanoramaPipelineService
 } from '../../packages/core/src/node';
+import { GeoFrame } from '../../packages/core/src/common/coordinate/GeoFrame';
 import {
     createEmptyProjectGraph,
     IMAGE_MODEL_PRIORITY,
@@ -192,7 +205,9 @@ function loadEnvironmentSecrets(): void {
 /** Routes reachable without the launch token. */
 const OPEN_ROUTES: Array<{ method: string; path: string }> = [
     { method: 'GET', path: '/health' },
-    { method: 'GET', path: '/api/browser/status' }
+    { method: 'GET', path: '/api/browser/status' },
+    { method: 'GET', path: '/api/models' },
+    { method: 'GET', path: '/api/models/status' }
 ];
 
 /** GET routes consumed by EventSource, which cannot set headers: accept `?token=`. */
@@ -312,6 +327,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         app.use(express.static(options.staticDir, { index: 'index.html' }));
     }
 
+    const publicRoot = path.resolve(__dirname, '../../public');
+    if (fs.existsSync(publicRoot)) {
+        app.use(express.static(publicRoot));
+    }
+
     app.use(createLaunchTokenMiddleware(launchToken));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
@@ -363,6 +383,9 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const executionBridge = new DeepWriteExecutionBridge(geminiService);
     const fileWatcher = new WorkspaceFileWatcherService();
     const lensSyncService = new CodebaseLensSyncService(workspaceService, fileWatcher);
+    const cppCompiler = new NativeCppCompilerService();
+    const tileCleanupService = new PhotorealTileCleanupService(cppCompiler);
+    const videoCompositor = new HeadlessVideoCompositorService();
     const primitiveSynthesizer = new PrimitiveSynthesizer();
     const deepWriteService = new DeepWriteService(
         goalAnalyzer,
@@ -503,11 +526,16 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const openSse = (req: Request, res: Response): AbortController => {
         res.writeHead(200, {
             'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
+            'Cache-Control': 'no-cache, no-transform',
             'Connection': 'keep-alive'
         });
+        res.flushHeaders?.();
         const controller = new AbortController();
-        req.on('close', () => controller.abort());
+        res.on('close', () => {
+            if (!res.writableEnded) {
+                controller.abort();
+            }
+        });
         return controller;
     };
 
@@ -542,6 +570,24 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
             res.json(response);
         } catch (err: any) {
             res.status(500).json({ error: err.message });
+        }
+    });
+
+    geminiRouter.post('/fim', async (req: Request, res: Response) => {
+        try {
+            const response = await geminiService.completeFim(req.body);
+            res.json(response);
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err.message });
+        }
+    });
+
+    geminiRouter.post('/quick-edit', async (req: Request, res: Response) => {
+        try {
+            const response = await geminiService.quickEditCode(req.body);
+            res.json(response);
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err.message });
         }
     });
 
@@ -1139,6 +1185,8 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     // 3. Workspace Endpoints
     // ==========================================
     const workspaceRouter = express.Router();
+    const resolveWorkspaceRoot = (req: Request): string | undefined =>
+        (req.query?.root as string) || (req.query?.workspaceRoot as string) || (req.body?.workspaceRoot as string) || undefined;
 
     workspaceRouter.get('/config', async (req: Request, res: Response) => {
         try {
@@ -1152,8 +1200,12 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     workspaceRouter.post('/config', async (req: Request, res: Response) => {
         try {
-            const { workspaceRoot, settings } = req.body || {};
-            await workspaceService.saveWorkspaceConfig(requireWorkspaceRoot(workspaceRoot), { settings });
+            const { workspaceRoot, settings, customSkills, customMcpServers } = req.body || {};
+            await workspaceService.saveWorkspaceConfig(requireWorkspaceRoot(workspaceRoot), {
+                settings,
+                customSkills,
+                customMcpServers
+            });
             res.json({ success: true });
         } catch (err: any) {
             sendError(res, err);
@@ -1292,7 +1344,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
             if (!await fs.pathExists(configPath)) {
                 await fs.writeJSON(configPath, {
                     workspaceName: cleanName,
-                    theme: 'obsidian',
+                    theme: 'dark',
                     defaultModel: 'gemini-3.7-flash',
                     thinkingBudget: 1024,
                     template: template || 'blank'
@@ -1341,6 +1393,78 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         });
     });
 
+    workspaceRouter.get(['/files', '/tree'], async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const maxDepth = parseInt(req.query.maxDepth as string, 10) || 6;
+            const tree = await workspaceService.getDirectoryTree(targetRoot, maxDepth);
+            res.json({ success: true, root: targetRoot, files: tree, tree });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    workspaceRouter.get(['/file-content', '/file'], async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const filePath = String(req.query.path || '').trim();
+            if (!filePath) {
+                res.status(400).json({ error: 'Missing "path" query parameter' });
+                return;
+            }
+            const fileData = await workspaceService.readFileContent(targetRoot, filePath);
+            res.json({ success: true, path: filePath, ...fileData });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    workspaceRouter.post(['/file-content', '/file'], async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, path: filePath, content } = req.body || {};
+            const resolvedRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const cleanPath = String(filePath || '').trim();
+            if (!cleanPath) {
+                res.status(400).json({ error: 'Missing "path" body parameter' });
+                return;
+            }
+            if (typeof content !== 'string') {
+                res.status(400).json({ error: 'Missing "content" body parameter' });
+                return;
+            }
+            const result = await workspaceService.writeFileContent(resolvedRoot, cleanPath, content, fileWatcher);
+            res.json(result);
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    workspaceRouter.post('/create-file', async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, path: filePath, isFolder, content } = req.body || {};
+            const resolvedRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const cleanPath = String(filePath || '').trim();
+            if (!cleanPath) {
+                res.status(400).json({ error: 'Missing "path" body parameter' });
+                return;
+            }
+            const safePath = resolveWithinRoot(resolvedRoot, cleanPath);
+            if (isFolder) {
+                await fs.ensureDir(safePath);
+            } else {
+                await fs.ensureDir(path.dirname(safePath));
+                if (!await fs.pathExists(safePath)) {
+                    await fs.writeFile(safePath, typeof content === 'string' ? content : '', 'utf-8');
+                }
+            }
+            res.json({ success: true, path: cleanPath, isFolder: !!isFolder });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
     workspaceRouter.get('/external-mcp', async (_req: Request, res: Response) => {
         try {
             const sources = await workspaceService.discoverExternalMcpConfigs();
@@ -1351,6 +1475,193 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     });
 
     app.use('/workspace', workspaceRouter);
+
+    // ==========================================
+    // Git Operations Endpoints
+    // ==========================================
+    const gitRouter = express.Router();
+
+    gitRouter.get('/branches', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            exec('git branch -a', { cwd: targetRoot }, (err, stdout, _stderr) => {
+                if (err) {
+                    res.json({ success: true, current: 'main', branches: ['main'] });
+                    return;
+                }
+                const lines = stdout.split('\n').map(l => l.trim()).filter(Boolean);
+                let current = 'main';
+                const branches: string[] = [];
+                for (const line of lines) {
+                    if (line.startsWith('*')) {
+                        current = line.replace(/^\*\s*/, '').trim();
+                        branches.push(current);
+                    } else {
+                        const bName = line.replace(/^remotes\/origin\//, '').trim();
+                        if (!branches.includes(bName) && !bName.includes('HEAD ->')) {
+                            branches.push(bName);
+                        }
+                    }
+                }
+                res.json({ success: true, current, branches: branches.length ? branches : ['main'] });
+            });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    gitRouter.post('/checkout', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const { branch } = req.body || {};
+            if (!branch || typeof branch !== 'string') {
+                res.status(400).json({ error: 'Missing branch parameter' });
+                return;
+            }
+            const cleanBranch = branch.trim().replace(/[^a-zA-Z0-9_\-\.\/]/g, '');
+            exec(`git checkout "${cleanBranch}"`, { cwd: targetRoot }, (err, stdout, stderr) => {
+                if (err) {
+                    res.status(400).json({ error: stderr || err.message });
+                    return;
+                }
+                res.json({ success: true, branch: cleanBranch, output: stdout });
+            });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    gitRouter.post('/clone', async (req: Request, res: Response) => {
+        try {
+            const { repoUrl, destinationDir, name } = req.body || {};
+            if (!repoUrl || typeof repoUrl !== 'string') {
+                res.status(400).json({ error: 'Missing repoUrl parameter' });
+                return;
+            }
+            const cleanUrl = repoUrl.trim();
+            if (!cleanUrl.startsWith('https://') && !cleanUrl.startsWith('git@')) {
+                res.status(400).json({ error: 'Invalid repository URL protocol' });
+                return;
+            }
+
+            const home = os.homedir();
+            const devHome = path.join(home, 'dev');
+            let targetDest: string;
+            if (destinationDir && typeof destinationDir === 'string') {
+                targetDest = path.resolve(destinationDir.replace(/^~(?=$|[\\/])/, home));
+            } else {
+                const repoName = name || cleanUrl.split('/').pop()?.replace(/\.git$/, '') || 'cloned-repo';
+                targetDest = path.resolve(devHome, repoName);
+            }
+
+            const resolvedDest = assertWorkspaceRoot(targetDest, allowedWorkspaceRoots);
+            if (!allowedWorkspaceRoots.includes(resolvedDest)) {
+                allowedWorkspaceRoots.push(resolvedDest);
+            }
+
+            await fs.ensureDir(path.dirname(resolvedDest));
+
+            exec(`git clone ${cleanUrl} "${resolvedDest}"`, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+                if (err) {
+                    res.status(500).json({ error: stderr || err.message });
+                    return;
+                }
+                res.json({
+                    success: true,
+                    path: resolvedDest,
+                    output: stdout || stderr
+                });
+            });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    app.use('/git', gitRouter);
+    app.use('/workspace/git', gitRouter);
+
+    // ==========================================
+    // Native C++20 Astra 3D Engine Endpoints
+    // ==========================================
+    const cppRouter = express.Router();
+
+    cppRouter.post('/compile', async (req: Request, res: Response) => {
+        try {
+            const { sourceCode, optimization, args, assets, geoAnchor, tileGlbBase64, tileAssetId } = req.body || {};
+            if (!sourceCode || typeof sourceCode !== 'string') {
+                res.status(400).json({ error: 'Missing "sourceCode" parameter' });
+                return;
+            }
+
+            const stagedAssets: Array<{ name: string; content: string; encoding?: 'utf8' | 'base64' }> = [];
+
+            if (Array.isArray(assets)) {
+                stagedAssets.push(...assets);
+            }
+
+            if (geoAnchor) {
+                stagedAssets.push({
+                    name: 'geo_anchor.json',
+                    content: JSON.stringify(geoAnchor, null, 2),
+                    encoding: 'utf8'
+                });
+            }
+
+            if (tileGlbBase64) {
+                stagedAssets.push({
+                    name: 'tile_payload.glb',
+                    content: tileGlbBase64,
+                    encoding: 'base64'
+                });
+            } else if (tileAssetId) {
+                const cacheFile = path.resolve(process.cwd(), '.scratchbox/tiles_cache', `${tileAssetId}.glb`);
+                if (fs.existsSync(cacheFile)) {
+                    stagedAssets.push({
+                        name: 'tile_payload.glb',
+                        content: fs.readFileSync(cacheFile).toString('base64'),
+                        encoding: 'base64'
+                    });
+                }
+            }
+
+            const compileRes = await cppCompiler.compileSource(sourceCode, {
+                optimization: optimization || '-O3',
+                assets: stagedAssets
+            });
+
+            if (!compileRes.success || !compileRes.binaryPath) {
+                res.json({
+                    success: false,
+                    compilerOutput: compileRes.compilerOutput,
+                    diagnostics: compileRes.diagnostics,
+                    compilationTimeMs: compileRes.compilationTimeMs
+                });
+                return;
+            }
+
+            const execRes = await cppCompiler.executeBinary(compileRes.binaryPath, args || []);
+
+            res.json({
+                success: execRes.success,
+                compilerOutput: compileRes.compilerOutput,
+                diagnostics: compileRes.diagnostics,
+                compilationTimeMs: compileRes.compilationTimeMs,
+                executionTimeMs: execRes.executionTimeMs,
+                glbBase64: execRes.glbBase64,
+                glbPath: execRes.glbPath,
+                chunks: execRes.chunks,
+                stdout: execRes.stdout,
+                stderr: execRes.stderr
+            });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    app.use('/3d', cppRouter);
+    app.use('/compiler', cppRouter);
 
     // ==========================================
     // 4. Google Media Endpoints (Nano Banana 2, Omni 1.1, Imagen, Veo)
@@ -1464,7 +1775,494 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/gemini/media', mediaRouter);
 
     // ==========================================
-    // 5. Standalone Vibe-Coded Tools & Micro-Studios Hub
+    // 5. Headless Video Compositor Endpoints
+    // ==========================================
+    const videoRouter = express.Router();
+
+    videoRouter.get('/capabilities', async (_req: Request, res: Response) => {
+        const available = await videoCompositor.isFfmpegAvailable();
+        res.json({
+            success: true,
+            ffmpegAvailable: available,
+            features: {
+                chromaKeying: true,
+                despillSuppression: true,
+                spatialTransform2D: true,
+                opticalLightWrap: true,
+                lutColorGrading: true,
+                audioMix: true
+            },
+            supportedFormats: ['mp4', 'mov', 'webm', 'gif']
+        });
+    });
+
+    videoRouter.post('/filtergraph', (req: Request, res: Response) => {
+        try {
+            const { timeline, resolution, customInputs } = req.body || {};
+            if (!timeline) {
+                res.status(400).json({ success: false, error: 'Missing timeline data' });
+                return;
+            }
+            const graph = videoCompositor.buildFilterGraph(timeline, resolution, customInputs);
+            res.json({ success: true, graph });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Filtergraph generation failed' });
+        }
+    });
+
+    videoRouter.post('/composite', async (req: Request, res: Response) => {
+        try {
+            const { timeline, outputPath, workspaceRoot, resolution, format, crf, preset, dryRun, customInputs } = req.body || {};
+            if (!timeline) {
+                res.status(400).json({ success: false, error: 'Missing timeline data' });
+                return;
+            }
+            if (!outputPath) {
+                res.status(400).json({ success: false, error: 'Missing outputPath' });
+                return;
+            }
+
+            let resolvedOutputPath = outputPath;
+            if (workspaceRoot) {
+                const safeRoot = requireWorkspaceRoot(workspaceRoot);
+                resolvedOutputPath = resolveWithinRoot(safeRoot, outputPath);
+            }
+
+            const result = await videoCompositor.execute({
+                timeline,
+                outputPath: resolvedOutputPath,
+                workspaceRoot,
+                resolution,
+                format,
+                crf,
+                preset,
+                dryRun,
+                customInputs
+            });
+
+            res.json(result);
+        } catch (err: any) {
+            if (isPathError(err)) {
+                sendError(res, err);
+                return;
+            }
+            res.status(500).json({ success: false, error: err?.message || 'Video compositing failed' });
+        }
+    });
+
+    app.use('/video', videoRouter);
+    app.use('/api/video', videoRouter);
+    app.use('/media/video', videoRouter);
+
+    // ==========================================
+    // 6. 3D Photogrammetry & Tile Cleanup Pipeline (In-App / Cloud Run)
+    // ==========================================
+    const tileCleanupRouter = express.Router();
+
+    tileCleanupRouter.get('/status', (_req: Request, res: Response) => {
+        res.json({
+            success: true,
+            service: 'scratchbox-tile-cleanup',
+            engine: 'C++20 Native Photogrammetry Engine',
+            pipeline: [
+                'PlanarDecimation',
+                'CornerStraightener',
+                'TextureDeLighter',
+                'SemanticMeshSeparator',
+                'ElevationConformer'
+            ],
+            cloudRunReady: true,
+            timestamp: Date.now()
+        });
+    });
+
+    tileCleanupRouter.post('/cleanup', async (req: Request, res: Response) => {
+        try {
+            const {
+                angleThresholdDegrees,
+                snapToleranceMeters,
+                roadWidthMeters
+            } = req.body || {};
+
+            const result = await tileCleanupService.cleanPhotogrammetryTile({
+                angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
+                snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
+                roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
+            });
+
+            res.json({
+                success: true,
+                metrics: result.metrics,
+                glbBase64: result.glbBase64,
+                byteLength: result.glbBuffer ? result.glbBuffer.length : 0
+            });
+        } catch (err: any) {
+            res.status(500).json({
+                success: false,
+                error: err?.message || 'Tile cleanup pipeline execution failed'
+            });
+        }
+    });
+
+    tileCleanupRouter.post('/cleanup-raw', async (req: Request, res: Response) => {
+        try {
+            const {
+                angleThresholdDegrees,
+                snapToleranceMeters,
+                roadWidthMeters
+            } = req.body || {};
+
+            const result = await tileCleanupService.cleanPhotogrammetryTile({
+                angleThresholdDegrees: typeof angleThresholdDegrees === 'number' ? angleThresholdDegrees : 4.0,
+                snapToleranceMeters: typeof snapToleranceMeters === 'number' ? snapToleranceMeters : 0.85,
+                roadWidthMeters: typeof roadWidthMeters === 'number' ? roadWidthMeters : 8.0
+            });
+
+            if (!result.glbBuffer) {
+                res.status(500).json({ success: false, error: 'Failed to generate GLB buffer' });
+                return;
+            }
+
+            res.setHeader('Content-Type', 'model/gltf-binary');
+            res.setHeader('Content-Disposition', 'attachment; filename="cleaned_tile.glb"');
+            res.send(result.glbBuffer);
+        } catch (err: any) {
+            res.status(500).json({
+                success: false,
+                error: err?.message || 'Tile cleanup pipeline execution failed'
+            });
+        }
+    });
+
+    app.use('/api/3d/tiles', tileCleanupRouter);
+    app.use('/api/3d/cleanup-tiles', tileCleanupRouter);
+
+    // ==========================================
+    // 6b. Mobile ARCore Geospatial Manifest Compiler
+    // ==========================================
+    const arRouter = express.Router();
+
+    arRouter.post('/compile', async (req: Request, res: Response) => {
+        try {
+            const { anchor, entities, scene, targetBranchId, timestamp, vectorMap, splatConfig, defaultAltitudeMode, weather } = req.body || {};
+            if (!anchor || typeof anchor.lat !== 'number' || typeof anchor.lng !== 'number') {
+                res.status(400).json({ success: false, error: 'Missing or invalid geodetic anchor { lat, lng }' });
+                return;
+            }
+
+            const geoFrame = new GeoFrame({
+                lat: anchor.lat,
+                lng: anchor.lng,
+                alt: anchor.alt ?? 0,
+                geoidHeight: anchor.geoidHeight ?? 0
+            });
+
+            const targetScene = scene || entities || [];
+            const contract = await DeploymentManifestCompiler.compile({
+                geoFrame,
+                scene: targetScene,
+                targetBranchId: targetBranchId || 'earth/main',
+                timestamp: timestamp ? new Date(timestamp) : undefined,
+                vectorMap,
+                splatConfig,
+                defaultAltitudeMode,
+                weather: weather !== undefined ? weather : false
+            });
+
+            const validation = DeploymentManifestCompiler.validateContract(contract);
+            res.json({
+                success: true,
+                contract,
+                validation
+            });
+        } catch (err: any) {
+            res.status(500).json({
+                success: false,
+                error: err?.message || 'Geospatial manifest compilation failed'
+            });
+        }
+    });
+
+    app.use('/api/3d/ar', arRouter);
+
+    // ==========================================
+    // 6c. Depthbox 360 Omnidirectional Spatial Engine
+    // ==========================================
+    const depthbox360Router = express.Router();
+
+    depthbox360Router.get('/presets', (_req: Request, res: Response) => {
+        res.json({
+            success: true,
+            presets: [
+                { id: 'san_marco', name: 'Piazza San Marco, Venice', description: 'Historic Venetian square with marble colonnades, St. Mark Basilica, and Campanile belfry.' },
+                { id: 'alpine_summit', name: 'Alpine Glacial Sanctuary', description: 'Crystalline turquoise lake surrounded by soaring snow-capped granite ridges and pine trees.' },
+                { id: 'cyber_shibuya', name: 'Cyber Shibuya Crossing', description: 'Wet reflective asphalt, towering holographic billboards, neon rain, and cybernetic infrastructure.' },
+                { id: 'roman_forum', name: 'Ancient Roman Forum', description: 'Corinthian travertine columns, triumphal arches, and golden hour Mediterranean illumination.' },
+                { id: 'martian_biodome', name: 'Martian Bio-Dome Colony', description: 'Pressurized geodesic glass domes, red iron oxide regolith, rover docks, and terraforming atmosphere.' }
+            ]
+        });
+    });
+
+    depthbox360Router.post('/generate', (req: Request, res: Response) => {
+        try {
+            const config = req.body || {};
+            const universe = Depthbox360UniverseService.generate360Universe(config);
+            res.json({
+                success: true,
+                splats: universe.splats,
+                colliders: universe.colliders,
+                atmosphere: universe.atmosphere,
+                statistics: universe.statistics
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || '360 universe synthesis failed' });
+        }
+    });
+
+    depthbox360Router.post('/export-glb', (req: Request, res: Response) => {
+        try {
+            const { preset = 'san_marco', eyeHeight = 1.7 } = req.body || {};
+            const colliders = Depthbox360UniverseService.extractUniverseColliders(preset, eyeHeight);
+            const glbBuffer = ImageToSplatService.generatePhysicsColliderGlb(colliders);
+            res.setHeader('Content-Type', 'model/gltf-binary');
+            res.setHeader('Content-Disposition', `attachment; filename="depthbox_${preset}_colliders.glb"`);
+            res.send(Buffer.from(glbBuffer));
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'GLB physics collider export failed' });
+        }
+    });
+
+    app.use('/api/3d-engine/depthbox-360', depthbox360Router);
+
+    // Google 360 Panorama Pipeline: Seam Healing, Nadir Removal & Generation
+    const panoramaRouter = express.Router();
+    const panoramaService = new Google360PanoramaPipelineService(mediaCredentials);
+
+    panoramaRouter.post('/heal-seam', async (req: Request, res: Response) => {
+        try {
+            const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, mockExecution, model } = req.body || {};
+            const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
+
+            const result = await panoramaService.healPanoramaSeam({
+                inputImagePath,
+                inputImageBuffer: inputBuffer,
+                prompt,
+                seamWidth,
+                outputImagePath,
+                mockExecution,
+                model
+            });
+
+            res.json({
+                success: true,
+                width: result.width,
+                height: result.height,
+                seamWidth: result.seamWidth,
+                outputImagePath: result.outputImagePath,
+                outputImageBase64: result.outputBuffer.toString('base64'),
+                modelUsed: result.modelUsed,
+                summary: result.summary
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to heal panorama seam' });
+        }
+    });
+
+    panoramaRouter.post('/inpaint', async (req: Request, res: Response) => {
+        try {
+            const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, mockExecution, model } = req.body || {};
+            const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
+            const maskBuffer = maskImageBase64 ? Buffer.from(maskImageBase64, 'base64') : undefined;
+
+            const result = await panoramaService.inpaintPanorama({
+                inputImagePath,
+                inputImageBuffer: inputBuffer,
+                maskImagePath,
+                maskImageBuffer: maskBuffer,
+                nadirOnly,
+                nadirRatio,
+                prompt,
+                outputImagePath,
+                mockExecution,
+                model
+            });
+
+            res.json({
+                success: true,
+                width: result.width,
+                height: result.height,
+                outputImagePath: result.outputImagePath,
+                outputImageBase64: result.outputBuffer.toString('base64'),
+                modelUsed: result.modelUsed,
+                summary: result.summary
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to inpaint panorama' });
+        }
+    });
+
+    panoramaRouter.post('/generate', async (req: Request, res: Response) => {
+        try {
+            const { prompt, style, width, height, healSeam, inpaintNadir, outputImagePath, mockExecution, model } = req.body || {};
+            if (!prompt) {
+                res.status(400).json({ success: false, error: 'prompt is required to generate 360 panorama' });
+                return;
+            }
+
+            const result = await panoramaService.generate360Panorama({
+                prompt,
+                style,
+                width,
+                height,
+                healSeam,
+                inpaintNadir,
+                outputImagePath,
+                mockExecution,
+                model
+            });
+
+            res.json({
+                success: true,
+                width: result.width,
+                height: result.height,
+                seamHealed: result.seamHealed,
+                outputImagePath: result.outputImagePath,
+                outputImageBase64: result.outputBuffer.toString('base64'),
+                modelUsed: result.modelUsed,
+                summary: result.summary
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to generate 360 panorama' });
+        }
+    });
+
+    panoramaRouter.post('/upscale-16k', async (req: Request, res: Response) => {
+        try {
+            const { inputImagePath, inputImageBase64, engine, outputImagePath, mockExecution, seamWidth } = req.body || {};
+            const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
+
+            const result = await panoramaService.upscalePanorama16K({
+                inputImagePath,
+                inputImageBuffer: inputBuffer,
+                engine,
+                outputImagePath,
+                mockExecution,
+                seamWidth
+            });
+
+            res.json({
+                success: true,
+                inputWidth: result.inputWidth,
+                inputHeight: result.inputHeight,
+                outputWidth: result.outputWidth,
+                outputHeight: result.outputHeight,
+                outputImagePath: result.outputImagePath,
+                outputImageBase64: result.outputBuffer.toString('base64'),
+                engineUsed: result.engineUsed,
+                seamHealed: result.seamHealed,
+                durationMs: result.durationMs,
+                summary: result.summary
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to upscale panorama to 16K' });
+        }
+    });
+
+    app.use('/api/panorama', panoramaRouter);
+
+    // 3DGS Studio: Single Image, Related Images Group, and Video Trajectory Endpoints
+    const splatStudioRouter = express.Router();
+
+    splatStudioRouter.get('/sources', (_req: Request, res: Response) => {
+        try {
+            const catalog = ImageToSplatService.getPublicSourceCatalog();
+            res.json({ success: true, catalog });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to retrieve public sources catalog' });
+        }
+    });
+
+    splatStudioRouter.post('/multiview-to-splat', (req: Request, res: Response) => {
+        try {
+            const { views = [], voxelSize = 0.05, densifyMaxScale = 0, stride = 1, edgeTau = 0.08, minDepth = 0.2, maxDepth = 200.0 } = req.body || {};
+            const convertedViews = views.map((v: any) => ({
+                ...v,
+                rgbPixels: Buffer.isBuffer(v.rgbPixels) ? v.rgbPixels : (typeof v.rgbPixels === 'string' ? Buffer.from(v.rgbPixels, 'base64') : new Uint8Array(v.rgbPixels || []))
+            }));
+            const splats = ImageToSplatService.convertMultiViewImagesToSplat({
+                views: convertedViews,
+                voxelSize,
+                densifyMaxScale,
+                stride,
+                edgeTau,
+                minDepth,
+                maxDepth
+            });
+            res.json({ success: true, splatCount: splats.length, splats });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Multi-view splat conversion failed' });
+        }
+    });
+
+    splatStudioRouter.post('/video-to-splat', (req: Request, res: Response) => {
+        try {
+            const {
+                keyframes = [],
+                trajectoryType = 'orbit',
+                orbitRadius = 12.0,
+                orbitSweepDegrees = 90.0,
+                dollyDistance = 8.0,
+                panDistance = 6.0,
+                voxelSize = 0.04,
+                densifyMaxScale = 0,
+                stride = 1,
+                edgeTau = 0.08,
+                minDepth = 0.2,
+                maxDepth = 200.0
+            } = req.body || {};
+
+            const convertedKeyframes = keyframes.map((kf: any) => ({
+                ...kf,
+                rgbPixels: Buffer.isBuffer(kf.rgbPixels) ? kf.rgbPixels : (typeof kf.rgbPixels === 'string' ? Buffer.from(kf.rgbPixels, 'base64') : new Uint8Array(kf.rgbPixels || []))
+            }));
+
+            const splats = ImageToSplatService.convertVideoKeyframesToSplat({
+                keyframes: convertedKeyframes,
+                trajectoryType,
+                orbitRadius,
+                orbitSweepDegrees,
+                dollyDistance,
+                panDistance,
+                voxelSize,
+                densifyMaxScale,
+                stride,
+                edgeTau,
+                minDepth,
+                maxDepth
+            });
+
+            res.json({ success: true, splatCount: splats.length, splats });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Video keyframe splat conversion failed' });
+        }
+    });
+
+    splatStudioRouter.post('/export-splat', (req: Request, res: Response) => {
+        try {
+            const { splats = [] } = req.body || {};
+            const buffer = ImageToSplatService.serializeToSplatBuffer(splats);
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'attachment; filename="depthbox_environment.splat"');
+            res.send(buffer);
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Splat serialization failed' });
+        }
+    });
+
+    app.use('/api/3d-engine/splat-studio', splatStudioRouter);
+
+    // ==========================================
+    // 7. Standalone Vibe-Coded Tools & Micro-Studios Hub
     //    Export stays on the (token-protected) API; the HTML itself is served
     //    by the isolated tools origin (see createToolsServer) so a generated
     //    tool can never read the launch token or call the API as the user.
@@ -1488,6 +2286,316 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     });
 
     app.use('/api/tools', toolsRouter);
+
+    // Trained Neural Models & 4DGS Avatars API
+    const modelsRouter = express.Router();
+    const modelRegistry = new TrainedModelRegistryService();
+
+    modelsRouter.get('/', (_req: Request, res: Response) => {
+        try {
+            const models = modelRegistry.discoverAllModels();
+            const summary = modelRegistry.getCatalogSummary();
+            res.json({
+                success: true,
+                summary,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/status', (_req: Request, res: Response) => {
+        try {
+            const summary = modelRegistry.getCatalogSummary();
+            res.json({
+                success: true,
+                status: summary.totalModels > 0 ? 'ready' : 'empty',
+                summary
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/4danyone/demos', (_req: Request, res: Response) => {
+        try {
+            const demos = modelRegistry.getModelsByFamily('4danyone_4dgs');
+            res.json({
+                success: true,
+                count: demos.length,
+                demos
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/4danyone/demos/:id', (req: Request, res: Response) => {
+        try {
+            const avatar = modelRegistry.get4DGSAvatar(req.params.id);
+            if (!avatar) {
+                res.status(404).json({ success: false, error: `Avatar ${req.params.id} not found` });
+                return;
+            }
+            res.json({
+                success: true,
+                avatar
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/smplx', (_req: Request, res: Response) => {
+        try {
+            const models = modelRegistry.discoverSmplxModels();
+            res.json({
+                success: true,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/omniroam', (_req: Request, res: Response) => {
+        try {
+            const models = modelRegistry.discoverOmniRoamModels();
+            res.json({
+                success: true,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    modelsRouter.get('/geobox', (_req: Request, res: Response) => {
+        try {
+            const models = modelRegistry.discoverGeoBoxModels();
+            res.json({
+                success: true,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    app.use('/api/models', modelsRouter);
+
+    const comfyRouter = express.Router();
+
+    comfyRouter.get('/status', async (req: Request, res: Response) => {
+        try {
+            const hostUrl = typeof req.query.hostUrl === 'string' ? req.query.hostUrl : undefined;
+            const bridge = new ComfyUiBridgeService({ hostUrl });
+            const available = await bridge.isAvailable();
+            if (!available) {
+                res.json({
+                    success: true,
+                    status: 'offline',
+                    available: false,
+                    hostUrl: bridge.getHostUrl(),
+                    message: 'ComfyUI server is offline.'
+                });
+                return;
+            }
+            const stats = await bridge.getSystemStats();
+            const models = await bridge.getModels();
+            res.json({
+                success: true,
+                status: 'online',
+                available: true,
+                hostUrl: bridge.getHostUrl(),
+                stats,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.get('/nodes', async (req: Request, res: Response) => {
+        try {
+            const hostUrl = typeof req.query.hostUrl === 'string' ? req.query.hostUrl : undefined;
+            const nodeClass = typeof req.query.nodeClass === 'string' ? req.query.nodeClass : undefined;
+            const bridge = new ComfyUiBridgeService({ hostUrl });
+            const info = await bridge.getObjectInfo(nodeClass);
+            res.json({ success: true, nodes: info });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/research', async (req: Request, res: Response) => {
+        try {
+            const { goal, hostUrl, mockExecution } = req.body;
+            if (!goal) {
+                res.status(400).json({ success: false, error: 'Goal is required.' });
+                return;
+            }
+            const agent = new ComfyUiPipelineAgent({ hostUrl, mockExecution: mockExecution ?? true });
+            const blueprint = await agent.researchPipeline(goal);
+            const prompt = agent.authorApiPrompt(blueprint);
+            const nodeGraphData = agent.convertToNodeGraphData(blueprint, prompt);
+            res.json({ success: true, blueprint, prompt, nodeGraphData });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.get('/cloudrun/status', async (req: Request, res: Response) => {
+        try {
+            const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
+            const mock = req.query.mockExecution === 'true' || req.query.mockExecution === undefined;
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
+            const status = await crService.getServiceStatus();
+            res.json({ success: true, ...status });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.get('/cloudrun/upstream', async (req: Request, res: Response) => {
+        try {
+            const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
+            const mock = req.query.mockExecution === 'true' || req.query.mockExecution === undefined;
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
+            const info = await crService.getUpstreamVersionInfo();
+            res.json({ success: true, ...info });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/cloudrun/sync', async (req: Request, res: Response) => {
+        try {
+            const { serviceUrl, mockExecution } = req.body || {};
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const syncResult = await crService.syncUpstream();
+            res.json({ ...syncResult, success: syncResult.success });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/cloudrun/inject-code', async (req: Request, res: Response) => {
+        try {
+            const { moduleName, code, nodeClasses, requirements, serviceUrl, mockExecution } = req.body || {};
+            if (!moduleName || !code) {
+                res.status(400).json({ success: false, error: 'moduleName and code are required.' });
+                return;
+            }
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const injectResult = await crService.injectDynamicCode({
+                moduleName,
+                code,
+                nodeClasses: nodeClasses || [],
+                requirements: requirements || []
+            });
+            res.json({ ...injectResult, success: true });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/workflow/prepare', async (req: Request, res: Response) => {
+        try {
+            const { workflow, dynamicCode, serviceUrl, mockExecution } = req.body || {};
+            if (!workflow) {
+                res.status(400).json({ success: false, error: 'workflow is required.' });
+                return;
+            }
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const report = await crService.prepareWorkflowDependencies(workflow, dynamicCode);
+            res.json({ success: true, report });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/execute', async (req: Request, res: Response) => {
+        try {
+            const { goal, workflow, workflowJson, hostUrl, mockExecution, maxFixAttempts, targetEnvironment, cloudRun, autoSyncUpstream } = req.body;
+            if (!goal && !workflow && !workflowJson) {
+                res.status(400).json({ success: false, error: 'Goal or workflow is required.' });
+                return;
+            }
+            const agent = new ComfyUiPipelineAgent({
+                hostUrl,
+                mockExecution: mockExecution ?? true,
+                maxFixAttempts,
+                targetEnvironment,
+                cloudRun
+            });
+
+            let result;
+            if (workflow || workflowJson) {
+                const parsed = workflow || (typeof workflowJson === 'string' ? JSON.parse(workflowJson) : workflowJson);
+                result = await agent.executeWorkflowPrompt(parsed, goal || 'Execute workflow', {
+                    targetEnvironment,
+                    cloudRun,
+                    autoSyncUpstream
+                });
+            } else {
+                result = await agent.executeAndHeal(goal, {
+                    targetEnvironment,
+                    cloudRun,
+                    autoSyncUpstream
+                });
+            }
+
+            res.json({ ...result });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    comfyRouter.post('/capabilities/resolve', async (req: Request, res: Response) => {
+        try {
+            const { taskGoal, goal, domainHint, hasInputImage, hasInputVideo, targetEnvironment } = req.body;
+            const targetGoal = taskGoal || goal;
+            if (!targetGoal) {
+                res.status(400).json({ success: false, error: 'taskGoal is required' });
+                return;
+            }
+            const agent = new ComfyUiPipelineAgent();
+            const result = agent.assessTaskCapability(targetGoal, {
+                domainHint,
+                hasInputImage,
+                hasInputVideo,
+                targetEnvironment
+            });
+            res.json({ success: true, ...result });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
+    app.use('/api/comfyui', comfyRouter);
+
+    app.post('/api/capabilities/resolve', async (req: Request, res: Response) => {
+        try {
+            const { taskGoal, goal, domainHint, hasInputImage, hasInputVideo, targetEnvironment } = req.body;
+            const targetGoal = taskGoal || goal;
+            if (!targetGoal) {
+                res.status(400).json({ success: false, error: 'taskGoal is required' });
+                return;
+            }
+            const agent = new ComfyUiPipelineAgent();
+            const result = agent.assessTaskCapability(targetGoal, {
+                domainHint,
+                hasInputImage,
+                hasInputVideo,
+                targetEnvironment
+            });
+            res.json({ success: true, ...result });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
 
     // SPA fallback for production browser mode (after all API routes).
     if (options.staticDir && fs.existsSync(options.staticDir)) {

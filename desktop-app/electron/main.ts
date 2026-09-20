@@ -7,11 +7,28 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, OpenDialogOptions, SaveDialogOptions } from 'electron';
+import { exec } from 'child_process';
 import * as http from 'http';
 import * as path from 'path';
+import * as fs from 'fs';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '../server/app';
 import { resolveRendererDist } from '../server/renderer-dist';
+
+function resolveAppIconPath(): string | undefined {
+    const candidates = [
+        path.resolve(__dirname, '../resources/icon.png'),
+        path.resolve(__dirname, '../../resources/icon.png'),
+        path.resolve(__dirname, '../../desktop-app/resources/icon.png'),
+        path.resolve(__dirname, '../../public/icons/ScratchboxIDE.png'),
+        path.resolve(app.getAppPath(), 'resources/icon.png'),
+        path.resolve(app.getAppPath(), 'public/icons/ScratchboxIDE.png')
+    ];
+    for (const c of candidates) {
+        if (fs.existsSync(c)) return c;
+    }
+    return undefined;
+}
 
 let mainWindow: BrowserWindow | null = null;
 let serverInstance: http.Server | null = null;
@@ -22,15 +39,16 @@ const BACKEND_PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_POR
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
 const DEV_RENDERER_URL = 'http://127.0.0.1:3000';
 
-const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const isDev = (process.env.NODE_ENV === 'development') ||
+    (!app.isPackaged && process.env.NODE_ENV !== 'production' && process.env.SCRATCHBOX_STANDALONE !== 'true');
 
 // Generate the per-launch token once; the server reads it from the environment
 // and the renderer receives it through the preload (additionalArguments).
 const launchToken = resolveLaunchToken();
 process.env.SCRATCHBOX_LAUNCH_TOKEN = launchToken;
 
-// Packaged builds load index.html from file://, which Chromium reports as `Origin: null`.
-if (app.isPackaged) {
+// Packaged or standalone builds load index.html from file://, which Chromium reports as `Origin: null`.
+if (app.isPackaged || process.env.NODE_ENV === 'production' || process.env.SCRATCHBOX_STANDALONE === 'true') {
     const existing = (process.env.SCRATCHBOX_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
     if (!existing.includes('null')) {
         process.env.SCRATCHBOX_ALLOWED_ORIGINS = [...existing, 'null'].join(',');
@@ -89,10 +107,71 @@ function registerIpcHandlers(): void {
         await shell.openExternal(parsed.toString());
         return true;
     });
+
+    ipcMain.handle('scratchbox:window-minimize', () => {
+        if (mainWindow) {
+            mainWindow.minimize();
+            return true;
+        }
+        return false;
+    });
+
+    ipcMain.handle('scratchbox:window-maximize', () => {
+        if (mainWindow) {
+            if (mainWindow.isMaximized()) {
+                mainWindow.unmaximize();
+            } else {
+                mainWindow.maximize();
+            }
+            return mainWindow.isMaximized();
+        }
+        return false;
+    });
+
+    ipcMain.handle('scratchbox:window-close', () => {
+        if (mainWindow) {
+            mainWindow.close();
+            return true;
+        }
+        return false;
+    });
+
+    ipcMain.handle('scratchbox:window-is-maximized', () => {
+        return mainWindow ? mainWindow.isMaximized() : false;
+    });
+
+    ipcMain.handle('scratchbox:show-open-dialog', async (_event, options: unknown) => {
+        if (!mainWindow) return { canceled: true, filePaths: [] };
+        const dialogOptions = (options && typeof options === 'object') ? options : { properties: ['openDirectory'] };
+        return dialog.showOpenDialog(mainWindow, dialogOptions as OpenDialogOptions);
+    });
+
+    ipcMain.handle('scratchbox:show-save-dialog', async (_event, options: unknown) => {
+        if (!mainWindow) return { canceled: true, filePath: undefined };
+        const dialogOptions = (options && typeof options === 'object') ? options : {};
+        return dialog.showSaveDialog(mainWindow, dialogOptions as SaveDialogOptions);
+    });
+
+    ipcMain.handle('scratchbox:execute-command', async (_event, command: unknown, cwd?: unknown) => {
+        if (typeof command !== 'string' || !command.trim()) {
+            return { stdout: '', stderr: 'Invalid command', code: 1 };
+        }
+        return new Promise(resolve => {
+            const workingDir = typeof cwd === 'string' && cwd.trim() ? cwd : process.cwd();
+            exec(command, { cwd: workingDir, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+                resolve({
+                    stdout: stdout || '',
+                    stderr: stderr || '',
+                    code: error ? (error.code ?? 1) : 0
+                });
+            });
+        });
+    });
 }
 
 function createWindow(): void {
     const apiBase = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+    const icon = resolveAppIconPath();
     mainWindow = new BrowserWindow({
         width: 1440,
         height: 900,
@@ -102,6 +181,7 @@ function createWindow(): void {
         trafficLightPosition: { x: 16, y: 16 },
         backgroundColor: '#212121',
         show: false,
+        icon: icon,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -116,10 +196,15 @@ function createWindow(): void {
         }
     });
 
+    const rendererDist = resolveRendererDist(__dirname);
     if (isDev) {
-        mainWindow.loadURL(DEV_RENDERER_URL);
+        mainWindow.loadURL(DEV_RENDERER_URL).catch(() => {
+            if (rendererDist) {
+                console.log('[Electron] Dev server not reachable at ' + DEV_RENDERER_URL + ', falling back to standalone dist/index.html');
+                mainWindow?.loadFile(path.join(rendererDist, 'index.html'));
+            }
+        });
     } else {
-        const rendererDist = resolveRendererDist(__dirname);
         if (!rendererDist) {
             console.error('[Electron] Built renderer not found (desktop-app/dist). Run `npm run build` first.');
             app.exit(1);
@@ -146,7 +231,7 @@ function createWindow(): void {
 
     // Keep the renderer on the app origin; anything else opens in the system browser.
     mainWindow.webContents.on('will-navigate', (event, url) => {
-        const allowed = isDev ? url.startsWith(DEV_RENDERER_URL) : url.startsWith('file://');
+        const allowed = url.startsWith(DEV_RENDERER_URL) || url.startsWith('file://');
         if (!allowed) {
             event.preventDefault();
             try {
@@ -169,6 +254,17 @@ app.whenReady().then(() => {
     registerIpcHandlers();
     startBackendServer();
     createWindow();
+
+    if (process.platform === 'darwin' && app.dock) {
+        const iconPath = resolveAppIconPath();
+        if (iconPath) {
+            try {
+                app.dock.setIcon(iconPath);
+            } catch {
+                // Ignore dock icon errors
+            }
+        }
+    }
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {

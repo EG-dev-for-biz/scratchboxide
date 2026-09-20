@@ -26,5 +26,10 @@
     "server",
     "electron",
     "test"
+  ],
+  "exclude": [
+    "electron/native/build",
+    "dist",
+    "dist-electron"
   ]
 }

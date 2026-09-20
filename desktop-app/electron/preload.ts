@@ -12,7 +12,14 @@ import { contextBridge, ipcRenderer } from 'electron';
 /** IPC channels the renderer may invoke. Nothing else is reachable. */
 const INVOKE_CHANNELS = new Set<string>([
     'scratchbox:open-external',
-    'scratchbox:get-launch-token'
+    'scratchbox:get-launch-token',
+    'scratchbox:window-minimize',
+    'scratchbox:window-maximize',
+    'scratchbox:window-close',
+    'scratchbox:window-is-maximized',
+    'scratchbox:show-open-dialog',
+    'scratchbox:show-save-dialog',
+    'scratchbox:execute-command'
 ]);
 
 function readArg(prefix: string): string {
@@ -45,5 +52,12 @@ contextBridge.exposeInMainWorld('scratchboxDesktop', {
     },
     openExternal: (url: string) => invoke('scratchbox:open-external', url),
     getLaunchToken: () => invoke('scratchbox:get-launch-token'),
+    minimize: () => invoke('scratchbox:window-minimize'),
+    maximize: () => invoke('scratchbox:window-maximize'),
+    close: () => invoke('scratchbox:window-close'),
+    isMaximized: () => invoke('scratchbox:window-is-maximized'),
+    showOpenDialog: (options?: unknown) => invoke('scratchbox:show-open-dialog', options),
+    showSaveDialog: (options?: unknown) => invoke('scratchbox:show-save-dialog', options),
+    executeCommand: (command: string, cwd?: string) => invoke('scratchbox:execute-command', command, cwd),
     invoke
 });

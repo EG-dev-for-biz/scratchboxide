@@ -224,6 +224,37 @@ async function runStandaloneServerTests() {
         }
         console.log('  ✓ Test 13 Passed: exported tools served from isolated origin with sandbox CSP');
 
+        // Test 14: 3D Photogrammetry & Tile Cleanup Pipeline Endpoints
+        console.log('  Testing GET /api/3d/tiles/status ...');
+        const tileStatusRes = await fetch(`${baseUrl}/api/3d/tiles/status`);
+        assert.strictEqual(tileStatusRes.status, 200, '/api/3d/tiles/status should return 200');
+        const tileStatusData = await tileStatusRes.json();
+        assert.strictEqual(tileStatusData.success, true);
+        assert.strictEqual(tileStatusData.cloudRunReady, true);
+        assert.ok(Array.isArray(tileStatusData.pipeline));
+        assert.ok(tileStatusData.pipeline.includes('PlanarDecimation'));
+        assert.ok(tileStatusData.pipeline.includes('CornerStraightener'));
+
+        console.log('  Testing POST /api/3d/tiles/cleanup ...');
+        const cleanupRes = await fetch(`${baseUrl}/api/3d/cleanup-tiles/cleanup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                angleThresholdDegrees: 4.0,
+                snapToleranceMeters: 0.85,
+                roadWidthMeters: 8.0
+            })
+        });
+        assert.strictEqual(cleanupRes.status, 200, '/api/3d/tiles/cleanup should return 200');
+        const cleanupData = await cleanupRes.json();
+        assert.strictEqual(cleanupData.success, true);
+        assert.ok(cleanupData.metrics);
+        assert.ok(cleanupData.metrics.polygonReductionPercent > 60.0);
+        assert.ok(cleanupData.metrics.treeAnchorsCount >= 1);
+        assert.ok(cleanupData.metrics.rooftopGreeblesCount >= 1);
+        assert.ok(cleanupData.glbBase64 && cleanupData.glbBase64.length > 1000);
+        console.log('  ✓ Test 14 Passed: 3D tile cleanup pipeline endpoints respond with validated GLB & metrics');
+
         console.log('\n🎉 ALL STANDALONE SERVER BACKEND TESTS PASSED SUCCESSFULLY!\n');
     } finally {
         (server as any).closeAllConnections?.();

@@ -28,5 +28,9 @@
   "include": [
     "electron",
     "server"
+  ],
+  "exclude": [
+    "electron/native/build",
+    "dist-electron"
   ]
 }

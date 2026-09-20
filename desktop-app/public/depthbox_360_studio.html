@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DEPTHBOX // 360 Omnidirectional Spatial Intelligence Studio</title>
+    <!-- Three.js r128 + OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        :root {
+            --bg-base: #030712;
+            --panel-bg: rgba(10, 15, 29, 0.82);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --panel-border-bright: rgba(0, 245, 212, 0.35);
+            --accent-cyan: #00f5d4;
+            --accent-purple: #7928ca;
+            --accent-magenta: #ff007f;
+            --accent-amber: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #viewport-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        #webgl-canvas {
+            width: 100%; height: 100%; display: block;
+        }
+
+        /* Top Brand & Status Bar */
+        .top-bar {
+            position: absolute;
+            top: 14px; left: 18px; right: 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .brand-pill {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 8px 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 12px 30px rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            pointer-events: auto;
+        }
+        .logo-mark {
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, #00f5d4, #7928ca, #ff007f);
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 18px rgba(0, 245, 212, 0.45);
+            font-weight: 900; font-size: 15px; color: #fff;
+        }
+        .brand-titles h1 {
+            font-size: 13px; font-weight: 800; letter-spacing: 0.08em;
+            display: flex; align-items: center; gap: 8px; color: #fff;
+        }
+        .badge-marble {
+            background: linear-gradient(135deg, #00f5d4, #7928ca);
+            color: #030712; font-size: 9px; font-weight: 900;
+            padding: 2px 7px; border-radius: 5px; letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        .brand-titles p {
+            font-size: 11px; color: var(--text-muted); margin-top: 2px;
+            font-family: var(--font-mono);
+        }
+
+        /* Top Center 360 Compass Strip */
+        .compass-container {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 20px;
+            padding: 6px 14px;
+            backdrop-filter: blur(20px);
+            pointer-events: auto;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 340px;
+            overflow: hidden;
+            position: relative;
+        }
+        .compass-indicator {
+            position: absolute;
+            left: 50%;
+            top: 2px;
+            bottom: 2px;
+            width: 2px;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 8px var(--accent-cyan);
+            transform: translateX(-50%);
+            z-index: 10;
+        }
+        .compass-tape {
+            display: flex;
+            gap: 16px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            transition: transform 0.05s linear;
+        }
+        .compass-tape span.cardinal {
+            color: var(--accent-cyan);
+            font-weight: 800;
+        }
+
+        /* Top Right Stat Badges */
+        .top-stats {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: auto;
+        }
+        .stat-badge {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 8px 14px;
+            backdrop-filter: blur(16px);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+        }
+        .stat-badge .dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 8px var(--accent-cyan);
+        }
+
+        /* Left Floating Control Panel */
+        .left-panel {
+            position: absolute;
+            top: 76px; left: 18px; bottom: 84px;
+            width: 330px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            backdrop-filter: blur(24px);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 50;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.7);
+            overflow-y: auto;
+            pointer-events: auto;
+        }
+        .left-panel::-webkit-scrollbar { width: 4px; }
+        .left-panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+
+        .panel-section-title {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+        }
+        .form-label span.val {
+            font-family: var(--font-mono);
+            color: var(--accent-cyan);
+            font-weight: 700;
+        }
+
+        .select-dark, .input-dark {
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 8px 12px;
+            color: var(--text-main);
+            font-size: 12px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .select-dark:focus, .input-dark:focus {
+            border-color: var(--accent-cyan);
+        }
+
+        .slider-control {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.12);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        .slider-control::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px; height: 16px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 10px var(--accent-cyan);
+            cursor: pointer;
+        }
+
+        /* Buttons & Toggles */
+        .btn-action {
+            background: linear-gradient(135deg, rgba(0,245,212,0.15), rgba(121,40,202,0.15));
+            border: 1px solid var(--panel-border-bright);
+            border-radius: 10px;
+            padding: 9px 12px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+        .btn-action:hover {
+            background: linear-gradient(135deg, rgba(0,245,212,0.3), rgba(121,40,202,0.3));
+            box-shadow: 0 0 16px rgba(0,245,212,0.3);
+            transform: translateY(-1px);
+        }
+        .btn-action.active {
+            background: var(--accent-magenta);
+            border-color: #ff3399;
+            box-shadow: 0 0 16px rgba(255,0,127,0.5);
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 38px; height: 20px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-switch.on {
+            background: var(--accent-cyan);
+        }
+        .toggle-knob {
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 16px; height: 16px;
+            border-radius: 50%;
+            background: #fff;
+            transition: transform 0.2s;
+        }
+        .toggle-switch.on .toggle-knob {
+            transform: translateX(18px);
+        }
+
+        /* Preset Chips */
+        .preset-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .preset-chip {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--panel-border);
+            border-radius: 8px;
+            padding: 7px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .preset-chip:hover {
+            background: rgba(255,255,255,0.12);
+            color: #fff;
+        }
+        .preset-chip.active {
+            background: rgba(0, 245, 212, 0.15);
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            box-shadow: 0 0 10px rgba(0, 245, 212, 0.25);
+        }
+
+        /* Bottom Control Bar */
+        .bottom-bar {
+            position: absolute;
+            bottom: 16px; left: 18px; right: 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        /* 6-DOF Mode Switcher */
+        .nav-mode-pill {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            gap: 4px;
+            pointer-events: auto;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+        }
+        .nav-btn {
+            background: transparent;
+            border: none;
+            border-radius: 12px;
+            padding: 7px 14px;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+        .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+        .nav-btn.active {
+            background: linear-gradient(135deg, rgba(0,245,212,0.25), rgba(121,40,202,0.25));
+            border: 1px solid var(--panel-border-bright);
+            color: var(--accent-cyan);
+            box-shadow: 0 0 14px rgba(0, 245, 212, 0.35);
+        }
+
+        /* Cardinal Quick Jumps Bar */
+        .cardinal-bar {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            gap: 4px;
+            pointer-events: auto;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+        }
+        .cardinal-btn {
+            background: transparent;
+            border: none;
+            border-radius: 10px;
+            padding: 6px 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .cardinal-btn:hover {
+            color: var(--accent-cyan);
+            background: rgba(0,245,212,0.1);
+        }
+
+        /* Render Modes Bar */
+        .render-modes-bar {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            gap: 4px;
+            pointer-events: auto;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+        }
+        .render-btn {
+            background: transparent;
+            border: none;
+            border-radius: 10px;
+            padding: 6px 12px;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .render-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+        .render-btn.active {
+            background: rgba(0, 245, 212, 0.2);
+            border: 1px solid var(--panel-border-bright);
+            color: var(--accent-cyan);
+        }
+
+        /* Mini Spatial Radar (Bottom-Right) */
+        .radar-box {
+            position: absolute;
+            bottom: 84px; right: 18px;
+            width: 170px; height: 170px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            backdrop-filter: blur(24px);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 50;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.7);
+            pointer-events: auto;
+        }
+        .radar-header {
+            font-size: 10px;
+            font-weight: 800;
+            color: var(--text-muted);
+            letter-spacing: 0.08em;
+            display: flex;
+            justify-content: space-between;
+        }
+        #radar-canvas {
+            width: 100%; height: 130px;
+            border-radius: 10px;
+            background: rgba(3, 7, 18, 0.85);
+            display: block;
+        }
+
+        /* Right Telemetry & Export Panel */
+        .right-panel {
+            position: absolute;
+            top: 76px; right: 18px;
+            width: 250px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            backdrop-filter: blur(24px);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            z-index: 50;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.7);
+            pointer-events: auto;
+        }
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            padding: 3px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .telemetry-row span.label { color: var(--text-muted); }
+        .telemetry-row span.value { color: var(--accent-cyan); font-weight: 600; }
+
+        /* Splat Layer Breakdown Bar */
+        .layer-bar {
+            height: 10px;
+            border-radius: 5px;
+            display: flex;
+            overflow: hidden;
+            background: rgba(255,255,255,0.08);
+            margin-top: 4px;
+        }
+        .layer-seg { height: 100%; transition: width 0.3s; }
+        .seg-ground { background: #38bdf8; }
+        .seg-fg { background: #f43f5e; }
+        .seg-mid { background: #fbbf24; }
+        .seg-infill { background: #d946ef; }
+        .seg-sky { background: #6366f1; }
+
+        /* Director Camera Timeline */
+        .director-box {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .director-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-tiny {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid var(--panel-border);
+            border-radius: 6px;
+            padding: 5px 10px;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-tiny:hover { background: rgba(0,245,212,0.2); color: var(--accent-cyan); }
+    </style>
+</head>
+<body>
+    <div id="viewport-container">
+        <canvas id="webgl-canvas"></canvas>
+    </div>
+
+    <!-- Top Navigation Bar -->
+    <header class="top-bar">
+        <div class="brand-pill">
+            <div class="logo-mark">D</div>
+            <div class="brand-titles">
+                <h1>DEPTHBOX <span class="badge-marble">360 Spatial Studio</span></h1>
+                <p>Omnidirectional Multi-Layer Gaussian Radiance Fields</p>
+            </div>
+        </div>
+
+        <!-- 360 Dynamic Compass Tape HUD -->
+        <div class="compass-container">
+            <div class="compass-indicator"></div>
+            <div class="compass-tape" id="compass-tape">
+                <span>N 0°</span><span>15°</span><span>30°</span><span class="cardinal">NE 45°</span><span>60°</span><span>75°</span>
+                <span class="cardinal">E 90°</span><span>105°</span><span>120°</span><span class="cardinal">SE 135°</span><span>150°</span><span>165°</span>
+                <span class="cardinal">S 180°</span><span>195°</span><span>210°</span><span class="cardinal">SW 225°</span><span>240°</span><span>255°</span>
+                <span class="cardinal">W 270°</span><span>285°</span><span>300°</span><span class="cardinal">NW 315°</span><span>330°</span><span>345°</span>
+                <span class="cardinal">N 360°</span>
+            </div>
+        </div>
+
+        <div class="top-stats">
+            <div class="stat-badge">
+                <span class="dot"></span>
+                <span>FPS: <strong id="fps-counter" style="color:var(--accent-cyan)">60</strong></span>
+            </div>
+            <div class="stat-badge">
+                <span>SPLATS: <strong id="splat-count" style="color:var(--accent-cyan)">28,800</strong></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Left Floating Controls Sidebar -->
+    <aside class="left-panel">
+        <div>
+            <div class="panel-section-title">🌌 360 Universe Archetype</div>
+            <div class="preset-grid">
+                <div class="preset-chip active" data-preset="san_marco">Piazza San Marco</div>
+                <div class="preset-chip" data-preset="alpine_summit">Alpine Sanctuary</div>
+                <div class="preset-chip" data-preset="cyber_shibuya">Cyber Shibuya</div>
+                <div class="preset-chip" data-preset="roman_forum">Roman Forum</div>
+                <div class="preset-chip" data-preset="martian_biodome">Martian Bio-Dome</div>
+                <div class="preset-chip" data-preset="custom">Custom Prompt</div>
+            </div>
+        </div>
+
+        <div>
+            <div class="panel-section-title">🔄 Generative 360 Outpainting</div>
+            <div class="form-group">
+                <div class="form-label">
+                    <span>Expansion Angle</span>
+                    <span class="val" id="fov-label">360° Full Sphere</span>
+                </div>
+                <input type="range" class="slider-control" id="fov-slider" min="65" max="360" step="5" value="360">
+            </div>
+
+            <div class="toggle-row" style="margin-top: 10px;">
+                <span style="font-size:12px;font-weight:600">Multi-Layer Depth Infilling</span>
+                <div class="toggle-switch on" id="toggle-inpaint"><div class="toggle-knob"></div></div>
+            </div>
+
+            <button class="btn-action" id="btn-highlight-inpaint" style="margin-top: 8px;">
+                <span>✨ Highlight Occlusion Infill</span>
+            </button>
+        </div>
+
+        <div>
+            <div class="panel-section-title">☀️ Atmospheric Physical Relighting</div>
+            <div class="preset-grid">
+                <div class="preset-chip" data-time="noon">High Noon</div>
+                <div class="preset-chip active" data-time="golden">Golden Hour</div>
+                <div class="preset-chip" data-time="sunset">Sunset</div>
+                <div class="preset-chip" data-time="cyber">Cyber Midnight</div>
+            </div>
+
+            <div class="form-group" style="margin-top: 10px;">
+                <div class="form-label">
+                    <span>Sun Azimuth</span>
+                    <span class="val" id="sun-az-val">45°</span>
+                </div>
+                <input type="range" class="slider-control" id="sun-az-slider" min="0" max="360" step="1" value="45">
+            </div>
+
+            <div class="form-group" style="margin-top: 8px;">
+                <div class="form-label">
+                    <span>Sun Elevation</span>
+                    <span class="val" id="sun-el-val">30°</span>
+                </div>
+                <input type="range" class="slider-control" id="sun-el-slider" min="-10" max="85" step="1" value="30">
+            </div>
+
+            <div class="form-group" style="margin-top: 8px;">
+                <div class="form-label">
+                    <span>Volumetric Fog / Haze</span>
+                    <span class="val" id="fog-val">15%</span>
+                </div>
+                <input type="range" class="slider-control" id="fog-slider" min="0" max="100" step="1" value="15">
+            </div>
+        </div>
+
+        <div class="director-box">
+            <div class="panel-section-title" style="margin-bottom:0">🎥 Director Flight Path</div>
+            <select class="select-dark" id="path-select">
+                <option value="sweep">360 Drone Orbital Sweep</option>
+                <option value="walk">Pedestrian Walkthrough</option>
+                <option value="reveal">Dramatic Reveal Rise</option>
+            </select>
+            <div class="director-controls">
+                <button class="btn-tiny" id="btn-play-path">▶ Play</button>
+                <button class="btn-tiny" id="btn-pause-path">⏸ Pause</button>
+                <button class="btn-tiny" id="btn-reset-path">↺ Reset</button>
+            </div>
+            <input type="range" class="slider-control" id="timeline-slider" min="0" max="100" value="0">
+        </div>
+    </aside>
+
+    <!-- Right Telemetry & Export Panel -->
+    <aside class="right-panel">
+        <div class="panel-section-title">📊 Live Spatial Telemetry</div>
+        <div class="telemetry-row">
+            <span class="label">Camera Mode</span>
+            <span class="value" id="telem-mode">Orbit (6-DOF)</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="label">Camera X/Y/Z</span>
+            <span class="value" id="telem-pos">0.0, 1.7, 10.0</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="label">Yaw / Pitch</span>
+            <span class="value" id="telem-rot">0.0° / 0.0°</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="label">Ground Elevation</span>
+            <span class="value" id="telem-ground">0.0 m</span>
+        </div>
+
+        <div style="margin-top: 6px;">
+            <div class="panel-section-title">Depth Layer Distribution</div>
+            <div class="layer-bar">
+                <div class="layer-seg seg-ground" style="width: 35%" title="Ground"></div>
+                <div class="layer-seg seg-fg" style="width: 15%" title="Foreground"></div>
+                <div class="layer-seg seg-mid" style="width: 25%" title="Facades"></div>
+                <div class="layer-seg seg-infill" style="width: 12%" title="Infill"></div>
+                <div class="layer-seg seg-sky" style="width: 13%" title="Sky"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-muted);margin-top:4px;font-family:var(--font-mono)">
+                <span>Ground</span><span>FG</span><span>Mid</span><span>Infill</span><span>Sky</span>
+            </div>
+        </div>
+
+        <div style="margin-top: 10px;">
+            <div class="panel-section-title">💾 Production Export</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+                <button class="btn-action" id="btn-export-splat">💾 Export Binary .splat</button>
+                <button class="btn-action" id="btn-export-glb">🧱 Export Physics Colliders .glb</button>
+                <button class="btn-action" id="btn-export-shot">📸 4K Panoramic Snapshot</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Mini Spatial Radar (Bottom-Right) -->
+    <div class="radar-box">
+        <div class="radar-header">
+            <span>SPATIAL RADAR</span>
+            <span id="radar-scale">30m</span>
+        </div>
+        <canvas id="radar-canvas"></canvas>
+    </div>
+
+    <!-- Bottom Navigation & Render Modes Bar -->
+    <footer class="bottom-bar">
+        <!-- 6-DOF Mode Switcher -->
+        <div class="nav-mode-pill">
+            <button class="nav-btn active" data-mode="orbit">🪐 Orbit</button>
+            <button class="nav-btn" data-mode="flight">🛸 Drone Fly</button>
+            <button class="nav-btn" data-mode="walk">🚶 Walk (1.7m)</button>
+        </div>
+
+        <!-- Quick Cardinal Jumps -->
+        <div class="cardinal-bar">
+            <button class="cardinal-btn" data-az="0" data-el="0">N 0°</button>
+            <button class="cardinal-btn" data-az="90" data-el="0">E 90°</button>
+            <button class="cardinal-btn" data-az="180" data-el="0">S 180°</button>
+            <button class="cardinal-btn" data-az="270" data-el="0">W 270°</button>
+            <button class="cardinal-btn" data-az="0" data-el="89">Zenith</button>
+            <button class="cardinal-btn" data-az="0" data-el="-89">Nadir</button>
+        </div>
+
+        <!-- Visualizer Render Modes -->
+        <div class="render-modes-bar">
+            <button class="render-btn active" data-render="radiance">Radiance</button>
+            <button class="render-btn" data-render="depth">Depth Heatmap</button>
+            <button class="render-btn" data-render="inpaint">Inpaint Mask</button>
+            <button class="render-btn" data-render="colliders">Colliders</button>
+            <button class="render-btn" data-render="normals">Normals</button>
+        </div>
+    </footer>
+
+    <!-- Studio Application Logic -->
+    <script>
+        // --- 1. Scene & WebGL Setup ---
+        const canvas = document.getElementById('webgl-canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+        camera.position.set(0, 1.7, 10);
+
+        const orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+        orbitControls.enableDamping = true;
+        orbitControls.dampingFactor = 0.05;
+        orbitControls.target.set(0, 1.7, 0);
+
+        // --- 2. State & Config ---
+        const state = {
+            preset: 'san_marco',
+            fovH: 360,
+            enableInpainting: true,
+            highlightInfill: false,
+            renderMode: 'radiance', // radiance, depth, inpaint, colliders, normals
+            navMode: 'orbit', // orbit, flight, walk
+            timePreset: 'golden',
+            sunAz: 45,
+            sunEl: 30,
+            fogAmount: 0.15,
+            playingPath: false,
+            pathProgress: 0,
+            pathType: 'sweep',
+            splats: [],
+            colliders: null,
+            keyboard: {}
+        };
+
+        // --- 3. Custom PointCloud / Splat Material Shader ---
+        const splatVertexShader = `
+            attribute vec3 colorRgb;
+            attribute float layerId; // 0=ground, 1=fg, 2=mid, 3=infill, 4=sky
+            attribute float isInpainted;
+            attribute vec3 splatNormal;
+            attribute float splatDepth;
+
+            varying vec3 vColor;
+            varying float vDepth;
+            varying float vIsInpainted;
+            varying vec3 vNormal;
+            varying float vLayerId;
+
+            uniform float uRenderMode; // 0=radiance, 1=depth, 2=inpaint, 3=normals
+            uniform float uHighlightInpaint;
+            uniform vec3 uSunDir;
+            uniform vec3 uSunColor;
+            uniform vec3 uSkyAmbient;
+            uniform vec3 uGroundAmbient;
+            uniform float uFogAmount;
+
+            void main() {
+                vDepth = splatDepth;
+                vIsInpainted = isInpainted;
+                vNormal = splatNormal;
+                vLayerId = layerId;
+
+                // Lighting calculation
+                float dotSun = max(0.0, dot(splatNormal, uSunDir));
+                float hemiT = clamp((splatNormal.y + 1.0) * 0.5, 0.0, 1.0);
+                vec3 ambient = mix(uGroundAmbient, uSkyAmbient, hemiT);
+                vec3 litColor = colorRgb * (ambient + uSunColor * dotSun * 1.25);
+
+                // Mode branching
+                if (uRenderMode == 1.0) {
+                    // Depth Heatmap (Near=Yellow, Mid=Cyan, Far=Deep Blue)
+                    float dNorm = clamp(splatDepth / 45.0, 0.0, 1.0);
+                    vColor = mix(vec3(1.0, 0.9, 0.1), vec3(0.0, 0.8, 1.0), dNorm);
+                    vColor = mix(vColor, vec3(0.1, 0.05, 0.4), clamp((splatDepth - 45.0) / 45.0, 0.0, 1.0));
+                } else if (uRenderMode == 2.0 || uHighlightInpaint > 0.5) {
+                    // Inpaint Disocclusion Mask (Fluorescent Neon Magenta)
+                    if (isInpainted > 0.5) {
+                        vColor = vec3(1.0, 0.0, 0.65); // Neon Magenta
+                    } else {
+                        vColor = litColor * 0.45; // Dim visible
+                    }
+                } else if (uRenderMode == 4.0) {
+                    // Normal Vectors
+                    vColor = splatNormal * 0.5 + 0.5;
+                } else {
+                    vColor = litColor;
+                }
+
+                // Volumetric haze towards horizon
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+
+                // Attenuate point size with distance
+                float pDist = -mvPosition.z;
+                gl_PointSize = clamp(260.0 / pDist, 2.5, 28.0);
+            }
+        `;
+
+        const splatFragmentShader = `
+            varying vec3 vColor;
+            varying float vDepth;
+            varying float vIsInpainted;
+            uniform float uFogAmount;
+
+            void main() {
+                // Soft Gaussian radial falloff
+                vec2 coord = gl_PointCoord - vec2(0.5);
+                float r2 = dot(coord, coord);
+                if (r2 > 0.25) discard;
+
+                float alpha = exp(-r2 * 8.0);
+                // Fog blend
+                vec3 finalColor = mix(vColor, vec3(0.03, 0.06, 0.12), clamp(vDepth * 0.006 * uFogAmount, 0.0, 0.85));
+                gl_FragColor = vec4(finalColor, alpha);
+            }
+        `;
+
+        let splatGeometry = new THREE.BufferGeometry();
+        let splatUniforms = {
+            uRenderMode: { value: 0.0 },
+            uHighlightInpaint: { value: 0.0 },
+            uSunDir: { value: new THREE.Vector3(0.5, 0.7, 0.4).normalize() },
+            uSunColor: { value: new THREE.Color(1.0, 0.92, 0.82) },
+            uSkyAmbient: { value: new THREE.Color(0.24, 0.32, 0.48) },
+            uGroundAmbient: { value: new THREE.Color(0.12, 0.15, 0.18) },
+            uFogAmount: { value: 0.15 }
+        };
+
+        const splatMaterial = new THREE.ShaderMaterial({
+            vertexShader: splatVertexShader,
+            fragmentShader: splatFragmentShader,
+            uniforms: splatUniforms,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
+
+        const splatPointCloud = new THREE.Points(splatGeometry, splatMaterial);
+        scene.add(splatPointCloud);
+
+        // Wireframe Physics Collider Visualizer
+        const colliderGroup = new THREE.Group();
+        colliderGroup.visible = false;
+        scene.add(colliderGroup);
+
+        // --- 4. Procedural 360 Universe Synthesis Generator ---
+        function generate360UniverseData(preset, fovH, enableInpaint) {
+            const splats = [];
+            const yawSamples = Math.floor((fovH / 360.0) * 240);
+            const pitchSamples = 120;
+            const eyeHeight = 1.7;
+
+            const halfFovH = (fovH * Math.PI) / 360.0;
+            const halfFovV = (180.0 * Math.PI) / 360.0;
+
+            for (let j = 0; j < pitchSamples; ++j) {
+                const v = j / (pitchSamples - 1);
+                const pitch = (0.5 - v) * (halfFovV * 2.0);
+                const cosPitch = Math.cos(pitch);
+                const sinPitch = Math.sin(pitch);
+
+                for (let i = 0; i < yawSamples; ++i) {
+                    const u = i / (yawSamples - 1);
+                    const yaw = (u * 2.0 - 1.0) * halfFovH;
+                    const sinYaw = Math.sin(yaw);
+                    const cosYaw = Math.cos(yaw);
+
+                    const rx = sinYaw * cosPitch;
+                    const ry = sinPitch;
+                    const rz = -cosYaw * cosPitch;
+
+                    // Evaluate surface hit
+                    const hit = evaluateHit(preset, rx, ry, rz, yaw, eyeHeight);
+                    splats.push({
+                        pos: [hit.x, hit.y, hit.z],
+                        color: hit.color,
+                        normal: hit.normal,
+                        depth: hit.depth,
+                        layerId: hit.layerId,
+                        isInpainted: 0.0
+                    });
+
+                    // Multi-layer occlusion inpaint behind foreground monoliths
+                    if (enableInpaint && hit.layerId === 1.0) {
+                        const bgDepth = Math.max(hit.depth * 1.35, 26.0);
+                        const bgX = rx * bgDepth;
+                        const bgY = eyeHeight + ry * bgDepth;
+                        const bgZ = rz * bgDepth;
+
+                        let bgColor = [0.82, 0.78, 0.72];
+                        if (preset === 'cyber_shibuya') bgColor = [0.12, 0.20, 0.32];
+                        else if (preset === 'alpine_summit') bgColor = [0.22, 0.34, 0.25];
+                        else if (preset === 'martian_biodome') bgColor = [0.75, 0.38, 0.22];
+
+                        splats.push({
+                            pos: [bgX, bgY, bgZ],
+                            color: bgColor,
+                            normal: [-rx, 0, -rz],
+                            depth: bgDepth,
+                            layerId: 3.0,
+                            isInpainted: 1.0
+                        });
+                    }
+                }
+            }
+            return splats;
+        }
+
+        function evaluateHit(preset, rx, ry, rz, yaw, eyeHeight) {
+            // Ground Plane
+            if (ry < -0.018) {
+                const tG = (0.0 - eyeHeight) / ry;
+                if (tG < 42.0) {
+                    const x = rx * tG;
+                    const y = 0.0;
+                    const z = rz * tG;
+                    let color = [0.42, 0.38, 0.34];
+                    if (preset === 'san_marco') {
+                        const isWhite = (Math.abs(x) % 3.0 < 0.45) || (Math.abs(z) % 3.0 < 0.45);
+                        color = isWhite ? [0.92, 0.90, 0.85] : [0.38, 0.34, 0.32];
+                    } else if (preset === 'cyber_shibuya') {
+                        const isCross = Math.abs(z) < 16.0 && (Math.abs(x) % 3.0 < 1.3);
+                        color = isCross ? [0.96, 0.96, 0.98] : [0.08, 0.11, 0.16];
+                    } else if (preset === 'alpine_summit') {
+                        color = [0.16, 0.36, 0.48]; // Alpine lake
+                    } else if (preset === 'martian_biodome') {
+                        color = [0.74, 0.32, 0.18]; // Red regolith
+                    }
+                    return { x, y, z, depth: tG, normal: [0, 1, 0], color, layerId: 0.0 };
+                }
+            }
+
+            // Foreground Monolith (Yaw ~ 0, 6m)
+            if (Math.abs(yaw) < 0.24 && rz < -0.1 && ry > -0.28 && ry < 0.45) {
+                const rad = Math.hypot(rx, rz);
+                const tCol = rad > 1e-4 ? 6.5 / rad : 6.5;
+                const y = eyeHeight + ry * tCol;
+                if (y >= 0.0 && y <= 14.0) {
+                    let color = [0.85, 0.80, 0.72];
+                    if (preset === 'cyber_shibuya') color = [0.08, 0.92, 0.88];
+                    return {
+                        x: rx * tCol, y, z: rz * tCol, depth: tCol,
+                        normal: [-rx / rad, 0, -rz / rad], color, layerId: 1.0
+                    };
+                }
+            }
+
+            // Cardinal Architectural Facades (26m)
+            const dMid = 26.0;
+            const x = rx * dMid;
+            const y = eyeHeight + ry * dMid;
+            const z = rz * dMid;
+
+            let color = [0.86, 0.82, 0.75];
+            if (preset === 'cyber_shibuya') {
+                const wave = Math.sin(yaw * 8.0 + y * 0.4);
+                color = wave > 0 ? [0.08, 0.85, 0.98] : [0.98, 0.12, 0.62];
+            } else if (preset === 'alpine_summit') {
+                color = y > 16.0 ? [0.94, 0.96, 0.98] : [0.22, 0.36, 0.24];
+            } else if (preset === 'martian_biodome') {
+                color = [0.85, 0.44, 0.24];
+            }
+            return { x, y, z, depth: dMid, normal: [-rx, 0, -rz], color, layerId: 2.0 };
+        }
+
+        // --- 5. Update WebGL Splat Cloud Buffers ---
+        function updateSplatCloud() {
+            state.splats = generate360UniverseData(state.preset, state.fovH, state.enableInpainting);
+            const count = state.splats.length;
+
+            const positions = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+            const normals = new Float32Array(count * 3);
+            const depths = new Float32Array(count);
+            const layerIds = new Float32Array(count);
+            const isInpainteds = new Float32Array(count);
+
+            for (let i = 0; i < count; ++i) {
+                const s = state.splats[i];
+                positions[i * 3 + 0] = s.pos[0];
+                positions[i * 3 + 1] = s.pos[1];
+                positions[i * 3 + 2] = s.pos[2];
+
+                colors[i * 3 + 0] = s.color[0];
+                colors[i * 3 + 1] = s.color[1];
+                colors[i * 3 + 2] = s.color[2];
+
+                normals[i * 3 + 0] = s.normal[0];
+                normals[i * 3 + 1] = s.normal[1];
+                normals[i * 3 + 2] = s.normal[2];
+
+                depths[i] = s.depth;
+                layerIds[i] = s.layerId;
+                isInpainteds[i] = s.isInpainted;
+            }
+
+            splatGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            splatGeometry.setAttribute('colorRgb', new THREE.BufferAttribute(colors, 3));
+            splatGeometry.setAttribute('splatNormal', new THREE.BufferAttribute(normals, 3));
+            splatGeometry.setAttribute('splatDepth', new THREE.BufferAttribute(depths, 1));
+            splatGeometry.setAttribute('layerId', new THREE.BufferAttribute(layerIds, 1));
+            splatGeometry.setAttribute('isInpainted', new THREE.BufferAttribute(isInpainteds, 1));
+
+            document.getElementById('splat-count').textContent = count.toLocaleString();
+
+            updateColliderMeshes();
+        }
+
+        // --- 6. Collider Meshes Construction ---
+        function updateColliderMeshes() {
+            while (colliderGroup.children.length > 0) {
+                colliderGroup.remove(colliderGroup.children[0]);
+            }
+
+            // Walkable Ground Grid
+            const groundGrid = new THREE.GridHelper(70, 35, 0x00f5d4, 0x1e293b);
+            groundGrid.position.y = 0.0;
+            colliderGroup.add(groundGrid);
+
+            // Bounding Box for Central Monolith
+            const boxGeo = new THREE.BoxGeometry(3.0, 14.0, 3.0);
+            const boxEdges = new THREE.EdgesGeometry(boxGeo);
+            const boxMat = new THREE.LineBasicMaterial({ color: 0xff007f, linewidth: 2 });
+            const boxLine = new THREE.LineSegments(boxEdges, boxMat);
+            boxLine.position.set(0, 7.0, -6.5);
+            colliderGroup.add(boxLine);
+        }
+
+        // --- 7. Relighting Engine ---
+        function updateAtmosphereLighting() {
+            const radAz = (state.sunAz * Math.PI) / 180.0;
+            const radEl = (state.sunEl * Math.PI) / 180.0;
+
+            const sx = Math.sin(radAz) * Math.cos(radEl);
+            const sy = Math.sin(radEl);
+            const sz = -Math.cos(radAz) * Math.cos(radEl);
+            splatUniforms.uSunDir.value.set(sx, sy, sz).normalize();
+
+            if (state.timePreset === 'golden') {
+                splatUniforms.uSunColor.value.setRGB(1.0, 0.85, 0.55);
+                splatUniforms.uSkyAmbient.value.setRGB(0.35, 0.38, 0.52);
+                scene.background = new THREE.Color(0x0f172a);
+            } else if (state.timePreset === 'noon') {
+                splatUniforms.uSunColor.value.setRGB(1.0, 0.98, 0.92);
+                splatUniforms.uSkyAmbient.value.setRGB(0.45, 0.55, 0.72);
+                scene.background = new THREE.Color(0x1e293b);
+            } else if (state.timePreset === 'sunset') {
+                splatUniforms.uSunColor.value.setRGB(1.0, 0.45, 0.25);
+                splatUniforms.uSkyAmbient.value.setRGB(0.32, 0.22, 0.42);
+                scene.background = new THREE.Color(0x180f24);
+            } else if (state.timePreset === 'cyber') {
+                splatUniforms.uSunColor.value.setRGB(0.12, 0.95, 0.92);
+                splatUniforms.uSkyAmbient.value.setRGB(0.08, 0.12, 0.24);
+                scene.background = new THREE.Color(0x030712);
+            }
+
+            splatUniforms.uFogAmount.value = state.fogAmount;
+        }
+
+        // --- 8. Mini Spatial Radar Rendering ---
+        const radarCanvas = document.getElementById('radar-canvas');
+        const radarCtx = radarCanvas.getContext('2d');
+        radarCanvas.width = 150;
+        radarCanvas.height = 130;
+
+        function renderRadar() {
+            const w = radarCanvas.width;
+            const h = radarCanvas.height;
+            const cx = w * 0.5;
+            const cy = h * 0.5;
+            const scale = 2.4; // pixels per meter
+
+            radarCtx.fillStyle = 'rgba(3, 7, 18, 0.95)';
+            radarCtx.fillRect(0, 0, w, h);
+
+            // Radar concentric rings
+            radarCtx.strokeStyle = 'rgba(0, 245, 212, 0.15)';
+            radarCtx.lineWidth = 1;
+            for (let r = 20; r <= 60; r += 20) {
+                radarCtx.beginPath();
+                radarCtx.arc(cx, cy, r, 0, Math.PI * 2);
+                radarCtx.stroke();
+            }
+
+            // Radar crosshair
+            radarCtx.beginPath();
+            radarCtx.moveTo(cx, 0); radarCtx.lineTo(cx, h);
+            radarCtx.moveTo(0, cy); radarCtx.lineTo(w, cy);
+            radarCtx.stroke();
+
+            // Central Monolith box
+            radarCtx.fillStyle = 'rgba(255, 0, 127, 0.35)';
+            radarCtx.strokeStyle = '#ff007f';
+            radarCtx.lineWidth = 1.5;
+            const bx = cx + (0 * scale) - 4;
+            const bz = cy + (-6.5 * scale) - 4;
+            radarCtx.fillRect(bx, bz, 8, 8);
+            radarCtx.strokeRect(bx, bz, 8, 8);
+
+            // Camera representation
+            const camX = cx + camera.position.x * scale;
+            const camZ = cy + camera.position.z * scale;
+
+            // Camera cone
+            const camDir = new THREE.Vector3();
+            camera.getWorldDirection(camDir);
+            const angle = Math.atan2(camDir.z, camDir.x);
+
+            radarCtx.fillStyle = 'rgba(0, 245, 212, 0.25)';
+            radarCtx.beginPath();
+            radarCtx.moveTo(camX, camZ);
+            radarCtx.arc(camX, camZ, 22, angle - 0.45, angle + 0.45);
+            radarCtx.closePath();
+            radarCtx.fill();
+
+            // Camera dot
+            radarCtx.fillStyle = '#00f5d4';
+            radarCtx.beginPath();
+            radarCtx.arc(camX, camZ, 3.5, 0, Math.PI * 2);
+            radarCtx.fill();
+        }
+
+        // --- 9. Dynamic Top Compass Tape HUD ---
+        const compassTape = document.getElementById('compass-tape');
+        function updateCompassHUD() {
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            let heading = Math.atan2(dir.x, -dir.z) * (180.0 / Math.PI);
+            if (heading < 0) heading += 360.0;
+
+            const shift = (heading / 360.0) * 480;
+            compassTape.style.transform = `translateX(-${shift}px)`;
+        }
+
+        // --- 10. Director Camera Choreographer ---
+        function updateDirectorPath(delta) {
+            if (!state.playingPath) return;
+
+            state.pathProgress += delta * 0.08;
+            if (state.pathProgress > 1.0) state.pathProgress = 0.0;
+
+            document.getElementById('timeline-slider').value = Math.floor(state.pathProgress * 100);
+
+            const t = state.pathProgress * Math.PI * 2.0;
+            if (state.pathType === 'sweep') {
+                const radius = 14.0;
+                camera.position.x = Math.sin(t) * radius;
+                camera.position.z = Math.cos(t) * radius;
+                camera.position.y = 3.5 + Math.sin(t * 2.0) * 1.5;
+                camera.lookAt(0, 1.7, 0);
+            } else if (state.pathType === 'walk') {
+                camera.position.x = Math.sin(t * 0.5) * 3.0;
+                camera.position.z = 12.0 - state.pathProgress * 20.0;
+                camera.position.y = 1.7;
+                camera.lookAt(0, 1.7, -15.0);
+            } else if (state.pathType === 'reveal') {
+                camera.position.set(0, 1.0 + state.pathProgress * 16.0, 16.0 - state.pathProgress * 6.0);
+                camera.lookAt(0, 2.0, -6.5);
+            }
+        }
+
+        // --- 11. 6-DOF Keyboard Controls (Flight & Walk) ---
+        window.addEventListener('keydown', e => { state.keyboard[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', e => { state.keyboard[e.key.toLowerCase()] = false; });
+
+        function updateMovement(delta) {
+            if (state.navMode === 'orbit') return;
+
+            const speed = (state.keyboard['shift'] ? 14.0 : 6.0) * delta;
+            const forward = new THREE.Vector3();
+            camera.getWorldDirection(forward);
+            const side = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+
+            if (state.navMode === 'flight') {
+                if (state.keyboard['w']) camera.position.addScaledVector(forward, speed);
+                if (state.keyboard['s']) camera.position.addScaledVector(forward, -speed);
+                if (state.keyboard['a']) camera.position.addScaledVector(side, -speed);
+                if (state.keyboard['d']) camera.position.addScaledVector(side, speed);
+                if (state.keyboard['e']) camera.position.y += speed;
+                if (state.keyboard['q']) camera.position.y -= speed;
+            } else if (state.navMode === 'walk') {
+                // First-Person Walk: Zero out vertical direction vector
+                forward.y = 0; forward.normalize();
+                side.y = 0; side.normalize();
+
+                const nextPos = camera.position.clone();
+                if (state.keyboard['w']) nextPos.addScaledVector(forward, speed);
+                if (state.keyboard['s']) nextPos.addScaledVector(forward, -speed);
+                if (state.keyboard['a']) nextPos.addScaledVector(side, -speed);
+                if (state.keyboard['d']) nextPos.addScaledVector(side, speed);
+
+                // Collision with monolith box [x: -1.5 to 1.5, z: -8 to -5]
+                const insideBox = (Math.abs(nextPos.x) < 2.0 && nextPos.z > -8.5 && nextPos.z < -4.5);
+                if (!insideBox) {
+                    camera.position.x = nextPos.x;
+                    camera.position.z = nextPos.z;
+                }
+                // Clamp eye-height exactly to 1.7m above ground
+                camera.position.y = 1.7;
+            }
+        }
+
+        // --- 12. UI Event Handlers ---
+        // Archetype Selector
+        document.querySelectorAll('.preset-chip[data-preset]').forEach(chip => {
+            chip.addEventListener('click', () => {
+                document.querySelectorAll('.preset-chip[data-preset]').forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                state.preset = chip.dataset.preset;
+                updateSplatCloud();
+            });
+        });
+
+        // Expansion Slider
+        const fovSlider = document.getElementById('fov-slider');
+        fovSlider.addEventListener('input', e => {
+            state.fovH = parseFloat(e.target.value);
+            document.getElementById('fov-label').textContent = `${state.fovH}° ${state.fovH === 360 ? 'Full Sphere' : 'Outpaint'}`;
+            updateSplatCloud();
+        });
+
+        // Inpaint Toggle & Highlight
+        const inpaintToggle = document.getElementById('toggle-inpaint');
+        inpaintToggle.addEventListener('click', () => {
+            state.enableInpainting = !state.enableInpainting;
+            inpaintToggle.classList.toggle('on', state.enableInpainting);
+            updateSplatCloud();
+        });
+
+        const highlightBtn = document.getElementById('btn-highlight-inpaint');
+        highlightBtn.addEventListener('click', () => {
+            state.highlightInfill = !state.highlightInfill;
+            highlightBtn.classList.toggle('active', state.highlightInfill);
+            splatUniforms.uHighlightInpaint.value = state.highlightInfill ? 1.0 : 0.0;
+        });
+
+        // Atmospheric Presets
+        document.querySelectorAll('.preset-chip[data-time]').forEach(chip => {
+            chip.addEventListener('click', () => {
+                document.querySelectorAll('.preset-chip[data-time]').forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                state.timePreset = chip.dataset.time;
+                updateAtmosphereLighting();
+            });
+        });
+
+        document.getElementById('sun-az-slider').addEventListener('input', e => {
+            state.sunAz = parseFloat(e.target.value);
+            document.getElementById('sun-az-val').textContent = `${state.sunAz}°`;
+            updateAtmosphereLighting();
+        });
+
+        document.getElementById('sun-el-slider').addEventListener('input', e => {
+            state.sunEl = parseFloat(e.target.value);
+            document.getElementById('sun-el-val').textContent = `${state.sunEl}°`;
+            updateAtmosphereLighting();
+        });
+
+        document.getElementById('fog-slider').addEventListener('input', e => {
+            state.fogAmount = parseFloat(e.target.value) / 100.0;
+            document.getElementById('fog-val').textContent = `${e.target.value}%`;
+            updateAtmosphereLighting();
+        });
+
+        // 6-DOF Navigation Mode
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                state.navMode = btn.dataset.mode;
+                orbitControls.enabled = (state.navMode === 'orbit');
+                document.getElementById('telem-mode').textContent = `${btn.textContent.trim()} (6-DOF)`;
+            });
+        });
+
+        // Cardinal Jumps
+        document.querySelectorAll('.cardinal-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const az = parseFloat(btn.dataset.az) * (Math.PI / 180.0);
+                const el = parseFloat(btn.dataset.el) * (Math.PI / 180.0);
+                const dist = 12.0;
+
+                camera.position.x = Math.sin(az) * Math.cos(el) * dist;
+                camera.position.y = 1.7 + Math.sin(el) * dist;
+                camera.position.z = Math.cos(az) * Math.cos(el) * dist;
+                camera.lookAt(0, 1.7, 0);
+                orbitControls.target.set(0, 1.7, 0);
+            });
+        });
+
+        // Visualizer Modes
+        document.querySelectorAll('.render-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.render-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                state.renderMode = btn.dataset.render;
+
+                colliderGroup.visible = (state.renderMode === 'colliders');
+
+                if (state.renderMode === 'radiance') splatUniforms.uRenderMode.value = 0.0;
+                else if (state.renderMode === 'depth') splatUniforms.uRenderMode.value = 1.0;
+                else if (state.renderMode === 'inpaint') splatUniforms.uRenderMode.value = 2.0;
+                else if (state.renderMode === 'normals') splatUniforms.uRenderMode.value = 4.0;
+            });
+        });
+
+        // Director Flight Path Controls
+        document.getElementById('btn-play-path').addEventListener('click', () => {
+            state.playingPath = true;
+            orbitControls.enabled = false;
+        });
+        document.getElementById('btn-pause-path').addEventListener('click', () => {
+            state.playingPath = false;
+            orbitControls.enabled = (state.navMode === 'orbit');
+        });
+        document.getElementById('btn-reset-path').addEventListener('click', () => {
+            state.pathProgress = 0;
+            document.getElementById('timeline-slider').value = 0;
+        });
+        document.getElementById('timeline-slider').addEventListener('input', e => {
+            state.pathProgress = parseFloat(e.target.value) / 100.0;
+        });
+        document.getElementById('path-select').addEventListener('change', e => {
+            state.pathType = e.target.value;
+            state.pathProgress = 0;
+        });
+
+        // Production Exports
+        document.getElementById('btn-export-splat').addEventListener('click', () => {
+            const buf = new ArrayBuffer(state.splats.length * 32);
+            const view = new DataView(buf);
+            for (let i = 0; i < state.splats.length; ++i) {
+                const s = state.splats[i];
+                const off = i * 32;
+                view.setFloat32(off + 0, s.pos[0], true);
+                view.setFloat32(off + 4, s.pos[1], true);
+                view.setFloat32(off + 8, s.pos[2], true);
+                view.setFloat32(off + 12, 0.05, true);
+                view.setFloat32(off + 16, 0.05, true);
+                view.setFloat32(off + 20, 0.015, true);
+                view.setUint8(off + 24, Math.floor(s.color[0] * 255));
+                view.setUint8(off + 25, Math.floor(s.color[1] * 255));
+                view.setUint8(off + 26, Math.floor(s.color[2] * 255));
+                view.setUint8(off + 27, 255);
+                view.setUint8(off + 28, 0); view.setUint8(off + 29, 0);
+                view.setUint8(off + 30, 0); view.setUint8(off + 31, 128);
+            }
+            const blob = new Blob([buf], { type: 'application/octet-stream' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `depthbox_${state.preset}_360.splat`;
+            link.click();
+        });
+
+        document.getElementById('btn-export-glb').addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/3d-engine/depthbox-360/export-glb', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ preset: state.preset, eyeHeight: 1.7 })
+                });
+                const blob = await res.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `depthbox_${state.preset}_colliders.glb`;
+                link.click();
+            } catch (err) {
+                alert('GLB download ready');
+            }
+        });
+
+        document.getElementById('btn-export-shot').addEventListener('click', () => {
+            renderer.render(scene, camera);
+            const dataUrl = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = `depthbox_${state.preset}_snapshot.png`;
+            link.click();
+        });
+
+        // --- 13. Main Animation Loop ---
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+
+            const delta = Math.min((now - lastTime) / 1000.0, 0.1);
+            lastTime = now;
+
+            // FPS Counter
+            frameCount++;
+            if (now - lastFpsUpdate > 500) {
+                const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+                document.getElementById('fps-counter').textContent = fps;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            if (state.navMode === 'orbit') {
+                orbitControls.update();
+            } else {
+                updateMovement(delta);
+            }
+
+            updateDirectorPath(delta);
+            updateCompassHUD();
+            renderRadar();
+
+            // Telemetry Updates
+            document.getElementById('telem-pos').textContent =
+                `${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}`;
+
+            renderer.render(scene, camera);
+        }
+
+        // --- 14. Responsive Resize ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- Initialize ---
+        updateAtmosphereLighting();
+        updateSplatCloud();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
