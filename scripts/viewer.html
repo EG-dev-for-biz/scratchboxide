@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scratchbox 3D Engine - Google API Geospatial 3D Building Proof & 50 2K PBR Library</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #0b0f19;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        #webgl-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .hud-panel {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 12px;
+            padding: 20px 24px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 36px rgba(0,0,0,0.6), 0 0 24px rgba(56, 189, 248, 0.15);
+            max-width: 490px;
+            z-index: 100;
+        }
+        .hud-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 10px;
+        }
+        .hud-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .badge {
+            background: #0284c7;
+            color: #ffffff;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+        .badge-verified {
+            background: #059669;
+        }
+        .model-toggle-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            background: rgba(0,0,0,0.3);
+            padding: 4px;
+            border-radius: 8px;
+        }
+        .model-toggle-btn {
+            flex: 1;
+            padding: 7px 10px;
+            font-size: 11.5px;
+            font-weight: 600;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .model-toggle-btn.active {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+            box-shadow: 0 2px 8px rgba(2, 132, 199, 0.4);
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin: 4.5px 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .metric-label {
+            color: #94a3b8;
+        }
+        .metric-val {
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+        .accent {
+            color: #38bdf8;
+        }
+        .highlight {
+            color: #f59e0b;
+        }
+        .success {
+            color: #10b981;
+        }
+        .comparison-panel {
+            position: absolute;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(15, 23, 42, 0.90);
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 12px;
+            padding: 14px 18px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 36px rgba(0,0,0,0.6);
+            z-index: 100;
+            max-width: 320px;
+        }
+        .comparison-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #f59e0b;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .comparison-img {
+            width: 100%;
+            height: 180px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .comparison-caption {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 6px;
+            font-family: ui-monospace, monospace;
+        }
+        .camera-modes {
+            position: absolute;
+            top: 24px;
+            right: 24px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+        .cam-btn {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #e2e8f0;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s;
+        }
+        .cam-btn.gallery-trigger {
+            background: #4f46e5;
+            border-color: #818cf8;
+        }
+        .cam-btn.gallery-trigger:hover {
+            background: #4338ca;
+        }
+
+        /* 50 PBR Gallery Modal */
+        #pbr-gallery-modal {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(5, 8, 16, 0.88);
+            backdrop-filter: blur(12px);
+            z-index: 200;
+            overflow-y: auto;
+            padding: 40px;
+        }
+        .modal-content {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 16px;
+            padding: 28px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #1e293b;
+            padding-bottom: 16px;
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .close-btn {
+            background: #1e293b;
+            border: 1px solid #475569;
+            color: #f1f5f9;
+            font-size: 18px;
+            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .atlas-preview {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            margin-bottom: 20px;
+        }
+        .atlas-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .atlas-tab-btn {
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #94a3b8;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .atlas-tab-btn.active {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+        }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js",
+            "three/addons/": "/node_modules/three/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="webgl-container"></div>
+
+    <div class="hud-panel">
+        <div class="hud-header">
+            <div class="hud-title">
+                <span>🏙️ Google 3D Tile Improver</span>
+            </div>
+            <span class="badge badge-verified">VERIFIED PROOF</span>
+        </div>
+
+        <div class="model-toggle-row">
+            <button id="toggle-spce_rectified_hybrid" class="model-toggle-btn active" onclick="switchModel('spce_rectified_hybrid')">🏛️ Rectified PBR Hybrid (Planar + Glass)</button>
+            <button id="toggle-spce_isolated_pbr" class="model-toggle-btn" onclick="switchModel('spce_isolated_pbr')">✨ Isolated ESB (Clean PBR)</button>
+            <button id="toggle-spce_isolated_raw" class="model-toggle-btn" onclick="switchModel('spce_isolated_raw')">🛰️ Isolated ESB (Raw Tile)</button>
+            <button id="toggle-spce_raw" class="model-toggle-btn" onclick="switchModel('spce_raw')">🌐 Full Context Raw Tile</button>
+            <button id="toggle-spce_cleaned_pbr" class="model-toggle-btn" onclick="switchModel('spce_cleaned_pbr')">✨ Full Context Cleaned PBR</button>
+            <button id="toggle-esb_authentic" class="model-toggle-btn" onclick="switchModel('esb_authentic')">🏛️ Authentic PBR ESB</button>
+            <button id="toggle-universal_inducer" class="model-toggle-btn" onclick="switchModel('universal_inducer')">⚡ Universal Inducer</button>
+            <button id="toggle-informed_pbr" class="model-toggle-btn" onclick="switchModel('informed_pbr')">✨ Texture-Informed PBR</button>
+            <button id="toggle-scan_raw" class="model-toggle-btn" onclick="switchModel('scan_raw')">📦 Raw Scan Tile</button>
+            <button id="toggle-cleaned" class="model-toggle-btn" onclick="switchModel('cleaned')">🧹 Cleaned (Planar+90°)</button>
+        </div>
+        <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+            <button id="toggle-wireframe" class="model-toggle-btn" style="background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.5); color: #c7d2fe;" onclick="toggleWireframe()">🕸️ Wireframe Mesh: OFF</button>
+            <button id="toggle-night" class="model-toggle-btn" style="background: rgba(245, 158, 11, 0.2); border: 1px solid rgba(245, 158, 11, 0.5); color: #fde68a;" onclick="toggleNight()">🌙 Night Glow: OFF</button>
+        </div>
+
+        <div class="metric-row">
+            <span class="metric-label">Target Landmark:</span>
+            <span class="metric-val">Empire State Building, NYC</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Real-World GPS Anchor:</span>
+            <span class="metric-val accent">40.74844° N, 73.98566° W</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Google Multi-Source Ingestion:</span>
+            <span class="metric-val success">Tiles + Street View + Solar + Aerial</span>
+        </div>
+        <div id="metrics-container">
+            <!-- Dynamically populated based on active model -->
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">PBR Textures Library:</span>
+            <span class="metric-val highlight">50 Native 2K Multi-Channel Archetypes</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Native C++20 SIMD Speed:</span>
+            <span class="metric-val success">15.14s (302.8ms / 2K Set)</span>
+        </div>
+    </div>
+
+    <div class="camera-modes">
+        <button id="btn-building" class="cam-btn active" onclick="setCameraView('building')">🏢 Building 3/4</button>
+        <button id="btn-portal" class="cam-btn" style="border-color:#38bdf8;" onclick="setCameraView('portal_5th_ave')">🚪 5th Ave Portal</button>
+        <button id="btn-lobby" class="cam-btn" style="border-color:#f59e0b;" onclick="setCameraView('lobby_5th_ave')">🏛️ Grand 5th Ave Lobby</button>
+        <button id="btn-piers" class="cam-btn" style="border-color:#38bdf8;" onclick="setCameraView('tower_piers')">🏢 Tower Pier Rhythm</button>
+        <button id="btn-marquee" class="cam-btn" onclick="setCameraView('marquee_34th')">🏬 34th St Marquee</button>
+        <button id="btn-aerial" class="cam-btn" onclick="setCameraView('aerial')">🚁 Aerial Overhead</button>
+        <button id="btn-corner" class="cam-btn" onclick="setCameraView('corner')">📐 90° Corner</button>
+        <button id="btn-roof" class="cam-btn" onclick="setCameraView('roof')">❄️ Rooftop Greeble</button>
+        <button id="btn-road" class="cam-btn" onclick="setCameraView('road')">🛣️ Conformed Road</button>
+        <button id="btn-panoramic" class="cam-btn" onclick="setCameraView('panoramic')">Panoramic</button>
+        <button class="cam-btn" style="background: #0284c7; border-color: #38bdf8;" onclick="toggleColorSchema(true)">🎨 Tile Color Schema</button>
+        <button class="cam-btn gallery-trigger" onclick="toggleGallery(true)">🎨 50 2K PBR Library</button>
+    </div>
+
+    <div class="comparison-panel">
+        <div class="comparison-title">
+            <span>📷 Google Street View Ground Truth</span>
+        </div>
+        <img class="comparison-img" src="/test_esb_facade.jpg" alt="Google Street View 5th Ave Facade">
+        <div class="comparison-caption">Live 5th Ave & 34th St Street View static panorama used to calibrate Indiana Limestone & bronze mullion PBR factors.</div>
+    </div>
+
+    <!-- 50 2K PBR Material Catalog Modal -->
+    <div id="pbr-gallery-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span>🎨 50 2K PBR Material Library (Procedural Multi-Channel Synthesis)</span>
+                </div>
+                <button class="close-btn" onclick="toggleGallery(false)">✕</button>
+            </div>
+            <div class="atlas-tabs">
+                <button id="tab-albedo" class="atlas-tab-btn active" onclick="switchAtlasMap('albedo')">Albedo (Base Color)</button>
+                <button id="tab-normal" class="atlas-tab-btn" onclick="switchAtlasMap('normal')">Normal (Tangent Space)</button>
+                <button id="tab-orm" class="atlas-tab-btn" onclick="switchAtlasMap('orm')">ORM (AO / Roughness / Metallic)</button>
+            </div>
+            <img id="atlas-img" class="atlas-preview" src="/public/textures/pbr50/pbr50_atlas_albedo.png" alt="50 2K PBR Material Atlas">
+            <div style="font-size: 13px; color: #94a3b8; line-height: 1.6;">
+                <strong>Library Structure:</strong> 50 Distinct Material Archetypes synthesized natively in C++20 via multi-threaded SIMD noise & trigonometric procedural math:
+                <ul style="margin-left: 20px; margin-top: 6px;">
+                    <li><strong>Stones (1-10):</strong> Indiana Limestone, Portland Stone, Travertine, Sandstone, Carrara Marble, Nero Marquina, Charcoal Granite, Grey Granite, Volcanic Basalt, Welsh Slate.</li>
+                    <li><strong>Concrete & Paving (11-20):</strong> Weathered Concrete, Scored Sidewalk Grid, Exposed Aggregate, Asphalt, Cobblestone, Brick, Stucco, Terrazzo, Statuary Bronze, Polished Brass.</li>
+                    <li><strong>Metals (21-30):</strong> Titanium, Turned Aluminum, Galvanized Zinc, Cor-Ten Rust, Wrought Iron, Chrome, Copper Verdigris, Champagne Gold, Stainless Steel 316, Pewter.</li>
+                    <li><strong>Glazing & Roofing (31-40):</strong> Low-E Glass, Clear Glass, Fluted Reeded Glass, Frosted Glass, Wire Safety Glass, Tinted Bronze Glass, Tar & Gravel, Standing Seam Copper, Corrugated Zinc, Spanish Clay Tile.</li>
+                    <li><strong>Finishes & Wood (41-50):</strong> Dark Zinc, EPDM Membrane, Weathered Oak, End-Grain Rings, Walnut, Teak Deck, Art Deco Chevron Spandrel, Chipped Enamel Rust, Efflorescence Masonry, Mossy Stone.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Google Map Tile Color Schema Modal -->
+    <div id="color-schema-modal" style="display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(5, 8, 16, 0.92); backdrop-filter: blur(14px); z-index: 200; overflow-y: auto; padding: 40px;">
+        <div class="modal-content" style="max-width: 1200px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span>🎨 Google Map 3D Tile Architectural Color Schema & Biophysical Calibration</span>
+                </div>
+                <button class="close-btn" onclick="toggleColorSchema(false)">✕</button>
+            </div>
+            
+            <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid #334155; border-radius: 12px; padding: 18px 22px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-size: 14px; font-weight: 700; color: #38bdf8; margin-bottom: 4px;">Empire State Building Photogrammetric Tile Extraction</div>
+                    <div style="font-size: 12px; color: #94a3b8;">Derived natively via <code>GoogleTileColorSchemeExtractor</code> in C++20 | 7,256 Vertices Sampled | Solar Direction Inversion</div>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <a href="/scripts/google_map_tile_color_schema.json" target="_blank" style="text-decoration: none; background: #0284c7; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">📥 Download JSON Schema</a>
+                    <a href="/docs/screenshots/24_google_tile_color_schema_proof.png" target="_blank" style="text-decoration: none; background: #1e293b; border: 1px solid #475569; color: #cbd5e1; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔍 View Full HD Proof</a>
+                </div>
+            </div>
+
+            <img src="/docs/screenshots/24_google_tile_color_schema_proof.png" alt="Google Tile Color Schema Proof" style="width: 100%; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 10px 30px rgba(0,0,0,0.5); margin-bottom: 24px;">
+
+            <div style="font-size: 13px; color: #94a3b8; line-height: 1.6; background: rgba(15, 23, 42, 0.6); border: 1px solid #334155; border-radius: 12px; padding: 20px;">
+                <div style="font-size: 15px; font-weight: 700; color: #f8fafc; margin-bottom: 8px;">Architectural Biophysical Color Extraction Pipeline</div>
+                <p>1. <strong>Direct Tile Parsing:</strong> Ingests raw binary glTF 2.0 (<code>.glb</code>) vertex geometry and photogrammetric vertex colors (<code>COLOR_0</code>).</p>
+                <p>2. <strong>Solar Irradiance Inversion:</strong> Projects vertical wall cardinal surface normals against ambient luminance to deduce the real solar elevation (72.9°) and azimuth (302.3° SW afternoon sun), subtracting directional sunlight and shadows.</p>
+                <p>3. <strong>10 Biophysical Materials:</strong> Partitions building geometry by elevation datum, surface normal slope, radial distance, and spectral clustering into 10 discrete materials: Indiana Limestone, Alcoa Cast-Aluminum/Bronze, Architectural Float Glass, Plinth Granite, Sidewalk Concrete, Roadway Asphalt, Setback Bitumen, Mooring Mast Steel, Stainless Spire, and Ruby Warning Beacon.</p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const container = document.getElementById('webgl-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0c1220);
+        scene.fog = new THREE.FogExp2(0x0c1220, 0.0010);
+
+        const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 1, 4000);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.22;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxPolarAngle = Math.PI * 0.495;
+
+        window.THREE = THREE;
+        window.scene = scene;
+        window.camera = camera;
+        window.controls = controls;
+
+        // Ground City Grid Plane
+        const gridHelper = new THREE.GridHelper(800, 80, 0x1e293b, 0x0f172a);
+        gridHelper.position.y = -0.6;
+        scene.add(gridHelper);
+
+        // Lighting Rig: Real-World NYC Astronomical Sun at 14:30 EST
+        const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.95);
+        scene.add(hemiLight);
+
+        const dirLight = new THREE.DirectionalLight(0xfff8ee, 3.4);
+        dirLight.position.set(280, 520, 320);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 10;
+        dirLight.shadow.camera.far = 1400;
+        dirLight.shadow.camera.left = -320;
+        dirLight.shadow.camera.right = 320;
+        dirLight.shadow.camera.top = 520;
+        dirLight.shadow.camera.bottom = -50;
+        dirLight.shadow.bias = -0.0001;
+        scene.add(dirLight);
+
+        // Fill Light for architectural shadow reveals
+        const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.9);
+        fillLight.position.set(-280, 220, -260);
+        scene.add(fillLight);
+
+        const metricsContainer = document.getElementById('metrics-container');
+
+        const metricsData = {
+            spce_rectified_hybrid: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val success">Planar Rectification & Architectural Hybrid</span></div>
+                <div class="metric-row"><span class="metric-label">Wall System:</span><span class="metric-val highlight">Open Pier-and-Aperture (No Monolithic Occlusion)</span></div>
+                <div class="metric-row"><span class="metric-label">5th Ave Portal:</span><span class="metric-val success">3-Story Portal, Eagle Pylons, Sunburst Transom & 3 Revolving Doors</span></div>
+                <div class="metric-row"><span class="metric-label">Side Entrances:</span><span class="metric-val accent">Streamlined Art Deco Marquee Canopies on 33rd & 34th Streets</span></div>
+                <div class="metric-row"><span class="metric-label">Pier Rhythm:</span><span class="metric-val highlight">2+3+3+2 Art Deco Window Cadence (LPC Verified)</span></div>
+                <div class="metric-row"><span class="metric-label">Fenestration:</span><span class="metric-val success">22cm Shadow Reveals, Cast-Aluminum Spandrels, Projecting Sills</span></div>
+                <div class="metric-row"><span class="metric-label">Authentic Spire:</span><span class="metric-val accent">Preserved Google 3D Photogrammetry Broadcast Mast (Y >= 330m)</span></div>
+                <div class="metric-row"><span class="metric-label">Materials:</span><span class="metric-val highlight">Indiana Limestone, Charcoal Granite, Art Deco Spandrels, Bronze, Steel, Glass</span></div>
+            `,
+            esb_authentic: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val highlight">Authentic Multi-Mesh PBR Architecture</span></div>
+                <div class="metric-row"><span class="metric-label">Sub-Meshes:</span><span class="metric-val success">8 Discrete Architectural Sub-Meshes</span></div>
+                <div class="metric-row"><span class="metric-label">UV Unwrapping:</span><span class="metric-val accent">Continuous Metric World-Space (No Quad Distortion)</span></div>
+                <div class="metric-row"><span class="metric-label">PBR Textures:</span><span class="metric-val success">25 Embedded 1024x1024 Maps (Albedo, Normal, ORM, Emissive)</span></div>
+                <div class="metric-row"><span class="metric-label">Materials:</span><span class="metric-val highlight">Limestone, Charcoal Granite, Art Deco Spandrel, Steel, Glass, Bronze, Bitumen, Sidewalk</span></div>
+                <div class="metric-row"><span class="metric-label">C++20 Synth Speed:</span><span class="metric-val success">1.06s Native Clang SIMD Compilation & Serializer</span></div>
+            `,
+            universal_inducer: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val highlight">Master-Class Texture Application (UAMTIA)</span></div>
+                <div class="metric-row"><span class="metric-label">Texel Budget:</span><span class="metric-val success">512 px/m (Fine Small-Pattern Scale 4.80× / 22.50×)</span></div>
+                <div class="metric-row"><span class="metric-label">Anti-Tiling:</span><span class="metric-val success">Inigo Quilez Voronoi Simplex Perturbation (0 Repetition)</span></div>
+                <div class="metric-row"><span class="metric-label">Normal Hierarchy:</span><span class="metric-val accent">Triple-Tier RNM (Macro Bevel + Meso Course + Micro Grit)</span></div>
+                <div class="metric-row"><span class="metric-label">Specular Optics:</span><span class="metric-val success">Toksvig Filtered (w=0.42, 0 Shimmer) | Dielectric IOR 1.50</span></div>
+                <div class="metric-row"><span class="metric-label">Weathering:</span><span class="metric-val highlight">Cavity Soot (AO 0.35) + Vertical Rain Streaks (g=[0,-1,0])</span></div>
+                <div class="metric-row"><span class="metric-label">Parallax Depth:</span><span class="metric-val success">35mm POM Raymarching w/ Secant Root Refinement</span></div>
+            `,
+            informed_pbr: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val highlight">Empire State Building PBR (6 Tiers)</span></div>
+                <div class="metric-row"><span class="metric-label">Planar Decimation:</span><span class="metric-val success">12,304 → 3,690 Triangles (70.0% Reduction)</span></div>
+                <div class="metric-row"><span class="metric-label">Manhattan Plumb:</span><span class="metric-val success">90° Corner Straightening & Road Datum Y=0</span></div>
+                <div class="metric-row"><span class="metric-label">Ashlar Limestone:</span><span class="metric-val accent">8 Courses/Fl, 12mm Recessed Mortar (AO 0.35)</span></div>
+                <div class="metric-row"><span class="metric-label">Fenestration:</span><span class="metric-val highlight">Bronze Mullions, 18cm Sills, Venetian Blinds</span></div>
+                <div class="metric-row"><span class="metric-label">glTF 2.0 Binary:</span><span class="metric-val success">13.4 MB GLB (1024x1024 Albedo/Normal/ORM/Emissive)</span></div>
+            `,
+            scan_raw: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val" style="color:#ef4444;">Stage 1: Raw Photogrammetric Scan</span></div>
+                <div class="metric-row"><span class="metric-label">Target Architecture:</span><span class="metric-val highlight">Empire State Building (220m, 6 Tiers)</span></div>
+                <div class="metric-row"><span class="metric-label">Surface Artifacts:</span><span class="metric-val" style="color:#f59e0b;">Aerial Sensor Noise (±0.045m) & Terraces</span></div>
+                <div class="metric-row"><span class="metric-label">Corner Geometry:</span><span class="metric-val" style="color:#ef4444;">Melted / Chamfered Corners (±0.14m)</span></div>
+                <div class="metric-row"><span class="metric-label">Photometry Texture:</span><span class="metric-val" style="color:#f59e0b;">Baked Afternoon Sunlight & Hard Shadows</span></div>
+                <div class="metric-row"><span class="metric-label">Geometry Density:</span><span class="metric-val">12,304 Triangles | 6,564 Vertices</span></div>
+            `,
+            cleaned: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val highlight">Stage 2: Artifact Cleanup</span></div>
+                <div class="metric-row"><span class="metric-label">Planar Variance:</span><span class="metric-val success">10.24m (raw) → 0.003m (planarized)</span></div>
+                <div class="metric-row"><span class="metric-label">Corner Sharpness:</span><span class="metric-val success">114.6° (melted) → 90.0° (crisp)</span></div>
+                <div class="metric-row"><span class="metric-label">Ground Plinth:</span><span class="metric-val accent">1.8m Honed Granite (Ground Datum Y=0)</span></div>
+                <div class="metric-row"><span class="metric-label">Slab Snapping:</span><span class="metric-val success">Setback Terraces Leveled (28m, 320m, 381m)</span></div>
+                <div class="metric-row"><span class="metric-label">Geometry Density:</span><span class="metric-val">4,672 Vertices | 2,336 Triangles</span></div>
+            `,
+            spce_isolated_pbr: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val success">Isolated Empire State Building Cleaned PBR</span></div>
+                <div class="metric-row"><span class="metric-label">Building Isolation:</span><span class="metric-val highlight">Setback Envelope Polygon Filter (100% Isolated)</span></div>
+                <div class="metric-row"><span class="metric-label">Removed Surrounding:</span><span class="metric-val accent">Pruned All Neighboring City Blocks & Streets</span></div>
+                <div class="metric-row"><span class="metric-label">Quality Level:</span><span class="metric-val success">Full Quality Leaf LOD (errorTarget = 0.5)</span></div>
+                <div class="metric-row"><span class="metric-label">Sub-Meshes & Elevation:</span><span class="metric-val highlight">11 Pure ESB Meshes (Y = -0.88m to 426.89m Peak)</span></div>
+                <div class="metric-row"><span class="metric-label">PBR Reconstruction:</span><span class="metric-val success">Bilateral De-Lighted + Sobel Normals + Roughness (33 Maps)</span></div>
+            `,
+            spce_isolated_raw: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val" style="color:#ef4444;">Isolated Empire State Building Raw Tile</span></div>
+                <div class="metric-row"><span class="metric-label">Building Isolation:</span><span class="metric-val highlight">Isolated Geometry (33rd-34th St / 5th Ave Parcel)</span></div>
+                <div class="metric-row"><span class="metric-label">Removed Surrounding:</span><span class="metric-val accent">Pruned All Neighboring City Blocks & Streets</span></div>
+                <div class="metric-row"><span class="metric-label">Quality Level:</span><span class="metric-val success">Full Quality Leaf LOD (errorTarget = 0.5)</span></div>
+                <div class="metric-row"><span class="metric-label">Sub-Meshes & Vertices:</span><span class="metric-val">11 Sub-Meshes | 15,318 Vertices | 5,106 Triangles</span></div>
+                <div class="metric-row"><span class="metric-label">Authentic Textures:</span><span class="metric-val" style="color:#f59e0b;">11 Raw Google Aerial Photogrammetry Maps</span></div>
+            `,
+            spce_raw: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val" style="color:#ef4444;">Scan Studio Raw Tile Extraction</span></div>
+                <div class="metric-row"><span class="metric-label">Google 3D Target:</span><span class="metric-val highlight">Empire State Building (Tile 77197, 98526 @ Z18)</span></div>
+                <div class="metric-row"><span class="metric-label">Sub-Meshes & Vertices:</span><span class="metric-val accent">70 Discrete Meshes | 236,579 Vertices | 169,588 Triangles</span></div>
+                <div class="metric-row"><span class="metric-label">Authentic Aerial Maps:</span><span class="metric-val" style="color:#f59e0b;">70 Embedded JPEG Textures (Authentic Photogrammetry)</span></div>
+                <div class="metric-row"><span class="metric-label">Photometry State:</span><span class="metric-val" style="color:#ef4444;">Raw Baked Afternoon Sunlight & Harsh Cast Shadows</span></div>
+                <div class="metric-row"><span class="metric-label">Floor Datum Snapping:</span><span class="metric-val success">Locked Ground Level Y=0 (427.5m Spire Peak)</span></div>
+            `,
+            spce_cleaned_pbr: `
+                <div class="metric-row"><span class="metric-label">Pipeline Stage:</span><span class="metric-val success">Scan Studio Cleaned PBR Reconstruction</span></div>
+                <div class="metric-row"><span class="metric-label">Bilateral De-Lighting:</span><span class="metric-val success">70 Aerial Textures Cleaned via TileTextureDeLighter (C++20 SIMD)</span></div>
+                <div class="metric-row"><span class="metric-label">Shadow Lift Factor:</span><span class="metric-val highlight">0.68f (Bilateral Macro Illumination Decoupled)</span></div>
+                <div class="metric-row"><span class="metric-label">Synthesized Normals:</span><span class="metric-val accent">70 Tangent-Space Sobel Normal Maps (Cornices, Sills, Mullions)</span></div>
+                <div class="metric-row"><span class="metric-label">Calibrated Roughness:</span><span class="metric-val success">70 Variance Roughness Maps (Glass 0.08, Stone 0.78, Metal 0.22)</span></div>
+                <div class="metric-row"><span class="metric-label">Embedded GLB Archive:</span><span class="metric-val highlight">20.84 MB Valid glTF 2.0 (70 Meshes, 280 PBR Channels)</span></div>
+            `
+        };
+
+        function updateMetrics(type) {
+            metricsContainer.innerHTML = metricsData[type] || metricsData['esb_authentic'];
+        }
+        updateMetrics('esb_authentic');
+
+        let currentBuilding = null;
+        let isWireframeActive = false;
+        const loader = new GLTFLoader();
+
+        window.toggleWireframe = function() {
+            isWireframeActive = !isWireframeActive;
+            const btn = document.getElementById('toggle-wireframe');
+            if (btn) {
+                btn.textContent = isWireframeActive ? '🕸️ Wireframe Mesh: ON' : '🕸️ Wireframe Mesh: OFF';
+                btn.style.background = isWireframeActive ? 'rgba(99, 102, 241, 0.6)' : 'rgba(99, 102, 241, 0.2)';
+            }
+            if (currentBuilding) {
+                currentBuilding.traverse((child) => {
+                    if (child.isMesh && child.material) {
+                        child.material.wireframe = isWireframeActive;
+                        child.material.needsUpdate = true;
+                    }
+                });
+            }
+        };
+
+        function loadModel(url, customPbr, modelType) {
+            window.__MODEL_LOADED__ = false;
+            if (currentBuilding) {
+                scene.remove(currentBuilding);
+                currentBuilding = null;
+            }
+            loader.load(
+                url + '?t=' + Date.now(),
+                (gltf) => {
+                    currentBuilding = gltf.scene;
+                    currentBuilding.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            if (child.material) {
+                                child.material.vertexColors = !!(child.geometry && child.geometry.attributes && child.geometry.attributes.color);
+                                child.material.side = THREE.DoubleSide;
+                                child.material.shadowSide = THREE.DoubleSide;
+                                if (customPbr?.roughness !== undefined) {
+                                    child.material.roughness = customPbr.roughness;
+                                }
+                                if (customPbr?.metalness !== undefined) {
+                                    child.material.metalness = customPbr.metalness;
+                                }
+                                if (customPbr?.normalScale && child.material.normalScale) {
+                                    child.material.normalScale.set(customPbr.normalScale, customPbr.normalScale);
+                                }
+                                child.material.wireframe = isWireframeActive;
+
+                                const maxAniso = renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 8;
+                                ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'].forEach((mapName) => {
+                                    if (child.material[mapName]) {
+                                        child.material[mapName].wrapS = THREE.RepeatWrapping;
+                                        child.material[mapName].wrapT = THREE.RepeatWrapping;
+                                        child.material[mapName].anisotropy = maxAniso;
+                                        child.material[mapName].needsUpdate = true;
+                                    }
+                                });
+                                if (child.material.emissiveMap) {
+                                    if (child.material.emissive.r === 0 && child.material.emissive.g === 0 && child.material.emissive.b === 0) {
+                                        child.material.emissive.setRGB(1.0, 1.0, 1.0);
+                                    }
+                                    child.material.emissiveIntensity = isNightLighting ? 2.4 : 1.0;
+                                }
+                                child.material.needsUpdate = true;
+                            }
+                        }
+                    });
+                    // Coordinate anchoring:
+                    // The Google 3D tile models (spce_raw and spce_cleaned_pbr) and spce_rectified_hybrid have their coordinate frame
+                    // naturally centered on the Empire State Building tower axis at (0, 0, 0).
+                    if (modelType === 'spce_raw' || modelType === 'spce_cleaned_pbr' || modelType === 'spce_rectified_hybrid') {
+                        currentBuilding.position.set(0, 0, 0);
+                        currentBuilding.rotation.set(0, 0, 0);
+                    } else {
+                        const box = new THREE.Box3().setFromObject(currentBuilding);
+                        const center = box.getCenter(new THREE.Vector3());
+                        currentBuilding.position.x = -center.x;
+                        currentBuilding.position.z = -center.z;
+                        currentBuilding.position.y = -box.min.y;
+                    }
+
+                    scene.add(currentBuilding);
+                    window.currentBuilding = currentBuilding;
+                    console.log('Model loaded:', url, 'type:', modelType);
+                    window.__MODEL_LOADED__ = true;
+                },
+                undefined,
+                (err) => console.error('Failed to load model:', err)
+            );
+        }
+        let isNightLighting = false;
+        window.toggleNight = function() {
+            isNightLighting = !isNightLighting;
+            const btn = document.getElementById('toggle-night');
+            if (btn) {
+                btn.textContent = isNightLighting ? '🌙 Night Glow: ON' : '🌙 Night Glow: OFF';
+                btn.style.background = isNightLighting ? 'rgba(245, 158, 11, 0.6)' : 'rgba(245, 158, 11, 0.2)';
+            }
+            if (currentBuilding) {
+                currentBuilding.traverse((child) => {
+                    if (child.isMesh && child.material && child.material.emissiveMap) {
+                        child.material.emissiveIntensity = isNightLighting ? 2.5 : 1.0;
+                        child.material.needsUpdate = true;
+                    }
+                });
+            }
+            if (isNightLighting) {
+                scene.background = new THREE.Color(0x030712);
+                scene.fog.color = new THREE.Color(0x030712);
+                dirLight.intensity = 0.05;
+                fillLight.intensity = 0.05;
+                hemiLight.intensity = 0.15;
+                renderer.toneMappingExposure = 1.6;
+            } else {
+                scene.background = new THREE.Color(0x0c1220);
+                scene.fog.color = new THREE.Color(0x0c1220);
+                dirLight.intensity = 3.4;
+                fillLight.intensity = 0.9;
+                hemiLight.intensity = 0.95;
+                renderer.toneMappingExposure = 1.22;
+            }
+        };
+
+        window.switchModel = function(type) {
+            document.querySelectorAll('.model-toggle-btn').forEach(b => {
+                if (b.id !== 'toggle-wireframe' && b.id !== 'toggle-night') b.classList.remove('active');
+            });
+            const btn = document.getElementById('toggle-' + type);
+            if (btn) btn.classList.add('active');
+            updateMetrics(type);
+
+            if (type === 'spce_rectified_hybrid') {
+                loadModel('/public/models/spce_esb_rectified_hybrid.glb', null, 'spce_rectified_hybrid');
+            } else if (type === 'spce_isolated_pbr') {
+                loadModel('/public/models/spce_esb_isolated_full_quality_pbr.glb', null, 'spce_isolated_pbr');
+            } else if (type === 'spce_isolated_raw') {
+                loadModel('/public/models/spce_esb_isolated_full_quality_raw.glb', null, 'spce_isolated_raw');
+            } else if (type === 'spce_raw') {
+                loadModel('/public/models/spce_scan_studio_raw_tile.glb', null, 'spce_raw');
+            } else if (type === 'spce_cleaned_pbr') {
+                loadModel('/public/models/spce_scan_studio_cleaned_pbr.glb', null, 'spce_cleaned_pbr');
+            } else if (type === 'esb_authentic') {
+                loadModel('/scripts/models/empire_state_building_pbr_textured.glb', null, 'esb_authentic');
+            } else if (type === 'universal_inducer') {
+                loadModel('/scripts/building_cleaned.glb', {
+                    normalScale: 2.84,
+                    roughness: 0.82,
+                    metalness: 0.12,
+                    aoIntensity: 0.92
+                }, 'universal_inducer');
+            } else if (type === 'informed_pbr') {
+                loadModel('/scripts/building_cleaned.glb', null, 'informed_pbr');
+            } else if (type === 'scan_raw') {
+                loadModel('/scripts/building_raw.glb', null, 'scan_raw');
+            } else if (type === 'cleaned') {
+                loadModel('/scripts/models/empire_state_building_cleaned_tile.glb', null, 'cleaned');
+            }
+        };
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const initialView = urlParams.get('view') || 'building';
+        const initialModel = urlParams.get('model') || 'spce_rectified_hybrid';
+
+        window.switchModel(initialModel);
+
+        window.setCameraView = function(mode) {
+            document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+            if (mode === 'aerial') {
+                const btn = document.getElementById('btn-aerial');
+                if (btn) btn.classList.add('active');
+                camera.position.set(180, 360, 220);
+                controls.target.set(0, 140, 0);
+            } else if (mode === 'building') {
+                const btn = document.getElementById('btn-building');
+                if (btn) btn.classList.add('active');
+                camera.position.set(240, 200, 280);
+                controls.target.set(0, 160, 0);
+            } else if (mode === 'corner') {
+                const btn = document.getElementById('btn-corner');
+                if (btn) btn.classList.add('active');
+                camera.position.set(130, 95, 130);
+                controls.target.set(0, 75, 0);
+            } else if (mode === 'roof') {
+                const btn = document.getElementById('btn-roof');
+                if (btn) btn.classList.add('active');
+                camera.position.set(80, 420, 90);
+                controls.target.set(0, 390, 0);
+            } else if (mode === 'road') {
+                const btn = document.getElementById('btn-road');
+                if (btn) btn.classList.add('active');
+                camera.position.set(0, 15, 130);
+                controls.target.set(0, 55, 0);
+            } else if (mode === 'panoramic') {
+                const btn = document.getElementById('btn-panoramic');
+                if (btn) btn.classList.add('active');
+                camera.position.set(430, 260, 560);
+                controls.target.set(0, 185, 0);
+            } else if (mode === 'entrance') {
+                const btn = document.getElementById('btn-entrance');
+                if (btn) btn.classList.add('active');
+                camera.position.set(0, 8, 70);
+                controls.target.set(0, 15, 0);
+            } else if (mode === 'facade') {
+                const btn = document.getElementById('btn-facade');
+                if (btn) btn.classList.add('active');
+                camera.position.set(42, 48, 62);
+                controls.target.set(12, 40, 27.5);
+            } else if (mode === 'streetview') {
+                const btn = document.getElementById('btn-streetview');
+                if (btn) btn.classList.add('active');
+                camera.position.set(115, 6, 95);
+                controls.target.set(10, 110, 0);
+            } else if (mode === 'portal_5th_ave') {
+                const btn = document.getElementById('btn-portal');
+                if (btn) btn.classList.add('active');
+                camera.position.set(52, 6.5, 0);
+                controls.target.set(35, 6.5, 0);
+            } else if (mode === 'lobby_5th_ave') {
+                const btn = document.getElementById('btn-lobby');
+                if (btn) btn.classList.add('active');
+                camera.position.set(33, 2.5, 0);
+                controls.target.set(18, 5.0, 0);
+            } else if (mode === 'tower_piers') {
+                const btn = document.getElementById('btn-piers');
+                if (btn) btn.classList.add('active');
+                camera.position.set(36, 140, 24);
+                controls.target.set(8.0, 140, 0);
+            } else if (mode === 'marquee_34th') {
+                const btn = document.getElementById('btn-marquee');
+                if (btn) btn.classList.add('active');
+                camera.position.set(-15, 6, -55);
+                controls.target.set(-15, 4.5, -35);
+            } else if (mode === 'crown') {
+                const btn = document.getElementById('btn-crown');
+                if (btn) btn.classList.add('active');
+                camera.position.set(140, 410, 160);
+                controls.target.set(0, 405, 0);
+            }
+            controls.update();
+        };
+
+        setCameraView(initialView);
+
+        window.toggleGallery = function(show) {
+            const modal = document.getElementById('pbr-gallery-modal');
+            modal.style.display = show ? 'block' : 'none';
+        };
+
+        window.toggleColorSchema = function(show) {
+            const modal = document.getElementById('color-schema-modal');
+            modal.style.display = show ? 'block' : 'none';
+        };
+
+        if (urlParams.get('color_schema') === 'open') {
+            window.toggleColorSchema(true);
+        }
+
+        if (urlParams.get('gallery') === 'open') {
+            window.toggleGallery(true);
+        }
+
+
+        window.switchAtlasMap = function(mapType) {
+            document.querySelectorAll('.atlas-tab-btn').forEach(b => b.classList.remove('active'));
+            const img = document.getElementById('atlas-img');
+            if (mapType === 'albedo') {
+                document.getElementById('tab-albedo').classList.add('active');
+                img.src = '/public/textures/pbr50/pbr50_atlas_albedo.png';
+            } else if (mapType === 'normal') {
+                document.getElementById('tab-normal').classList.add('active');
+                img.src = '/public/textures/pbr50/pbr50_atlas_normal.png';
+            } else if (mapType === 'orm') {
+                document.getElementById('tab-orm').classList.add('active');
+                img.src = '/public/textures/pbr50/pbr50_atlas_orm.png';
+            }
+        };
+
+        const initialMap = urlParams.get('map');
+        if (initialMap) {
+            window.switchAtlasMap(initialMap);
+        }
+
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

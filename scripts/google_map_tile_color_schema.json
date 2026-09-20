@@ -1,0 +1,202 @@
+{
+  "buildingName": "Empire State Building (Google 3D Tile Scan)",
+  "sourceTileFile": "scripts/building_raw.glb",
+  "totalVerticesSampled": 7256,
+  "estimatedLighting": {
+    "sunDirection": [-0.2483, 0.9559, 0.1571],
+    "sunElevationDeg": 72.9112,
+    "sunAzimuthDeg": 302.3129
+  },
+  "materials": [
+    {
+      "id": "facade_limestone",
+      "name": "Indiana Limestone (Salem Formation)",
+      "architecturalRole": "Primary ashlar wall pier masonry, warm buff calcitic albedo",
+      "hex": "#dcd9d6",
+      "delightedRgb": [0.8609, 0.8491, 0.8373],
+      "rawSampledRgb": [0.3982, 0.3865, 0.3710],
+      "roughness": 0.7800,
+      "metalness": 0.0000,
+      "f0": 0.0400,
+      "normalScale": 1.8000,
+      "aoIntensity": 0.9000,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 1614,
+      "areaFraction": 0.2224
+    },
+    {
+      "id": "spandrel_metal",
+      "name": "Alcoa Cast-Aluminum & Bronze Trim",
+      "architecturalRole": "Art Deco chevron spandrels and window trim with dark gunmetal patina",
+      "hex": "#dcd5cb",
+      "delightedRgb": [0.8634, 0.8372, 0.7954],
+      "rawSampledRgb": [0.3777, 0.3663, 0.3480],
+      "roughness": 0.4200,
+      "metalness": 0.7500,
+      "f0": 0.5500,
+      "normalScale": 2.4000,
+      "aoIntensity": 0.9500,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 971,
+      "areaFraction": 0.1338
+    },
+    {
+      "id": "window_glazing",
+      "name": "Architectural Float Glass Glazing",
+      "architecturalRole": "Low-E specular fenestration with interior cavity light trapping",
+      "hex": "#5e6165",
+      "delightedRgb": [0.3676, 0.3801, 0.3944],
+      "rawSampledRgb": [0.1611, 0.1666, 0.1728],
+      "roughness": 0.0600,
+      "metalness": 0.1000,
+      "f0": 0.0400,
+      "normalScale": 0.4000,
+      "aoIntensity": 0.6000,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 2823,
+      "areaFraction": 0.3891
+    },
+    {
+      "id": "plinth_granite",
+      "name": "Honed Charcoal Granite Water Table",
+      "architecturalRole": "Ground street plinth with dense micro-crystalline mineral flecks",
+      "hex": "#9b9996",
+      "delightedRgb": [0.6075, 0.6019, 0.5890],
+      "rawSampledRgb": [0.2738, 0.2686, 0.2584],
+      "roughness": 0.5500,
+      "metalness": 0.0500,
+      "f0": 0.0500,
+      "normalScale": 2.0000,
+      "aoIntensity": 0.8800,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 252,
+      "areaFraction": 0.0347
+    },
+    {
+      "id": "sidewalk_concrete",
+      "name": "Manhattan Sidewalk Concrete Pavers",
+      "architecturalRole": "High-traffic flagged concrete sidewalk paving around building perimeter",
+      "hex": "#d9e3d8",
+      "delightedRgb": [0.8511, 0.8894, 0.8471],
+      "rawSampledRgb": [0.5586, 0.5807, 0.5342],
+      "roughness": 0.8500,
+      "metalness": 0.0000,
+      "f0": 0.0400,
+      "normalScale": 1.5000,
+      "aoIntensity": 0.8000,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 241,
+      "areaFraction": 0.0332
+    },
+    {
+      "id": "street_asphalt",
+      "name": "5th Avenue Bituminous Roadway Asphalt",
+      "architecturalRole": "Dark aggregate road pavement bounding 33rd/34th St and 5th Ave",
+      "hex": "#899294",
+      "delightedRgb": [0.5387, 0.5740, 0.5791],
+      "rawSampledRgb": [0.2595, 0.2820, 0.2742],
+      "roughness": 0.9200,
+      "metalness": 0.0000,
+      "f0": 0.0400,
+      "normalScale": 1.4000,
+      "aoIntensity": 0.7500,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 810,
+      "areaFraction": 0.1116
+    },
+    {
+      "id": "terrace_bitumen",
+      "name": "Setback Terrace Bitumen & Gravel Ballast",
+      "architecturalRole": "Weather-resistant tar membrane and loose aggregate roofing",
+      "hex": "#575452",
+      "delightedRgb": [0.3400, 0.3300, 0.3200],
+      "rawSampledRgb": [0.2380, 0.2310, 0.2240],
+      "roughness": 0.8800,
+      "metalness": 0.0200,
+      "f0": 0.0400,
+      "normalScale": 1.6000,
+      "aoIntensity": 0.9200,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 0,
+      "areaFraction": 0.0000
+    },
+    {
+      "id": "mooring_mast",
+      "name": "Mooring Mast Cladding & Buttress Fins",
+      "architecturalRole": "Art Deco fluted architectural steel and aluminum tower envelope",
+      "hex": "#c4c5c8",
+      "delightedRgb": [0.7697, 0.7725, 0.7845],
+      "rawSampledRgb": [0.3610, 0.3654, 0.3755],
+      "roughness": 0.3200,
+      "metalness": 0.8500,
+      "f0": 0.7000,
+      "normalScale": 1.5000,
+      "aoIntensity": 0.8500,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 440,
+      "areaFraction": 0.0606
+    },
+    {
+      "id": "spire_stainless",
+      "name": "Broadcast Antenna Spire (Stainless Steel)",
+      "architecturalRole": "High-sheen polished nickel-chromium steel spire needle",
+      "hex": "#cfcecd",
+      "delightedRgb": [0.8109, 0.8084, 0.8058],
+      "rawSampledRgb": [0.3929, 0.3953, 0.3978],
+      "roughness": 0.1800,
+      "metalness": 0.9600,
+      "f0": 0.8800,
+      "normalScale": 1.2000,
+      "aoIntensity": 0.7000,
+      "emissive": {
+        "rgb": [0.0000, 0.0000, 0.0000],
+        "intensity": 0.0000
+      },
+      "sampleCount": 85,
+      "areaFraction": 0.0117
+    },
+    {
+      "id": "aviation_beacon",
+      "name": "Ruby Red Aviation Warning Beacon",
+      "architecturalRole": "FAA warning beacon lamp at pinnacle mast peak (443.2m)",
+      "hex": "#f2571d",
+      "delightedRgb": [0.9500, 0.3417, 0.1139],
+      "rawSampledRgb": [1.0000, 0.1500, 0.0500],
+      "roughness": 0.1500,
+      "metalness": 0.0000,
+      "f0": 0.0400,
+      "normalScale": 0.2000,
+      "aoIntensity": 0.5000,
+      "emissive": {
+        "rgb": [1.0000, 0.1500, 0.0500],
+        "intensity": 12.0000
+      },
+      "sampleCount": 20,
+      "areaFraction": 0.0028
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Google DeepMind TAPIR Point Tracking Script.
+
+Tracks dense query points across video frames using Google DeepMind's TAPIR / TAP-Net model.
+Reads JSON input from stdin:
+  {
+    "videoPath": "/path/to/video.mp4",
+    "queryPoints": [[x_norm, y_norm], ...],
+    "queryFrames": [0, ...],
+    "checkpointPath": "/path/to/tapir_checkpoint.pt",
+    "useCausal": true
+  }
+
+Writes JSON result to stdout:
+  {
+    "success": true,
+    "numFrames": T,
+    "numPoints": N,
+    "coords": [[[x, y], ...], ...],
+    "visibilities": [[v, ...], ...]
+  }
+"""
+
+import json
+import os
+import sys
+
+def main() -> None:
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as e:
+        print(json.dumps({"error": f"Missing python dependencies: {e}. Install with: pip install opencv-python-headless numpy"}))
+        sys.exit(1)
+
+    try:
+        input_data = json.loads(sys.stdin.read())
+    except Exception as e:
+        print(json.dumps({"error": f"Failed to parse JSON input from stdin: {e}"}))
+        sys.exit(2)
+
+    query_points = input_data.get("queryPoints", [])
+    query_frames = input_data.get("queryFrames", None)
+    checkpoint_path = input_data.get("checkpointPath", None)
+    video_path = input_data.get("videoPath", None)
+    frame_paths = input_data.get("framePaths", None)
+
+    if not query_points:
+        print(json.dumps({"error": "No queryPoints provided"}))
+        sys.exit(2)
+
+    # 1. Load video frames
+    frames = []
+    if video_path and os.path.exists(video_path):
+        cap = cv2.VideoCapture(video_path)
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(frame_rgb)
+        cap.release()
+    elif frame_paths:
+        for fp in frame_paths:
+            if os.path.exists(fp):
+                bgr = cv2.imread(fp)
+                if bgr is not None:
+                    frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+
+    if not frames:
+        print(json.dumps({"error": "No frames loaded from videoPath or framePaths", "fallback": True}))
+        sys.exit(2)
+
+    T = len(frames)
+    H, W, C = frames[0].shape
+    N = len(query_points)
+
+    if query_frames is None or len(query_frames) != N:
+        query_frames = [0] * N
+
+    # 2. Try loading PyTorch and DeepMind TAPIR model
+    try:
+        import torch
+
+        model = None
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            model = torch.load(checkpoint_path, map_location="cpu")
+        else:
+            # Common checkpoint paths
+            candidates = [
+                os.path.expanduser("~/.cache/tapir/tapir_checkpoint_panning.pt"),
+                os.path.join(os.getcwd(), "models/tapir_checkpoint.pt"),
+                os.path.join(os.getcwd(), "assets/models/tapir_checkpoint.pt")
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    model = torch.load(cand, map_location="cpu")
+                    break
+
+        if model is None:
+            print(json.dumps({
+                "fallback": True,
+                "reason": "TAPIR checkpoint not found on disk. Falling back to native optical flow."
+            }))
+            return
+
+        # Prepare tensors
+        queries_np = np.zeros((1, N, 3), dtype=np.float32)
+        for i in range(N):
+            queries_np[0, i, 0] = query_frames[i]
+            queries_np[0, i, 1] = query_points[i][1] * (H - 1) # y
+            queries_np[0, i, 2] = query_points[i][0] * (W - 1) # x
+
+        video_np = np.stack(frames, axis=0).astype(np.float32) # (T, H, W, 3)
+        video_norm = (video_np / 127.5) - 1.0 # [-1.0, 1.0]
+        video_tensor = torch.from_numpy(video_norm)[None] # (1, T, H, W, 3)
+        queries_tensor = torch.from_numpy(queries_np)
+
+        device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        model = model.to(device)
+        model.eval()
+        video_tensor = video_tensor.to(device)
+        queries_tensor = queries_tensor.to(device)
+
+        with torch.no_grad():
+            outputs = model(video_tensor, queries_tensor) if callable(model) else model.forward(video_tensor, queries_tensor)
+
+        if isinstance(outputs, dict):
+            tracks = outputs.get("tracks", outputs.get("tracks_prediction"))
+            occlusions = outputs.get("occlusion", outputs.get("occlusions"))
+        elif isinstance(outputs, (tuple, list)):
+            tracks = outputs[0]
+            occlusions = outputs[1] if len(outputs) > 1 else None
+        else:
+            tracks = outputs
+            occlusions = None
+
+        if isinstance(tracks, torch.Tensor):
+            tracks = tracks.cpu().numpy()
+        if isinstance(occlusions, torch.Tensor):
+            occlusions = occlusions.cpu().numpy()
+
+        if tracks.ndim == 4:
+            tracks = tracks[0] # (T, N, 2)
+
+        # Normalize tracks to [0, 1]
+        norm_coords = []
+        norm_vis = []
+
+        for t in range(T):
+            t_coords = []
+            t_vis = []
+            for n in range(N):
+                tx = float(np.clip(tracks[t, n, 0] / max(W - 1, 1), 0.0, 1.0))
+                ty = float(np.clip(tracks[t, n, 1] / max(H - 1, 1), 0.0, 1.0))
+                t_coords.append([tx, ty])
+
+                if occlusions is not None:
+                    occ = float(occlusions[0, t, n] if occlusions.ndim == 3 else occlusions[t, n])
+                    vis = 1.0 / (1.0 + float(np.exp(np.clip(occ, -15.0, 15.0))))
+                else:
+                    vis = 1.0
+                t_vis.append(float(vis))
+
+            norm_coords.append(t_coords)
+            norm_vis.append(t_vis)
+
+        print(json.dumps({
+            "success": True,
+            "backend": "tapir",
+            "numFrames": T,
+            "numPoints": N,
+            "coords": norm_coords,
+            "visibilities": norm_vis
+        }))
+
+    except Exception as e:
+        print(json.dumps({
+            "fallback": True,
+            "reason": f"TAPIR native inference failed: {e}. Falling back to native optical flow."
+        }))
+
+if __name__ == "__main__":
+    main()

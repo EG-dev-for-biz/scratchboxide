@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Extract Empire State Building 3D Tile</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js",
+            "three/addons/": "/node_modules/three/examples/jsm/",
+            "3d-tiles-renderer": "/node_modules/3d-tiles-renderer/build/index.js",
+            "3d-tiles-renderer/plugins": "/node_modules/3d-tiles-renderer/build/index.plugins.js"
+        }
+    }
+    </script>
+</head>
+<body style="margin: 0; background: #111; color: #eee; font-family: sans-serif; padding: 20px;">
+    <h2>Google 3D Photorealistic Tiles - Empire State Building Extractor</h2>
+    <div id="status" style="font-size: 18px; color: #38bdf8; margin-bottom: 12px;">Initializing...</div>
+    <div id="stats" style="font-family: monospace; white-space: pre; background: #222; padding: 10px; border-radius: 6px;"></div>
+    <div id="container" style="width: 800px; height: 600px; margin-top: 15px; border: 1px solid #444;"></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+        import { TilesRenderer } from '3d-tiles-renderer';
+        import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/plugins';
+
+        const statusEl = document.getElementById('status');
+        const statsEl = document.getElementById('stats');
+        const container = document.getElementById('container');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a202c);
+
+        const camera = new THREE.PerspectiveCamera(50, 800 / 600, 1, 10000);
+        // Position camera to view Empire State Building from 3/4 angle
+        camera.position.set(220, 280, 320);
+        camera.lookAt(0, 180, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(800, 600);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 2.0);
+        light.position.set(100, 300, 100);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+
+        // Empire State Building Coordinates
+        const ESB_LAT = 40.7484405;
+        const ESB_LNG = -73.9856644;
+        const ESB_ALT = 0.0;
+        const GEOID_HEIGHT = -30.0;
+
+        // WGS-84 Ellipsoid constants
+        const WGS84_A = 6378137.0;
+        const WGS84_F = 1.0 / 298.257223563;
+        const WGS84_B = WGS84_A * (1.0 - WGS84_F);
+        const WGS84_E2 = (WGS84_A * WGS84_A - WGS84_B * WGS84_B) / (WGS84_A * WGS84_A);
+
+        const latRad = ESB_LAT * (Math.PI / 180);
+        const lngRad = ESB_LNG * (Math.PI / 180);
+        const altEllipsoid = ESB_ALT + GEOID_HEIGHT;
+
+        const sinLat = Math.sin(latRad);
+        const cosLat = Math.cos(latRad);
+        const sinLng = Math.sin(lngRad);
+        const cosLng = Math.cos(lngRad);
+
+        const n = WGS84_A / Math.sqrt(1.0 - WGS84_E2 * sinLat * sinLat);
+        const x = (n + altEllipsoid) * cosLat * cosLng;
+        const y = (n + altEllipsoid) * cosLat * sinLng;
+        const z = ((1.0 - WGS84_E2) * n + altEllipsoid) * sinLat;
+
+        const m00 = -sinLng;
+        const m01 = cosLng;
+        const m02 = 0;
+        const m03 = -(m00 * x + m01 * y + m02 * z);
+
+        const m10 = cosLat * cosLng;
+        const m11 = cosLat * sinLng;
+        const m12 = sinLat;
+        const m13 = -(m10 * x + m11 * y + m12 * z);
+
+        const m20 = sinLat * cosLng;
+        const m21 = sinLat * sinLng;
+        const m22 = -cosLat;
+        const m23 = -(m20 * x + m21 * y + m22 * z);
+
+        const localMatrix = new THREE.Matrix4();
+        localMatrix.set(
+            m00, m01, m02, m03,
+            m10, m11, m12, m13,
+            m20, m21, m22, m23,
+            0,   0,   0,   1
+        );
+
+        statusEl.innerText = "Connecting to Google 3D Tiles API...";
+
+        const tiles = new TilesRenderer();
+        const auth = new GoogleCloudAuthPlugin({
+            apiToken: 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4',
+            autoRefreshToken: true,
+            useRecommendedSettings: false
+        });
+        tiles.registerPlugin(auth);
+
+        tiles.group.matrix.copy(localMatrix);
+        tiles.group.matrixAutoUpdate = false;
+        scene.add(tiles.group);
+
+        tiles.setCamera(camera);
+        // Calculate SSE against a 4K viewport to demand highest leaf tiles
+        tiles.setResolution(camera, 3840, 2160);
+        // Error target 0.5 drives deepest available LOD octree traversal (Maximum Quality)
+        tiles.errorTarget = 0.5;
+
+        window.tiles = tiles;
+        window.camera = camera;
+        window.scene = scene;
+        window.isExtractionComplete = false;
+        window.extractionResult = null;
+
+        let stableFrames = 0;
+        let lastLoadedCount = 0;
+        let hasTriggeredExport = false;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            camera.updateMatrixWorld();
+            tiles.setCamera(camera);
+            tiles.setResolution(camera, 800, 600);
+            tiles.update();
+
+            renderer.render(scene, camera);
+
+            const stats = tiles.stats;
+            statsEl.innerText = JSON.stringify(stats, null, 2);
+
+            if (stats.loaded > 0) {
+                statusEl.innerText = `Streaming tiles... Loaded: ${stats.loaded}, Downloading: ${stats.downloading}, Parsing: ${stats.parsing}`;
+                
+                if (stats.downloading === 0 && stats.parsing === 0 && stats.loaded >= 1) {
+                    if (stats.loaded === lastLoadedCount) {
+                        stableFrames++;
+                    } else {
+                        stableFrames = 0;
+                        lastLoadedCount = stats.loaded;
+                    }
+
+                    if (stableFrames > 60 && !hasTriggeredExport) {
+                        hasTriggeredExport = true;
+                        statusEl.innerText = "Tiles stabilized! Extracting Empire State Building GLB...";
+                        exportTileGLB();
+                    }
+                }
+            }
+        }
+
+        async function exportTileGLB() {
+            try {
+                tiles.group.updateMatrixWorld(true);
+
+                // Empire State Building target bounding box centered at (0, 0, 0)
+                // Width = 140m (E-W), Depth = 140m (N-S), Height = 480m
+                const clipBox = new THREE.Box3(
+                    new THREE.Vector3(-140, -10, -140),
+                    new THREE.Vector3(140, 500, 140)
+                );
+
+                const exportGroup = new THREE.Group();
+                exportGroup.name = "Empire_State_Building_Google_3D_Tile";
+
+                let meshCount = 0;
+                let triCount = 0;
+                let vertCount = 0;
+
+                tiles.group.traverse((node) => {
+                    if (node.isMesh && node.geometry) {
+                        node.updateMatrixWorld(true);
+                        node.geometry.computeBoundingBox();
+                        const worldBox = node.geometry.boundingBox.clone().applyMatrix4(node.matrixWorld);
+
+                        if (clipBox.intersectsBox(worldBox)) {
+                            const clonedGeom = node.geometry.clone();
+                            clonedGeom.applyMatrix4(node.matrixWorld);
+
+                            // Clone material
+                            let clonedMat;
+                            if (Array.isArray(node.material)) {
+                                clonedMat = node.material.map(m => m.clone());
+                            } else if (node.material) {
+                                clonedMat = node.material.clone();
+                            } else {
+                                clonedMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+                            }
+
+                            const exportMesh = new THREE.Mesh(clonedGeom, clonedMat);
+                            exportMesh.name = node.name || `ESB_Tile_Mesh_${meshCount}`;
+                            exportGroup.add(exportMesh);
+
+                            meshCount++;
+                            if (clonedGeom.index) {
+                                triCount += clonedGeom.index.count / 3;
+                            } else if (clonedGeom.attributes.position) {
+                                triCount += clonedGeom.attributes.position.count / 3;
+                            }
+                            if (clonedGeom.attributes.position) {
+                                vertCount += clonedGeom.attributes.position.count;
+                            }
+                        }
+                    }
+                });
+
+                console.log(`Gathered ${meshCount} meshes (${triCount} triangles, ${vertCount} vertices) for ESB!`);
+                statusEl.innerText = `Exporting ${meshCount} meshes (${triCount} tris, ${vertCount} verts) to GLB...`;
+
+                const exporter = new GLTFExporter();
+                exporter.parse(
+                    exportGroup,
+                    async (glbBuffer) => {
+                        console.log(`GLB export succeeded! Size: ${glbBuffer.byteLength} bytes.`);
+                        statusEl.innerText = `Saving GLB to server (${(glbBuffer.byteLength / 1024 / 1024).toFixed(2)} MB)...`;
+
+                        // Save as raw scan studio tile
+                        const res = await fetch('/api/save_glb?file=public/models/spce_scan_studio_raw_tile.glb', {
+                            method: 'POST',
+                            body: glbBuffer
+                        });
+                        const resJson = await res.json();
+
+                        // Also save backup in public/tiles/
+                        await fetch('/api/save_glb?file=public/tiles/scan_studio_tile_esb_77197_98526.glb', {
+                            method: 'POST',
+                            body: glbBuffer
+                        });
+
+                        statusEl.innerHTML = `<span style="color:#4ade80;">✓ Extracted Empire State Building Tile Successfully! Saved: ${resJson.bytes} bytes.</span>`;
+                        window.isExtractionComplete = true;
+                        window.extractionResult = {
+                            ok: true,
+                            meshCount,
+                            triCount,
+                            vertCount,
+                            bytes: glbBuffer.byteLength
+                        };
+                    },
+                    (error) => {
+                        console.error("GLTFExporter error:", error);
+                        statusEl.innerText = `GLTFExporter error: ${error.message}`;
+                        window.isExtractionComplete = true;
+                        window.extractionResult = { ok: false, error: error.message };
+                    },
+                    { binary: true }
+                );
+            } catch (err) {
+                console.error("Extraction error:", err);
+                statusEl.innerText = `Extraction failed: ${err.message}`;
+                window.isExtractionComplete = true;
+                window.extractionResult = { ok: false, error: err.message };
+            }
+        }
+
+        animate();
+    </script>
+</body>
+</html>

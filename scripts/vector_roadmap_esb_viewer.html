@@ -1,0 +1,2732 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Empire State Building - Google Maps Reference & Grey-Box Low-Poly 3D Viewer</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0b0f19;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+    }
+    #webgl-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.8), 0 0 20px rgba(56, 189, 248, 0.12);
+    }
+    .hud-slider {
+      accent-color: #38bdf8;
+    }
+    .btn-action {
+      background: rgba(30, 41, 59, 0.85);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      color: #cbd5e1;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .btn-action:hover {
+      background: rgba(2, 132, 199, 0.25);
+      border-color: rgba(56, 189, 248, 0.6);
+      color: #ffffff;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+    }
+    .btn-action.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #ffffff;
+      box-shadow: 0 0 18px rgba(14, 165, 233, 0.5);
+    }
+    @keyframes pulse-cyan {
+      0%, 100% { opacity: 0.85; }
+      50% { opacity: 1; filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.8)); }
+    }
+    .cyan-glow {
+      animation: pulse-cyan 3s infinite ease-in-out;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body class="bg-[#0b0f19] text-slate-100 antialiased overflow-hidden">
+  <!-- 3D Canvas Container -->
+  <div id="webgl-container"></div>
+
+  <!-- Top Navigation & Control Toolbar -->
+  <header class="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none z-20">
+    <div class="flex flex-col gap-2 pointer-events-auto">
+      <!-- Row 1: Brand + Landmark + Model Switcher -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- Engine Brand Pill -->
+        <div class="glass-panel flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-200">
+          <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
+          <span class="tracking-wide">Scratchbox 3D Engine</span>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 font-mono">GOOGLE REFERENCE</span>
+        </div>
+
+        <!-- Landmark Identifier -->
+        <div class="glass-panel cyan-glow flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium text-slate-200 border-cyan-500/40 bg-slate-900/60">
+          <span>🏛️</span>
+          <span class="font-bold text-slate-100">Empire State Building</span>
+          <span class="text-[10px] text-cyan-300 font-mono">Google Spatial Datum | H: 443.2m</span>
+        </div>
+
+        <!-- Model Style Switcher -->
+        <div class="glass-panel flex items-center gap-1 p-1 rounded-full">
+          <button id="btn-model-greybox" onclick="switchModelStyle('greybox')" class="btn-action active px-3 py-1 rounded-full text-[11px] font-semibold" title="Clean Architectural Studio Grey-Box Massing (C++20)">Google Grey-Box (Low Poly)</button>
+          <button id="btn-model-wireframe" onclick="switchModelStyle('wireframe')" class="btn-action px-3 py-1 rounded-full text-[11px] font-semibold" title="Facet Silhouette & Edge Outlines">Wireframe Facets</button>
+          <button id="btn-model-context" onclick="switchModelStyle('context')" class="btn-action px-3 py-1 rounded-full text-[11px] font-semibold" title="Full Midtown Contextual Envelopes">Midtown Massings</button>
+          <button id="btn-model-sloped" onclick="switchModelStyle('sloped')" class="btn-action px-3 py-1 rounded-full text-[11px] font-semibold text-emerald-300" title="Load Complete Native C++20 Engine Sloped GLB Map">Native C++20 Sloped Map</button>
+        </div>
+
+        <!-- Google Map ID & Style Data Source Modal Trigger -->
+        <button onclick="toggleMapStyleModal(true)" class="glass-panel btn-action px-3 py-1.5 rounded-full flex items-center gap-2 text-xs text-cyan-300 hover:text-white font-medium shadow-md transition-all border border-cyan-500/40 hover:border-cyan-400" title="Google Cloud Map ID & Vector Data Source (Vector1)">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="font-mono text-[11px]">Map ID: ad80a856...</span>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-200 border border-cyan-400/40 font-semibold">Vector1 Source</span>
+        </button>
+
+        <!-- Live Google Vector Map Reference (Path B) for COLMAP -->
+        <button id="btn-toggle-vector-ref" onclick="toggleVectorRefDock()" class="glass-panel btn-action px-3 py-1.5 rounded-full flex items-center gap-2 text-xs text-amber-300 hover:text-white font-medium shadow-md transition-all border border-amber-500/40 hover:border-amber-400 bg-amber-950/40" title="Toggle Live Google Maps JavaScript Vector Reference Dock (Path B) for COLMAP / GLOMAP (Hotkey: V)">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span class="font-bold">🗺️ COLMAP Vector Ref (Path B)</span>
+          <span id="vector-ref-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/80 text-amber-200 border border-amber-500/30 font-mono">PiP Dock</span>
+        </button>
+
+        <!-- Live Google Solar API Rooftop Shapes (Empirical Facets & Tiers) -->
+        <button id="btn-toggle-solar-roofs" onclick="toggleSolarRooftops()" class="glass-panel btn-action active px-3 py-1.5 rounded-full flex items-center gap-2 text-xs text-amber-300 hover:text-white font-medium shadow-md transition-all border border-amber-500/40 hover:border-amber-400 bg-amber-950/40" title="Toggle 3D Google Solar API Rooftop Facets & Empirical Setbacks (Hotkey: S)">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+          <span class="font-bold">☀️ Solar Rooftops</span>
+          <span id="solar-roof-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/80 text-amber-200 border border-amber-500/30 font-mono">109 Facets</span>
+        </button>
+      </div>
+
+      <!-- Row 2: Camera Presets & Lighting -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- Camera Presets -->
+        <div class="glass-panel flex items-center gap-1 p-1 rounded-full">
+          <button onclick="setCameraPreset('overview')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium" title="3/4 Isometric Perspective">Overview</button>
+          <button onclick="setCameraPreset('crown')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium" title="Mooring Mast & Spire at 443.2m">Spire & Crown</button>
+          <button onclick="setCameraPreset('broadway')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium" title="Herald Square & Broadway Diagonal">Broadway</button>
+          <button onclick="setCameraPreset('street5th')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium" title="5th Avenue Sidewalk Perspective">5th Ave View</button>
+          <button onclick="setCameraPreset('topdown')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium" title="90° Top-Down Masterplan">Midtown Plan</button>
+          <button onclick="setCameraPreset('colmap_survey')" class="btn-action px-2.5 py-1 rounded-full text-[11px] font-medium text-sky-400 font-mono" title="5th Ave COLMAP Photogrammetry Camera Station">📷 COLMAP (15)</button>
+          
+          <!-- Station Jump Dropdown -->
+          <div class="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/80 border border-sky-500/30">
+            <span class="text-[10px] font-mono text-sky-400">Station:</span>
+            <select id="colmap-station-select" onchange="onStationSelectChange(this.value)" class="bg-slate-800 text-sky-200 text-[10px] font-mono rounded px-1.5 py-0.5 border border-sky-400/30 focus:outline-none focus:border-sky-400 cursor-pointer">
+              <option value="">Jump to Station...</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Lighting Environment -->
+        <div class="glass-panel flex items-center gap-1 p-1 rounded-full">
+          <button id="light-studio" onclick="setLightingMode('studio')" class="btn-action active px-2.5 py-1 rounded-full text-[11px]">🏛️ Studio Clay</button>
+          <button id="light-day" onclick="setLightingMode('day')" class="btn-action px-2.5 py-1 rounded-full text-[11px]">☀️ Daylight</button>
+          <button id="light-sunset" onclick="setLightingMode('sunset')" class="btn-action px-2.5 py-1 rounded-full text-[11px]">🌅 Slate Sunset</button>
+          <button id="light-night" onclick="setLightingMode('night')" class="btn-action px-2.5 py-1 rounded-full text-[11px]">🌙 Blueprint</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Controls: Fullscreen, HUD Toggle -->
+    <div class="flex items-center gap-2 pointer-events-auto">
+      <!-- Fullscreen Toggle Button -->
+      <button onclick="toggleFullscreen()" class="glass-panel btn-action w-9 h-9 rounded-full flex items-center justify-center text-slate-300 hover:text-white" title="Toggle Fullscreen (F)">
+        <svg id="fullscreen-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+        </svg>
+      </button>
+
+      <!-- Toggle HUD Button -->
+      <button onclick="toggleHUD()" id="hud-toggle-btn" class="glass-panel btn-action w-9 h-9 rounded-full flex items-center justify-center text-cyan-300" title="Toggle Vector Roadmap HUD (H)">
+        <span class="text-sm">🗺️</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Vector Roadmap HUD Widget (Top-Right Floating) -->
+  <aside id="roadmap-hud" class="glass-panel absolute top-18 right-4 w-[320px] max-h-[calc(100vh-5.5rem)] overflow-y-auto rounded-2xl p-4 z-20 transition-all duration-300 border border-slate-700/60 shadow-2xl">
+    <!-- Header -->
+    <div class="flex items-center justify-between pb-2.5 border-b border-white/10">
+      <div class="flex items-center gap-2">
+        <span class="text-base">🗺️</span>
+        <div>
+          <h2 class="text-[11px] font-bold text-white tracking-wider uppercase">Google Vector Reference</h2>
+          <p class="text-[9px] text-cyan-300/80 font-mono">Midtown Manhattan (29.0° Grid)</p>
+        </div>
+      </div>
+      <span id="vector-status-badge" class="text-[9px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 tracking-wider">
+        14 ROADS | 9 BLOCKS
+      </span>
+    </div>
+
+    <!-- Live Minimap with Dynamic Camera Frustum & Heading Cone -->
+    <div class="mt-2.5 relative rounded-xl overflow-hidden border border-slate-700/60 bg-[#0a0f1d] h-[180px] w-full shadow-inner">
+      <canvas id="hud-minimap-canvas" class="w-full h-full block"></canvas>
+      
+      <!-- Center Reticle / Heading Compass (Rotates live with 3D camera) -->
+      <div id="hud-reticle" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-75">
+        <svg class="w-20 h-20 -ml-10 -mt-10 overflow-visible" viewBox="-50 -50 100 100">
+          <polygon points="0,0 -22,-38 22,-38" fill="rgba(56, 189, 248, 0.28)" stroke="rgba(56, 189, 248, 0.9)" stroke-width="1.5" stroke-dasharray="2,2"/>
+          <circle cx="0" cy="0" r="4" fill="#38bdf8" stroke="#ffffff" stroke-width="1.5" />
+          <circle cx="0" cy="0" r="9" fill="none" stroke="rgba(56, 189, 248, 0.6)" stroke-width="1.2" stroke-dasharray="3,3" />
+          <line x1="0" y1="-12" x2="0" y2="-5" stroke="#38bdf8" stroke-width="2"/>
+          <line x1="0" y1="5" x2="0" y2="12" stroke="#38bdf8" stroke-width="2"/>
+          <line x1="-12" y1="0" x2="-5" y2="0" stroke="#38bdf8" stroke-width="2"/>
+          <line x1="5" y1="0" x2="12" y2="0" stroke="#38bdf8" stroke-width="2"/>
+        </svg>
+      </div>
+
+      <!-- Real-time HUD Telemetry Badge -->
+      <div class="absolute bottom-1.5 left-1.5 right-1.5 flex items-center justify-between px-2 py-0.5 rounded bg-black/85 backdrop-blur-md border border-white/10 text-[9px] font-mono text-cyan-200">
+        <span id="hover-road-info" class="truncate max-w-[170px]">5th Ave & 34th St, NYC</span>
+        <span id="heading-display" class="font-bold text-cyan-400">HDG: 045°</span>
+      </div>
+    </div>
+
+    <!-- Live Material & Vector Layer Controls -->
+    <div class="mt-3.5 space-y-2.5">
+      <!-- 1. Google 3D Road Corridors Layer -->
+      <div class="flex items-center justify-between text-xs">
+        <label for="toggle-vector-roads" class="font-medium text-slate-300 cursor-pointer flex items-center gap-2">
+          <input type="checkbox" id="toggle-vector-roads" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+          <span>Google Road Corridors (3D)</span>
+        </label>
+        <span id="roads-badge" class="text-[10px] text-cyan-400 font-mono font-semibold">14 ROADS</span>
+      </div>
+
+      <!-- 2. Google 3D Tile Contextual Parcels Layer -->
+      <div class="flex items-center justify-between text-xs">
+        <label for="toggle-vector-parcels" class="font-medium text-slate-300 cursor-pointer flex items-center gap-2">
+          <input type="checkbox" id="toggle-vector-parcels" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+          <span>Surrounding Block Envelopes</span>
+        </label>
+        <span id="parcels-badge" class="text-[10px] text-slate-400 font-mono font-semibold">8 BLOCKS</span>
+      </div>
+
+      <!-- 3. Studio Ground Plane Toggle -->
+      <div class="flex items-center justify-between text-xs">
+        <label for="toggle-ground" class="font-medium text-slate-300 cursor-pointer flex items-center gap-2">
+          <input type="checkbox" id="toggle-ground" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+          <span>Studio Ground Plane</span>
+        </label>
+        <span id="blueprint-status" class="text-[10px] text-cyan-400 font-mono font-semibold">ACTIVE</span>
+      </div>
+
+      <!-- 4. Silhouette Outlines Toggle -->
+      <div class="flex items-center justify-between text-xs">
+        <label for="toggle-edges" class="font-medium text-slate-300 cursor-pointer flex items-center gap-2">
+          <input type="checkbox" id="toggle-edges" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+          <span>Silhouette Edge Outlines</span>
+        </label>
+        <span id="edges-status" class="text-[10px] text-emerald-400 font-mono font-semibold">ON</span>
+      </div>
+
+      <!-- 5. COLMAP / GLOMAP Photogrammetry Survey Rig Toggle -->
+      <div class="flex items-center justify-between text-xs">
+        <label for="toggle-colmap" class="font-medium text-slate-300 cursor-pointer flex items-center gap-2">
+          <input type="checkbox" id="toggle-colmap" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+          <span>COLMAP / GLOMAP Survey</span>
+        </label>
+        <span id="colmap-status" class="text-[10px] text-sky-400 font-mono font-semibold">15 POSES</span>
+      </div>
+
+      <!-- 6. Google Topographic Elevation Profile & Grade Controls -->
+      <div class="p-2.5 rounded-xl bg-slate-900/90 border border-slate-700/60 text-xs space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs">📈</span>
+            <span class="font-bold text-white uppercase text-[10px] tracking-wide">Topographic Profile</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <button id="btn-topo-5th" onclick="setTopoCorridor('5th')" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-900/80 text-cyan-300 border border-cyan-500/40">5th Ave</button>
+            <button id="btn-topo-34th" onclick="setTopoCorridor('34th')" class="px-2 py-0.5 rounded text-[10px] font-mono text-slate-400 hover:text-white bg-slate-800 border border-slate-700">34th St</button>
+          </div>
+        </div>
+
+        <!-- 2D Profile Canvas -->
+        <div class="relative rounded-lg overflow-hidden border border-slate-700/70 bg-[#070b14] h-[105px] w-full shadow-inner">
+          <canvas id="topo-profile-canvas" class="w-full h-full block cursor-crosshair"></canvas>
+          <div id="topo-readout" class="absolute top-1 left-1.5 text-[8.5px] font-mono text-cyan-200 bg-black/80 px-1.5 py-0.5 rounded border border-white/10 pointer-events-none">
+            Google Datum: 18.53m ASL
+          </div>
+        </div>
+
+        <!-- Elevation Topography Toggle & Slope Status -->
+        <div class="flex items-center justify-between text-xs pt-1 border-t border-white/5">
+          <label for="toggle-topography" class="font-medium text-slate-300 cursor-pointer flex items-center gap-1.5">
+            <input type="checkbox" id="toggle-topography" checked class="hud-slider rounded cursor-pointer w-4 h-4">
+            <span class="text-[11px]">Google Topography</span>
+          </label>
+          <span id="topo-grade-badge" class="text-[10px] text-emerald-400 font-mono font-bold">+1.7% S→N</span>
+        </div>
+      </div>
+
+      <!-- 7. Google Solar API Rooftop Shapes & Empirical Tiers -->
+      <div class="p-2.5 rounded-xl bg-slate-900/90 border border-amber-500/40 text-xs space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs">☀️</span>
+            <span class="font-bold text-white uppercase text-[10px] tracking-wide">Solar Rooftop Geometry</span>
+          </div>
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-500/40 font-mono font-bold">Solar API</span>
+        </div>
+
+        <div class="space-y-1.5 text-[10px] font-mono">
+          <div class="p-1.5 rounded bg-slate-950/80 border border-white/5 space-y-1">
+            <div class="flex justify-between items-center text-slate-300 font-bold">
+              <span>🏛️ Empire State Bldg</span>
+              <span class="text-amber-300">109 Facets | 11 Tiers</span>
+            </div>
+            <div class="flex justify-between text-slate-400 text-[9px]">
+              <span>Roof Area: <b class="text-slate-200 font-mono">5,181 m²</b></span>
+              <span>Spire Cap: <b class="text-emerald-300 font-mono">402.75m ASL</b></span>
+            </div>
+            <div class="flex justify-between text-slate-400 text-[9px]">
+              <span>Cap Pitch: <b class="text-cyan-300 font-mono">5.6°</b></span>
+              <span>Cap Azimuth: <b class="text-cyan-300 font-mono">171.8° (SSE)</b></span>
+            </div>
+          </div>
+
+          <div class="p-1.5 rounded bg-slate-950/80 border border-white/5 space-y-1">
+            <div class="flex justify-between items-center text-slate-300 font-bold">
+              <span>🛍️ Macy's Herald Sq</span>
+              <span class="text-amber-300">118 Facets | 4 Tiers</span>
+            </div>
+            <div class="flex justify-between text-slate-400 text-[9px]">
+              <span>Roof Area: <b class="text-slate-200 font-mono">9,560 m²</b></span>
+              <span>Max Roof: <b class="text-emerald-300 font-mono">110.28m ASL</b></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tier Isolation Filters -->
+        <div class="flex items-center gap-1 flex-wrap pt-1 border-t border-white/5">
+          <button id="btn-solar-tier-all" onclick="filterSolarTier('all')" class="px-2 py-0.5 rounded text-[9.5px] font-mono font-bold bg-amber-900/80 text-amber-200 border border-amber-500/40">All Tiers</button>
+          <button id="btn-solar-tier-podium" onclick="filterSolarTier('podium')" class="px-2 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white bg-slate-800 border border-slate-700">Podium (35.6m)</button>
+          <button id="btn-solar-tier-deck" onclick="filterSolarTier('deck')" class="px-2 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white bg-slate-800 border border-slate-700">86th Fl (347m)</button>
+          <button id="btn-solar-tier-spire" onclick="filterSolarTier('spire')" class="px-2 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white bg-slate-800 border border-slate-700">Spire (402.8m)</button>
+        </div>
+
+        <!-- Solar Rooftops Toggle -->
+        <div class="flex items-center justify-between text-xs pt-1 border-t border-white/5">
+          <label for="toggle-solar-mesh" class="font-medium text-slate-300 cursor-pointer flex items-center gap-1.5">
+            <input type="checkbox" id="toggle-solar-mesh" checked onchange="toggleSolarRooftops(this.checked)" class="hud-slider rounded cursor-pointer w-4 h-4">
+            <span class="text-[11px]">3D Solar Facets & Normals</span>
+          </label>
+          <span class="text-[10px] text-amber-400 font-mono font-bold">Pitch Colored</span>
+        </div>
+      </div>
+
+      <!-- Building Massing Height Scale Slider -->
+      <div>
+        <div class="flex items-center justify-between text-[11px] mb-1">
+          <span class="text-slate-400">Context Massing Height Scale</span>
+          <span id="bldg-scale-val" class="text-cyan-300 font-mono font-bold">1.0x</span>
+        </div>
+        <input type="range" id="bldg-scale-slider" min="0" max="200" step="10" value="100" class="hud-slider w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+      </div>
+
+      <!-- Notice: Pure Google Reference & Grey-Box Architecture -->
+      <div class="p-2.5 rounded-xl bg-slate-900/90 border border-slate-700/60 text-[10px] text-slate-300 leading-relaxed font-sans">
+        <div class="font-bold text-slate-200 flex items-center gap-1.5 mb-0.5">
+          <span>🏛️</span>
+          <span>Google Reference & Grey-Box Architecture</span>
+        </div>
+        <span>Vector road corridors, parcel boundaries, and low-poly architectural setbacks derived strictly from Google Maps Platform geospatial data and Google 3D Tile spatial envelopes (443.2m datum). Zero OSM reliance.</span>
+      </div>
+
+      <!-- Cloud-Based Map Styling Actions -->
+      <div class="pt-2 border-t border-white/10 space-y-2">
+        <button onclick="copyStylingJson()" class="w-full py-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700/90 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-medium flex items-center justify-center gap-1.5 transition-all">
+          <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+          <span>Copy Google Cloud Map Styling JSON</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- COLMAP / GLOMAP Live Google Maps Vector Reference Dock (Path B) -->
+  <div id="colmap-vector-dock" class="fixed z-40 transition-all duration-300 shadow-2xl overflow-hidden flex flex-col border border-amber-500/40 rounded-2xl backdrop-blur-xl bg-slate-950/95 hidden"
+       style="bottom: 24px; right: 24px; width: 440px; height: 360px;">
+    
+    <!-- Dock Titlebar -->
+    <div class="px-3 py-2 bg-slate-900/95 border-b border-white/10 flex items-center justify-between select-none" id="vector-dock-header">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+        <div class="flex flex-col">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-bold text-amber-200">Google Vector Reference</span>
+            <span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-500/40 font-mono">Map ID: ad80a856</span>
+          </div>
+          <span class="text-[9px] text-slate-400 font-mono">Vector1 • Manhattan 29.0° Grid • COLMAP Sync</span>
+        </div>
+      </div>
+
+      <!-- Dock Window Controls -->
+      <div class="flex items-center gap-1">
+        <button id="btn-dock-mode-pip" onclick="setVectorDockMode('pip')" class="px-2 py-0.5 rounded text-amber-300 bg-amber-950/80 border border-amber-500/40 hover:bg-slate-800 text-[10px] font-mono" title="Picture-in-Picture Float">⧉ PiP</button>
+        <button id="btn-dock-mode-split" onclick="setVectorDockMode('split')" class="px-2 py-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 text-[10px] font-mono" title="Split-Screen 50/50">◫ Split</button>
+        <button onclick="toggleVectorRefDock(false)" class="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 text-sm leading-none ml-1" title="Close Reference Dock">&times;</button>
+      </div>
+    </div>
+
+    <!-- Active Station Telemetry Strip -->
+    <div class="px-3 py-1.5 bg-slate-900/80 border-b border-white/5 flex items-center justify-between text-[10px] font-mono">
+      <div class="flex items-center gap-1.5 truncate">
+        <span class="text-slate-400">Target:</span>
+        <span id="dock-active-station-name" class="text-sky-300 font-bold truncate">COLMAP_CAM_5TH_AVE_4</span>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <span id="dock-active-station-coords" class="text-slate-400 text-[9px]">40.7484°N, -73.9856°W</span>
+        <button onclick="flyToActiveStation()" class="px-1.5 py-0.5 rounded bg-sky-900/60 hover:bg-sky-800 text-sky-200 text-[9px] border border-sky-400/40">Fly 3D</button>
+      </div>
+    </div>
+
+    <!-- Map Canvas Container -->
+    <div class="relative flex-1 w-full bg-slate-900 overflow-hidden" id="google-vector-map-wrapper">
+      <div id="google-vector-map-canvas" class="w-full h-full"></div>
+      
+      <!-- Overlay Reticle / Orientation Indicator -->
+      <div id="map-orientation-hud" class="absolute top-2 left-2 pointer-events-none px-2 py-0.5 rounded bg-black/70 backdrop-blur border border-white/10 text-[9px] font-mono text-cyan-300 flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <span>Cam Heading: <span id="map-cam-heading-val">029°</span></span>
+      </div>
+    </div>
+
+    <!-- Bottom Station Pin Legend & Quick Filter -->
+    <div class="px-3 py-1 bg-slate-900/95 border-t border-white/10 flex items-center justify-between text-[9px]">
+      <div class="flex items-center gap-2.5">
+        <div class="flex items-center gap-1">
+          <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+          <span class="text-slate-300">5th Ave (#01-#07)</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span class="text-slate-300">34th St (#08-#15)</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <span class="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+          <span class="text-cyan-300">3D Reticle</span>
+        </div>
+      </div>
+      <span class="text-slate-400 font-mono text-[8px]">Click pin to sync</span>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-slate-900/95 border border-cyan-500/50 text-cyan-200 text-xs font-medium shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none z-50 flex items-center gap-2">
+    <span>✓</span>
+    <span id="toast-msg">Google Cloud Map Styling JSON copied to clipboard!</span>
+  </div>
+
+  <!-- Google Cloud Map ID & Vector Data Source Modal -->
+  <div id="map-style-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="glass-panel w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-cyan-500/40 p-6 space-y-5 shadow-2xl text-slate-200">
+      
+      <!-- Modal Header -->
+      <div class="flex items-start justify-between pb-4 border-b border-white/10">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🗺️</span>
+            <h2 class="text-base font-bold text-white tracking-wide">Google Cloud Vector Map Style & Data Source</h2>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 font-mono">CLOUD-BASED STYLING</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">Direct integration with your Google Cloud Map Style ("Vector1") & Vector Map ID</p>
+        </div>
+        <button onclick="toggleMapStyleModal(false)" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 text-lg">&times;</button>
+      </div>
+
+      <!-- Cloud Metadata Card -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-900/80 border border-slate-700/80 font-mono text-xs">
+        <div class="space-y-1">
+          <span class="text-slate-400 text-[11px]">Map Style Name:</span>
+          <div class="flex items-center gap-2">
+            <strong class="text-white text-sm">Vector1</strong>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-500/30">Light</span>
+          </div>
+          <div class="text-[10px] text-slate-400">Style ID: <code class="text-cyan-300">171afbfed80e6143e663574d</code></div>
+        </div>
+
+        <div class="space-y-1">
+          <span class="text-slate-400 text-[11px]">Map ID (Google Cloud):</span>
+          <div class="flex items-center gap-2">
+            <code class="text-cyan-300 text-xs font-bold break-all">ad80a8568eeae7445909ba9f</code>
+            <button onclick="copyMapId()" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-slate-600">Copy</button>
+          </div>
+          <div class="text-[10px] text-emerald-400 font-semibold">Type: JavaScript - Vector (WebGL Engine Enabled)</div>
+        </div>
+      </div>
+
+      <!-- Tab Navigation -->
+      <div class="flex items-center gap-2 border-b border-slate-700 pb-2">
+        <button id="tab-btn-export" onclick="switchModalTab('export')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600/30 text-cyan-200 border border-cyan-500/40">1. How to Export JSON</button>
+        <button id="tab-btn-live" onclick="switchModalTab('live')" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white">2. Live Vector Map Ingestion</button>
+        <button id="tab-btn-colmap" onclick="switchModalTab('colmap')" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white">3. COLMAP & GLOMAP Pipeline</button>
+      </div>
+
+      <!-- Tab 1: How to Retrieve JSON from your screen -->
+      <div id="tab-content-export" class="space-y-3 text-xs leading-relaxed">
+        <div class="p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-cyan-200">
+          <strong>Step-by-step export from your Google Cloud Console screen:</strong>
+        </div>
+        <ol class="list-decimal list-inside space-y-2 text-slate-300 pl-1">
+          <li>On the <strong>Vector1</strong> screen you uploaded, click the <span class="px-2 py-0.5 rounded bg-blue-600/30 text-blue-300 border border-blue-500/40 font-semibold">Customize</span> button at the top.</li>
+          <li>In the style customizer sidebar on the left, click the <strong>JSON</strong> tab.</li>
+          <li>Click the <strong>Export</strong> button to download or copy the complete styling JSON schema.</li>
+          <li>The exported JSON specifies all styling rules for:
+            <ul class="list-disc list-inside pl-4 mt-1 text-slate-400 space-y-1">
+              <li><code class="text-cyan-300">pointOfInterest.park</code> & <code class="text-cyan-300">landscape.natural</code> (Parks & green spaces)</li>
+              <li><code class="text-cyan-300">road.highway</code>, <code class="text-cyan-300">road.arterial</code>, <code class="text-cyan-300">road.local</code> (Road ribbons & interchanges)</li>
+              <li><code class="text-cyan-300">building</code> (Building footprints and 3D setbacks)</li>
+              <li><code class="text-cyan-300">transit</code> (Rail lines, subways, stations)</li>
+            </ul>
+          </li>
+        </ol>
+
+        <!-- Quick Import / Paste Box -->
+        <div class="pt-2">
+          <label class="block text-slate-400 mb-1 font-medium">Or paste your exported Style JSON here:</label>
+          <textarea id="pasted-style-json" rows="4" class="w-full rounded-xl bg-slate-900 border border-slate-700 text-slate-200 font-mono text-[11px] p-2.5 focus:border-cyan-400 focus:outline-none" placeholder="Paste your exported Google Cloud Map Style JSON here..."></textarea>
+          <div class="flex justify-end gap-2 mt-2">
+            <button onclick="applyPastedStyleJson()" class="px-3 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold">Apply Custom Style</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Live Ingestion via Maps JavaScript Vector API -->
+      <div id="tab-content-live" class="space-y-3 text-xs leading-relaxed hidden">
+        <p class="text-slate-300">
+          Because your Map ID is configured as <strong>JavaScript - Vector</strong>, you do not need to manually parse images: Google Maps automatically streams the vector geometry (buildings, parks, road networks) directly into the browser's WebGL pipeline.
+        </p>
+
+        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-700 space-y-2">
+          <label class="block text-slate-300 font-medium">Test Live Google Vector Map with your Map ID:</label>
+          <div class="flex gap-2">
+            <input type="password" id="gmaps-api-key-input" class="flex-1 rounded-lg bg-slate-800 border border-slate-600 px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:border-cyan-400 focus:outline-none" placeholder="Enter your Google Maps API Key to load live Map ID">
+            <button onclick="loadGoogleVectorMapWithKey()" class="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs whitespace-nowrap">Load Live Vector1 Map</button>
+          </div>
+          <p id="gmaps-load-status" class="text-[11px] text-cyan-300 font-mono">Map ID: ad80a8568eeae7445909ba9f ready</p>
+        </div>
+
+        <div id="live-gmap-container" class="w-full h-64 rounded-xl border border-slate-700 overflow-hidden hidden relative"></div>
+      </div>
+
+      <!-- Tab 3: COLMAP / GLOMAP Pipeline -->
+      <div id="tab-content-colmap" class="space-y-3 text-xs leading-relaxed hidden">
+        <div class="p-3 rounded-xl bg-slate-900 border border-slate-700 space-y-2">
+          <div class="font-bold text-cyan-300 flex items-center gap-1.5">
+            <span>📷</span>
+            <span>How Google Vector Map Data Enriches COLMAP & GLOMAP</span>
+          </div>
+          <p class="text-slate-300">
+            In photogrammetry and Structure-from-Motion (SfM), accurate 3D vector map data from Google provides <strong>geometric priors</strong> that solve scale drift and camera degeneracy:
+          </p>
+          <ul class="list-disc list-inside space-y-1 text-slate-300 pl-2">
+            <li><strong>Road Centerline Splines & Curb Ribbons</strong>: Provide metric scale constraints and vanishing line directions (29.0° and 119.0°).</li>
+            <li><strong>Cadastral Parcel Prisms & Building Facades</strong>: Constrain plane-sweep stereo and provide structural bounding volumes for dense depth estimation.</li>
+            <li><strong>15 COLMAP Survey Stations</strong>: Each camera station in our rig has calibrated ENU coordinates (X, Y, Z) and optical forward vectors aligned to Google's vector grid.</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Bottom Telemetry & Navigation Instructions -->
+  <footer class="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
+    <div class="glass-panel px-3.5 py-1.5 rounded-full text-xs text-slate-400 pointer-events-auto flex items-center gap-3">
+      <span class="flex items-center gap-1.5 text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span id="fps-display" class="font-mono font-semibold">60 FPS</span>
+      </span>
+      <span class="w-[1px] h-3 bg-white/20"></span>
+      <span>Left-Drag: <strong class="text-slate-200">Orbit</strong></span>
+      <span>Right-Drag: <strong class="text-slate-200">Pan</strong></span>
+      <span>Scroll: <strong class="text-slate-200">Zoom</strong></span>
+      <span class="w-[1px] h-3 bg-white/20"></span>
+      <span class="text-cyan-400 font-mono text-[11px]" id="survey-stat">Google Vectors: 14 Corridors, 9 Block Parcels</span>
+    </div>
+
+    <div class="glass-panel px-3.5 py-1.5 rounded-full text-xs text-slate-200 font-mono pointer-events-auto flex items-center gap-2">
+      <span class="text-slate-400">Active Asset:</span>
+      <span id="active-model-name" class="font-semibold text-cyan-300">Google Grey-Box (Native C++20, 443.2m)</span>
+    </div>
+  </footer>
+
+  <!-- WebGL 3D Application Script -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // Expose for debugging & testing
+    window.THREE = THREE;
+    window.GLTFLoader = GLTFLoader;
+
+    // --- 1. Geodetic & Coordinate Reference ---
+    const ESB_GOOGLE_GEODETIC_ANCHOR = {
+      lat: 40.7484405,
+      lng: -73.9856644,
+      elevation: 15.0,
+      placeId: 'ChIJh9828XNZwokR_3A0K2N46j8'
+    };
+    const EARTH_RADIUS = 6378137.0;
+
+    function projectWgs84ToEnu(lng, lat) {
+      const dLngRad = ((lng - ESB_GOOGLE_GEODETIC_ANCHOR.lng) * Math.PI) / 180.0;
+      const dLatRad = ((lat - ESB_GOOGLE_GEODETIC_ANCHOR.lat) * Math.PI) / 180.0;
+      const originLatRad = (ESB_GOOGLE_GEODETIC_ANCHOR.lat * Math.PI) / 180.0;
+
+      const x = dLngRad * EARTH_RADIUS * Math.cos(originLatRad);
+      const z = -dLatRad * EARTH_RADIUS; // Three.js North is -Z
+      return [x, z];
+    }
+
+    // --- 2. WebGL 3D Scene Initialization ---
+    const container = document.getElementById('webgl-container');
+    const scene = new THREE.Scene();
+    window.scene = scene;
+    scene.background = new THREE.Color('#0b0f19');
+    scene.fog = new THREE.FogExp2('#0b0f19', 0.00085);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 5000);
+    window.camera = camera;
+    camera.position.set(413, 280, 494);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxPolarAngle = Math.PI * 0.492;
+    controls.target.set(-47.01, 180, -26.06);
+
+    window.camera = camera;
+    window.controls = controls;
+    window.scene = scene;
+
+    // --- 3. Studio Clay & Architectural Lighting Rig ---
+    const ambientLight = new THREE.AmbientLight('#ffffff', 0.95);
+    scene.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight('#e2e8f0', '#1e293b', 0.9);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight('#ffffff', 2.2);
+    dirLight.position.set(280, 480, 240);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 10;
+    dirLight.shadow.camera.far = 1600;
+    const d = 500;
+    dirLight.shadow.camera.left = -d;
+    dirLight.shadow.camera.right = d;
+    dirLight.shadow.camera.top = d;
+    dirLight.shadow.camera.bottom = -d;
+    dirLight.shadow.bias = -0.0002;
+    scene.add(dirLight);
+
+    const fillLight = new THREE.DirectionalLight('#94a3b8', 1.1);
+    fillLight.position.set(-260, 220, -220);
+    scene.add(fillLight);
+
+    window.setLightingMode = function(mode) {
+      document.querySelectorAll('#light-studio, #light-day, #light-sunset, #light-night').forEach(b => b.classList.remove('active'));
+      const activeBtn = document.getElementById(`light-${mode}`);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      if (mode === 'studio') {
+        scene.background.set('#0b0f19');
+        scene.fog.color.set('#0b0f19');
+        ambientLight.intensity = 0.95;
+        ambientLight.color.set('#ffffff');
+        hemiLight.color.set('#e2e8f0');
+        hemiLight.groundColor.set('#1e293b');
+        hemiLight.intensity = 0.9;
+        dirLight.color.set('#ffffff');
+        dirLight.intensity = 2.2;
+        dirLight.position.set(280, 480, 240);
+        fillLight.color.set('#94a3b8');
+        fillLight.intensity = 1.1;
+      } else if (mode === 'day') {
+        scene.background.set('#0d1527');
+        scene.fog.color.set('#0d1527');
+        ambientLight.intensity = 0.85;
+        ambientLight.color.set('#ffffff');
+        hemiLight.color.set('#7dd3fc');
+        hemiLight.groundColor.set('#0f172a');
+        hemiLight.intensity = 0.85;
+        dirLight.color.set('#f8fafc');
+        dirLight.intensity = 2.4;
+        dirLight.position.set(300, 480, 260);
+        fillLight.color.set('#38bdf8');
+        fillLight.intensity = 1.0;
+      } else if (mode === 'sunset') {
+        scene.background.set('#1e1b2e');
+        scene.fog.color.set('#1e1b2e');
+        ambientLight.intensity = 0.7;
+        ambientLight.color.set('#fed7aa');
+        hemiLight.color.set('#fb7185');
+        hemiLight.groundColor.set('#1e1022');
+        hemiLight.intensity = 0.8;
+        dirLight.color.set('#f59e0b');
+        dirLight.intensity = 2.6;
+        dirLight.position.set(360, 180, 180);
+        fillLight.color.set('#a855f7');
+        fillLight.intensity = 1.1;
+      } else if (mode === 'night') {
+        scene.background.set('#030712');
+        scene.fog.color.set('#030712');
+        ambientLight.intensity = 0.35;
+        ambientLight.color.set('#38bdf8');
+        hemiLight.color.set('#0284c7');
+        hemiLight.groundColor.set('#020617');
+        hemiLight.intensity = 0.4;
+        dirLight.color.set('#38bdf8');
+        dirLight.intensity = 0.8;
+        dirLight.position.set(120, 240, 120);
+        fillLight.color.set('#64748b');
+        fillLight.intensity = 0.5;
+      }
+    };
+
+    // --- 4. Ground Foundation & Vector Roadmap Underlay ---
+    const baseGroundGeo = new THREE.PlaneGeometry(3600, 3600);
+    baseGroundGeo.rotateX(-Math.PI / 2);
+    const baseGroundMat = new THREE.MeshStandardMaterial({ color: '#090d16', roughness: 0.95 });
+    const baseGroundMesh = new THREE.Mesh(baseGroundGeo, baseGroundMat);
+    baseGroundMesh.position.y = -0.2;
+    baseGroundMesh.receiveShadow = true;
+    scene.add(baseGroundMesh);
+
+    // Studio Ground Plane (Clean architectural base without conflicting unrotated 2D grids)
+    const groundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(3000, 3000).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({
+        color: 0x0a0f1d, // Clean deep architectural studio ground
+        roughness: 0.95,
+        metalness: 0.02
+      })
+    );
+    groundMesh.name = 'studio-ground-plane';
+    groundMesh.position.y = -0.05;
+    groundMesh.receiveShadow = true;
+    scene.add(groundMesh);
+
+    // Subtle Concentric Range Rings Centered on ESB Parcel (100m, 250m, 500m)
+    const rangeRingsGroup = new THREE.Group();
+    rangeRingsGroup.name = 'spatial-range-rings';
+    const ringMat = new THREE.LineBasicMaterial({
+      color: 0x1e293b,
+      transparent: true,
+      opacity: 0.6
+    });
+    [100, 250, 500].forEach(radius => {
+      const ringGeo = new THREE.BufferGeometry();
+      const pts = [];
+      const segs = 96;
+      for (let i = 0; i <= segs; i++) {
+        const theta = (i / segs) * Math.PI * 2;
+        pts.push(new THREE.Vector3(
+          -47.0102 + Math.cos(theta) * radius,
+          0.02,
+          -26.0585 + Math.sin(theta) * radius
+        ));
+      }
+      ringGeo.setFromPoints(pts);
+      rangeRingsGroup.add(new THREE.Line(ringGeo, ringMat));
+    });
+    scene.add(rangeRingsGroup);
+
+    // --- 5. Google Vector 3D Mesh Infrastructure ---
+    const vectorRootGroup = new THREE.Group();
+    vectorRootGroup.name = 'google-vector-root';
+    scene.add(vectorRootGroup);
+
+    const vectorRoadsGroup = new THREE.Group();
+    vectorRoadsGroup.name = 'google-road-corridors';
+    vectorRootGroup.add(vectorRoadsGroup);
+
+    const vectorParcelsGroup = new THREE.Group();
+    vectorParcelsGroup.name = 'google-block-parcels';
+    vectorRootGroup.add(vectorParcelsGroup);
+
+    // Google Solar API Rooftop Facets & Normal Vector Group
+    const solarRooftopsGroup = new THREE.Group();
+    solarRooftopsGroup.name = 'google-solar-rooftops';
+    vectorRootGroup.add(solarRooftopsGroup);
+    const solarFacetMeshList = [];
+
+    // Studio Grey-Box Architectural Materials
+    const roadMatMajor = new THREE.MeshStandardMaterial({
+      color: 0x334155, // Slate grey corridor
+      roughness: 0.85,
+      metalness: 0.05,
+      side: THREE.DoubleSide
+    });
+
+    const roadMatMinor = new THREE.MeshStandardMaterial({
+      color: 0x1e293b, // Dark slate cross street
+      roughness: 0.9,
+      metalness: 0.05,
+      side: THREE.DoubleSide
+    });
+
+    const parcelClayMat = new THREE.MeshStandardMaterial({
+      color: 0x64748b, // Architectural Grey-Box
+      roughness: 0.82,
+      metalness: 0.04
+    });
+
+    const edgeLineMat = new THREE.LineBasicMaterial({
+      color: 0x94a3b8,
+      transparent: true,
+      opacity: 0.65
+    });
+
+    const roadMeshList = [];
+    const parcelEdgesList = [];
+
+    function buildRoadRibbon(pointsXZ, width, elevation, pointsElevation) {
+      if (!pointsXZ || pointsXZ.length < 2) return null;
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const indices = [];
+
+      const halfW = width / 2.0;
+      const leftPts = [];
+      const rightPts = [];
+
+      for (let i = 0; i < pointsXZ.length; i++) {
+        const cur = pointsXZ[i];
+        let perpX = 0, perpZ = 0;
+        if (i === 0) {
+          const next = pointsXZ[1];
+          const dx = next[0] - cur[0], dz = next[1] - cur[1];
+          const len = Math.hypot(dx, dz) || 1;
+          perpX = -dz / len; perpZ = dx / len;
+        } else if (i === pointsXZ.length - 1) {
+          const prev = pointsXZ[pointsXZ.length - 2];
+          const dx = cur[0] - prev[0], dz = cur[1] - prev[1];
+          const len = Math.hypot(dx, dz) || 1;
+          perpX = -dz / len; perpZ = dx / len;
+        } else {
+          const prev = pointsXZ[i - 1];
+          const next = pointsXZ[i + 1];
+          const dx = next[0] - prev[0], dz = next[1] - prev[1];
+          const len = Math.hypot(dx, dz) || 1;
+          perpX = -dz / len; perpZ = dx / len;
+        }
+
+        const yElev = (pointsElevation && pointsElevation[i] != null) ? (elevation + pointsElevation[i]) : elevation;
+        leftPts.push([cur[0] + perpX * halfW, yElev, cur[1] + perpZ * halfW]);
+        rightPts.push([cur[0] - perpX * halfW, yElev, cur[1] - perpZ * halfW]);
+      }
+
+      for (let i = 0; i < pointsXZ.length; i++) {
+        const lp = leftPts[i];
+        const rp = rightPts[i];
+
+        positions.push(lp[0], lp[1], lp[2]);
+        normals.push(0, 1, 0);
+        uvs.push(0, i / (pointsXZ.length - 1));
+
+        positions.push(rp[0], rp[1], rp[2]);
+        normals.push(0, 1, 0);
+        uvs.push(1, i / (pointsXZ.length - 1));
+
+        if (i < pointsXZ.length - 1) {
+          const idx = i * 2;
+          indices.push(idx, idx + 1, idx + 2);
+          indices.push(idx + 1, idx + 3, idx + 2);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    // Direct 3D Polygon Prism Builder (Guarantees zero coordinate inversion and 100% parallel alignment)
+    function createPolygonPrismGeometry(ring, height, bottomY = 0) {
+      if (!ring || ring.length < 3) return null;
+
+      // Clean ring: strip duplicate closing point if present
+      const pts = [];
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i];
+        if (i === ring.length - 1 && ring.length > 3 &&
+            Math.hypot(p[0] - ring[0][0], p[1] - ring[0][1]) < 1e-4) {
+          continue;
+        }
+        pts.push(new THREE.Vector2(p[0], p[1]));
+      }
+      const n = pts.length;
+      if (n < 3) return null;
+
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const indices = [];
+
+      const topY = bottomY + height;
+
+      // Compute signed area in XZ plane (p0.x * p1.y - p1.x * p0.y where y is Z)
+      let signedArea = 0;
+      for (let i = 0; i < n; i++) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % n];
+        signedArea += (p0.x * p1.y - p1.x * p0.y);
+      }
+      const isCCW = signedArea > 0;
+
+      // 1. Vertical Side Walls
+      for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        const p0 = pts[i];
+        const p1 = pts[next];
+
+        const dx = p1.x - p0.x;
+        const dz = p1.y - p0.y;
+        const len = Math.hypot(dx, dz);
+        if (len < 1e-4) continue;
+
+        let nx = dz / len;
+        let nz = -dx / len;
+        if (!isCCW) {
+          nx = -nx;
+          nz = -nz;
+        }
+
+        const baseIdx = positions.length / 3;
+
+        // Quad vertices (direct X, Y, Z coordinates without any rotation)
+        positions.push(p0.x, bottomY, p0.y);
+        positions.push(p1.x, bottomY, p1.y);
+        positions.push(p1.x, topY, p1.y);
+        positions.push(p0.x, topY, p0.y);
+
+        for (let k = 0; k < 4; k++) {
+          normals.push(nx, 0, nz);
+        }
+        uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+
+        if (isCCW) {
+          indices.push(baseIdx + 0, baseIdx + 1, baseIdx + 2);
+          indices.push(baseIdx + 0, baseIdx + 2, baseIdx + 3);
+        } else {
+          indices.push(baseIdx + 0, baseIdx + 2, baseIdx + 1);
+          indices.push(baseIdx + 0, baseIdx + 3, baseIdx + 2);
+        }
+      }
+
+      // 2. Horizontal Roof Cap
+      const roofStartIdx = positions.length / 3;
+      for (let i = 0; i < n; i++) {
+        positions.push(pts[i].x, topY, pts[i].y);
+        normals.push(0, 1, 0);
+        uvs.push(pts[i].x * 0.05, pts[i].y * 0.05);
+      }
+
+      const triangles = THREE.ShapeUtils.triangulateShape(pts, []);
+      for (let i = 0; i < triangles.length; i++) {
+        const tri = triangles[i];
+        if (isCCW) {
+          indices.push(roofStartIdx + tri[0], roofStartIdx + tri[1], roofStartIdx + tri[2]);
+        } else {
+          indices.push(roofStartIdx + tri[0], roofStartIdx + tri[2], roofStartIdx + tri[1]);
+        }
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geo.setIndex(indices);
+      return geo;
+    }
+
+    function insetPolygonRing(ring, factor) {
+      if (!ring || ring.length < 3) return ring;
+      let cx = 0, cz = 0;
+      const n = ring.length;
+      for (let i = 0; i < n; i++) {
+        cx += ring[i][0];
+        cz += ring[i][1];
+      }
+      cx /= n;
+      cz /= n;
+      return ring.map(pt => [
+        cx + (pt[0] - cx) * (1.0 - factor),
+        cz + (pt[1] - cz) * (1.0 - factor)
+      ]);
+    }
+
+    // COLMAP / GLOMAP Multi-View Survey Trajectory & Frustums Group
+    const colmapCamerasGroup = new THREE.Group();
+    colmapCamerasGroup.name = 'google-colmap-cameras';
+    scene.add(colmapCamerasGroup);
+    const colmapCameraMeshes = [];
+    const parcelMeshList = [];
+    window.parcelMeshList = parcelMeshList;
+    let loadedMapping = null;
+    let useTopography = true;
+    window.useTopography = useTopography;
+    let currentTopoCorridor = '5th';
+    window.currentTopoCorridor = currentTopoCorridor;
+
+    // Ingest Canonical Google Midtown Vector Dataset (Zero OSM)
+    fetch('/public/data/google_midtown_vector_mapping.json')
+      .then(res => res.json())
+      .then(mapping => {
+        loadedMapping = mapping;
+        console.log(`Ingesting ${mapping.roads.length} Google road corridors, ${mapping.parcels.length} parcels, and ${mapping.colmapCameraPoses ? mapping.colmapCameraPoses.length : 0} COLMAP camera poses...`);
+
+        // 1. Build Google Road Corridors with Per-Vertex Google Elevation
+        mapping.roads.forEach(road => {
+          const pointsXZ = road.pointsLocalENU;
+          const isMajor = road.widthMeters >= 28.0;
+          const pointsElev = road.pointsElevationRelativeMeters;
+          const geo = buildRoadRibbon(pointsXZ, road.widthMeters, 0.12, pointsElev);
+
+          if (geo) {
+            const mesh = new THREE.Mesh(geo, isMajor ? roadMatMajor : roadMatMinor);
+            mesh.name = road.name;
+            mesh.userData = {
+              name: road.name,
+              type: road.type,
+              lanes: road.lanes,
+              width: road.widthMeters,
+              pointsElevationRelativeMeters: pointsElev,
+              elevationASL: road.elevationASL
+            };
+            mesh.receiveShadow = true;
+            vectorRoadsGroup.add(mesh);
+            roadMeshList.push(mesh);
+          }
+        });
+
+        // 2. Build Surrounding Building Parcels (Elevated by Google Elevation API)
+        mapping.parcels.forEach(parcel => {
+          const polygon = parcel.polygonLocalENU;
+          if (!polygon || polygon.length < 3) return;
+
+          const baseElev = (useTopography && parcel.elevationRelativeMeters != null) ? parcel.elevationRelativeMeters : 0.0;
+          const parcelGroup = new THREE.Group();
+          parcelGroup.name = parcel.name;
+          parcelGroup.userData = parcel;
+          parcelGroup.position.y = baseElev;
+
+          if (parcel.isLandmark) {
+            // Surveyed cadastral parcel footprint for ESB (Block 835, Lot 41)
+            const pts = [];
+            for (let i = 0; i < polygon.length; i++) {
+              pts.push(new THREE.Vector3(polygon[i][0], 0.20, polygon[i][1]));
+            }
+            const parcelBorderGeo = new THREE.BufferGeometry().setFromPoints(pts);
+            const parcelBorderMat = new THREE.LineBasicMaterial({
+              color: 0x38bdf8, // Glowing Cyan surveyed lot line
+              linewidth: 3.0,
+              transparent: true,
+              opacity: 0.95
+            });
+            const parcelBorderLine = new THREE.Line(parcelBorderGeo, parcelBorderMat);
+            parcelBorderLine.name = 'google-esb-cadastral-boundary';
+            parcelBorderLine.userData = parcel;
+            parcelGroup.add(parcelBorderLine);
+            vectorParcelsGroup.add(parcelGroup);
+            return;
+          }
+
+          const h = parcel.heightMeters || 60.0;
+          const levels = parcel.levels || 15;
+
+          // Multi-Tier Architectural Massings (Manhattan 1916 Zoning Setbacks)
+          if (h > 150.0) {
+            // 3-Tier Skyscraper: Podium + Setback Shaft + Crown Penthouse
+            const podiumH = Math.min(26.0, h * 0.20);
+            const crownH = Math.min(22.0, h * 0.12);
+            const shaftH = h - podiumH - crownH;
+
+            // Tier 1: Ground Podium
+            const g0 = createPolygonPrismGeometry(polygon, podiumH, 0.0);
+            if (g0) {
+              const m0 = new THREE.Mesh(g0, parcelClayMat);
+              m0.name = `${parcel.name} - Podium`;
+              m0.userData = parcel;
+              m0.castShadow = true;
+              m0.receiveShadow = true;
+              const e0 = new THREE.LineSegments(new THREE.EdgesGeometry(g0, 20), edgeLineMat);
+              m0.add(e0);
+              parcelEdgesList.push(e0);
+              parcelGroup.add(m0);
+              parcelMeshList.push(m0);
+            }
+
+            // Tier 2: Tower Shaft (Inset 14%)
+            const ring1 = insetPolygonRing(polygon, 0.14);
+            const g1 = createPolygonPrismGeometry(ring1, shaftH, podiumH);
+            if (g1) {
+              const m1 = new THREE.Mesh(g1, parcelClayMat);
+              m1.name = `${parcel.name} - Tower Shaft`;
+              m1.userData = parcel;
+              m1.castShadow = true;
+              m1.receiveShadow = true;
+              const e1 = new THREE.LineSegments(new THREE.EdgesGeometry(g1, 20), edgeLineMat);
+              m1.add(e1);
+              parcelEdgesList.push(e1);
+              parcelGroup.add(m1);
+              parcelMeshList.push(m1);
+            }
+
+            // Tier 3: Crown (Inset 28%)
+            const ring2 = insetPolygonRing(polygon, 0.28);
+            const g2 = createPolygonPrismGeometry(ring2, crownH, podiumH + shaftH);
+            if (g2) {
+              const m2 = new THREE.Mesh(g2, parcelClayMat);
+              m2.name = `${parcel.name} - Crown`;
+              m2.userData = parcel;
+              m2.castShadow = true;
+              m2.receiveShadow = true;
+              const e2 = new THREE.LineSegments(new THREE.EdgesGeometry(g2, 20), edgeLineMat);
+              m2.add(e2);
+              parcelEdgesList.push(e2);
+              parcelGroup.add(m2);
+              parcelMeshList.push(m2);
+            }
+          } else if (h > 75.0) {
+            // 2-Tier Commercial: Podium + Setback Tower
+            const podiumH = Math.min(24.0, h * 0.28);
+            const towerH = h - podiumH;
+
+            // Tier 1: Podium
+            const g0 = createPolygonPrismGeometry(polygon, podiumH, 0.0);
+            if (g0) {
+              const m0 = new THREE.Mesh(g0, parcelClayMat);
+              m0.name = `${parcel.name} - Base`;
+              m0.userData = parcel;
+              m0.castShadow = true;
+              m0.receiveShadow = true;
+              const e0 = new THREE.LineSegments(new THREE.EdgesGeometry(g0, 20), edgeLineMat);
+              m0.add(e0);
+              parcelEdgesList.push(e0);
+              parcelGroup.add(m0);
+              parcelMeshList.push(m0);
+            }
+
+            // Tier 2: Tower (Inset 12%)
+            const ring1 = insetPolygonRing(polygon, 0.12);
+            const g1 = createPolygonPrismGeometry(ring1, towerH, podiumH);
+            if (g1) {
+              const m1 = new THREE.Mesh(g1, parcelClayMat);
+              m1.name = `${parcel.name} - Upper Shaft`;
+              m1.userData = parcel;
+              m1.castShadow = true;
+              m1.receiveShadow = true;
+              const e1 = new THREE.LineSegments(new THREE.EdgesGeometry(g1, 20), edgeLineMat);
+              m1.add(e1);
+              parcelEdgesList.push(e1);
+              parcelGroup.add(m1);
+              parcelMeshList.push(m1);
+            }
+          } else {
+            // 1-Tier Low-Rise Commercial / Loft
+            const prismGeo = createPolygonPrismGeometry(polygon, h, 0.0);
+            if (prismGeo) {
+              const mesh = new THREE.Mesh(prismGeo, parcelClayMat);
+              mesh.name = parcel.name;
+              mesh.userData = parcel;
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+
+              // Crisp silhouette edge outlines
+              const edgeGeo = new THREE.EdgesGeometry(prismGeo, 20);
+              const edgeLines = new THREE.LineSegments(edgeGeo, edgeLineMat);
+              mesh.add(edgeLines);
+              parcelEdgesList.push(edgeLines);
+
+              parcelGroup.add(mesh);
+              parcelMeshList.push(mesh);
+            }
+          }
+
+          vectorParcelsGroup.add(parcelGroup);
+        });
+
+        // 2b. Build Landscape / Park / Plaza Polygons (Informed by Google Vector Shapes & Elevations)
+        if (mapping.landscapes && mapping.landscapes.length > 0) {
+          mapping.landscapes.forEach(landscape => {
+            const polygon = landscape.polygonLocalENU;
+            if (!polygon || polygon.length < 3) return;
+
+            const landscapeElev = (useTopography && landscape.elevationRelativeMeters != null) ? landscape.elevationRelativeMeters : 0.0;
+            const landscapeGroup = new THREE.Group();
+            landscapeGroup.name = landscape.name;
+            landscapeGroup.userData = landscape;
+            landscapeGroup.position.y = landscapeElev;
+
+            const isPark = landscape.type === 'park';
+            const slabH = isPark ? 0.20 : 0.12;
+            const slabGeo = createPolygonPrismGeometry(polygon, slabH, 0.02);
+            if (slabGeo) {
+              const slabMat = new THREE.MeshStandardMaterial({
+                color: isPark ? 0x4ade80 : 0x94a3b8,
+                roughness: isPark ? 0.85 : 0.70,
+                metalness: 0.05
+              });
+              const mesh = new THREE.Mesh(slabGeo, slabMat);
+              mesh.name = landscape.name;
+              mesh.userData = landscape;
+              mesh.receiveShadow = true;
+              landscapeGroup.add(mesh);
+              vectorParcelsGroup.add(landscapeGroup);
+              parcelMeshList.push(mesh);
+            }
+          });
+        }
+
+        renderTopoProfile(currentTopoCorridor);
+
+        // 3. Build Calibrated COLMAP & GLOMAP Photogrammetry Rig
+        if (mapping.colmapCameraPoses && mapping.colmapCameraPoses.length > 0) {
+          mapping.colmapCameraPoses.forEach(pose => {
+            const camGroup = new THREE.Group();
+            camGroup.name = pose.name;
+            camGroup.userData = pose;
+            camGroup.position.set(pose.positionLocalENU[0], pose.positionLocalENU[1], pose.positionLocalENU[2]);
+
+            // Camera Sensor Station (Sphere)
+            const sensorGeo = new THREE.SphereGeometry(1.2, 16, 16);
+            const isAvenue = pose.name.includes('5TH_AVE');
+            const sensorMat = new THREE.MeshStandardMaterial({
+              color: isAvenue ? 0x38bdf8 : 0xf59e0b,
+              emissive: isAvenue ? 0x0284c7 : 0xd97706,
+              emissiveIntensity: 0.8,
+              roughness: 0.2
+            });
+            const sensorMesh = new THREE.Mesh(sensorGeo, sensorMat);
+            sensorMesh.name = pose.name;
+            sensorMesh.userData = pose;
+            camGroup.add(sensorMesh);
+            colmapCameraMeshes.push(sensorMesh);
+
+            // Optical Frustum Pyramid
+            const fwdVec = pose.forwardVector || pose.forwardVectorENU || [0, 0, -1];
+            const fwd = new THREE.Vector3(...fwdVec).normalize();
+            const up = new THREE.Vector3(0, 1, 0);
+            const right = new THREE.Vector3().crossVectors(fwd, up).normalize();
+            const realUp = new THREE.Vector3().crossVectors(right, fwd).normalize();
+
+            const frustumDepth = 8.0;
+            const halfH = Math.tan(THREE.MathUtils.degToRad((pose.fovDegrees || 54.4) / 2)) * frustumDepth;
+            const halfW = halfH * 1.5;
+
+            const c = fwd.clone().multiplyScalar(frustumDepth);
+            const tl = c.clone().addScaledVector(right, -halfW).addScaledVector(realUp, halfH);
+            const tr = c.clone().addScaledVector(right, halfW).addScaledVector(realUp, halfH);
+            const br = c.clone().addScaledVector(right, halfW).addScaledVector(realUp, -halfH);
+            const bl = c.clone().addScaledVector(right, -halfW).addScaledVector(realUp, -halfH);
+
+            const frustumPts = [
+              new THREE.Vector3(0, 0, 0), tl,
+              new THREE.Vector3(0, 0, 0), tr,
+              new THREE.Vector3(0, 0, 0), br,
+              new THREE.Vector3(0, 0, 0), bl,
+              tl, tr,
+              tr, br,
+              br, bl,
+              bl, tl
+            ];
+            const frustumGeo = new THREE.BufferGeometry().setFromPoints(frustumPts);
+            const frustumLineMat = new THREE.LineBasicMaterial({
+              color: isAvenue ? 0x38bdf8 : 0xf59e0b,
+              linewidth: 2.0,
+              transparent: true,
+              opacity: 0.85
+            });
+            const frustumLines = new THREE.LineSegments(frustumGeo, frustumLineMat);
+            camGroup.add(frustumLines);
+
+            colmapCamerasGroup.add(camGroup);
+          });
+
+          // Connect 5th Ave Camera Trajectory
+          const fifthAveCams = mapping.colmapCameraPoses.filter(p => p.name.includes('5TH_AVE'));
+          if (fifthAveCams.length >= 2) {
+            const trajPts = fifthAveCams.map(p => new THREE.Vector3(...p.positionLocalENU));
+            const trajGeo = new THREE.BufferGeometry().setFromPoints(trajPts);
+            const trajMat = new THREE.LineDashedMaterial({
+              color: 0x38bdf8,
+              dashSize: 4,
+              gapSize: 2,
+              linewidth: 2.5
+            });
+            const trajLine = new THREE.Line(trajGeo, trajMat);
+            trajLine.computeLineDistances();
+            colmapCamerasGroup.add(trajLine);
+          }
+
+          // Connect 34th St Camera Trajectory
+          const streetCams = mapping.colmapCameraPoses.filter(p => p.name.includes('34TH_ST'));
+          if (streetCams.length >= 2) {
+            const trajPts = streetCams.map(p => new THREE.Vector3(...p.positionLocalENU));
+            const trajGeo = new THREE.BufferGeometry().setFromPoints(trajPts);
+            const trajMat = new THREE.LineDashedMaterial({
+              color: 0xf59e0b,
+              dashSize: 4,
+              gapSize: 2,
+              linewidth: 2.5
+            });
+            const trajLine = new THREE.Line(trajGeo, trajMat);
+            trajLine.computeLineDistances();
+            colmapCamerasGroup.add(trajLine);
+          }
+        }
+
+        // 4. Build 3D Google Solar API Rooftop Shapes & Orientation Vectors
+        if (mapping.solarRooftops) {
+          const solarBuildings = [
+            mapping.solarRooftops.empireStateBuilding,
+            mapping.solarRooftops.macysHeraldSquare
+          ].filter(Boolean);
+
+          solarBuildings.forEach(bldg => {
+            if (!bldg.sampleFacets) return;
+
+            bldg.sampleFacets.forEach(facet => {
+              const facetGroup = new THREE.Group();
+              facetGroup.name = `solar-facet-${bldg.name}-${facet.segmentIndex}`;
+              facetGroup.userData = {
+                isSolarFacet: true,
+                buildingName: bldg.name,
+                tierName: facet.tierName || 'Rooftop Tier',
+                ...facet
+              };
+
+              const w = facet.dimensionsMeters ? facet.dimensionsMeters[0] : 10.0;
+              const d = facet.dimensionsMeters ? facet.dimensionsMeters[1] : 10.0;
+              const yASL = facet.planeHeightASL || (18.53 + (facet.relativeHeightMeters || 0));
+              const yRel = yASL - 18.53 + 0.20; // Offset slightly above roof slab to prevent Z-fighting
+
+              // Plane geometry for facet quad
+              const quadGeo = new THREE.PlaneGeometry(w, d);
+              
+              // Color based on pitch angle
+              const pitch = facet.pitchDegrees || 0.0;
+              let facetColor = 0x38bdf8; // Sky blue (< 3 deg)
+              if (pitch >= 3.0 && pitch <= 15.0) {
+                facetColor = 0x10b981; // Emerald gentle slope
+              } else if (pitch > 15.0) {
+                facetColor = 0xf59e0b; // Amber steep pitch
+              }
+
+              const quadMat = new THREE.MeshStandardMaterial({
+                color: facetColor,
+                roughness: 0.35,
+                metalness: 0.70,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.88
+              });
+
+              const quadMesh = new THREE.Mesh(quadGeo, quadMat);
+              quadMesh.rotation.x = -Math.PI / 2; // Flat horizontal base
+              quadMesh.name = `quad-${facet.segmentIndex}`;
+              quadMesh.userData = facetGroup.userData;
+
+              // Tilt according to Solar API surface normal
+              const nx = facet.normal ? facet.normal.nx : 0;
+              const ny = facet.normal ? facet.normal.ny : 1;
+              const nz = facet.normal ? facet.normal.nz : 0;
+              const normalVec = new THREE.Vector3(nx, ny, nz).normalize();
+
+              // Align mesh normal with normalVec
+              const upVec = new THREE.Vector3(0, 1, 0);
+              const quat = new THREE.Quaternion().setFromUnitVectors(upVec, normalVec);
+              // Also rotate by Manhattan Grid bearing 29.0 deg
+              const gridEuler = new THREE.Euler(0, -THREE.MathUtils.degToRad(29.0), 0);
+              const gridQuat = new THREE.Quaternion().setFromEuler(gridEuler);
+              quadMesh.quaternion.copy(quat).multiply(gridQuat);
+
+              quadMesh.position.set(facet.centerENU[0], yRel, facet.centerENU[1]);
+              facetGroup.add(quadMesh);
+              solarFacetMeshList.push(quadMesh);
+
+              // Add surface normal vector orientation arrow (stem)
+              const arrowLen = Math.min(6.0, Math.max(2.5, Math.sqrt(facet.areaMeters2 || 20) * 0.4));
+              const arrow = new THREE.ArrowHelper(
+                normalVec,
+                new THREE.Vector3(facet.centerENU[0], yRel, facet.centerENU[1]),
+                arrowLen,
+                facetColor,
+                0.8,
+                0.4
+              );
+              facetGroup.add(arrow);
+
+              // Silhouette outline around facet
+              const edgesGeo = new THREE.EdgesGeometry(quadGeo);
+              const edgesLine = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.6
+              }));
+              quadMesh.add(edgesLine);
+
+              solarRooftopsGroup.add(facetGroup);
+            });
+          });
+          console.log(`Successfully generated ${solarFacetMeshList.length} 3D Google Solar API Rooftop Facets with Normal Vectors!`);
+        }
+
+        window.colmapPosesList = mapping.colmapCameraPoses || [];
+        populateStationDropdown(window.colmapPosesList);
+
+        const landscapeCount = mapping.landscapes ? mapping.landscapes.length : 0;
+        document.getElementById('vector-status-badge').textContent = `${mapping.roads.length} ROADS | ${mapping.parcels.length} BLOCKS | ${landscapeCount} PARKS | 15 COLMAP`;
+        document.getElementById('roads-badge').textContent = `${mapping.roads.length} ROADS`;
+        document.getElementById('parcels-badge').textContent = `${mapping.parcels.length - 1} BLOCKS`;
+        document.getElementById('survey-stat').textContent = `Google Vectors: ${mapping.roads.length} Corridors, ${mapping.parcels.length} Parcels, ${landscapeCount} Parks/Plazas, 15 COLMAP Poses (100% Parallel 29.0°)`;
+        console.log('Successfully ingested Google Midtown Vector Dataset with accurate 3D parcel prisms and COLMAP survey rig!');
+
+        // Render Vector Minimap directly from Google dataset
+        renderVectorMinimap(mapping);
+      })
+      .catch(err => {
+        console.error('Failed to load Google Midtown Vector Dataset:', err);
+      });
+
+    // --- 6. Native C++20 Google Grey-Box Empire State Building Model ---
+    const modelsRootGroup = new THREE.Group();
+    modelsRootGroup.name = 'google-greybox-root';
+
+    // Position and align to Google Maps surveyed cadastral parcel (Block 835, Lot 41)
+    // Centroid: u = -53.75m, v = 0.0m -> ENU: X = -47.0102m, Z = -26.0585m
+    // Bearing: Manhattan Grid 29.0° clockwise from True North -> rotation.y = -29.0°
+    const ESB_PARCEL_CENTER_X = -47.0102;
+    const ESB_PARCEL_CENTER_Z = -26.0585;
+    const MANHATTAN_GRID_ROTATION_Y = -THREE.MathUtils.degToRad(29.0);
+
+    modelsRootGroup.position.set(ESB_PARCEL_CENTER_X, 0, ESB_PARCEL_CENTER_Z);
+    modelsRootGroup.rotation.y = MANHATTAN_GRID_ROTATION_Y;
+    scene.add(modelsRootGroup);
+
+    let esbGreyBoxModel = null;
+    let esbWireframeEdges = null;
+
+    const gltfLoader = new GLTFLoader();
+
+    // 1. Load C++20 generated low-poly Grey-Box model
+    gltfLoader.load(
+      '/public/models/google_greybox_esb.glb',
+      (gltf) => {
+        esbGreyBoxModel = gltf.scene;
+        esbGreyBoxModel.name = 'google-greybox-esb';
+
+        // Apply Studio Grey-Box Clay Material
+        const esbClayMat = new THREE.MeshStandardMaterial({
+          color: 0x8e929b, // Studio Neutral Grey
+          roughness: 0.80,
+          metalness: 0.02
+        });
+
+        const esbEdgeMat = new THREE.LineBasicMaterial({
+          color: 0xcbd5e1, // Crisp silhouette line
+          linewidth: 1.5,
+          transparent: true,
+          opacity: 0.95
+        });
+
+        esbGreyBoxModel.traverse(child => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.material = esbClayMat;
+
+            // Generate crisp facet and setback edge lines
+            const edges = new THREE.EdgesGeometry(child.geometry, 20);
+            esbWireframeEdges = new THREE.LineSegments(edges, esbEdgeMat);
+            child.add(esbWireframeEdges);
+          }
+        });
+
+        modelsRootGroup.add(esbGreyBoxModel);
+        console.log('Successfully loaded Native C++20 Google Grey-Box Empire State Building GLB!');
+      },
+      undefined,
+      (err) => {
+        console.error('Failed to load Google Grey-Box GLB:', err);
+      }
+    );
+
+    // 2. Load C++20 Generated Topographic Midtown Sloped Map GLB
+    let nativeSlopedMapModel = null;
+    gltfLoader.load(
+      '/public/models/google_midtown_lowpoly_map.glb',
+      (gltf) => {
+        nativeSlopedMapModel = gltf.scene;
+        window.nativeSlopedMapModel = nativeSlopedMapModel;
+        nativeSlopedMapModel.name = 'native-cpp20-sloped-map';
+        nativeSlopedMapModel.visible = false;
+        modelsRootGroup.add(nativeSlopedMapModel);
+        console.log('Successfully preloaded Native C++20 Topographic Sloped Midtown Map GLB (4,203 verts)!');
+      },
+      undefined,
+      (err) => console.warn('Could not load native sloped map GLB:', err)
+    );
+
+    // Model View Modes
+    window.switchModelStyle = function(style) {
+      document.getElementById('btn-model-greybox').classList.toggle('active', style === 'greybox');
+      document.getElementById('btn-model-wireframe').classList.toggle('active', style === 'wireframe');
+      document.getElementById('btn-model-context').classList.toggle('active', style === 'context');
+      const btnSloped = document.getElementById('btn-model-sloped');
+      if (btnSloped) btnSloped.classList.toggle('active', style === 'sloped');
+
+      if (style === 'sloped') {
+        if (esbGreyBoxModel) esbGreyBoxModel.visible = false;
+        vectorParcelsGroup.visible = false;
+        vectorRoadsGroup.visible = false;
+        if (groundMesh) groundMesh.visible = false;
+        if (nativeSlopedMapModel) nativeSlopedMapModel.visible = true;
+        document.getElementById('active-model-name').textContent = 'Native C++20 Sloped Topographic GLB (4,203 Verts, Google Elevation)';
+        return;
+      }
+
+      if (nativeSlopedMapModel) nativeSlopedMapModel.visible = false;
+      if (groundMesh) groundMesh.visible = true;
+      vectorRoadsGroup.visible = true;
+      if (!esbGreyBoxModel) return;
+
+      if (style === 'greybox') {
+        esbGreyBoxModel.traverse(child => {
+          if (child.isMesh) {
+            child.material.wireframe = false;
+            child.visible = true;
+          }
+        });
+        if (esbWireframeEdges) esbWireframeEdges.visible = true;
+        vectorParcelsGroup.visible = true;
+        document.getElementById('active-model-name').textContent = 'Google Grey-Box (Native C++20, 443.2m)';
+      } else if (style === 'wireframe') {
+        esbGreyBoxModel.traverse(child => {
+          if (child.isMesh) {
+            child.material.wireframe = true;
+            child.visible = true;
+          }
+        });
+        if (esbWireframeEdges) esbWireframeEdges.visible = true;
+        document.getElementById('active-model-name').textContent = 'Grey-Box Wireframe Facet Silhouettes';
+      } else if (style === 'context') {
+        esbGreyBoxModel.traverse(child => {
+          if (child.isMesh) {
+            child.material.wireframe = false;
+            child.visible = true;
+          }
+        });
+        if (esbWireframeEdges) esbWireframeEdges.visible = true;
+        vectorParcelsGroup.visible = true;
+        document.getElementById('active-model-name').textContent = 'Full Midtown Contextual Envelopes';
+      }
+    };
+
+    // --- 7. Minimap HUD Canvas Synchronizer (Pure Google Vector Dataset) ---
+    const hudMinimapCanvas = document.getElementById('hud-minimap-canvas');
+    hudMinimapCanvas.width = 400;
+    hudMinimapCanvas.height = 400;
+    const hudMinimapCtx = hudMinimapCanvas.getContext('2d');
+
+    function renderVectorMinimap(mapping) {
+      if (!mapping || !hudMinimapCtx) return;
+      hudMinimapCtx.fillStyle = '#0a0f1d';
+      hudMinimapCtx.fillRect(0, 0, 400, 400);
+
+      const cx = 200;
+      const cy = 200;
+      const scale = 0.38; // px per meter
+
+      // Helper to convert world ENU to minimap canvas coords
+      function toMap(x, z) {
+        return [
+          cx + (x - ESB_PARCEL_CENTER_X) * scale,
+          cy + (z - ESB_PARCEL_CENTER_Z) * scale
+        ];
+      }
+
+      // Draw parcels
+      if (mapping.parcels) {
+        mapping.parcels.forEach(p => {
+          if (!p.polygonLocalENU || p.polygonLocalENU.length < 3) return;
+          hudMinimapCtx.beginPath();
+          for (let i = 0; i < p.polygonLocalENU.length; i++) {
+            const pt = toMap(p.polygonLocalENU[i][0], p.polygonLocalENU[i][1]);
+            if (i === 0) hudMinimapCtx.moveTo(pt[0], pt[1]);
+            else hudMinimapCtx.lineTo(pt[0], pt[1]);
+          }
+          hudMinimapCtx.closePath();
+          if (p.isLandmark) {
+            hudMinimapCtx.fillStyle = 'rgba(56, 189, 248, 0.4)';
+            hudMinimapCtx.fill();
+            hudMinimapCtx.strokeStyle = '#38bdf8';
+            hudMinimapCtx.lineWidth = 2.0;
+            hudMinimapCtx.stroke();
+          } else {
+            hudMinimapCtx.fillStyle = '#1e293b';
+            hudMinimapCtx.fill();
+            hudMinimapCtx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+            hudMinimapCtx.lineWidth = 1.0;
+            hudMinimapCtx.stroke();
+          }
+        });
+      }
+
+      // Draw landscapes (parks and plazas)
+      if (mapping.landscapes) {
+        mapping.landscapes.forEach(l => {
+          if (!l.polygonLocalENU || l.polygonLocalENU.length < 3) return;
+          hudMinimapCtx.beginPath();
+          for (let i = 0; i < l.polygonLocalENU.length; i++) {
+            const pt = toMap(l.polygonLocalENU[i][0], l.polygonLocalENU[i][1]);
+            if (i === 0) hudMinimapCtx.moveTo(pt[0], pt[1]);
+            else hudMinimapCtx.lineTo(pt[0], pt[1]);
+          }
+          hudMinimapCtx.closePath();
+          if (l.type === 'park') {
+            hudMinimapCtx.fillStyle = 'rgba(74, 222, 128, 0.55)';
+            hudMinimapCtx.fill();
+            hudMinimapCtx.strokeStyle = '#4ade80';
+            hudMinimapCtx.lineWidth = 1.5;
+            hudMinimapCtx.stroke();
+          } else {
+            hudMinimapCtx.fillStyle = 'rgba(148, 163, 184, 0.40)';
+            hudMinimapCtx.fill();
+            hudMinimapCtx.strokeStyle = '#94a3b8';
+            hudMinimapCtx.lineWidth = 1.0;
+            hudMinimapCtx.stroke();
+          }
+        });
+      }
+
+      // Draw road corridors
+      if (mapping.roads) {
+        mapping.roads.forEach(r => {
+          if (!r.pointsLocalENU || r.pointsLocalENU.length < 2) return;
+          hudMinimapCtx.beginPath();
+          for (let i = 0; i < r.pointsLocalENU.length; i++) {
+            const pt = toMap(r.pointsLocalENU[i][0], r.pointsLocalENU[i][1]);
+            if (i === 0) hudMinimapCtx.moveTo(pt[0], pt[1]);
+            else hudMinimapCtx.lineTo(pt[0], pt[1]);
+          }
+          hudMinimapCtx.strokeStyle = r.widthMeters >= 28.0 ? '#475569' : '#334155';
+          hudMinimapCtx.lineWidth = Math.max(2, r.widthMeters * scale * 0.75);
+          hudMinimapCtx.stroke();
+        });
+      }
+
+      // Draw COLMAP camera survey stations on minimap
+      if (mapping.colmapCameraPoses) {
+        mapping.colmapCameraPoses.forEach(c => {
+          const pt = toMap(c.positionLocalENU[0], c.positionLocalENU[2]);
+          hudMinimapCtx.beginPath();
+          hudMinimapCtx.arc(pt[0], pt[1], 2.8, 0, Math.PI * 2);
+          hudMinimapCtx.fillStyle = c.name.includes('5TH_AVE') ? '#38bdf8' : '#f59e0b';
+          hudMinimapCtx.fill();
+        });
+      }
+    }
+
+    // --- Topographic Profile Canvas & Interactive Crosshair ---
+    const topoCanvas = document.getElementById('topo-profile-canvas');
+    let topoCtx = null;
+    if (topoCanvas) {
+      topoCanvas.width = 280 * (window.devicePixelRatio || 1);
+      topoCanvas.height = 100 * (window.devicePixelRatio || 1);
+      topoCtx = topoCanvas.getContext('2d');
+    }
+
+    const topoCorridorData = {
+      '5th': {
+        name: '5th Ave (30th ➔ 42nd St)',
+        points: [
+          { name: '30th St', dist: 0, elev: 14.98 },
+          { name: '31st St', dist: 80, elev: 15.54 },
+          { name: '32nd St', dist: 160, elev: 16.12 },
+          { name: '33rd St', dist: 240, elev: 17.30 },
+          { name: '34th St (ESB)', dist: 320, elev: 18.53, isDatum: true },
+          { name: '36th St', dist: 460, elev: 19.82 },
+          { name: '38th St', dist: 600, elev: 21.40 },
+          { name: '40th St', dist: 740, elev: 23.15 },
+          { name: '42nd St (Bryant Pk)', dist: 860, elev: 24.80 }
+        ]
+      },
+      '34th': {
+        name: '34th St (Penn ➔ Park Ave)',
+        points: [
+          { name: 'Penn / 7th', dist: 0, elev: 14.26 },
+          { name: 'Greeley Sq', dist: 140, elev: 15.10 },
+          { name: 'Herald Sq', dist: 220, elev: 15.27 },
+          { name: 'ESB / 5th', dist: 440, elev: 18.53, isDatum: true },
+          { name: 'CUNY Center', dist: 560, elev: 20.08 },
+          { name: 'Madison Ave', dist: 680, elev: 20.95 },
+          { name: 'Park Ave', dist: 870, elev: 22.39 }
+        ]
+      }
+    };
+
+    let topoHoverDist = null;
+
+    if (topoCanvas) {
+      topoCanvas.addEventListener('mousemove', (e) => {
+        const rect = topoCanvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const padL = 28, padR = 12;
+        const plotW = rect.width - padL - padR;
+        const norm = Math.max(0, Math.min(1, (mouseX - padL) / Math.max(1, plotW)));
+        const data = topoCorridorData[currentTopoCorridor];
+        if (data) {
+          const maxDist = data.points[data.points.length - 1].dist;
+          topoHoverDist = norm * maxDist;
+          renderTopoProfile(currentTopoCorridor);
+        }
+      });
+
+      topoCanvas.addEventListener('mouseleave', () => {
+        topoHoverDist = null;
+        renderTopoProfile(currentTopoCorridor);
+      });
+    }
+
+    function renderTopoProfile(corridorKey) {
+      if (!topoCanvas || !topoCtx) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = topoCanvas.width;
+      const h = topoCanvas.height;
+      topoCtx.clearRect(0, 0, w, h);
+
+      const data = topoCorridorData[corridorKey] || topoCorridorData['5th'];
+      const pts = data.points;
+      const padL = 32 * dpr;
+      const padR = 14 * dpr;
+      const padT = 16 * dpr;
+      const padB = 20 * dpr;
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+
+      const minElev = 12.0;
+      const maxElev = 26.0;
+      const maxDist = pts[pts.length - 1].dist;
+
+      const getX = (dist) => padL + (dist / maxDist) * plotW;
+      const getY = (elev) => padT + plotH - ((elev - minElev) / (maxElev - minElev)) * plotH;
+
+      // Draw subtle grid lines
+      topoCtx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      topoCtx.lineWidth = 1 * dpr;
+      topoCtx.fillStyle = '#64748b';
+      topoCtx.font = `${8 * dpr}px monospace`;
+      topoCtx.textAlign = 'right';
+
+      [15.0, 20.0, 25.0].forEach(level => {
+        const y = getY(level);
+        topoCtx.beginPath();
+        topoCtx.moveTo(padL, y);
+        topoCtx.lineTo(w - padR, y);
+        topoCtx.stroke();
+        topoCtx.fillText(`${level}m`, padL - 4 * dpr, y + 3 * dpr);
+      });
+
+      // Draw Datum Line (18.53m ASL) in dashed amber
+      const datumY = getY(18.53);
+      topoCtx.save();
+      topoCtx.setLineDash([3 * dpr, 3 * dpr]);
+      topoCtx.strokeStyle = 'rgba(245, 158, 11, 0.7)';
+      topoCtx.beginPath();
+      topoCtx.moveTo(padL, datumY);
+      topoCtx.lineTo(w - padR, datumY);
+      topoCtx.stroke();
+      topoCtx.fillStyle = '#f59e0b';
+      topoCtx.fillText('ESB', padL - 4 * dpr, datumY + 3 * dpr);
+      topoCtx.restore();
+
+      // Draw Elevation Polyline & Gradient Fill
+      topoCtx.beginPath();
+      topoCtx.moveTo(getX(pts[0].dist), getY(pts[0].elev));
+      for (let i = 1; i < pts.length; i++) {
+        topoCtx.lineTo(getX(pts[i].dist), getY(pts[i].elev));
+      }
+      topoCtx.strokeStyle = '#38bdf8';
+      topoCtx.lineWidth = 2 * dpr;
+      topoCtx.stroke();
+
+      // Fill beneath profile
+      topoCtx.lineTo(getX(pts[pts.length - 1].dist), padT + plotH);
+      topoCtx.lineTo(getX(pts[0].dist), padT + plotH);
+      topoCtx.closePath();
+      const grad = topoCtx.createLinearGradient(0, padT, 0, padT + plotH);
+      grad.addColorStop(0, 'rgba(56, 189, 248, 0.3)');
+      grad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
+      topoCtx.fillStyle = grad;
+      topoCtx.fill();
+
+      // Draw Points
+      pts.forEach(p => {
+        const px = getX(p.dist);
+        const py = getY(p.elev);
+        topoCtx.beginPath();
+        topoCtx.arc(px, py, p.isDatum ? 4 * dpr : 2.5 * dpr, 0, Math.PI * 2);
+        topoCtx.fillStyle = p.isDatum ? '#f59e0b' : '#38bdf8';
+        topoCtx.fill();
+        topoCtx.strokeStyle = '#0f172a';
+        topoCtx.lineWidth = 1 * dpr;
+        topoCtx.stroke();
+      });
+
+      // Interactive hover vertical line & dynamic readout
+      const readoutEl = document.getElementById('topo-readout');
+      if (topoHoverDist != null) {
+        let elevInterp = pts[0].elev;
+        let pLabel = pts[0].name;
+        for (let i = 0; i < pts.length - 1; i++) {
+          if (topoHoverDist >= pts[i].dist && topoHoverDist <= pts[i + 1].dist) {
+            const frac = (topoHoverDist - pts[i].dist) / (pts[i + 1].dist - pts[i].dist);
+            elevInterp = pts[i].elev + frac * (pts[i + 1].elev - pts[i].elev);
+            pLabel = frac < 0.5 ? pts[i].name : pts[i + 1].name;
+            break;
+          }
+        }
+        if (topoHoverDist >= pts[pts.length - 1].dist) {
+          elevInterp = pts[pts.length - 1].elev;
+          pLabel = pts[pts.length - 1].name;
+        }
+
+        const hx = getX(topoHoverDist);
+        const hy = getY(elevInterp);
+
+        topoCtx.strokeStyle = '#e2e8f0';
+        topoCtx.lineWidth = 1 * dpr;
+        topoCtx.beginPath();
+        topoCtx.moveTo(hx, padT);
+        topoCtx.lineTo(hx, padT + plotH);
+        topoCtx.stroke();
+
+        topoCtx.beginPath();
+        topoCtx.arc(hx, hy, 4 * dpr, 0, Math.PI * 2);
+        topoCtx.fillStyle = '#ffffff';
+        topoCtx.fill();
+
+        if (readoutEl) {
+          const datumOffset = elevInterp - 18.53;
+          readoutEl.textContent = `${pLabel}: ${elevInterp.toFixed(2)}m ASL (${datumOffset >= 0 ? '+' : ''}${datumOffset.toFixed(2)}m)`;
+        }
+      } else if (readoutEl) {
+        readoutEl.textContent = 'Hover corridor for ASL';
+      }
+    }
+
+    window.setTopoCorridor = function(corridor) {
+      currentTopoCorridor = corridor;
+      const btn5th = document.getElementById('btn-topo-5th');
+      const btn34th = document.getElementById('btn-topo-34th');
+      if (btn5th) btn5th.classList.toggle('active', corridor === '5th');
+      if (btn34th) btn34th.classList.toggle('active', corridor === '34th');
+
+      const gradeBadge = document.getElementById('topo-grade-badge');
+      if (gradeBadge && useTopography) {
+        gradeBadge.textContent = corridor === '5th' ? '+1.7% S➔N' : '+0.9% W➔E';
+      }
+
+      renderTopoProfile(corridor);
+    };
+
+    // --- 8. Telemetry & Interactive Hover Inspection ---
+    const hudReticle = document.getElementById('hud-reticle');
+    const headingDisplay = document.getElementById('heading-display');
+    const hoverInfo = document.getElementById('hover-road-info');
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2(-1000, -1000);
+    let lastHoveredRoad = null;
+    let lastHoveredCamera = null;
+    let lastMouseClientX = 0;
+    let lastMouseClientY = 0;
+
+    window.addEventListener('mousemove', (e) => {
+      lastMouseClientX = e.clientX;
+      lastMouseClientY = e.clientY;
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    });
+
+    function checkRaycastHover() {
+      raycaster.setFromCamera(mouse, camera);
+
+      // 1. Check COLMAP cameras hover
+      if (colmapCamerasGroup.visible && colmapCameraMeshes.length > 0) {
+        const camHits = raycaster.intersectObjects(colmapCameraMeshes, false);
+        if (camHits.length > 0) {
+          const hitCam = camHits[0].object;
+          if (hitCam !== lastHoveredCamera) {
+            lastHoveredCamera = hitCam;
+            const data = hitCam.userData;
+            hoverInfo.textContent = `📷 ${data.name} (f=${data.focalLengthMm}mm, ${data.fovDegrees}°)`;
+          }
+          return;
+        } else {
+          lastHoveredCamera = null;
+        }
+      }
+
+      // 2. Check Road corridors hover
+      if (!vectorRoadsGroup.visible || roadMeshList.length === 0) return;
+      const intersects = raycaster.intersectObjects(roadMeshList, false);
+
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        if (hit !== lastHoveredRoad) {
+          if (lastHoveredRoad) {
+            lastHoveredRoad.material = lastHoveredRoad.userData.width >= 28.0 ? roadMatMajor : roadMatMinor;
+          }
+          lastHoveredRoad = hit;
+          hit.material = new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            roughness: 0.4,
+            emissive: 0x0284c7,
+            emissiveIntensity: 0.45
+          });
+          const name = hit.userData.name || 'Google Road Corridor';
+          const type = hit.userData.type || 'corridor';
+          hoverInfo.textContent = `${name} (${type})`;
+        }
+      } else {
+        if (lastHoveredRoad) {
+          lastHoveredRoad.material = lastHoveredRoad.userData.width >= 28.0 ? roadMatMajor : roadMatMinor;
+          lastHoveredRoad = null;
+          hoverInfo.textContent = '5th Ave & 34th St, NYC';
+        }
+      }
+
+      // 3. Check Solar Rooftop Facets hover for empirical geometry & angles
+      const tooltip = document.getElementById('elevation-tooltip');
+      if (solarRooftopsGroup.visible && solarFacetMeshList.length > 0) {
+        const solarHits = raycaster.intersectObjects(solarFacetMeshList, false);
+        if (solarHits.length > 0) {
+          const hit = solarHits[0].object;
+          const f = hit.userData;
+          if (f && tooltip) {
+            const iconEl = document.getElementById('tooltip-icon');
+            if (iconEl) iconEl.textContent = '☀️';
+            document.getElementById('tooltip-title').textContent = `${f.tierName || 'Solar Rooftop Facet'}`;
+            const planeASL = f.planeHeightASL || (18.53 + (f.relativeHeightMeters || 0));
+            const datumOffset = planeASL - 18.53;
+            document.getElementById('tooltip-ground-asl').textContent = planeASL.toFixed(2) + 'm ASL';
+            document.getElementById('tooltip-datum-y').textContent = (datumOffset >= 0 ? '+' : '') + datumOffset.toFixed(2) + 'm';
+            document.getElementById('tooltip-height').textContent = `Pitch: ${(f.pitchDegrees || 0).toFixed(1)}° | Az: ${(f.azimuthDegrees || 0).toFixed(1)}°`;
+            document.getElementById('tooltip-roof-asl').textContent = `${f.areaMeters2 ? f.areaMeters2.toFixed(1) : '12.5'} m² (${f.buildingName || 'Building'})`;
+
+            const srcEl = document.getElementById('tooltip-src-badge');
+            if (srcEl) srcEl.textContent = 'Google Solar API';
+
+            tooltip.style.left = Math.min(window.innerWidth - 270, lastMouseClientX + 16) + 'px';
+            tooltip.style.top = Math.min(window.innerHeight - 170, lastMouseClientY + 16) + 'px';
+            tooltip.classList.remove('hidden');
+            return;
+          }
+        }
+      }
+
+      // 4. Check Parcels hover for Elevation & Metric Inspector
+      if (vectorParcelsGroup.visible && parcelMeshList.length > 0) {
+        const parcelHits = raycaster.intersectObjects(parcelMeshList, false);
+        if (parcelHits.length > 0) {
+          const hit = parcelHits[0].object;
+          const p = hit.userData;
+          if (p && tooltip) {
+            const iconEl = document.getElementById('tooltip-icon');
+            if (iconEl) iconEl.textContent = p.type === 'park' ? '🌳' : '🏢';
+            document.getElementById('tooltip-title').textContent = p.name || 'Midtown Parcel';
+            const groundASL = p.elevationASL != null ? p.elevationASL : (18.53 + (p.elevationRelativeMeters || 0));
+            const datumOffset = p.elevationRelativeMeters != null ? p.elevationRelativeMeters : (groundASL - 18.53);
+            const bldgH = p.height || p.heightMeters || (p.type === 'park' ? 0.2 : 60.0);
+            const roofASL = groundASL + bldgH;
+
+            document.getElementById('tooltip-ground-asl').textContent = groundASL.toFixed(2) + 'm ASL';
+            document.getElementById('tooltip-datum-y').textContent = (datumOffset >= 0 ? '+' : '') + datumOffset.toFixed(2) + 'm';
+            document.getElementById('tooltip-height').textContent = bldgH.toFixed(1) + 'm' + (p.levels ? ` (${p.levels} fl)` : (p.type === 'park' ? ' (Grade Slab)' : ''));
+            document.getElementById('tooltip-roof-asl').textContent = roofASL.toFixed(2) + 'm ASL';
+
+            const srcEl = document.getElementById('tooltip-src-badge');
+            if (srcEl) srcEl.textContent = 'Google Elevation API';
+
+            tooltip.style.left = Math.min(window.innerWidth - 270, lastMouseClientX + 16) + 'px';
+            tooltip.style.top = Math.min(window.innerHeight - 170, lastMouseClientY + 16) + 'px';
+            tooltip.classList.remove('hidden');
+          }
+        } else if (tooltip && !tooltip.classList.contains('hidden')) {
+          tooltip.classList.add('hidden');
+        }
+      } else if (tooltip && !tooltip.classList.contains('hidden')) {
+        tooltip.classList.add('hidden');
+      }
+    }
+
+    // Click on COLMAP Camera station to teleport into camera optical pose
+    window.addEventListener('click', (e) => {
+      if (e.target.closest('#roadmap-hud') || e.target.closest('header') || e.target.closest('#colmap-vector-dock') || e.target.closest('#map-style-modal')) return;
+      raycaster.setFromCamera(mouse, camera);
+      const camHits = raycaster.intersectObjects(colmapCameraMeshes, false);
+      if (camHits.length > 0) {
+        const pose = camHits[0].object.userData;
+        if (pose && pose.positionLocalENU) {
+          selectColmapStation(pose, true);
+        }
+      }
+    });
+
+    function updateHeadingTelemetry() {
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      let headingDeg = (Math.atan2(dir.x, -dir.z) * 180 / Math.PI);
+      if (headingDeg < 0) headingDeg += 360;
+
+      hudReticle.style.transform = `translate(-50%, -50%) rotate(${headingDeg}deg)`;
+      headingDisplay.textContent = `HDG: ${String(Math.round(headingDeg)).padStart(3, '0')}°`;
+
+      if (gmapCameraReticle) {
+        const radLat = 40.7484405 * Math.PI / 180;
+        const dLat = -camera.position.z / 111139.0;
+        const dLng = camera.position.x / (111139.0 * Math.cos(radLat));
+        const curLat = 40.7484405 + dLat;
+        const curLng = -73.9856644 + dLng;
+        gmapCameraReticle.position = { lat: curLat, lng: curLng };
+        const reticleEl = document.getElementById('gmap-reticle-div');
+        if (reticleEl) {
+          reticleEl.style.transform = `rotate(${headingDeg}deg)`;
+        }
+        const hdgEl = document.getElementById('map-cam-heading-val');
+        if (hdgEl) hdgEl.textContent = `${String(Math.round(headingDeg)).padStart(3, '0')}°`;
+      }
+    }
+
+    // --- 9. Camera Presets with Smooth Easing Centered on ESB Parcel ---
+    window.setCameraPreset = function(preset) {
+      if (preset === 'overview') {
+        camera.up.set(0, 1, 0);
+        animateCameraTo(new THREE.Vector3(413, 280, 494), new THREE.Vector3(-47.01, 180, -26.06));
+      } else if (preset === 'crown') {
+        camera.up.set(0, 1, 0);
+        animateCameraTo(new THREE.Vector3(43, 410, 84), new THREE.Vector3(-47.01, 380, -26.06));
+      } else if (preset === 'broadway') {
+        camera.up.set(0, 1, 0);
+        animateCameraTo(new THREE.Vector3(-327, 180, 214), new THREE.Vector3(-47.01, 140, -26.06));
+      } else if (preset === 'street5th') {
+        camera.up.set(0, 1, 0);
+        animateCameraTo(new THREE.Vector3(73, 25, 49), new THREE.Vector3(-47.01, 160, -26.06));
+      } else if (preset === 'topdown') {
+        // True North points UP on screen (-Z is North in Three.js world)
+        camera.up.set(0, 0, -1);
+        animateCameraTo(new THREE.Vector3(-47.01, 850, -26.059), new THREE.Vector3(-47.01, 0, -26.06));
+      } else if (preset === 'colmap_survey') {
+        camera.up.set(0, 1, 0);
+        animateCameraTo(new THREE.Vector3(180.0, 50.0, 60.0), new THREE.Vector3(-47.01, 80.0, -26.06));
+      }
+    };
+
+    let camAnimStartTime = 0;
+    let camAnimDuration = 900;
+    let camStartPos = new THREE.Vector3();
+    let camEndPos = new THREE.Vector3();
+    let camStartTarget = new THREE.Vector3();
+    let camEndTarget = new THREE.Vector3();
+    let isAnimatingCam = false;
+
+    function animateCameraTo(targetPos, targetLookAt) {
+      camStartPos.copy(camera.position);
+      camEndPos.copy(targetPos);
+      camStartTarget.copy(controls.target);
+      camEndTarget.copy(targetLookAt);
+      camAnimStartTime = performance.now();
+      isAnimatingCam = true;
+    }
+
+    function updateCameraAnimation(now) {
+      if (!isAnimatingCam) return;
+      const elapsed = now - camAnimStartTime;
+      const t = Math.min(1, elapsed / camAnimDuration);
+      const ease = 1 - Math.pow(1 - t, 3);
+
+      camera.position.lerpVectors(camStartPos, camEndPos, ease);
+      controls.target.lerpVectors(camStartTarget, camEndTarget, ease);
+      controls.update();
+
+      if (t >= 1) isAnimatingCam = false;
+    }
+
+    // --- 10. HUD Controls ---
+    document.getElementById('toggle-vector-roads').addEventListener('change', (e) => {
+      vectorRoadsGroup.visible = e.target.checked;
+    });
+
+    document.getElementById('toggle-vector-parcels').addEventListener('change', (e) => {
+      vectorParcelsGroup.visible = e.target.checked;
+    });
+
+    document.getElementById('toggle-ground').addEventListener('change', (e) => {
+      groundMesh.visible = e.target.checked;
+      rangeRingsGroup.visible = e.target.checked;
+      document.getElementById('blueprint-status').textContent = e.target.checked ? 'ACTIVE' : 'HIDDEN';
+    });
+
+    document.getElementById('toggle-edges').addEventListener('change', (e) => {
+      const show = e.target.checked;
+      if (esbWireframeEdges) esbWireframeEdges.visible = show;
+      parcelEdgesList.forEach(ed => ed.visible = show);
+      document.getElementById('edges-status').textContent = show ? 'ON' : 'OFF';
+    });
+
+    document.getElementById('toggle-colmap').addEventListener('change', (e) => {
+      const show = e.target.checked;
+      colmapCamerasGroup.visible = show;
+      document.getElementById('colmap-status').textContent = show ? '15 POSES' : 'OFF';
+    });
+
+    const topoToggle = document.getElementById('toggle-topography');
+    if (topoToggle) {
+      topoToggle.addEventListener('change', (e) => {
+        toggleTopographyMode(e.target.checked);
+      });
+    }
+
+    function toggleTopographyMode(enabled) {
+      useTopography = enabled;
+      const gradeBadge = document.getElementById('topo-grade-badge');
+      if (gradeBadge) {
+        gradeBadge.textContent = enabled ? (currentTopoCorridor === '5th' ? '+1.7% S➔N' : '+0.9% W➔E') : 'FLAT DATUM';
+        gradeBadge.className = enabled ? 'text-[10px] text-emerald-400 font-mono font-bold' : 'text-[10px] text-slate-400 font-mono font-bold';
+      }
+
+      vectorParcelsGroup.children.forEach(child => {
+        if (child.userData && child.userData.elevationRelativeMeters != null) {
+          child.position.y = enabled ? child.userData.elevationRelativeMeters : 0.0;
+        }
+      });
+
+      renderTopoProfile(currentTopoCorridor);
+    }
+
+    document.getElementById('bldg-scale-slider').addEventListener('input', (e) => {
+      const scale = parseInt(e.target.value) / 100;
+      document.getElementById('bldg-scale-val').textContent = scale.toFixed(1) + 'x';
+      vectorParcelsGroup.scale.set(1, scale, 1);
+    });
+
+    window.toggleSolarRooftops = function(forceState) {
+      const show = forceState !== undefined ? forceState : !solarRooftopsGroup.visible;
+      solarRooftopsGroup.visible = show;
+      const toggle = document.getElementById('toggle-solar-mesh');
+      if (toggle) toggle.checked = show;
+      const btn = document.getElementById('btn-toggle-solar-roofs');
+      if (btn) btn.classList.toggle('active', show);
+    };
+
+    window.filterSolarTier = function(tierKey) {
+      ['all', 'podium', 'deck', 'spire'].forEach(k => {
+        const btn = document.getElementById(`btn-solar-tier-${k}`);
+        if (btn) {
+          btn.className = (k === tierKey)
+            ? 'px-2 py-0.5 rounded text-[9.5px] font-mono font-bold bg-amber-900/80 text-amber-200 border border-amber-500/40'
+            : 'px-2 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white bg-slate-800 border border-slate-700';
+        }
+      });
+
+      solarFacetMeshList.forEach(mesh => {
+        const p = mesh.parent;
+        if (!p) return;
+        const elev = mesh.userData.planeHeightASL || 0;
+        if (tierKey === 'all') {
+          p.visible = true;
+        } else if (tierKey === 'podium') {
+          p.visible = elev < 120;
+        } else if (tierKey === 'deck') {
+          p.visible = elev >= 300 && elev <= 360;
+        } else if (tierKey === 'spire') {
+          p.visible = elev > 360;
+        }
+      });
+    };
+
+    window.toggleFullscreen = function() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.warn(err));
+      } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+      }
+    };
+
+    window.toggleHUD = function() {
+      const hud = document.getElementById('roadmap-hud');
+      hud.style.display = hud.style.display === 'none' ? 'block' : 'none';
+    };
+
+    window.copyStylingJson = function() {
+      const json = JSON.stringify({
+        "variant": "light",
+        "styles": [
+          { "id": "political", "label": { "visible": false } },
+          { "id": "pointOfInterest", "label": { "visible": false } },
+          { "id": "infrastructure", "label": { "visible": false } },
+          { "id": "natural", "label": { "visible": false } }
+        ]
+      }, null, 2);
+
+      navigator.clipboard.writeText(json).then(() => {
+        showToast('Google Cloud Map Styling JSON copied to clipboard!');
+      }).catch(() => {
+        showToast('JSON ready to copy!');
+      });
+    };
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toast-msg');
+      toastMsg.textContent = msg;
+      toast.style.opacity = '1';
+      setTimeout(() => {
+        toast.style.opacity = '0';
+      }, 2600);
+    }
+
+    // --- Google Map Style Modal & Data Source Interactions ---
+    window.toggleMapStyleModal = function(open) {
+      const modal = document.getElementById('map-style-modal');
+      if (open === undefined) {
+        modal.classList.toggle('hidden');
+      } else if (open) {
+        modal.classList.remove('hidden');
+      } else {
+        modal.classList.add('hidden');
+      }
+    };
+
+    window.switchModalTab = function(tab) {
+      const tabs = ['export', 'live', 'colmap'];
+      tabs.forEach(t => {
+        const btn = document.getElementById(`tab-btn-${t}`);
+        const content = document.getElementById(`tab-content-${t}`);
+        if (t === tab) {
+          btn.className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600/30 text-cyan-200 border border-cyan-500/40";
+          content.classList.remove('hidden');
+        } else {
+          btn.className = "px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white";
+          content.classList.add('hidden');
+        }
+      });
+    };
+
+    window.copyMapId = function() {
+      navigator.clipboard.writeText("ad80a8568eeae7445909ba9f").then(() => {
+        showToast('Map ID ad80a8568eeae7445909ba9f copied!');
+      }).catch(() => {
+        showToast('Map ID ready to copy: ad80a8568eeae7445909ba9f');
+      });
+    };
+
+    let gmapInstance = null;
+    let googleMapsConfig = null;
+    let isDockOpen = false;
+    let currentDockMode = 'pip';
+    let gmapVectorInstance = null;
+    let gmapStationMarkers = [];
+    let gmapCameraReticle = null;
+    let activeColmapStationPose = null;
+    let gmapScriptLoading = false;
+
+    // Load Google Maps Configuration (Static fallback + Backend API)
+    fetch('/public/data/google_maps_config.json')
+      .then(res => res.json())
+      .then(cfg => {
+        googleMapsConfig = cfg;
+        console.log('Loaded Google Maps config from JSON:', cfg);
+        const keyInput = document.getElementById('gmaps-api-key-input');
+        if (keyInput && cfg.apiKey) keyInput.value = cfg.apiKey;
+      })
+      .catch(err => {
+        console.warn('Fallback: loading config from /api/google_maps_config...', err);
+        fetch('/api/google_maps_config')
+          .then(r => r.json())
+          .then(cfg => {
+            googleMapsConfig = cfg;
+            const keyInput = document.getElementById('gmaps-api-key-input');
+            if (keyInput && cfg.apiKey) keyInput.value = cfg.apiKey;
+          })
+          .catch(e => console.warn('Could not load Google Maps configuration:', e));
+      });
+
+    async function ensureGoogleMapsLoaded(apiKey) {
+      if (window.google && window.google.maps && window.google.maps.marker && window.google.maps.marker.AdvancedMarkerElement) {
+        return true;
+      }
+      if (gmapScriptLoading) {
+        while (!window.google?.maps?.marker?.AdvancedMarkerElement) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+        return true;
+      }
+      gmapScriptLoading = true;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=beta&libraries=marker`;
+        script.async = true;
+        script.onload = () => {
+          gmapScriptLoading = false;
+          resolve(true);
+        };
+        script.onerror = (e) => {
+          gmapScriptLoading = false;
+          reject(new Error('Failed to load Google Maps script. Check your API key.'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+
+    // Modal Live Vector Map Loader
+    window.loadGoogleVectorMapWithKey = async function() {
+      const apiKey = document.getElementById('gmaps-api-key-input').value.trim() || googleMapsConfig?.apiKey;
+      const statusEl = document.getElementById('gmaps-load-status');
+      if (!apiKey) {
+        showToast('Please enter your Google Maps API Key');
+        statusEl.textContent = 'Please enter an API Key to connect.';
+        return;
+      }
+      statusEl.textContent = 'Connecting to Google Maps Vector Engine with Map ID ad80a8568eeae7445909ba9f...';
+
+      try {
+        await ensureGoogleMapsLoaded(apiKey);
+        const container = document.getElementById('live-gmap-container');
+        container.classList.remove('hidden');
+        
+        gmapInstance = new google.maps.Map(container, {
+          center: { lat: 40.7484405, lng: -73.9856644 },
+          zoom: 17,
+          heading: 29.0,
+          tilt: 45,
+          mapId: 'ad80a8568eeae7445909ba9f',
+          renderingType: 'VECTOR',
+          internalUsageAttributionIds: ['gmp_git_agentskills_v1'],
+          disableDefaultUI: false,
+        });
+
+        statusEl.innerHTML = '<span class="text-emerald-400 font-bold">✓ Live Google Vector Map active!</span> Streaming Vector1 style with 3D buildings, parks, and roads.';
+        showToast('Vector1 Google Vector Map connected successfully!');
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Error: ' + err.message;
+        showToast('Failed to load Google Vector Map: ' + err.message);
+      }
+    };
+
+    // Populate COLMAP Station Select Dropdown
+    function populateStationDropdown(poses) {
+      const select = document.getElementById('colmap-station-select');
+      if (!select) return;
+      select.innerHTML = '<option value="">Jump to Station...</option>';
+      poses.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = String(p.id);
+        const street = p.name.includes('5TH_AVE') ? '5th Ave' : '34th St';
+        opt.textContent = `#${String(p.id).padStart(2, '0')} ${street} (${p.focalLengthMm}mm)`;
+        select.appendChild(opt);
+      });
+    }
+
+    window.onStationSelectChange = function(stationId) {
+      if (!stationId) return;
+      const pose = window.colmapPosesList?.find(p => String(p.id) === String(stationId));
+      if (pose) {
+        selectColmapStation(pose, true);
+      }
+    };
+
+    window.flyToActiveStation = function() {
+      if (activeColmapStationPose) {
+        selectColmapStation(activeColmapStationPose, true);
+      } else if (window.colmapPosesList && window.colmapPosesList.length > 0) {
+        selectColmapStation(window.colmapPosesList[0], true);
+      }
+    };
+
+    // Initialize the Live Google Maps Vector Reference Dock (Path B)
+    async function initGoogleVectorRefMap() {
+      if (gmapVectorInstance) return;
+
+      const apiKey = googleMapsConfig?.apiKey || document.getElementById('gmaps-api-key-input')?.value?.trim();
+      if (!apiKey) {
+        showToast('Missing Google Maps API Key in config');
+        return;
+      }
+
+      try {
+        await ensureGoogleMapsLoaded(apiKey);
+        const canvas = document.getElementById('google-vector-map-canvas');
+        if (!canvas) return;
+
+        gmapVectorInstance = new google.maps.Map(canvas, {
+          center: { lat: 40.7484405, lng: -73.9856644 },
+          zoom: 17,
+          heading: 29.0,
+          tilt: 45.0,
+          mapId: googleMapsConfig?.mapId || 'ad80a8568eeae7445909ba9f',
+          renderingType: 'VECTOR',
+          internalUsageAttributionIds: ['gmp_git_agentskills_v1'],
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
+          cameraControl: true,
+        });
+        window.gmapVectorInstance = gmapVectorInstance;
+
+        // Populate all 15 COLMAP survey stations as AdvancedMarkerElement pins
+        if (window.colmapPosesList && window.colmapPosesList.length > 0) {
+          renderGoogleMapColmapPins(window.colmapPosesList);
+        }
+
+        // Create 3D Viewport Optical Reticle
+        const reticleDiv = document.createElement('div');
+        reticleDiv.id = 'gmap-reticle-div';
+        reticleDiv.style.width = '26px';
+        reticleDiv.style.height = '26px';
+        reticleDiv.style.borderRadius = '50%';
+        reticleDiv.style.border = '2.5px solid #06b6d4';
+        reticleDiv.style.background = 'rgba(6, 182, 212, 0.35)';
+        reticleDiv.style.boxShadow = '0 0 12px #06b6d4, inset 0 0 8px rgba(6, 182, 212, 0.5)';
+        reticleDiv.style.position = 'relative';
+        reticleDiv.style.pointerEvents = 'none';
+        reticleDiv.innerHTML = '<div style="position: absolute; top: -9px; left: 8.5px; width: 0; height: 0; border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-bottom: 9px solid #06b6d4; filter: drop-shadow(0 0 4px #06b6d4);">';
+
+        gmapCameraReticle = new google.maps.marker.AdvancedMarkerElement({
+          map: gmapVectorInstance,
+          position: { lat: 40.7484405, lng: -73.9856644 },
+          title: 'Three.js 3D Viewport Optical Pose',
+          content: reticleDiv
+        });
+
+        console.log('Google Maps Vector Reference (Path B) initialized with Map ID ad80a8568eeae7445909ba9f');
+      } catch (err) {
+        console.error('Failed to initialize Google Maps Vector Reference:', err);
+        showToast('Google Vector Reference Error: ' + err.message);
+      }
+    }
+
+    function renderGoogleMapColmapPins(poses) {
+      if (!gmapVectorInstance || !window.google?.maps?.marker?.AdvancedMarkerElement) return;
+
+      gmapStationMarkers.forEach(item => {
+        item.marker.map = null;
+      });
+      gmapStationMarkers = [];
+
+      poses.forEach((pose, idx) => {
+        const isAvenue = pose.name.includes('5TH_AVE');
+        const pin = document.createElement('div');
+        pin.id = `colmap-pin-${pose.id || (idx + 1)}`;
+        pin.className = 'colmap-station-pin cursor-pointer transition-all duration-200 hover:scale-125';
+        pin.style.display = 'flex';
+        pin.style.flexDirection = 'column';
+        pin.style.alignItems = 'center';
+        pin.innerHTML = `
+          <div style="background: ${isAvenue ? '#0284c7' : '#d97706'}; color: white; padding: 2px 6px; border-radius: 6px; font-size: 9px; font-weight: bold; font-family: monospace; border: 1.5px solid ${isAvenue ? '#38bdf8' : '#fbbf24'}; box-shadow: 0 2px 6px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 3px; white-space: nowrap;">
+            <span>📷</span>
+            <span>#${String(pose.id || (idx + 1)).padStart(2, '0')}</span>
+          </div>
+          <div style="width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid ${isAvenue ? '#38bdf8' : '#fbbf24'};"></div>
+        `;
+
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map: gmapVectorInstance,
+          position: { lat: pose.coordinatesWGS84.lat, lng: pose.coordinatesWGS84.lng },
+          title: `${pose.name} (Lens: ${pose.focalLengthMm}mm, FOV: ${pose.fovDegrees}°)`,
+          content: pin
+        });
+
+        marker.addListener('click', () => {
+          selectColmapStation(pose, true);
+        });
+
+        gmapStationMarkers.push({ pose, marker, pin });
+      });
+    }
+
+    window.selectColmapStation = function(pose, shouldAnimateCamera = true) {
+      if (!pose) return;
+      activeColmapStationPose = pose;
+
+      const selectEl = document.getElementById('colmap-station-select');
+      if (selectEl) selectEl.value = String(pose.id || '');
+
+      const dockNameEl = document.getElementById('dock-active-station-name');
+      if (dockNameEl) {
+        const isAve = pose.name.includes('5TH_AVE');
+        dockNameEl.textContent = `${pose.name} (#${pose.id})`;
+        dockNameEl.className = `${isAve ? 'text-sky-300' : 'text-amber-300'} font-bold truncate`;
+      }
+
+      const dockCoordsEl = document.getElementById('dock-active-station-coords');
+      if (dockCoordsEl && pose.coordinatesWGS84) {
+        dockCoordsEl.textContent = `${pose.coordinatesWGS84.lat.toFixed(5)}°N, ${Math.abs(pose.coordinatesWGS84.lng).toFixed(5)}°W`;
+      }
+
+      // Highlight pin on Google Maps
+      gmapStationMarkers.forEach(item => {
+        if (item.pose.id === pose.id) {
+          item.pin.style.transform = 'scale(1.35)';
+          item.pin.style.filter = 'drop-shadow(0 0 10px #38bdf8)';
+          item.marker.zIndex = 999;
+        } else {
+          item.pin.style.transform = 'scale(1.0)';
+          item.pin.style.filter = 'none';
+          item.marker.zIndex = 10;
+        }
+      });
+
+      // Pan Google Maps Vector reference
+      if (gmapVectorInstance && pose.coordinatesWGS84) {
+        gmapVectorInstance.panTo({ lat: pose.coordinatesWGS84.lat, lng: pose.coordinatesWGS84.lng });
+        const targetHeading = pose.name.includes('5TH_AVE') ? 29.0 : 119.0;
+        gmapVectorInstance.setHeading(targetHeading);
+      }
+
+      // Teleport Three.js 3D Camera into station pose
+      if (shouldAnimateCamera && pose.positionLocalENU) {
+        camera.up.set(0, 1, 0);
+        const eye = new THREE.Vector3(...pose.positionLocalENU);
+        const fwdVec = pose.forwardVector || pose.forwardVectorENU || [0, 0, -1];
+        const fwd = new THREE.Vector3(...fwdVec).normalize();
+        const target = eye.clone().addScaledVector(fwd, 60.0);
+        animateCameraTo(eye, target);
+        showToast(`Survey Station #${pose.id}: ${pose.name} (${pose.focalLengthMm}mm lens, ${pose.fovDegrees}° FOV)`);
+      }
+    };
+
+    window.toggleVectorRefDock = function(forceOpen) {
+      const dock = document.getElementById('colmap-vector-dock');
+      const btn = document.getElementById('btn-toggle-vector-ref');
+      if (!dock) return;
+
+      if (forceOpen === undefined) {
+        isDockOpen = !isDockOpen;
+      } else {
+        isDockOpen = !!forceOpen;
+      }
+
+      if (isDockOpen) {
+        dock.classList.remove('hidden');
+        if (btn) btn.classList.add('active', 'border-amber-400');
+        initGoogleVectorRefMap();
+        if (activeColmapStationPose) {
+          selectColmapStation(activeColmapStationPose, false);
+        }
+        showToast('Live Google Vector Map Reference (Path B) Active');
+      } else {
+        dock.classList.add('hidden');
+        if (btn) btn.classList.remove('active', 'border-amber-400');
+        if (currentDockMode === 'split') {
+          handleResize();
+        }
+      }
+    };
+
+    window.setVectorDockMode = function(mode) {
+      currentDockMode = mode;
+      const dock = document.getElementById('colmap-vector-dock');
+      const badge = document.getElementById('vector-ref-badge');
+      const btnPip = document.getElementById('btn-dock-mode-pip');
+      const btnSplit = document.getElementById('btn-dock-mode-split');
+      const hud = document.getElementById('roadmap-hud');
+
+      if (mode === 'split') {
+        dock.style.bottom = '0px';
+        dock.style.right = '0px';
+        dock.style.top = '72px';
+        dock.style.left = 'auto';
+        dock.style.width = '50vw';
+        dock.style.height = 'calc(100vh - 72px)';
+        dock.style.borderRadius = '0px';
+        if (badge) badge.textContent = 'Split 50/50';
+        if (btnPip) {
+          btnPip.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 text-[10px] font-mono";
+        }
+        if (btnSplit) {
+          btnSplit.className = "px-2 py-0.5 rounded text-amber-300 bg-amber-950/80 border border-amber-500/40 hover:bg-slate-800 text-[10px] font-mono";
+        }
+        if (hud) {
+          hud.style.left = '16px';
+          hud.style.right = 'auto';
+          hud.style.top = '100px';
+        }
+      } else {
+        // PiP Mode
+        dock.style.top = 'auto';
+        dock.style.left = 'auto';
+        dock.style.bottom = '24px';
+        dock.style.right = '24px';
+        dock.style.width = '440px';
+        dock.style.height = '360px';
+        dock.style.borderRadius = '1rem';
+        if (badge) badge.textContent = 'PiP Dock';
+        if (btnPip) {
+          btnPip.className = "px-2 py-0.5 rounded text-amber-300 bg-amber-950/80 border border-amber-500/40 hover:bg-slate-800 text-[10px] font-mono";
+        }
+        if (btnSplit) {
+          btnSplit.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 text-[10px] font-mono";
+        }
+        if (hud) {
+          hud.style.left = 'auto';
+          hud.style.right = '16px';
+          hud.style.top = '72px';
+        }
+      }
+
+      handleResize();
+      if (gmapVectorInstance && window.google?.maps?.event) {
+        setTimeout(() => {
+          google.maps.event.trigger(gmapVectorInstance, 'resize');
+          if (activeColmapStationPose?.coordinatesWGS84) {
+            gmapVectorInstance.panTo({ lat: activeColmapStationPose.coordinatesWGS84.lat, lng: activeColmapStationPose.coordinatesWGS84.lng });
+          }
+        }, 200);
+      }
+    };
+
+    function handleResize() {
+      const container = document.getElementById('webgl-container');
+      const w = (currentDockMode === 'split' && isDockOpen) ? window.innerWidth * 0.5 : window.innerWidth;
+      const h = window.innerHeight;
+      if (container) {
+        container.style.width = `${w}px`;
+      }
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+
+    window.applyPastedStyleJson = function() {
+      const val = document.getElementById('pasted-style-json').value.trim();
+      if (!val) {
+        showToast('Please paste a JSON style object');
+        return;
+      }
+      try {
+        const parsed = JSON.parse(val);
+        console.log('User custom style JSON parsed:', parsed);
+        showToast('Custom Style JSON successfully loaded!');
+      } catch (e) {
+        showToast('Invalid JSON: ' + e.message);
+      }
+    };
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+      else if (e.key === 'h' || e.key === 'H') toggleHUD();
+      else if (e.key === 'v' || e.key === 'V') toggleVectorRefDock();
+      else if (e.key === 's' || e.key === 'S') toggleSolarRooftops();
+      else if (e.key === '1') setCameraPreset('overview');
+      else if (e.key === '2') setCameraPreset('crown');
+      else if (e.key === '3') setCameraPreset('broadway');
+      else if (e.key === '4') setCameraPreset('street5th');
+      else if (e.key === '5') setCameraPreset('topdown');
+    });
+
+    window.addEventListener('resize', handleResize);
+
+    // --- 11. Main Render Loop ---
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+    const fpsDisplay = document.getElementById('fps-display');
+
+    function animate(time) {
+      requestAnimationFrame(animate);
+
+      updateCameraAnimation(time);
+      controls.update();
+      updateHeadingTelemetry();
+      checkRaycastHover();
+
+      renderer.render(scene, camera);
+
+      frameCount++;
+      if (time - lastFpsTime >= 1000) {
+        fpsDisplay.textContent = frameCount + ' FPS';
+        frameCount = 0;
+        lastFpsTime = time;
+      }
+    }
+    requestAnimationFrame(animate);
+  </script>
+  <!-- Floating Elevation Inspector Tooltip (Raycasting On Parcels) -->
+  <div id="elevation-tooltip" class="fixed pointer-events-none z-50 glass-panel rounded-xl p-3 border border-cyan-500/50 bg-slate-950/95 shadow-2xl transition-opacity duration-150 hidden" style="width: 250px;">
+    <div class="flex items-center gap-1.5 text-xs font-bold text-white mb-1.5">
+      <span id="tooltip-icon">🏢</span>
+      <span id="tooltip-title" class="truncate font-sans">Empire State Building</span>
+    </div>
+    <div class="space-y-1 text-[10px] font-mono">
+      <div class="flex justify-between text-slate-400">
+        <span>Ground ASL:</span>
+        <span id="tooltip-ground-asl" class="text-cyan-300 font-bold">18.53m</span>
+      </div>
+      <div class="flex justify-between text-slate-400">
+        <span>Datum Offset (Y):</span>
+        <span id="tooltip-datum-y" class="text-amber-300 font-bold">+0.00m</span>
+      </div>
+      <div class="flex justify-between text-slate-400">
+        <span>Building Height:</span>
+        <span id="tooltip-height" class="text-slate-200">443.2m (102 fl)</span>
+      </div>
+      <div class="flex justify-between text-slate-400">
+        <span>Roof Apex ASL:</span>
+        <span id="tooltip-roof-asl" class="text-emerald-300 font-bold">461.73m</span>
+      </div>
+    </div>
+    <div class="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-between text-[8px] text-slate-400">
+      <span id="tooltip-src-badge" class="text-cyan-400 font-mono">Google Elevation API</span>
+      <span class="text-slate-500 font-mono">solution_id=gmp_git_agentskills_v1</span>
+    </div>
+  </div>
+</body>
+</html>

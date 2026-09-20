@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scratchbox 3D Engine - Blender Algorithmic Abstractions Proof Gallery</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #0b0f19;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        #webgl-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .hud-panel {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            border-radius: 14px;
+            padding: 22px 26px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.7), 0 0 30px rgba(56, 189, 248, 0.2);
+            max-width: 520px;
+            z-index: 100;
+        }
+        .hud-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
+            padding-bottom: 12px;
+        }
+        .hud-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #38bdf8;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .badge {
+            background: #059669;
+            color: #ffffff;
+            font-size: 10px;
+            padding: 3px 9px;
+            border-radius: 9999px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+        .model-toggle-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .model-toggle-btn {
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 600;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(30, 41, 59, 0.7);
+            color: #94a3b8;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .model-toggle-btn:hover {
+            background: rgba(51, 65, 85, 0.9);
+            color: #f1f5f9;
+            border-color: rgba(56, 189, 248, 0.5);
+        }
+        .model-toggle-btn.active {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+            box-shadow: 0 4px 14px rgba(2, 132, 199, 0.45);
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin: 5px 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .metric-label {
+            color: #94a3b8;
+        }
+        .metric-val {
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+        .accent { color: #38bdf8; }
+        .highlight { color: #f59e0b; }
+        .success { color: #10b981; }
+        .info-box {
+            margin-top: 14px;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 8px;
+            border-left: 3px solid #38bdf8;
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        #loading-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(15, 23, 42, 0.85);
+            padding: 16px 28px;
+            border-radius: 12px;
+            border: 1px solid #38bdf8;
+            font-size: 14px;
+            font-weight: 600;
+            color: #38bdf8;
+            z-index: 200;
+            display: none;
+        }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js",
+            "three/addons/": "/node_modules/three/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="webgl-container"></div>
+    <div id="loading-overlay">Loading 3D Model...</div>
+
+    <div class="hud-panel">
+        <div class="hud-header">
+            <div class="hud-title">
+                <span>⚡ Blender Algorithms Abstraction</span>
+            </div>
+            <span class="badge">NATIVE C++20 VERIFIED</span>
+        </div>
+
+        <div class="model-toggle-grid">
+            <button id="btn-tree" class="model-toggle-btn active" onclick="loadModel('tree')">
+                🌲 Colonization Tree
+            </button>
+            <button id="btn-ivy" class="model-toggle-btn" onclick="loadModel('ivy')">
+                🌿 Clinging Ivy
+            </button>
+            <button id="btn-hip" class="model-toggle-btn" onclick="loadModel('hip')">
+                🏛️ Building (Hip Roof)
+            </button>
+            <button id="btn-mansard" class="model-toggle-btn" onclick="loadModel('mansard')">
+                🏠 Building (Mansard)
+            </button>
+            <button id="btn-rd" class="model-toggle-btn" onclick="loadModel('rd')">
+                🧬 Reaction-Diffusion
+            </button>
+            <button id="btn-lattice" class="model-toggle-btn" onclick="loadModel('lattice')">
+                🕸️ Voronoi Lattice
+            </button>
+        </div>
+
+        <div id="meta-display">
+            <!-- Dynamically populated -->
+        </div>
+
+        <div class="metric-row" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <span class="metric-label">Execution Engine:</span>
+            <span class="metric-val accent">Scratchbox C++20 SIMD Native</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Licensing:</span>
+            <span class="metric-val success">100% Clean Room (MIT-Compatible)</span>
+        </div>
+
+        <div class="info-box" id="info-description">
+            Loading algorithm details...
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        const MODELS = {
+            tree: {
+                url: '/scripts/models/test_space_colonization_tree.glb',
+                name: 'Space Colonization Tree (Mtree / Runions 2007)',
+                verts: '5,872',
+                tris: '4,848',
+                source: 'Runions et al. 2007 + Leonardo da Vinci Pipe Model',
+                desc: '3D crown attractor volume sampling with perception & kill radiuses. da Vinci recursive branch radius propagation (r_p^2.2 = sum r_c^2.2) and smooth foliage normal transfer.',
+                camY: 4.5,
+                camDist: 10.0
+            },
+            ivy: {
+                url: '/scripts/models/test_clinging_ivy.glb',
+                name: 'Obstacle-Clinging Ivy (IvyGen / Thomas Luft)',
+                verts: '7,776',
+                tris: '7,050',
+                source: 'Thomas Luft 2006 Climbing Ivy Algorithm',
+                desc: 'Surface-adhering vine propagation climbing obstacle hulls with surface tangent projection, stochastic perturbation, phototropic vertical bias, and clinging leaf cards.',
+                camY: 3.0,
+                camDist: 7.5
+            },
+            hip: {
+                url: '/scripts/models/test_procedural_building_hip.glb',
+                name: 'Procedural Building - Hip Roof (Building Tools / OSM)',
+                verts: '1,966',
+                tris: '982',
+                source: 'Procedural Facade Grammar + Straight Skeleton Roof',
+                desc: 'Rhythmic window bay subdivision with recessed frames, plinth foundation, entrance doors, and 4-slope parametric hip roof with ridge-line offsets.',
+                camY: 7.0,
+                camDist: 22.0
+            },
+            mansard: {
+                url: '/scripts/models/test_procedural_building_mansard.glb',
+                name: 'Procedural Building - Mansard Roof (Building Tools / OSM)',
+                verts: '1,966',
+                tris: '982',
+                source: 'Two-Stage Curb Roof + Facade Grammar',
+                desc: 'Multi-story structural facade with classic Parisian two-stage curb mansard roof: steep lower pitch section topped by a shallow upper deck.',
+                camY: 7.0,
+                camDist: 22.0
+            },
+            rd: {
+                url: '/scripts/models/test_reaction_diffusion.glb',
+                name: 'Gray-Scott Reaction-Diffusion PDE (Tissue / Turing)',
+                verts: '1,024',
+                tris: '1,860',
+                source: 'Alan Turing 1952 Morphogenesis / Alessandro Zomparelli',
+                desc: 'Nonlinear coupled reaction-diffusion PDE solved over 3D triangle meshes via cotangent Laplace-Beltrami operator. Concentration mapped to vertex colors and normal extrusion.',
+                camY: 0.0,
+                camDist: 5.5
+            },
+            lattice: {
+                url: '/scripts/models/test_dual_lattice.glb',
+                name: 'Voronoi Dual Mesh & Strut Lattice (Tissue / Sverchok)',
+                verts: '9,848',
+                tris: '9,848',
+                source: 'Topological Dual Operator + Geometric Strut Extrusion',
+                desc: 'Voronoi dual conversion where primal faces become dual vertices circulating along DCEL half-edges, thickened into a continuous architectural honeycomb strut lattice.',
+                camY: 0.0,
+                camDist: 5.5
+            }
+        };
+
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+        const loader = new GLTFLoader();
+
+        function init() {
+            const container = document.getElementById('webgl-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0b0f19);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 4.5, 10);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.15;
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Studio Lighting Setup
+            const amb = new THREE.AmbientLight(0xffffff, 0.85);
+            scene.add(amb);
+
+            const keyLight = new THREE.DirectionalLight(0xfff5e6, 2.5);
+            keyLight.position.set(12, 18, 15);
+            scene.add(keyLight);
+
+            const fillLight = new THREE.DirectionalLight(0x90c5f0, 1.2);
+            fillLight.position.set(-15, 10, -12);
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.8);
+            rimLight.position.set(0, 20, -15);
+            scene.add(rimLight);
+
+            // Ground grid helper
+            const grid = new THREE.GridHelper(30, 30, 0x38bdf8, 0x1e293b);
+            grid.position.y = -0.01;
+            scene.add(grid);
+
+            window.addEventListener('resize', onWindowResize);
+            loadModel('tree');
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.loadModel = function(key) {
+            const cfg = MODELS[key];
+            if (!cfg) return;
+
+            document.querySelectorAll('.model-toggle-btn').forEach(b => b.classList.remove('active'));
+            const activeBtn = document.getElementById('btn-' + key);
+            if (activeBtn) activeBtn.classList.add('active');
+
+            const overlay = document.getElementById('loading-overlay');
+            overlay.style.display = 'block';
+
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel = null;
+            }
+
+            loader.load(cfg.url, (gltf) => {
+                currentModel = gltf.scene;
+                scene.add(currentModel);
+                overlay.style.display = 'none';
+
+                // Update Camera
+                controls.target.set(0, cfg.camY, 0);
+                camera.position.set(cfg.camDist * 0.7, cfg.camY + 2.0, cfg.camDist);
+                controls.update();
+
+                // Update HUD
+                updateMeta(cfg);
+            }, undefined, (err) => {
+                console.error('Failed to load GLB:', err);
+                overlay.innerText = 'Error loading model: ' + err.message;
+            });
+        };
+
+        function updateMeta(cfg) {
+            document.getElementById('meta-display').innerHTML = `
+                <div class="metric-row">
+                    <span class="metric-label">Algorithm:</span>
+                    <span class="metric-val accent">${cfg.name}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Mathematical Origin:</span>
+                    <span class="metric-val highlight">${cfg.source}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Geometry Budget:</span>
+                    <span class="metric-val">${cfg.verts} Vertices / ${cfg.tris} Triangles</span>
+                </div>
+            `;
+            document.getElementById('info-description').innerText = cfg.desc;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            if (currentModel) {
+                currentModel.rotation.y += 0.003;
+            }
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

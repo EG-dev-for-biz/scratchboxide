@@ -1,0 +1,14 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'tools/depthbox/Dockerfile'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/depthbox-trainer:latest'
+      - 'tools/depthbox'
+images:
+  - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/depthbox-trainer:latest'
+timeout: '1800s'
+options:
+  machineType: 'E2_HIGHCPU_8'

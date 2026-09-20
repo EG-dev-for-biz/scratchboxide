@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Universal Google 3D Tiles Clay & COLMAP Photogrammetry Survey Studio - Scratchbox IDE</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #080c14;
+      color: #f1f5f9;
+      user-select: none;
+    }
+
+    .font-mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    #webgl-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.82);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .glass-panel-amber {
+      background: rgba(20, 16, 10, 0.85);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    }
+
+    .btn-action {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .btn-action:hover {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+
+    .btn-action.active {
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+      border-color: #38bdf8;
+      color: #ffffff;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+    }
+
+    #vector-dock {
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    #vector-dock.dock-pip {
+      width: 440px;
+      height: 370px;
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      border-radius: 16px;
+      overflow: hidden;
+      z-index: 30;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(56, 189, 248, 0.2);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+
+    #vector-dock.dock-split {
+      width: 50%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      right: 0;
+      border-radius: 0;
+      border-left: 2px solid rgba(56, 189, 248, 0.4);
+      z-index: 10;
+    }
+
+    #vector-dock.dock-hide {
+      display: none;
+    }
+
+    .frustum-marker {
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+    .frustum-marker:hover {
+      transform: scale(1.15);
+    }
+
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(56, 189, 248, 0.3);
+      border-radius: 3px;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body class="w-screen h-screen overflow-hidden">
+  <!-- 3D WebGL Canvas -->
+  <div id="webgl-container"></div>
+
+  <!-- Header Bar -->
+  <header class="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none z-20">
+    <div class="flex flex-col gap-2 pointer-events-auto">
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- Brand Pill -->
+        <div class="glass-panel flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-200">
+          <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
+          <span class="tracking-wide">Scratchbox IDE</span>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 font-mono">3D TILES CLAY</span>
+        </div>
+
+        <!-- Zero-Preset Directive Badge -->
+        <div class="glass-panel flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-emerald-300 border-emerald-500/40 bg-emerald-950/40">
+          <span>🌐</span>
+          <span class="font-bold">Zero-Preset Geography</span>
+          <span class="text-[10px] text-emerald-400 font-mono">WGS84 Tangent Plane</span>
+        </div>
+
+        <!-- Global Location Quick Switchers -->
+        <div class="glass-panel flex items-center gap-1 p-1 rounded-full text-xs">
+          <button onclick="loadPresetLocation('sydney')" class="btn-action active px-3 py-1 rounded-full text-[11px] font-medium" id="loc-sydney">Sydney</button>
+          <button onclick="loadPresetLocation('paris')" class="btn-action px-3 py-1 rounded-full text-[11px] font-medium" id="loc-paris">Paris</button>
+          <button onclick="loadPresetLocation('tokyo')" class="btn-action px-3 py-1 rounded-full text-[11px] font-medium" id="loc-tokyo">Tokyo</button>
+          <button onclick="loadPresetLocation('london')" class="btn-action px-3 py-1 rounded-full text-[11px] font-medium" id="loc-london">London</button>
+        </div>
+      </div>
+
+      <!-- Universal Search & Geocoding Bar -->
+      <div class="glass-panel flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs max-w-xl">
+        <span class="text-cyan-400">🔍</span>
+        <input id="location-search-input" type="text" placeholder="Enter ANY address or coordinates worldwide (e.g. 'Dubai Frame' or '35.7100, 139.8107')..." class="bg-transparent border-none text-slate-100 placeholder-slate-500 text-xs focus:outline-none flex-1 font-mono" onkeydown="if(event.key==='Enter') executeLocationSearch()">
+        <button onclick="executeLocationSearch()" class="btn-action px-3 py-1 rounded-lg text-[11px] font-semibold text-cyan-300 hover:text-white">Locate</button>
+      </div>
+    </div>
+
+    <!-- Right Controls: View Switcher & Dock Toggle -->
+    <div class="flex items-center gap-2 pointer-events-auto">
+      <div class="glass-panel flex items-center gap-1 p-1 rounded-full">
+        <button id="btn-dock-pip" onclick="setDockMode('pip')" class="btn-action active px-3 py-1 rounded-full text-[11px] font-semibold">Floating PiP</button>
+        <button id="btn-dock-split" onclick="setDockMode('split')" class="btn-action px-3 py-1 rounded-full text-[11px] font-semibold">Split Screen</button>
+        <button id="btn-dock-hide" onclick="setDockMode('hide')" class="btn-action px-3 py-1 rounded-full text-[11px] font-semibold">Hide Dock (V)</button>
+      </div>
+
+      <button onclick="toggleFlythrough()" id="btn-flythrough" class="glass-panel btn-action flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-amber-300 border-amber-500/40">
+        <span id="flythrough-icon">▶</span>
+        <span id="flythrough-label">Flythrough (Space)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Left Sidebar: Survey Synthesis & Ingestion Inspector -->
+  <aside class="absolute top-24 left-4 w-80 glass-panel rounded-2xl p-4 flex flex-col gap-3.5 z-20 max-h-[calc(100vh-120px)] overflow-y-auto custom-scrollbar">
+    <div class="flex items-center justify-between pb-2 border-b border-cyan-500/20">
+      <div class="flex items-center gap-2">
+        <span class="text-cyan-400 font-bold">⚙️ Survey Synthesis</span>
+      </div>
+      <span id="station-count-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30">12 Stations</span>
+    </div>
+
+    <!-- Location Info Card -->
+    <div class="bg-slate-900/60 rounded-xl p-2.5 border border-slate-800 text-xs flex flex-col gap-1">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold flex justify-between">
+        <span>Active Anchor</span>
+        <span id="anchor-wgs-badge" class="text-cyan-400 font-mono">WGS84</span>
+      </div>
+      <div id="anchor-name" class="font-bold text-slate-200 truncate">Sydney Opera House</div>
+      <div id="anchor-coords" class="font-mono text-[10px] text-slate-400">-33.856800°S, 151.215300°E</div>
+      <div id="anchor-datum" class="font-mono text-[10px] text-cyan-300">Ground Datum: 12.0m ASL</div>
+    </div>
+
+    <!-- Survey Pattern Config -->
+    <div class="flex flex-col gap-2 text-xs">
+      <label class="text-[11px] font-semibold text-slate-300">Photogrammetry Pattern</label>
+      <select id="pattern-select" class="bg-slate-900/80 border border-slate-700 rounded-lg p-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-400">
+        <option value="orbital-multi-tier">Orbital Multi-Tier (Helical)</option>
+        <option value="facade-lawnmower">Facade Lawnmower (Vertical Raster)</option>
+        <option value="street-corridor">Street Corridor Flythrough</option>
+        <option value="nadir-grid">Nadir Orthophoto Grid</option>
+      </select>
+
+      <div class="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+        <span>Stations: <b id="val-cameras" class="text-cyan-300 font-mono">12</b></span>
+        <span>Radius: <b id="val-radius" class="text-cyan-300 font-mono">140m</b></span>
+      </div>
+      <input id="slider-cameras" type="range" min="4" max="36" value="12" class="w-full accent-cyan-400" oninput="document.getElementById('val-cameras').textContent=this.value">
+      <input id="slider-radius" type="range" min="30" max="400" value="140" class="w-full accent-cyan-400" oninput="document.getElementById('val-radius').textContent=this.value+'m'">
+
+      <div class="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+        <span>Optics / Lens:</span>
+        <select id="optics-focal" class="bg-slate-900 border border-slate-700 rounded px-1 text-slate-200 font-mono text-[10px]">
+          <option value="24">24mm (Wide / 73.7°)</option>
+          <option value="35" selected>35mm (Std / 54.4°)</option>
+          <option value="50">50mm (Portrait / 39.6°)</option>
+          <option value="85">85mm (Tele / 23.9°)</option>
+        </select>
+      </div>
+
+      <button onclick="synthesizeSurvey()" class="mt-2 w-full py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 font-bold text-white text-xs transition-all shadow-lg shadow-cyan-900/50 flex items-center justify-center gap-1.5">
+        <span>⚡</span>
+        <span>Synthesize Survey Array</span>
+      </button>
+    </div>
+
+    <!-- Active Station Telemetry HUD -->
+    <div id="station-telemetry-card" class="bg-slate-900/70 rounded-xl p-3 border border-cyan-500/30 text-xs flex flex-col gap-1.5">
+      <div class="flex items-center justify-between pb-1 border-b border-slate-800">
+        <span class="text-cyan-300 font-bold font-mono" id="tel-station-id">STATION #01</span>
+        <span class="text-[10px] text-slate-400 font-mono" id="tel-station-tier">TIER 1</span>
+      </div>
+      <div class="grid grid-cols-2 gap-1.5 font-mono text-[10px]">
+        <div><span class="text-slate-500">Altitude:</span> <span id="tel-alt" class="text-slate-200">37.0m ASL</span></div>
+        <div><span class="text-slate-500">Height:</span> <span id="tel-hgt" class="text-slate-200">25.0m AGL</span></div>
+        <div><span class="text-slate-500">Yaw:</span> <span id="tel-yaw" class="text-slate-200">45.0°</span></div>
+        <div><span class="text-slate-500">Pitch:</span> <span id="tel-pitch" class="text-slate-200">-18.5°</span></div>
+        <div><span class="text-slate-500">Lens:</span> <span id="tel-lens" class="text-slate-200">35mm</span></div>
+        <div><span class="text-slate-500">FOV:</span> <span id="tel-fov" class="text-slate-200">54.4°</span></div>
+      </div>
+    </div>
+
+    <!-- Data Export Buttons -->
+    <div class="flex flex-col gap-1.5 pt-1">
+      <button onclick="exportGeoJson()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
+        <span>💾</span> Export RFC 7946 GeoJSON
+      </button>
+      <button onclick="exportColmap()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
+        <span>📄</span> Export COLMAP (cameras.txt/images.txt)
+      </button>
+    </div>
+  </aside>
+
+  <!-- Bottom Floating Google Maps 3D Tiles Clay Dock (Path B) -->
+  <section id="vector-dock" class="dock-pip glass-panel flex flex-col shadow-2xl">
+    <!-- Dock Titlebar -->
+    <div class="flex items-center justify-between px-3 py-2 border-b border-cyan-500/20 bg-slate-900/90 cursor-move">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="text-xs font-bold text-slate-200">Google 3D Tiles Clay Dock</span>
+        <span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30">PATH B</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span id="dock-status" class="text-[10px] text-emerald-400 font-mono">getGoogle3DTilesClay</span>
+        <button onclick="setDockMode('hide')" class="text-slate-400 hover:text-white text-xs px-1">✕</button>
+      </div>
+    </div>
+
+    <!-- Clay 3D Inspector Body -->
+    <div id="clay-dock-body" class="flex-1 w-full relative bg-[#090d16] p-3 flex flex-col justify-between overflow-y-auto custom-scrollbar gap-2.5">
+      <!-- Loading Overlay -->
+      <div id="clay-loading-overlay" class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-xs text-slate-400 bg-slate-950/85 z-10 transition-opacity">
+        <div class="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+        <span id="clay-loading-text" class="text-[11px] font-mono text-cyan-300">Ingesting Google Photorealistic 3D Tiles (Clay)...</span>
+      </div>
+
+      <!-- Top Row: Mesh Statistics Grid -->
+      <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+        <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2 flex flex-col">
+          <span class="text-[10px] text-slate-400 uppercase">3D Mesh Vertices</span>
+          <span id="clay-vert-count" class="text-base font-bold text-cyan-300">--</span>
+          <span class="text-[9px] text-slate-500">glTF 2.0 Binary Buffer</span>
+        </div>
+        <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2 flex flex-col">
+          <span class="text-[10px] text-slate-400 uppercase">3D Mesh Triangles</span>
+          <span id="clay-tri-count" class="text-base font-bold text-emerald-300">--</span>
+          <span class="text-[9px] text-slate-500">Indexed Draw Elements</span>
+        </div>
+      </div>
+
+      <!-- Quality & Contract Spec -->
+      <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 flex flex-col gap-1.5 text-[11px] font-mono">
+        <div class="flex items-center justify-between text-slate-300">
+          <span class="text-slate-400">Leaf LOD Error Target:</span>
+          <span id="clay-error-target" class="text-cyan-400 font-bold">0.50 (Max Quality)</span>
+        </div>
+        <div class="flex items-center justify-between text-slate-300">
+          <span class="text-slate-400">SSE Resolution:</span>
+          <span id="clay-sse-res" class="text-amber-300">4K (3840×2160)</span>
+        </div>
+        <div class="flex items-center justify-between text-slate-300">
+          <span class="text-slate-400">Studio Clay PBR:</span>
+          <span class="text-slate-300">#B0B0B0 | R: 0.75 | M: 0.10</span>
+        </div>
+        <div class="flex items-center justify-between text-slate-300">
+          <span class="text-slate-400">Leaf Settle Status:</span>
+          <span id="clay-settle-status" class="text-emerald-400 font-bold">Settled (0 pending)</span>
+        </div>
+        <div class="flex items-center justify-between text-slate-300">
+          <span class="text-slate-400">Bounding Radius:</span>
+          <span id="clay-bounding-radius" class="text-purple-300">--</span>
+        </div>
+      </div>
+
+      <!-- Shading & Model Action Controls -->
+      <div class="flex items-center gap-2 pt-0.5">
+        <div class="flex-1 flex items-center gap-1 bg-slate-900/90 p-1 rounded-lg border border-slate-800 text-[10px] font-semibold">
+          <button id="btn-shade-clay" onclick="setClayShading('clay')" class="btn-action active px-2 py-1 rounded flex-1">Solid Clay</button>
+          <button id="btn-shade-wire" onclick="setClayShading('wireframe')" class="btn-action px-2 py-1 rounded flex-1">Wireframe</button>
+          <button id="btn-shade-hybrid" onclick="setClayShading('hybrid')" class="btn-action px-2 py-1 rounded flex-1">Facets</button>
+        </div>
+        <button id="btn-toggle-bbox" onclick="toggleBoundingBox()" class="btn-action px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-slate-300" title="Toggle 3D Bounding Box">
+          <span>📐 Box</span>
+        </button>
+        <button onclick="downloadActiveClayGlb()" class="btn-action px-3 py-1.5 rounded-lg text-[10px] font-bold text-cyan-300 flex items-center gap-1">
+          <span>📦</span>
+          <span>.GLB</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Dock Telemetry Footer -->
+    <div class="px-3 py-1.5 bg-slate-900/90 border-t border-slate-800 flex items-center justify-between text-[10px] font-mono text-slate-400">
+      <div><span class="text-cyan-400">API:</span> <span class="text-slate-300">getGoogle3DTilesClay</span></div>
+      <div><span class="text-cyan-400">SYNC:</span> <span id="dock-sync-coords">-33.8568, 151.2153</span></div>
+      <div><span class="text-slate-500">GMP v1</span></div>
+    </div>
+  </section>
+
+  <!-- Embedded Logic -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    // Global State
+    let scene, camera, renderer, controls;
+    let cameraStationsGroup, trajectoryLineMesh, groundGrid;
+    let clayMeshGroup = null;
+    let boundingBoxHelper = null;
+    let currentClayMetadata = null;
+    let clayShadingMode = 'clay'; // 'clay' | 'wireframe' | 'hybrid'
+    let showBoundingBox = false;
+    let activePoses = [];
+    let currentAnchor = {
+      lat: -33.8568,
+      lng: 151.2153,
+      elevationMeters: 12.0,
+      headingDeg: 45.0,
+      formattedAddress: 'Sydney Opera House'
+    };
+    let activeStationIndex = 0;
+    let isFlythroughPlaying = false;
+    let flythroughTimer = null;
+    let dockMode = 'pip';
+    let gmapInstance = null;
+    let stationMarkers = [];
+    let gmapLoaded = false;
+    let googleApiKey = '';
+
+    // Preset Global Locations (Zero presets rule: only used as convenient coordinate buttons in the UI demo)
+    const PRESET_LOCATIONS = {
+      sydney: { lat: -33.8568, lng: 151.2153, alt: 12.0, heading: 45.0, name: 'Sydney Opera House' },
+      paris: { lat: 48.8584, lng: 2.2945, alt: 35.0, heading: 0.0, name: 'Eiffel Tower, Paris' },
+      tokyo: { lat: 35.7100, lng: 139.8107, alt: 4.0, heading: 15.0, name: 'Tokyo Skytree' },
+      london: { lat: 51.5007, lng: -0.1246, alt: 12.0, heading: 90.0, name: 'Big Ben, London' }
+    };
+
+    // Initialize Three.js 3D Viewport
+    function initThreeScene() {
+      const container = document.getElementById('webgl-container');
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x080c14);
+      scene.fog = new THREE.FogExp2(0x080c14, 0.0015);
+
+      camera = new THREE.PerspectiveCamera(54.4, window.innerWidth / window.innerHeight, 0.5, 5000);
+      camera.position.set(180, 140, 240);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      container.appendChild(renderer.domElement);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.maxPolarAngle = Math.PI / 2 - 0.02;
+      controls.target.set(0, 20, 0);
+
+      // Lighting
+      const hemiLight = new THREE.HemisphereLight(0x38bdf8, 0x0f172a, 0.6);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      dirLight.position.set(120, 200, 100);
+      scene.add(dirLight);
+
+      // Stylized Ground Plane & Grid
+      groundGrid = new THREE.GridHelper(800, 80, 0x0284c7, 0x1e293b);
+      groundGrid.position.y = 0;
+      scene.add(groundGrid);
+
+      // Target Studio Grey Clay 3D Mesh Group (getGoogle3DTilesClay)
+      clayMeshGroup = new THREE.Group();
+      scene.add(clayMeshGroup);
+
+      // Camera Groups
+      cameraStationsGroup = new THREE.Group();
+      scene.add(cameraStationsGroup);
+
+      window.clayMeshGroup = clayMeshGroup;
+      window.scene = scene;
+      window.camera = camera;
+      window.controls = controls;
+
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('keydown', handleKeyboardShortcuts);
+
+      animate();
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+
+      // Broadcast camera telemetry to dock
+      updateDockTelemetryFromCamera();
+    }
+
+    // Mathematical Camera Survey Synthesis (Universal Zero Presets)
+    window.synthesizeSurvey = function() {
+      const pattern = document.getElementById('pattern-select').value;
+      const cameraCount = parseInt(document.getElementById('slider-cameras').value, 10);
+      const radius = parseFloat(document.getElementById('slider-radius').value);
+      const focalLength = parseFloat(document.getElementById('optics-focal').value);
+      const fovDeg = 2.0 * Math.atan((36.0 / 2.0) / focalLength) * (180.0 / Math.PI);
+
+      activePoses = [];
+      const altitudeTiers = [
+        currentAnchor.elevationMeters + 25.0,
+        currentAnchor.elevationMeters + 65.0,
+        currentAnchor.elevationMeters + 120.0
+      ];
+      const stationsPerTier = Math.ceil(cameraCount / altitudeTiers.length);
+
+      let id = 1;
+      for (let t = 0; t < altitudeTiers.length; t++) {
+        const alt = altitudeTiers[t];
+        const tierRadius = radius * (1.0 + t * 0.15);
+        const tierOffset = t * (Math.PI / stationsPerTier);
+
+        for (let i = 0; i < stationsPerTier; i++) {
+          if (activePoses.length >= cameraCount) break;
+          const theta = (2.0 * Math.PI * i) / stationsPerTier + tierOffset;
+
+          const x = tierRadius * Math.sin(theta);
+          const z = tierRadius * Math.cos(theta);
+          const y = alt - currentAnchor.elevationMeters;
+
+          // Forward vector toward target
+          const dx = -x;
+          const dy = 20.0 - y;
+          const dz = -z;
+          const len = Math.hypot(dx, dy, dz);
+          const fwd = [dx / len, dy / len, dz / len];
+
+          const yaw = ((Math.atan2(fwd[0], -fwd[2]) * 180.0) / Math.PI + 360.0) % 360.0;
+          const pitch = (Math.asin(fwd[1]) * 180.0) / Math.PI;
+
+          // Approximation for lat/lng delta
+          const metersPerDegLat = 111132.92;
+          const metersPerDegLng = 111412.84 * Math.cos((currentAnchor.lat * Math.PI) / 180.0);
+
+          const wgsLat = currentAnchor.lat - z / metersPerDegLat;
+          const wgsLng = currentAnchor.lng + x / metersPerDegLng;
+
+          activePoses.push({
+            id,
+            name: `STATION_${String(id).padStart(2, '0')}`,
+            tier: `TIER ${t + 1}`,
+            positionLocalENU: [x, y, z],
+            forwardVector: fwd,
+            yawDegrees: Number(yaw.toFixed(2)),
+            pitchDegrees: Number(pitch.toFixed(2)),
+            focalLengthMm: focalLength,
+            fovDegrees: Number(fovDeg.toFixed(2)),
+            coordinatesWGS84: {
+              lat: Number(wgsLat.toFixed(7)),
+              lng: Number(wgsLng.toFixed(7)),
+              elevation: Number(alt.toFixed(2))
+            },
+            heightAboveGround: Number(y.toFixed(2))
+          });
+
+          id++;
+        }
+      }
+
+      document.getElementById('station-count-badge').textContent = `${activePoses.length} Stations`;
+      render3DCameraStations();
+      selectStation(0);
+    };
+
+    // Render 3D Frustum Pyramids in Three.js
+    function render3DCameraStations() {
+      while (cameraStationsGroup.children.length > 0) {
+        const obj = cameraStationsGroup.children[0];
+        cameraStationsGroup.remove(obj);
+      }
+
+      if (trajectoryLineMesh) {
+        scene.remove(trajectoryLineMesh);
+        trajectoryLineMesh = null;
+      }
+
+      const trajectoryPoints = [];
+
+      activePoses.forEach((pose, idx) => {
+        const stationMesh = createCameraFrustumMesh(pose, idx === activeStationIndex);
+        stationMesh.position.set(...pose.positionLocalENU);
+        
+        // Orient camera
+        const lookTarget = new THREE.Vector3(
+          pose.positionLocalENU[0] + pose.forwardVector[0] * 10,
+          pose.positionLocalENU[1] + pose.forwardVector[1] * 10,
+          pose.positionLocalENU[2] + pose.forwardVector[2] * 10
+        );
+        stationMesh.lookAt(lookTarget);
+        stationMesh.userData = { poseIndex: idx, pose };
+
+        cameraStationsGroup.add(stationMesh);
+        trajectoryPoints.push(new THREE.Vector3(...pose.positionLocalENU));
+      });
+
+      // Trajectory Linestring
+      if (trajectoryPoints.length > 1) {
+        const curve = new THREE.CatmullRomCurve3(trajectoryPoints, true);
+        const curvePoints = curve.getPoints(activePoses.length * 10);
+        const pathGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
+        const pathMat = new THREE.LineBasicMaterial({
+          color: 0xfbbf24,
+          transparent: true,
+          opacity: 0.8,
+          linewidth: 2
+        });
+        trajectoryLineMesh = new THREE.Line(pathGeo, pathMat);
+        scene.add(trajectoryLineMesh);
+      }
+    }
+
+    function createCameraFrustumMesh(pose, isActive) {
+      const group = new THREE.Group();
+      const length = 15.0;
+      const halfW = length * Math.tan(((pose.fovDegrees / 2) * Math.PI) / 180);
+      const halfH = halfW * (9 / 16);
+
+      const color = isActive ? 0x38bdf8 : (pose.pitchDegrees < -45 ? 0xf59e0b : 0x0284c7);
+
+      // Frustum wireframe vertices
+      const positions = [
+        0, 0, 0,  -halfW,  halfH, -length,
+        0, 0, 0,   halfW,  halfH, -length,
+        0, 0, 0,   halfW, -halfH, -length,
+        0, 0, 0,  -halfW, -halfH, -length,
+
+        -halfW,  halfH, -length,   halfW,  halfH, -length,
+         halfW,  halfH, -length,   halfW, -halfH, -length,
+         halfW, -halfH, -length,  -halfW, -halfH, -length,
+        -halfW, -halfH, -length,  -halfW,  halfH, -length
+      ];
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({ color, linewidth: isActive ? 2 : 1 });
+      const wire = new THREE.LineSegments(geo, mat);
+      group.add(wire);
+
+      // Center optical point
+      const ptGeo = new THREE.SphereGeometry(1.5, 8, 8);
+      const ptMat = new THREE.MeshBasicMaterial({ color });
+      const pt = new THREE.Mesh(ptGeo, ptMat);
+      group.add(pt);
+
+      return group;
+    }
+
+    // Select Active Station
+    window.selectStation = function(idx) {
+      if (idx < 0 || idx >= activePoses.length) return;
+      activeStationIndex = idx;
+      const pose = activePoses[idx];
+
+      // Update HUD
+      document.getElementById('tel-station-id').textContent = `STATION #${String(pose.id).padStart(2, '0')}`;
+      document.getElementById('tel-station-tier').textContent = pose.tier;
+      document.getElementById('tel-alt').textContent = `${pose.coordinatesWGS84.elevation}m ASL`;
+      document.getElementById('tel-hgt').textContent = `${pose.heightAboveGround}m AGL`;
+      document.getElementById('tel-yaw').textContent = `${pose.yawDegrees}°`;
+      document.getElementById('tel-pitch').textContent = `${pose.pitchDegrees}°`;
+      document.getElementById('tel-lens').textContent = `${pose.focalLengthMm}mm`;
+      document.getElementById('tel-fov').textContent = `${pose.fovDegrees}°`;
+
+      // Update 3D wireframe colors
+      cameraStationsGroup.children.forEach((child, i) => {
+        const isSel = i === idx;
+        const col = isSel ? 0x38bdf8 : (child.userData.pose?.pitchDegrees < -45 ? 0xf59e0b : 0x0284c7);
+        child.children.forEach(mesh => {
+          if (mesh.material) mesh.material.color.setHex(col);
+        });
+      });
+
+      // Update dock telemetry coordinates
+      const syncCoordEl = document.getElementById('dock-sync-coords');
+      if (syncCoordEl) {
+        syncCoordEl.textContent = `${pose.coordinatesWGS84.lat.toFixed(5)}, ${pose.coordinatesWGS84.lng.toFixed(5)}`;
+      }
+    };
+
+    // Google Photorealistic 3D Tiles Clay Ingestion (getGoogle3DTilesClay)
+    async function loadClay3DObject(anchor) {
+      const overlay = document.getElementById('clay-loading-overlay');
+      const loadingText = document.getElementById('clay-loading-text');
+      if (overlay) {
+        overlay.style.display = 'flex';
+        if (loadingText) loadingText.textContent = `Ingesting Google 3D Tiles Clay (${anchor.formattedAddress || 'Location'})...`;
+      }
+
+      try {
+        const queryStr = anchor.formattedAddress || '';
+        const resp = await fetch(`/api/colmap/clay_3d_tiles?lat=${anchor.lat}&lng=${anchor.lng}&query=${encodeURIComponent(queryStr)}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (!data.success) throw new Error(data.error || 'Failed to ingest clay 3D model');
+
+        currentClayMetadata = data;
+
+        // Load GLB via GLTFLoader
+        const loader = new GLTFLoader();
+        loader.load(data.glbUrl, (gltf) => {
+          // Clear previous clay meshes
+          while (clayMeshGroup.children.length > 0) {
+            clayMeshGroup.remove(clayMeshGroup.children[0]);
+          }
+          if (boundingBoxHelper) {
+            scene.remove(boundingBoxHelper);
+            boundingBoxHelper = null;
+          }
+
+          const root = gltf.scene;
+
+          // Compute bounding box
+          const box = new THREE.Box3().setFromObject(root);
+          const center = new THREE.Vector3();
+          box.getCenter(center);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+
+          // Center geometry horizontally and rest lowest point at y = 0
+          root.position.x = -center.x;
+          root.position.y = -box.min.y;
+          root.position.z = -center.z;
+
+          clayMeshGroup.add(root);
+
+          // Apply current studio clay shading mode
+          applyClayShading(root, clayShadingMode);
+
+          // Bounding Box Helper
+          boundingBoxHelper = new THREE.BoxHelper(clayMeshGroup, 0x38bdf8);
+          boundingBoxHelper.visible = showBoundingBox;
+          scene.add(boundingBoxHelper);
+
+          // Update dock telemetry
+          const sphere = new THREE.Sphere();
+          box.getBoundingSphere(sphere);
+          const radiusMeters = sphere.radius || 80;
+
+          const vertEl = document.getElementById('clay-vert-count');
+          const triEl = document.getElementById('clay-tri-count');
+          const radiusEl = document.getElementById('clay-bounding-radius');
+          const errorEl = document.getElementById('clay-error-target');
+          const sseEl = document.getElementById('clay-sse-res');
+          const settleEl = document.getElementById('clay-settle-status');
+          const dockStatusEl = document.getElementById('dock-status');
+
+          if (vertEl) vertEl.textContent = (data.mesh?.vertexCount || 0).toLocaleString();
+          if (triEl) triEl.textContent = (data.mesh?.triangleCount || 0).toLocaleString();
+          if (radiusEl) radiusEl.textContent = `${radiusMeters.toFixed(1)}m`;
+          if (errorEl) errorEl.textContent = `${data.quality?.errorTarget || 0.50} (Max Quality)`;
+          if (sseEl) sseEl.textContent = data.quality?.resolution || '4K (3840×2160)';
+          if (settleEl) settleEl.textContent = 'Settled (Leaf LOD 0.5)';
+          if (dockStatusEl) dockStatusEl.textContent = `${data.mode || 'clay'}: ${(data.mesh?.triangleCount || 0).toLocaleString()} tris`;
+
+          // Dynamically scale survey radius to encircle the real mesh
+          const autoRadius = Math.max(80, Math.round(radiusMeters * 1.35));
+          const sliderRadius = document.getElementById('slider-radius');
+          const valRadius = document.getElementById('val-radius');
+          if (sliderRadius) sliderRadius.value = autoRadius;
+          if (valRadius) valRadius.textContent = `${autoRadius}m`;
+          synthesizeSurvey();
+
+          if (overlay) overlay.style.display = 'none';
+        }, undefined, (err) => {
+          console.error('Failed to parse glb:', err);
+          if (loadingText) loadingText.textContent = `Error loading GLB: ${err.message}`;
+        });
+      } catch (err) {
+        console.error('getGoogle3DTilesClay error:', err);
+        if (loadingText) loadingText.textContent = `Clay Ingestion Error: ${err.message}`;
+      }
+    }
+
+    function applyClayShading(root, mode) {
+      root.traverse((child) => {
+        if (child.isMesh) {
+          if (mode === 'clay') {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0xb0b0b0,
+              roughness: 0.75,
+              metalness: 0.10,
+              flatShading: false,
+              wireframe: false
+            });
+          } else if (mode === 'wireframe') {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0x38bdf8,
+              wireframe: true
+            });
+          } else if (mode === 'hybrid') {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0xb0b0b0,
+              roughness: 0.75,
+              metalness: 0.10,
+              flatShading: true,
+              wireframe: false
+            });
+          }
+        }
+      });
+    }
+
+    window.setClayShading = function(mode) {
+      clayShadingMode = mode;
+      document.querySelectorAll('#btn-shade-clay, #btn-shade-wire, #btn-shade-hybrid').forEach(b => b.classList.remove('active'));
+      const idSuffix = mode === 'wireframe' ? 'wire' : mode;
+      const btn = document.getElementById(`btn-shade-${idSuffix}`);
+      if (btn) btn.classList.add('active');
+      if (clayMeshGroup) {
+        applyClayShading(clayMeshGroup, mode);
+      }
+    };
+
+    window.toggleBoundingBox = function() {
+      showBoundingBox = !showBoundingBox;
+      if (boundingBoxHelper) boundingBoxHelper.visible = showBoundingBox;
+      const btn = document.getElementById('btn-toggle-bbox');
+      if (btn) {
+        if (showBoundingBox) btn.classList.add('active');
+        else btn.classList.remove('active');
+      }
+    };
+
+    window.downloadActiveClayGlb = function() {
+      if (!currentClayMetadata || !currentClayMetadata.glbUrl) {
+        alert('No clay GLB model available yet.');
+        return;
+      }
+      const a = document.createElement('a');
+      a.href = currentClayMetadata.glbUrl;
+      a.download = currentClayMetadata.glbUrl.split('/').pop() || 'google_3d_tiles_clay.glb';
+      a.click();
+    };
+
+
+    function flyCameraToStation(idx) {
+      const pose = activePoses[idx];
+      if (!pose) return;
+
+      const targetPos = new THREE.Vector3(...pose.positionLocalENU);
+      const lookAt = new THREE.Vector3(
+        pose.positionLocalENU[0] + pose.forwardVector[0] * 50,
+        pose.positionLocalENU[1] + pose.forwardVector[1] * 50,
+        pose.positionLocalENU[2] + pose.forwardVector[2] * 50
+      );
+
+      // Smooth camera transition
+      const startPos = camera.position.clone();
+      const startTarget = controls.target.clone();
+      let t = 0;
+
+      function step() {
+        t += 0.04;
+        if (t <= 1) {
+          camera.position.lerpVectors(startPos, targetPos, t);
+          controls.target.lerpVectors(startTarget, lookAt, t);
+          requestAnimationFrame(step);
+        } else {
+          camera.position.copy(targetPos);
+          controls.target.copy(lookAt);
+        }
+      }
+      step();
+    }
+
+    // Bidirectional Telemetry Broadcast
+    function updateDockTelemetryFromCamera() {
+      if (!currentAnchor) return;
+
+      const metersPerDegLat = 111132.92;
+      const metersPerDegLng = 111412.84 * Math.cos((currentAnchor.lat * Math.PI) / 180.0);
+
+      const lat = currentAnchor.lat - camera.position.z / metersPerDegLat;
+      const lng = currentAnchor.lng + camera.position.x / metersPerDegLng;
+
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      const heading = ((Math.atan2(dir.x, -dir.z) * 180.0) / Math.PI + 360.0) % 360.0;
+
+      const cEl = document.getElementById('dock-sync-coords');
+      if (cEl) cEl.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      const hEl = document.getElementById('dock-sync-heading');
+      if (hEl) hEl.textContent = `${heading.toFixed(1)}°`;
+    }
+
+    // Preset Location Switcher
+    window.loadPresetLocation = function(key) {
+      const loc = PRESET_LOCATIONS[key];
+      if (!loc) return;
+
+      document.querySelectorAll('#loc-sydney, #loc-paris, #loc-tokyo, #loc-london').forEach(b => b.classList.remove('active'));
+      const btn = document.getElementById(`loc-${key}`);
+      if (btn) btn.classList.add('active');
+
+      currentAnchor = {
+        lat: loc.lat,
+        lng: loc.lng,
+        elevationMeters: loc.alt,
+        headingDeg: loc.heading,
+        formattedAddress: loc.name
+      };
+
+      document.getElementById('anchor-name').textContent = loc.name;
+      document.getElementById('anchor-coords').textContent = `${loc.lat.toFixed(6)}°, ${loc.lng.toFixed(6)}°`;
+      document.getElementById('anchor-datum').textContent = `Ground Datum: ${loc.alt}m ASL`;
+
+      loadClay3DObject(currentAnchor);
+      synthesizeSurvey();
+    };
+
+    // Universal Location Geocoder
+    window.executeLocationSearch = async function() {
+      const input = document.getElementById('location-search-input').value.trim();
+      if (!input) return;
+
+      // Check if raw coordinates
+      const coordMatch = input.match(/^(-?\d+(\.\d+)?)[,\s]+(-?\d+(\.\d+)?)$/);
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[3]);
+        currentAnchor = {
+          lat,
+          lng,
+          elevationMeters: 0,
+          headingDeg: 0,
+          formattedAddress: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`
+        };
+      } else {
+        // Geocode via proxy
+        try {
+          const resp = await fetch(`/api/geocode?address=${encodeURIComponent(input)}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.results && data.results.length > 0) {
+              const res = data.results[0];
+              currentAnchor = {
+                lat: res.geometry.location.lat,
+                lng: res.geometry.location.lng,
+                elevationMeters: 0,
+                headingDeg: 0,
+                formattedAddress: res.formatted_address
+              };
+            }
+          }
+        } catch (e) {
+          console.warn('Geocoding fallback failed:', e);
+        }
+      }
+
+      document.getElementById('anchor-name').textContent = currentAnchor.formattedAddress;
+      document.getElementById('anchor-coords').textContent = `${currentAnchor.lat.toFixed(6)}°, ${currentAnchor.lng.toFixed(6)}°`;
+      loadClay3DObject(currentAnchor);
+      synthesizeSurvey();
+    };
+
+    // Dock Modes
+    window.setDockMode = function(mode) {
+      dockMode = mode;
+      const dock = document.getElementById('vector-dock');
+      const pipBtn = document.getElementById('btn-dock-pip');
+      const splitBtn = document.getElementById('btn-dock-split');
+
+      dock.classList.remove('dock-pip', 'dock-split', 'dock-minimized');
+      pipBtn.classList.remove('active');
+      splitBtn.classList.remove('active');
+
+      if (mode === 'pip') {
+        dock.classList.add('dock-pip');
+        pipBtn.classList.add('active');
+      } else if (mode === 'split') {
+        dock.classList.add('dock-split');
+        splitBtn.classList.add('active');
+      } else {
+        dock.classList.add('dock-minimized');
+      }
+
+      setTimeout(() => {
+        onWindowResize();
+      }, 350);
+    };
+
+    // Flythrough Player
+    window.toggleFlythrough = function() {
+      isFlythroughPlaying = !isFlythroughPlaying;
+      const icon = document.getElementById('flythrough-icon');
+      const label = document.getElementById('flythrough-label');
+      const btn = document.getElementById('btn-flythrough');
+
+      if (isFlythroughPlaying) {
+        icon.textContent = '⏸';
+        label.textContent = 'Pause Flythrough';
+        btn.classList.add('active');
+        runFlythroughLoop();
+      } else {
+        icon.textContent = '▶';
+        label.textContent = 'Flythrough (Space)';
+        btn.classList.remove('active');
+        clearTimeout(flythroughTimer);
+      }
+    };
+
+    function runFlythroughLoop() {
+      if (!isFlythroughPlaying) return;
+      activeStationIndex = (activeStationIndex + 1) % activePoses.length;
+      selectStation(activeStationIndex);
+      flyCameraToStation(activeStationIndex);
+      flythroughTimer = setTimeout(runFlythroughLoop, 2200);
+    }
+
+    function handleKeyboardShortcuts(e) {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        toggleFlythrough();
+      } else if (e.key === 'v' || e.key === 'V') {
+        setDockMode(dockMode === 'hide' ? 'pip' : 'hide');
+      } else if (e.key === 'c' || e.key === 'C') {
+        activeStationIndex = (activeStationIndex + 1) % activePoses.length;
+        selectStation(activeStationIndex);
+        flyCameraToStation(activeStationIndex);
+      }
+    }
+
+    // Exports
+    window.exportColmapBundle = function() {
+      const exportData = {
+        anchor: currentAnchor,
+        cameraModel: {
+          model: 'PINHOLE',
+          width: 3840,
+          height: 2160,
+          focalLength: (parseFloat(document.getElementById('optics-focal').value) / 36.0) * 3840
+        },
+        stations: activePoses,
+        generatedAt: new Date().toISOString()
+      };
+      downloadFile(JSON.stringify(exportData, null, 2), 'colmap_vector_survey.json', 'application/json');
+    };
+
+    window.exportGeoJSON = function() {
+      const geojson = {
+        type: 'FeatureCollection',
+        features: activePoses.map(p => ({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [p.coordinatesWGS84.lng, p.coordinatesWGS84.lat, p.coordinatesWGS84.elevation]
+          },
+          properties: {
+            id: p.id,
+            name: p.name,
+            heightAGL: p.heightAboveGround,
+            yaw: p.yawDegrees,
+            pitch: p.pitchDegrees,
+            focalLength: p.focalLengthMm
+          }
+        }))
+      };
+      downloadFile(JSON.stringify(geojson, null, 2), 'colmap_camera_stations.geojson', 'application/json');
+    };
+
+    window.exportColmapText = function() {
+      const f = (parseFloat(document.getElementById('optics-focal').value) / 36.0) * 3840;
+      let cameras = `# Camera list with one line of data per camera:\n# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n1 PINHOLE 3840 2160 ${f.toFixed(2)} ${f.toFixed(2)} 1920.00 1080.00`;
+      let images = `# Image list with two lines of data per image:\n# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n# POINTS2D[] as (X, Y, POINT3D_ID)\n`;
+      activePoses.forEach(p => {
+        images += `${p.id} 1.0 0.0 0.0 0.0 ${(-p.positionLocalENU[0]).toFixed(2)} ${(-p.positionLocalENU[1]).toFixed(2)} ${(-p.positionLocalENU[2]).toFixed(2)} 1 station_${p.id}.jpg\n\n`;
+      });
+      downloadFile(cameras + '\n\n' + images, 'colmap_export.txt', 'text/plain');
+    };
+
+    function downloadFile(content, filename, type) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Boot
+    window.addEventListener('DOMContentLoaded', () => {
+      initThreeScene();
+      synthesizeSurvey();
+      loadClay3DObject(currentAnchor);
+    });
+  </script>
+</body>
+</html>

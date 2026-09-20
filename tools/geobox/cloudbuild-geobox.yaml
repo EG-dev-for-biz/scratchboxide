@@ -1,0 +1,14 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'tools/geobox/Dockerfile'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/geobox-trainer:latest'
+      - 'tools/geobox'
+images:
+  - 'us-central1-docker.pkg.dev/scratchbox-canvas/depthbox3-repo/geobox-trainer:latest'
+timeout: '1800s'
+options:
+  machineType: 'E2_HIGHCPU_8'

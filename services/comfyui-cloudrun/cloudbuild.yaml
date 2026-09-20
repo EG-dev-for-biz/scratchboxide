@@ -1,0 +1,53 @@
+# Google Cloud Build pipeline for Scratchbox ComfyUI Cloud Run
+# Maintains parity with upstream ComfyUI releases and deploys with dynamic node support
+
+steps:
+  # 1. Build container image pulling latest upstream ComfyUI
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--no-cache'
+      - '--build-arg'
+      - 'COMFYUI_BRANCH=${_COMFYUI_BRANCH:-master}'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:latest'
+      - '.'
+
+  # 2. Push images to Container Registry / Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:$COMMIT_SHA']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:latest']
+
+  # 3. Deploy container image to Google Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scratchbox-comfyui-runner'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--cpu'
+      - '4'
+      - '--memory'
+      - '16Gi'
+      - '--timeout'
+      - '3600'
+
+substitutions:
+  _COMFYUI_BRANCH: 'master'
+
+images:
+  - 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/scratchbox-comfyui-runner:latest'

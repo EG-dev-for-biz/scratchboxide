@@ -50,3 +50,6 @@ temp-artifacts/
 scratch/
 qc_debug.json
 packages/.temp-cli-test-*/
+scripts/*.png
+scripts/*.glb
+scripts/extracted_textures/

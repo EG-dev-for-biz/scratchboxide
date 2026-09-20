@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scratchbox IDE - 1,000,000 3D Gaussian Splats (Empire State Building 10x)</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #030712;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        #viewport {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .header-bar {
+            position: absolute;
+            top: 18px;
+            left: 22px;
+            right: 22px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none;
+            z-index: 100;
+        }
+        .title-badge {
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            border-radius: 12px;
+            padding: 12px 20px;
+            backdrop-filter: blur(14px);
+            box-shadow: 0 12px 35px rgba(0,0,0,0.7);
+            pointer-events: auto;
+        }
+        .title-badge h1 {
+            font-size: 15px;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .title-badge h1 span.pill {
+            background: linear-gradient(135deg, #ec4899, #8b5cf6);
+            color: white;
+            font-size: 9px;
+            font-weight: 800;
+            padding: 3px 8px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            box-shadow: 0 0 12px rgba(236, 72, 153, 0.5);
+        }
+        .title-badge p {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 30px;
+            padding: 8px 16px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            pointer-events: auto;
+        }
+        .tool-btn {
+            background: rgba(30, 41, 59, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tool-btn:hover {
+            color: #e2e8f0;
+            border-color: #a855f7;
+            background: #1e293b;
+        }
+        .tool-btn.active {
+            background: #8b5cf6;
+            color: #ffffff;
+            border-color: #c084fc;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.45);
+        }
+        .tool-btn.ultra {
+            background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(139, 92, 246, 0.2));
+            border-color: #ec4899;
+            color: #f472b6;
+        }
+        .tool-btn.ultra.active {
+            background: linear-gradient(135deg, #ec4899, #8b5cf6);
+            color: #ffffff;
+            border-color: #f472b6;
+            box-shadow: 0 0 18px rgba(236, 72, 153, 0.6);
+        }
+        .hud-card {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            padding: 16px 20px;
+            width: 340px;
+            backdrop-filter: blur(14px);
+            box-shadow: 0 16px 40px rgba(0,0,0,0.7);
+            z-index: 100;
+            font-size: 12px;
+        }
+        .hud-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: #a855f7;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .hud-title span.status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: #10b981;
+            font-size: 10px;
+        }
+        .hud-title span.status-indicator::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .stat-box {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .stat-box .lbl {
+            font-size: 9px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-box .val {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f1f5f9;
+            margin-top: 2px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .stat-box .val.accent {
+            color: #ec4899;
+        }
+        .stat-box .val.green {
+            color: #4ade80;
+        }
+        .compression-bar-box {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+        }
+        .compression-bar-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            margin-bottom: 6px;
+        }
+        .compression-bar-header span.lbl { color: #94a3b8; font-weight: 600; }
+        .compression-bar-header span.pct { color: #f472b6; font-weight: 800; font-family: monospace; }
+        .bar-track {
+            height: 6px;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 3px;
+            overflow: hidden;
+            display: flex;
+        }
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ec4899, #8b5cf6);
+            width: 22.5%;
+            border-radius: 3px;
+        }
+        .bar-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 9px;
+            color: #64748b;
+            margin-top: 4px;
+            font-family: monospace;
+        }
+        /* Image Comparison Inset */
+        .image-inset {
+            position: absolute;
+            top: 86px;
+            right: 24px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 12px;
+            padding: 10px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 36px rgba(0,0,0,0.7);
+            z-index: 100;
+            width: 170px;
+        }
+        .image-inset .lbl {
+            font-size: 9px;
+            font-weight: 700;
+            color: #a855f7;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .image-inset img {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .legend {
+            position: absolute;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 10px 14px;
+            backdrop-filter: blur(14px);
+            z-index: 100;
+            font-size: 11px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #cbd5e1;
+        }
+        .legend-color {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        .camera-controls-bar {
+            position: absolute;
+            bottom: 24px;
+            left: 380px;
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 30px;
+            padding: 6px 14px;
+            backdrop-filter: blur(14px);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            z-index: 100;
+        }
+        .cam-btn {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #94a3b8;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 5px 12px;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .cam-btn:hover {
+            color: #ffffff;
+            border-color: #38bdf8;
+            background: #1e293b;
+        }
+        .cam-btn.active {
+            background: #0284c7;
+            color: #ffffff;
+            border-color: #38bdf8;
+        }
+    </style>
+    <!-- Three.js + OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div class="header-bar">
+        <div class="title-badge">
+            <h1>
+                SCRATCHBOX 3D ENGINE
+                <span class="pill">1,000,000 SPLATS (10&times;)</span>
+            </h1>
+            <p>Photorealistic Ultra-Density Splatting: Empire State Building Streetscape</p>
+        </div>
+        <div class="toolbar">
+            <button class="tool-btn ultra active" id="btn-1m">1,048,576 Splats (10&times;)</button>
+            <button class="tool-btn" id="btn-100k">102,400 Splats</button>
+            <button class="tool-btn" id="btn-orbit">Auto Orbit</button>
+        </div>
+    </div>
+
+    <!-- Inset showing original photograph -->
+    <div class="image-inset">
+        <div class="lbl">
+            <span>Source Image</span>
+            <span style="color:#64748b">1024&times;1024</span>
+        </div>
+        <img src="../test_esb_facade.jpg" alt="Source Photograph">
+    </div>
+
+    <!-- HUD Telemetry -->
+    <div class="hud-card">
+        <div class="hud-title">
+            <span>Splat Telemetry</span>
+            <span class="status-indicator">ONLINE (1M SPLATS)</span>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="lbl">Active Splats</div>
+                <div class="val accent" id="val-splats">1,048,576</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Frame Rate</div>
+                <div class="val green" id="val-fps">60 FPS</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">VRAM Footprint</div>
+                <div class="val" id="val-vram" style="font-size:12px">41.9 MB (GPU)</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Depth Range</div>
+                <div class="val" style="font-size:12px">3.5m &ndash; 97.0m</div>
+            </div>
+        </div>
+
+        <div class="compression-bar-box">
+            <div class="compression-bar-header">
+                <span class="lbl">Niantic SPZ Compression</span>
+                <span class="pct" id="val-pct">77.5% SMALLER</span>
+            </div>
+            <div class="bar-track">
+                <div class="bar-fill" id="bar-fill"></div>
+            </div>
+            <div class="bar-labels">
+                <span id="lbl-spz">SPZ: 7,381 KB</span>
+                <span id="lbl-splat">Raw Splat: 32,768 KB</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Camera Presets -->
+    <div class="camera-controls-bar">
+        <span style="font-size:10px; color:#64748b; font-weight:700; text-transform:uppercase; margin-right:4px;">Angle:</span>
+        <button class="cam-btn active" id="cam-parallax">3D Parallax</button>
+        <button class="cam-btn" id="cam-facade">Facade Align</button>
+        <button class="cam-btn" id="cam-street">Street Level</button>
+        <button class="cam-btn" id="cam-tower">Setbacks &amp; Spire</button>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+        <div class="legend-item">
+            <span class="legend-color" style="background:#38bdf8;"></span>
+            <span>Ground &amp; Street Plane (3.5m &ndash; 15m)</span>
+        </div>
+        <div class="legend-item">
+            <span class="legend-color" style="background:#fbbf24;"></span>
+            <span>Limestone Facade &amp; Windows (18m &ndash; 28m)</span>
+        </div>
+        <div class="legend-item">
+            <span class="legend-color" style="background:#c084fc;"></span>
+            <span>Tower Shaft &amp; Setbacks (32m &ndash; 67m)</span>
+        </div>
+        <div class="legend-item">
+            <span class="legend-color" style="background:#60a5fa;"></span>
+            <span>Atmospheric Sky Dome (85m &ndash; 97m)</span>
+        </div>
+    </div>
+
+    <canvas id="viewport"></canvas>
+
+    <script>
+        const canvas = document.getElementById('viewport');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+        const initialTarget = new THREE.Vector3(0, 10, -28);
+        camera.position.set(22, 14, 2);
+        camera.lookAt(initialTarget);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.copy(initialTarget);
+        controls.update();
+
+        const gridHelper = new THREE.GridHelper(100, 50, 0x38bdf8, 0x1e293b);
+        gridHelper.position.set(0, -6, -28);
+        scene.add(gridHelper);
+
+        // Splat Shader Material
+        const splatMaterial = new THREE.ShaderMaterial({
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending,
+            uniforms: {
+                viewport: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+            },
+            vertexShader: `
+                attribute vec3 instanceCenter;
+                attribute vec3 instanceScale;
+                attribute vec3 instanceColor;
+                attribute float instanceOpacity;
+
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+
+                void main() {
+                    vUv = uv;
+                    vColor = instanceColor;
+                    vOpacity = instanceOpacity;
+
+                    vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+                    float radius = max(instanceScale.x, max(instanceScale.y, instanceScale.z));
+                    vec3 cornerPos = position * radius * 3.2;
+                    vec4 viewPos = viewCenter + vec4(cornerPos.xy, 0.0, 0.0);
+
+                    gl_Position = projectionMatrix * viewPos;
+                }
+            `,
+            fragmentShader: `
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+
+                void main() {
+                    vec2 d = (vUv - vec2(0.5)) * 2.0;
+                    float r2 = dot(d, d);
+                    if (r2 > 1.0) discard;
+
+                    float alpha = exp(-1.25 * r2) * vOpacity;
+                    if (alpha < 0.02) discard;
+                    gl_FragColor = vec4(vColor, alpha);
+                }
+            `
+        });
+
+        let currentMesh = null;
+
+        function parseSplatArrayBuffer(buffer) {
+            const count = Math.floor(buffer.byteLength / 32);
+            const positions = new Float32Array(count * 3);
+            const scales = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+            const opacities = new Float32Array(count);
+
+            const view = new DataView(buffer);
+            for (let i = 0; i < count; i++) {
+                const off = i * 32;
+                positions[i * 3 + 0] = view.getFloat32(off + 0, true);
+                positions[i * 3 + 1] = view.getFloat32(off + 4, true);
+                positions[i * 3 + 2] = view.getFloat32(off + 8, true);
+
+                scales[i * 3 + 0] = view.getFloat32(off + 12, true);
+                scales[i * 3 + 1] = view.getFloat32(off + 16, true);
+                scales[i * 3 + 2] = view.getFloat32(off + 20, true);
+
+                colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
+                colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
+                colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
+                opacities[i] = view.getUint8(off + 27) / 255.0;
+            }
+
+            return { count, positions, scales, colors, opacities };
+        }
+
+        function createSplatMesh(splatData) {
+            if (currentMesh) {
+                scene.remove(currentMesh);
+                currentMesh.geometry.dispose();
+                currentMesh = null;
+            }
+
+            const quadGeo = new THREE.PlaneGeometry(1, 1);
+            const instancedGeo = new THREE.InstancedBufferGeometry();
+            instancedGeo.index = quadGeo.index;
+            instancedGeo.attributes.position = quadGeo.attributes.position;
+            instancedGeo.attributes.uv = quadGeo.attributes.uv;
+
+            instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(splatData.positions, 3));
+            instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(splatData.scales, 3));
+            instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(splatData.colors, 3));
+            instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(splatData.opacities, 1));
+
+            const mesh = new THREE.Mesh(instancedGeo, splatMaterial);
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            currentMesh = mesh;
+
+            document.getElementById('val-splats').textContent = splatData.count.toLocaleString();
+            return mesh;
+        }
+
+        async function loadDataset(url, isUltra) {
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const buffer = await resp.arrayBuffer();
+                const splatData = parseSplatArrayBuffer(buffer);
+                createSplatMesh(splatData);
+
+                if (isUltra) {
+                    document.getElementById('btn-1m').classList.add('active');
+                    document.getElementById('btn-100k').classList.remove('active');
+                    document.getElementById('val-vram').textContent = "41.9 MB (GPU)";
+                    document.getElementById('val-pct').textContent = "77.5% SMALLER";
+                    document.getElementById('bar-fill').style.width = "22.5%";
+                    document.getElementById('lbl-spz').textContent = "SPZ: 7,381 KB";
+                    document.getElementById('lbl-splat').textContent = "Raw Splat: 32,768 KB";
+                } else {
+                    document.getElementById('btn-1m').classList.remove('active');
+                    document.getElementById('btn-100k').classList.add('active');
+                    document.getElementById('val-vram').textContent = "4.1 MB (GPU)";
+                    document.getElementById('val-pct').textContent = "75.2% SMALLER";
+                    document.getElementById('bar-fill').style.width = "24.8%";
+                    document.getElementById('lbl-spz').textContent = "SPZ: 793 KB";
+                    document.getElementById('lbl-splat').textContent = "Raw Splat: 3,200 KB";
+                }
+            } catch (err) {
+                console.error("Failed to fetch splat dataset:", err);
+            }
+        }
+
+        // Default: Load 10x Ultra Splats (1,048,576 Splats)
+        loadDataset('/build/esb_1m.splat', true);
+
+        // Buttons
+        document.getElementById('btn-1m').onclick = () => loadDataset('/build/esb_1m.splat', true);
+        document.getElementById('btn-100k').onclick = () => loadDataset('/build/esb_complicated.splat', false);
+
+        let autoOrbit = false;
+        document.getElementById('btn-orbit').onclick = (e) => {
+            autoOrbit = !autoOrbit;
+            e.currentTarget.classList.toggle('active', autoOrbit);
+        };
+
+        // Camera presets
+        function setCamBtn(activeId) {
+            ['cam-parallax', 'cam-facade', 'cam-street', 'cam-tower'].forEach(id => {
+                document.getElementById(id).classList.toggle('active', id === activeId);
+            });
+        }
+
+        document.getElementById('cam-parallax').onclick = () => {
+            setCamBtn('cam-parallax');
+            animateCamera(new THREE.Vector3(22, 14, 2), new THREE.Vector3(0, 10, -28));
+        };
+        document.getElementById('cam-facade').onclick = () => {
+            setCamBtn('cam-facade');
+            animateCamera(new THREE.Vector3(0, 7, 0), new THREE.Vector3(0, 8, -25));
+        };
+        document.getElementById('cam-street').onclick = () => {
+            setCamBtn('cam-street');
+            animateCamera(new THREE.Vector3(5, -2, 4), new THREE.Vector3(0, 2, -18));
+        };
+        document.getElementById('cam-tower').onclick = () => {
+            setCamBtn('cam-tower');
+            animateCamera(new THREE.Vector3(12, 30, -5), new THREE.Vector3(0, 22, -45));
+        };
+
+        function animateCamera(targetPos, targetLookAt) {
+            autoOrbit = false;
+            document.getElementById('btn-orbit').classList.remove('active');
+            const startPos = camera.position.clone();
+            const startLook = controls.target.clone();
+            let progress = 0;
+
+            function step() {
+                progress += 0.05;
+                if (progress >= 1.0) {
+                    camera.position.copy(targetPos);
+                    controls.target.copy(targetLookAt);
+                    controls.update();
+                    return;
+                }
+                const t = 0.5 - 0.5 * Math.cos(progress * Math.PI);
+                camera.position.lerpVectors(startPos, targetPos, t);
+                controls.target.lerpVectors(startLook, targetLookAt, t);
+                controls.update();
+                requestAnimationFrame(step);
+            }
+            step();
+        }
+
+        // FPS Counter
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+        const fpsElem = document.getElementById('val-fps');
+
+        let clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsUpdate >= 500) {
+                const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+                fpsElem.textContent = `${fps} FPS`;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            if (autoOrbit) {
+                const angle = 0.20 * delta;
+                const offset = camera.position.clone().sub(controls.target);
+                offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+                camera.position.copy(controls.target).add(offset);
+                camera.lookAt(controls.target);
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            splatMaterial.uniforms.viewport.value.set(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

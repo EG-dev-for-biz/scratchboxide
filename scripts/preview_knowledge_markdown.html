@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scratchbox IDE - Knowledge AI Markdown Integration Showcase</title>
+    <link rel="stylesheet" href="../packages/core/src/browser/style/unified-ui.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 32px;
+            background: #090d16;
+            color: #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            max-width: 880px;
+            width: 100%;
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 36px 44px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+        }
+        .header-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            background: rgba(139, 92, 246, 0.15);
+            border: 1px solid rgba(139, 92, 246, 0.35);
+            color: #c4b5fd;
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        h1 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #f8fafc;
+            margin: 0 0 8px 0;
+        }
+        p.subtitle {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 28px;
+        }
+        .feature-card {
+            margin-bottom: 32px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .feature-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #38bdf8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .interactive-toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #1e1b4b;
+            border: 1px solid #6366f1;
+            color: #e0e7ff;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            display: none;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-badge">
+            <span>✨</span> Knowledge AI Features Activated
+        </div>
+        <h1>Knowledge AI Markdown Engine in Scratchbox IDE</h1>
+        <p class="subtitle">Visual verification of collapsible AI provenance callouts, inline AST selection popovers, diff review workflow, and bidirectional wikilinks.</p>
+
+        <!-- Feature 1: Collapsible AI Callout -->
+        <div class="feature-card">
+            <div class="feature-title">
+                <span>1. Collapsible AI Provenance Callout (&gt; [!ai]+)</span>
+            </div>
+            <div class="sb-doc-callout sb-callout-ai">
+                <div class="sb-callout-ai-header">
+                    <div class="sb-callout-badge-ai">
+                        <span class="sb-callout-sparkle">✨</span>
+                        <span class="sb-callout-badge-label">AI SYNTHESIS</span>
+                        <span class="sb-callout-model-tag">Gemini 2.5 Pro</span>
+                    </div>
+                    <div class="sb-ai-callout-actions">
+                        <button type="button" class="sb-btn sb-ai-action-btn" onclick="showToast('Promoted AI callout content to main document body!')">
+                            Promote to Body
+                        </button>
+                        <button type="button" class="sb-btn sb-ai-collapse-toggle" onclick="toggleCallout(this)">
+                            <span class="sb-ai-chevron">▼</span>
+                            <span>Fold</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="sb-callout-content" id="callout-content-1">
+                    <div class="sb-ai-provenance-meta">
+                        <span class="sb-ai-meta-item">🕒 Just now</span>
+                        <span class="sb-ai-meta-item">🎯 Prompt: "Synthesize SIMD vector math architecture"</span>
+                    </div>
+                    <p style="margin: 0; line-height: 1.6;">
+                        Native C++20 compilation accelerates SDF raymarching by <strong>4.2x</strong> over pure browser WebGL shaders.
+                        Refer to <span class="sb-wikilink-badge" onclick="showToast('Navigating to [[SIMD Acceleration]]')"><span class="sb-wikilink-bracket">[[</span><span class="sb-wikilink-label">SIMD Acceleration</span><span class="sb-wikilink-bracket">]]</span></span>
+                        and memory benchmarks in <span class="sb-wikilink-badge" onclick="showToast('Navigating to [[Memory Pooling#Linear Allocator]]')"><span class="sb-wikilink-bracket">[[</span><span class="sb-wikilink-label">Memory Pooling &gt; Linear Allocator</span><span class="sb-wikilink-bracket">]]</span></span>.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature 2: In-line Selection Popover -->
+        <div class="feature-card">
+            <div class="feature-title">
+                <span>2. In-line Text Selection Popover (Smart Markdown Conversions)</span>
+            </div>
+            <div style="position: relative; padding: 24px 0 16px 0;">
+                <div class="sb-floating-selection-popover" style="position: relative; display: inline-flex; top: 0; left: 0; transform: none; box-shadow: 0 10px 25px rgba(0,0,0,0.4);">
+                    <button type="button" class="sb-selection-popover-pill" onclick="showToast('Transforming selected text to Comparison Table')">
+                        <span>📊</span>
+                        <span>To Table</span>
+                    </button>
+                    <button type="button" class="sb-selection-popover-pill" onclick="showToast('Converting requirements to Actionable Checklist')">
+                        <span>☑️</span>
+                        <span>To Checklist</span>
+                    </button>
+                    <button type="button" class="sb-selection-popover-pill" onclick="showToast('Synthesizing into Collapsible AI Callout')">
+                        <span>✨</span>
+                        <span>AI Callout</span>
+                    </button>
+                    <button type="button" class="sb-selection-popover-pill" onclick="showToast('Polishing and clarifying excerpt')">
+                        <span>🪄</span>
+                        <span>Refine</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature 3: Side-by-Side / Stacked Diff Review -->
+        <div class="feature-card">
+            <div class="feature-title">
+                <span>3. In-line Section Diff Review (Accept / Reject)</span>
+            </div>
+            <div class="sb-doc-diff-view">
+                <div class="sb-doc-diff-header">
+                    <span class="sb-diff-tag">TRANSFORM TO TABLE PROPOSAL</span>
+                    <span class="sb-diff-hint">Review AI suggested changes</span>
+                </div>
+                <div class="sb-diff-content">
+                    <div class="sb-diff-line sb-diff-del">
+                        <span class="sb-diff-sign">-</span>
+                        <span>Performance: Marching cubes runs at 60fps, SDF raymarching runs at 120fps with half memory bandwidth.</span>
+                    </div>
+                    <div class="sb-diff-line sb-diff-add">
+                        <span class="sb-diff-sign">+</span>
+                        <div style="flex: 1;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid rgba(34, 197, 94, 0.3); text-align: left;">
+                                        <th style="padding: 4px;">Technique</th>
+                                        <th style="padding: 4px;">FPS Target</th>
+                                        <th style="padding: 4px;">Bandwidth</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                        <td style="padding: 4px;">Marching Cubes</td>
+                                        <td style="padding: 4px;">60 FPS</td>
+                                        <td style="padding: 4px;">Standard</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px;">SDF Raymarching</td>
+                                        <td style="padding: 4px;">120 FPS</td>
+                                        <td style="padding: 4px;">50% Reduced</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="sb-diff-actions">
+                    <button type="button" class="sb-btn sb-diff-accept-btn" onclick="showToast('Changes Accepted! Document updated.')">
+                        ✓ Accept Changes
+                    </button>
+                    <button type="button" class="sb-btn sb-diff-reject-btn" onclick="showToast('Proposal Rejected. Kept original text.')">
+                        ✕ Reject
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feature 4: Bidirectional Wikilinks & Auto-Link Notes -->
+        <div class="feature-card">
+            <div class="feature-title">
+                <span>4. Bidirectional Wikilinks & Auto-Link Notes</span>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+                <p style="margin: 0; font-size: 13px; color: #cbd5e1;">
+                    Referenced notes in active project:
+                </p>
+                <button type="button" class="sb-btn sb-btn-secondary" style="font-size: 11px; padding: 4px 10px; display: flex; align-items: center; gap: 6px;" onclick="showToast('Auto-linked 4 concepts into [[wikilinks]]!')">
+                    <span>🔗</span>
+                    <span>Auto-Link Notes</span>
+                </button>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                <span class="sb-wikilink-badge" onclick="showToast('Navigating to [[Kernel Architecture]]')">
+                    <span class="sb-wikilink-bracket">[[</span>
+                    <span class="sb-wikilink-label">Kernel Architecture</span>
+                    <span class="sb-wikilink-bracket">]]</span>
+                </span>
+                <span class="sb-wikilink-badge" onclick="showToast('Navigating to [[Simulation Engine]] (aliased as Physics Kernel)')">
+                    <span class="sb-wikilink-bracket">[[</span>
+                    <span class="sb-wikilink-label">Physics Kernel</span>
+                    <span class="sb-wikilink-bracket">]]</span>
+                </span>
+                <span class="sb-wikilink-badge" onclick="showToast('Navigating to [[Procedural Terrains#Erosion Shader]]')">
+                    <span class="sb-wikilink-bracket">[[</span>
+                    <span class="sb-wikilink-label">Procedural Terrains &gt; Erosion Shader</span>
+                    <span class="sb-wikilink-bracket">]]</span>
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="interactive-toast"></div>
+
+    <script>
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.display = 'block';
+            clearTimeout(window.__toastTimeout);
+            window.__toastTimeout = setTimeout(() => {
+                t.style.display = 'none';
+            }, 3000);
+        }
+
+        function toggleCallout(btn) {
+            const content = document.getElementById('callout-content-1');
+            const chevron = btn.querySelector('.sb-ai-chevron');
+            const label = btn.querySelector('span:last-child');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                chevron.textContent = '▼';
+                label.textContent = 'Fold';
+                showToast('Expanded AI Callout (> [!ai]+)');
+            } else {
+                content.style.display = 'none';
+                chevron.textContent = '▶';
+                label.textContent = 'Expand';
+                showToast('Folded AI Callout (> [!ai]-)');
+            }
+        }
+    </script>
+</body>
+</html>
