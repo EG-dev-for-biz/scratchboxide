@@ -1,4 +1,4 @@
-import { LensDistortionParams } from '../vfx-plate-protocol.js';
+import type { LensDistortionParams } from '../vfx-plate-protocol';
 
 export interface VfxLensMetadata {
     lensName?: string;

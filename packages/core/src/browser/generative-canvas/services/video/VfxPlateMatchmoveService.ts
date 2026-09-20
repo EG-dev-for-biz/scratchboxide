@@ -19,7 +19,7 @@ import {
     getSolarPosition,
     solarDirectionVector,
     type SolarPosition
-} from '../../../../common/coordinate/solarPosition.js';
+} from '../../../../common/coordinate/solarPosition';
 import type { Vec3 } from '../../../../common/coordinate/LocalTangentPlane';
 
 export interface InterpolatedCameraPose {

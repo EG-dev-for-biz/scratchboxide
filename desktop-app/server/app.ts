@@ -46,7 +46,10 @@ import {
     ComfyUiCloudRunService,
     Depthbox360UniverseService,
     ImageToSplatService,
-    Google360PanoramaPipelineService
+    Google360PanoramaPipelineService,
+    SurveyApi,
+    createSurveyRouter,
+    getGoogle3DTilesClay
 } from '../../packages/core/src/node';
 import { GeoFrame } from '../../packages/core/src/common/coordinate/GeoFrame';
 import {
@@ -1936,6 +1939,24 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
 
     app.use('/api/3d/tiles', tileCleanupRouter);
     app.use('/api/3d/cleanup-tiles', tileCleanupRouter);
+
+    // ==========================================
+    // Survey Synthesis API: station cameras for blockout render, AI Beautify, splat tiles.
+    // Backs the Vector Dock "Survey Synthesis" panel (clay ingestion, rank, render, export).
+    // ==========================================
+    const surveyWorkspaceRoot = process.cwd();
+    const surveyApi = new SurveyApi({
+        workspaceRoot: surveyWorkspaceRoot,
+        fetchClayGlb: async (query, options) => {
+            const res = await getGoogle3DTilesClay(query as any, { ...(options || {}), outputDir: path.join(surveyWorkspaceRoot, 'public/tiles') });
+            if (!res.success) throw new Error(res.error || 'Clay ingestion failed');
+            const publicRootAbs = path.join(surveyWorkspaceRoot, 'public');
+            const rel = path.relative(publicRootAbs, res.glbPath);
+            const glbUrl = rel && !rel.startsWith('..') ? '/' + rel.split(path.sep).join('/') : undefined;
+            return { glbPath: res.glbPath, glbUrl, mesh: res.mesh, geoAnchor: res.geoAnchor, resolvedAddress: res.resolvedAddress, quality: res.quality, mode: res.mode };
+        }
+    });
+    app.use('/api/3d/survey', createSurveyRouter(express, surveyApi));
 
     // ==========================================
     // 6b. Mobile ARCore Geospatial Manifest Compiler

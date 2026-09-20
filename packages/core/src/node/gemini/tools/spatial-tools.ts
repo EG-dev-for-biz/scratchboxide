@@ -71,6 +71,7 @@ import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-servic
 import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
+import { SurveyApi } from '../../spatial/survey-router';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -696,6 +697,73 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['inputPath']
         }
+    },
+    {
+        name: 'survey_synthesize_stations',
+        description: 'Survey Synthesis: procedurally place 6-DoF camera stations around a geodetic anchor (orbital-multi-tier, facade-lawnmower, street-corridor, nadir-grid) in the local ENU frame with WGS-84 coordinates, lens fov and frustum footprints. Optionally enrich each station against a GLB (standoff, horizon row, sky fraction, mesh coverage, sun azimuth/elevation) and rank the best stations for AI Beautify. These stations are the single camera truth for blockout rendering, buildBeautifyPrompt and depth-to-splat baking.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                latitude: { type: 'NUMBER', description: 'Anchor latitude (degrees).' },
+                longitude: { type: 'NUMBER', description: 'Anchor longitude (degrees).' },
+                elevationMeters: { type: 'NUMBER', description: 'Anchor ground elevation ASL (metres, default 0).' },
+                headingDeg: { type: 'NUMBER', description: 'Anchor / corridor heading, degrees clockwise from north (default 0).' },
+                pattern: { type: 'STRING', description: "'orbital-multi-tier' | 'facade-lawnmower' | 'street-corridor' | 'nadir-grid'" },
+                radiusMeters: { type: 'NUMBER', description: 'Orbit radius / facade standoff / corridor scale (metres).' },
+                cameraCount: { type: 'NUMBER', description: 'Number of stations (>= 3).' },
+                focalLengthMm: { type: 'NUMBER', description: 'Full-frame equivalent focal length (default 35).' },
+                cameraHeightMeters: { type: 'NUMBER', description: 'Street-corridor camera height (e.g. 1.7 for eye level).' },
+                lookAtOffsetLocalENU: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Orbit look-at point [east, up, south] in metres (default [0, 20, 0]).' },
+                glbPath: { type: 'STRING', description: 'Optional anchored GLB (e.g. Google 3D Tiles clay) to enrich stations against.' },
+                isoDate: { type: 'STRING', description: 'ISO-8601 UTC instant for the sun ephemeris (default now).' },
+                rankMaxCount: { type: 'NUMBER', description: 'If set, also return the ids of the best stations for beautify.' },
+                outJsonPath: { type: 'STRING', description: 'Optional path to write the stations JSON.' }
+            },
+            required: ['latitude', 'longitude', 'pattern', 'radiusMeters', 'cameraCount']
+        }
+    },
+    {
+        name: 'survey_rank_stations',
+        description: 'Rank enriched survey stations for AI Beautify: drops stations with low mesh coverage or too much sky, then picks a set with maximal angular spread.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                stationsJsonPath: { type: 'STRING', description: 'Path to a stations JSON written by survey_synthesize_stations.' },
+                maxCount: { type: 'NUMBER', description: 'How many stations to keep (default 8).' },
+                minMeshCoverage: { type: 'NUMBER', description: 'Minimum footprint coverage of the mesh (default 0.6).' },
+                maxSkyFraction: { type: 'NUMBER', description: 'Maximum empty-sky fraction (default 0.6).' }
+            },
+            required: ['stationsJsonPath']
+        }
+    },
+    {
+        name: 'survey_export_colmap',
+        description: 'Export survey stations as COLMAP cameras.txt / images.txt (camera-from-world convention) for external Gaussian splat trainers or SfM tools.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                stationsJsonPath: { type: 'STRING', description: 'Path to a stations JSON.' },
+                outDir: { type: 'STRING', description: 'Directory to write cameras.txt and images.txt.' },
+                width: { type: 'NUMBER', description: 'Image width in px (default 1920).' },
+                height: { type: 'NUMBER', description: 'Image height in px (default 1080).' }
+            },
+            required: ['stationsJsonPath', 'outDir']
+        }
+    },
+    {
+        name: 'survey_render_station',
+        description: 'Render a pose-exact clay blockout of a GLB from one survey station (pure Node software rasterizer): PNG plus pinhole intrinsics and metric depth statistics. This is the <IMAGE_REF_0> precursor for buildBeautifyPrompt at that station.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Anchored GLB to render.' },
+                stationsJsonPath: { type: 'STRING', description: 'Stations JSON containing the station.' },
+                stationId: { type: 'NUMBER', description: 'Station id to render.' },
+                width: { type: 'NUMBER', description: 'Render width (default 1920; height follows the station aspect).' },
+                outPngPath: { type: 'STRING', description: 'Where to write the PNG.' }
+            },
+            required: ['glbPath', 'stationsJsonPath', 'stationId', 'outPngPath']
+        }
     }
 ];
 
@@ -1056,6 +1124,71 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 durationMs: res.durationMs
             } as unknown as ToolResultPayload,
             summaryResult: `Tiled ${res.numSplats.toLocaleString()} splats into ${res.tileCount} KHR_gaussian_splatting tiles (${res.levels} LOD levels, ${(res.tileBytes / 1048576).toFixed(1)} MB) in ${res.durationMs} ms${res.rootTransform ? ', placed on WGS-84' : ' (local metres)'}. tileset.json: ${res.tilesetPath}`
+        };
+    },
+
+    survey_synthesize_stations: async (args, _ctx) => {
+        const api = new SurveyApi({ workspaceRoot: process.cwd() });
+        const res = await api.synthesize({
+            anchor: { lat: args.latitude, lng: args.longitude, elevationMeters: typeof args.elevationMeters === 'number' ? args.elevationMeters : 0, headingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : 0 },
+            config: {
+                type: asString(args.pattern), targetRadiusMeters: args.radiusMeters, cameraCount: args.cameraCount,
+                focalLengthMm: typeof args.focalLengthMm === 'number' ? args.focalLengthMm : 35,
+                cameraHeightMeters: typeof args.cameraHeightMeters === 'number' ? args.cameraHeightMeters : undefined,
+                lookAtOffsetLocalENU: Array.isArray(args.lookAtOffsetLocalENU) && args.lookAtOffsetLocalENU.length === 3 ? args.lookAtOffsetLocalENU : undefined,
+                corridorHeadingDeg: typeof args.headingDeg === 'number' ? args.headingDeg : undefined
+            },
+            glbPath: asString(args.glbPath) || undefined,
+            isoDate: asString(args.isoDate) || undefined,
+            rankMaxCount: typeof args.rankMaxCount === 'number' ? args.rankMaxCount : undefined
+        });
+        const outJsonPath = asString(args.outJsonPath);
+        if (outJsonPath) {
+            const fsMod = await import('fs-extra');
+            await fsMod.outputJson(outJsonPath, { anchor: res.anchor, poses: res.poses, rankedStationIds: res.rankedStationIds }, { spaces: 2 });
+        }
+        return {
+            resultPayload: { success: true, stationCount: res.poses.length, enriched: res.enriched, rankedStationIds: res.rankedStationIds, stats: res.stats, outJsonPath: outJsonPath || undefined, stations: res.poses.map(p => ({ id: p.id, name: p.name, yaw: p.yawDegrees, pitch: p.pitchDegrees, fov: p.fovDegrees, positionLocalENU: p.positionLocalENU, wgs84: p.coordinatesWGS84, beautify: p.beautify })) } as unknown as ToolResultPayload,
+            summaryResult: `Synthesized ${res.poses.length} ${asString(args.pattern)} stations (radius ${res.stats.boundingRadiusMeters} m)${res.enriched ? ', enriched against the mesh' : ''}${res.rankedStationIds ? `; best for beautify: [${res.rankedStationIds.join(', ')}]` : ''}${outJsonPath ? ` -> ${outJsonPath}` : ''}`
+        };
+    },
+
+    survey_rank_stations: async (args, _ctx) => {
+        const fsMod = await import('fs-extra');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const api = new SurveyApi({ workspaceRoot: process.cwd() });
+        const res = api.rank({ poses: data.poses, maxCount: args.maxCount, minMeshCoverage: args.minMeshCoverage, maxSkyFraction: args.maxSkyFraction });
+        return {
+            resultPayload: { success: true, rankedStationIds: res.rankedStationIds, ranked: res.ranked.map(p => ({ id: p.id, name: p.name, rankScore: p.beautify?.rankScore, skyFraction: p.beautify?.skyFraction, meshCoverage: p.beautify?.meshCoverageFraction })) } as unknown as ToolResultPayload,
+            summaryResult: `Ranked ${res.ranked.length} of ${data.poses.length} stations for beautify: [${res.rankedStationIds.join(', ')}]`
+        };
+    },
+
+    survey_export_colmap: async (args, _ctx) => {
+        const fsMod = await import('fs-extra');
+        const pathMod = await import('path');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const api = new SurveyApi({ workspaceRoot: process.cwd() });
+        const out = api.exportColmap({ poses: data.poses, width: args.width, height: args.height });
+        const outDir = asString(args.outDir);
+        await fsMod.outputFile(pathMod.join(outDir, 'cameras.txt'), out.camerasText);
+        await fsMod.outputFile(pathMod.join(outDir, 'images.txt'), out.imagesText);
+        return {
+            resultPayload: { success: true, camerasPath: pathMod.join(outDir, 'cameras.txt'), imagesPath: pathMod.join(outDir, 'images.txt'), stationCount: data.poses.length } as unknown as ToolResultPayload,
+            summaryResult: `Exported ${data.poses.length} stations as COLMAP text to ${outDir}`
+        };
+    },
+
+    survey_render_station: async (args, _ctx) => {
+        const fsMod = await import('fs-extra');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const station = (data.poses as any[]).find(p => p.id === args.stationId);
+        if (!station) throw new Error(`survey_render_station: station ${args.stationId} not found in ${args.stationsJsonPath}`);
+        const api = new SurveyApi({ workspaceRoot: process.cwd() });
+        const res = await api.renderStation({ glbPath: asString(args.glbPath), station, width: typeof args.width === 'number' ? args.width : 1920, outPath: asString(args.outPngPath) });
+        return {
+            resultPayload: { success: true, stationId: res.stationId, width: res.width, height: res.height, intrinsics: res.intrinsics, depthKind: res.depthKind, depthStats: res.depthStats, outPngPath: asString(args.outPngPath) } as unknown as ToolResultPayload,
+            summaryResult: `Rendered station ${res.stationId} blockout ${res.width}x${res.height} (fx ${res.intrinsics.fx.toFixed(1)} px, ${(res.depthStats.filledFraction * 100).toFixed(0)}% mesh coverage) -> ${asString(args.outPngPath)}`
         };
     },
 

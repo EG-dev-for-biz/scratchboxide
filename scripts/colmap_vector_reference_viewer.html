@@ -236,6 +236,7 @@
       <div class="flex items-center justify-between pb-1 border-b border-slate-800">
         <span class="text-cyan-300 font-bold font-mono" id="tel-station-id">STATION #01</span>
         <span class="text-[10px] text-slate-400 font-mono" id="tel-station-tier">TIER 1</span>
+        <span id="tel-station-rank" class="text-[10px] font-mono text-slate-500"></span>
       </div>
       <div class="grid grid-cols-2 gap-1.5 font-mono text-[10px]">
         <div><span class="text-slate-500">Altitude:</span> <span id="tel-alt" class="text-slate-200">37.0m ASL</span></div>
@@ -245,16 +246,32 @@
         <div><span class="text-slate-500">Lens:</span> <span id="tel-lens" class="text-slate-200">35mm</span></div>
         <div><span class="text-slate-500">FOV:</span> <span id="tel-fov" class="text-slate-200">54.4°</span></div>
       </div>
+      <div id="tel-metrics" class="text-[10px] font-mono text-slate-500 leading-snug">load clay to enrich</div>
+      <div class="hidden">
+      </div>
     </div>
 
     <!-- Data Export Buttons -->
     <div class="flex flex-col gap-1.5 pt-1">
-      <button onclick="exportGeoJson()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
+      <button onclick="exportGeoJSON()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
         <span>💾</span> Export RFC 7946 GeoJSON
       </button>
-      <button onclick="exportColmap()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
+      <button onclick="exportColmapText()" class="w-full py-1.5 rounded-lg btn-action text-[11px] font-semibold flex items-center justify-center gap-1 text-slate-300">
         <span>📄</span> Export COLMAP (cameras.txt/images.txt)
       </button>
+    </div>
+    <div class="bg-slate-900/70 rounded-xl p-3 border border-amber-500/30 text-xs flex flex-col gap-2">
+      <div class="flex items-center justify-between">
+        <span class="text-amber-300 font-bold">Beautify at Station</span>
+        <span id="beautify-hint" class="text-[10px] text-slate-500 font-mono">Load a clay GLB to enable</span>
+      </div>
+      <img id="blockout-preview" alt="Station blockout" class="w-full rounded-lg border border-slate-700" style="display:none" />
+      <div id="blockout-caption" class="text-[10px] font-mono text-slate-400">No blockout rendered yet</div>
+      <div class="flex gap-1.5">
+        <button id="btn-render-blockout" onclick="renderStationBlockout()" disabled class="flex-1 py-1.5 rounded-lg btn-action text-[11px] font-semibold text-slate-200 disabled:opacity-40">Render Blockout</button>
+        <button id="btn-beautify-station" onclick="beautifyStation()" disabled class="flex-1 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-white disabled:opacity-40">Beautify Station</button>
+      </div>
+      <button id="btn-beautify-all" onclick="beautifyRankedToSplats()" disabled class="w-full py-1.5 rounded-lg bg-purple-700 hover:bg-purple-600 text-[11px] font-bold text-white disabled:opacity-40">Beautify Ranked → Splat 3D Tiles</button>
     </div>
   </aside>
 
@@ -454,78 +471,114 @@
     }
 
     // Mathematical Camera Survey Synthesis (Universal Zero Presets)
-    window.synthesizeSurvey = function() {
+    // ---- Survey Synthesis API (single camera truth: /api/3d/survey) ----
+    const SURVEY_API = '/api/3d/survey';
+    function launchToken() {
+      const q = new URLSearchParams(location.search).get('token');
+      if (q) { try { localStorage.setItem('scratchboxLaunchToken', q); } catch {} return q; }
+      // Electron preload bridge, then dev conveniences (Vite proxy injects the header itself when served through Vite)
+      return (window.scratchbox && window.scratchbox.launchToken) || window.__SCRATCHBOX_LAUNCH_TOKEN__ || (function(){ try { return localStorage.getItem('scratchboxLaunchToken') || ''; } catch { return ''; } })();
+    }
+    async function surveyPost(route, body) {
+      const resp = await fetch(SURVEY_API + route, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Scratchbox-Token': launchToken() }, body: JSON.stringify(body) });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.success === false) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data;
+    }
+    async function surveyGet(route) {
+      const resp = await fetch(SURVEY_API + route, { headers: { 'X-Scratchbox-Token': launchToken() } });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data;
+    }
+    let lastSurveyResponse = null;
+    let rankedStationIds = [];
+    window.__survey = { get poses() { return activePoses; }, get ranked() { return rankedStationIds; }, get last() { return lastSurveyResponse; } };
+
+    window.synthesizeSurvey = async function() {
       const pattern = document.getElementById('pattern-select').value;
       const cameraCount = parseInt(document.getElementById('slider-cameras').value, 10);
       const radius = parseFloat(document.getElementById('slider-radius').value);
       const focalLength = parseFloat(document.getElementById('optics-focal').value);
-      const fovDeg = 2.0 * Math.atan((36.0 / 2.0) / focalLength) * (180.0 / Math.PI);
-
-      activePoses = [];
-      const altitudeTiers = [
-        currentAnchor.elevationMeters + 25.0,
-        currentAnchor.elevationMeters + 65.0,
-        currentAnchor.elevationMeters + 120.0
-      ];
-      const stationsPerTier = Math.ceil(cameraCount / altitudeTiers.length);
-
-      let id = 1;
-      for (let t = 0; t < altitudeTiers.length; t++) {
-        const alt = altitudeTiers[t];
-        const tierRadius = radius * (1.0 + t * 0.15);
-        const tierOffset = t * (Math.PI / stationsPerTier);
-
-        for (let i = 0; i < stationsPerTier; i++) {
-          if (activePoses.length >= cameraCount) break;
-          const theta = (2.0 * Math.PI * i) / stationsPerTier + tierOffset;
-
-          const x = tierRadius * Math.sin(theta);
-          const z = tierRadius * Math.cos(theta);
-          const y = alt - currentAnchor.elevationMeters;
-
-          // Forward vector toward target
-          const dx = -x;
-          const dy = 20.0 - y;
-          const dz = -z;
-          const len = Math.hypot(dx, dy, dz);
-          const fwd = [dx / len, dy / len, dz / len];
-
-          const yaw = ((Math.atan2(fwd[0], -fwd[2]) * 180.0) / Math.PI + 360.0) % 360.0;
-          const pitch = (Math.asin(fwd[1]) * 180.0) / Math.PI;
-
-          // Approximation for lat/lng delta
-          const metersPerDegLat = 111132.92;
-          const metersPerDegLng = 111412.84 * Math.cos((currentAnchor.lat * Math.PI) / 180.0);
-
-          const wgsLat = currentAnchor.lat - z / metersPerDegLat;
-          const wgsLng = currentAnchor.lng + x / metersPerDegLng;
-
-          activePoses.push({
-            id,
-            name: `STATION_${String(id).padStart(2, '0')}`,
-            tier: `TIER ${t + 1}`,
-            positionLocalENU: [x, y, z],
-            forwardVector: fwd,
-            yawDegrees: Number(yaw.toFixed(2)),
-            pitchDegrees: Number(pitch.toFixed(2)),
-            focalLengthMm: focalLength,
-            fovDegrees: Number(fovDeg.toFixed(2)),
-            coordinatesWGS84: {
-              lat: Number(wgsLat.toFixed(7)),
-              lng: Number(wgsLng.toFixed(7)),
-              elevation: Number(alt.toFixed(2))
-            },
-            heightAboveGround: Number(y.toFixed(2))
-          });
-
-          id++;
-        }
+      const badge = document.getElementById('station-count-badge');
+      if (badge) badge.textContent = 'Synthesizing...';
+      try {
+        const data = await surveyPost('/synthesize', {
+          anchor: { lat: currentAnchor.lat, lng: currentAnchor.lng, elevationMeters: currentAnchor.elevationMeters, headingDeg: currentAnchor.headingDeg, formattedAddress: currentAnchor.formattedAddress },
+          config: { type: pattern, targetRadiusMeters: radius, cameraCount, focalLengthMm: focalLength, sensorWidthMm: 36, cameraHeightMeters: pattern === 'street-corridor' ? 1.7 : undefined, lookAtOffsetLocalENU: [0, 20, 0] },
+          glbPath: currentClayMetadata?.glbPath || undefined,
+          isoDate: new Date().toISOString(),
+          rankMaxCount: 6
+        });
+        lastSurveyResponse = data;
+        activePoses = data.poses.map(p => ({ ...p, tier: (p.name.match(/TIER_(\d+)/) ? `TIER ${p.name.match(/TIER_(\d+)/)[1]}` : pattern.toUpperCase()), heightAboveGround: p.cameraHeightAboveGround }));
+        rankedStationIds = data.rankedStationIds || [];
+        if (badge) badge.textContent = `${activePoses.length} Stations${data.enriched ? ` · ${rankedStationIds.length} ranked` : ''}`;
+        render3DCameraStations();
+        selectStation(0);
+        updateBeautifyButtons();
+      } catch (err) {
+        console.error('Survey synthesis failed', err);
+        if (badge) badge.textContent = `Survey error: ${err.message}`;
       }
-
-      document.getElementById('station-count-badge').textContent = `${activePoses.length} Stations`;
-      render3DCameraStations();
-      selectStation(0);
     };
+
+    // ---- Beautify at station (Phase 2/3 jobs) ----
+    let surveyCapabilities = { clay: false, beautify: false };
+    async function refreshSurveyCapabilities() {
+      try { surveyCapabilities = await surveyGet('/status'); } catch { surveyCapabilities = { clay: false, beautify: false }; }
+      updateBeautifyButtons();
+    }
+    function updateBeautifyButtons() {
+      const one = document.getElementById('btn-beautify-station');
+      const all = document.getElementById('btn-beautify-all');
+      const render = document.getElementById('btn-render-blockout');
+      const hasMesh = !!currentClayMetadata?.glbPath;
+      if (render) render.disabled = !hasMesh || activePoses.length === 0;
+      if (one) one.disabled = !surveyCapabilities.beautify || !hasMesh || activePoses.length === 0;
+      if (all) all.disabled = !surveyCapabilities.beautify || !hasMesh || rankedStationIds.length === 0;
+      const hint = document.getElementById('beautify-hint');
+      if (hint) hint.textContent = !hasMesh ? 'Load a clay GLB to enable blockout render and beautify' : (surveyCapabilities.beautify ? `${rankedStationIds.length} stations ranked for beautify` : 'Beautify service not registered on this server yet');
+    }
+    window.renderStationBlockout = async function() {
+      const pose = activePoses[activeStationIndex];
+      if (!pose || !currentClayMetadata?.glbPath) return;
+      const img = document.getElementById('blockout-preview');
+      const cap = document.getElementById('blockout-caption');
+      if (cap) cap.textContent = `Rendering station #${pose.id}...`;
+      try {
+        const r = await surveyPost('/render-station', { glbPath: currentClayMetadata.glbPath, station: pose, width: 960 });
+        if (img) { img.src = 'data:image/png;base64,' + r.pngBase64; img.style.display = 'block'; }
+        if (cap) cap.textContent = `Station #${pose.id} blockout ${r.width}×${r.height} · fx ${r.intrinsics.fx.toFixed(0)}px · mesh ${(r.depthStats.filledFraction * 100).toFixed(0)}%`;
+      } catch (err) { if (cap) cap.textContent = `Render error: ${err.message}`; }
+    };
+    async function pollJob(jobId, onUpdate) {
+      for (;;) {
+        const { job } = await surveyGet('/jobs/' + jobId);
+        onUpdate(job);
+        if (job.status === 'done' || job.status === 'error') return job;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+    window.beautifyStation = async function() {
+      const pose = activePoses[activeStationIndex];
+      const cap = document.getElementById('blockout-caption');
+      try {
+        const { job } = await surveyPost('/beautify-station', { glbPath: currentClayMetadata.glbPath, station: pose, anchor: currentAnchor });
+        const done = await pollJob(job.id, j => { if (cap) cap.textContent = `Beautify #${pose.id}: ${j.status} ${(j.progress * 100).toFixed(0)}% ${j.message || ''}`; });
+        if (done.status === 'done' && done.result?.imageBase64) {
+          const img = document.getElementById('blockout-preview'); if (img) img.src = 'data:image/png;base64,' + done.result.imageBase64;
+        }
+      } catch (err) { if (cap) cap.textContent = `Beautify error: ${err.message}`; }
+    };
+    window.beautifyRankedToSplats = async function() {
+      const cap = document.getElementById('blockout-caption');
+      try {
+        const { job } = await surveyPost('/beautify-to-splats', { glbPath: currentClayMetadata.glbPath, stations: activePoses.filter(p => rankedStationIds.includes(p.id)), anchor: currentAnchor });
+        await pollJob(job.id, j => { if (cap) cap.textContent = `Splat tiles: ${j.status} ${(j.progress * 100).toFixed(0)}% ${j.message || ''}`; });
+      } catch (err) { if (cap) cap.textContent = `Pipeline error: ${err.message}`; }
+    };
+    refreshSurveyCapabilities();
 
     // Render 3D Frustum Pyramids in Three.js
     function render3DCameraStations() {
@@ -626,10 +679,21 @@
       document.getElementById('tel-lens').textContent = `${pose.focalLengthMm}mm`;
       document.getElementById('tel-fov').textContent = `${pose.fovDegrees}°`;
 
-      // Update 3D wireframe colors
+      const rankEl = document.getElementById('tel-station-rank');
+      if (rankEl) {
+        const r = rankedStationIds.indexOf(pose.id);
+        const m = pose.beautify;
+        rankEl.textContent = r >= 0 ? `BEAUTIFY #${r + 1}` : (m ? 'not ranked' : '');
+        rankEl.className = r >= 0 ? 'text-[10px] font-mono px-1.5 rounded bg-amber-900/60 text-amber-300 border border-amber-500/40' : 'text-[10px] font-mono text-slate-500';
+        const metEl = document.getElementById('tel-metrics');
+        if (metEl) metEl.textContent = m ? `standoff ${m.standoffMeters ?? '--'}m · sky ${(m.skyFraction * 100).toFixed(0)}% · mesh ${(m.meshCoverageFraction * 100).toFixed(0)}% · sun az ${m.solar?.azimuthDegrees}° el ${m.solar?.elevationDegrees}°` : 'load clay to enrich';
+      }
+
+      // Update 3D wireframe colors (ranked-for-beautify stations in gold)
       cameraStationsGroup.children.forEach((child, i) => {
         const isSel = i === idx;
-        const col = isSel ? 0x38bdf8 : (child.userData.pose?.pitchDegrees < -45 ? 0xf59e0b : 0x0284c7);
+        const isRanked = rankedStationIds.includes(child.userData.pose?.id);
+        const col = isSel ? 0x38bdf8 : (isRanked ? 0xfbbf24 : (child.userData.pose?.pitchDegrees < -45 ? 0xf59e0b : 0x0284c7));
         child.children.forEach(mesh => {
           if (mesh.material) mesh.material.color.setHex(col);
         });
@@ -652,13 +716,13 @@
       }
 
       try {
-        const queryStr = anchor.formattedAddress || '';
-        const resp = await fetch(`/api/colmap/clay_3d_tiles?lat=${anchor.lat}&lng=${anchor.lng}&query=${encodeURIComponent(queryStr)}`);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        if (!data.success) throw new Error(data.error || 'Failed to ingest clay 3D model');
+        // ?mock=1 uses the offline synthetic clay mesh (no Google tiles fetch) for UI development
+        const mock = new URLSearchParams(location.search).get('mock') === '1';
+        const data = await surveyPost('/clay', { anchor: { lat: anchor.lat, lng: anchor.lng, elevationMeters: anchor.elevationMeters, headingDeg: anchor.headingDeg, formattedAddress: anchor.formattedAddress }, options: mock ? { offlineMock: true } : undefined });
+        if (!data.glbUrl) throw new Error('Clay GLB is not under the public directory; cannot stream it to the viewer');
 
         currentClayMetadata = data;
+        updateBeautifyButtons();
 
         // Load GLB via GLTFLoader
         const loader = new GLTFLoader();
@@ -988,50 +1052,21 @@
 
     // Exports
     window.exportColmapBundle = function() {
-      const exportData = {
-        anchor: currentAnchor,
-        cameraModel: {
-          model: 'PINHOLE',
-          width: 3840,
-          height: 2160,
-          focalLength: (parseFloat(document.getElementById('optics-focal').value) / 36.0) * 3840
-        },
-        stations: activePoses,
-        generatedAt: new Date().toISOString()
-      };
-      downloadFile(JSON.stringify(exportData, null, 2), 'colmap_vector_survey.json', 'application/json');
+      downloadFile(JSON.stringify({ anchor: currentAnchor, stations: activePoses, rankedStationIds, generatedAt: new Date().toISOString() }, null, 2), 'survey_stations.json', 'application/json');
     };
 
     window.exportGeoJSON = function() {
-      const geojson = {
-        type: 'FeatureCollection',
-        features: activePoses.map(p => ({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [p.coordinatesWGS84.lng, p.coordinatesWGS84.lat, p.coordinatesWGS84.elevation]
-          },
-          properties: {
-            id: p.id,
-            name: p.name,
-            heightAGL: p.heightAboveGround,
-            yaw: p.yawDegrees,
-            pitch: p.pitchDegrees,
-            focalLength: p.focalLengthMm
-          }
-        }))
-      };
-      downloadFile(JSON.stringify(geojson, null, 2), 'colmap_camera_stations.geojson', 'application/json');
+      const gj = lastSurveyResponse?.geoJson;
+      if (!gj) return;
+      downloadFile(JSON.stringify(gj, null, 2), 'survey_camera_stations.geojson', 'application/json');
     };
 
-    window.exportColmapText = function() {
-      const f = (parseFloat(document.getElementById('optics-focal').value) / 36.0) * 3840;
-      let cameras = `# Camera list with one line of data per camera:\n# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n1 PINHOLE 3840 2160 ${f.toFixed(2)} ${f.toFixed(2)} 1920.00 1080.00`;
-      let images = `# Image list with two lines of data per image:\n# IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n# POINTS2D[] as (X, Y, POINT3D_ID)\n`;
-      activePoses.forEach(p => {
-        images += `${p.id} 1.0 0.0 0.0 0.0 ${(-p.positionLocalENU[0]).toFixed(2)} ${(-p.positionLocalENU[1]).toFixed(2)} ${(-p.positionLocalENU[2]).toFixed(2)} 1 station_${p.id}.jpg\n\n`;
-      });
-      downloadFile(cameras + '\n\n' + images, 'colmap_export.txt', 'text/plain');
+    window.exportColmapText = async function() {
+      try {
+        const out = await surveyPost('/export-colmap', { poses: activePoses, width: 1920, height: 1080 });
+        downloadFile(out.camerasText, 'cameras.txt', 'text/plain');
+        setTimeout(() => downloadFile(out.imagesText, 'images.txt', 'text/plain'), 200);
+      } catch (err) { console.error('COLMAP export failed', err); }
     };
 
     function downloadFile(content, filename, type) {

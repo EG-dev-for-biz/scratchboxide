@@ -92,6 +92,28 @@ export interface ColmapCameraPose {
   
   // Optional 4-corner ground projection footprint polygon [lng, lat]
   frustumFootprintWGS84?: [number, number][];
+
+  /**
+   * Per-station facts derived from the anchored 3D mesh and the sun ephemeris, used to rank
+   * stations and to ground the AI Beautify prompt (standoff, horizon, sun). Filled by
+   * SurveyStationEnrichmentService (Node); absent for plain synthesis.
+   */
+  beautify?: StationBeautifyMetrics;
+}
+
+export interface StationBeautifyMetrics {
+  /** Metric distance along the optical axis to the first mesh surface (undefined if the ray misses). */
+  standoffMeters?: number;
+  /** Horizon row as a fraction of image height (0 = top), from pitch and vertical fov. */
+  horizonRowFraction?: number;
+  /** Fraction of pixels where the mesh depth buffer is empty (sky / beyond tile extent). */
+  skyFraction?: number;
+  /** Fraction of the frustum ground footprint that lies inside the mesh's ground bounding box. */
+  meshCoverageFraction?: number;
+  /** Sun at the anchor for the chosen timestamp (degrees; azimuth clockwise from north). */
+  solar?: { azimuthDegrees: number; elevationDegrees: number; isoDate: string };
+  /** Ranking score assigned by SurveySynthesisEngine.rankForBeautify (higher is better). */
+  rankScore?: number;
 }
 
 /**
@@ -117,6 +139,10 @@ export interface SurveyPatternConfig {
   lookAtOffsetLocalENU?: [number, number, number];
   corridorHeadingDeg?: number;
   corridorLengthMeters?: number;
+  /** Camera height above ground for street-corridor stations (default 25 m; use ~1.7 m for eye height). */
+  cameraHeightMeters?: number;
+  /** Image aspect ratio for the stations (default 16/9). */
+  aspectRatio?: number;
 }
 
 /**

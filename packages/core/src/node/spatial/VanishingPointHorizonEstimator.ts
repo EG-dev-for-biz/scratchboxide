@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Point2D, CameraIntrinsics } from './SpatialPoseEstimatorService.js';
+import { Point2D, CameraIntrinsics } from './SpatialPoseEstimatorService';
 
 export interface LineSegment2D {
     p1: Point2D; // [x, y]

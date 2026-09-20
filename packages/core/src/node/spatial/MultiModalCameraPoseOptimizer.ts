@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { CameraPose6DOF, SobelEdgeField, evaluateEdgeOverlap } from './SubPixelEdgeAlignmentOptimizer.js';
-import { VanishingPointResult } from './VanishingPointHorizonEstimator.js';
-import { ViewingQuadrantBounds } from './LandmarkBearingGatedMatcher.js';
+import { CameraPose6DOF, SobelEdgeField, evaluateEdgeOverlap } from './SubPixelEdgeAlignmentOptimizer';
+import { VanishingPointResult } from './VanishingPointHorizonEstimator';
+import { ViewingQuadrantBounds } from './LandmarkBearingGatedMatcher';
 
 export interface MultiLossWeights {
     wEdge?: number;    // default: 1.0

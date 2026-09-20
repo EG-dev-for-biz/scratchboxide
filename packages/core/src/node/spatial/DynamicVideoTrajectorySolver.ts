@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { CameraPathData, CameraPoseFrame, GeoAnchor } from './Google3DTileBlockoutPipelineService.js';
-import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer.js';
+import { CameraPathData, CameraPoseFrame, GeoAnchor } from './Google3DTileBlockoutPipelineService';
+import { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 
 export interface TrajectoryBoundaryPose {
     timeSec: number;

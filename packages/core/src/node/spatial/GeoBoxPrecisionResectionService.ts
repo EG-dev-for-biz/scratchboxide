@@ -9,7 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { LatLngAlt, LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane.js';
+import { LatLngAlt, LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 import {
     CameraAttitude,
     CameraViewFrustum,
@@ -18,34 +18,34 @@ import {
     calculateStandoffDistance,
     computeCameraFrustum,
     haversineDistanceKm
-} from '../3d-engine/geobox-pipeline-types.js';
+} from '../3d-engine/geobox-pipeline-types';
 import {
     SubPixelEdgeAlignmentOptimizer,
     OptimizationResult,
     CameraPose6DOF,
     computeSobelField,
     evaluateEdgeOverlap
-} from './SubPixelEdgeAlignmentOptimizer.js';
+} from './SubPixelEdgeAlignmentOptimizer';
 import {
     SpatialPoseEstimatorService,
     Point2D,
     Point3D,
     CameraIntrinsics
-} from './SpatialPoseEstimatorService.js';
+} from './SpatialPoseEstimatorService';
 import {
     HeadlessMeshSilhouetteRenderer,
     RenderMesh3D
-} from './HeadlessMeshSilhouetteRenderer.js';
+} from './HeadlessMeshSilhouetteRenderer';
 import {
     geocode3DTilesAddress,
     GeoAnchor
-} from './Google3DTileBlockoutPipelineService.js';
-import { VfxLensInterchangeService } from '../../common/optics/VfxLensInterchangeService.js';
+} from './Google3DTileBlockoutPipelineService';
+import { VfxLensInterchangeService } from '../../common/optics/VfxLensInterchangeService';
 import {
     VanishingPointHorizonEstimator,
     LineSegment2D,
     VanishingPointResult
-} from './VanishingPointHorizonEstimator.js';
+} from './VanishingPointHorizonEstimator';
 
 export interface GeoBoxResectionRequest {
     imagePath?: string;
@@ -73,8 +73,8 @@ export interface GeoBoxResectionRequest {
 export type ImageLocationResectionRequest = GeoBoxResectionRequest;
 export type ImageLocationResectionResult = GeoBoxResectionResult;
 
-import { LensDistortionParams } from '../../common/vfx-plate-protocol.js';
-export { LensDistortionParams };
+import type { LensDistortionParams } from '../../common/vfx-plate-protocol';
+export type { LensDistortionParams };
 
 export interface GeoBoxResectionResult {
     success: boolean;

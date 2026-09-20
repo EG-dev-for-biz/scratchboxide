@@ -35,6 +35,8 @@ export * from './common/comfyui-protocol';
 
 // Universal COLMAP Vector Reference Types (Zero Presets)
 export * from './common/spatial/colmap-vector-reference-types';
+export { SurveySynthesisEngine, stationFromLookAt, stationToPinhole, horizontalFovDegrees, yawPitchFromForward, cameraBasis } from './common/spatial/SurveySynthesisEngine';
+export type { PinholeIntrinsics, RankOptions, StationOptics } from './common/spatial/SurveySynthesisEngine';
 
 // VFX Plate & Lens Distortion Protocols
 export * from './common/vfx-plate-protocol';

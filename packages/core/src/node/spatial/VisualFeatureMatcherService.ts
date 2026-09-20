@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Point2D, Point3D, CameraIntrinsics } from './SpatialPoseEstimatorService.js';
+import { Point2D, Point3D, CameraIntrinsics } from './SpatialPoseEstimatorService';
 
 export interface VisualKeypoint {
     x: number;

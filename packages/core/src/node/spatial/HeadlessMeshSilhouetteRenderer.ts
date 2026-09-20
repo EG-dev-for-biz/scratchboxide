@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
-import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer.js';
+import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 
 export interface RenderMesh3D {
     /** Flat array of vertex positions [x0, y0, z0, x1, y1, z1, ...] */
@@ -50,7 +50,7 @@ export class HeadlessMeshSilhouetteRenderer {
         // 1. Build View Matrix (LookAt)
         const eye: [number, number, number] = [pose.x, pose.y, pose.z];
         const target: [number, number, number] = [pose.targetX, pose.targetY, pose.targetZ];
-        const up: [number, number, number] = [0, 1, 0];
+        const up: [number, number, number] = pose.up ?? [0, 1, 0];
 
         // Forward vector (eye to target)
         let fx = target[0] - eye[0];
@@ -161,9 +161,10 @@ export class HeadlessMeshSilhouetteRenderer {
             const x1 = screenX[i1]; const y1 = screenY[i1]; const z1 = screenZ[i1];
             const x2 = screenX[i2]; const y2 = screenY[i2]; const z2 = screenZ[i2];
 
-            // 2D Signed Area (cross product for backface culling)
+            // 2D signed area. No winding cull: photogrammetry GLBs have inconsistent winding and the
+            // depth test already keeps the nearest surface. Only degenerate triangles are skipped.
             const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            if (area <= 0) continue; // Back-face or degenerate
+            if (Math.abs(area) < 1e-12) continue;
 
             const invArea = 1.0 / area;
 
@@ -478,16 +479,18 @@ export class HeadlessMeshSilhouetteRenderer {
         const flen = Math.hypot(fx, fy, fz) || 1;
         fx /= flen; fy /= flen; fz /= flen;
 
-        const up = [0, 1, 0];
-        let rx = up[1] * fz - up[2] * fy;
-        let ry = up[2] * fx - up[0] * fz;
-        let rz = up[0] * fy - up[1] * fx;
+        const up = pose.up ?? [0, 1, 0];
+        // right = forward x up (camera looks down -Z with +Y up => right is +X)
+        let rx = fy * up[2] - fz * up[1];
+        let ry = fz * up[0] - fx * up[2];
+        let rz = fx * up[1] - fy * up[0];
         const rlen = Math.hypot(rx, ry, rz) || 1;
         rx /= rlen; ry /= rlen; rz /= rlen;
 
-        const ux = fy * rz - fz * ry;
-        const uy = fz * rx - fx * rz;
-        const uz = fx * ry - fy * rx;
+        // true up = right x forward
+        const ux = ry * fz - rz * fy;
+        const uy = rz * fx - rx * fz;
+        const uz = rx * fy - ry * fx;
 
         const aspect = width / height;
         const fovRad = (pose.fov * Math.PI) / 180;
@@ -565,7 +568,7 @@ export class HeadlessMeshSilhouetteRenderer {
             const x2 = screenX[i2], y2 = screenY[i2], z2 = screenZ[i2];
 
             const area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            if (area <= 0) continue; // Back-face or degenerate
+            if (Math.abs(area) < 1e-12) continue; // degenerate only; no winding cull (see renderMesh)
 
             // Calculate 3D normal for Lambertian lighting
             const ax = mesh.vertices[i1 * 3] - mesh.vertices[i0 * 3];
@@ -580,6 +583,9 @@ export class HeadlessMeshSilhouetteRenderer {
             let nz = ax * by - ay * bx;
             const nlen = Math.hypot(nx, ny, nz) || 1;
             nx /= nlen; ny /= nlen; nz /= nlen;
+            // Face the normal toward the camera so shading is winding-independent
+            const vcx = eye[0] - mesh.vertices[i0 * 3], vcy = eye[1] - mesh.vertices[i0 * 3 + 1], vcz = eye[2] - mesh.vertices[i0 * 3 + 2];
+            if (nx * vcx + ny * vcy + nz * vcz < 0) { nx = -nx; ny = -ny; nz = -nz; }
 
             const dot = nx * lx + ny * ly + nz * lz;
             const diffuse = Math.max(0, dot);
@@ -603,10 +609,10 @@ export class HeadlessMeshSilhouetteRenderer {
                     const w1 = (x2 - px) * (y0 - py) - (y2 - py) * (x0 - px);
                     const w2 = (x0 - px) * (y1 - py) - (y0 - py) * (x1 - px);
 
-                    if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-                        const b0 = w0 * invArea;
-                        const b1 = w1 * invArea;
-                        const b2 = w2 * invArea;
+                    const b0 = w0 * invArea;
+                    const b1 = w1 * invArea;
+                    const b2 = w2 * invArea;
+                    if (b0 >= 0 && b1 >= 0 && b2 >= 0) {
                         const z = b0 * z0 + b1 * z1 + b2 * z2;
                         const idx = pyOffset + px;
                         if (z < depthBuffer[idx]) {

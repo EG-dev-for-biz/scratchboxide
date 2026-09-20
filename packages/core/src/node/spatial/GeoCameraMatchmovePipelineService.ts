@@ -21,47 +21,47 @@ import {
   TileLodQualityConfig,
   TileBlockoutOutputConfig,
   TileBlockoutPipelineRequest
-} from './Google3DTileBlockoutPipelineService.js';
-import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane.js';
+} from './Google3DTileBlockoutPipelineService';
+import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
 import type {
   CameraSolveTrack,
   CameraSolveFrame,
   LensDistortionParams,
   TrackingMarker2D3D
-} from '../../common/vfx-plate-protocol.js';
+} from '../../common/vfx-plate-protocol';
 import {
   VfxPlateMatchmoveService,
   DriftEvaluationResult
-} from '../../browser/generative-canvas/services/video/VfxPlateMatchmoveService.js';
+} from '../../browser/generative-canvas/services/video/VfxPlateMatchmoveService';
 import {
   SubPixelEdgeAlignmentOptimizer,
   CameraPose6DOF,
   computeSobelField,
   evaluateEdgeOverlap
-} from './SubPixelEdgeAlignmentOptimizer.js';
+} from './SubPixelEdgeAlignmentOptimizer';
 import {
   HeadlessMeshSilhouetteRenderer,
   RenderMesh3D
-} from './HeadlessMeshSilhouetteRenderer.js';
+} from './HeadlessMeshSilhouetteRenderer';
 import {
   GeoBoxPrecisionResectionService
-} from './GeoBoxPrecisionResectionService.js';
+} from './GeoBoxPrecisionResectionService';
 import {
   VanishingPointHorizonEstimator,
   VanishingPointResult
-} from './VanishingPointHorizonEstimator.js';
+} from './VanishingPointHorizonEstimator';
 import {
   LandmarkBearingGatedMatcher,
   ViewingQuadrantBounds
-} from './LandmarkBearingGatedMatcher.js';
+} from './LandmarkBearingGatedMatcher';
 import {
   MultiModalCameraPoseOptimizer,
   MultiModalOptimizationMetrics
-} from './MultiModalCameraPoseOptimizer.js';
+} from './MultiModalCameraPoseOptimizer';
 import {
   DynamicVideoTrajectorySolver,
   TrajectoryBoundaryPose
-} from './DynamicVideoTrajectorySolver.js';
+} from './DynamicVideoTrajectorySolver';
 
 const execAsync = promisify(exec);
 

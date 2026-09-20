@@ -9,7 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { MaxRectsAtlasPacker, TextureAtlasPacker, TextureItem, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker.js';
+import { MaxRectsAtlasPacker, TextureAtlasPacker, TextureItem, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker';
 
 // ============================================================================
 // Public Interfaces & Options Contracts

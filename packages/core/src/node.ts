@@ -178,6 +178,17 @@ export {
     healPanoramaSeam,
     inpaintPanorama,
     generate360Panorama,
+    generate4KMonumentalPanorama,
+    auditPanoramaQuality,
+    reprojectZenithPanorama,
+    extractZenithRectilinearPatch,
+    type Generate4KMonumentalPanoramaOptions,
+    type Generate4KMonumentalPanoramaResult,
+    type PanoramaQualityAuditOptions,
+    type PanoramaQualityAuditResult,
+    type ZenithReprojectionOptions,
+    type ZenithReprojectionResult,
+    type EquirectangularStructuredPrompt,
     UpscalePanorama16KOptions,
     UpscalePanorama16KResult,
     upscalePanorama16K
@@ -228,6 +239,16 @@ export {
     ColmapVectorPipelineService,
     ColmapNodeExecutionOptions
 } from './node/spatial/ColmapVectorPipelineService';
+
+// Survey Synthesis: station camera truth for blockout render, AI Beautify and splat baking
+export { SurveySynthesisEngine, stationFromLookAt, stationToPinhole, horizontalFovDegrees, yawPitchFromForward } from './common/spatial/SurveySynthesisEngine';
+export type { PinholeIntrinsics, RankOptions, StationOptics } from './common/spatial/SurveySynthesisEngine';
+export { SurveyStationRenderService, solarAtUtcInstant, EMPTY_DEPTH } from './node/spatial/SurveyStationRenderService';
+export type { StationBlockoutRender, StationBlockoutRenderOptions, StationEnrichOptions } from './node/spatial/SurveyStationRenderService';
+export { SurveyApi, createSurveyRouter, createNodeHttpHandler } from './node/spatial/survey-router';
+export type { SurveyApiDeps, SurveyJob } from './node/spatial/survey-router';
+export { Splat3DTilesService } from './node/spatial/Splat3DTilesService';
+export type { Splat3DTilesOptions, Splat3DTilesResult } from './node/spatial/Splat3DTilesService';
 
 // GeoBox Multimodal Camera Resectioning & 100% Sub-Pixel Edge Alignment
 export {

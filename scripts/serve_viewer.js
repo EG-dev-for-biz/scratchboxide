@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const https = require('https');
 
 let secrets = null;
+let surveyHandler = null;
 try {
     const secretsPath = path.resolve(ROOT, 'secrets.json');
     if (fs.existsSync(secretsPath)) {
@@ -327,6 +328,41 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Google Maps Photorealistic 3D Tiles in Studio Grey Clay mode (getGoogle3DTilesClay)
+    // Survey Synthesis API (same handlers as the desktop server's /api/3d/survey; no launch token here,
+    // this viewer server is a local dev tool). Stations, enrichment, ranking, COLMAP export, clay, blockout render.
+    if (reqPath.startsWith('/api/3d/survey')) {
+        (async () => {
+            try {
+                if (!surveyHandler) {
+                    // esModuleInterop is required: core uses default imports of node builtins (import fs from 'fs')
+                    require('ts-node').register({ transpileOnly: true, compilerOptions: { module: 'commonjs', esModuleInterop: true, allowSyntheticDefaultImports: true, moduleResolution: 'node' } });
+                    const routerMod = require(path.resolve(ROOT, 'packages/core/src/node/spatial/survey-router.ts'));
+                    const tilesMod = require(path.resolve(ROOT, 'packages/core/src/node/spatial/Google3DTileBlockoutPipelineService.ts'));
+                    const apiKey = secrets?.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';
+                    const api = new routerMod.SurveyApi({
+                        workspaceRoot: ROOT,
+                        fetchClayGlb: async (query, options) => {
+                            const exportDir = path.resolve(ROOT, 'public/data/colmap_vector_export');
+                            fs.mkdirSync(exportDir, { recursive: true });
+                            const key = typeof query === 'string' ? query.toLowerCase().replace(/[^a-z0-9]+/g, '_') : `${query.lat.toFixed(4)}_${query.lng.toFixed(4)}`;
+                            const outGlbPath = path.resolve(exportDir, `${key}_clay.glb`);
+                            const result = await tilesMod.getGoogle3DTilesClay(query, { ...(options || {}), outputGlbPath: outGlbPath, apiKey, offlineMock: (options && options.offlineMock) || !apiKey });
+                            if (!result.success) throw new Error(result.error || 'Clay ingestion failed');
+                            return { glbPath: result.glbPath, glbUrl: `/data/colmap_vector_export/${path.basename(result.glbPath)}`, mesh: result.mesh, geoAnchor: result.geoAnchor, quality: result.quality, mode: result.mode };
+                        }
+                    });
+                    surveyHandler = routerMod.createNodeHttpHandler(api, '/api/3d/survey');
+                }
+                await surveyHandler(req, res);
+            } catch (err) {
+                console.error('[serve_viewer] survey api error:', err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+            }
+        })();
+        return;
+    }
+
     if (reqPath === '/api/colmap/clay_3d_tiles') {
         const urlObj = new URL(req.url, 'http://localhost');
         const lat = parseFloat(urlObj.searchParams.get('lat'));

@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Point3D } from './SpatialPoseEstimatorService.js';
-import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer.js';
+import { Point3D } from './SpatialPoseEstimatorService';
+import { RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 
 export interface FacadePlane {
     name: string;

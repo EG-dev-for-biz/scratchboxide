@@ -11,8 +11,8 @@ import * as THREE from 'three';
 import {
     PhysicalCameraConfig,
     PHYSICAL_SENSOR_PRESETS
-} from '../../../../common/optics/physical-camera-protocol.js';
-import { PhysicalCameraModel } from '../../../../common/optics/PhysicalCameraModel.js';
+} from '../../../../common/optics/physical-camera-protocol';
+import { PhysicalCameraModel } from '../../../../common/optics/PhysicalCameraModel';
 
 export interface BokehPassParams {
     focusDistanceMeters: number;

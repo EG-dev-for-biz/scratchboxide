@@ -12,19 +12,19 @@ import {
     VideoTimelineData,
     TimelineElement,
     GradeParams,
-    VfxParams,
+    type VfxParams,
     BlendMode,
     BLEND_MODE_LABELS,
-    ColorWheelOffset,
-    VideoMediaAsset,
-    KeyingParams,
-    LayerTransform,
-    LightWrapParams,
-    CameraSolveTrack,
-    GeodeticEphemerisAnchor,
-    LensDistortionParams,
-    AntiDriftHoldoutConfig,
-    VfxPlateConfig
+    type ColorWheelOffset,
+    type VideoMediaAsset,
+    type KeyingParams,
+    type LayerTransform,
+    type LightWrapParams,
+    type CameraSolveTrack,
+    type GeodeticEphemerisAnchor,
+    type LensDistortionParams,
+    type AntiDriftHoldoutConfig,
+    type VfxPlateConfig
 } from '../../services/video/videoTypes';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import {

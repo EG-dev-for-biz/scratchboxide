@@ -16,6 +16,8 @@ export interface CameraPose6DOF {
     targetZ: number;
     fov: number; // horizontal or vertical FOV in degrees
     k1?: number; // Brown-Conrady radial distortion
+    /** Optional camera up hint (world space); defaults to +Y. Lets callers express roll. */
+    up?: [number, number, number];
 }
 
 export interface SobelEdgeField {
@@ -218,7 +220,8 @@ export class SubPixelEdgeAlignmentOptimizer {
         let stepFov = options.stepSizes?.fov ?? 1.0;
         let stepK1 = options.stepSizes?.k1 ?? 0.005;
 
-        const paramDefs: Array<{ key: keyof CameraPose6DOF; getStep: () => number }> = [
+        type ScalarPoseKey = 'x' | 'y' | 'z' | 'targetX' | 'targetY' | 'targetZ' | 'fov' | 'k1';
+        const paramDefs: Array<{ key: ScalarPoseKey; getStep: () => number }> = [
             { key: "x", getStep: () => stepPos },
             { key: "y", getStep: () => stepPos * 0.7 },
             { key: "z", getStep: () => stepPos },

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { LatLngAlt } from '../coordinate/LocalTangentPlane.js';
+import type { LatLngAlt } from '../coordinate/LocalTangentPlane';
 
 /**
  * Standard industry sensor and film gate format identifiers.

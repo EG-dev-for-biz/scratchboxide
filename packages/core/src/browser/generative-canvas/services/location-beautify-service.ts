@@ -10,6 +10,7 @@
 import { MarkdownSection } from '../canvas-types';
 import { DocumentTheme, detectDocumentTheme } from '../document-synthesis-engine';
 import { lookupCuratedNanoBananaImage } from '../nano-banana-service';
+import type { ColmapCameraPose } from '../../../common/spatial/colmap-vector-reference-types';
 export interface NanoBananaStyle {
     id: string;
     label: string;
@@ -284,6 +285,7 @@ export interface SpatialEnvelopeLock {
         aspect_ratio: string;
         enforcement_mode: string;
     };
+    solar_ephemeris?: { azimuthDegrees: number; elevationDegrees: number };
     viewportCropLock?: {
         referenceTensor: string;
         aspectRatio: string;
@@ -300,6 +302,40 @@ export function buildDoubleBracketFramingSuffix(aspectRatio: string = '16:9', im
     return `Style: ${clause} (${clause})`;
 }
 
+/**
+ * Camera facts read straight off a survey station (see SurveySynthesisEngine / enrichStations).
+ * When any of these are present the prompt gains a "Camera lock" clause and, with `solar`, a
+ * "Sun" clause; otherwise the template output is byte-identical to the legacy form.
+ */
+export interface StationLockOptions {
+    fovDegrees?: number;           // horizontal
+    focalLengthMm?: number;
+    pitchDegrees?: number;
+    cameraHeightMeters?: number;
+    horizonRowFraction?: number;   // 0 = top of frame
+    solar?: { azimuthDegrees: number; elevationDegrees: number };
+}
+
+/** Builds the optional station lock clause (" Camera lock: ... Sun: ...") or "" when no station facts are given. */
+export function buildStationLockHint(o: StationLockOptions): string {
+    const hasLock = o.fovDegrees !== undefined || o.focalLengthMm !== undefined || o.pitchDegrees !== undefined || o.cameraHeightMeters !== undefined || o.horizonRowFraction !== undefined;
+    let out = '';
+    if (hasLock) {
+        const parts: string[] = [];
+        if (o.focalLengthMm !== undefined) parts.push(`${Number(o.focalLengthMm.toFixed(o.focalLengthMm % 1 ? 1 : 0))}mm lens`);
+        if (o.fovDegrees !== undefined) parts.push(`${o.fovDegrees.toFixed(1)}° horizontal field of view`);
+        if (o.pitchDegrees !== undefined) parts.push(`pitch ${o.pitchDegrees.toFixed(1)}°`);
+        if (o.cameraHeightMeters !== undefined) parts.push(`${Number(o.cameraHeightMeters.toFixed(1))} m above ground`);
+        out += ` Camera lock: ${parts.join(', ')}`;
+        if (o.horizonRowFraction !== undefined) out += `; the horizon sits at ${Math.round(o.horizonRowFraction * 100)}% of the frame height from the top`;
+        out += '.';
+    }
+    if (o.solar) {
+        out += ` Sun: azimuth ${Math.round(o.solar.azimuthDegrees)}° clockwise from north, elevation ${Math.round(o.solar.elevationDegrees)}° above the horizon; cast shadows accordingly.`;
+    }
+    return out;
+}
+
 export interface HybridPromptPayload {
     spatial_envelope_lock: SpatialEnvelopeLock;
     rendering_instruction: string;
@@ -310,7 +346,7 @@ export interface HybridPromptPayload {
     };
 }
 
-export interface BuildHybridPromptOptions {
+export interface BuildHybridPromptOptions extends StationLockOptions {
     locationName: string;
     coordinates: { lat: number; lng: number; altitudeM?: number };
     heading: number;
@@ -340,6 +376,7 @@ export function buildHybridPromptPayload(options: BuildHybridPromptOptions): Hyb
     const earthUrl = options.earthUrl || googleEarthUrl(options.coordinates.lat, options.coordinates.lng, heading, 45);
 
     const distanceHint = ` Subject distance: approximately ${standoff} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).`;
+    const stationLockHint = buildStationLockHint(options);
     let styleSuffix = options.styleSuffix || '';
     if (options.viewportCropLock) {
         const doubleBracket = buildDoubleBracketFramingSuffix(aspectRatio, options.imageRef || '@image1');
@@ -362,18 +399,20 @@ export function buildHybridPromptPayload(options: BuildHybridPromptOptions): Hyb
         `(3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. ` +
         `(4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. ` +
         `Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.` +
-        `${distanceHint}${styleSuffix}`;
+        `${distanceHint}${stationLockHint}${styleSuffix}`;
 
     const cameraPose: CameraPoseLock = {
         headingDegrees: heading,
         pitchDegrees: pitch,
         standoffDistanceMeters: standoff,
-        fieldOfViewDegrees: 65.0
+        fieldOfViewDegrees: options.fovDegrees !== undefined ? options.fovDegrees : 65.0,
+        ...(options.focalLengthMm !== undefined ? { focalLengthMm: options.focalLengthMm } : {})
     };
 
     const geometricInvariants: GeometricInvariants = {
         foregroundStructure: options.foregroundInvariant,
         primaryLandmark: options.primaryLandmarkInvariant,
+        ...(options.horizonRowFraction !== undefined ? { horizonLine: `Level horizon at ${Math.round(options.horizonRowFraction * 100)}% of frame height from the top (y = ${options.horizonRowFraction.toFixed(2)})` } : {}),
         backgroundSkyline: options.backgroundInvariant || 'Preserve existing skyline silhouettes without adding unverified towers.'
     };
 
@@ -398,6 +437,7 @@ export function buildHybridPromptPayload(options: BuildHybridPromptOptions): Hyb
             geometricInvariants,
             framing_rules: framingRules,
             framingRules,
+            ...(options.solar ? { solar_ephemeris: { azimuthDegrees: options.solar.azimuthDegrees, elevationDegrees: options.solar.elevationDegrees } } : {}),
             ...(options.viewportCropLock ? {
                 viewport_crop_lock: {
                     reference_tensor: options.imageRef || '@image1',
@@ -429,7 +469,7 @@ export function buildHybridBeautifyPrompt(options: BuildHybridPromptOptions): st
 
 export const buildHybridPrompt = buildHybridBeautifyPrompt;
 
-export interface BeautifyPromptOptions {
+export interface BeautifyPromptOptions extends StationLockOptions {
     locationName: string;
     coords?: string | { lat: number; lng: number };
     coordinates?: { lat: number; lng: number };
@@ -519,7 +559,12 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
             styleSuffix: options.styleSuffix,
             earthUrl,
             viewportCropLock: options.viewportCropLock,
-            imageRef: options.imageRef
+            imageRef: options.imageRef,
+            fovDegrees: options.fovDegrees,
+            focalLengthMm: options.focalLengthMm,
+            cameraHeightMeters: options.cameraHeightMeters,
+            horizonRowFraction: options.horizonRowFraction,
+            solar: options.solar
         });
     }
 
@@ -550,7 +595,57 @@ export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
         }
     }
 
-    return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${styleSuffix}`;
+    // Optional station lock slot: "" unless station camera facts were supplied (template stays byte-identical otherwise)
+    const stationLockHint = buildStationLockHint({
+        fovDegrees: options.fovDegrees, focalLengthMm: options.focalLengthMm, pitchDegrees: options.pitch,
+        cameraHeightMeters: options.cameraHeightMeters, horizonRowFraction: options.horizonRowFraction, solar: options.solar
+    });
+
+    return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${stationLockHint}${styleSuffix}`;
+}
+
+export interface StationBeautifyContext {
+    locationName: string;
+    moodPromptContext?: string;
+    styleSuffix?: string;
+    format?: 'prose' | 'hybrid';
+    aspectRatio?: string;
+    viewportCropLock?: boolean;
+    imageRef?: string;
+}
+
+/**
+ * The canonical AI Beautify prompt for a survey station: every camera fact (coordinates, yaw,
+ * pitch, fov, lens, height, horizon, standoff, sun) is read from the station record so the prompt,
+ * the blockout render and the depth-to-splat unprojection share one pose.
+ */
+export function buildStationBeautifyPrompt(station: ColmapCameraPose, ctx: StationBeautifyContext): string {
+    const m = station.beautify;
+    const aspect = station.aspectRatio ? aspectRatioLabel(station.aspectRatio) : '16:9';
+    return buildBeautifyPrompt({
+        locationName: ctx.locationName,
+        coordinates: { lat: station.coordinatesWGS84.lat, lng: station.coordinatesWGS84.lng },
+        heading: station.yawDegrees,
+        pitch: station.pitchDegrees,
+        aspectRatio: ctx.aspectRatio || aspect,
+        moodPromptContext: ctx.moodPromptContext,
+        distance: m?.standoffMeters,
+        styleSuffix: ctx.styleSuffix,
+        format: ctx.format,
+        viewportCropLock: ctx.viewportCropLock,
+        imageRef: ctx.imageRef,
+        fovDegrees: station.fovDegrees,
+        focalLengthMm: station.focalLengthMm,
+        cameraHeightMeters: station.cameraHeightAboveGround,
+        horizonRowFraction: m?.horizonRowFraction,
+        solar: m?.solar ? { azimuthDegrees: m.solar.azimuthDegrees, elevationDegrees: m.solar.elevationDegrees } : undefined
+    });
+}
+
+function aspectRatioLabel(r: number): string {
+    const known: Array<[number, string]> = [[16 / 9, '16:9'], [9 / 16, '9:16'], [1, '1:1'], [4 / 3, '4:3'], [3 / 2, '3:2'], [21 / 9, '21:9']];
+    for (const [v, label] of known) if (Math.abs(v - r) < 0.01) return label;
+    return `${r.toFixed(3)}:1`;
 }
 
 /**
