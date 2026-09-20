@@ -176,4 +176,144 @@ export class NativeSpatialBridge implements INativeSpatialBridge {
       confidence: 0.95
     };
   }
+
+  /**
+   * Parses standard 32-byte .splat binary buffer into BakedGaussian array.
+   */
+  public static parseSplatBuffer(buffer: ArrayBuffer | ArrayBufferView): BakedGaussian[] {
+    const view = ArrayBuffer.isView(buffer)
+      ? new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+      : new DataView(buffer);
+    const BYTES_PER_SPLAT = 32;
+    const count = Math.floor(view.byteLength / BYTES_PER_SPLAT);
+    const splats: BakedGaussian[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const offset = i * BYTES_PER_SPLAT;
+      const px = view.getFloat32(offset, true);
+      const py = view.getFloat32(offset + 4, true);
+      const pz = view.getFloat32(offset + 8, true);
+
+      const sx = view.getFloat32(offset + 12, true);
+      const sy = view.getFloat32(offset + 16, true);
+      const sz = view.getFloat32(offset + 20, true);
+
+      const r = view.getUint8(offset + 24);
+      const g = view.getUint8(offset + 25);
+      const b = view.getUint8(offset + 26);
+      const a = view.getUint8(offset + 27) / 255.0;
+
+      const qx = (view.getUint8(offset + 28) / 255.0) * 2.0 - 1.0;
+      const qy = (view.getUint8(offset + 29) / 255.0) * 2.0 - 1.0;
+      const qz = (view.getUint8(offset + 30) / 255.0) * 2.0 - 1.0;
+      const qw = (view.getUint8(offset + 31) / 255.0) * 2.0 - 1.0;
+
+      splats.push({
+        position: [px, py, pz],
+        scale: [sx, sy, sz],
+        colorRgb: [r, g, b],
+        opacity: a,
+        quaternion: [qx, qy, qz, qw]
+      });
+    }
+
+    return splats;
+  }
+
+  /**
+   * Serializes BakedGaussian array into standard 32-byte .splat binary buffer.
+   */
+  public static serializeSplatBuffer(splats: BakedGaussian[]): ArrayBuffer {
+    const BYTES_PER_SPLAT = 32;
+    const buffer = new ArrayBuffer(splats.length * BYTES_PER_SPLAT);
+    const view = new DataView(buffer);
+
+    for (let i = 0; i < splats.length; i++) {
+      const s = splats[i];
+      const offset = i * BYTES_PER_SPLAT;
+
+      view.setFloat32(offset, s.position[0], true);
+      view.setFloat32(offset + 4, s.position[1], true);
+      view.setFloat32(offset + 8, s.position[2], true);
+
+      view.setFloat32(offset + 12, s.scale[0], true);
+      view.setFloat32(offset + 16, s.scale[1], true);
+      view.setFloat32(offset + 20, s.scale[2], true);
+
+      view.setUint8(offset + 24, Math.min(255, Math.max(0, Math.round(s.colorRgb[0]))));
+      view.setUint8(offset + 25, Math.min(255, Math.max(0, Math.round(s.colorRgb[1]))));
+      view.setUint8(offset + 26, Math.min(255, Math.max(0, Math.round(s.colorRgb[2]))));
+      view.setUint8(offset + 27, Math.min(255, Math.max(0, Math.round(s.opacity * 255.0))));
+
+      const q = s.quaternion || [0, 0, 0, 1];
+      view.setUint8(offset + 28, Math.min(255, Math.max(0, Math.round((q[0] * 0.5 + 0.5) * 255.0))));
+      view.setUint8(offset + 29, Math.min(255, Math.max(0, Math.round((q[1] * 0.5 + 0.5) * 255.0))));
+      view.setUint8(offset + 30, Math.min(255, Math.max(0, Math.round((q[2] * 0.5 + 0.5) * 255.0))));
+      view.setUint8(offset + 31, Math.min(255, Math.max(0, Math.round((q[3] * 0.5 + 0.5) * 255.0))));
+    }
+
+    return buffer;
+  }
+
+  /**
+   * Decodes an SPZ uncompressed payload into BakedGaussians.
+   */
+  public static decodeSpzPayload(uncompressed: ArrayBuffer | ArrayBufferView): BakedGaussian[] {
+    const view = ArrayBuffer.isView(uncompressed)
+      ? new DataView(uncompressed.buffer, uncompressed.byteOffset, uncompressed.byteLength)
+      : new DataView(uncompressed);
+    const magic = view.getUint32(0, true);
+    if (magic !== 0x315a5053) {
+      throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x315a5053)`);
+    }
+
+    const numPoints = view.getUint32(8, true);
+    const fractionalBits = view.getUint8(12);
+    const posScale = 1.0 / (1 << fractionalBits);
+
+    const POINT_STRIDE = 22;
+    const headerSize = 16;
+    const availablePoints = Math.floor((view.byteLength - headerSize) / POINT_STRIDE);
+    const count = Math.min(numPoints, availablePoints);
+
+    const splats: BakedGaussian[] = [];
+    let offset = headerSize;
+
+    for (let i = 0; i < count; i++) {
+      const ix = view.getInt32(offset, true);
+      const iy = view.getInt32(offset + 4, true);
+      const iz = view.getInt32(offset + 8, true);
+      offset += 12;
+
+      const sxQuant = view.getInt8(offset++);
+      const syQuant = view.getInt8(offset++);
+      const szQuant = view.getInt8(offset++);
+
+      const sx = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
+      const sy = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
+      const sz = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
+
+      const qx = view.getInt8(offset++) / 127.0;
+      const qy = view.getInt8(offset++) / 127.0;
+      const qz = view.getInt8(offset++) / 127.0;
+      const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
+      const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
+
+      const r = view.getUint8(offset++);
+      const g = view.getUint8(offset++);
+      const b = view.getUint8(offset++);
+      const opacity = view.getUint8(offset++) / 255.0;
+
+      splats.push({
+        position: [ix * posScale, iy * posScale, iz * posScale],
+        scale: [sx, sy, sz],
+        quaternion: [qx, qy, qz, qw],
+        colorRgb: [r, g, b],
+        opacity
+      });
+    }
+
+    return splats;
+  }
 }
+

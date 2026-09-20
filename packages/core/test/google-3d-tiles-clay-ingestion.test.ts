@@ -86,7 +86,7 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
         const expectedPresets: ClayPresetId[] = [
             'warm-clay',
             'alabaster',
-            'obsidian',
+            'onyx',
             'studio-grey',
             'terracotta',
             'porcelain',
@@ -120,7 +120,7 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
 
         // Test custom clay shader generation
         const customClay = TileClayProcessor.createClayShaderConfig({
-            preset: 'obsidian',
+            preset: 'onyx',
             cavityStrength: 0.65,
             ambientOcclusionGain: 1.2
         });
@@ -249,17 +249,17 @@ async function runGoogle3DTileIngestionTests(): Promise<void> {
         // 2. Test `sb_set_clay_mode`
         const clayRes = await engine.dispatch('sb_set_clay_mode', {
             targetId: importRes.data.objectId,
-            preset: 'obsidian',
+            preset: 'onyx',
             roughness: 0.82,
             metalness: 0.05
         });
 
         assert.strictEqual(clayRes.success, true, `sb_set_clay_mode failed: ${clayRes.error}`);
-        assert.strictEqual(clayRes.data.appliedPreset, 'obsidian');
+        assert.strictEqual(clayRes.data.appliedPreset, 'onyx');
 
         const mutatedScene = engine.getSceneData();
         const updatedTileMesh = mutatedScene.customMeshes?.find(m => m.id === importRes.data.objectId);
-        assert.strictEqual(updatedTileMesh?.material?.shaderKey, 'obsidian');
+        assert.strictEqual(updatedTileMesh?.material?.shaderKey, 'onyx');
 
         // 3. Test `sb_set_tile_anchor`
         const anchorRes = await engine.dispatch('sb_set_tile_anchor', {

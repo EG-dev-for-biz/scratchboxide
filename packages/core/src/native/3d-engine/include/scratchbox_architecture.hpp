@@ -1,0 +1,591 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+#ifndef SCRATCHBOX_ARCHITECTURE_HPP
+#define SCRATCHBOX_ARCHITECTURE_HPP
+
+#include "scratchbox_math.hpp"
+#include "scratchbox_geometry.hpp"
+#include "scratchbox_pbr.hpp"
+
+#include <vector>
+#include <string>
+#include <cmath>
+#include <algorithm>
+#include <memory>
+#include <cstdint>
+
+namespace scratchbox {
+namespace architecture {
+
+using math::Vec2;
+using math::Vec3;
+using math::Vec4;
+using math::PI;
+using math::DEG_TO_RAD;
+using geometry::Vertex;
+using geometry::ScratchboxMesh;
+using geometry::PbrMaterial;
+
+// ============================================================================
+// 1. ROOF & ENVELOPE TYPES
+// ============================================================================
+
+enum class RoofType {
+    FlatParapet,  // Flat roof enclosed by a raised perimeter parapet wall with coping
+    Gable,        // Classic triangular dual-pitch roof with vertical gable end walls
+    Hip,          // Quad-sloped roof with sloping ends and ridge line
+    Mansard       // Double-sloped curb roof with steep lower pitch and shallow upper pitch
+};
+
+struct BuildingMaterials {
+    PbrMaterial wall{ "Wall_PBR" };
+    PbrMaterial glass{ "Glass_PBR" };
+    PbrMaterial frame{ "Frame_PBR" };
+    PbrMaterial roof{ "Roof_PBR" };
+    PbrMaterial foundation{ "Foundation_PBR" };
+
+    static BuildingMaterials createArchitecturalPalette() {
+        BuildingMaterials mats;
+        // Wall: Architectural Limestone / Concrete
+        mats.wall.baseColorFactor = Vec4(0.82f, 0.80f, 0.76f, 1.0f);
+        mats.wall.roughnessFactor = 0.85f;
+        mats.wall.metallicFactor = 0.04f;
+
+        // Glass: High-transmission reflective architectural glazing
+        mats.glass.baseColorFactor = Vec4(0.25f, 0.35f, 0.40f, 0.85f);
+        mats.glass.roughnessFactor = 0.08f;
+        mats.glass.metallicFactor = 0.20f;
+        mats.glass.transmissionFactor = 0.90f;
+        mats.glass.ior = 1.52f;
+
+        // Frame: Anodized Dark Bronze / Aluminum Mullions
+        mats.frame.baseColorFactor = Vec4(0.18f, 0.17f, 0.16f, 1.0f);
+        mats.frame.roughnessFactor = 0.35f;
+        mats.frame.metallicFactor = 0.88f;
+
+        // Roof: Slate / Architectural Shingles
+        mats.roof.baseColorFactor = Vec4(0.28f, 0.30f, 0.32f, 1.0f);
+        mats.roof.roughnessFactor = 0.90f;
+        mats.roof.metallicFactor = 0.05f;
+
+        // Foundation: Cast-in-place concrete plinth
+        mats.foundation.baseColorFactor = Vec4(0.55f, 0.54f, 0.52f, 1.0f);
+        mats.foundation.roughnessFactor = 0.92f;
+        mats.foundation.metallicFactor = 0.02f;
+
+        return mats;
+    }
+};
+
+struct BuildingConfig {
+    float width{16.0f};                 // Building width along X-axis (meters)
+    float depth{12.0f};                 // Building depth along Z-axis (meters)
+    int floorCount{4};                  // Total number of stories
+    float floorHeight{3.4f};            // Standard upper floor height (meters)
+    float groundFloorHeight{4.2f};      // Ground / retail floor height (meters)
+
+    float plinthHeight{0.6f};           // Base plinth elevation above grade (meters)
+    float plinthOffset{0.25f};          // Horizontal plinth ledge offset (meters)
+
+    float bayWidth{3.2f};               // Rhythm period between window bays (meters)
+    float windowWidth{1.8f};            // Width of individual window openings (meters)
+    float windowHeight{2.0f};           // Height of window openings (meters)
+    float sillHeight{0.9f};             // Height of window sill from floor level (meters)
+    float windowRecessDepth{0.22f};     // Reveal / recess depth from outer wall (meters)
+    float frameThickness{0.08f};        // Thickness of window frame perimeter (meters)
+    float mullionThickness{0.05f};      // Center mullion division thickness (meters)
+
+    float doorWidth{2.4f};              // Ground floor entrance door width (meters)
+    float doorHeight{2.8f};             // Ground floor entrance door height (meters)
+
+    RoofType roofType{RoofType::Hip};
+    float roofPitchDegrees{32.0f};      // Slope angle for Gable, Hip, Mansard
+    float roofOverhang{0.65f};          // Eaves overhang beyond outer wall (meters)
+    float parapetHeight{1.1f};          // Height of perimeter parapet for Flat roofs (meters)
+    float parapetThickness{0.35f};      // Thickness of parapet wall coping (meters)
+
+    BuildingMaterials materials{BuildingMaterials::createArchitecturalPalette()};
+};
+
+// ============================================================================
+// 2. PROCEDURAL BUILDING GENERATOR ENGINE
+// ============================================================================
+
+class ProceduralBuildingGenerator {
+public:
+    /**
+     * Generates a complete, multi-story architectural building with facade bays,
+     * recessed window reveals, mullions, ground entrance, plinth, and procedural roof.
+     * Returns a unified ScratchboxMesh ready for glTF serialization.
+     */
+    static ScratchboxMesh generateBuilding(const BuildingConfig& config, const std::string& name = "ProceduralBuilding") {
+        ScratchboxMesh mesh(name);
+        mesh.material = config.materials.wall;
+
+        // 1. Plinth / Foundation Base
+        generatePlinth(config, mesh);
+
+        // 2. Vertical Wall Facades with Rhythmic Fenestration
+        generateFacades(config, mesh);
+
+        // 3. Floor Slabs & Ceilings
+        generateFloorSlabs(config, mesh);
+
+        // 4. Procedural Roof System
+        generateRoof(config, mesh);
+
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+private:
+    static void addQuad(
+        ScratchboxMesh& mesh,
+        const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3,
+        const Vec3& normal,
+        const Vec4& color = Vec4(1, 1, 1, 1),
+        const Vec2& uv0 = Vec2(0, 0), const Vec2& uv1 = Vec2(1, 0),
+        const Vec2& uv2 = Vec2(1, 1), const Vec2& uv3 = Vec2(0, 1)
+    ) {
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
+        Vec4 tangent(1, 0, 0, 1);
+        if (std::abs(normal.x) > 0.8f) tangent = Vec4(0, 0, 1, 1);
+
+        mesh.addVertex(Vertex(p0, normal, uv0, color, tangent));
+        mesh.addVertex(Vertex(p1, normal, uv1, color, tangent));
+        mesh.addVertex(Vertex(p2, normal, uv2, color, tangent));
+        mesh.addVertex(Vertex(p3, normal, uv3, color, tangent));
+
+        mesh.addTriangle(base, base + 1, base + 2);
+        mesh.addTriangle(base, base + 2, base + 3);
+    }
+
+    static void addBox(
+        ScratchboxMesh& mesh,
+        const Vec3& minP, const Vec3& maxP,
+        const Vec4& color = Vec4(1, 1, 1, 1)
+    ) {
+        // Front (+Z)
+        addQuad(mesh,
+            Vec3(minP.x, minP.y, maxP.z), Vec3(maxP.x, minP.y, maxP.z),
+            Vec3(maxP.x, maxP.y, maxP.z), Vec3(minP.x, maxP.y, maxP.z),
+            Vec3(0, 0, 1), color);
+        // Back (-Z)
+        addQuad(mesh,
+            Vec3(maxP.x, minP.y, minP.z), Vec3(minP.x, minP.y, minP.z),
+            Vec3(minP.x, maxP.y, minP.z), Vec3(maxP.x, maxP.y, minP.z),
+            Vec3(0, 0, -1), color);
+        // Left (-X)
+        addQuad(mesh,
+            Vec3(minP.x, minP.y, minP.z), Vec3(minP.x, minP.y, maxP.z),
+            Vec3(minP.x, maxP.y, maxP.z), Vec3(minP.x, maxP.y, minP.z),
+            Vec3(-1, 0, 0), color);
+        // Right (+X)
+        addQuad(mesh,
+            Vec3(maxP.x, minP.y, maxP.z), Vec3(maxP.x, minP.y, minP.z),
+            Vec3(maxP.x, maxP.y, minP.z), Vec3(maxP.x, maxP.y, maxP.z),
+            Vec3(1, 0, 0), color);
+        // Top (+Y)
+        addQuad(mesh,
+            Vec3(minP.x, maxP.y, maxP.z), Vec3(maxP.x, maxP.y, maxP.z),
+            Vec3(maxP.x, maxP.y, minP.z), Vec3(minP.x, maxP.y, minP.z),
+            Vec3(0, 1, 0), color);
+        // Bottom (-Y)
+        addQuad(mesh,
+            Vec3(minP.x, minP.y, minP.z), Vec3(maxP.x, minP.y, minP.z),
+            Vec3(maxP.x, minP.y, maxP.z), Vec3(minP.x, minP.y, maxP.z),
+            Vec3(0, -1, 0), color);
+    }
+
+    static void generatePlinth(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f + cfg.plinthOffset;
+        float hz = cfg.depth * 0.5f + cfg.plinthOffset;
+        Vec3 minP(-hx, 0.0f, -hz);
+        Vec3 maxP(hx, cfg.plinthHeight, hz);
+        addBox(mesh, minP, maxP, cfg.materials.foundation.baseColorFactor);
+    }
+
+    static void generateFacades(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f;
+        float hz = cfg.depth * 0.5f;
+        float yBase = cfg.plinthHeight;
+
+        // Build each facade side:
+        // 0: South (+Z), 1: North (-Z), 2: East (+X), 3: West (-X)
+        struct SideInfo {
+            Vec3 start;
+            Vec3 rightDir;
+            Vec3 normal;
+            float length;
+            bool hasEntrance;
+        };
+
+        std::vector<SideInfo> sides = {
+            { Vec3(-hx, yBase,  hz), Vec3(1, 0, 0), Vec3(0, 0,  1), cfg.width, true  }, // South (front entrance)
+            { Vec3( hx, yBase, -hz), Vec3(-1, 0, 0), Vec3(0, 0, -1), cfg.width, false }, // North
+            { Vec3( hx, yBase,  hz), Vec3(0, 0, -1), Vec3(1, 0,  0), cfg.depth, false }, // East
+            { Vec3(-hx, yBase, -hz), Vec3(0, 0,  1), Vec3(-1, 0,  0), cfg.depth, false }  // West
+        };
+
+        for (const auto& side : sides) {
+            float currY = yBase;
+
+            for (int floor = 0; floor < cfg.floorCount; ++floor) {
+                float curFloorH = (floor == 0) ? cfg.groundFloorHeight : cfg.floorHeight;
+                float yNext = currY + curFloorH;
+
+                // Calculate rhythmic window bays
+                int bayCount = std::max(1, static_cast<int>(side.length / cfg.bayWidth));
+                float actualBayW = side.length / static_cast<float>(bayCount);
+
+                for (int b = 0; b < bayCount; ++b) {
+                    float u0 = static_cast<float>(b) * actualBayW;
+                    float u1 = u0 + actualBayW;
+                    float bayCenterU = (u0 + u1) * 0.5f;
+
+                    // Check if this bay has the ground floor entrance
+                    bool isEntranceBay = (floor == 0 && side.hasEntrance && b == bayCount / 2);
+
+                    float openW = isEntranceBay ? cfg.doorWidth : cfg.windowWidth;
+                    float openH = isEntranceBay ? cfg.doorHeight : cfg.windowHeight;
+                    float openSill = isEntranceBay ? 0.0f : cfg.sillHeight;
+
+                    // Ensure opening fits inside bay
+                    openW = std::min(openW, actualBayW * 0.85f);
+                    openH = std::min(openH, curFloorH - openSill - 0.4f);
+
+                    float openLeft = bayCenterU - openW * 0.5f;
+                    float openRight = bayCenterU + openW * 0.5f;
+                    float openBottom = currY + openSill;
+                    float openTop = openBottom + openH;
+
+                    // 1. Left pier wall
+                    Vec3 lp0 = side.start + side.rightDir * u0 + Vec3(0, currY - yBase, 0);
+                    Vec3 lp1 = side.start + side.rightDir * openLeft + Vec3(0, currY - yBase, 0);
+                    Vec3 lp2 = lp1 + Vec3(0, curFloorH, 0);
+                    Vec3 lp3 = lp0 + Vec3(0, curFloorH, 0);
+                    addQuad(mesh, lp0, lp1, lp2, lp3, side.normal, cfg.materials.wall.baseColorFactor);
+
+                    // 2. Right pier wall
+                    Vec3 rp0 = side.start + side.rightDir * openRight + Vec3(0, currY - yBase, 0);
+                    Vec3 rp1 = side.start + side.rightDir * u1 + Vec3(0, currY - yBase, 0);
+                    Vec3 rp2 = rp1 + Vec3(0, curFloorH, 0);
+                    Vec3 rp3 = rp0 + Vec3(0, curFloorH, 0);
+                    addQuad(mesh, rp0, rp1, rp2, rp3, side.normal, cfg.materials.wall.baseColorFactor);
+
+                    // 3. Spandrel below opening (if sill > 0)
+                    if (openSill > 0.001f) {
+                        Vec3 sp0 = side.start + side.rightDir * openLeft + Vec3(0, currY - yBase, 0);
+                        Vec3 sp1 = side.start + side.rightDir * openRight + Vec3(0, currY - yBase, 0);
+                        Vec3 sp2 = sp1 + Vec3(0, openSill, 0);
+                        Vec3 sp3 = sp0 + Vec3(0, openSill, 0);
+                        addQuad(mesh, sp0, sp1, sp2, sp3, side.normal, cfg.materials.wall.baseColorFactor);
+                    }
+
+                    // 4. Lintel above opening
+                    Vec3 lt0 = side.start + side.rightDir * openLeft + Vec3(0, openTop - yBase, 0);
+                    Vec3 lt1 = side.start + side.rightDir * openRight + Vec3(0, openTop - yBase, 0);
+                    Vec3 lt2 = side.start + side.rightDir * openRight + Vec3(0, yNext - yBase, 0);
+                    Vec3 lt3 = side.start + side.rightDir * openLeft + Vec3(0, yNext - yBase, 0);
+                    addQuad(mesh, lt0, lt1, lt2, lt3, side.normal, cfg.materials.wall.baseColorFactor);
+
+                    // 5. Inset reveals / jambs (window recess)
+                    float recess = cfg.windowRecessDepth;
+                    Vec3 inward = -side.normal * recess;
+
+                    Vec3 oBL = side.start + side.rightDir * openLeft + Vec3(0, openBottom - yBase, 0);
+                    Vec3 oBR = side.start + side.rightDir * openRight + Vec3(0, openBottom - yBase, 0);
+                    Vec3 oTR = side.start + side.rightDir * openRight + Vec3(0, openTop - yBase, 0);
+                    Vec3 oTL = side.start + side.rightDir * openLeft + Vec3(0, openTop - yBase, 0);
+
+                    // Left jamb
+                    addQuad(mesh, oBL, oBL + inward, oTL + inward, oTL, side.rightDir, cfg.materials.wall.baseColorFactor * 0.9f);
+                    // Right jamb
+                    addQuad(mesh, oBR + inward, oBR, oTR, oTR + inward, -side.rightDir, cfg.materials.wall.baseColorFactor * 0.9f);
+                    // Top head jamb
+                    addQuad(mesh, oTL, oTL + inward, oTR + inward, oTR, -Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.85f);
+                    // Bottom sill jamb
+                    if (openSill > 0.001f) {
+                        addQuad(mesh, oBL + inward, oBL, oBR, oBR + inward, Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.95f);
+                    }
+
+                    // 6. Recessed Glazing / Door Panel
+                    Vec3 gBL = oBL + inward;
+                    Vec3 gBR = oBR + inward;
+                    Vec3 gTR = oTR + inward;
+                    Vec3 gTL = oTL + inward;
+
+                    if (isEntranceBay) {
+                        // Entrance Door: Wood/Metal frame with glass center
+                        addQuad(mesh, gBL, gBR, gTR, gTL, side.normal, cfg.materials.frame.baseColorFactor);
+                        // Glass insert
+                        Vec3 dBL = math::lerp(gBL, gBR, 0.2f) + Vec3(0, 0.4f, 0);
+                        Vec3 dBR = math::lerp(gBL, gBR, 0.8f) + Vec3(0, 0.4f, 0);
+                        Vec3 dTR = math::lerp(gTL, gTR, 0.8f) - Vec3(0, 0.2f, 0);
+                        Vec3 dTL = math::lerp(gTL, gTR, 0.2f) - Vec3(0, 0.2f, 0);
+                        addQuad(mesh, dBL, dBR, dTR, dTL, side.normal, cfg.materials.glass.baseColorFactor);
+                    } else {
+                        // Window Glass Pane
+                        addQuad(mesh, gBL, gBR, gTR, gTL, side.normal, cfg.materials.glass.baseColorFactor);
+
+                        // Window Frame / Mullions
+                        float mt = cfg.mullionThickness;
+                        Vec3 midB = (gBL + gBR) * 0.5f;
+                        Vec3 midT = (gTL + gTR) * 0.5f;
+
+                        // Vertical Mullion
+                        Vec3 m0 = midB - side.rightDir * (mt * 0.5f) + side.normal * 0.02f;
+                        Vec3 m1 = midB + side.rightDir * (mt * 0.5f) + side.normal * 0.02f;
+                        Vec3 m2 = midT + side.rightDir * (mt * 0.5f) + side.normal * 0.02f;
+                        Vec3 m3 = midT - side.rightDir * (mt * 0.5f) + side.normal * 0.02f;
+                        addQuad(mesh, m0, m1, m2, m3, side.normal, cfg.materials.frame.baseColorFactor);
+                    }
+                }
+
+                currY = yNext;
+            }
+        }
+    }
+
+    static void generateFloorSlabs(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f;
+        float hz = cfg.depth * 0.5f;
+        float currY = cfg.plinthHeight;
+
+        for (int floor = 0; floor <= cfg.floorCount; ++floor) {
+            // Horizontal floor slab quad (ceiling of lower, floor of upper)
+            Vec3 p0(-hx, currY,  hz);
+            Vec3 p1( hx, currY,  hz);
+            Vec3 p2( hx, currY, -hz);
+            Vec3 p3(-hx, currY, -hz);
+
+            // Upward facing
+            addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
+
+            if (floor < cfg.floorCount) {
+                float curFloorH = (floor == 0) ? cfg.groundFloorHeight : cfg.floorHeight;
+                currY += curFloorH;
+            }
+        }
+    }
+
+    static void generateRoof(const BuildingConfig& cfg, ScratchboxMesh& mesh) {
+        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(cfg.floorCount - 1);
+
+        switch (cfg.roofType) {
+            case RoofType::FlatParapet:
+                generateFlatParapetRoof(cfg, totalH, mesh);
+                break;
+            case RoofType::Gable:
+                generateGableRoof(cfg, totalH, mesh);
+                break;
+            case RoofType::Hip:
+                generateHipRoof(cfg, totalH, mesh);
+                break;
+            case RoofType::Mansard:
+                generateMansardRoof(cfg, totalH, mesh);
+                break;
+        }
+    }
+
+    static void generateFlatParapetRoof(const BuildingConfig& cfg, float totalH, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f;
+        float hz = cfg.depth * 0.5f;
+        float ph = cfg.parapetHeight;
+        float pt = cfg.parapetThickness;
+
+        // Outer parapet walls
+        // Front (+Z)
+        addQuad(mesh,
+            Vec3(-hx, totalH, hz), Vec3(hx, totalH, hz),
+            Vec3(hx, totalH + ph, hz), Vec3(-hx, totalH + ph, hz),
+            Vec3(0, 0, 1), cfg.materials.wall.baseColorFactor);
+        // Back (-Z)
+        addQuad(mesh,
+            Vec3(hx, totalH, -hz), Vec3(-hx, totalH, -hz),
+            Vec3(-hx, totalH + ph, -hz), Vec3(hx, totalH + ph, -hz),
+            Vec3(0, 0, -1), cfg.materials.wall.baseColorFactor);
+        // Left (-X)
+        addQuad(mesh,
+            Vec3(-hx, totalH, -hz), Vec3(-hx, totalH, hz),
+            Vec3(-hx, totalH + ph, hz), Vec3(-hx, totalH + ph, -hz),
+            Vec3(-1, 0, 0), cfg.materials.wall.baseColorFactor);
+        // Right (+X)
+        addQuad(mesh,
+            Vec3(hx, totalH, hz), Vec3(hx, totalH, -hz),
+            Vec3(hx, totalH + ph, -hz), Vec3(hx, totalH + ph, hz),
+            Vec3(1, 0, 0), cfg.materials.wall.baseColorFactor);
+
+        // Coping / Cap on top of parapet
+        float inX = hx - pt;
+        float inZ = hz - pt;
+        // Top cap
+        addQuad(mesh,
+            Vec3(-hx, totalH + ph, hz), Vec3(hx, totalH + ph, hz),
+            Vec3(inX, totalH + ph, inZ), Vec3(-inX, totalH + ph, inZ),
+            Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh,
+            Vec3(hx, totalH + ph, -hz), Vec3(-hx, totalH + ph, -hz),
+            Vec3(-inX, totalH + ph, -inZ), Vec3(inX, totalH + ph, -inZ),
+            Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh,
+            Vec3(-hx, totalH + ph, -hz), Vec3(-hx, totalH + ph, hz),
+            Vec3(-inX, totalH + ph, inZ), Vec3(-inX, totalH + ph, -inZ),
+            Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh,
+            Vec3(hx, totalH + ph, hz), Vec3(hx, totalH + ph, -hz),
+            Vec3(inX, totalH + ph, -inZ), Vec3(inX, totalH + ph, inZ),
+            Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+
+        // Flat roof deck surface
+        addQuad(mesh,
+            Vec3(-inX, totalH + 0.1f, inZ), Vec3(inX, totalH + 0.1f, inZ),
+            Vec3(inX, totalH + 0.1f, -inZ), Vec3(-inX, totalH + 0.1f, -inZ),
+            Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor * 0.75f);
+    }
+
+    static void generateGableRoof(const BuildingConfig& cfg, float totalH, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f + cfg.roofOverhang;
+        float hz = cfg.depth * 0.5f + cfg.roofOverhang;
+        float pitchRad = cfg.roofPitchDegrees * DEG_TO_RAD;
+        float ridgeH = std::tan(pitchRad) * hz;
+        float yRidge = totalH + ridgeH;
+
+        // Ridge line along X-axis
+        Vec3 rL(-hx, yRidge, 0.0f);
+        Vec3 rR( hx, yRidge, 0.0f);
+
+        Vec3 eFL(-hx, totalH,  hz);
+        Vec3 eFR( hx, totalH,  hz);
+        Vec3 eBL(-hx, totalH, -hz);
+        Vec3 eBR( hx, totalH, -hz);
+
+        // Front Slope (+Z)
+        Vec3 nFront = Vec3(0, hz, ridgeH).normalized();
+        addQuad(mesh, eFL, eFR, rR, rL, nFront, cfg.materials.roof.baseColorFactor);
+
+        // Back Slope (-Z)
+        Vec3 nBack = Vec3(0, hz, -ridgeH).normalized();
+        addQuad(mesh, rL, rR, eBR, eBL, nBack, cfg.materials.roof.baseColorFactor);
+
+        // Left Gable End Wall (Triangle)
+        uint32_t bLeft = static_cast<uint32_t>(mesh.vertices.size());
+        Vec3 nLeft(-1, 0, 0);
+        Vec4 wallCol = cfg.materials.wall.baseColorFactor;
+        mesh.addVertex(Vertex(Vec3(-cfg.width * 0.5f, totalH,  cfg.depth * 0.5f), nLeft, Vec2(0, 0), wallCol, Vec4(0, 0, 1, 1)));
+        mesh.addVertex(Vertex(Vec3(-cfg.width * 0.5f, totalH, -cfg.depth * 0.5f), nLeft, Vec2(1, 0), wallCol, Vec4(0, 0, 1, 1)));
+        mesh.addVertex(Vertex(Vec3(-cfg.width * 0.5f, yRidge, 0.0f), nLeft, Vec2(0.5f, 1), wallCol, Vec4(0, 0, 1, 1)));
+        mesh.addTriangle(bLeft, bLeft + 1, bLeft + 2);
+
+        // Right Gable End Wall (Triangle)
+        uint32_t bRight = static_cast<uint32_t>(mesh.vertices.size());
+        Vec3 nRight(1, 0, 0);
+        mesh.addVertex(Vertex(Vec3(cfg.width * 0.5f, totalH, -cfg.depth * 0.5f), nRight, Vec2(0, 0), wallCol, Vec4(0, 0, -1, 1)));
+        mesh.addVertex(Vertex(Vec3(cfg.width * 0.5f, totalH,  cfg.depth * 0.5f), nRight, Vec2(1, 0), wallCol, Vec4(0, 0, -1, 1)));
+        mesh.addVertex(Vertex(Vec3(cfg.width * 0.5f, yRidge, 0.0f), nRight, Vec2(0.5f, 1), wallCol, Vec4(0, 0, -1, 1)));
+        mesh.addTriangle(bRight, bRight + 1, bRight + 2);
+    }
+
+    static void generateHipRoof(const BuildingConfig& cfg, float totalH, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f + cfg.roofOverhang;
+        float hz = cfg.depth * 0.5f + cfg.roofOverhang;
+        float pitchRad = cfg.roofPitchDegrees * DEG_TO_RAD;
+
+        // For a rectangular hip roof, ridge length = |width - depth|
+        float halfSpan = std::min(hx, hz);
+        float ridgeH = std::tan(pitchRad) * halfSpan;
+        float yRidge = totalH + ridgeH;
+
+        float ridgeOffset = std::max(0.0f, hx - hz);
+        Vec3 rL(-ridgeOffset, yRidge, 0.0f);
+        Vec3 rR( ridgeOffset, yRidge, 0.0f);
+
+        Vec3 eFL(-hx, totalH,  hz);
+        Vec3 eFR( hx, totalH,  hz);
+        Vec3 eBL(-hx, totalH, -hz);
+        Vec3 eBR( hx, totalH, -hz);
+
+        // Front slope (Trapezoid)
+        Vec3 nFront = Vec3(0, hz, ridgeH).normalized();
+        addQuad(mesh, eFL, eFR, rR, rL, nFront, cfg.materials.roof.baseColorFactor);
+
+        // Back slope (Trapezoid)
+        Vec3 nBack = Vec3(0, hz, -ridgeH).normalized();
+        addQuad(mesh, rL, rR, eBR, eBL, nBack, cfg.materials.roof.baseColorFactor);
+
+        // Left hip slope (Triangle)
+        uint32_t bLeft = static_cast<uint32_t>(mesh.vertices.size());
+        Vec3 nLeft = Vec3(-ridgeH, halfSpan, 0).normalized();
+        mesh.addVertex(Vertex(eBL, nLeft, Vec2(0, 0), cfg.materials.roof.baseColorFactor, Vec4(0, 0, 1, 1)));
+        mesh.addVertex(Vertex(eFL, nLeft, Vec2(1, 0), cfg.materials.roof.baseColorFactor, Vec4(0, 0, 1, 1)));
+        mesh.addVertex(Vertex(rL,  nLeft, Vec2(0.5f, 1), cfg.materials.roof.baseColorFactor, Vec4(0, 0, 1, 1)));
+        mesh.addTriangle(bLeft, bLeft + 1, bLeft + 2);
+
+        // Right hip slope (Triangle)
+        uint32_t bRight = static_cast<uint32_t>(mesh.vertices.size());
+        Vec3 nRight = Vec3(ridgeH, halfSpan, 0).normalized();
+        mesh.addVertex(Vertex(eFR, nRight, Vec2(0, 0), cfg.materials.roof.baseColorFactor, Vec4(0, 0, -1, 1)));
+        mesh.addVertex(Vertex(eBR, nRight, Vec2(1, 0), cfg.materials.roof.baseColorFactor, Vec4(0, 0, -1, 1)));
+        mesh.addVertex(Vertex(rR,  nRight, Vec2(0.5f, 1), cfg.materials.roof.baseColorFactor, Vec4(0, 0, -1, 1)));
+        mesh.addTriangle(bRight, bRight + 1, bRight + 2);
+    }
+
+    static void generateMansardRoof(const BuildingConfig& cfg, float totalH, ScratchboxMesh& mesh) {
+        float hx = cfg.width * 0.5f + cfg.roofOverhang;
+        float hz = cfg.depth * 0.5f + cfg.roofOverhang;
+
+        // Stage 1: Steep curb pitch (65-75 degrees)
+        float curbH = 2.4f;
+        float curbInset = 1.2f;
+        float yCurb = totalH + curbH;
+        float curbX = hx - curbInset;
+        float curbZ = hz - curbInset;
+
+        Vec3 eFL(-hx, totalH,  hz);
+        Vec3 eFR( hx, totalH,  hz);
+        Vec3 eBL(-hx, totalH, -hz);
+        Vec3 eBR( hx, totalH, -hz);
+
+        Vec3 cFL(-curbX, yCurb,  curbZ);
+        Vec3 cFR( curbX, yCurb,  curbZ);
+        Vec3 cBL(-curbX, yCurb, -curbZ);
+        Vec3 cBR( curbX, yCurb, -curbZ);
+
+        // Steep lower slopes
+        addQuad(mesh, eFL, eFR, cFR, cFL, Vec3(0, curbInset, curbH).normalized(), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eBR, eBL, cBL, cBR, Vec3(0, curbInset, -curbH).normalized(), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eBL, eFL, cFL, cBL, Vec3(-curbH, curbInset, 0).normalized(), cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eFR, eBR, cBR, cFR, Vec3(curbH, curbInset, 0).normalized(), cfg.materials.roof.baseColorFactor);
+
+        // Stage 2: Shallow upper deck
+        float deckH = 0.8f;
+        float yDeck = yCurb + deckH;
+        float deckX = curbX - 1.5f;
+        float deckZ = curbZ - 1.5f;
+
+        Vec3 dFL(-deckX, yDeck,  deckZ);
+        Vec3 dFR( deckX, yDeck,  deckZ);
+        Vec3 dBL(-deckX, yDeck, -deckZ);
+        Vec3 dBR( deckX, yDeck, -deckZ);
+
+        addQuad(mesh, cFL, cFR, dFR, dFL, Vec3(0, 1.5f, deckH).normalized(), cfg.materials.roof.baseColorFactor * 0.9f);
+        addQuad(mesh, cBR, cBL, dBL, dBR, Vec3(0, 1.5f, -deckH).normalized(), cfg.materials.roof.baseColorFactor * 0.9f);
+        addQuad(mesh, cBL, cFL, dFL, dBL, Vec3(-deckH, 1.5f, 0).normalized(), cfg.materials.roof.baseColorFactor * 0.9f);
+        addQuad(mesh, cFR, cBR, dBR, dFR, Vec3(deckH, 1.5f, 0).normalized(), cfg.materials.roof.baseColorFactor * 0.9f);
+
+        // Top flat cap
+        addQuad(mesh, dFL, dFR, dBR, dBL, Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor * 0.8f);
+    }
+};
+
+} // namespace architecture
+} // namespace scratchbox
+
+#endif // SCRATCHBOX_ARCHITECTURE_HPP

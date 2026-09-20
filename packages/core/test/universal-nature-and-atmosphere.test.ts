@@ -1,0 +1,375 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { describe, it, expect } from 'vitest';
+import {
+    generateDefaultCpp3DSource,
+    synthesizeContextual3DScene
+} from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import {
+    createOperatorEngine
+} from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
+import {
+    DynamicDagPlanner
+} from '../src/node/deep-write/dynamic-dag-planner';
+import {
+    NativeCppCompilerService
+} from '../src/node/3d-engine/native-compiler-service';
+import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
+
+describe('Universal Nature, Atmosphere, SSS & Triplanar 3D Systems', () => {
+
+    it('1. should register and dispatch all 5 Category 11 operators in DirectDispatchOperatorEngine', () => {
+        const initialScene: Scene3DData = {
+            title: 'Nature Scene',
+            renderMode: 'pbr',
+            customMeshes: [
+                {
+                    id: 'mesh-hero',
+                    name: 'Hero Boulder',
+                    type: 'custom',
+                    position: [0, 0, 0]
+                }
+            ]
+        };
+        const engine = createOperatorEngine(initialScene);
+
+        // 1. sb_apply_triplanar_material
+        const triplanarRes = engine.dispatch('sb_apply_triplanar_material', {
+            targetMeshId: 'mesh-hero',
+            materialType: 'rock_strata',
+            sharpness: 6.0,
+            scale: 2.0
+        });
+        expect(triplanarRes.success).toBe(true);
+        expect(triplanarRes.data.triplanar.materialType).toBe('rock_strata');
+        expect(triplanarRes.data.triplanar.sharpness).toBe(6.0);
+
+        // 2. sb_set_subsurface_scattering
+        const sssRes = engine.dispatch('sb_set_subsurface_scattering', {
+            targetMeshId: 'mesh-hero',
+            profile: 'green_leaf',
+            scatteringWeight: 0.90,
+            thickness: 0.15
+        });
+        expect(sssRes.success).toBe(true);
+        expect(sssRes.data.subsurface.profile).toBe('green_leaf');
+        expect(sssRes.data.subsurface.thickness).toBe(0.15);
+
+        // 3. sb_add_volumetric_fog
+        const fogRes = engine.dispatch('sb_add_volumetric_fog', {
+            density: 0.045,
+            scatteringColor: '#f8d28a',
+            anisotropy: 0.78,
+            heightScale: 5.0,
+            godRaysEnabled: true
+        });
+        expect(fogRes.success).toBe(true);
+        expect(fogRes.data.volumetricFog.anisotropy).toBe(0.78);
+        expect(fogRes.data.volumetricFog.density).toBe(0.045);
+
+        // 4. sb_generate_l_system_vegetation
+        const treeRes = engine.dispatch('sb_generate_l_system_vegetation', {
+            treeType: 'oak',
+            position: [-3.0, 0, -2.0],
+            maxDepth: 4,
+            initialLength: 3.5,
+            initialRadius: 0.35,
+            seed: 123
+        });
+        expect(treeRes.success).toBe(true);
+        expect(treeRes.data.treeMesh.generator.algorithm).toBe('l_system');
+        expect(treeRes.data.treeMesh.generator.treeType).toBe('oak');
+
+        // 5. sb_generate_biome_terrain
+        const terrainRes = engine.dispatch('sb_generate_biome_terrain', {
+            width: 32.0,
+            depth: 32.0,
+            resolution: 48,
+            maxElevation: 5.0,
+            rockSlopeThreshold: 35.0,
+            seed: 777
+        });
+        expect(terrainRes.success).toBe(true);
+        expect(terrainRes.data.terrainMesh.terrainParams.maxElevation).toBe(5.0);
+        expect(terrainRes.data.terrainMesh.terrainParams.rockSlopeThreshold).toBe(35.0);
+
+        // 6. sb_generate_detailed_foliage
+        const foliageRes = engine.dispatch('sb_generate_detailed_foliage', {
+            parentTreeId: treeRes.data.treeId,
+            clumpCount: 8,
+            leafSize: 0.45,
+            thinWall: true,
+            subsurfaceWeight: 1.0
+        });
+        expect(foliageRes.success).toBe(true);
+        expect(foliageRes.data.foliageMesh.material.subsurface.thinWall).toBe(true);
+        expect(foliageRes.data.foliageMesh.foliageParams.clumpCount).toBe(8);
+
+        // 7. sb_transfer_foliage_normals
+        const transferRes = engine.dispatch('sb_transfer_foliage_normals', {
+            targetMeshId: foliageRes.data.foliageId,
+            mixFactor: 1.0,
+            upwardBias: 0.20,
+            helpers: [{ center: [0, 3, 0], radius: 1.8 }]
+        });
+        expect(transferRes.success).toBe(true);
+        expect(transferRes.data.normalTransfer.mixFactor).toBe(1.0);
+        expect(transferRes.data.normalTransfer.upwardBias).toBe(0.20);
+
+        // Verify scene data state
+        const updatedScene = engine.getSceneData();
+        expect(updatedScene.customMeshes?.length).toBeGreaterThanOrEqual(4);
+        expect((updatedScene.environment as any)?.volumetricFog?.enabled).toBe(true);
+    });
+
+    it('2. should plan Stage 3e Nature & Ecosystem and Stage 5 Volumetric Fog in DynamicDagPlanner', async () => {
+        const planner = new DynamicDagPlanner();
+        const dag = planner.generate3DPlanDAG('Generate an ancient mossy monolith inside an overgrown misty forest with golden god rays');
+
+        // Check Stage 3e
+        const natureStage = dag.stages.find(s => s.id === 'stage_03e_nature_and_ecosystem');
+        expect(natureStage).toBeDefined();
+        expect(natureStage?.expectedStateChecks?.natureGenerated).toBe(true);
+        expect(natureStage?.operators.some(op => op.operator === 'sb_generate_biome_terrain')).toBe(true);
+        expect(natureStage?.operators.some(op => op.operator === 'sb_generate_l_system_vegetation')).toBe(true);
+
+        // Check Stage 4 Material Triplanar & SSS
+        const matStage = dag.stages.find(s => s.id === 'stage_04_materials_and_shading');
+        expect(matStage).toBeDefined();
+        expect(matStage?.operators.some(op => op.operator === 'sb_apply_triplanar_material')).toBe(true);
+        expect(matStage?.operators.some(op => op.operator === 'sb_set_subsurface_scattering')).toBe(true);
+
+        // Check Stage 5 Volumetric Fog
+        const lightStage = dag.stages.find(s => s.id === 'stage_05_lighting_and_atmosphere');
+        expect(lightStage).toBeDefined();
+        expect(lightStage?.operators.some(op => op.operator === 'sb_add_volumetric_fog')).toBe(true);
+
+        // Execute autonomous workflow
+        const workflow = await planner.executeAutonomous3DWorkflow('Generate an ancient mossy monolith inside an overgrown misty forest with golden god rays');
+        expect(workflow.success).toBe(true);
+        expect(workflow.executedStages.map(s => s.stageId)).toContain('stage_03e_nature_and_ecosystem');
+    });
+
+    it('3. should generate nature_atmosphere C++20 source code utilizing all 4 new engine modules', () => {
+        const cppCode = generateDefaultCpp3DSource('nature_atmosphere', 'Ancient Monolith Forest');
+        expect(cppCode).toContain('#include "scratchbox_engine.hpp"');
+        expect(cppCode).toContain('using namespace scratchbox::triplanar;');
+        expect(cppCode).toContain('using namespace scratchbox::sss;');
+        expect(cppCode).toContain('using namespace scratchbox::volumetrics;');
+        expect(cppCode).toContain('using namespace scratchbox::nature;');
+        expect(cppCode).toContain('generateBiomeTerrain');
+        expect(cppCode).toContain('applyTriplanarToMesh');
+        expect(cppCode).toContain('generateProceduralTree');
+        expect(cppCode).toContain('getSkyGoldenHourSH');
+        expect(cppCode).toContain('scene.streamSceneGlb');
+    });
+
+    it('4. should compile and stream glTF 2.0 binary chunks from C++20 nature_atmosphere program with NativeCppCompilerService', async () => {
+        const compiler = new NativeCppCompilerService();
+        const natureCpp = generateDefaultCpp3DSource('nature_atmosphere', 'Verdant Forest Plateau');
+
+        const compileRes = await compiler.compileSource(natureCpp, 'verdant_forest.cpp');
+        expect(compileRes.success).toBe(true);
+        expect(compileRes.binaryPath).toBeDefined();
+
+        if (compileRes.binaryPath) {
+            const execRes = await compiler.executeBinary(compileRes.binaryPath);
+            expect(execRes.success).toBe(true);
+            expect(execRes.chunks.length).toBeGreaterThan(0);
+
+            // Verify binary glTF 2.0 magic 'glTF' (0x46546C67)
+            const chunk = execRes.chunks[0];
+            expect(chunk.vertexCount).toBeGreaterThan(100);
+            const glbBuffer = Buffer.from(chunk.glbBase64, 'base64');
+            const magic = glbBuffer.toString('ascii', 0, 4);
+            expect(magic).toBe('glTF');
+        }
+    });
+
+    it('5. should compile and verify unit math across Triplanar, SSS, Volumetrics, and L-System Nature', async () => {
+        const compiler = new NativeCppCompilerService();
+
+        // Direct C++ unit test validating mathematical correctness of all 4 modules
+        const unitTestCpp = `#include "scratchbox_engine.hpp"
+#include <iostream>
+#include <cassert>
+#include <cmath>
+
+int main() {
+    using namespace scratchbox::math;
+    using namespace scratchbox::triplanar;
+    using namespace scratchbox::sss;
+    using namespace scratchbox::volumetrics;
+    using namespace scratchbox::nature;
+
+    // --- 1. Triplanar Weight Normalization ---
+    Vec3 normal(0.57735f, 0.57735f, 0.57735f); // equal diagonal
+    Vec3 weights = computeTriplanarWeights(normal, 4.0f);
+    float sumW = weights.x + weights.y + weights.z;
+    assert(std::fabs(sumW - 1.0f) < 0.001f);
+    assert(std::fabs(weights.x - weights.y) < 0.001f);
+
+    // --- 2. SSS Burley Dipole Evaluation ---
+    SSSProfile leafProfile = PROFILE_GREEN_LEAF;
+    Vec3 sssNear = evaluateBurleyDiffusion(0.1f, leafProfile.scatterRadius, leafProfile.surfaceAlbedo);
+    Vec3 sssFar = evaluateBurleyDiffusion(10.0f, leafProfile.scatterRadius, leafProfile.surfaceAlbedo);
+    assert(sssNear.x > sssFar.x);
+    assert(sssNear.y > 0.0f && sssFar.y >= 0.0f);
+
+    // --- 3. Atmospheric Scattering Phase Function ---
+    float phaseForward = henyeyGreensteinPhase(1.0f, 0.75f);  // cosTheta = 1 (forward)
+    float phaseBackward = henyeyGreensteinPhase(-1.0f, 0.75f); // cosTheta = -1 (back)
+    assert(phaseForward > phaseBackward); // Forward Mie peak
+
+    // Spherical Harmonics Irradiance test
+    SphericalHarmonics9 skySH = getSkyGoldenHourSH();
+    Vec3 skyUp = skySH.evaluateIrradiance(Vec3(0, 1, 0));
+    Vec3 skyDown = skySH.evaluateIrradiance(Vec3(0, -1, 0));
+    assert(skyUp.y > skyDown.y); // Sky irradiance greater upward than into ground
+
+    // --- 4. Nature & L-System Generation ---
+    LSystemTreeParams treeParams;
+    treeParams.maxDepth = 3;
+    treeParams.initialLength = 2.0f;
+    treeParams.generateLeaves = true;
+    scratchbox::geometry::Mesh treeMesh = generateProceduralTree(Vec3(0, 0, 0), treeParams);
+    assert(!treeMesh.vertices.empty());
+    assert(!treeMesh.indices.empty());
+    assert(!treeMesh.normals.empty());
+
+    // --- 5. Biome Terrain Generation ---
+    BiomeTerrainParams terrainParams;
+    terrainParams.width = 10.0f;
+    terrainParams.depth = 10.0f;
+    terrainParams.resolution = 16;
+    scratchbox::geometry::Mesh terrainMesh = generateBiomeTerrain(terrainParams);
+    assert(terrainMesh.vertices.size() == 16 * 16);
+    assert(terrainMesh.indices.size() == 15 * 15 * 6);
+    assert(!terrainMesh.vertexColors.empty());
+
+    // Stream a minimal verification chunk
+    scratchbox::io::GlbWriter::streamChunk(treeMesh, "nature_verification");
+    return 0;
+}`;
+
+        const compileRes = await compiler.compileSource(unitTestCpp, 'nature_unit_test.cpp');
+        expect(compileRes.success).toBe(true);
+
+        if (compileRes.binaryPath) {
+            const execRes = await compiler.executeBinary(compileRes.binaryPath);
+            expect(execRes.success).toBe(true);
+            expect(execRes.chunks.length).toBe(1);
+            expect(execRes.chunks[0].name).toBe('nature_verification');
+        }
+    });
+
+    it('6. should verify envelope normal transfer, detailed foliage cards, and thin-wall SSS mathematics in C++20', async () => {
+        const compiler = new NativeCppCompilerService();
+
+        const foliageMathTestCpp = `#include "scratchbox_engine.hpp"
+#include <iostream>
+#include <cassert>
+#include <cmath>
+
+int main() {
+    using namespace scratchbox::math;
+    using namespace scratchbox::sss;
+    using namespace scratchbox::nature;
+    using namespace scratchbox::geometry;
+
+    // --- 1. Envelope Normal Transfer Math Verification ---
+    // Create card with flat normals pointing along +Z
+    Mesh cardMesh;
+    cardMesh.vertices = {
+        Vec3(0.5f, 0.5f, 0.0f),
+        Vec3(-0.5f, 0.5f, 0.0f),
+        Vec3(-0.5f, -0.5f, 0.0f),
+        Vec3(0.5f, -0.5f, 0.0f)
+    };
+    cardMesh.normals = {
+        Vec3(0.0f, 0.0f, 1.0f),
+        Vec3(0.0f, 0.0f, 1.0f),
+        Vec3(0.0f, 0.0f, 1.0f),
+        Vec3(0.0f, 0.0f, 1.0f)
+    };
+    cardMesh.indices = { 0, 1, 2, 0, 2, 3 };
+
+    // Define clump envelope sphere centered at origin
+    std::vector<FoliageClumpHelper> helpers = {
+        { Vec3(0, 0, 0), 1.0f, Vec3(1, 1, 1), 1 }
+    };
+
+    // Transfer normals with 100% mix factor and 0 upward bias
+    transferFoliageNormals(cardMesh, helpers, 1.0f, 0.0f);
+
+    // Verify each vertex normal now points radially outward from (0,0,0)
+    for (size_t i = 0; i < cardMesh.vertices.size(); ++i) {
+        Vec3 expected = cardMesh.vertices[i].normalized();
+        float dotVal = cardMesh.normals[i].dot(expected);
+        assert(std::fabs(dotVal - 1.0f) < 0.01f);
+    }
+
+    // --- 2. Thin-Wall Subsurface Scattering Transmission Verification ---
+    Vec3 sunDir(0.0f, 0.0f, 1.0f);
+    Vec3 viewDir(0.0f, 0.0f, -1.0f);
+    Vec3 normal(0.0f, 0.0f, 1.0f); // Facing sun directly
+    Vec3 lightRadiance(1.0f, 1.0f, 1.0f);
+    SSSProfile leafProfile = PROFILE_GREEN_LEAF;
+
+    // Front-lit case: normal faces sun
+    Vec3 frontLit = evaluateThinWallTransmission(sunDir, viewDir, normal, lightRadiance, leafProfile, 0.35f, 1.0f);
+    assert(frontLit.x > 0.0f && frontLit.y > 0.0f);
+
+    // Back-lit case: normal faces away from sun (sun penetrates through leaf card)
+    Vec3 backNormal(0.0f, 0.0f, -1.0f);
+    Vec3 sideView(1.0f, 0.0f, 0.0f);
+    Vec3 backLitSide = evaluateThinWallTransmission(sunDir, sideView, backNormal, lightRadiance, leafProfile, 0.35f, 1.0f);
+    // Green chlorophyll transmission should dominate in transmitted light
+    assert(backLitSide.y > backLitSide.x && backLitSide.y > backLitSide.z);
+
+    // Forward solar rim peak: looking directly towards sun through leaf
+    Vec3 headOnBacklitView(0.0f, 0.0f, -1.0f);
+    Vec3 rimLit = evaluateThinWallTransmission(sunDir, headOnBacklitView, backNormal, lightRadiance, leafProfile, 0.35f, 1.0f);
+    assert(rimLit.y >= backLitSide.y); // View-dependent forward solar peak enhances backlight
+
+    // --- 3. Detailed Foliage Cards Synthesis ---
+    Mesh canopyMesh;
+    FoliageClumpHelper helper{ Vec3(0, 1.5f, 0), 1.0f, Vec3(1, 1, 1), 1 };
+    uint32_t seed = 42;
+    appendDetailedFoliageCards(canopyMesh, Vec3(0, 1.5f, 0), Vec3(0, 1, 0), 0.40f, helper, seed, 4);
+    assert(!canopyMesh.vertices.empty());
+    assert(!canopyMesh.normals.empty());
+    assert(!canopyMesh.vertexColors.empty());
+    assert(canopyMesh.indices.size() > 12);
+
+    // --- 4. Procedural Tree with Detailed Cards & Transferred Normals ---
+    LSystemTreeParams treeParams;
+    treeParams.maxDepth = 3;
+    treeParams.generateLeaves = true;
+    treeParams.useDetailedFoliageCards = true;
+    treeParams.transferSmoothNormals = true;
+    Mesh treeWithSoftFoliage = generateProceduralTree(Vec3(0, 0, 0), treeParams);
+    assert(treeWithSoftFoliage.vertices.size() > 50);
+
+    scratchbox::io::GlbWriter::streamChunk(treeWithSoftFoliage, "detailed_foliage_verification");
+    return 0;
+}`;
+
+        const compileRes = await compiler.compileSource(foliageMathTestCpp, { outputBinaryName: 'foliage_math_test' });
+        expect(compileRes.success).toBe(true);
+
+        if (compileRes.binaryPath) {
+            const execRes = await compiler.executeBinary(compileRes.binaryPath);
+            expect(execRes.success).toBe(true);
+            expect(execRes.chunks.length).toBe(1);
+            expect(execRes.chunks[0].name).toBe('detailed_foliage_verification');
+        }
+    });
+});

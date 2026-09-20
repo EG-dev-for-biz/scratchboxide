@@ -21,6 +21,10 @@ export interface SolarPosition {
   altitude: number;
   /** Azimuth in radians, measured clockwise from north. */
   azimuth: number;
+  /** Altitude in degrees above horizon. */
+  altitudeDegrees?: number;
+  /** Azimuth in degrees from north. */
+  azimuthDegrees?: number;
 }
 
 const RAD = Math.PI / 180;

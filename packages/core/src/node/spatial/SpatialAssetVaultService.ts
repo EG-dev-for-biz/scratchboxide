@@ -84,7 +84,8 @@ export class SpatialAssetVaultService {
     const lat = coords.lat;
     const lng = coords.lng;
     const geohashToken = SpatialAssetVaultService.computeGeohash(lat, lng, 10);
-    const id = `vault-${asset.type}-${geohashToken}-${Date.now()}`;
+    const branchKey = branchId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const id = `vault-${branchKey}-${asset.type}-${geohashToken}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     // Compute coordinate bbox delta (approx degrees from meters)
     const degDeltaLat = boundingRadiusMeters / 111000.0;
@@ -135,6 +136,20 @@ export class SpatialAssetVaultService {
   }
 
   /**
+   * Returns all stored asset records in the vault.
+   */
+  public getAllAssets(): VaultMetadata[] {
+    return Array.from(this.vaultStore.values());
+  }
+
+  /**
+   * Alias for getAllAssets()
+   */
+  public listAssets(): VaultMetadata[] {
+    return this.getAllAssets();
+  }
+
+  /**
    * Seed static photorealistic assets into the vault.
    */
   private seedDefaultPresetCaches(): void {
@@ -160,6 +175,79 @@ export class SpatialAssetVaultService {
         metadata: { pointCount: 1500000, title: 'Baked Cyberpunk Volumetric Radiance Field' }
       },
       150.0
+    );
+
+    // 3. Trained 4DGS Humanoid Characters (Cloud Run Trained)
+    this.storeAsset(
+      'humanoids/2785536',
+      { lat: 37.7940, lng: -122.4010, alt: 0.0 },
+      {
+        type: 'gaussian-splat',
+        durableUri: 'vault://humanoid/2785536',
+        metadata: {
+          title: '4DAnyone Humanoid 2785536 (Stage Choreography)',
+          splatCount: 121942,
+          splatUri: '/models/humanoid_2785536.splat',
+          glbUri: '/models/humanoid_2785536.glb',
+          plyUri: '/models/4danyone/demos/2785536/human_4dgs.ply',
+          canonicalFrame: '/models/4danyone/demos/2785536/canonical_frame.jpg'
+        }
+      },
+      50.0
+    );
+
+    this.storeAsset(
+      'humanoids/10331522',
+      { lat: 37.7940, lng: -122.4010, alt: 0.0 },
+      {
+        type: 'gaussian-splat',
+        durableUri: 'vault://humanoid/10331522',
+        metadata: {
+          title: '4DAnyone Humanoid 10331522 (Performer Motion)',
+          splatCount: 121944,
+          splatUri: '/models/humanoid_10331522.splat',
+          glbUri: '/models/humanoid_10331522.glb',
+          plyUri: '/models/4danyone/demos/10331522/human_4dgs.ply',
+          canonicalFrame: '/models/4danyone/demos/10331522/canonical_frame.jpg'
+        }
+      },
+      50.0
+    );
+
+    this.storeAsset(
+      'humanoids/5435720',
+      { lat: 37.7940, lng: -122.4010, alt: 0.0 },
+      {
+        type: 'gaussian-splat',
+        durableUri: 'vault://humanoid/5435720',
+        metadata: {
+          title: '4DAnyone Humanoid 5435720 (Extended Motion)',
+          splatCount: 121862,
+          splatUri: '/models/humanoid_5435720.splat',
+          glbUri: '/models/humanoid_5435720.glb',
+          plyUri: '/models/4danyone/demos/5435720/human_4dgs.ply',
+          canonicalFrame: '/models/4danyone/demos/5435720/canonical_frame.jpg'
+        }
+      },
+      50.0
+    );
+
+    // 4. SMPL-X Parametric Humanoid Body Models
+    this.storeAsset(
+      'body_models/smplx',
+      { lat: 0.0, lng: 0.0, alt: 0.0 },
+      {
+        type: 'mesh-glb',
+        durableUri: 'vault://body_models/smplx/neutral',
+        metadata: {
+          title: 'SMPL-X Parametric Body Model',
+          neutralUri: '/models/smplx/SMPLX_NEUTRAL.npz',
+          maleUri: '/models/smplx/SMPLX_MALE.npz',
+          femaleUri: '/models/smplx/SMPLX_FEMALE.npz',
+          numVertices: 10475
+        }
+      },
+      10.0
     );
   }
 }

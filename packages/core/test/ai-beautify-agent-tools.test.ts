@@ -1,0 +1,104 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { describe, it, expect } from 'vitest';
+import { GeminiService } from '../src/node/gemini-service';
+import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
+import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
+import type { GeminiGenerateRequest } from '../src/common/gemini-protocol';
+
+describe('AI Beautify Agent Tool & Capability Resolution', () => {
+    it('exposes build_beautify_prompt in Gemini tool declarations when workspace tools are enabled', () => {
+        const geminiService = new GeminiService();
+        const request: GeminiGenerateRequest = {
+            prompt: 'Beautify this 3D tiles rendering of Philadelphia Independence Hall',
+            enableWorkspaceTools: true
+        };
+
+        const toolDeclarations = (geminiService as any).buildToolDeclarations(request);
+        expect(toolDeclarations).toBeDefined();
+
+        const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
+        expect(fnDeclsContainer).toBeDefined();
+
+        const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
+        const toolNames = fnDecls.map((d: any) => d.name);
+
+        expect(toolNames).toContain('build_beautify_prompt');
+
+        const beautifyTool = fnDecls.find((d: any) => d.name === 'build_beautify_prompt');
+        expect(beautifyTool.parameters.required).toContain('locationName');
+        expect(beautifyTool.description).toMatch(/photorealistic 3D tiles rendering into a photorealistic photograph/i);
+        expect(beautifyTool.parameters.properties.aspectRatio).toBeDefined();
+        expect(beautifyTool.parameters.properties.distance).toBeDefined();
+        expect(beautifyTool.parameters.properties.coords).toBeDefined();
+        expect(beautifyTool.parameters.properties.heading).toBeDefined();
+    });
+
+    it('executes build_beautify_prompt via tool registry and produces verbatim template with distance', async () => {
+        const registry = createDefaultToolRegistry();
+        const outcome = await registry.dispatch(
+            'build_beautify_prompt',
+            {
+                locationName: 'Philadelphia Independence Hall',
+                coords: '39.948900, -75.150000',
+                heading: 180,
+                earthUrl: 'https://earth.google.com/web/@39.948900,-75.150000,180h,45t',
+                aspectRatio: '16:9',
+                moodPromptContext: 'Crisp autumn morning sunlight. ',
+                distance: 120,
+                styleSuffix: ' High dynamic range architectural photography.'
+            },
+            {} as any
+        );
+
+        expect(outcome.exec.status).toBe('completed');
+        const payload: any = outcome.resultPayload;
+        expect(payload.success).toBe(true);
+        expect(payload.locationName).toBe('Philadelphia Independence Hall');
+        expect(payload.heading).toBe(180);
+        expect(payload.aspectRatio).toBe('16:9');
+
+        const expectedPrompt =
+            'Transform this photorealistic 3D tiles rendering of Philadelphia Independence Hall (camera at coordinates 39.948900, -75.150000, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@39.948900,-75.150000,180h,45t. Crisp autumn morning sunlight. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 120 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). High dynamic range architectural photography.';
+
+        expect(payload.prompt).toBe(expectedPrompt);
+        expect(outcome.exec.summaryResult).toMatch(/Constructed AI Beautify prompt for Philadelphia Independence Hall/i);
+    });
+
+    it('executes build_beautify_prompt via tool registry omitting subjectDistanceHint when distance is omitted', async () => {
+        const registry = createDefaultToolRegistry();
+        const outcome = await registry.dispatch(
+            'build_beautify_prompt',
+            {
+                locationName: 'Midtown Manhattan',
+                coords: '40.748400, -73.985700',
+                heading: 45
+            },
+            {} as any
+        );
+
+        expect(outcome.exec.status).toBe('completed');
+        const payload: any = outcome.resultPayload;
+        expect(payload.success).toBe(true);
+        expect(payload.prompt).not.toContain('Subject distance:');
+        expect(payload.prompt).toContain('(camera at coordinates 40.748400, -73.985700, facing 45°)');
+        expect(payload.prompt).toContain('CRITICAL FRAMING RULES — non-negotiable:');
+    });
+
+    it('TaskCapabilityResolver routes AI Beautify location tasks natively to Tier 1', () => {
+        const resolution = TaskCapabilityResolver.resolveTaskCapability(
+            'Beautify photorealistic 3D tiles of Philadelphia Independence Hall with buildBeautifyPrompt'
+        );
+
+        expect(resolution.recommendedResolutionRoute).toBe('tier1-native');
+        expect(resolution.tier1Assessment.nativeCapabilitiesUsed.some(c => c.includes('buildBeautifyPrompt'))).toBe(true);
+        expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/buildBeautifyPrompt|build_beautify_prompt/);
+    });
+});

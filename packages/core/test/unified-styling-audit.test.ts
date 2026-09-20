@@ -205,7 +205,7 @@ async function runUnifiedStylingAuditTests() {
     );
     assert.ok(
         indexCss.includes('#212121') || indexCss.includes('#171717'),
-        'index.css should define ChatGPT dark graphite/obsidian surface colors (#212121 or #171717)'
+        'index.css should define ChatGPT dark graphite surface colors (#212121 or #171717)'
     );
     console.log('  ✓ Test 7 Passed: Minimalist ChatGPT neutral color palette & high-contrast button styling verified');
 

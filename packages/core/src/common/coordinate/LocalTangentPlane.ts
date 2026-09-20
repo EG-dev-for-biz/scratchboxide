@@ -88,6 +88,21 @@ export class LocalTangentPlane {
   }
 
   /**
+   * Converts Geodetic (Lat, Lng, Alt in MSL) to standard East-North-Up (ENU) coordinates in meters.
+   */
+  geodeticToEnu(p: LatLngAlt): Vec3 {
+    const local = this.toLocal(p);
+    return [local[0], -local[2], local[1]]; // [east, north, up]
+  }
+
+  /**
+   * Converts local ENU (East, North, Up) coordinates in meters to Geodetic.
+   */
+  enuToGeodetic(enu: Vec3): LatLngAlt {
+    return this.toLatLng([enu[0], enu[2], -enu[1]]);
+  }
+
+  /**
    * Converts local Three.js coordinates to Geodetic (Lat, Lng, Alt in MSL).
    */
   toLatLng(local: Vec3): LatLngAlt {
@@ -163,5 +178,22 @@ export class LocalTangentPlane {
     const alt = p * cosLat + z * sinLat - (WGS84_A * WGS84_A) / n;
 
     return { lat, lng, alt };
+  }
+
+  /**
+   * Static helper: converts Geodetic target point to ENU relative to an origin anchor.
+   */
+  static geodeticToEnu(origin: LatLngAlt, target: LatLngAlt): { x: number; y: number; z: number } {
+    const ltp = new LocalTangentPlane(origin);
+    const enu = ltp.geodeticToEnu(target);
+    return { x: enu[0], y: enu[1], z: enu[2] };
+  }
+
+  /**
+   * Static helper: converts local ENU coordinates in meters to Geodetic relative to an origin anchor.
+   */
+  static enuToGeodetic(origin: LatLngAlt, east: number, north: number, up: number): LatLngAlt {
+    const ltp = new LocalTangentPlane(origin);
+    return ltp.enuToGeodetic([east, north, up]);
   }
 }
