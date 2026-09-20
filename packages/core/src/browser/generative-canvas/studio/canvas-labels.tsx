@@ -17,6 +17,7 @@ import {
     IconKanban,
     IconSparkles,
     Icon3D,
+    IconFilm,
     getPrimitiveSvgIcon
 } from '../canvas-icons';
 
@@ -62,6 +63,11 @@ export function getPrimitiveLabel(type: string): string {
             return 'Superpowers Hub';
         case 'mcp-hub':
             return 'Live MCP Hub';
+        case 'video-timeline':
+        case 'video':
+        case 'timeline':
+        case 'nle':
+            return 'Video NLE Timeline';
         default:
             return 'Visual Canvas';
     }
@@ -70,6 +76,8 @@ export function getPrimitiveLabel(type: string): string {
 export function getCanvasHeaderLabel(stageLayoutMode: StageLayoutMode, layoutMode: StudioLayoutMode): string {
     if (stageLayoutMode !== 'single') return 'BENTO CANVAS MATRIX';
     switch (layoutMode) {
+        case 'video':
+            return 'VIDEO NLE TIMELINE';
         case '3d':
             return '3D SCENE CANVAS';
         case 'document':
@@ -90,6 +98,8 @@ export function getCanvasHeaderLabel(stageLayoutMode: StageLayoutMode, layoutMod
 
 export function getCanvasReopenLabel(layoutMode: StudioLayoutMode): string {
     switch (layoutMode) {
+        case 'video':
+            return 'Reopen Video Timeline';
         case '3d':
             return 'Reopen 3D Canvas';
         case 'document':
@@ -110,6 +120,8 @@ export function getCanvasReopenLabel(layoutMode: StudioLayoutMode): string {
 
 export function getCanvasReopenTabTitle(layoutMode: StudioLayoutMode): string {
     switch (layoutMode) {
+        case 'video':
+            return 'Video Timeline';
         case '3d':
             return '3D Canvas';
         case 'document':
@@ -130,6 +142,8 @@ export function getCanvasReopenTabTitle(layoutMode: StudioLayoutMode): string {
 
 export function getCanvasReopenIcon(layoutMode: StudioLayoutMode): React.ReactElement {
     switch (layoutMode) {
+        case 'video':
+            return <IconFilm size={14} strokeWidth={1.8} />;
         case '3d':
             return <Icon3D size={14} strokeWidth={1.8} />;
         case 'document':

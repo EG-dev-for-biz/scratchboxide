@@ -27,14 +27,14 @@ export const CustomizeTabs: React.FC = () => {
                          activeTab === 'about' ? 'About Scratchbox IDE' :
                          'Customize Studio'}
                     </h2>
-                    <p className="text-xs text-zinc-400">
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
                         {activeTab === 'shortcuts' ? 'Global keystrokes and rapid navigation bindings.' :
                          activeTab === 'about' ? 'Universal AI Software Architecture & Intelligence Environment.' :
                          'Manage project rules, superpowers (skills), and MCP connections.'}
                     </p>
                 </div>
                 {(activeTab === 'workspace' || activeTab === 'skills' || activeTab === 'mcp') && (
-                    <div className="flex items-center gap-1.5 bg-zinc-900/80 p-1 rounded-xl border border-zinc-800/80">
+                    <div className="flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-900/80 p-1 rounded-xl border border-zinc-200 dark:border-zinc-800/80">
                         <button
                             type="button"
                             className={`sb-segment-btn ${activeTab === 'workspace' ? 'sb-segment-active' : ''}`}

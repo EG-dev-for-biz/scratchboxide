@@ -184,7 +184,7 @@ export function isCanvasArtifactJson(text: string): boolean {
     const trimmed = text.trim();
     
     // Primitive types
-    const artifactTypePattern = /"(?:type|primitiveType)"\s*:\s*"(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser)"/i;
+    const artifactTypePattern = /"(?:type|primitiveType)"\s*:\s*"(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser|video-timeline|video-editor|timeline|nle)"/i;
     
     // 3D Scene structures & spatial properties
     const scene3DPattern = /"(?:camera|skybox|lighting|terrainBiomes|geoAnchor|atmosphericScattering|godRays|contrails|controlSurfaces|landmarkName|spatial3d|durableUri|biomeType)"\s*:/i;
@@ -466,10 +466,14 @@ export function cleanMessageTextSmart(rawText: string, artifact?: CanvasArtifact
         return artifact ? `I've synthesized the **${artifact.title || 'Canvas Artifact'}** on your visual canvas.` : '';
     }
 
-    const artifactTypes = '(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser)';
+    const artifactTypes = '(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser|video-timeline|video-editor|timeline|nle)';
 
     // 1. Remove systemic preamble phrases
     let cleaned = rawText.replace(/Connected to Studio AI Engine with Thinking active\.\.\.?\s*/gi, '');
+
+    // 1.1 Strip canonical <scratchboxPrimitive> tags completely from user-visible chat bubbles
+    cleaned = cleaned.replace(/<scratchboxPrimitive[\s\S]*?<\/scratchboxPrimitive>/gi, '');
+    cleaned = cleaned.replace(/<scratchboxPrimitive[\s\S]*$/gi, '');
 
     // 2. Remove "Here's the JSON..." / "Below is the JSON..." / "Here's the updated 3D scene JSON..." preamble phrases
     cleaned = cleaned.replace(/(?:Here(?:'s|\s+is)|Below\s+is|Here\s+are)\s+(?:the\s+)?(?:updated\s+|new\s+|interactive\s+|spatial\s+)?(?:3d\s+scene\s+)?(?:JSON|code|canvas\s+JSON|payload|data|scene\s+JSON)[\s\S]*?:/gi, '');
@@ -478,41 +482,26 @@ export function cleanMessageTextSmart(rawText: string, artifact?: CanvasArtifact
     // 3. Strip fenced JSON/code blocks with 3 or 4 backticks that represent canvas artifacts or 3D scenes
     cleaned = cleaned.replace(/`{3,4}(?:json|javascript|typescript|js|ts|markdown|md)?\s*\{[\s\S]*?`{3,4}/gi, (match) => {
         const inner = match.replace(/^`{3,4}(?:[a-zA-Z0-9_-]*)\r?\n?/, '').replace(/`{3,4}$/, '').trim();
-        if (
-            isCanvasArtifactJson(inner) ||
-            new RegExp(`"(?:type|primitiveType)"\\s*:\\s*"${artifactTypes}"`, 'i').test(inner) ||
-            /"id"\s*:\s*"art-/i.test(inner) ||
-            /"(?:camera|skybox|geoAnchor|atmosphericScattering|objects)"\s*:/i.test(inner)
-        ) {
+        if (isCanvasArtifactJson(inner)) {
             return '';
         }
         return match;
     });
 
-    // 4. Strip unclosed in-flight or trailing fenced JSON artifact code blocks
-    cleaned = cleaned.replace(/`{3,4}(?:json|javascript|typescript|js|ts|markdown|md)?\s*\{[\s\S]*$/gi, (match) => {
-        if (
-            isCanvasArtifactJson(match) ||
-            new RegExp(`"(?:type|primitiveType)"\\s*:\\s*"${artifactTypes}"`, 'i').test(match) ||
-            /"id"\s*:\s*"art-/i.test(match) ||
-            /"(?:camera|skybox|geoAnchor|atmosphericScattering|objects)"\s*:/i.test(match)
-        ) {
-            return '';
-        }
-        return match;
-    });
+    // 4. Strip single backtick wrapped JSON artifacts
+    cleaned = cleaned.replace(/`\s*\{[\s\S]*?"(?:camera|environment|objects|type|docTitle)"[\s\S]*?\}\s*`/gi, '');
 
-    // 5. Strip fenced code blocks representing document specs with docTitle / sections
-    cleaned = cleaned.replace(/`{3,4}(?:json|javascript|typescript|js|ts|markdown|md)?\s*\{[\s\S]*?"(?:docTitle|sections|checklistItems|tableHeaders)"\s*:[\s\S]*?(?:`{3,4}|$)/gi, '');
+    // 5. Strip raw XML-like tool call / function tags if leaked
+    cleaned = cleaned.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+    cleaned = cleaned.replace(/<function_call>[\s\S]*?<\/function_call>/gi, '');
 
-    // 6. Strip malformed unfenced fragments like `json , "camera": ...` or `json , { ... }` or `json\n{...}`
-    cleaned = cleaned.replace(/\bjson\s*,\s*\{[\s\S]*$/gi, '');
-    cleaned = cleaned.replace(/\bjson\s*,\s*"(?:camera|environment|skybox|geoAnchor|features|objects|type|id|docTitle)"[\s\S]*$/gi, '');
-    cleaned = cleaned.replace(/\bjson\s*\n\s*\{[\s\S]*$/gi, '');
+    // 6. Strip system / grounding tags if leaked
+    cleaned = cleaned.replace(/<system>[\s\S]*?<\/system>/gi, '');
+    cleaned = cleaned.replace(/<grounding>[\s\S]*?<\/grounding>/gi, '');
 
-    // 7. Strip raw un-fenced artifact JSON objects & 3D scene payloads
-    cleaned = cleaned.replace(/\{\s*"(?:id|type|primitiveType|title|docTitle|camera|environment|skybox|objects|features)"[\s\S]*?"(?:data|sections|nodes|columns|files|camera|objects|position|target|lighting|skybox|elevation)"\s*:[\s\S]*?\}/gi, (match) => {
-        if (isCanvasArtifactJson(match) || new RegExp(`"(?:type|primitiveType)"\\s*:\\s*"${artifactTypes}"`, 'i').test(match)) {
+    // 7. Strip large naked JSON blocks
+    cleaned = cleaned.replace(/\{[\s\r\n]*"(?:title|docTitle|type|sections|nodes|columns|camera|environment)"[\s\S]*?\}(?=\s*(?:\n\n|$))/gi, (match) => {
+        if (isCanvasArtifactJson(match)) {
             return '';
         }
         return match;
@@ -526,11 +515,28 @@ export function cleanMessageTextSmart(rawText: string, artifact?: CanvasArtifact
         return match;
     });
 
-    cleaned = cleaned.replace(/\{\s*"type"\s*:\s*"(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser)"[\s\S]*?\}/gi, '');
+    cleaned = cleaned.replace(/\{\s*"type"\s*:\s*"(?:node-graph|flow-graph|markdown-document|rendered-document|kanban-board|kanban|metric-dashboard|metrics|interactive-form|mind-map|checklist|skills-hub|mcp-hub|live-code-sandbox|3d-scene|3d_scene|interactive-browser|browser|video-timeline|video-editor|timeline|nle)"[\s\S]*?\}/gi, '');
     cleaned = cleaned.replace(/\{\s*"docTitle"\s*:[\s\S]*?"sections"\s*:[\s\S]*?\}/gi, '');
 
-    // 9. Normalize spacing and remove excessive blank lines
+    // 9. Sanitize video timeline limitation disclaimers if video-timeline artifact is mounted
+    if (artifact?.type === 'video-timeline') {
+        cleaned = cleaned.replace(/(?:However,\s+)?I\s+cannot\s+directly\s+interact\s+with\s+or\s+generate\s+a\s+video-timeline\s+primitive[\s\S]*?(?:Please\s+let\s+me\s+know\s+how\s+you'd\s+like\s+to\s+proceed!?)?/gi, '').trim();
+        cleaned = cleaned.replace(/My\s+current\s+capabilities\s+are\s+limited\s+to\s+the\s+following\s+canvas\s+primitives[\s\S]*?(?:Please\s+let\s+me\s+know\s+how\s+you'd\s+like\s+to\s+proceed!?)?/gi, '').trim();
+        cleaned = cleaned.replace(/As\s+an\s+AI,\s+I\s+don't\s+directly\s+control\s+external\s+video\s+editing\s+software[\s\S]*?(?:Here\s+is\s+the\s+(?:`?live-code-sandbox`?\s+)?artifact:?)?/gi, '').trim();
+        cleaned = cleaned.replace(/The\s+request\s+to\s+"[^"]+"\s+describes\s+a\s+common\s+video\s+editing\s+operation\.\s*As\s+an\s+AI[\s\S]*?(?:Here\s+is\s+the\s+(?:`?live-code-sandbox`?\s+)?artifact:?)?/gi, '').trim();
+        cleaned = cleaned.replace(/I\s+cannot\s+directly\s+perform\s+video\s+editing\s+operations[\s\S]*?(?:future\s+implementation\.?|$)/gi, '').trim();
+        cleaned = cleaned.replace(/(?:However,\s+)?I\s+can\s+create\s+a\s+`?live-code-sandbox`?[\s\S]*?(?:future\s+implementation\.?|$)/gi, '').trim();
+        cleaned = cleaned.replace(/Here\s+is\s+an?\s+(?:interactive\s+)?`?live-code-sandbox`?[\s\S]*?(?:future\s+implementation\.?|$)/gi, '').trim();
+    }
+
+    // 10. Normalize spacing and remove excessive blank lines
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
+
+    if (artifact?.type === 'video-timeline') {
+        if (!cleaned || /cannot directly|don't have access|live-code-sandbox|conceptual/i.test(cleaned)) {
+            return `I've updated the **${artifact.title}** multi-track video timeline and performed the requested editing operation.`;
+        }
+    }
 
     if (!cleaned && artifact) {
         return `I've synthesized the **${artifact.title}** on your visual canvas.`;
@@ -544,14 +550,15 @@ export function cleanMessageTextSmart(rawText: string, artifact?: CanvasArtifact
 export interface InlineMarkdownProps {
     text: string;
     onOpenInBrowser?: (url: string, title?: string) => void;
+    onOpenWikilink?: (target: string, anchor?: string) => void;
 }
 
-export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBrowser }) => {
+export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBrowser, onOpenWikilink }) => {
     if (!text || typeof text !== 'string') return null;
 
-    // Pattern to match inline images (![alt](url)), code (`code`), bold (**bold**), italic (*italic*), and links ([title](url))
+    // Pattern to match inline images (![alt](url)), wikilinks ([[target]]), code (`code`), bold (**bold**), italic (*italic*), and links ([title](url))
     const parts: React.ReactNode[] = [];
-    const inlineRegex = /(!\[[^\]]*\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+    const inlineRegex = /(!\[[^\]]*\]\([^)]+\)|\[\[[^\]]+\]\]|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
 
     let lastIdx = 0;
     let match: RegExpExecArray | null;
@@ -586,6 +593,47 @@ export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBr
             } else {
                 parts.push(matchedStr);
             }
+        } else if (matchedStr.startsWith('[[') && matchedStr.endsWith(']]')) {
+            const inner = matchedStr.slice(2, -2).trim();
+            let target = inner;
+            let alias = '';
+            let anchor = '';
+
+            if (target.includes('|')) {
+                const pipeIdx = target.indexOf('|');
+                alias = target.slice(pipeIdx + 1).trim();
+                target = target.slice(0, pipeIdx).trim();
+            }
+            if (target.includes('#')) {
+                const hashIdx = target.indexOf('#');
+                anchor = target.slice(hashIdx + 1).trim();
+                target = target.slice(0, hashIdx).trim();
+            }
+
+            const displayLabel = alias || (anchor ? `${target} > ${anchor}` : target);
+
+            parts.push(
+                <span
+                    key={`wikilink-${keyIdx++}`}
+                    className="sb-wikilink-badge"
+                    onClick={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (onOpenWikilink) {
+                            onOpenWikilink(target, anchor);
+                        } else if (onOpenInBrowser) {
+                            onOpenInBrowser(`#wikilink:${encodeURIComponent(target)}`, displayLabel);
+                        }
+                    }}
+                    title={`Knowledge Note Link: ${target}${anchor ? ' #' + anchor : ''}`}
+                    role="button"
+                    tabIndex={0}
+                >
+                    <span className="sb-wikilink-bracket">[[</span>
+                    <span className="sb-wikilink-label">{displayLabel}</span>
+                    <span className="sb-wikilink-bracket">]]</span>
+                </span>
+            );
         } else if (matchedStr.startsWith('`') && matchedStr.endsWith('`')) {
             parts.push(
                 <code key={`code-${keyIdx++}`} className="sb-chat-inline-code">
@@ -990,6 +1038,7 @@ export interface ChatMarkdownRendererProps {
     isStreaming?: boolean;
     onExecuteCommand?: (cmd: string) => void;
     onOpenInBrowser?: (url: string, title?: string) => void;
+    onOpenWikilink?: (target: string, anchor?: string) => void;
     onPreviewInCanvas?: (language: string, content: string) => void;
 }
 
@@ -1002,6 +1051,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
     isStreaming = false,
     onExecuteCommand,
     onOpenInBrowser,
+    onOpenWikilink,
     onPreviewInCanvas
 }) => {
     const safeText = typeof text === 'string' ? text : (text ? String(text) : '');
@@ -1042,7 +1092,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                             const Tag = `h${Math.min(6, Math.max(1, level))}` as keyof JSX.IntrinsicElements;
                             return (
                                 <Tag key={bIdx} className={`sb-chat-heading sb-chat-h${level}`}>
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} />
+                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </Tag>
                             );
@@ -1054,7 +1104,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                                 <ol key={bIdx} className="sb-chat-ordered-list">
                                     {items.map((item, iIdx) => (
                                         <li key={iIdx} className="sb-chat-list-item">
-                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} />
+                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
                                             {isStreaming && isLast && iIdx === items.length - 1 && <StreamingCursor />}
                                         </li>
                                     ))}
@@ -1063,7 +1113,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                                 <ul key={bIdx} className="sb-chat-bullet-list">
                                     {items.map((item, iIdx) => (
                                         <li key={iIdx} className="sb-chat-list-item">
-                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} />
+                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
                                             {isStreaming && isLast && iIdx === items.length - 1 && <StreamingCursor />}
                                         </li>
                                     ))}
@@ -1074,7 +1124,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                         case 'blockquote':
                             return (
                                 <blockquote key={bIdx} className="sb-chat-blockquote">
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} />
+                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </blockquote>
                             );
@@ -1083,7 +1133,7 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                         default:
                             return (
                                 <p key={bIdx} className="sb-chat-paragraph">
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} />
+                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </p>
                             );

@@ -62,6 +62,10 @@ export interface WasmMeshHandle extends SliceHandle {
     positionAttribute: THREE.BufferAttribute;
 }
 
+export interface VectorRoadmapHandle extends SliceHandle {
+    blueprintMesh: THREE.Mesh | null;
+}
+
 /** Recursively frees geometries and materials under `root` (best-effort). */
 export function disposeObject3D(root: THREE.Object3D | null | undefined): void {
     if (!root) return;

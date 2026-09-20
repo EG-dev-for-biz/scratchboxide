@@ -125,7 +125,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                         data={artifact.data as LiveCodeSandboxData}
                         onUpdate={updatedData => onUpdateArtifact?.({ ...artifact, data: updatedData })}
                         onPromptAction={onPromptAction}
-                        hideTopbar={false}
+                        hideTopbar={true}
                     />
                 );
             case 'markdown-document':
@@ -294,11 +294,12 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                     justifyContent: 'space-between',
                     padding: '4px 12px',
                     height: 32,
-                    backgroundColor: 'var(--theia-sideBar-background, #141416)',
-                    borderBottom: '1px solid var(--theia-border, rgba(255, 255, 255, 0.06))',
+                    backgroundColor: 'var(--sb-surface-elevated, #ffffff)',
+                    borderBottom: '1px solid var(--sb-surface-border, rgba(0, 0, 0, 0.07))',
+                    color: 'var(--sb-text-secondary, #475569)',
                     fontSize: 11
                 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--theia-descriptionForeground, #888)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--sb-text-secondary, #64748b)' }}>
                         <IconSplit size={13} />
                         <span style={{ fontWeight: 500 }}>Multi-Surface Stage:</span>
                     </div>

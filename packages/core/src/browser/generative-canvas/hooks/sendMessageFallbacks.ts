@@ -29,6 +29,17 @@ import {
     synthesizeComprehensiveDocument,
     synthesizeMediaDocument
 } from '../document-synthesis-engine';
+import type { VideoTimelineData } from '../services/video/videoTypes';
+import { synthesizeContextualVideoTimeline } from '../services/video/videoTimelineSynthesizer';
+import {
+    classifyDomain,
+    extractPromptEntities,
+    synthesizeAdaptiveKanban,
+    synthesizeAdaptiveMetrics,
+    synthesizeAdaptiveNodeGraph,
+    synthesizeAdaptiveSandbox,
+    synthesizeAdaptive3DScene
+} from '../services/adaptive-domain-engine';
 import type { AttachedDataFile } from './useSendMessage';
 
 /**
@@ -41,7 +52,8 @@ export interface FallbackToast {
 }
 
 export interface FallbackResult {
-    artifact: CanvasArtifact;
+    artifact?: CanvasArtifact;
+    chatResponse?: string;
     toast?: FallbackToast;
 }
 
@@ -51,12 +63,15 @@ export interface FallbackClassification {
     isExplicitImage: boolean;
     isExplicitVideo: boolean;
     isExplicitMedia: boolean;
+    isVideoTimelineRequest: boolean;
     is3DRequest: boolean;
     isKanbanRequest: boolean;
     isGraphRequest: boolean;
     isSandboxRequest: boolean;
     isMetricsRequest: boolean;
     isDocumentRequest: boolean;
+    isDocumentEditRequest: boolean;
+    isChatIntent: boolean;
 }
 
 export function classifyFallbackPrompt(text: string, targetPrimitiveType: PrimitiveType | undefined, layoutMode: StudioLayoutMode, activeArtifact: CanvasArtifact | undefined): FallbackClassification {
@@ -65,49 +80,116 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         ? (activeArtifact.data as MarkdownDocumentData)?.sections?.map(s => s.content || s.calloutTitle || '').join(' ')
         : undefined;
 
-    const isExplicitImage = /create\s+(?:a\s+)?picture|generate\s+(?:a\s+)?picture|picture\s+of|draw\s+(?:a\s+)?picture|image\s+of|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|photo\s+of|photograph\s+of|illustration\s+of|painting\s+of|artwork\s+of|draw\s+(?:an?\s+)?image|make\s+(?:a\s+)?picture|make\s+(?:an?\s+)?image|\bpicture\b|\bphoto\b|\billustration\b|\bpainting\b/i.test(text);
+    const hasDocCreationIntent = /(?:create|generate|write|draft|build|make)\s+(?:me\s+)?(?:an?\s+)?(?:new\s+)?(?:[\w-]+\s+){0,3}(?:document|doc|docs|spec|specification|paper|report|proposal|memo|notes|guidelines?|brief)\b/i.test(text);
 
-    const isExplicitVideo = /create\s+(?:a\s+)?video|generate\s+(?:a\s+)?video|video\s+of|make\s+(?:a\s+)?video|film\s+of|motion\s+clip|video\s+clip|record\s+(?:a\s+)?video|\bvideo\s+file\b|\bvideo\b/i.test(text);
+    const isVideoTimelineRequest = targetPrimitiveType === 'video-timeline' ||
+        (!hasDocCreationIntent && (
+            /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap|picture[- ]in[- ]picture|\bpip\b/i.test(text) ||
+            ((layoutMode === 'video' || activeArtifact?.type === 'video-timeline') && (lower.includes('clip') || lower.includes('timeline')) && (lower.includes('split') || lower.includes('cut') || lower.includes('delete') || lower.includes('playhead') || lower.includes('ripple') || lower.includes('track') || lower.includes('video') || lower.includes('composite') || lower.includes('key')))
+        ));
+
+    const isExplicitImage = /(?:create|generate|make|draw)\s+(?:a|an)?\s*(?:picture|image|photo|photograph|illustration|painting|artwork)\b|(?:picture|image|photo|illustration|painting|artwork)\s+of\b/i.test(text);
+
+    const isExplicitVideo = !isVideoTimelineRequest && /(?:create|generate|make|record|produce)\s+(?:a|an)?\s*(?:video|clip|animation|film)\b|video\s+of\b/i.test(text);
 
     const isExplicitMedia = isExplicitImage || isExplicitVideo;
 
-    const isExplicit3D = !isExplicitMedia && (targetPrimitiveType === '3d-scene' ||
-        /3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js\s+scene|r3f\s+scene|planetary\s+orbit|solar\s+system|molecular\s+physics|cyberpunk\s+city|architectural\s+blueprint/i.test(text) ||
-        ((lower.includes('3d') || lower.includes('spatial')) && (lower.includes('plane') || lower.includes('airplane') || lower.includes('jet') || lower.includes('aircraft') || lower.includes('flight') || lower.includes('scene') || lower.includes('world') || lower.includes('model') || lower.includes('render') || lower.includes('corridor') || lower.includes('aviation'))) ||
-        lower.includes('cyberpunk branch') ||
-        lower.includes('multiverse branch') ||
-        lower.includes('wireframe mode') ||
-        lower.includes('wasm physics') ||
-        lower.includes('drone route') ||
-        lower.includes('mars colony') ||
-        lower.includes('post-apocalypse'));
+    const isDocumentEditRequest = activeArtifact?.type === 'markdown-document' && (
+        /for section ["'].*?["']/i.test(text) ||
+        /for the selected excerpt/i.test(text) ||
+        /(?:add|insert|append)\s+(?:a\s+)?(?:new\s+)?(?:section|heading|paragraph|callout|table|checklist|quote|diagram|citation|image|video)\b/i.test(text) ||
+        /(?:expand|polish|refine|rewrite|shorten|elaborate\s+on|convert\s+to|rephrase)\s+(?:this|the|selected)?\s*(?:section|paragraph|heading|callout|table|checklist|doc|document)\b/i.test(text) ||
+        /(?:add|insert)\s+(?:a\s+)?(?:table|checklist|callout|svg|citation|quote)\s+(?:to|in)\s+(?:document|doc|this)/i.test(text)
+    );
 
-    const isExplicitKanban = targetPrimitiveType === 'kanban-board' ||
-        /kanban|roadmap|sprint\s+tasks?|backlog\s+board|todo\s+board|task\s+board|action\s+items/i.test(text);
-
-    const isExplicitGraph = targetPrimitiveType === 'node-graph' ||
-        /node\s+graph|architecture\s+map|system\s+diagram|workflow\s+pipeline|pipeline\s+graph|flow\s+diagram|workflow\s+canvas/i.test(text);
-
-    const isExplicitMetrics = targetPrimitiveType === 'metric-dashboard' ||
-        /metric\s+dashboard|kpis?|telemetry\s+dashboard|analytics\s+dashboard|performance\s+metrics|kpi\s+metrics|summarize\s+into\s+metrics|summarize\s+into\s+kpi/i.test(text);
-
-    const isExplicitSandbox = targetPrimitiveType === 'live-code-sandbox' ||
-        isVibeToolRequest(text) ||
-        /preview|sandbox|app|web\s*app|landing\s*page|calculator|game|dashboard|component|widget|mockup|ui|react|html|css|javascript|typescript|python|interactive|simulator|timeline|code\s+sandbox|sandbox\s+code|runnable\s+prototype|live\s+code|interactive\s+code|react\s+sandbox|component\s+sandbox|app\s+sandbox/i.test(text);
-
-    const isExplicitDoc = targetPrimitiveType === 'markdown-document' ||
+    const isExplicitDoc = !isVideoTimelineRequest && (
+        targetPrimitiveType === 'markdown-document' ||
         isExplicitMedia ||
-        /write|document|paper|research|essay|article|report|guide|brief|memo|spec|specification|overview|summary|proposal|1776|history/i.test(text);
+        text.trim().startsWith('/doc') ||
+        text.trim().startsWith('/deepwrite') ||
+        hasDocCreationIntent ||
+        isDocumentEditRequest
+    );
 
-    const is3DRequest = !isExplicitMedia && (isExplicit3D || (!isExplicitKanban && !isExplicitGraph && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === '3d' || activeArtifact?.type === '3d-scene')));
-    const isKanbanRequest = isExplicitKanban || (!isExplicit3D && !isExplicitGraph && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board'));
-    const isGraphRequest = isExplicitGraph || (!isExplicit3D && !isExplicitKanban && !isExplicitMetrics && !isExplicitSandbox && !isExplicitDoc && (layoutMode === 'automation' || layoutMode === 'canvas' || activeArtifact?.type === 'node-graph'));
-    const isSandboxRequest = isExplicitSandbox || (!isExplicit3D && !isExplicitKanban && !isExplicitGraph && !isExplicitMetrics && !isExplicitDoc && (layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox'));
-    const isMetricsRequest = isExplicitMetrics;
+    const isVehicleCreationRequest = (
+        /\b(?:build|make|create|generate|render|simulate|spawn|show)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:cars?|vehicles?|automobiles?|trucks?|pickups?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|racers?|formula\s*(?:1|one)?|f1\b|cybertrucks?|cyber\s*trucks?|roadsters?|speedsters?|hot\s*rods?|evs?|hypercars?|supercars?|convertibles?|vans?)\b/i.test(text) ||
+        /\b(?:cybertrucks?|cyber\s*trucks?|sports\s*cars?|race\s*cars?|hypercars?|supercars?|roadsters?|formula\s*1)\b/i.test(text)
+    );
+
+    const hasExplicit3DDirective = (
+        isVehicleCreationRequest ||
+        /\b3d\s+(?:scene|plane|world|model|car|vehicle|automobile|truck|mesh|object|environment|simulation|terrain|city|building|character|robot|avatar|room|asset|preview)\b/i.test(text) ||
+        /\b(?:build|make|create|generate|render|simulate|draw|show)\s+(?:me\s+)?(?:a\s+)?(?:3d\b|\w+\s+in\s+3d\b)/i.test(text) ||
+        /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\s+\w+/i.test(text) ||
+        /\b(?:car|vehicle|automobile|truck|sports\s*car|plane|aircraft|spaceship|building|city|terrain|mesh|character|robot|avatar|room|furniture)\s+in\s+3d\b/i.test(text) ||
+        /3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js\s+scene|r3f\s+scene|\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+scene|3d\s+world|3d\s+model|spatial\s+environment)\b/i.test(text)
+    );
+
+    const isExplicit3D = !isExplicitMedia && !isVideoTimelineRequest && (targetPrimitiveType === '3d-scene' ||
+        hasExplicit3DDirective ||
+        (!isExplicitDoc && (
+            /planetary\s+orbit|cyberpunk\s+city|architectural\s+blueprint/i.test(text) ||
+            /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+)?scene\b/i.test(text) ||
+            (/\b(?:cars?|vehicles?|automobiles?|trucks?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|hot\s*rods?)\b/i.test(text) && /\b(?:3d|spatial|render|mesh|model|simulation)\b/i.test(text)) ||
+            /\b(?:bullet\s*going\s*through|plate\s*of\s*glass|glass\s*shatter|shatter(?:ed|ing)?|fracture|glass\s*shards?|high\s*speed\s*impact|projectile|ballistics?|penetrat(?:e|ion)|shattering\s*glass)\b/i.test(text) ||
+            /\b(?:three\.js|threejs|webgl|wgsl|mesh|geometry|sdf|marching\s+cubes|pbr\s+material|procedural\s+terrain)\b/i.test(text) ||
+            ((lower.includes('3d') || lower.includes('spatial')) && (lower.includes('plane') || lower.includes('airplane') || lower.includes('jet') || lower.includes('aircraft') || lower.includes('flight') || lower.includes('scene') || lower.includes('world') || lower.includes('model') || lower.includes('render') || lower.includes('corridor') || lower.includes('aviation') || lower.includes('car') || lower.includes('vehicle') || lower.includes('truck') || lower.includes('drive'))) ||
+            lower.includes('cyberpunk branch') ||
+            lower.includes('multiverse branch') ||
+            lower.includes('wireframe mode') ||
+            lower.includes('wasm physics') ||
+            lower.includes('drone route') ||
+            lower.includes('mars colony') ||
+            lower.includes('ambient light') ||
+            lower.includes('ambient lighting') ||
+            lower.includes('post-apocalypse')
+        ))
+    );
+
+    const isExplicitKanban = !isVideoTimelineRequest && (targetPrimitiveType === 'kanban-board' ||
+        /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:kanban|sprint\s+board|task\s+board|backlog\s+board|todo\s+board)\b/i.test(text) ||
+        /\b(?:kanban\s+board|sprint\s+tasks?|backlog\s+board|todo\s+board|task\s+board)\b/i.test(text));
+
+    const isExplicitGraph = !isVideoTimelineRequest && (targetPrimitiveType === 'node-graph' ||
+        /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:node\s+graph|architecture\s+map|workflow\s+pipeline|pipeline\s+graph|system\s+diagram)\b/i.test(text) ||
+        /\b(?:node\s+graph|architecture\s+map|workflow\s+pipeline|pipeline\s+graph|workflow\s+canvas)\b/i.test(text));
+
+    const isExplicitMetrics = !isVideoTimelineRequest && (targetPrimitiveType === 'metric-dashboard' ||
+        /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:metric\s+dashboard|kpi\s+dashboard|telemetry\s+dashboard|analytics\s+dashboard)\b/i.test(text) ||
+        /summarize\s+into\s+metrics|summarize\s+into\s+kpi/i.test(text));
+
+    const hasAppCreationIntent = !isVideoTimelineRequest && !hasExplicit3DDirective && !isExplicit3D && (
+        targetPrimitiveType === 'live-code-sandbox' ||
+        isVibeToolRequest(text) ||
+        /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(text) ||
+        /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(text)
+    );
+
+    const isExplicitSandbox = hasAppCreationIntent;
+
+    const is3DRequest = !isVideoTimelineRequest && !isExplicitMedia && (isExplicit3D || ((layoutMode === '3d' || activeArtifact?.type === '3d-scene') && /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting/i.test(text)));
+    const isKanbanRequest = !isVideoTimelineRequest && (isExplicitKanban || ((layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board') && /column|card|task|board|move/i.test(text)));
+    const isGraphRequest = !isVideoTimelineRequest && (isExplicitGraph || ((layoutMode === 'automation' || activeArtifact?.type === 'node-graph') && /node|edge|port|connect|pipeline/i.test(text)));
+    const isSandboxRequest = !isVideoTimelineRequest && !isExplicit3D && (isExplicitSandbox || ((layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox') && /button|style|component|code|state|input|css/i.test(text)));
+    const isMetricsRequest = !isVideoTimelineRequest && isExplicitMetrics;
+    const isDocumentRequest = !isVideoTimelineRequest && isExplicitDoc;
+
+    const isChatIntent = !isExplicitMedia &&
+        !isVideoTimelineRequest &&
+        !is3DRequest &&
+        !isKanbanRequest &&
+        !isGraphRequest &&
+        !isSandboxRequest &&
+        !isMetricsRequest &&
+        !isDocumentRequest;
+
     return {
         lower, docContentExtract, isExplicitImage, isExplicitVideo, isExplicitMedia,
+        isVideoTimelineRequest,
         is3DRequest, isKanbanRequest, isGraphRequest, isSandboxRequest, isMetricsRequest,
-        isDocumentRequest: layoutMode === 'document' || activeArtifact?.type === 'markdown-document'
+        isDocumentRequest,
+        isDocumentEditRequest,
+        isChatIntent
     };
 }
 
@@ -166,12 +248,37 @@ export function synthesizeMediaFallback(text: string, isExplicitVideo: boolean):
     return { artifact: fallbackGen!, toast };
 }
 
+export function synthesizeVideoTimelineFallback(text: string, activeArtifact: CanvasArtifact | undefined): FallbackResult {
+    let fallbackGen: CanvasArtifact | undefined;
+    let toast: FallbackToast | undefined;
+    const showToast = (toastText: string, icon: string = '') => { toast = { text: toastText, icon }; };
+
+    const isVideoActive = activeArtifact?.type === 'video-timeline';
+    const activeVideoData = isVideoActive ? (activeArtifact.data as VideoTimelineData) : undefined;
+    const timelineData = synthesizeContextualVideoTimeline(text, undefined, activeVideoData);
+
+    fallbackGen = {
+        id: (isVideoActive ? activeArtifact.id : undefined) || `art-video-${Date.now()}`,
+        type: 'video-timeline',
+        title: timelineData.title,
+        summary: timelineData.subtitle || 'Multi-track non-linear video editing timeline with real-time WebGL compositor',
+        version: isVideoActive ? (activeArtifact.version || 1) + 1 : 1,
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        data: timelineData
+    };
+
+    showToast(`Synthesized Video NLE: ${timelineData.title}`, '🎬');
+    return { artifact: fallbackGen!, toast };
+}
+
 export function synthesize3DFallback(text: string, lower: string, activeArtifact: CanvasArtifact | undefined, messages: ChatMessage[], docContentExtract: string | undefined): FallbackResult {
     const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
-    const is3DTopicRequest = /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior/i.test(text);
+    const isTopicChange = /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model/i.test(text);
+    const isNewSceneDirective = /\b(?:build|make|create|generate|render|new|fresh|switch\s+to|start)\b/i.test(text);
+    const isFreshSceneRequest = !isExisting3D || isNewSceneDirective || isTopicChange;
 
-    if (!isExisting3D || is3DTopicRequest) {
-        return synthesizeFresh3DScene(text, activeArtifact, messages, docContentExtract, !!isExisting3D);
+    if (isFreshSceneRequest) {
+        return synthesizeFresh3DScene(text, activeArtifact, messages, docContentExtract, false);
     }
     return mutateExisting3DScene(text, lower, activeArtifact!);
 }
@@ -203,15 +310,17 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
     let fallbackGen: CanvasArtifact | undefined;
     let toast: FallbackToast | undefined;
     const showToast = (text: string, icon: string = '') => { toast = { text, icon }; };
+    const domain = classifyDomain(text, activeArtifact?.title);
+    const defaultSkybox = domain === 'astrophysics' ? 'space' : domain === 'history' ? 'historical' : domain === 'biology' ? 'studio' : 'realistic-sky';
     const current3D = (activeArtifact.data as Scene3DData) || {
         title: activeArtifact?.title && activeArtifact.title !== 'Live Code Sandbox' ? activeArtifact.title : 'Interactive 3D Scene Workspace',
-        subtitle: 'WebGL viewport with procedural topography, real-time wave solvers, and simulated WASM linear memory heap.',
+        subtitle: `Spatial 3D scene aligned with ${domain} architecture.`,
         worldBranch: 'earth/main',
         renderMode: 'shaded',
         cameraMode: 'orbit',
         objects: [],
         camera: { position: [15, 12, 15], target: [0, 0, 0] },
-        environment: { skybox: 'cyberpunk', lighting: 'shaded', ground: true }
+        environment: { skybox: defaultSkybox, lighting: 'daylight', ground: true }
     };
 
     let explanation = '';
@@ -220,7 +329,45 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
         objects: [...(current3D.objects || [])]
     };
 
-    if (lower.includes('god ray') || lower.includes('crepuscular') || lower.includes('light shaft') || lower.includes('sun ray') || lower.includes('sunlight scattering')) {
+    if (lower.includes('ambient') || (lower.includes('light') && !lower.includes('flight')) || lower.includes('bright') || lower.includes('illuminate') || lower.includes('daylight') || lower.includes('exposure') || lower.includes('sunlight')) {
+        updated3D.renderMode = 'pbr';
+        const currentEnv = current3D.environment || {};
+        const prevAmbient = currentEnv.ambientIntensity ?? 0.25;
+        const targetIntensity = prevAmbient < 0.5 ? 0.85 : Math.min(prevAmbient + 0.35, 1.5);
+        updated3D.environment = {
+            ...currentEnv,
+            skybox: currentEnv.skybox || 'realistic-sky',
+            lighting: 'daylight',
+            ambientIntensity: targetIntensity,
+            ground: true
+        };
+        // Ensure any shards, glass, or dynamic meshes have glowing / illuminated physical materials
+        if (updated3D.objects && updated3D.objects.length > 0) {
+            updated3D.objects = updated3D.objects.map(obj => {
+                if (obj.content?.metadata?.material) {
+                    return {
+                        ...obj,
+                        content: {
+                            ...obj.content,
+                            metadata: {
+                                ...obj.content.metadata,
+                                material: {
+                                    ...obj.content.metadata.material,
+                                    roughness: 0.1,
+                                    metalness: 0.15,
+                                    transmission: 0.85,
+                                    ior: 1.52,
+                                    emissive: '#1a3044'
+                                }
+                            }
+                        }
+                    };
+                }
+                return obj;
+            });
+        }
+        explanation = `Configured **High-Intensity Ambient Lighting (${Math.round(targetIntensity * 100)}%) & Daylight Rig** to illuminate the 3D scene geometry and glass fracture shards.`;
+    } else if (lower.includes('god ray') || lower.includes('crepuscular') || lower.includes('light shaft') || lower.includes('sun ray') || lower.includes('sunlight scattering')) {
         updated3D.renderMode = 'pbr';
         updated3D.environment = {
             ...(current3D.environment || {}),
@@ -466,19 +613,25 @@ export function synthesizeKanbanFallback(text: string, lower: string, activeArti
     let fallbackGen: CanvasArtifact | undefined;
     let toast: FallbackToast | undefined;
     const showToast = (text: string, icon: string = '') => { toast = { text, icon }; };
+    const domain = classifyDomain(text, activeArtifact?.title);
+
     if (activeArtifact && activeArtifact.type !== 'kanban-board') {
         const morphed = morphArtifact(activeArtifact, 'kanban-board');
         fallbackGen = morphed;
         showToast(`Generated Kanban Board: ${morphed.title}`, '📋');
     } else {
         const currentBoard = (activeArtifact?.data as KanbanBoardData) || {
-            title: activeArtifact?.title || 'Sprint Roadmap',
+            title: activeArtifact?.title || `${extractPromptEntities(text, 'Sprint').subject} Roadmap`,
             columns: []
         };
-        const newCols = [...(currentBoard.columns || [])];
+        let newCols = [...(currentBoard.columns || [])];
         let explanation = '';
 
-        if (lower.includes('column') || lower.includes('qa') || lower.includes('review') || lower.includes('stage')) {
+        if (newCols.length === 0) {
+            const synthesized = synthesizeAdaptiveKanban(domain, currentBoard.title, text);
+            newCols = synthesized.columns;
+            explanation = `Synthesized domain-adaptive Kanban roadmap for ${extractPromptEntities(text, domain).subject}.`;
+        } else if (lower.includes('column') || lower.includes('qa') || lower.includes('review') || lower.includes('stage')) {
             explanation = `Added "QA & Review" stage column to the sprint Kanban delivery board.`;
             newCols.splice(newCols.length - 1, 0, {
                 id: `col-qa-${Date.now()}`,
@@ -524,8 +677,8 @@ export function synthesizeKanbanFallback(text: string, lower: string, activeArti
                     {
                         id: `card-task-${Date.now()}`,
                         title: text.charAt(0).toUpperCase() + text.slice(1),
-                        description: 'Sprint task item generated via AI Assistant',
-                        tag: 'Sprint',
+                        description: `${domain.toUpperCase()} task item generated via AI Assistant`,
+                        tag: domain.toUpperCase(),
                         tagColor: 'blue',
                         priority: 'medium'
                     },
@@ -538,7 +691,7 @@ export function synthesizeKanbanFallback(text: string, lower: string, activeArti
         fallbackGen = {
             id: activeArtifact?.id || `art-kanban-${Date.now()}`,
             type: 'kanban-board' as const,
-            title: activeArtifact?.title || 'Sprint Roadmap',
+            title: activeArtifact?.title || (domain !== 'general' ? `${domain.toUpperCase()} Roadmap` : 'Sprint Roadmap'),
             summary: explanation,
             version: (activeArtifact?.version || 1) + 1,
             createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -553,21 +706,28 @@ export function synthesizeGraphFallback(text: string, lower: string, activeArtif
     let fallbackGen: CanvasArtifact | undefined;
     let toast: FallbackToast | undefined;
     const showToast = (text: string, icon: string = '') => { toast = { text, icon }; };
+    const domain = classifyDomain(text, activeArtifact?.title);
+
     if (activeArtifact && activeArtifact.type !== 'node-graph') {
         const morphed = morphArtifact(activeArtifact, 'node-graph');
         fallbackGen = morphed;
         showToast(`Generated Node Graph: ${morphed.title}`, '⚡');
     } else {
         const currentGraph = (activeArtifact?.data as NodeGraphData) || {
-            title: activeArtifact?.title || 'Canvas Workflow',
+            title: activeArtifact?.title || `${extractPromptEntities(text, 'Canvas').subject} Pipeline`,
             nodes: [],
             edges: []
         };
-        const newNodes = [...(currentGraph.nodes || [])];
-        const newEdges = [...(currentGraph.edges || [])];
+        let newNodes = [...(currentGraph.nodes || [])];
+        let newEdges = [...(currentGraph.edges || [])];
         let explanation = '';
 
-        if (lower.includes('webhook') || lower.includes('trigger') || lower.includes('input')) {
+        if (newNodes.length === 0) {
+            const synthesized = synthesizeAdaptiveNodeGraph(domain, currentGraph.title, text);
+            newNodes = synthesized.nodes;
+            newEdges = synthesized.edges;
+            explanation = `Synthesized domain-adaptive execution graph for ${extractPromptEntities(text, domain).subject}.`;
+        } else if (lower.includes('webhook') || lower.includes('trigger') || lower.includes('input')) {
             explanation = `Added Webhook Event Trigger node to the visual canvas pipeline.`;
             const newNodeId = `node-wh-${Date.now()}`;
             newNodes.push({
@@ -626,20 +786,24 @@ export function synthesizeMetricsFallback(activeArtifact: CanvasArtifact | undef
     let fallbackGen: CanvasArtifact | undefined;
     let toast: FallbackToast | undefined;
     const showToast = (text: string, icon: string = '') => { toast = { text, icon }; };
+    const domain = classifyDomain(activeArtifact?.title || '');
     if (activeArtifact && activeArtifact.type !== 'metric-dashboard') {
         const morphed = morphArtifact(activeArtifact, 'metric-dashboard');
         fallbackGen = morphed;
         showToast(`Generated KPI Dashboard: ${morphed.title}`, '📊');
     } else {
-        const currentMetrics = (activeArtifact?.data as MetricCardsData) || {
-            title: activeArtifact?.title || 'KPI Metric Dashboard',
+        let currentMetrics = (activeArtifact?.data as MetricCardsData) || {
+            title: activeArtifact?.title || `${extractPromptEntities(activeArtifact?.title || 'System', 'System').subject} Telemetry`,
             metrics: []
         };
+        if (!currentMetrics.metrics || currentMetrics.metrics.length === 0) {
+            currentMetrics = synthesizeAdaptiveMetrics(domain, currentMetrics.title);
+        }
         fallbackGen = {
             id: activeArtifact?.id || `art-metrics-${Date.now()}`,
             type: 'metric-dashboard' as const,
             title: currentMetrics.title,
-            summary: 'Updated KPI telemetry dashboard with verified analytics.',
+            summary: `Updated ${domain} telemetry dashboard with verified analytics.`,
             version: (activeArtifact?.version || 1) + 1,
             createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             data: currentMetrics
@@ -647,6 +811,161 @@ export function synthesizeMetricsFallback(activeArtifact: CanvasArtifact | undef
         showToast(`Updated KPI Dashboard: ${fallbackGen.title}`, '📊');
     }
     return { artifact: fallbackGen!, toast };
+}
+
+export function generateAdaptiveSandboxCode(text: string, title: string = 'Interactive Simulation'): string {
+    const isImpact = /bullet|glass|shatter|fracture|impact|bully/i.test(text);
+    if (isImpact) {
+        return `import React, { useState, useEffect, useRef } from 'react';
+
+export default function BulletGlassImpactSandbox() {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const [speed, setSpeed] = useState(820);
+    const [shardsCount, setShardsCount] = useState(110);
+    const [isPlaying, setIsPlaying] = useState(true);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        let frameId: number;
+        let t = 0;
+
+        const render = () => {
+            if (isPlaying) t += 0.016;
+            ctx.fillStyle = '#0a0d14';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const cx = canvas.width * 0.5;
+            const cy = canvas.height * 0.5;
+
+            // Glass frame
+            ctx.strokeStyle = '#4a5568';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(cx - 240, cy - 160, 480, 320);
+
+            // Intact outer glass
+            ctx.fillStyle = 'rgba(180, 225, 245, 0.12)';
+            ctx.fillRect(cx - 238, cy - 158, 476, 316);
+
+            // Fracture radial cracks
+            ctx.strokeStyle = 'rgba(230, 245, 255, 0.75)';
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < 28; ++i) {
+                const angle = (i * Math.PI * 2) / 28;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                const r = 180 + Math.sin(i * 3.7) * 30;
+                ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+                ctx.stroke();
+            }
+
+            // Expanding Voronoi Shards
+            const cycle = (t % 2.5);
+            for (let s = 0; s < shardsCount; ++s) {
+                const a = (s * 2.39996);
+                const baseR = 15 + Math.sqrt(s) * 12;
+                const dist = baseR + cycle * 90;
+                const sx = cx + Math.cos(a) * dist;
+                const sy = cy + Math.sin(a) * dist;
+                const size = Math.max(3, 14 - (s * 0.08));
+
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.rotate(cycle * (s % 2 === 0 ? 3 : -3));
+                ctx.fillStyle = 'rgba(210, 240, 255, 0.65)';
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(-size, -size * 0.5);
+                ctx.lineTo(size, -size);
+                ctx.lineTo(size * 0.5, size);
+                ctx.lineTo(-size * 0.7, size * 0.8);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Bullet projectile & Mach Shockwave
+            const bulletX = cx + (cycle - 0.5) * speed * 0.8;
+            ctx.fillStyle = '#f6ad55';
+            ctx.beginPath();
+            ctx.ellipse(bulletX, cy, 24, 7, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Mach cone lines
+            ctx.strokeStyle = 'rgba(255, 200, 100, 0.4)';
+            ctx.beginPath();
+            ctx.moveTo(bulletX + 24, cy);
+            ctx.lineTo(bulletX - 120, cy - 80);
+            ctx.moveTo(bulletX + 24, cy);
+            ctx.lineTo(bulletX - 120, cy + 80);
+            ctx.stroke();
+
+            frameId = requestAnimationFrame(render);
+        };
+
+        render();
+        return () => cancelAnimationFrame(frameId);
+    }, [speed, shardsCount, isPlaying]);
+
+    return (
+        <div style={{ background: '#090d16', color: '#f7fafc', minHeight: '100%', padding: '24px', fontFamily: 'system-ui, sans-serif' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Ballistic Glass Impact Simulation</h2>
+                <span style={{ fontSize: '12px', background: 'rgba(99, 179, 237, 0.2)', color: '#63b3ed', padding: '4px 10px', borderRadius: '12px' }}>
+                    {speed} m/s (Mach {\${(speed / 343).toFixed(1)}})
+                </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                <canvas ref={canvasRef} width={640} height={380} style={{ borderRadius: '8px', border: '1px solid #2d3748', background: '#060910' }} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '8px', border: '1px solid #2d3748' }}>
+                <div>
+                    <label style={{ fontSize: '12px', color: '#a0aec0' }}>Impact Velocity: {speed} m/s</label>
+                    <input type="range" min={300} max={1200} value={speed} onChange={e => setSpeed(Number(e.target.value))} style={{ width: '100%' }} />
+                </div>
+                <div>
+                    <label style={{ fontSize: '12px', color: '#a0aec0' }}>Voronoi Shards: {shardsCount}</label>
+                    <input type="range" min={30} max={200} value={shardsCount} onChange={e => setShardsCount(Number(e.target.value))} style={{ width: '100%' }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                    <button onClick={() => setIsPlaying(!isPlaying)} style={{ width: '100%', padding: '8px 16px', background: isPlaying ? '#e53e3e' : '#3182ce', border: 'none', borderRadius: '6px', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>
+                        {isPlaying ? 'Pause Simulation' : 'Resume Simulation'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}`;
+    }
+
+    const domain = classifyDomain(text, title);
+    const adaptive = synthesizeAdaptiveSandbox(domain, title, text);
+    if (adaptive.files && adaptive.files[0]?.content) {
+        return adaptive.files[0].content;
+    }
+
+    return `import React, { useState } from 'react';
+
+export default function App() {
+    const [count, setCount] = useState(0);
+    return (
+        <div style={{ padding: 32, color: '#f7fafc', fontFamily: 'system-ui, sans-serif', background: '#0a0d14', minHeight: '100%' }}>
+            <h2 style={{ fontSize: '20px', marginBottom: '8px' }}>${title || 'Interactive Sandbox'}</h2>
+            <p style={{ color: '#a0aec0', marginBottom: '20px', fontSize: '14px' }}>Synthesized preview based on prompt: "${text}"</p>
+            <div style={{ padding: '20px', background: 'rgba(255,255,255,0.04)', borderRadius: '8px', border: '1px solid #2d3748', maxWidth: '400px' }}>
+                <p style={{ marginBottom: '12px' }}>Interactive State Demo</p>
+                <button onClick={() => setCount(c => c + 1)} style={{ padding: '8px 16px', background: '#3182ce', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                    Clicked {count} times
+                </button>
+            </div>
+        </div>
+    );
+};`;
 }
 
 export function synthesizeSandboxFallback(text: string, activeArtifact: CanvasArtifact | undefined): FallbackResult {
@@ -673,14 +992,20 @@ export function synthesizeSandboxFallback(text: string, activeArtifact: CanvasAr
         fallbackGen = morphed;
         showToast(`Generated Live Preview: ${morphed.title}`, '💻');
     } else {
-        const currentSandbox = (activeArtifact?.data as LiveCodeSandboxData) || {
-            title: activeArtifact?.title || 'Component Sandbox',
+        const hasRealCode = activeArtifact?.data && (activeArtifact.data as LiveCodeSandboxData).files?.some(f => f.content && !f.content.includes('<div style={{ padding: 24, color: \'#fff\' }}>Interactive Sandbox</div>'));
+        const domain = classifyDomain(text, activeArtifact?.title);
+        const defaultTitle = /bullet|glass|fracture/i.test(text) ? 'Bullet Glass Impact Simulation' : `${extractPromptEntities(text, 'Interactive Prototype').subject} Interactive Sandbox`;
+        const currentSandbox: LiveCodeSandboxData = hasRealCode ? (activeArtifact!.data as LiveCodeSandboxData) : {
+            title: activeArtifact?.title || defaultTitle,
+            template: 'react',
+            viewMode: 'preview',
             files: [
                 {
                     id: 'App.tsx',
                     name: 'App.tsx',
                     language: 'typescript',
-                    content: `export default function App() {\n  return <div style={{ padding: 24, color: '#fff' }}>Interactive Sandbox</div>;\n}`
+                    isEntry: true,
+                    content: generateAdaptiveSandboxCode(text, activeArtifact?.title || defaultTitle)
                 }
             ]
         };
@@ -733,12 +1058,14 @@ export function synthesizeDocumentFallback(text: string, activeArtifact: CanvasA
     );
 
     let updatedDoc: MarkdownDocumentData;
-    const docTitle = currentDoc.title && currentDoc.title !== 'Markdown Document'
-        ? currentDoc.title
-        : (activeArtifact?.title && activeArtifact.title !== 'Markdown Document' ? activeArtifact.title : extractDocumentTitleFromPrompt(text));
+    const isGenericTitle = !currentDoc.title || /project specification|markdown document|untitled/i.test(currentDoc.title);
+    const docTitle = isNewDocRequest || isGenericTitle
+        ? extractDocumentTitleFromPrompt(text, currentDoc.title)
+        : (currentDoc.title || (activeArtifact?.title && !/project specification|markdown document/i.test(activeArtifact.title) ? activeArtifact.title : extractDocumentTitleFromPrompt(text)));
 
     if (isNewDocRequest) {
-        updatedDoc = synthesizeComprehensiveDocument(text, docTitle);
+        const wantsMedia = /with[- ](media|images?|diagrams?|video|maps?|visuals?|illustrations?)|multimedia|visual[- ]guide|diagrammatic|rich[- ]media/i.test(text);
+        updatedDoc = synthesizeComprehensiveDocument(text, docTitle, undefined, { includeMedia: wantsMedia });
         explanation = `Synthesized new document: "${updatedDoc.title}" with comprehensive overview, historical/architectural context, comparison tables, and milestone checklists.`;
     } else if (targetQuery && existingSections.length > 0) {
         // Surgical Section Mutation: Locate targeted section and mutate/expand while preserving ALL other sections
@@ -903,7 +1230,8 @@ export function synthesizeDefaultDocument(text: string): FallbackResult {
     let fallbackGen: CanvasArtifact | undefined;
     let toast: FallbackToast | undefined;
     const showToast = (text: string, icon: string = '') => { toast = { text, icon }; };
-    const synthesizedDoc = synthesizeComprehensiveDocument(text);
+    const wantsMedia = /with[- ](media|images?|diagrams?|video|maps?|visuals?|illustrations?)|multimedia|visual[- ]guide|diagrammatic|rich[- ]media/i.test(text);
+    const synthesizedDoc = synthesizeComprehensiveDocument(text, undefined, undefined, { includeMedia: wantsMedia });
     fallbackGen = {
         id: `art-doc-${Date.now()}`,
         type: 'markdown-document' as const,
@@ -916,6 +1244,128 @@ export function synthesizeDefaultDocument(text: string): FallbackResult {
     return { artifact: fallbackGen!, toast };
 }
 
+/**
+ * Pure conversational chat response synthesizer when intent is conversational research or inquiry.
+ * Produces structured Markdown output directly for the chat stream without creating or hijacking canvas artifacts.
+ */
+export function synthesizeChatFallback(text: string, activeArtifact?: CanvasArtifact): FallbackResult {
+    const lower = text.toLowerCase();
+
+    // 0. Safety Delegation: If prompt requests a 3D model, vehicle, or scene, synthesize 3D artifact
+    if (/\b(?:3d|spatial)\b/i.test(lower) || /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d|\w+\s+in\s+3d)/i.test(text) || /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:cars?|vehicles?|automobiles?|trucks?|pickups?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|racers?|formula\s*(?:1|one)?|f1\b|cybertrucks?|cyber\s*trucks?|roadsters?|speedsters?|hot\s*rods?|evs?|hypercars?|supercars?|convertibles?|vans?)\b/i.test(text) || /\b(?:cybertrucks?|cyber\s*trucks?|sports\s*cars?|race\s*cars?|hypercars?|supercars?|roadsters?|formula\s*1)\b/i.test(text)) {
+        return synthesize3DFallback(text, lower, activeArtifact, [], undefined);
+    }
+
+    // 1. Astronomy & Space / Solar Eclipses
+    if (/solar\s+ec?lip[sz]e?s?|ec?lip[sz]e?s?|ecplis|astronomy|celestial|orbit|planetary|moon|sun|totality|corona|astrophysics|nasa/i.test(lower)) {
+        const chatResponse = `# 🌒 Research Brief: Solar Eclipses & Celestial Mechanics
+
+A **solar eclipse** occurs when the Moon passes directly between the Earth and the Sun during a new moon phase, casting its shadow—the **umbra**, **penumbra**, and **antumbra**—across the surface of the Earth.
+
+---
+
+### 1. The Geometry of an Eclipse: Syzygy & Orbital Inclination
+While a new moon takes place every synodic month (~29.5 days), solar eclipses happen only **2 to 5 times per year**. 
+
+The Moon’s orbital plane around the Earth is tilted by approximately **5.14°** relative to Earth’s ecliptic plane (the plane of Earth's orbit around the Sun). Most new moons pass either slightly above or below the Sun from our vantage point. A solar eclipse can only occur when a new moon aligns closely with one of the two intersection points—the **ascending or descending orbital nodes**. This exact three-body celestial alignment is known as **syzygy**.
+
+* **Umbra**: The dark, converging conical shadow where direct solar illumination is 100% obscured. Viewers in this narrow terrestrial track (100–160 miles wide) experience a **Total Solar Eclipse**.
+* **Penumbra**: The diverging outer shadow where only a portion of the solar disk is blocked, producing a **Partial Solar Eclipse**.
+* **Antumbra**: The region beyond the apex of the umbra where the Moon appears entirely inside the solar disc, creating an **Annular Solar Eclipse** ("Ring of Fire").
+
+---
+
+### 2. The Four Primary Classifications
+
+| Eclipse Type | Lunar Distance (Orbit) | Visual Experience | Solar Corona Visible? | Safe to View Naked-Eye? |
+| :--- | :--- | :--- | :---: | :---: |
+| **Total** | Near Perigee (Closest) | 100% totality; day turns to deep twilight; stars emerge | **Yes** (Only during 100% totality) | Only during exact totality; otherwise ISO 12312-2 required |
+| **Annular** | Near Apogee (Furthest) | Symmetrical "Ring of Fire"; Moon appears smaller than Sun | No | **No** (certified solar filters required 100% of the time) |
+| **Partial** | Off-center node alignment | Crescent Sun resembling a celestial bite mark | No | **No** (certified solar filters required 100% of the time) |
+| **Hybrid** | Transitioning curvature | Shifts between annular and total along the path curvature | Brief window | Only in the narrow totality portion |
+
+---
+
+### 3. Key Phenomena During Totality
+1. **Shadow Bands**: Rapid, undulating ripples of light and dark shimmering across plain surfaces in the final 60 seconds before totality, caused by atmospheric refraction of thin solar crescent light.
+2. **Baily's Beads**: Brilliant pearls of sunlight gleaming through deep lunar valleys along the Moon’s rugged limb just before the Sun is fully extinguished.
+3. **The Diamond Ring**: The final single bead of blinding sunlight flashing adjacent to the emerging halo of the solar corona, resembling a diamond solitaire.
+4. **The Solar Corona & Prominences**: The Sun's delicate, pearly-white outer atmosphere (1–3 million °C) radiating outward into interplanetary space, flanked by ruby-magenta plumes of glowing hydrogen plasma.
+
+---
+
+### 4. Historic Scientific Breakthroughs
+* **Discovery of Helium (1868)**: During the total eclipse of August 18, 1868 in Guntur, India, astronomers Jules Janssen and J. Norman Lockyer analyzed the solar spectrum and detected a brilliant yellow emission line at **587.49 nm**, discovering the element **Helium** before it was ever isolated on Earth.
+* **Verification of Einstein's General Relativity (1919)**: Sir Arthur Eddington led an expedition to Príncipe during the May 29, 1919 total eclipse. By photographing stars visible near the eclipsed solar limb, he proved that the Sun’s gravitational mass bent starlight by **1.75 arcseconds**—verifying Einstein’s General Theory of Relativity and transforming modern physics.
+
+---
+
+### 5. Eye Safety Protocols (ISO 12312-2)
+* **Never stare directly at the uneclipsed or partially eclipsed Sun** without verified eye protection.
+* **ISO 12312-2 Standards**: Solar filters must transmit less than 0.0032% of visible light and block 99.99% of infrared and ultraviolet radiation.
+* **Indirect Viewing**: Use a pinhole projector, kitchen colander, or tree canopies to project clear images of the crescent Sun safely.
+
+---
+
+### 💡 Proactive Canvas Options
+How would you like to proceed?
+- **Create a Canvas Document**: Type \`create a document about solar eclipses\` to generate an extensive scientific paper with diagrams and citations on your canvas.
+- **3D Celestial Simulation**: Type \`create a 3D scene of the solar eclipse\` to launch an interactive Three.js orbital physics model.`;
+
+        return { chatResponse };
+    }
+
+    // 2. PKB / Markdown Knowledge Architectures
+    if (/markdown|pkm|second brain|zettelkasten|wikilink|backlink|frontmatter|callout/i.test(lower)) {
+        const chatResponse = `# 📓 PKB & Modern Markdown Knowledge Architectures
+
+Modern personal knowledge base (PKB) engines pair local plain-text Markdown files with rich metadata graphs. Here are the core capabilities and how Scratchbox implements them:
+
+---
+
+### 1. Key Markdown & Knowledge Innovations
+* **Bidirectional \`[[WikiLinks]]\`**: Enables non-linear, associative knowledge structures with automated backlink indexing and alias resolution (\`[[Target Note|Custom Label]]\`).
+* **YAML Frontmatter / Metadata Cards**: Structured frontmatter delimited by \`---\` at the head of documents, powering tag hierarchies and queries.
+* **Collapsible Callouts**: Syntax like \`> [!NOTE]\`, \`> [!WARNING]\`, \`> [!TIP]\`, and \`> [!IMPORTANT]\` rendered with custom icons, color accents, and collapsible fold states.
+* **Mermaid & Dynamic Diagrams**: Inline \`\`\`mermaid\` blocks rendered into interactive flowcharts, sequence diagrams, and class diagrams.
+* **Footnotes & References**: Standardized \`[^1]\` inline references linking directly to bibliography notes at the foot of the file.
+
+---
+
+### 💡 Next Steps
+- Try typing \`[[Concept]]\` anywhere in your document or prompt to create bidirectional links!
+- Ask me to create a notes document or knowledge map anytime.`;
+
+        return { chatResponse };
+    }
+
+    // 3. Coding, Web Development & Software Architecture
+    if (/react|typescript|javascript|python|architecture|api|database|system|css|html|node|docker|kubernetes/i.test(lower)) {
+        const chatResponse = `### 💻 Engineering Architecture Analysis
+
+Here is an analysis and recommendation based on your inquiry:
+
+* **Separation of Concerns**: Partition business logic, state machines, and view components to maintain modular testability.
+* **Strict Type Safety**: Enforce zero \`any\` types across interface boundaries and schema decoders.
+* **Performance Budget**: Target sub-16ms frame times for visual interactions and sub-100ms TTFT for streaming operations.
+
+Would you like me to generate code for a specific component, create a live interactive sandbox, or draft a full architectural specification?`;
+
+        return { chatResponse };
+    }
+
+    // 4. Default Conversational Chat Response
+    const chatResponse = `I'm here to help! Whether you're exploring scientific research, writing code, designing system architectures, or analyzing data, feel free to ask questions or brainstorm ideas.
+
+If you ever want to turn our conversation into visual canvas artifacts, you can ask me to:
+- **Write a Document**: \`create a document on [topic]\`
+- **Build a 3D Scene**: \`build a 3D simulation of [topic]\`
+- **Design an Architecture Map**: \`create a node graph for [system]\`
+- **Build an Interactive Web App**: \`build a live sandbox for [prototype]\``;
+
+    return { chatResponse };
+}
+
 export function buildFallbackAssistantText(attachedDataFile: AttachedDataFile | undefined, fallbackGen: CanvasArtifact | undefined): string {
     const targetAssistantText = attachedDataFile
         ? `I've analyzed **${attachedDataFile.name}** (${attachedDataFile.rowsCount} rows) and generated an interactive **KPI Metric Dashboard & Data Table** with performance charts on your visual canvas!`
@@ -926,6 +1376,35 @@ export function buildFallbackAssistantText(attachedDataFile: AttachedDataFile | 
 }
 
 export function buildSimulatedSteps(fallbackGen: CanvasArtifact | undefined): AgentExecutionStep[] {
+    const isPureChat = !fallbackGen;
+    if (isPureChat) {
+        return [
+            {
+                id: `step-${Date.now()}-1`,
+                title: 'Context & Query Analysis',
+                status: 'running',
+                durationMs: 0,
+                details: 'Evaluating conversational intent and workspace knowledge context.',
+                kind: 'context'
+            },
+            {
+                id: `step-${Date.now()}-2`,
+                title: 'Knowledge Synthesis',
+                status: 'pending',
+                durationMs: 0,
+                details: 'Synthesizing comprehensive research findings and structured analysis.',
+                kind: 'synthesize'
+            },
+            {
+                id: `step-${Date.now()}-3`,
+                title: 'Response Formatting',
+                status: 'pending',
+                durationMs: 0,
+                details: 'Formatting structured Markdown, tables, citations, and recommendations.',
+                kind: 'verify'
+            }
+        ];
+    }
     const simulatedSteps: AgentExecutionStep[] = [
         {
             id: `step-${Date.now()}-1`,

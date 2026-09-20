@@ -14,3 +14,8 @@ export * from './diurnal-lighting';
 export * from './AtmosphericSkyDome';
 export * from './AerialPerspectiveEffect';
 export * from './TerrainCloudShadows';
+export * from './VolumetricGodRays';
+export * from './volumetric-participating-media';
+export * from './AtmosphereService';
+export * from './AtmosphereImageEstimationService';
+export * from './LocationObjectLightingService';

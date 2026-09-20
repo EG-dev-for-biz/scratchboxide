@@ -7,13 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-/** Mock workspace file trees shown in the sidebar explorer. */
-export interface FileTreeNode {
-    name: string;
-    path: string;
-    isFolder: boolean;
-    children?: FileTreeNode[];
-}
+import type { FileTreeNode } from '../../../common/workspace-sync-protocol';
+export type { FileTreeNode };
 
 export const SCRATCHBOX_TREE: FileTreeNode[] = [
     {

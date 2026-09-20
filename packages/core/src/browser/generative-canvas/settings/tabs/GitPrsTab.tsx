@@ -24,14 +24,14 @@ export const GitPrsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Review Provider</div>
-                            <div className="sb-cursor-row-desc">Choose Origin (cursor.com/codebase), GitHub, or Graphite for pull request links on web and desktop</div>
+                            <div className="sb-cursor-row-desc">Choose Origin (scratchbox.dev/codebase), GitHub, or Graphite for pull request links on web and desktop</div>
                         </div>
                         <select
                             className="sb-cursor-select-dropdown"
                             value={reviewProvider}
                             onChange={e => setReviewProvider(e.target.value)}
                         >
-                            <option value="github">GitHub ▾</option>
+                            <option value="github">GitHub</option>
                             <option value="origin">Origin</option>
                             <option value="graphite">Graphite</option>
                         </select>
@@ -40,14 +40,14 @@ export const GitPrsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">PR Link Destination</div>
-                            <div className="sb-cursor-row-desc">Open pull request links inside Cursor or in the default browser</div>
+                            <div className="sb-cursor-row-desc">Open pull request links inside Scratchbox or in the default browser</div>
                         </div>
                         <select
                             className="sb-cursor-select-dropdown"
                             value={prLinkDestination}
                             onChange={e => setPrLinkDestination(e.target.value)}
                         >
-                            <option value="inside">Inside Cursor ▾</option>
+                            <option value="inside">Inside Scratchbox</option>
                             <option value="browser">Default Browser</option>
                         </select>
                     </div>
@@ -61,7 +61,7 @@ export const GitPrsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Commit Attribution</div>
-                            <div className="sb-cursor-row-desc">Mark Agent commits as 'Made with Cursor'</div>
+                            <div className="sb-cursor-row-desc">Mark Agent commits as 'Made with Scratchbox'</div>
                         </div>
                         <button
                             type="button"
@@ -77,7 +77,7 @@ export const GitPrsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">PR Attribution</div>
-                            <div className="sb-cursor-row-desc">Mark pull requests as made with Cursor</div>
+                            <div className="sb-cursor-row-desc">Mark pull requests as made with Scratchbox</div>
                         </div>
                         <button
                             type="button"

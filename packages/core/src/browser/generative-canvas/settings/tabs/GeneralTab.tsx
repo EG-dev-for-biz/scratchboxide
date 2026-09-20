@@ -13,17 +13,18 @@ import { IconExternalLink, IconLock } from '../../canvas-icons';
 import { useSettingsContext } from '../SettingsContext';
 
 export const GeneralTab: React.FC = () => {
-    const { activeWorkspace, completionSound, continueInterruptedAgents, isLoggedOut, menuBarIcon, onOpenFolder, onOpenWorkspace, privacyMode, setActiveTab, setCompletionSound, setContinueInterruptedAgents, setIsLoggedOut, setMenuBarIcon, setPrivacyMode, setSystemNotifications, setTipsEnabled, setWarningNotifications, setWindowRestoration, systemNotifications, tipsEnabled, warningNotifications, windowRestoration, workspaceRules } = useSettingsContext();
+    const { activeWorkspace, completionSound, continueInterruptedAgents, menuBarIcon, onOpenFolder, onOpenWorkspace, privacyMode, setActiveTab, setCompletionSound, setContinueInterruptedAgents, setMenuBarIcon, setPrivacyMode, setSystemNotifications, setTipsEnabled, setWarningNotifications, setWindowRestoration, systemNotifications, tipsEnabled, warningNotifications, windowRestoration, workspaceRules } = useSettingsContext();
+    const [isLoggedOut, setIsLoggedOut] = React.useState(false);
     return (
         <div className="sb-cursor-settings-content animate-fadeIn">
             <h2 className="sb-cursor-content-title">General</h2>
 
-            {/* Cursor Account */}
+            {/* Scratchbox Account */}
             <div className="sb-cursor-group-card">
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Cursor Account</div>
-                        <div className="sb-cursor-row-desc">Manage your account and billing</div>
+                        <div className="sb-cursor-row-title">Scratchbox Account</div>
+                        <div className="sb-cursor-row-desc">Manage your developer profile and preferences</div>
                     </div>
                     <button
                         type="button"
@@ -59,7 +60,7 @@ export const GeneralTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Window Restoration</div>
-                            <div className="sb-cursor-row-desc">Controls which windows Cursor restores on startup</div>
+                            <div className="sb-cursor-row-desc">Controls which windows Scratchbox restores on startup</div>
                         </div>
                         <select
                             className="sb-cursor-select-dropdown"
@@ -129,7 +130,7 @@ export const GeneralTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Menu Bar Icon</div>
-                            <div className="sb-cursor-row-desc">Show Cursor in menu bar</div>
+                            <div className="sb-cursor-row-desc">Show Scratchbox in menu bar</div>
                         </div>
                         <button
                             type="button"
@@ -166,21 +167,26 @@ export const GeneralTab: React.FC = () => {
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="flex items-center gap-1.5 sb-cursor-row-title">
-                                <IconLock size={12} className="text-zinc-400" />
+                            <div className="flex items-center gap-2 sb-cursor-row-title">
+                                <IconLock size={12} className={privacyMode ? 'text-emerald-400' : 'text-zinc-400'} />
                                 <span>Privacy Mode</span>
+                                <span className={`sb-badge-unified ${privacyMode ? 'sb-badge-emerald' : 'sb-badge-zinc'}`}>
+                                    {privacyMode ? 'STRICT PRIVACY ENABLED' : 'STANDARD'}
+                                </span>
                             </div>
                             <div className="sb-cursor-row-desc">
-                                Your code data will not be trained on or used to improve the product. Code may be stored to provide features such as Background Agent.
+                                Your code data will not be trained on or used to improve the product. Zero telemetry or model retention is applied when enabled.
                             </div>
                         </div>
                         <button
                             type="button"
-                            className="sb-cursor-row-btn"
+                            role="switch"
+                            aria-checked={privacyMode}
+                            className={`sb-cursor-toggle ${privacyMode ? 'sb-cursor-toggle-on' : ''}`}
                             onClick={() => setPrivacyMode(!privacyMode)}
+                            title={privacyMode ? 'Disable Privacy Mode' : 'Enable Privacy Mode'}
                         >
-                            <span>Configure</span>
-                            <span className="text-[10px]">▾</span>
+                            <span className="sb-cursor-toggle-thumb" />
                         </button>
                     </div>
                 </div>
@@ -193,7 +199,7 @@ export const GeneralTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Active Workspace Root</div>
-                            <div className="sb-cursor-row-desc font-mono text-[11px] text-zinc-300">
+                            <div className="sb-cursor-row-desc font-mono text-xs text-zinc-600 dark:text-zinc-300">
                                 {activeWorkspace?.path || (typeof process !== 'undefined' && process.cwd ? process.cwd() : '~')}
                             </div>
                         </div>
@@ -236,7 +242,7 @@ export const GeneralTab: React.FC = () => {
                             onClick={() => setActiveTab('workspace')}
                         >
                             <span>Manage Rules</span>
-                            <span className="text-[10px]">→</span>
+                            <span>→</span>
                         </button>
                     </div>
                 </div>

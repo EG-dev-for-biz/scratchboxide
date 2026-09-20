@@ -12,7 +12,28 @@ import * as React from 'react';
 import { useSettingsContext } from '../SettingsContext';
 
 export const AgentsTab: React.FC = () => {
-    const { agentAutocomplete, autoAcceptWebSearch, autoApproveTransitions, autoParseLinks, defaultAgentModel, defaultEnvironment, importClaudeCode, includeThirdPartyConfigs, keepComputerAwake, legacyTerminalTool, manualQueueBehavior, newMessagesBehavior, remoteControlEnabled, runModeSetting, setAgentAutocomplete, setAutoAcceptWebSearch, setAutoApproveTransitions, setAutoParseLinks, setDefaultAgentModel, setDefaultEnvironment, setImportClaudeCode, setIncludeThirdPartyConfigs, setKeepComputerAwake, setLegacyTerminalTool, setManualQueueBehavior, setNewMessagesBehavior, setRemoteControlEnabled, setRunModeSetting, setSubmitWithCmdEnter, setUsageSummaryBehavior, setWaitForMcpAuth, setWebFetchToolEnabled, setWebSearchToolEnabled, submitWithCmdEnter, usageSummaryBehavior, waitForMcpAuth, webFetchToolEnabled, webSearchToolEnabled } = useSettingsContext();
+    const { agentAutocomplete, autoAcceptWebSearch, autoApproveTransitions, autoParseLinks, defaultAgentModel, defaultEnvironment, importClaudeCode, includeThirdPartyConfigs, keepComputerAwake, manualQueueBehavior, newMessagesBehavior, remoteControlEnabled, runModeSetting, setAgentAutocomplete, setAutoAcceptWebSearch, setAutoApproveTransitions, setAutoParseLinks, setDefaultAgentModel, setDefaultEnvironment, setImportClaudeCode, setIncludeThirdPartyConfigs, setKeepComputerAwake, setManualQueueBehavior, setNewMessagesBehavior, setRemoteControlEnabled, setRunModeSetting, setSubmitWithCmdEnter, setUsageSummaryBehavior, setWaitForMcpAuth, setWebFetchToolEnabled, setWebSearchToolEnabled, submitWithCmdEnter, usageSummaryBehavior, waitForMcpAuth, webFetchToolEnabled, webSearchToolEnabled } = useSettingsContext();
+
+    const [voiceKeywords, setVoiceKeywords] = React.useState<string[]>(['submit', 'send', 'execute']);
+    const [newKeywordInput, setNewKeywordInput] = React.useState('');
+    const [isAddingKeyword, setIsAddingKeyword] = React.useState(false);
+    const [showRunModeInfo, setShowRunModeInfo] = React.useState(false);
+
+    const handleAddKeyword = () => {
+        if (newKeywordInput.trim()) {
+            const cleaned = newKeywordInput.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (cleaned && !voiceKeywords.includes(cleaned)) {
+                setVoiceKeywords(prev => [...prev, cleaned]);
+            }
+            setNewKeywordInput('');
+            setIsAddingKeyword(false);
+        }
+    };
+
+    const handleRemoveKeyword = (kw: string) => {
+        setVoiceKeywords(prev => prev.filter(k => k !== kw));
+    };
+
     return (
         <div className="sb-cursor-settings-content animate-fadeIn">
             <h2 className="sb-cursor-content-title">Agents</h2>
@@ -47,7 +68,7 @@ export const AgentsTab: React.FC = () => {
                             value={defaultEnvironment}
                             onChange={e => setDefaultEnvironment(e.target.value)}
                         >
-                            <option value="last-used">Last Used ▾</option>
+                            <option value="last-used">Last Used</option>
                             <option value="local">Local Machine</option>
                             <option value="cloud">Isolated Worktree</option>
                         </select>
@@ -63,7 +84,7 @@ export const AgentsTab: React.FC = () => {
                             value={defaultAgentModel}
                             onChange={e => setDefaultAgentModel(e.target.value)}
                         >
-                            <option value="cursor-default">Cursor Default ▾</option>
+                            <option value="cursor-default">Scratchbox Default</option>
                             <option value="high-reasoning">High Reasoning Engine</option>
                             <option value="fast">Fast Intelligence</option>
                         </select>
@@ -79,7 +100,7 @@ export const AgentsTab: React.FC = () => {
                             value={newMessagesBehavior}
                             onChange={e => setNewMessagesBehavior(e.target.value)}
                         >
-                            <option value="steer">Steer ▾</option>
+                            <option value="steer">Steer</option>
                             <option value="queue">Queue</option>
                             <option value="interrupt">Interrupt</option>
                         </select>
@@ -95,7 +116,7 @@ export const AgentsTab: React.FC = () => {
                             value={manualQueueBehavior}
                             onChange={e => setManualQueueBehavior(e.target.value)}
                         >
-                            <option value="interrupt">Interrupt ▾</option>
+                            <option value="interrupt">Interrupt</option>
                             <option value="steer">Steer</option>
                         </select>
                     </div>
@@ -110,7 +131,7 @@ export const AgentsTab: React.FC = () => {
                             value={usageSummaryBehavior}
                             onChange={e => setUsageSummaryBehavior(e.target.value)}
                         >
-                            <option value="auto">Auto ▾</option>
+                            <option value="auto">Auto</option>
                             <option value="always">Always</option>
                             <option value="never">Never</option>
                         </select>
@@ -135,7 +156,7 @@ export const AgentsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Auto-Approve Mode Transitions</div>
-                            <div className="sb-cursor-row-desc">Allow agent to switch to modes like Plan or Debug without asking. When off, Cursor asks first, but skips if unanswered within 15 seconds.</div>
+                            <div className="sb-cursor-row-desc">Allow agent to switch to modes like Plan or Debug without asking. When off, Scratchbox asks first, but skips if unanswered within 15 seconds.</div>
                         </div>
                         <button
                             type="button"
@@ -152,10 +173,65 @@ export const AgentsTab: React.FC = () => {
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Voice Submit Keywords</div>
                             <div className="sb-cursor-row-desc">Custom words that submit a voice prompt. Spaces and punctuation are ignored.</div>
-                            <div className="mt-2">
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800 border border-zinc-700 text-xs text-zinc-300 font-mono">
-                                    submit <span className="cursor-pointer text-zinc-500 hover:text-zinc-300">×</span>
-                                </span>
+                            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                                {voiceKeywords.map(kw => (
+                                    <span
+                                        key={kw}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-zinc-800/80 border border-zinc-700/80 text-xs text-zinc-300 font-mono"
+                                    >
+                                        <span>{kw}</span>
+                                        <button
+                                            type="button"
+                                            className="sb-btn-ghost text-zinc-500 hover:text-red-400 leading-none"
+                                            onClick={() => handleRemoveKeyword(kw)}
+                                            title={`Remove keyword "${kw}"`}
+                                        >
+                                            ×
+                                        </button>
+                                    </span>
+                                ))}
+
+                                {isAddingKeyword ? (
+                                    <div className="inline-flex items-center gap-1">
+                                        <input
+                                            type="text"
+                                            className="sb-cursor-text-input text-xs py-0.5 px-2 w-24 h-7"
+                                            value={newKeywordInput}
+                                            onChange={e => setNewKeywordInput(e.target.value)}
+                                            placeholder="word"
+                                            onKeyDown={e => {
+                                                if (e.key === 'Enter') handleAddKeyword();
+                                                if (e.key === 'Escape') setIsAddingKeyword(false);
+                                            }}
+                                            autoFocus
+                                        />
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-btn-primary sb-btn-xs h-7 px-2"
+                                            onClick={handleAddKeyword}
+                                        >
+                                            Add
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-btn-ghost sb-btn-xs text-zinc-400 h-7 px-1.5"
+                                            onClick={() => {
+                                                setIsAddingKeyword(false);
+                                                setNewKeywordInput('');
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="sb-btn sb-btn-ghost sb-btn-xs text-blue-400 hover:text-blue-300"
+                                        onClick={() => setIsAddingKeyword(true)}
+                                    >
+                                        + Add keyword
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -168,8 +244,8 @@ export const AgentsTab: React.FC = () => {
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Include Third-Party Plugins, Skills, and Other Configs</div>
-                            <div className="sb-cursor-row-desc">Automatically import agent configs from other tools</div>
+                            <div className="sb-cursor-row-title">Include Third-Party Configs</div>
+                            <div className="sb-cursor-row-desc">Read and apply rules and tools from other tools, such as Claude Code</div>
                         </div>
                         <button
                             type="button"
@@ -184,8 +260,8 @@ export const AgentsTab: React.FC = () => {
 
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Import Claude Code Conversations</div>
-                            <div className="sb-cursor-row-desc">Sync chats and continue them in Cursor</div>
+                            <div className="sb-cursor-row-title">Import from Claude Code</div>
+                            <div className="sb-cursor-row-desc">Import Claude Code configuration and history</div>
                         </div>
                         <button
                             type="button"
@@ -206,8 +282,8 @@ export const AgentsTab: React.FC = () => {
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Remote Control</div>
-                            <div className="sb-cursor-row-desc">Allow agents on this machine to be controlled remotely from mobile</div>
+                            <div className="sb-cursor-row-title">Enable Remote Control</div>
+                            <div className="sb-cursor-row-desc">Allow remote control of this computer from other devices</div>
                         </div>
                         <button
                             type="button"
@@ -322,40 +398,40 @@ export const AgentsTab: React.FC = () => {
                             value={runModeSetting}
                             onChange={e => setRunModeSetting(e.target.value)}
                         >
-                            <option value="unsandboxed">Run Everything (Unsandboxed) ▾</option>
+                            <option value="unsandboxed">Run Everything (Unsandboxed)</option>
                             <option value="guarded">Guarded Confirmation</option>
                             <option value="strict">Strict Sandboxed</option>
                         </select>
                     </div>
-                    <div className="text-[11px] text-zinc-500">
-                        All commands will run without approval, classification or sandboxing.
+                    <div className="text-xs text-zinc-500">
+                        {runModeSetting === 'unsandboxed' && 'All commands will run directly without approval, classification or sandboxing.'}
+                        {runModeSetting === 'guarded' && 'Commands with high blast radius require interactive user confirmation before execution.'}
+                        {runModeSetting === 'strict' && 'All terminal processes and filesystem writes run in isolated containers.'}
                     </div>
-                    <a href="#learn-more" className="text-[11px] text-blue-400 hover:underline block pt-1">
-                        Learn more
-                    </a>
+                    <button
+                        type="button"
+                        onClick={() => setShowRunModeInfo(!showRunModeInfo)}
+                        className="sb-btn-ghost text-xs text-blue-400 hover:underline block pt-1 text-left bg-transparent border-0 p-0 cursor-pointer"
+                    >
+                        {showRunModeInfo ? 'Hide policy details ▲' : 'Learn more about execution policies ▾'}
+                    </button>
+                    {showRunModeInfo && (
+                        <div className="mt-2 p-3 bg-zinc-900/80 rounded-lg border border-zinc-800 text-xs text-zinc-300 space-y-1.5 animate-fadeIn">
+                            <div className="font-semibold text-zinc-200">Execution Policy Levels:</div>
+                            <ul className="list-disc list-inside space-y-1 text-zinc-400">
+                                <li><strong className="text-zinc-200">Unsandboxed:</strong> Direct local execution for rapid iterative prototyping.</li>
+                                <li><strong className="text-zinc-200">Guarded:</strong> Heuristic inspection prompts on git push, rm -rf, and network calls.</li>
+                                <li><strong className="text-zinc-200">Strict:</strong> Total process isolation with zero network escalation without explicit token.</li>
+                            </ul>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Terminal and Editing */}
+            {/* Editing and Links */}
             <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">Terminal and Editing</div>
+                <div className="sb-cursor-section-header">Editing and Links</div>
                 <div className="sb-cursor-group-card">
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Legacy Terminal Tool</div>
-                            <div className="sb-cursor-row-desc">Use the legacy terminal tool in agent mode, for use on systems with unsupported shell configurations</div>
-                        </div>
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={legacyTerminalTool}
-                            className={`sb-cursor-toggle ${legacyTerminalTool ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setLegacyTerminalTool(!legacyTerminalTool)}
-                        >
-                            <span className="sb-cursor-toggle-thumb" />
-                        </button>
-                    </div>
-
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Auto-Parse Links</div>

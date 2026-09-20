@@ -13,6 +13,7 @@ import {
     TimeOfDayPreset
 } from './atmosphere-types';
 import { calculateNOAASolarPosition } from './solar-position';
+import { blackbodyKelvinToLinearRgb } from './kelvin';
 
 function clamp(x: number, min: number, max: number): number {
     return Math.min(Math.max(x, min), max);
@@ -160,6 +161,53 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
     const isGoldenHour = altitudeDeg > 0.5 && altitudeDeg <= 8.0;
     const isTwilight = altitudeDeg > -6.0 && altitudeDeg <= 0.5;
 
+    let kelvinTemperature = 6500;
+    let turbidity = 2.0;
+
+    if (altitudeDeg <= -6.0) {
+        kelvinTemperature = 15000;
+        turbidity = 1.2;
+    } else if (altitudeDeg <= -3.0) {
+        kelvinTemperature = 12000;
+        turbidity = 1.5;
+    } else if (altitudeDeg <= 0.0) {
+        kelvinTemperature = 8500;
+        turbidity = 2.0;
+    } else if (altitudeDeg <= 2.0) {
+        kelvinTemperature = 6000;
+        turbidity = 2.2;
+    } else if (altitudeDeg <= 8.0) {
+        const t = (altitudeDeg - 2.0) / 6.0;
+        kelvinTemperature = Math.round(lerp(3000, 4200, t));
+        turbidity = 2.8;
+    } else if (altitudeDeg <= 25.0) {
+        const t = (altitudeDeg - 8.0) / 17.0;
+        kelvinTemperature = Math.round(lerp(4200, 5400, t));
+        turbidity = 2.4;
+    } else if (altitudeDeg <= 55.0) {
+        const t = (altitudeDeg - 25.0) / 30.0;
+        kelvinTemperature = Math.round(lerp(5400, 6200, t));
+        turbidity = 2.2;
+    } else {
+        kelvinTemperature = 6500;
+        turbidity = 2.0;
+    }
+
+    const sunLinearRgb = blackbodyKelvinToLinearRgb(kelvinTemperature);
+    const ambientLinearRgb: [number, number, number] = [
+        sunLinearRgb[0] * 0.7 + 0.1,
+        sunLinearRgb[1] * 0.75 + 0.15,
+        sunLinearRgb[2] * 0.9 + 0.2
+    ];
+    const skyColorLinear: [number, number, number] = [
+        sunLinearRgb[0] * 0.35,
+        sunLinearRgb[1] * 0.55,
+        sunLinearRgb[2] * 0.95
+    ];
+    const groundAlbedoLinear: [number, number, number] = [0.18, 0.18, 0.18];
+    const shadowSoftness = isGoldenHour ? 1.8 : 1.0;
+    const ambientIntensity = skyLightIntensity;
+
     return {
         phase,
         sunIntensity,
@@ -174,7 +222,15 @@ export function computeDiurnalLightingProfile(altitudeDeg: number): DiurnalLight
         isNight,
         isGoldenHour,
         isTwilight,
-        sunAltitudeDeg: altitudeDeg
+        sunAltitudeDeg: altitudeDeg,
+        kelvinTemperature,
+        turbidity,
+        ambientIntensity,
+        shadowSoftness,
+        sunLinearRgb,
+        ambientLinearRgb,
+        skyColorLinear,
+        groundAlbedoLinear
     };
 }
 

@@ -31,3 +31,11 @@ export function kelvinToRGB(kelvin: number): THREE.Color {
 
     return new THREE.Color(r / 255, g / 255, b / 255);
 }
+
+/**
+ * Converts a Kelvin color temperature into linear RGB tuple [r, g, b] in [0, 1].
+ */
+export function blackbodyKelvinToLinearRgb(kelvin: number): [number, number, number] {
+    const col = kelvinToRGB(kelvin);
+    return [col.r, col.g, col.b];
+}

@@ -12,7 +12,7 @@ import * as THREE from 'three';
 export type ClayPresetId =
   | 'warm-clay'
   | 'alabaster'
-  | 'obsidian'
+  | 'onyx'
   | 'studio-grey'
   | 'terracotta'
   | 'porcelain'
@@ -53,9 +53,9 @@ export const CLAY_PRESETS: Record<ClayPresetId, ClayPresetDefinition> = {
     ambientOcclusionGain: 1.20,
     highlightTone: 0xffffff
   },
-  'obsidian': {
-    id: 'obsidian',
-    name: 'Obsidian Basalt',
+  'onyx': {
+    id: 'onyx',
+    name: 'Onyx Basalt',
     description: 'Deep graphite slate and volcanic basalt stone with micro-cavity edge definition',
     color: 0x1e2024,
     roughness: 0.78,

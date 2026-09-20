@@ -29,7 +29,7 @@ export const AppearanceTab: React.FC = () => {
                         value={selectedTheme}
                         onChange={e => setSelectedTheme(e.target.value as any)}
                     >
-                        <option value="system">System ▾</option>
+                        <option value="system">System</option>
                         <option value="dark">Dark</option>
                         <option value="light">Light</option>
                         <option value="high-contrast">High Contrast</option>
@@ -46,7 +46,7 @@ export const AppearanceTab: React.FC = () => {
                             <div className="sb-cursor-row-title">Tool Call Density</div>
                             <div className="sb-cursor-row-desc">Adjust how much detail is shown for tool calls</div>
                         </div>
-                        <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-3">
                             <input
                                 type="range"
                                 min="0"
@@ -55,10 +55,9 @@ export const AppearanceTab: React.FC = () => {
                                 value={toolCallDensity}
                                 onChange={e => setToolCallDensity(Number(e.target.value))}
                             />
-                            <div className="flex justify-between w-full text-[10px] text-zinc-500">
-                                <span>Compact</span>
-                                <span>Detailed</span>
-                            </div>
+                            <span className="text-xs text-zinc-600 dark:text-zinc-400 font-medium w-14 text-right">
+                                {toolCallDensity <= 33 ? 'Compact' : toolCallDensity <= 66 ? 'Normal' : 'Detailed'}
+                            </span>
                         </div>
                     </div>
 
@@ -161,7 +160,7 @@ export const AppearanceTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">UI Font Size</div>
-                            <div className="sb-cursor-row-desc">Font size for the Cursor user interface</div>
+                            <div className="sb-cursor-row-desc">Font size for the Scratchbox user interface</div>
                         </div>
                         <div className="sb-cursor-stepper">
                             <button type="button" className="sb-stepper-btn" onClick={() => setUiFontSize(Math.max(10, uiFontSize - 1))}>−</button>
@@ -185,14 +184,14 @@ export const AppearanceTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">UI Font Family</div>
-                            <div className="sb-cursor-row-desc">Override the Cursor user interface typeface</div>
+                            <div className="sb-cursor-row-desc">Override the Scratchbox user interface typeface</div>
                         </div>
                         <select
                             className="sb-cursor-select-dropdown"
                             value={uiFontFamily}
                             onChange={e => setUiFontFamily(e.target.value)}
                         >
-                            <option value="system">System font ▾</option>
+                            <option value="system">System font</option>
                             <option value="sf-pro">SF Pro</option>
                             <option value="inter">Inter</option>
                             <option value="geist">Geist</option>
@@ -209,7 +208,7 @@ export const AppearanceTab: React.FC = () => {
                             value={codeFontFamily}
                             onChange={e => setCodeFontFamily(e.target.value)}
                         >
-                            <option value="system-mono">System monospace ▾</option>
+                            <option value="system-mono">System monospace</option>
                             <option value="menlo">Menlo</option>
                             <option value="fira-code">Fira Code</option>
                             <option value="jetbrains-mono">JetBrains Mono</option>
@@ -218,7 +217,15 @@ export const AppearanceTab: React.FC = () => {
 
                     {/* Live Code Diff Preview Box */}
                     <div className="p-3 bg-zinc-950/60 border-t border-zinc-800/80">
-                        <div className="sb-cursor-diff-preview" style={{ fontSize: `${codeFontSize}px` }}>
+                        <div
+                            className="sb-cursor-diff-preview"
+                            style={{
+                                fontSize: `${codeFontSize}px`,
+                                fontFamily: codeFontFamily === 'system-mono'
+                                    ? 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+                                    : codeFontFamily
+                            }}
+                        >
                             <div className="sb-diff-line sb-diff-del">
                                 <span className="sb-diff-num">1</span>
                                 <span className="sb-diff-content">return a + b;</span>
@@ -288,7 +295,7 @@ export const AppearanceTab: React.FC = () => {
                             value={reduceMotionSetting}
                             onChange={e => setReduceMotionSetting(e.target.value)}
                         >
-                            <option value="system">System ▾</option>
+                            <option value="system">System</option>
                             <option value="always">Always Reduce</option>
                             <option value="never">Full Motion</option>
                         </select>

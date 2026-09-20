@@ -245,6 +245,11 @@ export function resolveModeForArtifact(type: PrimitiveType | string): StudioLayo
         case 'scene-3d':
         case '3d':
             return '3d';
+        case 'video-timeline':
+        case 'video':
+        case 'timeline':
+        case 'nle':
+            return 'video';
         case 'metric-dashboard':
         case 'mind-map':
         case 'skills-hub':
@@ -267,7 +272,7 @@ export function resolveModeForArtifact(type: PrimitiveType | string): StudioLayo
  * Sanitizes layout mode to ensure only valid non-legacy modes are used.
  */
 export function sanitizeLayoutMode(mode?: string, artifact?: CanvasArtifact): StudioLayoutMode {
-    if (mode === 'chat' || mode === 'code' || mode === 'canvas' || mode === 'document' || mode === 'kanban' || mode === 'automation' || mode === '3d' || mode === 'browser') {
+    if (mode === 'chat' || mode === 'code' || mode === 'canvas' || mode === 'document' || mode === 'kanban' || mode === 'automation' || mode === '3d' || mode === 'browser' || mode === 'video') {
         return mode === 'canvas' ? 'code' : (mode as StudioLayoutMode);
     }
     if (artifact) {

@@ -730,12 +730,30 @@ export const IconBrowser: React.FC<IconProps> = ({ size = 15, strokeWidth = 1.8,
     </svg>
 );
 
+export const IconFilm: React.FC<IconProps> = ({ size = 15, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+        <line x1="7" y1="2" x2="7" y2="22" />
+        <line x1="17" y1="2" x2="17" y2="22" />
+        <line x1="2" y1="12" x2="22" y2="12" />
+        <line x1="2" y1="7" x2="7" y2="7" />
+        <line x1="2" y1="17" x2="7" y2="17" />
+        <line x1="17" y1="17" x2="22" y2="17" />
+        <line x1="17" y1="7" x2="22" y2="7" />
+    </svg>
+);
+
 export const getPrimitiveSvgIcon = (type: string, size = 15, strokeWidth = 1.8): React.ReactElement => {
     switch (type) {
         case 'interactive-browser':
         case 'browser':
         case 'web-browser':
             return <IconGlobe size={size} strokeWidth={strokeWidth} />;
+        case 'video-timeline':
+        case 'video':
+        case 'timeline':
+        case 'nle':
+            return <IconFilm size={size} strokeWidth={strokeWidth} />;
         case 'live-code-sandbox':
         case 'code-sandbox':
         case 'sandbox':
@@ -777,3 +795,49 @@ export const getPrimitiveSvgIcon = (type: string, size = 15, strokeWidth = 1.8):
             return <IconDocument size={size} strokeWidth={strokeWidth} />;
     }
 };
+
+export const IconScratchbox: React.FC<IconProps> = ({ size = 16, className = '' }) => (
+    <img
+        src="/icons/ScratchboxIDE.png"
+        width={size}
+        height={size}
+        alt="Scratchbox"
+        className={`inline-block object-contain ${className}`}
+        style={{ width: size, height: size }}
+    />
+);
+
+export const IconMoreVertical: React.FC<IconProps> = ({ size = 15, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <circle cx="12" cy="5" r="1.5" />
+        <circle cx="12" cy="12" r="1.5" />
+        <circle cx="12" cy="19" r="1.5" />
+    </svg>
+);
+
+export const IconExpandCorners: React.FC<IconProps> = ({ size = 15, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+    </svg>
+);
+
+export const IconSidebarToggle: React.FC<IconProps> = ({ size = 15, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <line x1="15" y1="3" x2="15" y2="21" />
+    </svg>
+);
+
+export const IconPushPin: React.FC<IconProps> = ({ size = 14, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <line x1="12" y1="17" x2="12" y2="22" />
+        <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+    </svg>
+);
+
+export const IconMessageSquare: React.FC<IconProps> = ({ size = 14, strokeWidth = 1.8, className = '' }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+);
+

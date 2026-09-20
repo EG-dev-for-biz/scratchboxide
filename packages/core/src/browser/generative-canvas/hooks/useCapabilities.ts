@@ -23,8 +23,44 @@ import { WorkspaceConfigClient } from '../workspace-config-client';
 
 export function useCapabilities() {
     // Capabilities & Live Tools state
-    const [skills, setSkills] = React.useState<SkillItem[]>(DEFAULT_SKILLS_CATALOG);
-    const [mcpServers, setMcpServers] = React.useState<McpServerItem[]>(DEFAULT_MCP_SERVERS);
+    const [skills, setSkillsState] = React.useState<SkillItem[]>(() => {
+        if (typeof localStorage !== 'undefined') {
+            try {
+                const saved = localStorage.getItem('scratchbox_custom_skills');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        const existingIds = new Set(DEFAULT_SKILLS_CATALOG.map(s => s.id));
+                        const uniqueCustom = parsed.filter((s: SkillItem) => !existingIds.has(s.id));
+                        return [...uniqueCustom, ...DEFAULT_SKILLS_CATALOG];
+                    }
+                }
+            } catch {
+                // Ignore parse errors
+            }
+        }
+        return DEFAULT_SKILLS_CATALOG;
+    });
+
+    const [mcpServers, setMcpServersState] = React.useState<McpServerItem[]>(() => {
+        if (typeof localStorage !== 'undefined') {
+            try {
+                const saved = localStorage.getItem('scratchbox_custom_mcp_servers');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        const existingIds = new Set(DEFAULT_MCP_SERVERS.map(s => s.id));
+                        const uniqueCustom = parsed.filter((s: McpServerItem) => !existingIds.has(s.id));
+                        return [...uniqueCustom, ...DEFAULT_MCP_SERVERS];
+                    }
+                }
+            } catch {
+                // Ignore parse errors
+            }
+        }
+        return DEFAULT_MCP_SERVERS;
+    });
+
     const [mcpExecutions, setMcpExecutions] = React.useState<McpExecutionState[]>([]);
     const [googleSearchGrounding, setGoogleSearchGrounding] = React.useState<boolean>(() => {
         if (typeof localStorage !== 'undefined') {
@@ -35,6 +71,46 @@ export function useCapabilities() {
     });
 
     const [, setGeminiStatus] = React.useState<GeminiStatus | undefined>(undefined);
+
+    const persistSkills = React.useCallback((nextSkills: SkillItem[]) => {
+        const customSkills = nextSkills.filter(
+            s => s.isCustom || !DEFAULT_SKILLS_CATALOG.some(d => d.id === s.id)
+        );
+        if (typeof localStorage !== 'undefined') {
+            try {
+                localStorage.setItem('scratchbox_custom_skills', JSON.stringify(customSkills));
+            } catch {}
+        }
+        WorkspaceConfigClient.getInstance().saveWorkspaceConfig('', { customSkills }).catch(() => {});
+    }, []);
+
+    const persistMcpServers = React.useCallback((nextServers: McpServerItem[]) => {
+        const customMcpServers = nextServers.filter(
+            s => s.id.startsWith('mcp-custom-') || !DEFAULT_MCP_SERVERS.some(d => d.id === s.id)
+        );
+        if (typeof localStorage !== 'undefined') {
+            try {
+                localStorage.setItem('scratchbox_custom_mcp_servers', JSON.stringify(customMcpServers));
+            } catch {}
+        }
+        WorkspaceConfigClient.getInstance().saveWorkspaceConfig('', { customMcpServers }).catch(() => {});
+    }, []);
+
+    const setSkills = React.useCallback((action: React.SetStateAction<SkillItem[]>) => {
+        setSkillsState(prev => {
+            const next = typeof action === 'function' ? action(prev) : action;
+            persistSkills(next);
+            return next;
+        });
+    }, [persistSkills]);
+
+    const setMcpServers = React.useCallback((action: React.SetStateAction<McpServerItem[]>) => {
+        setMcpServersState(prev => {
+            const next = typeof action === 'function' ? action(prev) : action;
+            persistMcpServers(next);
+            return next;
+        });
+    }, [persistMcpServers]);
 
     // Check Gemini 3.7 Flash Backend Status
     React.useEffect(() => {
@@ -63,14 +139,14 @@ export function useCapabilities() {
                 setGoogleSearchGrounding(cfg.settings.googleSearchGrounding);
             }
             if (cfg.customSkills && cfg.customSkills.length > 0) {
-                setSkills(prev => {
+                setSkillsState(prev => {
                     const existingIds = new Set(prev.map(s => s.id));
                     const newSkills = cfg.customSkills.filter(s => !existingIds.has(s.id));
                     return [...newSkills, ...prev];
                 });
             }
             if (cfg.customMcpServers && cfg.customMcpServers.length > 0) {
-                setMcpServers(prev => {
+                setMcpServersState(prev => {
                     const existingIds = new Set(prev.map(s => s.id));
                     const newMcp = cfg.customMcpServers.filter(s => !existingIds.has(s.id));
                     return [...newMcp, ...prev];

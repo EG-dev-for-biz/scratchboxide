@@ -19,6 +19,7 @@ import {
   computeFlattenBounds,
   bakeFlattenHeightfield
 } from './mesh/FlattenRegion';
+import { CLASSIFIER_SHADER_CHUNK } from './TileMaterialClassifier';
 
 let TilesRenderer: any;
 let GoogleCloudAuthPlugin: any;
@@ -111,6 +112,7 @@ export class GooglePhotorealistic3DTilesLayer {
     uFlattenMargin: { value: number };
     uFlattenExcavateDepth: { value: number };
     uFlattenHeightTex: { value: THREE.DataTexture };
+    uWeatherRain: { value: number };
   };
 
   constructor(options: Google3DTilesLayerOptions = {}) {
@@ -139,7 +141,8 @@ export class GooglePhotorealistic3DTilesLayer {
       uFlattenBoundsMax: { value: new THREE.Vector2(1, 1) },
       uFlattenMargin: { value: 0.8 },
       uFlattenExcavateDepth: { value: 0.0 },
-      uFlattenHeightTex: { value: defaultFlattenTex }
+      uFlattenHeightTex: { value: defaultFlattenTex },
+      uWeatherRain: { value: 0.0 }
     };
 
     this.initTilesRenderer(options);
@@ -236,6 +239,7 @@ export class GooglePhotorealistic3DTilesLayer {
       shader.uniforms.uFlattenMargin = this.styleUniforms.uFlattenMargin;
       shader.uniforms.uFlattenExcavateDepth = this.styleUniforms.uFlattenExcavateDepth;
       shader.uniforms.uFlattenHeightTex = this.styleUniforms.uFlattenHeightTex;
+      shader.uniforms.uWeatherRain = this.styleUniforms.uWeatherRain;
 
       // Vertex shader hooks for world position and normals
       shader.vertexShader = shader.vertexShader.replace(
@@ -262,6 +266,8 @@ export class GooglePhotorealistic3DTilesLayer {
         uniform vec3 uTileColor;
         uniform float uTileRoughness;
         uniform float uTileMetalness;
+        uniform float uWeatherRain;
+        ${CLASSIFIER_SHADER_CHUNK}
         uniform float uFlattenActive;
         uniform int uFlattenPolyCount;
         uniform vec2 uFlattenPoly[32];
@@ -334,6 +340,20 @@ export class GooglePhotorealistic3DTilesLayer {
             // Mode 3: Blueprint Architectural Blue
             diffuseColor.rgb = vec3(0.02, 0.08, 0.22);
           }
+        } else {
+          // Mode 0: Photorealistic Dynamic PBR Material Classification
+          #if defined(USE_MAP)
+            MaterialClass classified = classifyTileMaterial(diffuseColor.rgb, vWorldNormal, uWeatherRain);
+            #ifdef USE_ROUGHNESS
+              roughnessFactor = classified.roughness;
+            #endif
+            #ifdef USE_METALNESS
+              metalnessFactor = classified.metalness;
+            #endif
+            if (classified.type == 3) {
+              diffuseColor.rgb *= mix(1.0, 0.38, uWeatherRain);
+            }
+          #endif
         }
         `
       );
@@ -452,6 +472,14 @@ export class GooglePhotorealistic3DTilesLayer {
     this.styleUniforms.uTileColor.value.set(clayDef.color);
     this.styleUniforms.uTileRoughness.value = clayDef.roughness;
     this.styleUniforms.uTileMetalness.value = clayDef.metalness;
+  }
+
+  /**
+   * Sets the weather rain intensity (0.0 = dry, 1.0 = heavy rain).
+   * Dynamically darkens asphalt albedo and increases specular reflections on roads and water.
+   */
+  public setWeatherRain(rain: number): void {
+    this.styleUniforms.uWeatherRain.value = Math.max(0, Math.min(1, rain));
   }
 
   /**

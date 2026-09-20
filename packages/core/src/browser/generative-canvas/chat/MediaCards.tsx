@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 import * as React from 'react';
+import * as THREE from 'three';
+import type { TextureMatrixResult, TextureMatrixCandidate } from '../../../common/media-generation-protocol';
 
 // ==========================================
 // Multimedia & Geospatial Rendering Cards
@@ -29,12 +31,21 @@ export const ImageGeneratedCard: React.FC<{
 
     const [statusText, setStatusText] = React.useState<string | null>(null);
 
-    const handleAction = (action: string) => {
+    const handleAction = (action: string, img: string) => {
         setStatusText(`${action}...`);
+        if (action === 'Apply as 3D Texture' || action === 'Apply as Texture') {
+            window.dispatchEvent(new CustomEvent('scratchbox:apply-3d-texture', { detail: { textureUrl: img } }));
+            window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
+        } else if (action === 'Insert into Code') {
+            window.dispatchEvent(new CustomEvent('scratchbox:insert-code', { detail: { snippet: `<img src="${img}" alt="Generated asset" />` } }));
+            window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: 'live-code-sandbox' } }));
+        } else if (action === 'Remix Prompt') {
+            window.dispatchEvent(new CustomEvent('scratchbox:remix-prompt', { detail: { prompt: `Remix generated asset: ${img}` } }));
+        }
         setTimeout(() => {
             setStatusText(`${action} Succeeded!`);
             setTimeout(() => setStatusText(null), 2000);
-        }, 1000);
+        }, 800);
     };
 
     if (images.length === 0) return null;
@@ -48,25 +59,25 @@ export const ImageGeneratedCard: React.FC<{
                         <div className="sb-image-overlay">
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Apply as 3D Texture')}
+                                onClick={() => handleAction('Apply as 3D Texture', img)}
                             >
                                 Apply as 3D Texture
                             </button>
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Apply as Texture')}
+                                onClick={() => handleAction('Apply as Texture', img)}
                             >
                                 Apply as Texture
                             </button>
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Insert into Code')}
+                                onClick={() => handleAction('Insert into Code', img)}
                             >
                                 Insert into Code
                             </button>
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Remix Prompt')}
+                                onClick={() => handleAction('Remix Prompt', img)}
                             >
                                 Remix Prompt
                             </button>
@@ -280,10 +291,14 @@ export const CinematicVideoCard: React.FC<{
 
     const handleAddToTimeline = () => {
         setStatusText('Adding to Timeline...');
+        window.dispatchEvent(new CustomEvent('scratchbox:add-video-to-timeline', {
+            detail: { videoUrl: videoContent, duration: videoRef.current?.duration || 5 }
+        }));
+        window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: 'video-timeline' } }));
         setTimeout(() => {
             setStatusText('Successfully added to Timeline!');
             setTimeout(() => setStatusText(null), 2500);
-        }, 1200);
+        }, 800);
     };
 
     const formatTime = (secs: number) => {
@@ -542,6 +557,287 @@ export const GoogleMapsCard: React.FC<{
                     </div>
                 )}
             </div>
+
+            {statusText && (
+                <div className="sb-image-status-badge">
+                    <span>{statusText}</span>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ==========================================
+// 5. Generative Media Studio Texture Matrix Card
+// ==========================================
+export const TextureMatrixCard: React.FC<{
+    result: TextureMatrixResult;
+    onApplyToMesh?: (candidateId: string, mappingPreset?: 'triplanar' | 'uv' | 'spherical') => void;
+    onBakeCpp?: (candidateId: string) => void;
+}> = ({ result, onApplyToMesh, onBakeCpp }) => {
+    const candidates = result.candidates || [];
+    const [selectedId, setSelectedId] = React.useState<string>(result.selectedCandidateId || candidates[0]?.id || 'candidate-0');
+    const [activeChannel, setActiveChannel] = React.useState<'composite' | 'albedo' | 'normal' | 'roughness' | 'metallic' | 'ao'>('composite');
+    const [mappingPreset, setMappingPreset] = React.useState<'triplanar' | 'uv' | 'spherical'>('triplanar');
+    const [statusText, setStatusText] = React.useState<string | null>(null);
+
+    const activeCandidate = candidates.find(c => c.id === selectedId) || candidates[0];
+
+    const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+
+    React.useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas || !activeCandidate) return;
+
+        let animationFrameId: number;
+        const width = canvas.clientWidth || 320;
+        const height = canvas.clientHeight || 200;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0e1117);
+
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 50);
+        camera.position.set(0, 0, 2.9);
+
+        let renderer: THREE.WebGLRenderer | null = null;
+        try {
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+            renderer.setSize(width, height, false);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+        } catch {
+            return;
+        }
+
+        const ambLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambLight);
+
+        const dirLight1 = new THREE.DirectionalLight(0xffffff, 2.2);
+        dirLight1.position.set(3, 4, 3);
+        scene.add(dirLight1);
+
+        const dirLight2 = new THREE.DirectionalLight(0x60a5fa, 0.9);
+        dirLight2.position.set(-3, -2, -2);
+        scene.add(dirLight2);
+
+        const geometry = new THREE.SphereGeometry(1.0, 48, 48);
+        const material = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            metalness: 0.1,
+            roughness: 0.5,
+            clearcoat: 0.05
+        });
+
+        const sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+
+        const loader = new THREE.TextureLoader();
+        const textures = activeCandidate.textures;
+
+        if (activeChannel === 'composite') {
+            if (textures.albedo) {
+                loader.load(textures.albedo, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = THREE.SRGBColorSpace;
+                    material.map = tex;
+                    material.needsUpdate = true;
+                });
+            }
+            if (textures.normal) {
+                loader.load(textures.normal, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = THREE.NoColorSpace;
+                    material.normalMap = tex;
+                    material.normalScale.set(1.2, 1.2);
+                    material.needsUpdate = true;
+                });
+            }
+            if (textures.roughness) {
+                loader.load(textures.roughness, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = THREE.NoColorSpace;
+                    material.roughnessMap = tex;
+                    material.needsUpdate = true;
+                });
+            }
+            if (textures.metallic) {
+                loader.load(textures.metallic, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = THREE.NoColorSpace;
+                    material.metalnessMap = tex;
+                    material.needsUpdate = true;
+                });
+            }
+            if (textures.ao) {
+                loader.load(textures.ao, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = THREE.NoColorSpace;
+                    material.aoMap = tex;
+                    material.aoMapIntensity = 1.0;
+                    material.needsUpdate = true;
+                });
+            }
+        } else {
+            const channelUrl = (textures as any)[activeChannel];
+            if (channelUrl) {
+                loader.load(channelUrl, tex => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.repeat.set(2, 2);
+                    tex.colorSpace = activeChannel === 'albedo' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+                    material.map = tex;
+                    material.normalMap = null;
+                    material.roughnessMap = null;
+                    material.metalnessMap = null;
+                    material.aoMap = null;
+                    material.metalness = 0.0;
+                    material.roughness = 0.5;
+                    material.needsUpdate = true;
+                });
+            }
+        }
+
+        const render = () => {
+            sphere.rotation.y += 0.008;
+            renderer?.render(scene, camera);
+            animationFrameId = requestAnimationFrame(render);
+        };
+        render();
+
+        return () => {
+            cancelAnimationFrame(animationFrameId);
+            geometry.dispose();
+            material.dispose();
+            renderer?.dispose();
+        };
+    }, [activeCandidate, activeChannel]);
+
+    const handleAction = (label: string, callback?: () => void) => {
+        setStatusText(`${label}...`);
+        if (callback) callback();
+        if (activeCandidate) {
+            if (label.includes('C++')) {
+                window.dispatchEvent(new CustomEvent('scratchbox:bake-cpp-texture', { detail: { candidate: activeCandidate } }));
+                window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
+            } else if (label.includes('Mesh')) {
+                window.dispatchEvent(new CustomEvent('scratchbox:apply-3d-texture', {
+                    detail: { textureUrl: activeCandidate.textures.albedo, candidate: activeCandidate, mappingPreset }
+                }));
+                window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
+            }
+        }
+        setTimeout(() => {
+            setStatusText(`${label} Applied!`);
+            setTimeout(() => setStatusText(null), 2500);
+        }, 800);
+    };
+
+    if (candidates.length === 0) return null;
+
+    return (
+        <div className="sb-multimedia-card sb-texture-matrix-card">
+            <div className="sb-texture-matrix-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div className="sb-badge-matrix">PBR STUDIO</div>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: '#f3f4f6' }}>
+                        Generative Materials Workshop
+                    </span>
+                </div>
+                <span style={{ fontSize: 11, color: '#9ca3af' }}>
+                    {candidates.length}-Up Seamless Variations
+                </span>
+            </div>
+
+            {/* 4-Up Variations Grid */}
+            <div className="sb-texture-matrix-grid">
+                {candidates.map((candidate) => {
+                    const isSelected = candidate.id === selectedId;
+                    return (
+                        <div
+                            key={candidate.id}
+                            className={`sb-matrix-candidate-card ${isSelected ? 'sb-candidate-selected' : ''}`}
+                            onClick={() => setSelectedId(candidate.id)}
+                        >
+                            <div className="sb-matrix-candidate-thumb">
+                                <img
+                                    src={candidate.textures.albedo}
+                                    alt={candidate.styleModifier}
+                                    className="sb-matrix-thumb-img"
+                                />
+                                {isSelected && (
+                                    <div className="sb-candidate-active-tag">ACTIVE</div>
+                                )}
+                            </div>
+                            <div className="sb-matrix-candidate-info">
+                                <span className="sb-candidate-title">{candidate.styleModifier}</span>
+                                <span className="sb-candidate-sub">Seamless Toroidal PBR</span>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* Active Preview & Channel Controls */}
+            {activeCandidate && (
+                <div className="sb-matrix-preview-panel">
+                    <div className="sb-matrix-channel-pills">
+                        {(['composite', 'albedo', 'normal', 'roughness', 'metallic', 'ao'] as const).map(ch => (
+                            <button
+                                key={ch}
+                                className={`sb-channel-pill-btn ${activeChannel === ch ? 'sb-channel-active' : ''}`}
+                                onClick={() => setActiveChannel(ch)}
+                            >
+                                {ch.toUpperCase()}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="sb-matrix-viewport-container">
+                        <canvas ref={canvasRef} className="sb-matrix-webgl-canvas" />
+                        <div className="sb-matrix-viewport-overlay">
+                            <span className="sb-matrix-mesh-preset">
+                                Mapping: {mappingPreset.toUpperCase()}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="sb-matrix-actions-row">
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                                className={`sb-btn sb-btn-xs ${mappingPreset === 'triplanar' ? 'sb-btn-primary' : 'sb-btn-secondary'}`}
+                                onClick={() => setMappingPreset(m => m === 'triplanar' ? 'uv' : 'triplanar')}
+                            >
+                                {mappingPreset === 'triplanar' ? 'Triplanar Enabled' : 'Standard UV'}
+                            </button>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                                className="sb-btn sb-btn-secondary sb-btn-xs"
+                                onClick={() => handleAction('Bake into C++20 glTF', () => onBakeCpp?.(activeCandidate.id))}
+                            >
+                                Bake into C++
+                            </button>
+                            <button
+                                className="sb-btn sb-btn-primary sb-btn-xs"
+                                onClick={() => handleAction('Projected to Active Mesh', () => onApplyToMesh?.(activeCandidate.id, mappingPreset))}
+                            >
+                                Project to Mesh
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {statusText && (
                 <div className="sb-image-status-badge">

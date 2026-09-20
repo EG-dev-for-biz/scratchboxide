@@ -46,6 +46,7 @@ export interface SpotlightLauncherModalProps {
     onDebugTerminal?: () => void;
     recentSessions?: ChatSession[];
     onSelectSession?: (sessionId: string) => void;
+    onOpenDemos?: () => void;
 }
 
 export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
@@ -58,7 +59,8 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     onOpenMcpHub,
     onDebugTerminal,
     recentSessions = [],
-    onSelectSession
+    onSelectSession,
+    onOpenDemos
 }) => {
     const [searchQuery, setSearchQuery] = React.useState<string>('');
     const [selectedIndex, setSelectedIndex] = React.useState<number>(0);
@@ -73,6 +75,18 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     }, [isOpen]);
 
     const defaultActions: SpotlightActionItem[] = [
+        {
+            id: 'act-open-demos',
+            title: 'Explore Showcase Demos',
+            subtitle: 'Preloaded 3D Geospatial Tiles, VFX NLE Matchmove, AI Pipeline, and Breakout Game',
+            category: 'Actions',
+            icon: <IconSparkles size={15} className="text-amber-400" />,
+            shortcut: '⌘D',
+            onExecute: () => {
+                onClose();
+                if (onOpenDemos) onOpenDemos();
+            }
+        },
         {
             id: 'act-new-chat',
             title: 'New Conversational Session',

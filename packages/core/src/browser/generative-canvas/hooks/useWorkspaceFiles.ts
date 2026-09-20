@@ -16,7 +16,7 @@
  */
 import * as React from 'react';
 import { ProjectItem } from '../ProjectsModal';
-import { CanvasArtifact, ChatSession, CodeFileTab, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, NodeGraphData, PrimitiveType, Scene3DData, StudioLayoutMode, WorkspaceFileType, getActiveUserName } from '../canvas-types';
+import { CanvasArtifact, ChatSession, CodeFileTab, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, NodeGraphData, PrimitiveType, Scene3DData, StudioLayoutMode, VideoTimelineData, WorkspaceFileType, getActiveUserName } from '../canvas-types';
 import { synthesizeComprehensiveDocument } from '../document-synthesis-engine';
 import { KanbanBoardPrimitive } from '../primitives/KanbanBoardPrimitive';
 import { MarkdownDocumentPrimitive } from '../primitives/MarkdownDocumentPrimitive';
@@ -64,8 +64,23 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
     };
 
 
-    const handleFileClick = (filePath: string, fileName: string) => {
+    const handleFileClick = async (filePath: string, fileName: string) => {
         const ext = fileName.split('.').pop() || '';
+
+        // Attempt to fetch real file contents from disk
+        let realContent: string | null = null;
+        try {
+            const rootParam = activeWorkspace.path ? `&root=${encodeURIComponent(activeWorkspace.path)}` : '';
+            const res = await fetch(`/workspace/file-content?path=${encodeURIComponent(filePath)}${rootParam}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && typeof data.content === 'string') {
+                    realContent = data.content;
+                }
+            }
+        } catch {
+            // Graceful fallback to mock content
+        }
         
         let targetLayoutMode: StudioLayoutMode;
         let artifactType: PrimitiveType;
@@ -73,6 +88,9 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
         if (ext === '3d' || fileName === 'Scene3DPrimitive.tsx') {
             targetLayoutMode = '3d';
             artifactType = '3d-scene';
+        } else if (ext === 'otio' || ext === 'edl' || fileName === 'VideoTimelinePrimitive.tsx') {
+            targetLayoutMode = 'video';
+            artifactType = 'video-timeline';
         } else if (ext === 'md' || fileName === 'MarkdownDocumentPrimitive.tsx') {
             targetLayoutMode = 'document';
             artifactType = 'markdown-document';
@@ -119,14 +137,17 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
             
             if (existingFile) {
                 fileId = existingFile.id;
+                if (realContent !== null) {
+                    existingFile.content = realContent;
+                }
                 currentSandbox.activeFileId = fileId;
             } else {
-                const mockContent = getMockFileContent(normalizedPath, fileName);
+                const loadedContent = realContent !== null ? realContent : getMockFileContent(normalizedPath, fileName);
                 const newTab: CodeFileTab = {
                     id: fileId,
                     name: fileName,
                     language: ext === 'tsx' ? 'react' : ext === 'ts' ? 'typescript' : ext === 'css' ? 'css' : 'javascript',
-                    content: mockContent,
+                    content: loadedContent,
                     path: normalizedPath,
                     isEntry: currentSandbox.files.length === 0
                 };
@@ -152,8 +173,8 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
             setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: updatedArtifact } : s));
 
         } else if (artifactType === 'markdown-document') {
-            const mockContent = getMockFileContent(filePath, fileName);
-            const sections = mockContent.split('\n\n').map((para, idx) => {
+            const markdownSource = realContent !== null ? realContent : getMockFileContent(filePath, fileName);
+            const sections = markdownSource.split('\n\n').map((para, idx) => {
                 if (para.startsWith('# ')) {
                     return { id: `sec-${idx}`, type: 'heading' as const, level: 1 as const, content: para.replace(/^#+\s*/, '') };
                 } else if (para.startsWith('## ') || para.startsWith('### ')) {
@@ -173,7 +194,7 @@ export function useWorkspaceFiles(deps: UseWorkspaceFilesDeps) {
                 author: getActiveUserName(),
                 lastUpdated: 'Just now',
                 tags: ['Specification', 'Documentation'],
-                sections: sections.length > 0 ? sections : [{ id: 'sec-1', type: 'paragraph', content: mockContent }]
+                sections: sections.length > 0 ? sections : [{ id: 'sec-1', type: 'paragraph', content: markdownSource }]
             };
 
             const updatedArtifact: CanvasArtifact = {
@@ -538,6 +559,139 @@ export function useWorkspaceFileCreation(deps: UseWorkspaceFilesDeps) {
                 title: 'Interactive Web Browser',
                 fileType: 'browser',
                 layoutMode: 'browser',
+                workspaceId: activeWorkspace.id,
+                workspaceName: activeWorkspace.path.split('/').pop() || activeWorkspace.name,
+                relativeTime: 'Just now',
+                dateCategory: 'Today',
+                updatedAt: 'Just now',
+                messages: [],
+                activeArtifact: activeArt,
+                artifactHistory: [activeArt]
+            };
+        } else if (type === 'video') {
+            const activeArt: CanvasArtifact = {
+                id: `art-video-${Date.now()}`,
+                type: 'video-timeline',
+                title: 'Cyberpunk 2088 Motion Teaser',
+                summary: 'Multi-track non-linear video editing timeline with real-time WebGL compositor, color wheels & scopes.',
+                data: {
+                    title: 'Cyberpunk 2088 Motion Teaser',
+                    subtitle: 'Multi-Track NLE Timeline with WebGL Compositor & Scopes',
+                    fps: 30,
+                    aspectRatio: '16:9',
+                    duration: 15.0,
+                    currentTime: 2.5,
+                    zoom: 50,
+                    tracks: [
+                        {
+                            id: 'v2-overlay',
+                            name: 'V2 Title Graphics',
+                            type: 'overlay',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            elements: [
+                                {
+                                    id: 'clip-v2-1',
+                                    name: 'SCRATCHBOX NLE HUD',
+                                    trackId: 'v2-overlay',
+                                    type: 'text',
+                                    startTime: 1.0,
+                                    duration: 4.5,
+                                    trimStart: 0,
+                                    trimEnd: 4.5,
+                                    opacity: 0.95,
+                                    textContent: 'SYSTEM: COMPOSITING MATRIX ONLINE',
+                                    textColor: '#38bdf8'
+                                }
+                            ]
+                        },
+                        {
+                            id: 'v1-video',
+                            name: 'V1 Video Footage',
+                            type: 'video',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            elements: [
+                                {
+                                    id: 'clip-v1-1',
+                                    name: 'City Skyline Drone Shot',
+                                    trackId: 'v1-video',
+                                    type: 'video',
+                                    startTime: 0,
+                                    duration: 5.0,
+                                    trimStart: 0,
+                                    trimEnd: 5.0,
+                                    opacity: 1.0,
+                                    grade: {
+                                        exposure: 0,
+                                        contrast: 0,
+                                        saturation: 100
+                                    }
+                                },
+                                {
+                                    id: 'clip-v1-2',
+                                    name: '3D Hologram Mech Scene',
+                                    trackId: 'v1-video',
+                                    type: '3d',
+                                    startTime: 5.0,
+                                    duration: 6.5,
+                                    trimStart: 0,
+                                    trimEnd: 6.5,
+                                    opacity: 1.0,
+                                    grade: {
+                                        exposure: 0,
+                                        contrast: 0,
+                                        saturation: 100
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            id: 'a1-music',
+                            name: 'A1 Synthwave Soundtrack',
+                            type: 'audio',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            volume: 0.9,
+                            elements: [
+                                {
+                                    id: 'clip-a1-1',
+                                    name: 'Synthwave Night City Theme.wav',
+                                    trackId: 'a1-music',
+                                    type: 'audio',
+                                    startTime: 0,
+                                    duration: 15.0,
+                                    trimStart: 0,
+                                    trimEnd: 15.0,
+                                    volume: 0.9
+                                }
+                            ]
+                        }
+                    ],
+                    mediaAssets: [
+                        { id: 'med-1', name: 'City Skyline Drone Shot.mp4', type: 'video', duration: 12.0, width: 3840, height: 2160, fps: 30 },
+                        { id: 'med-2', name: '3D Hologram Mech Scene.glb', type: '3d', duration: 10.0 },
+                        { id: 'med-3', name: 'Synthwave Night City Theme.wav', type: 'audio', duration: 30.0 }
+                    ],
+                    globalGrade: {
+                        exposure: 0,
+                        contrast: 0,
+                        saturation: 100,
+                        colorTemp: 6500,
+                        colorTint: 0
+                    }
+                } as VideoTimelineData,
+                createdAt: new Date().toLocaleTimeString(),
+                version: 1
+            };
+            newSession = {
+                id: newSessionId,
+                title: 'Cyberpunk 2088 Motion Teaser',
+                fileType: 'video',
+                layoutMode: 'video',
                 workspaceId: activeWorkspace.id,
                 workspaceName: activeWorkspace.path.split('/').pop() || activeWorkspace.name,
                 relativeTime: 'Just now',

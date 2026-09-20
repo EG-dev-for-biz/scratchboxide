@@ -1694,7 +1694,7 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                 </div>
 
                 {/* Quick Node Addition Triggers */}
-                <div className="sb-graph-quick-actions" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)', flexWrap: 'wrap' }}>
+                <div className="sb-graph-quick-actions" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--sb-surface-border)', flexWrap: 'wrap' }}>
                     <button
                         type="button"
                         className="sb-btn sb-btn-secondary sb-btn-xs sb-graph-quick-btn"

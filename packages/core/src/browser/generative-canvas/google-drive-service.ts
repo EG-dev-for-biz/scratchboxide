@@ -228,14 +228,20 @@ export class GoogleDriveService {
                         type: 'paragraph',
                         text: sec.content || ''
                     };
-                case 'callout':
+                case 'callout': {
+                    const cType = sec.calloutType;
+                    const safeCalloutType: 'info' | 'warning' | 'tip' | 'note' | 'danger' | 'success' =
+                        cType === 'warning' || cType === 'tip' || cType === 'success' || cType === 'info' || cType === 'note'
+                            ? cType
+                            : 'note';
                     return {
                         id: sec.id,
                         type: 'callout',
-                        calloutType: sec.calloutType || 'info',
+                        calloutType: safeCalloutType,
                         calloutTitle: sec.calloutTitle || 'Architecture Insight',
                         text: sec.content || ''
                     };
+                }
                 case 'checklist':
                     return {
                         id: sec.id,

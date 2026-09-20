@@ -17,7 +17,7 @@ export const PlanTab: React.FC = () => {
         <div className="sb-cursor-settings-content animate-fadeIn">
             <div className="flex items-center justify-between mb-1">
                 <h2 className="sb-cursor-content-title">Plan &amp; Usage</h2>
-                <span className="sb-badge-unified sb-badge-emerald font-semibold text-[11px] px-2.5 py-1">
+                <span className="sb-badge-unified sb-badge-emerald font-semibold">
                     ● 100% Free · Limited Time Promo
                 </span>
             </div>
@@ -27,7 +27,7 @@ export const PlanTab: React.FC = () => {
                 <div className="sb-cursor-plan-card sb-plan-active-promo-card">
                     <div className="flex items-center justify-between mb-1">
                         <span className="sb-plan-card-tag text-emerald-400 font-semibold">CURRENT PLAN · LIMITED TIME PROMO</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20">
+                        <span className="sb-badge-unified sb-badge-emerald font-bold">
                             Free Active
                         </span>
                     </div>
@@ -54,7 +54,7 @@ export const PlanTab: React.FC = () => {
                 <div className="sb-cursor-plan-card sb-plan-upgrade-card">
                     <div className="flex items-center justify-between mb-1">
                         <span className="sb-plan-card-tag text-blue-400">UPGRADE AVAILABLE</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 font-bold border border-blue-500/20">
+                        <span className="sb-badge-unified sb-badge-blue font-bold">
                             Included
                         </span>
                     </div>
@@ -94,11 +94,11 @@ export const PlanTab: React.FC = () => {
                             <span className="sb-usage-metric-title font-medium text-zinc-200">Google Reasoning Models</span>
                             <span className="sb-usage-metric-percent text-emerald-400 font-mono font-semibold">0% used · Unlimited Free</span>
                         </div>
-                        <div className="text-[11px] text-zinc-500 mb-2">High-reasoning Gemini models and autonomous subagents</div>
+                        <div className="text-xs text-zinc-400 mb-2">High-reasoning Gemini models and autonomous subagents</div>
                         <div className="sb-cursor-usage-bar">
                             <div className="sb-usage-fill" style={{ width: '0%' }} />
                         </div>
-                        <div className="text-[10px] text-zinc-500 mt-1.5">Unlimited complimentary usage active during the promotional period.</div>
+                        <div className="text-xs text-zinc-500 mt-1.5">Unlimited complimentary usage active during the promotional period.</div>
                     </div>
 
                     <div className="pt-3 border-t border-zinc-800/80 sb-usage-group-row">
@@ -106,11 +106,11 @@ export const PlanTab: React.FC = () => {
                             <span className="sb-usage-metric-title font-medium text-zinc-200">Background Agent Sessions</span>
                             <span className="sb-usage-metric-percent text-emerald-400 font-mono font-semibold">0% used · Unlimited Free</span>
                         </div>
-                        <div className="text-[11px] text-zinc-500 mb-2">Multi-step TDD verification and autonomous tool pipelines</div>
+                        <div className="text-xs text-zinc-400 mb-2">Multi-step TDD verification and autonomous tool pipelines</div>
                         <div className="sb-cursor-usage-bar">
                             <div className="sb-usage-fill" style={{ width: '0%' }} />
                         </div>
-                        <div className="text-[10px] text-zinc-500 mt-1.5">All background agent sessions are 100% free during the promotion.</div>
+                        <div className="text-xs text-zinc-500 mt-1.5">All background agent sessions are 100% free during the promotion.</div>
                     </div>
                 </div>
             </div>
@@ -141,7 +141,7 @@ export const PlanTab: React.FC = () => {
                                 value={monthlySpendLimit}
                                 onChange={e => setMonthlySpendLimit(e.target.value)}
                             >
-                                <option value="unlimited">Unlimited (Free Promo) ▾</option>
+                                <option value="unlimited">Unlimited (Free Promo)</option>
                                 <option value="50">$50 / mo</option>
                                 <option value="100">$100 / mo</option>
                                 <option value="200">$200 / mo</option>

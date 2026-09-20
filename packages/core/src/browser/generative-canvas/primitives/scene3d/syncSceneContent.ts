@@ -45,6 +45,7 @@ export interface SceneContentInput {
     hasCustomMeshes: boolean;
     /** Objects exist and are not merely the `internal:mesh` fallback placeholder. */
     hasNonFallbackObjects: boolean;
+    hasCppGenerator?: boolean;
     selectedShape: SculptableShape;
     sculptWireframe: boolean;
 }
@@ -69,6 +70,7 @@ export function classifySceneContent(input: SceneContentInput): 'script' | 'tile
     if (input.hasActiveScript) return 'script';
     if (input.has3DTiles) return 'tiles';
     if (input.isAirplane) return 'aircraft';
+    if (input.hasCppGenerator) return 'objects';
     if (t === 'worldbuilder' || WORLD_KEYWORDS.test(haystack)) return 'worldbuilder';
     if (t === 'battlefield' || BATTLEFIELD_KEYWORDS.test(haystack)) return 'battlefield';
     if (t === 'city' || CITY_KEYWORDS.test(haystack)) return 'city';
@@ -221,7 +223,7 @@ export function syncSceneContent(
     }
 
     // Sculptable focal mesh (general / custom scenes) or first procedural mesh as sculpt target
-    if (!input.isAirplane && !input.has3DTiles && (!proceduralSceneGroup || input.sceneType === 'general' || input.sceneType === 'custom')) {
+    if (!input.hasCppGenerator && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup || input.sceneType === 'general' || input.sceneType === 'custom')) {
         const sGeo = createSculptableGeometry(input.selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
         const sMat = new THREE.MeshStandardMaterial({
             color: 0x60a5fa,

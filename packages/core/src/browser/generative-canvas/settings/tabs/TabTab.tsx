@@ -20,7 +20,7 @@ export const TabTab: React.FC = () => {
             <div className="sb-cursor-group-card">
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Cursor Tab</div>
+                        <div className="sb-cursor-row-title">Scratchbox Tab</div>
                         <div className="sb-cursor-row-desc">Context-aware, multi-line suggestions around your cursor based on recent edits</div>
                     </div>
                     <button
@@ -100,7 +100,7 @@ export const TabTab: React.FC = () => {
 
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Auto Import for Python <span className="sb-badge-unified sb-badge-zinc text-[9px]">BETA</span></div>
+                        <div className="sb-cursor-row-title">Auto Import for Python <span className="sb-badge-unified sb-badge-zinc">BETA</span></div>
                         <div className="sb-cursor-row-desc">Enable auto import for Python. This is a beta feature.</div>
                     </div>
                     <button
@@ -117,7 +117,7 @@ export const TabTab: React.FC = () => {
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
                         <div className="sb-cursor-row-title">Ignored Files</div>
-                        <div className="sb-cursor-row-desc">Glob patterns for files where Cursor Tab will not suggest</div>
+                        <div className="sb-cursor-row-desc">Glob patterns for files where Scratchbox Tab will not suggest</div>
                     </div>
                     <input
                         type="text"

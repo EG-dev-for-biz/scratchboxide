@@ -24,6 +24,7 @@ import {
     SkillsManagerData,
     LiveCodeSandboxData,
     InteractiveBrowserData,
+    VideoTimelineData,
     getActiveUserName
 } from '../canvas-types';
 import { ChecklistPrimitive } from './ChecklistPrimitive';
@@ -37,6 +38,7 @@ import { NodeGraphPrimitive } from './NodeGraphPrimitive';
 import { SkillsManagerPrimitive } from './SkillsManagerPrimitive';
 import { LiveCodeSandboxPrimitive } from './LiveCodeSandboxPrimitive';
 import { InteractiveBrowserPrimitive } from './InteractiveBrowserPrimitive';
+import { VideoTimelinePrimitive } from './VideoTimelinePrimitive';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import {
     getPrimitiveSvgIcon,
@@ -472,6 +474,8 @@ export const ArtifactContainer: React.FC<ArtifactContainerProps> = ({
             case 'interactive-browser':
             case 'browser':
                 return { label: 'Web Browser', color: 'cyan' };
+            case 'video-timeline':
+                return { label: 'Video NLE', color: 'pink' };
             default:
                 return { label: 'Canvas', color: 'blue' };
         }
@@ -487,6 +491,7 @@ export const ArtifactContainer: React.FC<ArtifactContainerProps> = ({
         if (t === 'skills-manager') return 'skills-hub';
         if (t === 'sandbox' || t === 'code-sandbox') return 'live-code-sandbox';
         if (t === 'browser' || t === 'web-browser') return 'interactive-browser';
+        if (t === 'video-timeline' || t === 'video' || t === 'nle') return 'video-timeline';
         return (t as PrimitiveType) || 'markdown-document';
     };
 
@@ -855,6 +860,14 @@ export const ArtifactContainer: React.FC<ArtifactContainerProps> = ({
                 return (
                     <InteractiveBrowserPrimitive
                         data={artifact.data as InteractiveBrowserData}
+                        onUpdate={handlePrimitiveUpdate}
+                        onPromptAction={onPromptAction}
+                    />
+                );
+            case 'video-timeline':
+                return (
+                    <VideoTimelinePrimitive
+                        data={artifact.data as VideoTimelineData}
                         onUpdate={handlePrimitiveUpdate}
                         onPromptAction={onPromptAction}
                     />

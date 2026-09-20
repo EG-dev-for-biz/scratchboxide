@@ -168,6 +168,17 @@ export class TerrainCloudShadows {
         }
     }
 
+    public updateConfig(config: Partial<CloudShadowConfig>): void {
+        if (config.cloudShadowsEnabled !== undefined) this.uniforms.uCloudShadowsEnabled.value = config.cloudShadowsEnabled;
+        if (config.cloudShadowIntensity !== undefined) this.uniforms.uCloudShadowIntensity.value = config.cloudShadowIntensity;
+        if (config.cloudShadowScale !== undefined) this.uniforms.uCloudShadowScale.value = config.cloudShadowScale;
+        if (config.atmosphereShadowLength !== undefined) this.uniforms.uAtmosphereShadowLength.value = config.atmosphereShadowLength;
+        if (config.cloudAltitude !== undefined) this.uniforms.uCloudAltitude.value = config.cloudAltitude;
+        if (config.cloudCoverage !== undefined) this.uniforms.uCloudCoverage.value = config.cloudCoverage;
+        if (config.cloudDensity !== undefined) this.uniforms.uCloudDensity.value = config.cloudDensity;
+        if (config.windVector !== undefined) this.uniforms.uWindVector.value.set(config.windVector[0], config.windVector[1]);
+    }
+
     public dispose(): void {
         this.materials.clear();
     }

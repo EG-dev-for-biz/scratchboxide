@@ -25,7 +25,7 @@ export const DocsTab: React.FC = () => {
                     {sidebarNavSections.find(s => s.id === activeTab)?.label} Documentation
                 </div>
                 <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                    Cloud agent tasks and documentation links are accessible at docs.cursor.com and scratchbox.io/docs.
+                    Cloud agent tasks and documentation links are accessible at docs.scratchbox.dev and scratchbox.io/docs.
                 </p>
             </div>
         </div>

@@ -15,7 +15,7 @@
  * Extracted verbatim from GenerativeCanvasStudio.tsx.
  */
 import * as React from 'react';
-import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, StudioLayoutMode, getActiveUserName } from '../canvas-types';
+import { CanvasArtifact, InteractiveBrowserData, KanbanBoardData, LiveCodeSandboxData, MarkdownDocumentData, MetricDashboardData, NodeGraphData, PrimitiveType, StudioLayoutMode, VideoTimelineData, getActiveUserName } from '../canvas-types';
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useCapabilities } from '../hooks/useCapabilities';
 import { ChatState, ChatStore } from '../state/chatStore';
@@ -53,7 +53,8 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
             kanban: ['kanban-board'],
             automation: ['node-graph'],
             '3d': ['3d-scene'],
-            browser: ['interactive-browser', 'browser']
+            browser: ['interactive-browser', 'browser'],
+            video: ['video-timeline']
         };
 
         const targetTypes = typeMap[effectiveMode] || [];
@@ -211,6 +212,127 @@ export function useLayoutModeSwitch(deps: UseLayoutModeSwitchDeps) {
             };
             setActiveArtifact(defaultBrowser);
             setArtifactHistory(prev => [defaultBrowser, ...prev.filter(a => a.id !== defaultBrowser.id)]);
+        } else if (effectiveMode === 'video') {
+            const defaultVideo: CanvasArtifact = {
+                id: `art-video-${Date.now()}`,
+                type: 'video-timeline',
+                title: 'Cyberpunk 2088 Motion Teaser',
+                summary: 'Multi-track non-linear video editing timeline with real-time WebGL compositor, color wheels & scopes.',
+                version: 1,
+                createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                data: {
+                    title: 'Cyberpunk 2088 Motion Teaser',
+                    subtitle: 'Multi-Track NLE Timeline with WebGL Compositor & Scopes',
+                    fps: 30,
+                    aspectRatio: '16:9',
+                    duration: 15.0,
+                    currentTime: 2.5,
+                    zoom: 50,
+                    tracks: [
+                        {
+                            id: 'v2-overlay',
+                            name: 'V2 Title Graphics',
+                            type: 'overlay',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            elements: [
+                                {
+                                    id: 'clip-v2-1',
+                                    name: 'SCRATCHBOX NLE HUD',
+                                    trackId: 'v2-overlay',
+                                    type: 'text',
+                                    startTime: 1.0,
+                                    duration: 4.5,
+                                    trimStart: 0,
+                                    trimEnd: 4.5,
+                                    opacity: 0.95,
+                                    textContent: 'SYSTEM: COMPOSITING MATRIX ONLINE',
+                                    textColor: '#38bdf8'
+                                }
+                            ]
+                        },
+                        {
+                            id: 'v1-video',
+                            name: 'V1 Video Footage',
+                            type: 'video',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            elements: [
+                                {
+                                    id: 'clip-v1-1',
+                                    name: 'City Skyline Drone Shot',
+                                    trackId: 'v1-video',
+                                    type: 'video',
+                                    startTime: 0,
+                                    duration: 5.0,
+                                    trimStart: 0,
+                                    trimEnd: 5.0,
+                                    opacity: 1.0,
+                                    grade: {
+                                        exposure: 0,
+                                        contrast: 0,
+                                        saturation: 100
+                                    }
+                                },
+                                {
+                                    id: 'clip-v1-2',
+                                    name: '3D Hologram Mech Scene',
+                                    trackId: 'v1-video',
+                                    type: '3d',
+                                    startTime: 5.0,
+                                    duration: 6.5,
+                                    trimStart: 0,
+                                    trimEnd: 6.5,
+                                    opacity: 1.0,
+                                    grade: {
+                                        exposure: 0,
+                                        contrast: 0,
+                                        saturation: 100
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            id: 'a1-music',
+                            name: 'A1 Synthwave Soundtrack',
+                            type: 'audio',
+                            visible: true,
+                            muted: false,
+                            locked: false,
+                            volume: 0.9,
+                            elements: [
+                                {
+                                    id: 'clip-a1-1',
+                                    name: 'Synthwave Night City Theme.wav',
+                                    trackId: 'a1-music',
+                                    type: 'audio',
+                                    startTime: 0,
+                                    duration: 15.0,
+                                    trimStart: 0,
+                                    trimEnd: 15.0,
+                                    volume: 0.9
+                                }
+                            ]
+                        }
+                    ],
+                    mediaAssets: [
+                        { id: 'med-1', name: 'City Skyline Drone Shot.mp4', type: 'video', duration: 12.0, width: 3840, height: 2160, fps: 30 },
+                        { id: 'med-2', name: '3D Hologram Mech Scene.glb', type: '3d', duration: 10.0 },
+                        { id: 'med-3', name: 'Synthwave Night City Theme.wav', type: 'audio', duration: 30.0 }
+                    ],
+                    globalGrade: {
+                        exposure: 0,
+                        contrast: 0,
+                        saturation: 100,
+                        colorTemp: 6500,
+                        colorTint: 0
+                    }
+                } as VideoTimelineData
+            };
+            setActiveArtifact(defaultVideo);
+            setArtifactHistory(prev => [defaultVideo, ...prev.filter(a => a.id !== defaultVideo.id)]);
         }
     };
 
@@ -320,19 +442,57 @@ export function useCreateEmptyCanvas(deps: UseLayoutModeSwitchDeps) {
                     deviceScale: 1
                 } as InteractiveBrowserData
             };
+        } else if (type === 'video-timeline') {
+            newArtifact = {
+                id: `art-video-${Date.now()}`,
+                type: 'video-timeline',
+                title: customTitle || 'New Video Project',
+                summary: 'Multi-track non-linear video editing timeline with real-time WebGL compositor',
+                version: 1,
+                createdAt: timestamp,
+                data: {
+                    title: customTitle || 'New Video Project',
+                    subtitle: 'Multi-Track NLE Timeline',
+                    fps: 30,
+                    aspectRatio: '16:9',
+                    duration: 10.0,
+                    currentTime: 0.0,
+                    zoom: 50,
+                    tracks: [
+                        { id: 'v1', name: 'Video 1', type: 'video', muted: false, locked: false, visible: true, volume: 1.0, elements: [] },
+                        { id: 'a1', name: 'Audio 1', type: 'audio', muted: false, locked: false, visible: true, volume: 1.0, elements: [] }
+                    ],
+                    mediaAssets: []
+                } as VideoTimelineData
+            };
         } else {
             newArtifact = {
                 id: `art-metric-${Date.now()}`,
                 type: 'metric-dashboard',
-                title: customTitle || 'New KPI Metrics Dashboard',
+                title: customTitle || 'System Performance & Telemetry',
                 summary: 'Real-time telemetry and metric cards',
                 version: 1,
                 createdAt: timestamp,
                 data: {
-                    title: customTitle || 'Performance Metrics',
+                    title: customTitle || 'System Performance & Telemetry',
+                    subtitle: 'Real-time telemetry and KPI metrics',
                     metrics: [
-                        { id: 'm1', label: 'Throughput', value: '1,240 req/s', change: '+12%', trend: 'up', color: 'blue' }
-                    ]
+                        { id: 'm1', label: 'Throughput', value: '1,240 req/s', change: '+12%', trend: 'up', color: 'blue', sparkline: [100, 110, 105, 120, 118, 125, 130] },
+                        { id: 'm2', label: 'Avg Latency', value: '42ms', change: '-8%', trend: 'down', color: 'emerald', sparkline: [50, 48, 45, 46, 44, 43, 42] },
+                        { id: 'm3', label: 'Error Rate', value: '0.02%', change: '-0.01%', trend: 'down', color: 'purple', sparkline: [0.05, 0.04, 0.03, 0.03, 0.02, 0.02, 0.02] },
+                        { id: 'm4', label: 'Active Nodes', value: '18 / 20', change: 'Stable', trend: 'neutral', color: 'indigo', sparkline: [16, 16, 17, 18, 18, 18, 18] }
+                    ],
+                    chart: {
+                        title: 'Hourly API Throughput (req/s)',
+                        data: [
+                            { label: '00:00', value: 320 },
+                            { label: '04:00', value: 280 },
+                            { label: '08:00', value: 890 },
+                            { label: '12:00', value: 1240 },
+                            { label: '16:00', value: 1180 },
+                            { label: '20:00', value: 950 }
+                        ]
+                    }
                 } as MetricDashboardData
             };
         }

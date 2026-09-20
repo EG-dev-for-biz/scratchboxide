@@ -11,7 +11,9 @@ import { test } from 'vitest';
 import * as assert from 'assert';
 import {
     GoogleMapsService,
-    StaticMapOptions
+    StaticMapOptions,
+    GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE,
+    STATIC_MAPS_NO_LABELS_STYLES
 } from '../src/browser/generative-canvas/services/google-maps-service';
 
 async function runGoogleMapsServiceTests() {
@@ -190,6 +192,56 @@ async function runGoogleMapsServiceTests() {
     // Restore original key
     service.setApiKey(originalKey);
     console.log('  ✓ Test 6 Passed: Reactive observer subscriptions reliably propagate state changes.');
+
+    // -------------------------------------------------------------
+    // Test 7: Vector ROADMAP Reference & Cloud-Based Map Styling
+    // -------------------------------------------------------------
+    console.log('  Testing Vector ROADMAP Reference & Cloud-Based Map Styling...');
+
+    // 1. Verify Cloud-Based Map Styling JSON Schema
+    assert.strictEqual(GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE.variant, 'light', 'Cloud styling must use light variant');
+    assert.ok(Array.isArray(GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE.styles), 'styles must be an array');
+    const styledIds = GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE.styles.map(s => s.id);
+    assert.ok(styledIds.includes('political'), 'Must suppress political labels');
+    assert.ok(styledIds.includes('pointOfInterest'), 'Must suppress POI labels');
+    assert.ok(styledIds.includes('infrastructure'), 'Must suppress infrastructure labels');
+    assert.ok(styledIds.includes('natural'), 'Must suppress natural labels');
+
+    for (const rule of GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE.styles) {
+        assert.strictEqual(rule.label.visible, false, `Label visibility for ${rule.id} must be false`);
+    }
+
+    assert.deepStrictEqual(service.getCloudMapStylingJson(), GOOGLE_CLOUD_ROADMAP_NO_LABELS_STYLE, 'Service getCloudMapStylingJson must match constant');
+
+    // 2. Verify Map ID management
+    const testMapId = 'map_id_vector_roadmap_light_ref_2026';
+    service.setVectorRoadmapMapId(testMapId);
+    assert.strictEqual(service.getVectorRoadmapMapId(), testMapId, 'getVectorRoadmapMapId must return configured Map ID');
+
+    // 3. Verify Vector Roadmap Ground Blueprint URL Generation (with Map ID)
+    service.setApiKey(testKey);
+    const blueprintUrlWithMapId = service.getVectorRoadmapStaticBlueprintUrl({
+        center: { lat: 37.7955, lng: -122.3937 },
+        zoom: 17,
+        size: 1024
+    });
+    assert.ok(blueprintUrlWithMapId.includes('maptype=roadmap'), 'Blueprint URL must use roadmap maptype');
+    assert.ok(blueprintUrlWithMapId.includes('size=1024x1024'), 'Blueprint URL must specify square dimension');
+    assert.ok(blueprintUrlWithMapId.includes(`map_id=${testMapId}`), 'Blueprint URL must embed Cloud Map ID');
+    assert.ok(blueprintUrlWithMapId.includes('zoom=17'), 'Blueprint URL must embed zoom level');
+
+    // 4. Verify Vector Roadmap Ground Blueprint URL Generation (without Map ID fallback to style)
+    service.setVectorRoadmapMapId('');
+    const blueprintUrlWithStyleFallback = service.getVectorRoadmapStaticBlueprintUrl({
+        center: '37.7955,-122.3937',
+        zoom: 16
+    });
+    assert.ok(blueprintUrlWithStyleFallback.includes('maptype=roadmap'), 'Fallback URL must use roadmap maptype');
+    assert.ok(blueprintUrlWithStyleFallback.includes('style='), 'Fallback URL must embed style parameter hiding labels');
+
+    // Restore key
+    service.setApiKey(originalKey);
+    console.log('  ✓ Test 7 Passed: Vector ROADMAP Reference, Cloud-Based Map Styling JSON, and Map ID pipeline operate flawlessly.');
 
     console.log('\n🎉 ALL GOOGLE MAPS SERVICE TESTS PASSED SUCCESSFULLY!\n');
 }

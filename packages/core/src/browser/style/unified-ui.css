@@ -7,9 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+@import "./video-nle.css";
+
 /* ==========================================================================
    Scratchbox Unified Design System & Component Library (unified-ui.css)
-   Minimalist ChatGPT & Modern Obsidian Aesthetic: Monochrome, Restrained & Refined
+   Minimalist ChatGPT & Modern Refined Aesthetic: Monochrome, Restrained & Refined
    ========================================================================== */
 
 :root {
@@ -149,8 +151,8 @@ aside.sb-chatgpt-sidebar,
 .sb-chatgpt-sidebar {
     display: flex;
     flex-direction: column;
-    width: 240px;
-    min-width: 240px;
+    width: 260px;
+    min-width: 260px;
     flex-shrink: 0;
     height: 100%;
     border-right: 1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.06));
@@ -369,6 +371,13 @@ body.theia-light .sb-segment-btn.sb-segment-active {
     color: #ffffff !important;
 }
 
+body.theia-light .sb-btn-secondary:hover:not(:disabled),
+body.theia-light .sb-button-secondary:hover:not(:disabled),
+body.sb-light .sb-btn-secondary:hover:not(:disabled),
+body.sb-light .sb-button-secondary:hover:not(:disabled) {
+    color: var(--sb-text-label, #0f172a) !important;
+}
+
 .sb-btn-secondary:active:not(:disabled),
 .sb-button-secondary:active:not(:disabled) {
     background: var(--sb-btn-secondary-bg-active) !important;
@@ -387,6 +396,13 @@ body.theia-light .sb-segment-btn.sb-segment-active {
 .sb-button-ghost:hover:not(:disabled) {
     background: var(--sb-btn-ghost-bg-hover) !important;
     color: #ffffff !important;
+}
+
+body.theia-light .sb-btn-ghost:hover:not(:disabled),
+body.theia-light .sb-button-ghost:hover:not(:disabled),
+body.sb-light .sb-btn-ghost:hover:not(:disabled),
+body.sb-light .sb-button-ghost:hover:not(:disabled) {
+    color: var(--sb-text-label, #0f172a) !important;
 }
 
 .sb-btn-ghost:active:not(:disabled),
@@ -1617,10 +1633,23 @@ body.theia-light .sb-sidebar-nav-active {
 }
 
 .sb-history-time-badge {
-    font-size: 11px;
-    color: var(--sb-text-tertiary);
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--sb-text-tertiary, #71717a);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 1px 5px;
+    border-radius: 4px;
     margin-left: 6px;
     font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+    line-height: 1.2;
+}
+
+body.theia-light .sb-history-time-badge {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.06);
+    color: #71717a;
 }
 
 .sb-sidebar-more-btn {
@@ -2140,6 +2169,19 @@ body.theia-light .sb-active-dot {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.sb-workspace-thread-item .sb-history-item-delete {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+
+.sb-workspace-thread-item:hover .sb-history-item-delete {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 /* Getting Started Card */
@@ -2600,6 +2642,7 @@ body.theia-light .sb-ide-icon-btn:hover {
     flex-direction: column;
     flex: 1;
     min-width: 0;
+    overflow: hidden;
     background: #141416;
     border-right: 1px solid #27272a;
 }
@@ -2614,7 +2657,8 @@ body.theia-light .sb-ide-editor-container {
 }
 
 .sb-ide-editor-split {
-    flex: 0.55;
+    flex: 0.52;
+    min-width: 0;
 }
 
 /* Tab Bar */
@@ -2625,8 +2669,9 @@ body.theia-light .sb-ide-editor-container {
     height: 35px;
     background: #18181b;
     border-bottom: 1px solid #27272a;
-    padding: 0 4px;
+    padding: 0 6px;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
 body.theia-light .sb-ide-tab-bar {
@@ -2789,14 +2834,20 @@ body.theia-light .sb-ide-gutter {
     font-size: 11.5px;
 }
 
-.sb-ide-textarea-wrap {
+.sb-ide-textarea-wrap,
+.sb-ide-monaco-wrap {
     flex: 1;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
     position: relative;
     overflow: hidden;
     background: #141416;
 }
 
-body.theia-light .sb-ide-textarea-wrap {
+body.theia-light .sb-ide-textarea-wrap,
+body.theia-light .sb-ide-monaco-wrap {
     background: #ffffff;
 }
 
@@ -3057,6 +3108,7 @@ body.theia-light .sb-ide-log-msg {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    overflow: hidden;
     background: #09090b;
 }
 
@@ -3065,7 +3117,8 @@ body.theia-light .sb-ide-log-msg {
 }
 
 .sb-ide-preview-split {
-    flex: 0.45;
+    flex: 0.48;
+    min-width: 0;
 }
 
 .sb-ide-preview-header {
@@ -3073,10 +3126,11 @@ body.theia-light .sb-ide-log-msg {
     align-items: center;
     justify-content: space-between;
     height: 35px;
-    padding: 0 12px;
+    padding: 0 10px;
     background: #18181b;
     border-bottom: 1px solid #27272a;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
 body.theia-light .sb-ide-preview-header {
@@ -4828,7 +4882,8 @@ body.theia-light .sb-cursor-settings-main {
     display: flex;
     flex-direction: column;
     gap: 18px;
-    max-width: 680px;
+    max-width: 720px;
+    width: 100%;
 }
 
 .sb-cursor-content-title {
@@ -4935,6 +4990,19 @@ body.theia-light .sb-cursor-row-title {
 .sb-cursor-row-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: #ffffff;
+}
+
+body.theia-light .sb-cursor-row-btn {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.16);
+    color: #18181b;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+body.theia-light .sb-cursor-row-btn:hover {
+    background: #f4f4f5;
+    border-color: rgba(0, 0, 0, 0.28);
+    color: #000000;
 }
 
 /* Apple Green Cursor Toggle Switch */
@@ -5099,6 +5167,65 @@ body.theia-light .sb-cursor-text-input {
     color: #18181b;
 }
 
+/* Scoped Full-Width Form Controls for Cursor Settings */
+.sb-cursor-settings-window .sb-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+
+.sb-cursor-settings-window .sb-form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #a1a1aa;
+    margin-bottom: 6px;
+    line-height: 1.4;
+}
+
+body.theia-light .sb-cursor-settings-window .sb-form-label {
+    color: #52525b;
+}
+
+.sb-cursor-settings-window .sb-form-input,
+.sb-cursor-settings-window .sb-form-textarea,
+.sb-cursor-settings-window .sb-form-select {
+    width: 100%;
+    box-sizing: border-box;
+    display: block;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #f4f4f5;
+    font-size: 12.5px;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sb-cursor-settings-window .sb-form-input:focus,
+.sb-cursor-settings-window .sb-form-textarea:focus,
+.sb-cursor-settings-window .sb-form-select:focus {
+    border-color: rgba(59, 130, 246, 0.5);
+    background: rgba(255, 255, 255, 0.07);
+}
+
+body.theia-light .sb-cursor-settings-window .sb-form-input,
+body.theia-light .sb-cursor-settings-window .sb-form-textarea,
+body.theia-light .sb-cursor-settings-window .sb-form-select {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.14);
+    color: #18181b;
+}
+
+body.theia-light .sb-cursor-settings-window .sb-form-input:focus,
+body.theia-light .sb-cursor-settings-window .sb-form-textarea:focus,
+body.theia-light .sb-cursor-settings-window .sb-form-select:focus {
+    border-color: rgba(59, 130, 246, 0.6);
+    background: #ffffff;
+}
+
 /* Plan & Usage Cards */
 .sb-cursor-plan-card {
     background: #1c1c1f;
@@ -5242,6 +5369,207 @@ body.theia-light .sb-cursor-usage-bar {
 
 .sb-diff-content {
     font-weight: 500;
+}
+
+body.theia-light .sb-cursor-diff-preview {
+    background: #f4f4f6;
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+body.theia-light .sb-diff-line.sb-diff-del {
+    background: rgba(244, 63, 94, 0.12);
+    color: #be123c;
+}
+
+body.theia-light .sb-diff-line.sb-diff-add {
+    background: rgba(16, 185, 129, 0.12);
+    color: #047857;
+}
+
+body.theia-light .sb-diff-num {
+    color: #71717a;
+}
+
+/* Light Theme Contrast Scoping for Settings Sub-cards, Borders & Typography */
+body.theia-light .sb-cursor-settings-window .bg-zinc-900\/80,
+body.theia-light .sb-cursor-settings-window .bg-zinc-900\/60,
+body.theia-light .sb-cursor-settings-window .bg-zinc-900\/50,
+body.theia-light .sb-cursor-settings-window .bg-zinc-900\/40,
+body.theia-light .sb-cursor-settings-window .bg-zinc-900\/90,
+body.theia-light .sb-cursor-settings-window .bg-zinc-950\/60,
+body.theia-light .sb-cursor-settings-window .bg-zinc-950\/40,
+body.theia-light .sb-cursor-settings-window .bg-zinc-900 {
+    background-color: #f4f4f6;
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.theia-light .sb-cursor-settings-window .text-zinc-200 {
+    color: #18181b;
+}
+
+body.theia-light .sb-cursor-settings-window .text-zinc-300 {
+    color: #27272a;
+}
+
+body.theia-light .sb-cursor-settings-window .text-zinc-400 {
+    color: #52525b;
+}
+
+body.theia-light .sb-cursor-settings-window .text-zinc-500 {
+    color: #71717a;
+}
+
+body.theia-light .sb-cursor-settings-window .border-zinc-800,
+body.theia-light .sb-cursor-settings-window .border-zinc-800\/80,
+body.theia-light .sb-cursor-settings-window .border-zinc-800\/60 {
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Scoped Utility & Grid Layout Helpers for Settings Window */
+.sb-cursor-settings-window .grid {
+    display: grid !important;
+}
+.sb-cursor-settings-window .grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+.sb-cursor-settings-window .gap-2 {
+    gap: 8px !important;
+}
+.sb-cursor-settings-window .gap-3 {
+    gap: 12px !important;
+}
+.sb-cursor-settings-window .gap-4 {
+    gap: 16px !important;
+}
+.sb-cursor-settings-window .flex {
+    display: flex !important;
+}
+.sb-cursor-settings-window .flex-col {
+    flex-direction: column !important;
+}
+.sb-cursor-settings-window .items-center {
+    align-items: center !important;
+}
+.sb-cursor-settings-window .justify-between {
+    justify-content: space-between !important;
+}
+.sb-cursor-settings-window .justify-end {
+    justify-content: flex-end !important;
+}
+.sb-cursor-settings-window .justify-center {
+    justify-content: center !important;
+}
+.sb-cursor-settings-window .p-3 {
+    padding: 12px !important;
+}
+.sb-cursor-settings-window .p-4 {
+    padding: 16px !important;
+}
+.sb-cursor-settings-window .p-6 {
+    padding: 24px !important;
+}
+.sb-cursor-settings-window .px-3 {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+}
+.sb-cursor-settings-window .py-2 {
+    padding-top: 8px !important;
+    padding-bottom: 8px !important;
+}
+.sb-cursor-settings-window .pt-2 {
+    padding-top: 8px !important;
+}
+.sb-cursor-settings-window .pt-3 {
+    padding-top: 12px !important;
+}
+.sb-cursor-settings-window .pb-2 {
+    padding-bottom: 8px !important;
+}
+.sb-cursor-settings-window .mb-2 {
+    margin-bottom: 8px !important;
+}
+.sb-cursor-settings-window .mb-3 {
+    margin-bottom: 12px !important;
+}
+.sb-cursor-settings-window .mb-4 {
+    margin-bottom: 16px !important;
+}
+.sb-cursor-settings-window .space-y-1 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 4px !important;
+}
+.sb-cursor-settings-window .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 8px !important;
+}
+.sb-cursor-settings-window .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 12px !important;
+}
+.sb-cursor-settings-window .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 16px !important;
+}
+
+.sb-cursor-group-card.p-4,
+.sb-cursor-card-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.sb-cursor-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 12px;
+    margin-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+body.theia-light .sb-cursor-card-footer {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.sb-cursor-tool-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.sb-cursor-tool-card {
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 4px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sb-cursor-tool-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.sb-icon-box {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+body.theia-light .sb-cursor-tool-card {
+    background: #f8f9fa;
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.theia-light .sb-cursor-tool-card:hover {
+    background: #f1f3f5;
+    border-color: rgba(0, 0, 0, 0.12);
 }
 
 /* Layout Helper */
@@ -5481,16 +5809,25 @@ body.theia-light .sb-metric-value {
 
 .sb-metric-bottom {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
 }
 
 .sb-metric-desc {
     font-size: 11px;
-    color: #71717a;
-    white-space: nowrap;
+    line-height: 1.4;
+    color: #a1a1aa;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 1 1 100%;
+}
+
+body.theia-light .sb-metric-desc {
+    color: #64748b;
 }
 
 .sb-metric-trend-pill {
@@ -6620,8 +6957,202 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     justify-content: flex-end;
 }
 
+/* 5. Generative Media Studio Texture Matrix Card */
+.sb-texture-matrix-card {
+    background: linear-gradient(145deg, #18191f, #121318);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--sb-btn-radius-md);
+    padding: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.sb-texture-matrix-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sb-badge-matrix {
+    background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+    color: #031321;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+
+.sb-texture-matrix-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+.sb-matrix-candidate-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.sb-matrix-candidate-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(56, 189, 248, 0.4);
+    transform: translateY(-1px);
+}
+
+.sb-matrix-candidate-card.sb-candidate-selected {
+    border-color: #38bdf8;
+    background: rgba(56, 189, 248, 0.08);
+    box-shadow: 0 0 14px rgba(56, 189, 248, 0.25);
+}
+
+.sb-matrix-candidate-thumb {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: #000;
+    overflow: hidden;
+}
+
+.sb-matrix-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.sb-matrix-candidate-card:hover .sb-matrix-thumb-img {
+    transform: scale(1.04);
+}
+
+.sb-candidate-active-tag {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: #38bdf8;
+    color: #031321;
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+}
+
+.sb-matrix-candidate-info {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sb-candidate-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f3f4f6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sb-candidate-sub {
+    font-size: 10px;
+    color: #9ca3af;
+}
+
+.sb-matrix-preview-panel {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sb-matrix-channel-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.sb-channel-pill-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #9ca3af;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sb-channel-pill-btn:hover {
+    color: #f3f4f6;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.sb-channel-pill-btn.sb-channel-active {
+    background: #38bdf8;
+    border-color: #38bdf8;
+    color: #031321;
+}
+
+.sb-matrix-viewport-container {
+    position: relative;
+    width: 100%;
+    height: 180px;
+    background: radial-gradient(circle at center, #1b1e28 0%, #0a0b10 100%);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sb-matrix-webgl-canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.sb-matrix-viewport-overlay {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    pointer-events: none;
+}
+
+.sb-matrix-mesh-preset {
+    background: rgba(0, 0, 0, 0.65);
+    color: #cbd5e1;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-family: monospace;
+}
+
+.sb-matrix-actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding-top: 4px;
+}
+
 /* ==========================================================================
-   5. 4D Scene Workspace / 4D Media Primitive Custom Styles (Blender-grade)
+   6. 4D Scene Workspace / 4D Media Primitive Custom Styles (Blender-grade)
    ========================================================================== */
 .sb-3d-stage-wrapper {
     width: 100% !important;
@@ -6708,17 +7239,19 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     display: block !important;
 }
 
-/* Top-Left Minimal Floating Scene Badge */
+/* Bottom-Left Minimal Floating Scene Telemetry Badge */
 .sb-3d-minimal-badge-container {
     position: absolute !important;
-    top: 16px !important;
+    bottom: 16px !important;
+    top: auto !important;
     left: 16px !important;
     z-index: 20 !important;
     pointer-events: none !important;
     display: flex !important;
     align-items: center !important;
     gap: 8px !important;
-    flex-wrap: wrap !important;
+    flex-wrap: nowrap !important;
+    max-width: calc(45% - 24px) !important;
 }
 
 .sb-3d-minimal-badge {
@@ -6740,6 +7273,40 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
 
 .sb-3d-minimal-badge .text-zinc-200 {
     color: #f4f4f5 !important;
+}
+
+.sb-3d-budget-btn {
+    pointer-events: auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: 3px 10px !important;
+    border-radius: 9999px !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-size: 10px !important;
+    font-weight: 500 !important;
+    background: rgba(6, 78, 59, 0.75) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(16, 185, 129, 0.4) !important;
+    color: #6ee7b7 !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+    font-variant-numeric: tabular-nums !important;
+    user-select: none !important;
+}
+
+.sb-3d-budget-btn:hover {
+    background: rgba(6, 78, 59, 0.9) !important;
+    border-color: rgba(16, 185, 129, 0.6) !important;
+}
+
+body.theia-light .sb-3d-budget-btn {
+    background: rgba(236, 253, 245, 0.9) !important;
+    border-color: rgba(16, 185, 129, 0.4) !important;
+    color: #047857 !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
 }
 
 /* 3D Precision Creative Vertical Toolstrip (Left Docked) */
@@ -6819,13 +7386,29 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     margin: 2px 0 !important;
 }
 
+/* 3D Top Header Bar: flex container preventing collisions across all viewport widths */
+.sb-3d-top-header-bar {
+    position: absolute !important;
+    top: 16px !important;
+    left: 72px !important;
+    right: 16px !important;
+    z-index: 20 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+    pointer-events: none !important;
+    overflow: hidden !important;
+    user-select: none !important;
+}
+
 /* Top-Right Contextual Options Bar */
 .sb-3d-options-bar,
 .sb-control-bar {
-    position: absolute !important;
-    top: 16px !important;
-    right: 16px !important;
-    z-index: 20 !important;
+    position: relative !important;
+    top: auto !important;
+    right: auto !important;
+    z-index: auto !important;
     display: flex !important;
     align-items: center !important;
     gap: 10px !important;
@@ -6842,7 +7425,45 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     pointer-events: auto !important;
     user-select: none !important;
     width: auto !important;
+    max-width: none !important;
     height: auto !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+}
+
+/* Top-Left Contextual Tool Options Bar (Positioned adjacent to vertical toolstrip) */
+.sb-3d-tool-options-bar {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    z-index: auto !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 6px 14px !important;
+    border-radius: 9999px !important;
+    background: rgba(18, 18, 22, 0.8) !important;
+    backdrop-filter: blur(24px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif !important;
+    font-size: 12px !important;
+    color: #e4e4e7 !important;
+    pointer-events: auto !important;
+    user-select: none !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    flex-shrink: 1 !important;
+    height: auto !important;
+    white-space: nowrap !important;
+    overflow-x: auto !important;
+}
+
+.sb-3d-options-bar::-webkit-scrollbar,
+.sb-3d-tool-options-bar::-webkit-scrollbar {
+    display: none !important;
 }
 
 /* Floating Glassmorphic 3D Scene Outliner Panel */
@@ -6855,16 +7476,17 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     max-height: 72vh !important;
     display: flex !important;
     flex-direction: column !important;
-    padding: 12px !important;
-    border-radius: 16px !important;
-    background: rgba(18, 18, 22, 0.92) !important;
+    background: rgba(18, 18, 22, 0.88) !important;
     backdrop-filter: blur(28px) saturate(190%) !important;
     -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.14) !important;
-    box-shadow: 0 20px 48px -8px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif !important;
     color: #f4f4f5 !important;
     pointer-events: auto !important;
-    user-select: none !important;
+    overflow: hidden !important;
+    animation: sbFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 .sb-3d-outliner-panel input[type="text"] {
@@ -6881,13 +7503,15 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
 }
 
-.sb-3d-options-bar .sb-3d-pill-group-container {
+.sb-3d-options-bar .sb-3d-pill-group-container,
+.sb-3d-tool-options-bar .sb-3d-pill-group-container {
     display: inline-flex !important;
     align-items: center !important;
     gap: 6px !important;
 }
 
-.sb-3d-options-bar .sb-3d-pill-group {
+.sb-3d-options-bar .sb-3d-pill-group,
+.sb-3d-tool-options-bar .sb-3d-pill-group {
     display: inline-flex !important;
     align-items: center !important;
     gap: 2px !important;
@@ -6897,7 +7521,8 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     border-radius: 8px !important;
 }
 
-.sb-3d-options-bar .sb-3d-pill-btn {
+.sb-3d-options-bar .sb-3d-pill-btn,
+.sb-3d-tool-options-bar .sb-3d-pill-btn {
     padding: 4px 8px !important;
     font-size: 11px !important;
     font-weight: 500 !important;
@@ -6909,13 +7534,16 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     transition: all 0.15s ease !important;
 }
 
-.sb-3d-options-bar .sb-3d-pill-btn:hover {
+.sb-3d-options-bar .sb-3d-pill-btn:hover,
+.sb-3d-tool-options-bar .sb-3d-pill-btn:hover {
     color: #ffffff !important;
     background: rgba(255, 255, 255, 0.08) !important;
 }
 
 .sb-3d-options-bar .sb-3d-pill-btn.active,
-.sb-3d-options-bar .sb-3d-pill-btn-active {
+.sb-3d-options-bar .sb-3d-pill-btn-active,
+.sb-3d-tool-options-bar .sb-3d-pill-btn.active,
+.sb-3d-tool-options-bar .sb-3d-pill-btn-active {
     color: #93c5fd !important;
     background: rgba(59, 130, 246, 0.3) !important;
     border-color: rgba(96, 165, 250, 0.4) !important;
@@ -6923,20 +7551,23 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     box-shadow: 0 0 8px rgba(59, 130, 246, 0.25) !important;
 }
 
-.sb-3d-options-bar .sb-3d-options-label {
+.sb-3d-options-bar .sb-3d-options-label,
+.sb-3d-tool-options-bar .sb-3d-options-label {
     color: #a1a1aa !important;
     font-size: 11px !important;
     font-weight: 500 !important;
 }
 
-.sb-3d-options-bar .sb-3d-options-divider {
+.sb-3d-options-bar .sb-3d-options-divider,
+.sb-3d-tool-options-bar .sb-3d-options-divider {
     width: 1px !important;
     height: 16px !important;
     background: rgba(255, 255, 255, 0.12) !important;
     margin: 0 2px !important;
 }
 
-.sb-3d-options-bar .sb-3d-action-btn {
+.sb-3d-options-bar .sb-3d-action-btn,
+.sb-3d-tool-options-bar .sb-3d-action-btn {
     display: inline-flex !important;
     align-items: center !important;
     gap: 5px !important;
@@ -6951,17 +7582,23 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     transition: all 0.15s ease !important;
 }
 
-.sb-3d-options-bar .sb-3d-action-btn:hover {
+.sb-3d-options-bar .sb-3d-action-btn:hover,
+.sb-3d-tool-options-bar .sb-3d-action-btn:hover {
     background: rgba(63, 63, 70, 0.9) !important;
     color: #ffffff !important;
     border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
-.sb-3d-options-bar input[type="range"] {
+.sb-3d-options-bar input[type="range"],
+.sb-3d-tool-options-bar input[type="range"] {
+    width: 56px !important;
+    height: 4px !important;
     accent-color: #3b82f6 !important;
 }
 
-.sb-3d-options-bar select {
+.sb-3d-options-bar select,
+.sb-3d-tool-options-bar select {
+    max-width: 110px !important;
     background: #18181b !important;
     color: #e4e4e7 !important;
     border: 1px solid rgba(255, 255, 255, 0.15) !important;
@@ -6970,15 +7607,18 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     font-size: 11px !important;
     font-weight: 500 !important;
     cursor: pointer !important;
+    text-overflow: ellipsis !important;
 }
 
-.sb-3d-options-bar select:focus {
+.sb-3d-options-bar select:focus,
+.sb-3d-tool-options-bar select:focus {
     border-color: #3b82f6 !important;
     outline: none !important;
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3) !important;
 }
 
-.sb-3d-options-bar button {
+.sb-3d-options-bar button,
+.sb-3d-tool-options-bar button {
     cursor: pointer;
     user-select: none;
 }
@@ -7046,6 +7686,92 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
 .sb-scene3d-primitive-container .font-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
 }
+
+/* 3D Scene C++20 Spatial Engine Studio Panel */
+.sb-3d-cpp-studio-panel {
+    position: absolute !important;
+    top: 16px !important;
+    right: 16px !important;
+    bottom: 64px !important;
+    width: 440px !important;
+    max-width: calc(100% - 32px) !important;
+    background: rgba(13, 15, 23, 0.96) !important;
+    backdrop-filter: blur(24px) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+    border: 1px solid rgba(168, 85, 247, 0.4) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 25px rgba(168, 85, 247, 0.2) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    z-index: 9999 !important;
+}
+
+.sb-3d-cpp-studio-panel > div:first-child {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 12px 16px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: rgba(88, 28, 135, 0.25) !important;
+}
+
+.sb-3d-cpp-studio-panel > div:nth-child(2) {
+    padding: 8px 16px !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: rgba(0, 0, 0, 0.25) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+
+.sb-3d-cpp-studio-panel > div:nth-child(3) {
+    flex: 1 1 0% !important;
+    min-height: 0 !important;
+    padding: 12px 16px !important;
+    overflow: auto !important;
+    background: rgba(0, 0, 0, 0.5) !important;
+}
+
+.sb-3d-cpp-studio-panel textarea {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 200px !important;
+    background: transparent !important;
+    resize: none !important;
+    border: none !important;
+    outline: none !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-size: 11px !important;
+    color: #e4e4e7 !important;
+    line-height: 1.6 !important;
+}
+
+.sb-3d-cpp-studio-panel > div:last-child {
+    padding: 12px 16px !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+    background: #090b10 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+
+/* 3D Scene Real-time Lightweight Budget HUD */
+.sb-3d-budget-panel {
+    position: absolute !important;
+    top: 68px !important;
+    right: 16px !important;
+    z-index: 50 !important;
+    width: 320px !important;
+    background: rgba(15, 17, 26, 0.95) !important;
+    backdrop-filter: blur(24px) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6) !important;
+    padding: 16px !important;
+}
+
 
 /* ==========================================================================
    6. Document Canvas & Markdown Spec Primitive Light/Dark Theme System
@@ -7245,6 +7971,191 @@ body.theia-light .sb-doc-callout.sb-callout-danger {
     border-left: 2px solid rgba(239, 68, 68, 0.45) !important;
 }
 
+/* AI Callout & Provenance Styling */
+.sb-doc-callout.sb-callout-ai {
+    background: rgba(139, 92, 246, 0.08) !important;
+    border: 1px solid rgba(139, 92, 246, 0.35) !important;
+    border-left: 3px solid #8b5cf6 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 16px rgba(139, 92, 246, 0.1) !important;
+    transition: all 0.2s ease !important;
+}
+
+body.sb-light .sb-doc-callout.sb-callout-ai,
+body.theia-light .sb-doc-callout.sb-callout-ai {
+    background: rgba(139, 92, 246, 0.04) !important;
+    border: 1px solid rgba(139, 92, 246, 0.25) !important;
+    border-left: 3px solid #7c3aed !important;
+}
+
+.sb-callout-ai-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.sb-callout-badge-ai {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(139, 92, 246, 0.2);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    color: #c4b5fd;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+body.sb-light .sb-callout-badge-ai,
+body.theia-light .sb-callout-badge-ai {
+    background: rgba(139, 92, 246, 0.12);
+    border-color: rgba(139, 92, 246, 0.3);
+    color: #6d28d9;
+}
+
+.sb-ai-provenance-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    font-style: italic;
+}
+
+body.sb-light .sb-ai-provenance-meta,
+body.theia-light .sb-ai-provenance-meta {
+    color: rgba(0, 0, 0, 0.5);
+}
+
+.sb-ai-callout-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Wikilink Badges */
+.sb-wikilink-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 1px 6px;
+    margin: 0 2px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.14);
+    border: 1px solid rgba(99, 102, 241, 0.32);
+    color: #a5b4fc;
+    font-size: 0.9em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    text-decoration: none;
+}
+
+.sb-wikilink-badge:hover {
+    background: rgba(99, 102, 241, 0.26);
+    border-color: #818cf8;
+    color: #e0e7ff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25);
+}
+
+.sb-wikilink-bracket {
+    opacity: 0.45;
+    font-weight: 700;
+    font-size: 0.85em;
+}
+
+.sb-wikilink-label {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+body.sb-light .sb-wikilink-badge,
+body.theia-light .sb-wikilink-badge {
+    background: rgba(79, 70, 229, 0.08);
+    border-color: rgba(79, 70, 229, 0.28);
+    color: #4338ca;
+}
+
+body.sb-light .sb-wikilink-badge:hover,
+body.theia-light .sb-wikilink-badge:hover {
+    background: rgba(79, 70, 229, 0.16);
+    color: #312e81;
+}
+
+/* Inline Diff Review Panel */
+.sb-doc-diff-view {
+    margin: 12px 0;
+    padding: 14px 18px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 13px;
+    line-height: 1.6;
+    backdrop-filter: blur(8px);
+}
+
+body.sb-light .sb-doc-diff-view,
+body.theia-light .sb-doc-diff-view {
+    background: rgba(248, 250, 252, 0.9);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.sb-diff-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #818cf8;
+    margin-bottom: 8px;
+}
+
+.sb-diff-del {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+    border-left: 2px solid #ef4444;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    text-decoration: line-through;
+}
+
+body.sb-light .sb-diff-del,
+body.theia-light .sb-diff-del {
+    background: rgba(239, 68, 68, 0.1);
+    color: #b91c1c;
+}
+
+.sb-diff-add {
+    background: rgba(16, 185, 129, 0.15);
+    color: #6ee7b7;
+    border-left: 2px solid #10b981;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+
+body.sb-light .sb-diff-add,
+body.theia-light .sb-diff-add {
+    background: rgba(16, 185, 129, 0.1);
+    color: #047857;
+}
+
+.sb-diff-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
 body.sb-light .sb-callout-title,
 body.theia-light .sb-callout-title,
 body.sb-light .sb-callout-title-seamless,
@@ -7346,8 +8257,19 @@ body.theia-light .sb-doc-item-done .sb-doc-check-input {
 
 body.sb-light .sb-doc-check-box,
 body.theia-light .sb-doc-check-box {
-    border-color: #cbd5e1 !important;
-    background: #ffffff !important;
+    border-color: #cbd5e1;
+    background: #ffffff;
+}
+
+body.sb-light .sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box,
+body.theia-light .sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box {
+    background: #2563eb !important;
+    border-color: #2563eb !important;
+}
+
+body.sb-light .sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box::after,
+body.theia-light .sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box::after {
+    border-color: #ffffff !important;
 }
 
 body.sb-light .sb-checklist-add-btn,
@@ -7532,9 +8454,15 @@ body.theia-light .sb-section-order-btn:hover:not(:disabled) {
 }
 
 .sb-doc-inline-ai-toolbar {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+    position: static !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 3px !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
 }
 
 .sb-doc-inline-btn {
@@ -8279,6 +9207,48 @@ body.sb-light .sb-doc-export-dropdown-menu {
     color: #60a5fa;
 }
 
+.sb-prompt-summary {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--sb-system-blue, #3b82f6);
+    user-select: none;
+    transition: color 0.15s ease;
+}
+
+.sb-prompt-summary-icon {
+    font-size: 11px;
+    line-height: 1;
+}
+
+.sb-prompt-summary-title {
+    font-weight: 600;
+}
+
+.sb-prompt-summary-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--sb-system-blue, #3b82f6);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    letter-spacing: 0.02em;
+}
+
+body.theia-light .sb-prompt-summary-badge,
+body.sb-light .sb-prompt-summary-badge {
+    background: rgba(37, 99, 235, 0.08);
+    color: #2563eb;
+    border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
 /* Cinematic location cards: scoped so editorial images and videos remain unchanged. */
 .sb-doc-location-card .sb-location-media-frame {
     aspect-ratio: 16 / 9;
@@ -8305,7 +9275,9 @@ body.sb-light .sb-doc-export-dropdown-menu {
 }
 
 .sb-location-context-label {
-    right: 68px;
+    left: 14px;
+    right: auto;
+    width: fit-content;
     max-width: calc(100% - 152px);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -11077,3 +12049,734 @@ body.sb-light .sb-doc-toc-item:hover {
     font: inherit;
     color: inherit;
 }
+
+/* ==========================================================================
+   Scratchbox Studio Canvas Header & Controls
+   ========================================================================== */
+.sb-canvas-tabs-container,
+.sb-antigravity-tabs-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex-shrink: 0;
+}
+.sb-canvas-tabs-container::-webkit-scrollbar,
+.sb-antigravity-tabs-container::-webkit-scrollbar {
+    display: none;
+}
+
+.sb-canvas-tab,
+.sb-antigravity-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 7px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--sb-text-secondary, #94a3b8);
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    white-space: nowrap;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.sb-canvas-tab:hover,
+.sb-antigravity-tab:hover {
+    color: var(--sb-text-primary, #f8fafc);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.sb-canvas-tab.active,
+.sb-antigravity-tab.active {
+    color: var(--sb-text-primary, #f8fafc);
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+body.theia-light .sb-canvas-tab,
+body.theia-light .sb-antigravity-tab {
+    color: #64748b;
+}
+body.theia-light .sb-canvas-tab:hover,
+body.theia-light .sb-antigravity-tab:hover {
+    color: #0f172a;
+    background: rgba(0, 0, 0, 0.04);
+}
+body.theia-light .sb-canvas-tab.active,
+body.theia-light .sb-antigravity-tab.active {
+    color: #0f172a;
+    background: #e2e8f0;
+    border-color: #cbd5e1;
+}
+
+.sb-canvas-tab-icon,
+.sb-antigravity-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    opacity: 0.85;
+}
+
+.sb-canvas-tab-title,
+.sb-antigravity-tab-title {
+    max-width: 320px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+
+.sb-canvas-tab-close,
+.sb-antigravity-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.45;
+    cursor: pointer;
+    font-size: 10px;
+    margin-left: 4px;
+    transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.sb-canvas-tab-close:hover,
+.sb-antigravity-tab-close:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.15);
+}
+body.theia-light .sb-canvas-tab-close:hover,
+body.theia-light .sb-antigravity-tab-close:hover,
+body.sb-light .sb-canvas-tab-close:hover,
+body.sb-light .sb-antigravity-tab-close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+    color: #0f172a;
+}
+
+.sb-canvas-icon-btn,
+.sb-antigravity-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--sb-text-secondary, #94a3b8);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.sb-canvas-icon-btn:hover,
+.sb-antigravity-icon-btn:hover {
+    color: var(--sb-text-primary, #ffffff);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.sb-canvas-icon-btn.active,
+.sb-antigravity-icon-btn.active {
+    color: #ffffff;
+    background: rgba(37, 99, 235, 0.2);
+    border-color: rgba(37, 99, 235, 0.4);
+}
+
+.sb-canvas-icon-btn:disabled,
+.sb-antigravity-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+body.theia-light .sb-canvas-icon-btn,
+body.theia-light .sb-antigravity-icon-btn {
+    color: #64748b;
+}
+body.theia-light .sb-canvas-icon-btn:hover,
+body.theia-light .sb-antigravity-icon-btn:hover {
+    color: #0f172a;
+    background: rgba(0, 0, 0, 0.06);
+}
+
+/* Scratchbox Studio Canvas Overflow Menu Popover */
+.sb-canvas-menu,
+.sb-antigravity-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 190px;
+    background: #18181b;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+    padding: 4px;
+    z-index: 1000;
+    animation: sb-scale-in 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+    backdrop-filter: blur(12px);
+}
+
+body.theia-light .sb-canvas-menu,
+body.theia-light .sb-antigravity-menu {
+    background: #ffffff;
+    border-color: #e2e8f0;
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+}
+
+.sb-canvas-menu-item,
+.sb-antigravity-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: #e4e4e7;
+    font-size: 11.5px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s ease, color 0.1s ease;
+}
+
+body.theia-light .sb-canvas-menu-item,
+body.theia-light .sb-antigravity-menu-item {
+    color: #334155;
+}
+
+.sb-canvas-menu-item:hover,
+.sb-antigravity-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+}
+
+body.theia-light .sb-canvas-menu-item:hover,
+body.theia-light .sb-antigravity-menu-item:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+}
+
+.sb-canvas-menu-item.danger:hover,
+.sb-antigravity-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+}
+
+.sb-canvas-menu-divider,
+.sb-antigravity-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 4px 0;
+}
+
+body.theia-light .sb-canvas-menu-divider,
+body.theia-light .sb-antigravity-menu-divider {
+    background: #e2e8f0;
+}
+
+/* ==========================================================================
+   Scratchbox Preloaded Demos Showcase Section
+   ========================================================================== */
+.sb-demos-launcher-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(245, 158, 11, 0.12) !important;
+    border: 1px solid rgba(245, 158, 11, 0.28) !important;
+    color: #fbbf24 !important;
+    font-weight: 600 !important;
+    padding: 3px 9px !important;
+    border-radius: 6px !important;
+    font-size: 11.5px !important;
+    transition: all 0.15s ease !important;
+}
+
+.sb-demos-launcher-btn:hover {
+    background: rgba(245, 158, 11, 0.22) !important;
+    border-color: rgba(245, 158, 11, 0.45) !important;
+    transform: translateY(-0.5px);
+}
+/* ==========================================================================
+   Showcase Preloaded Demos Modal - Scratchbox Studio
+   ========================================================================== */
+
+.sb-demos-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(4, 7, 13, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: sb-fade-in 0.15s ease-out;
+}
+
+.sb-demos-modal {
+    width: 100%;
+    max-width: 1080px;
+    max-height: 88vh;
+    background: #0d1117;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 16px;
+    box-shadow: 0 25px 70px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: sb-scale-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    color: #f0f6fc;
+}
+
+.sb-demos-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
+}
+
+.sb-demos-header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.sb-demos-header-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(234, 179, 8, 0.2), rgba(249, 115, 22, 0.2));
+    border: 1px solid rgba(234, 179, 8, 0.35);
+    color: #facc15;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 12px rgba(234, 179, 8, 0.25);
+}
+
+.sb-demos-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: -0.01em;
+    margin: 0 0 4px 0;
+}
+
+.sb-demos-subtitle {
+    font-size: 12.5px;
+    color: #94a3b8;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.sb-demos-close-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sb-demos-close-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Filters & Search */
+.sb-demos-filters {
+    padding: 14px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.sb-demos-search-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 260px;
+    display: flex;
+    align-items: center;
+}
+
+.sb-demos-search-icon {
+    position: absolute;
+    left: 12px;
+    color: #64748b;
+    pointer-events: none;
+}
+
+.sb-demos-search-input {
+    width: 100%;
+    height: 34px;
+    padding: 0 32px 0 34px;
+    background: #161b22;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    color: #f0f6fc;
+    font-size: 13px;
+    outline: none;
+    transition: all 0.15s ease;
+}
+
+.sb-demos-search-input:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+    background: #1a202c;
+}
+
+.sb-demos-search-input::placeholder {
+    color: #64748b;
+}
+
+.sb-demos-search-clear {
+    position: absolute;
+    right: 8px;
+    background: transparent;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sb-demos-search-clear:hover {
+    color: #ffffff;
+}
+
+.sb-demos-category-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+}
+
+.sb-demos-pill {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.sb-demos-pill:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.sb-demos-pill.active {
+    color: #ffffff;
+    background: #2563eb;
+    border-color: #3b82f6;
+    font-weight: 600;
+    box-shadow: 0 2px 10px rgba(37, 99, 235, 0.4);
+}
+
+/* Grid & Cards */
+.sb-demos-grid-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    min-height: 380px;
+    background: #0d1117;
+}
+
+.sb-demos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 16px;
+}
+
+.sb-demos-card {
+    background: #161b22;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.sb-demos-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(99, 102, 241, 0.4);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4), 0 0 15px rgba(99, 102, 241, 0.15);
+}
+
+.sb-demos-card-header {
+    margin-bottom: 10px;
+}
+
+.sb-demos-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.sb-demos-category-tag {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.sb-demos-highlight-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(234, 179, 8, 0.15);
+    color: #facc15;
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.sb-demos-card-body {
+    flex: 1;
+    margin-bottom: 12px;
+}
+
+.sb-demos-card-title {
+    font-size: 14.5px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin: 0 0 4px 0;
+    line-height: 1.3;
+}
+
+.sb-demos-card-subtitle {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #38bdf8;
+    margin: 0 0 8px 0;
+    line-height: 1.35;
+}
+
+.sb-demos-card-desc {
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.45;
+    margin: 0;
+}
+
+.sb-demos-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 14px;
+}
+
+.sb-demos-tag {
+    font-size: 10px;
+    color: #64748b;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sb-demos-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.sb-demos-launch-btn {
+    width: 100%;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid #3b82f6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
+    transition: all 0.15s ease;
+}
+
+.sb-demos-launch-btn:hover {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+    transform: translateY(-1px);
+}
+
+.sb-demos-launch-btn:active {
+    transform: translateY(0);
+}
+
+/* Empty State */
+.sb-demos-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    text-align: center;
+    color: #94a3b8;
+}
+
+.sb-demos-reset-btn {
+    margin-top: 12px;
+    padding: 6px 16px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: #f8fafc;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.sb-demos-reset-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+/* Modal Footer */
+.sb-demos-footer {
+    padding: 14px 24px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.sb-demos-footer-hint {
+    font-size: 11.5px;
+    color: #64748b;
+}
+
+.sb-demos-done-btn {
+    padding: 6px 18px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #f8fafc;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sb-demos-done-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+}
+
+/* Interactive Split Resizer Divider */
+.sb-canvas-split-resizer {
+    width: 10px;
+    margin: 0 -5px;
+    position: relative;
+    z-index: 40;
+    cursor: col-resize;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    touch-action: none;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+}
+
+.sb-canvas-split-resizer .sb-canvas-resizer-line {
+    width: 1px;
+    height: 100%;
+    background: var(--sb-ui-card-border, rgba(255, 255, 255, 0.08));
+    transition: background 0.15s ease, width 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sb-canvas-split-resizer:hover .sb-canvas-resizer-line,
+.sb-canvas-split-resizer.dragging .sb-canvas-resizer-line {
+    background: #3b82f6;
+    width: 2px;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.sb-canvas-split-resizer .sb-canvas-resizer-knob {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 36px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.sb-canvas-split-resizer:hover .sb-canvas-resizer-knob,
+.sb-canvas-split-resizer.dragging .sb-canvas-resizer-knob {
+    opacity: 1;
+    background: #60a5fa;
+}
+
+body.theia-light .sb-canvas-split-resizer .sb-canvas-resizer-line {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+body.theia-light .sb-canvas-split-resizer:hover .sb-canvas-resizer-line,
+body.theia-light .sb-canvas-split-resizer.dragging .sb-canvas-resizer-line {
+    background: #2563eb;
+    box-shadow: 0 0 8px rgba(37, 99, 235, 0.3);
+}
+
+body.theia-light .sb-canvas-split-resizer .sb-canvas-resizer-knob {
+    background: rgba(0, 0, 0, 0.25);
+}
+
+body.theia-light .sb-canvas-split-resizer:hover .sb-canvas-resizer-knob,
+body.theia-light .sb-canvas-split-resizer.dragging .sb-canvas-resizer-knob {
+    background: #2563eb;
+}
+

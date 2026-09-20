@@ -245,3 +245,122 @@ function inferLanguageFromFileName(fileName: string): SandboxLanguage {
     if (fileName.endsWith('.yaml') || fileName.endsWith('.yml')) return 'yaml';
     return 'javascript';
 }
+
+export interface DiffHunkBlock {
+    id: string;
+    oldStart: number;
+    oldLength: number;
+    newStart: number;
+    newLength: number;
+    header: string;
+    lines: FileDiffLine[];
+    isAccepted?: boolean;
+}
+
+/**
+ * Groups raw line-diff entries into semantic hunks with context windows.
+ */
+export function extractHunksFromDiffLines(lines: FileDiffLine[]): DiffHunkBlock[] {
+    const hunks: DiffHunkBlock[] = [];
+    let currentHunkLines: FileDiffLine[] = [];
+    let hunkIdx = 0;
+    let hasChanges = false;
+    let contextTrailing = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if (line.type === 'add' || line.type === 'del') {
+            hasChanges = true;
+            contextTrailing = 0;
+            currentHunkLines.push(line);
+        } else {
+            // context line
+            if (hasChanges) {
+                contextTrailing++;
+                currentHunkLines.push(line);
+                // After 3 context lines following changes, close the hunk
+                if (contextTrailing >= 3 || i === lines.length - 1) {
+                    const firstOld = currentHunkLines.find(l => l.oldLineNo)?.oldLineNo || 1;
+                    const firstNew = currentHunkLines.find(l => l.newLineNo)?.newLineNo || 1;
+                    hunks.push({
+                        id: `hunk-${hunkIdx++}`,
+                        oldStart: firstOld,
+                        oldLength: currentHunkLines.filter(l => l.type !== 'add').length,
+                        newStart: firstNew,
+                        newLength: currentHunkLines.filter(l => l.type !== 'del').length,
+                        header: `@@ -${firstOld} +${firstNew} @@`,
+                        lines: [...currentHunkLines],
+                        isAccepted: true
+                    });
+                    currentHunkLines = [];
+                    hasChanges = false;
+                    contextTrailing = 0;
+                }
+            } else {
+                currentHunkLines.push(line);
+                if (currentHunkLines.length > 2) {
+                    currentHunkLines.shift();
+                }
+            }
+        }
+    }
+
+    if (hasChanges && currentHunkLines.length > 0) {
+        const firstOld = currentHunkLines.find(l => l.oldLineNo)?.oldLineNo || 1;
+        const firstNew = currentHunkLines.find(l => l.newLineNo)?.newLineNo || 1;
+        hunks.push({
+            id: `hunk-${hunkIdx++}`,
+            oldStart: firstOld,
+            oldLength: currentHunkLines.filter(l => l.type !== 'add').length,
+            newStart: firstNew,
+            newLength: currentHunkLines.filter(l => l.type !== 'del').length,
+            header: `@@ -${firstOld} +${firstNew} @@`,
+            lines: [...currentHunkLines],
+            isAccepted: true
+        });
+    }
+
+    return hunks;
+}
+
+/**
+ * Selectively applies accepted hunks onto the original file content.
+ */
+export function applySelectedHunks(
+    oldContent: string,
+    hunks: DiffHunkBlock[],
+    acceptedHunkIds: string[] | Set<string>
+): string {
+    if (!hunks || hunks.length === 0) {
+        return oldContent;
+    }
+
+    const acceptedSet = acceptedHunkIds instanceof Set ? acceptedHunkIds : new Set(acceptedHunkIds);
+    const lines = oldContent.length > 0 ? oldContent.split('\n') : [];
+
+    // Sort descending by oldStart so line position shifts do not affect prior hunk indices
+    const sortedHunks = [...hunks].sort((a, b) => b.oldStart - a.oldStart);
+
+    for (const hunk of sortedHunks) {
+        if (!acceptedSet.has(hunk.id)) {
+            continue; // Rejected: leave original lines intact
+        }
+
+        // Gather lines that should replace the hunk's old range
+        const replacementLines = hunk.lines
+            .filter(l => l.type === 'context' || l.type === 'add')
+            .map(l => l.content);
+
+        const startIdx = Math.max(0, hunk.oldStart - 1);
+        const deleteCount = Math.max(0, hunk.oldLength);
+
+        if (lines.length === 0 && hunk.oldLength === 0) {
+            lines.push(...replacementLines);
+        } else {
+            lines.splice(startIdx, deleteCount, ...replacementLines);
+        }
+    }
+
+    return lines.join('\n');
+}

@@ -33,15 +33,15 @@ export const CloudAgentsTab: React.FC = () => {
                             value={cloudAgentTarget}
                             onChange={e => setCloudAgentTarget(e.target.value)}
                         >
-                            <option value="antigravity-preview-05-2026">antigravity-preview-05-2026 (Recommended)</option>
+                            <option value="antigravity-preview-05-2026">Scratchbox Cloud Agent (Preview) (Recommended)</option>
                             <option value="deep-research-preview-04-2026">deep-research-preview-04-2026</option>
                             <option value="deep-research-max-preview-04-2026">deep-research-max-preview-04-2026</option>
                             <option value="code-reviewer">code-reviewer</option>
                         </select>
                     </div>
-                    <div className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800 text-[11px] text-zinc-400">
+                    <div className="p-3 rounded-xl bg-zinc-100/70 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
                         {cloudAgentTarget === 'antigravity-preview-05-2026' && (
-                            <span><strong>Active:</strong> &quot;antigravity-preview-05-2026&quot; runs high-fidelity autonomous agent loops with built-in sandbox bash execution.</span>
+                            <span><strong>Active:</strong> Scratchbox Autonomous Cloud Agent runs high-fidelity autonomous agent loops with built-in sandbox bash execution.</span>
                         )}
                         {cloudAgentTarget === 'deep-research-preview-04-2026' && (
                             <span><strong>Active:</strong> &quot;deep-research-preview-04-2026&quot; recursively queries documents and search engines to construct deep blueprints.</span>
@@ -87,7 +87,7 @@ export const CloudAgentsTab: React.FC = () => {
                                 value={cloudRamGb}
                                 onChange={e => setCloudRamGb(Number(e.target.value))}
                             />
-                            <span className="text-xs text-zinc-300 font-mono font-bold w-12 text-right">{cloudRamGb} GB</span>
+                            <span className="text-xs text-zinc-700 dark:text-zinc-300 font-mono font-bold w-12 text-right">{cloudRamGb} GB</span>
                         </div>
                     </div>
 

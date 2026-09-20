@@ -1,0 +1,882 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/* ==========================================================================
+   Scratchbox IDE: Video NLE Studio Stylesheet (DaVinci Resolve / Premiere Pro Grade)
+   ========================================================================== */
+
+/* 1. Parent Card Light-Theme Override (Prevent stark white backgrounds) */
+body.theia-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper),
+body.sb-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper),
+.sb-chatgpt-document-card:has(.sb-video-stage-wrapper) {
+    background: #090a0f !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75) !important;
+}
+
+body.theia-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper) .sb-document-card-header,
+body.sb-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper) .sb-document-card-header {
+    background: #101118 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    color: #f1f5f9 !important;
+}
+
+/* 2. Video Stage Root & Layout Wrapper */
+.sb-video-stage-wrapper {
+    width: 100% !important;
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    background: #090a0f !important;
+    position: relative !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+    color: #e2e8f0 !important;
+}
+
+.sb-nle-studio {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    background-color: #090a0f;
+    color: #e2e8f0;
+    overflow: hidden;
+    user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    position: relative;
+    box-sizing: border-box;
+}
+
+/* 3. NLE Top Header Bar */
+.sb-nle-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #111219;
+    border-bottom: 1px solid #1c1e28;
+    font-size: 12px;
+    color: #cbd5e1;
+    flex-shrink: 0;
+    gap: 12px;
+    box-sizing: border-box;
+}
+
+.sb-nle-badge {
+    background: rgba(59, 130, 246, 0.18);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.sb-nle-action-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #1a1c27;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sb-nle-action-pill:hover {
+    background: #252837;
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* 4. Upper Stage: Monitor (Left) & Inspector (Right) */
+.sb-nle-upper-stage {
+    flex: 1 1 0%;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: 8px;
+    padding: 8px;
+    overflow: hidden;
+    box-sizing: border-box;
+    background: #090a0f;
+}
+
+@media (max-width: 1024px) {
+    .sb-nle-upper-stage {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+}
+
+.sb-nle-monitor-col,
+.sb-nle-inspector-col {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* 5. Program Monitor */
+.sb-nle-monitor {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #0d0e15;
+    border: 1px solid #1c1e28;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    box-sizing: border-box;
+}
+
+.sb-nle-monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: #13141f;
+    border-bottom: 1px solid #1c1e28;
+    font-size: 11px;
+    color: #94a3b8;
+    flex-shrink: 0;
+}
+
+.sb-nle-monitor-viewport {
+    flex: 1 1 0%;
+    min-height: 220px;
+    max-height: 480px;
+    background: #040406;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    position: relative;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.sb-nle-aspect-box {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.8);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #1c1e28;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000000;
+}
+
+.sb-nle-monitor-viewport canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000000;
+}
+
+.sb-nle-timecode-hud {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 2px 8px;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #38bdf8;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    pointer-events: none;
+    letter-spacing: 0.5px;
+    z-index: 10;
+}
+
+.sb-nle-transport {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    background: #11121b;
+    border-top: 1px solid #1c1e28;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+/* Play/Pause Button */
+.sb-nle-play-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #ffffff;
+    border: none;
+    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sb-nle-play-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.6);
+}
+
+.sb-nle-play-btn.sb-playing {
+    background: linear-gradient(135deg, #d97706, #b45309);
+    box-shadow: 0 4px 14px rgba(217, 119, 6, 0.4);
+}
+
+/* 6. Inspector Panel */
+.sb-nle-inspector {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #0d0e15;
+    border: 1px solid #1c1e28;
+    border-radius: 8px;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.sb-nle-tabs-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    background: #13141f;
+    border-bottom: 1px solid #1c1e28;
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.sb-nle-tab-btn {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #94a3b8;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.sb-nle-tab-btn:hover {
+    color: #e2e8f0;
+    background: #1c1e2b;
+}
+
+.sb-nle-tab-btn.sb-active {
+    background: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.sb-nle-inspector-content {
+    flex: 1 1 0%;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-sizing: border-box;
+}
+
+/* 4-Way Color Wheels */
+.sb-nle-color-wheel-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px;
+    border-radius: 6px;
+    background: #13141e;
+    border: 1px solid #1e202e;
+}
+
+.sb-nle-puck-circle {
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    position: relative;
+    cursor: crosshair;
+    border: 1px solid #2d3144;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* 7. Lower Stage: Toolbar + Multi-Track Timeline */
+.sb-nle-lower-stage {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid #1c1e28;
+    background: #090a0f;
+    box-sizing: border-box;
+}
+
+.sb-nle-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: #111219;
+    border-bottom: 1px solid #1c1e28;
+    font-size: 11px;
+    color: #94a3b8;
+    flex-shrink: 0;
+    gap: 8px;
+    box-sizing: border-box;
+}
+
+.sb-nle-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    background: #181923;
+    color: #94a3b8;
+    border: 1px solid #232533;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sb-nle-tool-btn:hover {
+    background: #232535;
+    color: #f1f5f9;
+}
+
+.sb-nle-tool-btn.sb-active {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #3b82f6;
+    font-weight: 600;
+}
+
+/* Glowing Export Button */
+.sb-nle-export-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 14px;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+    transition: all 0.15s ease;
+}
+
+.sb-nle-export-btn:hover {
+    box-shadow: 0 6px 18px rgba(37, 99, 235, 0.55);
+    transform: translateY(-1px);
+}
+
+/* 8. Multi-Track Timeline Canvas */
+.sb-nle-timeline-container {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: auto;
+    position: relative;
+    min-height: 200px;
+    max-height: 360px;
+    background: #0a0b10;
+    box-sizing: border-box;
+}
+
+.sb-nle-track-headers-col {
+    position: sticky;
+    left: 0;
+    z-index: 30;
+    width: 215px;
+    flex-shrink: 0;
+    background: #111219;
+    border-right: 1px solid #1c1e28;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 4px 0 12px rgba(0, 0, 0, 0.5);
+}
+
+.sb-nle-track-header-cell {
+    height: 64px;
+    border-bottom: 1px solid #1a1b24;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-sizing: border-box;
+    transition: background 0.15s ease;
+}
+
+.sb-nle-track-header-cell:hover {
+    background: #161722;
+}
+
+/* Timeline Ruler */
+.sb-nle-ruler {
+    height: 28px;
+    background: #0f1017;
+    border-bottom: 1px solid #1c1e28;
+    position: relative;
+    cursor: pointer;
+    user-select: none;
+    box-sizing: border-box;
+}
+
+/* Playhead Needle */
+.sb-nle-playhead-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ef4444;
+    z-index: 25;
+    pointer-events: none;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.sb-nle-playhead-needle {
+    position: absolute;
+    top: 0;
+    width: 12px;
+    height: 14px;
+    margin-left: -5px;
+    background: #ef4444;
+    clip-path: polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
+    z-index: 26;
+    pointer-events: auto;
+    cursor: ew-resize;
+}
+
+/* Timeline Clip Blocks */
+.sb-nle-clip-block {
+    position: absolute;
+    top: 8px;
+    height: 48px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    cursor: grab;
+    user-select: none;
+    box-sizing: border-box;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    transition: outline 0.15s ease, filter 0.15s ease;
+}
+
+.sb-nle-clip-block:hover {
+    filter: brightness(1.08);
+}
+
+.sb-nle-clip-block.sb-selected {
+    outline: 2px solid #60a5fa;
+    box-shadow: 0 0 14px rgba(96, 165, 250, 0.5);
+    z-index: 15;
+}
+
+/* Clip Themes by Track Type */
+.sb-nle-clip-video {
+    background: linear-gradient(135deg, #3730a3, #4338ca);
+    border-color: #6366f1;
+}
+
+.sb-nle-clip-audio {
+    background: linear-gradient(135deg, #065f46, #047857);
+    border-color: #10b981;
+}
+
+.sb-nle-clip-overlay {
+    background: linear-gradient(135deg, #b45309, #d97706);
+    border-color: #f59e0b;
+}
+
+.sb-nle-clip-3d {
+    background: linear-gradient(135deg, #9f1239, #be123c);
+    border-color: #f43f5e;
+}
+
+/* 9. Scoped Dark Form Controls inside .sb-video-stage-wrapper */
+.sb-video-stage-wrapper select,
+.sb-nle-studio select {
+    background-color: #181923 !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #282a39 !important;
+    border-radius: 4px !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+    outline: none !important;
+    cursor: pointer !important;
+}
+
+.sb-video-stage-wrapper select:focus,
+.sb-nle-studio select:focus {
+    border-color: #3b82f6 !important;
+}
+
+.sb-video-stage-wrapper button,
+.sb-nle-studio button {
+    font-family: inherit;
+    border: none;
+    outline: none;
+    cursor: pointer;
+}
+
+.sb-video-stage-wrapper input[type="range"],
+.sb-nle-studio input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: #232535;
+    border-radius: 2px;
+    height: 4px;
+    outline: none;
+    cursor: pointer;
+}
+
+.sb-video-stage-wrapper input[type="range"]::-webkit-slider-thumb,
+.sb-nle-studio input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3b82f6;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+    cursor: pointer;
+}
+
+/* 10. Scoped Utility Fallbacks (Provides standard classes for NLE without global bleed) */
+.sb-video-stage-wrapper .flex, .sb-nle-studio .flex { display: flex !important; }
+.sb-video-stage-wrapper .flex-col, .sb-nle-studio .flex-col { flex-direction: column !important; }
+.sb-video-stage-wrapper .flex-row, .sb-nle-studio .flex-row { flex-direction: row !important; }
+.sb-video-stage-wrapper .flex-1, .sb-nle-studio .flex-1 { flex: 1 1 0% !important; min-height: 0 !important; }
+.sb-video-stage-wrapper .shrink-0, .sb-nle-studio .shrink-0 { flex-shrink: 0 !important; }
+
+.sb-video-stage-wrapper .items-center, .sb-nle-studio .items-center { align-items: center !important; }
+.sb-video-stage-wrapper .items-start, .sb-nle-studio .items-start { align-items: flex-start !important; }
+.sb-video-stage-wrapper .items-end, .sb-nle-studio .items-end { align-items: flex-end !important; }
+
+.sb-video-stage-wrapper .justify-between, .sb-nle-studio .justify-between { justify-content: space-between !important; }
+.sb-video-stage-wrapper .justify-center, .sb-nle-studio .justify-center { justify-content: center !important; }
+.sb-video-stage-wrapper .justify-start, .sb-nle-studio .justify-start { justify-content: flex-start !important; }
+.sb-video-stage-wrapper .justify-end, .sb-nle-studio .justify-end { justify-content: flex-end !important; }
+
+.sb-video-stage-wrapper .grid, .sb-nle-studio .grid { display: grid !important; }
+.sb-video-stage-wrapper .grid-cols-2, .sb-nle-studio .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.sb-video-stage-wrapper .grid-cols-3, .sb-nle-studio .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+.sb-video-stage-wrapper .grid-cols-4, .sb-nle-studio .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+.sb-video-stage-wrapper .grid-cols-12, .sb-nle-studio .grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)) !important; }
+
+.sb-video-stage-wrapper .col-span-12, .sb-nle-studio .col-span-12 { grid-column: span 12 / span 12 !important; }
+@media (min-width: 1024px) {
+    .sb-video-stage-wrapper .lg\:col-span-7, .sb-nle-studio .lg\:col-span-7 { grid-column: span 7 / span 12 !important; }
+    .sb-video-stage-wrapper .lg\:col-span-5, .sb-nle-studio .lg\:col-span-5 { grid-column: span 5 / span 12 !important; }
+}
+
+.sb-video-stage-wrapper .gap-1, .sb-nle-studio .gap-1 { gap: 4px !important; }
+.sb-video-stage-wrapper .gap-1\.5, .sb-nle-studio .gap-1\.5 { gap: 6px !important; }
+.sb-video-stage-wrapper .gap-2, .sb-nle-studio .gap-2 { gap: 8px !important; }
+.sb-video-stage-wrapper .gap-3, .sb-nle-studio .gap-3 { gap: 12px !important; }
+.sb-video-stage-wrapper .gap-4, .sb-nle-studio .gap-4 { gap: 16px !important; }
+
+.sb-video-stage-wrapper .p-1, .sb-nle-studio .p-1 { padding: 4px !important; }
+.sb-video-stage-wrapper .p-1\.5, .sb-nle-studio .p-1\.5 { padding: 6px !important; }
+.sb-video-stage-wrapper .p-2, .sb-nle-studio .p-2 { padding: 8px !important; }
+.sb-video-stage-wrapper .p-3, .sb-nle-studio .p-3 { padding: 12px !important; }
+.sb-video-stage-wrapper .p-4, .sb-nle-studio .p-4 { padding: 16px !important; }
+.sb-video-stage-wrapper .p-5, .sb-nle-studio .p-5 { padding: 20px !important; }
+
+.sb-video-stage-wrapper .px-1, .sb-nle-studio .px-1 { padding-left: 4px !important; padding-right: 4px !important; }
+.sb-video-stage-wrapper .px-1\.5, .sb-nle-studio .px-1\.5 { padding-left: 6px !important; padding-right: 6px !important; }
+.sb-video-stage-wrapper .px-2, .sb-nle-studio .px-2 { padding-left: 8px !important; padding-right: 8px !important; }
+.sb-video-stage-wrapper .px-2\.5, .sb-nle-studio .px-2\.5 { padding-left: 10px !important; padding-right: 10px !important; }
+.sb-video-stage-wrapper .px-3, .sb-nle-studio .px-3 { padding-left: 12px !important; padding-right: 12px !important; }
+.sb-video-stage-wrapper .px-4, .sb-nle-studio .px-4 { padding-left: 16px !important; padding-right: 16px !important; }
+
+.sb-video-stage-wrapper .py-0\.5, .sb-nle-studio .py-0\.5 { padding-top: 2px !important; padding-bottom: 2px !important; }
+.sb-video-stage-wrapper .py-1, .sb-nle-studio .py-1 { padding-top: 4px !important; padding-bottom: 4px !important; }
+.sb-video-stage-wrapper .py-1\.5, .sb-nle-studio .py-1\.5 { padding-top: 6px !important; padding-bottom: 6px !important; }
+.sb-video-stage-wrapper .py-2, .sb-nle-studio .py-2 { padding-top: 8px !important; padding-bottom: 8px !important; }
+
+.sb-video-stage-wrapper .pb-2, .sb-nle-studio .pb-2 { padding-bottom: 8px !important; }
+.sb-video-stage-wrapper .pb-3, .sb-nle-studio .pb-3 { padding-bottom: 12px !important; }
+.sb-video-stage-wrapper .mb-1, .sb-nle-studio .mb-1 { margin-bottom: 4px !important; }
+
+.sb-video-stage-wrapper .relative, .sb-nle-studio .relative { position: relative !important; }
+.sb-video-stage-wrapper .absolute, .sb-nle-studio .absolute { position: absolute !important; }
+.sb-video-stage-wrapper .sticky, .sb-nle-studio .sticky { position: sticky !important; }
+.sb-video-stage-wrapper .fixed, .sb-nle-studio .fixed { position: fixed !important; }
+.sb-video-stage-wrapper .inset-0, .sb-nle-studio .inset-0 { inset: 0 !important; }
+.sb-video-stage-wrapper .top-2, .sb-nle-studio .top-2 { top: 8px !important; }
+.sb-video-stage-wrapper .left-2, .sb-nle-studio .left-2 { left: 8px !important; }
+.sb-video-stage-wrapper .left-0, .sb-nle-studio .left-0 { left: 0 !important; }
+
+.sb-video-stage-wrapper .w-full, .sb-nle-studio .w-full { width: 100% !important; }
+.sb-video-stage-wrapper .h-full, .sb-nle-studio .h-full { height: 100% !important; }
+.sb-video-stage-wrapper .min-h-0, .sb-nle-studio .min-h-0 { min-height: 0 !important; }
+.sb-video-stage-wrapper .min-w-0, .sb-nle-studio .min-w-0 { min-width: 0 !important; }
+.sb-video-stage-wrapper .overflow-hidden, .sb-nle-studio .overflow-hidden { overflow: hidden !important; }
+.sb-video-stage-wrapper .overflow-x-auto, .sb-nle-studio .overflow-x-auto { overflow-x: auto !important; }
+.sb-video-stage-wrapper .overflow-y-auto, .sb-nle-studio .overflow-y-auto { overflow-y: auto !important; }
+
+.sb-video-stage-wrapper .bg-black, .sb-nle-studio .bg-black { background-color: #000000 !important; }
+.sb-video-stage-wrapper .bg-zinc-950, .sb-nle-studio .bg-zinc-950 { background-color: #090a0f !important; }
+.sb-video-stage-wrapper .bg-zinc-900, .sb-nle-studio .bg-zinc-900 { background-color: #111219 !important; }
+.sb-video-stage-wrapper .bg-zinc-850, .sb-nle-studio .bg-zinc-850 { background-color: #151620 !important; }
+.sb-video-stage-wrapper .bg-zinc-800, .sb-nle-studio .bg-zinc-800 { background-color: #1a1c27 !important; }
+.sb-video-stage-wrapper .bg-blue-600, .sb-nle-studio .bg-blue-600 { background-color: #2563eb !important; }
+.sb-video-stage-wrapper .bg-emerald-500, .sb-nle-studio .bg-emerald-500 { background-color: #10b981 !important; }
+
+.sb-video-stage-wrapper .text-zinc-100, .sb-nle-studio .text-zinc-100 { color: #f8fafc !important; }
+.sb-video-stage-wrapper .text-zinc-200, .sb-nle-studio .text-zinc-200 { color: #e2e8f0 !important; }
+.sb-video-stage-wrapper .text-zinc-300, .sb-nle-studio .text-zinc-300 { color: #cbd5e1 !important; }
+.sb-video-stage-wrapper .text-zinc-400, .sb-nle-studio .text-zinc-400 { color: #94a3b8 !important; }
+.sb-video-stage-wrapper .text-zinc-500, .sb-nle-studio .text-zinc-500 { color: #64748b !important; }
+.sb-video-stage-wrapper .text-zinc-600, .sb-nle-studio .text-zinc-600 { color: #475569 !important; }
+.sb-video-stage-wrapper .text-blue-400, .sb-nle-studio .text-blue-400 { color: #60a5fa !important; }
+.sb-video-stage-wrapper .text-white, .sb-nle-studio .text-white { color: #ffffff !important; }
+
+.sb-video-stage-wrapper .border-zinc-800, .sb-nle-studio .border-zinc-800 { border-color: #1c1e28 !important; }
+.sb-video-stage-wrapper .border-zinc-700, .sb-nle-studio .border-zinc-700 { border-color: #282a39 !important; }
+.sb-video-stage-wrapper .border, .sb-nle-studio .border { border-width: 1px !important; border-style: solid !important; }
+.sb-video-stage-wrapper .border-t, .sb-nle-studio .border-t { border-top-width: 1px !important; border-top-style: solid !important; }
+.sb-video-stage-wrapper .border-b, .sb-nle-studio .border-b { border-bottom-width: 1px !important; border-bottom-style: solid !important; }
+.sb-video-stage-wrapper .border-r, .sb-nle-studio .border-r { border-right-width: 1px !important; border-right-style: solid !important; }
+.sb-video-stage-wrapper .border-l, .sb-nle-studio .border-l { border-left-width: 1px !important; border-left-style: solid !important; }
+
+.sb-video-stage-wrapper .rounded, .sb-nle-studio .rounded { border-radius: 4px !important; }
+.sb-video-stage-wrapper .rounded-md, .sb-nle-studio .rounded-md { border-radius: 6px !important; }
+.sb-video-stage-wrapper .rounded-lg, .sb-nle-studio .rounded-lg { border-radius: 8px !important; }
+.sb-video-stage-wrapper .rounded-xl, .sb-nle-studio .rounded-xl { border-radius: 12px !important; }
+.sb-video-stage-wrapper .rounded-full, .sb-nle-studio .rounded-full { border-radius: 9999px !important; }
+
+.sb-video-stage-wrapper .font-mono, .sb-nle-studio .font-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+}
+
+.sb-video-stage-wrapper .font-semibold, .sb-nle-studio .font-semibold { font-weight: 600 !important; }
+.sb-video-stage-wrapper .font-bold, .sb-nle-studio .font-bold { font-weight: 700 !important; }
+.sb-video-stage-wrapper .uppercase, .sb-nle-studio .uppercase { text-transform: uppercase !important; }
+.sb-video-stage-wrapper .truncate, .sb-nle-studio .truncate {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+
+.sb-video-stage-wrapper .custom-scrollbar::-webkit-scrollbar,
+.sb-nle-studio .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+.sb-video-stage-wrapper .custom-scrollbar::-webkit-scrollbar-track,
+.sb-nle-studio .custom-scrollbar::-webkit-scrollbar-track {
+    background: #090a0f;
+}
+.sb-video-stage-wrapper .custom-scrollbar::-webkit-scrollbar-thumb,
+.sb-nle-studio .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #1e202e;
+    border-radius: 3px;
+}
+
+/* 11. Additional Dimensions & Positioning */
+.sb-video-stage-wrapper .w-48, .sb-nle-studio .w-48 { width: 192px !important; }
+.sb-video-stage-wrapper .w-56, .sb-nle-studio .w-56 { width: 224px !important; }
+.sb-video-stage-wrapper .w-20, .sb-nle-studio .w-20 { width: 80px !important; }
+.sb-video-stage-wrapper .w-7, .sb-nle-studio .w-7 { width: 28px !important; }
+.sb-video-stage-wrapper .h-7, .sb-nle-studio .h-7 { height: 28px !important; }
+.sb-video-stage-wrapper .h-16, .sb-nle-studio .h-16 { height: 64px !important; }
+.sb-video-stage-wrapper .h-1, .sb-nle-studio .h-1 { height: 4px !important; }
+.sb-video-stage-wrapper .w-\[460px\], .sb-nle-studio .w-\[460px\] { width: 460px !important; max-width: 95vw !important; }
+
+.sb-video-stage-wrapper .min-h-\[220px\], .sb-nle-studio .min-h-\[220px\] { min-height: 220px !important; }
+.sb-video-stage-wrapper .min-h-\[260px\], .sb-nle-studio .min-h-\[260px\] { min-height: 260px !important; }
+.sb-video-stage-wrapper .max-h-\[360px\], .sb-nle-studio .max-h-\[360px\] { max-height: 360px !important; }
+.sb-video-stage-wrapper .max-h-\[460px\], .sb-nle-studio .max-h-\[460px\] { max-height: 460px !important; }
+.sb-video-stage-wrapper .max-h-\[480px\], .sb-nle-studio .max-h-\[480px\] { max-height: 480px !important; }
+
+.sb-video-stage-wrapper .top-0, .sb-nle-studio .top-0 { top: 0 !important; }
+.sb-video-stage-wrapper .bottom-0, .sb-nle-studio .bottom-0 { bottom: 0 !important; }
+.sb-video-stage-wrapper .right-0, .sb-nle-studio .right-0 { right: 0 !important; }
+.sb-video-stage-wrapper .top-1\.5, .sb-nle-studio .top-1\.5 { top: 6px !important; }
+.sb-video-stage-wrapper .bottom-1\.5, .sb-nle-studio .bottom-1\.5 { bottom: 6px !important; }
+
+.sb-video-stage-wrapper .z-0, .sb-nle-studio .z-0 { z-index: 0 !important; }
+.sb-video-stage-wrapper .z-10, .sb-nle-studio .z-10 { z-index: 10 !important; }
+.sb-video-stage-wrapper .z-20, .sb-nle-studio .z-20 { z-index: 20 !important; }
+.sb-video-stage-wrapper .z-25, .sb-nle-studio .z-25 { z-index: 25 !important; }
+.sb-video-stage-wrapper .z-30, .sb-nle-studio .z-30 { z-index: 30 !important; }
+.sb-video-stage-wrapper .z-50, .sb-nle-studio .z-50 { z-index: 50 !important; }
+
+/* 12. Cursors, Selection & Interactions */
+.sb-video-stage-wrapper .cursor-pointer, .sb-nle-studio .cursor-pointer { cursor: pointer !important; }
+.sb-video-stage-wrapper .cursor-grab, .sb-nle-studio .cursor-grab { cursor: grab !important; }
+.sb-video-stage-wrapper .cursor-grabbing, .sb-nle-studio .cursor-grabbing { cursor: grabbing !important; }
+.sb-video-stage-wrapper .cursor-col-resize, .sb-nle-studio .cursor-col-resize { cursor: col-resize !important; }
+.sb-video-stage-wrapper .cursor-ew-resize, .sb-nle-studio .cursor-ew-resize { cursor: ew-resize !important; }
+.sb-video-stage-wrapper .cursor-not-allowed, .sb-nle-studio .cursor-not-allowed { cursor: not-allowed !important; }
+
+.sb-video-stage-wrapper .select-none, .sb-nle-studio .select-none { user-select: none !important; }
+.sb-video-stage-wrapper .pointer-events-none, .sb-nle-studio .pointer-events-none { pointer-events: none !important; }
+.sb-video-stage-wrapper .pointer-events-auto, .sb-nle-studio .pointer-events-auto { pointer-events: auto !important; }
+
+/* 13. Shadows, Rings & Blurs */
+.sb-video-stage-wrapper .shadow-sm, .sb-nle-studio .shadow-sm { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important; }
+.sb-video-stage-wrapper .shadow-md, .sb-nle-studio .shadow-md { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important; }
+.sb-video-stage-wrapper .shadow-lg, .sb-nle-studio .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.6) !important; }
+.sb-video-stage-wrapper .shadow-2xl, .sb-nle-studio .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8) !important; }
+
+.sb-video-stage-wrapper .backdrop-blur-sm, .sb-nle-studio .backdrop-blur-sm { backdrop-filter: blur(4px) !important; -webkit-backdrop-filter: blur(4px) !important; }
+.sb-video-stage-wrapper .backdrop-blur-md, .sb-nle-studio .backdrop-blur-md { backdrop-filter: blur(8px) !important; -webkit-backdrop-filter: blur(8px) !important; }
+
+.sb-video-stage-wrapper .ring-2, .sb-nle-studio .ring-2 {
+    outline: 2px solid #60a5fa !important;
+    box-shadow: 0 0 12px rgba(96, 165, 250, 0.5) !important;
+}
+
+/* 14. Clip Theme Gradients */
+.sb-video-stage-wrapper .from-blue-700, .sb-nle-studio .from-blue-700 {
+    background: linear-gradient(to right, #1d4ed8, #3730a3) !important;
+}
+.sb-video-stage-wrapper .from-rose-700, .sb-nle-studio .from-rose-700 {
+    background: linear-gradient(to right, #be123c, #9d174d) !important;
+}
+.sb-video-stage-wrapper .from-emerald-700, .sb-nle-studio .from-emerald-700 {
+    background: linear-gradient(to right, #047857, #115e59) !important;
+}
+.sb-video-stage-wrapper .from-amber-700, .sb-nle-studio .from-amber-700 {
+    background: linear-gradient(to right, #b45309, #9a3412) !important;
+}
+
+/* 15. Opacities, Accents & Text Badges */
+.sb-video-stage-wrapper .text-blue-100, .sb-nle-studio .text-blue-100 { color: #dbeafe !important; }
+.sb-video-stage-wrapper .text-rose-100, .sb-nle-studio .text-rose-100 { color: #ffe4e6 !important; }
+.sb-video-stage-wrapper .text-emerald-100, .sb-nle-studio .text-emerald-100 { color: #d1fae5 !important; }
+.sb-video-stage-wrapper .text-amber-100, .sb-nle-studio .text-amber-100 { color: #fef3c7 !important; }
+.sb-video-stage-wrapper .text-amber-400, .sb-nle-studio .text-amber-400 { color: #fbbf24 !important; }
+.sb-video-stage-wrapper .text-rose-400, .sb-nle-studio .text-rose-400 { color: #fb7185 !important; }
+.sb-video-stage-wrapper .text-rose-300, .sb-nle-studio .text-rose-300 { color: #fda4af !important; }
+
+.sb-video-stage-wrapper .border-blue-500\/40, .sb-nle-studio .border-blue-500\/40 { border-color: rgba(59, 130, 246, 0.4) !important; }
+.sb-video-stage-wrapper .border-rose-500\/40, .sb-nle-studio .border-rose-500\/40 { border-color: rgba(244, 63, 94, 0.4) !important; }
+.sb-video-stage-wrapper .border-emerald-500\/40, .sb-nle-studio .border-emerald-500\/40 { border-color: rgba(16, 185, 129, 0.4) !important; }
+.sb-video-stage-wrapper .border-amber-500\/40, .sb-nle-studio .border-amber-500\/40 { border-color: rgba(245, 158, 11, 0.4) !important; }
+
+.sb-video-stage-wrapper .bg-blue-600\/20, .sb-nle-studio .bg-blue-600\/20 { background-color: rgba(37, 99, 235, 0.2) !important; }
+.sb-video-stage-wrapper .bg-blue-600\/10, .sb-nle-studio .bg-blue-600\/10 { background-color: rgba(37, 99, 235, 0.1) !important; }
+.sb-video-stage-wrapper .border-blue-500\/30, .sb-nle-studio .border-blue-500\/30 { border-color: rgba(59, 130, 246, 0.3) !important; }
+.sb-video-stage-wrapper .bg-amber-500\/20, .sb-nle-studio .bg-amber-500\/20 { background-color: rgba(245, 158, 11, 0.2) !important; }
+.sb-video-stage-wrapper .border-amber-500\/40, .sb-nle-studio .border-amber-500\/40 { border-color: rgba(245, 158, 11, 0.4) !important; }
+.sb-video-stage-wrapper .bg-rose-950\/40, .sb-nle-studio .bg-rose-950\/40 { background-color: rgba(76, 5, 25, 0.4) !important; }
+
+/* 16. Button UI Framework */
+.sb-video-stage-wrapper .sb-btn, .sb-nle-studio .sb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+.sb-video-stage-wrapper .sb-btn-xs, .sb-nle-studio .sb-btn-xs {
+    padding: 2px 6px;
+    font-size: 10px;
+    height: 22px;
+}
+
+.sb-video-stage-wrapper .sb-btn-sm, .sb-nle-studio .sb-btn-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+    height: 28px;
+}
+
+.sb-video-stage-wrapper .sb-btn-secondary, .sb-nle-studio .sb-btn-secondary {
+    background: #181923;
+    color: #cbd5e1;
+    border-color: #242636;
+}
+.sb-video-stage-wrapper .sb-btn-secondary:hover, .sb-nle-studio .sb-btn-secondary:hover {
+    background: #232535;
+    color: #ffffff;
+    border-color: #33364c;
+}
+
+.sb-video-stage-wrapper .sb-btn-ghost, .sb-nle-studio .sb-btn-ghost {
+    background: transparent;
+    color: #94a3b8;
+    border-color: transparent;
+}
+.sb-video-stage-wrapper .sb-btn-ghost:hover, .sb-nle-studio .sb-btn-ghost:hover {
+    background: #1e202e;
+    color: #ffffff;
+}
+
+.sb-video-stage-wrapper .sb-btn-primary, .sb-nle-studio .sb-btn-primary {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #3b82f6;
+}
+.sb-video-stage-wrapper .sb-btn-primary:hover, .sb-nle-studio .sb-btn-primary:hover {
+    background: #1d4ed8;
+}
+
+.sb-video-stage-wrapper .sb-tab-btn, .sb-nle-studio .sb-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+    background: transparent;
+}
+

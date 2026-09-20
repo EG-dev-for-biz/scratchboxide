@@ -13,6 +13,7 @@ import {
     McpServerItem,
     SkillItem
 } from './canvas-types';
+import type { FileTreeNode } from '../../common/workspace-sync-protocol';
 
 export interface ProjectRule {
     id: string;
@@ -293,6 +294,64 @@ export class WorkspaceConfigClient {
             return { success: false, error: err };
         } catch (e: any) {
             return { success: false, error: e.message || 'Failed to import MCP servers' };
+        }
+    }
+
+    /**
+     * Fetch real file content from disk.
+     */
+    async fetchFileContent(filePath: string, workspaceRoot?: string): Promise<{ success: boolean; content?: string; size?: number; isBinary?: boolean; error?: string }> {
+        try {
+            const rootParam = workspaceRoot ? `&root=${encodeURIComponent(workspaceRoot)}` : '';
+            const res = await fetch(`${this.endpoint()}/file-content?path=${encodeURIComponent(filePath)}${rootParam}`);
+            if (res.ok) {
+                return await res.json();
+            }
+            return { success: false, error: `HTTP ${res.status}` };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * Save updated file content to disk.
+     */
+    async saveFileContent(filePath: string, content: string, workspaceRoot?: string): Promise<{ success: boolean; path?: string; size?: number; error?: string }> {
+        try {
+            const res = await fetch(`${this.endpoint()}/file-content`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json'
+                },
+                body: JSON.stringify({
+                    workspaceRoot,
+                    path: filePath,
+                    content
+                })
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            return { success: false, error: `HTTP ${res.status}` };
+        } catch (e: any) {
+            return { success: false, error: e.message };
+        }
+    }
+
+    /**
+     * Fetch workspace directory tree.
+     */
+    async fetchDirectoryTree(workspaceRoot?: string, maxDepth: number = 6): Promise<{ success: boolean; files?: FileTreeNode[]; error?: string }> {
+        try {
+            const rootParam = workspaceRoot ? `?root=${encodeURIComponent(workspaceRoot)}&maxDepth=${maxDepth}` : `?maxDepth=${maxDepth}`;
+            const res = await fetch(`${this.endpoint()}/files${rootParam}`);
+            if (res.ok) {
+                return await res.json();
+            }
+            return { success: false, error: `HTTP ${res.status}` };
+        } catch (e: any) {
+            return { success: false, error: e.message };
         }
     }
 }

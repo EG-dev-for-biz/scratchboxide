@@ -16,20 +16,22 @@ import { useSettingsContext } from '../SettingsContext';
 export const SkillsTab: React.FC = () => {
     const { onClose, onSelectPromptStarter, onSkillsChange, skills } = useSettingsContext();
     return (
-        <SkillsManagerPrimitive
-            data={{
-                title: 'Superpowers (Skills)',
-                subtitle: 'Domain capabilities and system prompts',
-                skills
-            }}
-            onToggleSkill={(id: string, enabled: boolean) => {
-                const updated = skills.map(s => s.id === id ? { ...s, isEnabled: enabled } : s);
-                onSkillsChange(updated);
-            }}
-            onSelectPromptStarter={(prompt: string, skill: SkillItem) => {
-                onClose();
-                onSelectPromptStarter(prompt, skill);
-            }}
-        />
+        <div className="sb-cursor-settings-content animate-fadeIn">
+            <SkillsManagerPrimitive
+                data={{
+                    title: 'Superpowers (Skills)',
+                    subtitle: 'Domain capabilities and system prompts',
+                    skills
+                }}
+                onToggleSkill={(id: string, enabled: boolean) => {
+                    const updated = skills.map(s => s.id === id ? { ...s, isEnabled: enabled } : s);
+                    onSkillsChange(updated);
+                }}
+                onSelectPromptStarter={(prompt: string, skill: SkillItem) => {
+                    onClose();
+                    onSelectPromptStarter(prompt, skill);
+                }}
+            />
+        </div>
     );
 };

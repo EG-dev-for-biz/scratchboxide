@@ -45,8 +45,8 @@ export const CodeIntelligenceTab: React.FC = () => {
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Hierarchical Cursor Ignore</div>
-                            <div className="sb-cursor-row-desc">Apply .cursorignore files to all subdirectories. Changing this setting requires restarting Cursor.</div>
+                            <div className="sb-cursor-row-title">Hierarchical Scratchbox Ignore</div>
+                            <div className="sb-cursor-row-desc">Apply .scratchboxignore / .cursorignore files to all subdirectories. Changing this setting requires restarting Scratchbox.</div>
                         </div>
                         <button
                             type="button"
@@ -61,8 +61,8 @@ export const CodeIntelligenceTab: React.FC = () => {
 
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Ignore Symlinks in Cursor Ignore Search</div>
-                            <div className="sb-cursor-row-desc">Use with caution. Skip symlinks during .cursorignore file discovery. Enable only when all .cursorignore files are reachable without symlinks. Changing this setting requires restarting Cursor.</div>
+                            <div className="sb-cursor-row-title">Ignore Symlinks in Scratchbox Ignore Search</div>
+                            <div className="sb-cursor-row-desc">Use with caution. Skip symlinks during ignore file discovery. Enable only when all ignore files are reachable without symlinks. Changing this setting requires restarting Scratchbox.</div>
                         </div>
                         <button
                             type="button"

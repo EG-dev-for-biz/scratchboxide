@@ -8,7 +8,20 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { IconCode, IconEdit, IconPlus, IconSparkles, IconSplit } from '../canvas-icons';
+import {
+    IconCode,
+    IconEdit,
+    IconPlus,
+    IconSparkles,
+    IconSplit,
+    IconMoreVertical,
+    IconExpandCorners,
+    IconSidebarToggle,
+    IconMinimize,
+    IconCheck,
+    IconDocument,
+    IconFolder
+} from '../canvas-icons';
 import { ArtifactStageProps } from './artifact-stage-props';
 
 /** Artifact tab strip, title and version-history dropdown on the left of the canvas card header. */
@@ -17,6 +30,14 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
     // Canvas version history dropdown (open state + outside-click dismissal)
     const [isCanvasVersionMenuOpen, setIsCanvasVersionMenuOpen] = React.useState<boolean>(false);
     const canvasVersionMenuRef = React.useRef<HTMLDivElement>(null);
+    const activeTabRef = React.useRef<HTMLDivElement>(null);
+
+    React.useEffect(() => {
+        if (activeTabRef.current) {
+            activeTabRef.current.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+        }
+    }, [activeArtifact?.id]);
+
     React.useEffect(() => {
         if (!isCanvasVersionMenuOpen) return;
         const handleClickOutside = (e: MouseEvent) => {
@@ -28,47 +49,46 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isCanvasVersionMenuOpen]);
 
+    const totalVersions = Math.max(currentArtifactVersionsList.length, activeArtifact?.version || 1);
+    const displayVersion = Math.min(activeArtifact?.version || (currentArtifactVersionIndex + 1), totalVersions);
+
     return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1, minWidth: 0, marginRight: '12px' }}>
         {canvasArtifactTabs.length === 0 && (
             <span className="sb-doc-card-title-tag" style={{ fontSize: '12px', fontWeight: 600 }}>{getCanvasHeaderLabel()}</span>
         )}
-        {/* Persistent Artifact Tab Strip */}
-        <div className="sb-canvas-tabs-bar" style={{ display: 'flex', alignItems: 'center', gap: '4px', overflowX: 'auto', maxWidth: '460px', scrollbarWidth: 'none', flexShrink: 0 }}>
+        {/* Scratchbox Studio Minimalist Artifact Tab Strip */}
+        <div 
+            className="sb-canvas-tabs-container" 
+            style={{ maxWidth: 'calc(100% - 150px)', flex: '0 1 auto' }}
+            onWheel={(e) => {
+                if (e.deltaY !== 0) {
+                    e.currentTarget.scrollLeft += e.deltaY;
+                }
+            }}
+        >
             {canvasArtifactTabs.map(art => {
                 const isActive = activeArtifact?.id === art.id;
                 return (
                     <div
                         key={art.id}
-                        className={`sb-canvas-tab-pill ${isActive ? 'sb-canvas-tab-active' : ''}`}
+                        ref={isActive ? activeTabRef : undefined}
+                        className={`sb-canvas-tab ${isActive ? 'active' : ''}`}
                         onClick={() => handleSelectArtifactTab(art)}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            padding: '3px 8px',
-                            borderRadius: '6px',
-                            fontSize: '11px',
-                            fontWeight: isActive ? 600 : 500,
-                            cursor: 'pointer',
-                            background: isActive ? 'var(--sb-system-blue-subtle, rgba(37, 99, 235, 0.22))' : 'rgba(255, 255, 255, 0.05)',
-                            border: isActive ? '1px solid var(--sb-system-blue, #2563eb)' : '1px solid rgba(255, 255, 255, 0.08)',
-                            color: isActive ? '#ffffff' : 'var(--sb-text-secondary, #94a3b8)',
-                            transition: 'all 0.15s ease',
-                            whiteSpace: 'nowrap',
-                            flexShrink: 0
-                        }}
                         title={`${art.title || art.type} (${art.type})`}
                     >
-                        <span style={{ fontSize: '11px' }}>{getArtifactIcon(art.type)}</span>
-                        <span style={{ maxWidth: '90px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span className="sb-canvas-tab-icon">{getArtifactIcon(art.type)}</span>
+                        <span className="sb-canvas-tab-title">
                             {art.title || art.type}
                         </span>
                         {canvasArtifactTabs.length > 1 && (
                             <button
                                 type="button"
                                 className="sb-canvas-tab-close"
-                                onClick={(e) => handleCloseArtifactTab(e, art.id)}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCloseArtifactTab(e, art.id);
+                                }}
                                 title="Close tab"
                             >
                                 ✕
@@ -78,27 +98,15 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
                 );
             })}
 
-            {/* New Preview Sandbox Button */}
+            {/* Scratchbox New Tab Button (+) */}
             <button
                 type="button"
-                className="sb-btn sb-btn-ghost sb-btn-xs"
+                className="sb-canvas-icon-btn"
                 onClick={handleCreateNewSandboxTab}
-                style={{
-                    padding: '3px 8px',
-                    borderRadius: '6px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: 'var(--sb-text-secondary, #94a3b8)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    border: '1px dashed rgba(255, 255, 255, 0.15)',
-                    flexShrink: 0
-                }}
-                title="Open new live preview sandbox"
+                style={{ width: '26px', height: '26px', borderRadius: '6px' }}
+                title="New Live Sandbox / Artifact Tab (+)"
             >
-                <IconPlus size={11} strokeWidth={2} />
-                <span>Preview</span>
+                <IconPlus size={13} strokeWidth={2} />
             </button>
         </div>
 
@@ -108,7 +116,7 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
         {activeArtifact && currentArtifactVersionsList.length > 0 && (
             <div className="sb-canvas-header-version-ctrls" ref={canvasVersionMenuRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {currentArtifactVersionsList.length > 1 && (
-                    <div className="sb-canvas-ver-stepper-group" style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '6px', padding: '2px 4px' }}>
+                    <div className="sb-canvas-ver-stepper-group" style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'var(--sb-surface-card)', border: '1px solid var(--sb-surface-border)', borderRadius: '6px', padding: '2px 4px' }}>
                         <button
                             type="button"
                             className="sb-btn sb-btn-ghost sb-btn-icon-xs sb-canvas-ver-step-btn"
@@ -145,12 +153,12 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
                         borderRadius: '6px',
                         fontSize: '11px',
                         fontWeight: 600,
-                        background: isCurrentArtifactLatestVersion ? 'rgba(255, 255, 255, 0.06)' : 'rgba(245, 158, 11, 0.15)',
+                        background: isCurrentArtifactLatestVersion ? 'var(--sb-surface-card)' : 'rgba(245, 158, 11, 0.15)',
                         color: isCurrentArtifactLatestVersion ? 'var(--sb-text-secondary)' : '#f59e0b',
                         border: isCurrentArtifactLatestVersion ? '1px solid var(--sb-surface-border)' : '1px solid rgba(245, 158, 11, 0.4)'
                     }}
                 >
-                    <span>v{activeArtifact.version || currentArtifactVersionIndex + 1} of {currentArtifactVersionsList.length}</span>
+                    <span>{totalVersions > 1 ? `v${displayVersion} of ${totalVersions}` : `v${displayVersion}`}</span>
                     {!isCurrentArtifactLatestVersion && <span style={{ fontSize: '9px', opacity: 0.8 }}>(Historical)</span>}
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="6 9 12 15 18 9" />
@@ -270,201 +278,264 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
 
 /** Version pager, layout/mode switches and export actions on the right of the canvas card header. */
 export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
-    const { activeArtifact, layoutMode, documentPaneState, setDocumentPaneState, docReadOnly, setDocReadOnly, activeSandboxData, getCanvasReopenTabTitle, handleSetSandboxViewMode, triggerMarkdownExport, triggerGoogleDriveSave, showToast } = props;
+    const {
+        activeArtifact,
+        activeWorkspace,
+        layoutMode,
+        documentPaneState,
+        setDocumentPaneState,
+        docReadOnly,
+        setDocReadOnly,
+        activeSandboxData,
+        syncSandboxSaveToMarkdown,
+        getCanvasReopenTabTitle,
+        handleSetSandboxViewMode,
+        triggerMarkdownExport,
+        triggerGoogleDriveSave,
+        showToast,
+        handleCreateNewSandboxTab
+    } = props;
+
+    // Scratchbox Studio overflow menu state & click-outside dismissal
+    const [isOverflowOpen, setIsOverflowOpen] = React.useState<boolean>(false);
+    const overflowMenuRef = React.useRef<HTMLDivElement>(null);
+
+    React.useEffect(() => {
+        if (!isOverflowOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target as Node)) {
+                setIsOverflowOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isOverflowOpen]);
+
+    const handleDoneCommit = async () => {
+        setIsOverflowOpen(false);
+        if (layoutMode === 'document') {
+            const nextReadOnly = !docReadOnly;
+            setDocReadOnly(nextReadOnly);
+            if (nextReadOnly && activeArtifact) {
+                try {
+                    const rootParam = activeWorkspace?.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+                    await fetch(`/workspace/sync-artifact${rootParam}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            workspaceRoot: activeWorkspace?.path,
+                            artifact: activeArtifact
+                        })
+                    });
+                } catch {
+                    // ignore offline
+                }
+                showToast(`${getCanvasReopenTabTitle()} saved and committed.`, 'check');
+            }
+        } else {
+            if (activeArtifact && activeSandboxData && syncSandboxSaveToMarkdown) {
+                syncSandboxSaveToMarkdown(activeSandboxData);
+            }
+            if (activeArtifact) {
+                try {
+                    const rootParam = activeWorkspace?.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+                    await fetch(`/workspace/sync-artifact${rootParam}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            workspaceRoot: activeWorkspace?.path,
+                            artifact: activeArtifact
+                        })
+                    });
+                } catch {
+                    // ignore offline
+                }
+            }
+            showToast(`${getCanvasReopenTabTitle()} saved and committed.`, 'check');
+        }
+    };
+
     return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-        {/* Mode Switcher: Code | Split | Preview */}
-        {(layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox') && (
-            <div
-                className="sb-segmented-control sb-segmented-control-xs"
-                style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    background: 'rgba(0, 0, 0, 0.4)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: '8px',
-                    padding: '2px',
-                    gap: '2px',
-                    marginRight: '4px'
-                }}
-                title="Live Code Sandbox View Mode"
-            >
-                <button
-                    type="button"
-                    className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'code' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
-                    onClick={() => handleSetSandboxViewMode('code')}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            {/* Minimalist Segmented View Mode Pill: Code | Split | Preview */}
+            {(layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox') && (
+                <div
+                    className="sb-segmented-control sb-segmented-control-xs"
                     style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        borderRadius: '6px',
-                        display: 'flex',
+                        display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px'
+                        background: 'rgba(0, 0, 0, 0.35)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        borderRadius: '7px',
+                        padding: '2px',
+                        gap: '2px',
+                        marginRight: '4px'
                     }}
-                    title="Code Editor View"
+                    title="Live Sandbox View Mode"
                 >
-                    <IconCode size={11} strokeWidth={2} />
-                    <span>Code</span>
-                </button>
-                <button
-                    type="button"
-                    className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'split' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
-                    onClick={() => handleSetSandboxViewMode('split')}
-                    style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        borderRadius: '6px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                    }}
-                    title="Split Editor & Live Preview"
-                >
-                    <IconSplit size={11} strokeWidth={2} />
-                    <span>Split</span>
-                </button>
-                <button
-                    type="button"
-                    className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'preview' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
-                    onClick={() => handleSetSandboxViewMode('preview')}
-                    style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        borderRadius: '6px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                    }}
-                    title="Full Live Interactive Preview"
-                >
-                    <IconSparkles size={11} strokeWidth={2} />
-                    <span>Preview</span>
-                </button>
-            </div>
-        )}
+                    <button
+                        type="button"
+                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'code' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        onClick={() => handleSetSandboxViewMode('code')}
+                        style={{
+                            padding: '3px 8px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            borderRadius: '5px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                        }}
+                        title="Code Editor"
+                    >
+                        <IconCode size={11} strokeWidth={2} />
+                        <span>Code</span>
+                    </button>
+                    <button
+                        type="button"
+                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'split' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        onClick={() => handleSetSandboxViewMode('split')}
+                        style={{
+                            padding: '3px 8px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            borderRadius: '5px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                        }}
+                        title="Split Editor & Live Preview"
+                    >
+                        <IconSplit size={11} strokeWidth={2} />
+                        <span>Split</span>
+                    </button>
+                    <button
+                        type="button"
+                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'preview' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        onClick={() => handleSetSandboxViewMode('preview')}
+                        style={{
+                            padding: '3px 8px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            borderRadius: '5px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                        }}
+                        title="Live Interactive Preview"
+                    >
+                        <IconSparkles size={11} strokeWidth={2} />
+                        <span>Preview</span>
+                    </button>
+                </div>
+            )}
 
-        {layoutMode === 'document' ? (
-            /* Edit toggle button */
+            {/* Scratchbox Studio Minimalist Controls Group */}
+            {/* 1. Toggle Split / Side-by-side View ([|]) */}
             <button
-                className={`sb-btn sb-btn-xs sb-doc-edit-mode-toggle ${docReadOnly ? 'sb-btn-secondary' : 'sb-btn-primary'}`}
                 type="button"
-                onClick={() => setDocReadOnly(prev => !prev)}
-                style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '4px 10px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    transition: 'all 0.15s ease'
-                }}
-                title={docReadOnly ? "Switch to Edit Mode" : "Switch to Read-Only Mode"}
-            >
-                <IconEdit size={12} strokeWidth={1.8} />
-                <span>{docReadOnly ? 'Edit' : 'Done'}</span>
-            </button>
-        ) : (
-            /* Done button for non-document canvas modes */
-            <button
-                className="sb-btn sb-btn-primary sb-btn-xs sb-canvas-done-btn"
-                type="button"
+                className={`sb-canvas-icon-btn ${documentPaneState === 'split' ? 'active' : ''}`}
                 onClick={() => {
-                    showToast(`${getCanvasReopenTabTitle()} saved and up to date.`);
+                    if (documentPaneState === 'split') {
+                        setDocumentPaneState('collapsed');
+                    } else {
+                        setDocumentPaneState('split');
+                    }
                 }}
-                style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '4px 10px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    background: 'var(--sb-system-blue, #2563eb)',
-                    color: '#ffffff'
-                }}
-                title="Done editing canvas"
+                title={documentPaneState === 'split' ? "Focus Chat" : "Split View"}
             >
-                <IconSparkles size={12} strokeWidth={1.8} />
-                <span>Done</span>
+                <IconSidebarToggle size={14} strokeWidth={1.8} />
             </button>
-        )}
 
-        {/* Download button */}
-        <button
-            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-export-btn"
-            type="button"
-            onClick={triggerMarkdownExport}
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 500
-            }}
-            title={layoutMode === 'document' ? "Export Markdown (.md)" : "Export Artifact (.md)"}
-        >
-            <span>Download .md</span>
-        </button>
-
-        {/* Save to Drive button */}
-        <button
-            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-export-btn"
-            type="button"
-            onClick={triggerGoogleDriveSave}
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                fontWeight: 500
-            }}
-            title="Save to Google Drive"
-        >
-            <span>Save Drive</span>
-        </button>
-
-        {/* Minimize/Collapse/Expand Buttons */}
-        {documentPaneState === 'split' ? (
-            <>
-                <button
-                    className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-collapse-btn"
-                    type="button"
-                    onClick={() => setDocumentPaneState('collapsed')}
-                    style={{ padding: '4px 8px', borderRadius: '6px' }}
-                    title="Collapse canvas (View Chat)"
-                >
-                    <span>Collapse</span>
-                </button>
-                <button
-                    className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-expand-btn"
-                    type="button"
-                    onClick={() => setDocumentPaneState('expanded')}
-                    style={{ padding: '4px 8px', borderRadius: '6px' }}
-                    title="Expand canvas (Full Workspace)"
-                >
-                    <span>Expand</span>
-                </button>
-            </>
-        ) : (
+            {/* 2. Toggle Maximize / Fullscreen ([ ]) */}
             <button
-                className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-split-view-btn"
                 type="button"
-                onClick={() => setDocumentPaneState('split')}
-                style={{ padding: '4px 8px', borderRadius: '6px' }}
-                title="Reset to Split View"
+                className={`sb-canvas-icon-btn ${documentPaneState === 'expanded' ? 'active' : ''}`}
+                onClick={() => {
+                    if (documentPaneState === 'expanded') {
+                        setDocumentPaneState('split');
+                    } else {
+                        setDocumentPaneState('expanded');
+                    }
+                }}
+                title={documentPaneState === 'expanded' ? "Restore Window" : "Maximize Canvas"}
             >
-                <span>Split View</span>
+                {documentPaneState === 'expanded' ? (
+                    <IconMinimize size={14} strokeWidth={1.8} />
+                ) : (
+                    <IconExpandCorners size={14} strokeWidth={1.8} />
+                )}
             </button>
-        )}
-    </div>
+
+            {/* 3. More Actions Overflow Dropdown (⋮) */}
+            <div style={{ position: 'relative' }} ref={overflowMenuRef}>
+                <button
+                    type="button"
+                    className={`sb-canvas-icon-btn ${isOverflowOpen ? 'active' : ''}`}
+                    onClick={() => setIsOverflowOpen(!isOverflowOpen)}
+                    title="More Actions"
+                >
+                    <IconMoreVertical size={14} strokeWidth={1.8} />
+                </button>
+
+                {isOverflowOpen && (
+                    <div className="sb-canvas-menu">
+                        {/* Done & Commit */}
+                        <button
+                            type="button"
+                            className="sb-canvas-menu-item"
+                            onClick={handleDoneCommit}
+                        >
+                            <span style={{ color: '#10b981', display: 'inline-flex' }}><IconCheck size={13} strokeWidth={2} /></span>
+                            <span>{layoutMode === 'document' ? (docReadOnly ? 'Switch to Edit' : 'Done Editing') : 'Done & Commit'}</span>
+                        </button>
+
+                        <div className="sb-canvas-menu-divider" />
+
+                        {/* Download Markdown */}
+                        <button
+                            type="button"
+                            className="sb-canvas-menu-item"
+                            onClick={() => {
+                                setIsOverflowOpen(false);
+                                triggerMarkdownExport();
+                            }}
+                        >
+                            <IconDocument size={13} strokeWidth={1.8} />
+                            <span>Download Markdown (.md)</span>
+                        </button>
+
+                        {/* Save to Drive */}
+                        <button
+                            type="button"
+                            className="sb-canvas-menu-item"
+                            onClick={() => {
+                                setIsOverflowOpen(false);
+                                triggerGoogleDriveSave();
+                            }}
+                        >
+                            <IconFolder size={13} strokeWidth={1.8} />
+                            <span>Save to Google Drive</span>
+                        </button>
+
+                        <div className="sb-canvas-menu-divider" />
+
+                        {/* New Sandbox Tab */}
+                        <button
+                            type="button"
+                            className="sb-canvas-menu-item"
+                            onClick={() => {
+                                setIsOverflowOpen(false);
+                                handleCreateNewSandboxTab();
+                            }}
+                        >
+                            <IconPlus size={13} strokeWidth={1.8} />
+                            <span>New Sandbox Tab</span>
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
     );
 };
 

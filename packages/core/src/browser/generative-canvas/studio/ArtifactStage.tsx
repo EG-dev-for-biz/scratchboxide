@@ -20,7 +20,8 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
     const { documentPaneState, relatedArtifacts, handleSelectRelatedArtifact, handleOpenRelatedInBento } = props;
     return (
     <div className="sb-canvas-split-right-pane sb-document-split-right-pane" style={{
-        width: documentPaneState === 'expanded' ? '100%' : '55%',
+        flex: 1,
+        width: documentPaneState === 'expanded' ? '100%' : undefined,
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
@@ -34,7 +35,7 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            margin: '16px',
+            margin: documentPaneState === 'expanded' ? '12px' : '10px 14px 12px 6px',
             borderRadius: '16px',
             overflow: 'hidden',
             position: 'relative',
@@ -46,6 +47,7 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
             items={relatedArtifacts}
             onSelect={handleSelectRelatedArtifact}
             onOpenBento={handleOpenRelatedInBento}
+            activeArtifactTitle={props.activeArtifact?.title}
         />
 
         <CanvasCardBody {...props} />

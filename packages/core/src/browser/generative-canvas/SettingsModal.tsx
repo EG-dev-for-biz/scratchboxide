@@ -19,16 +19,20 @@ import { GeneralTab } from './settings/tabs/GeneralTab';
 import { ProfileTab } from './settings/tabs/ProfileTab';
 import { AppearanceTab } from './settings/tabs/AppearanceTab';
 import { PlanTab } from './settings/tabs/PlanTab';
+import { ModelsTab } from './settings/tabs/ModelsTab';
 import { AgentsTab } from './settings/tabs/AgentsTab';
 import { CloudAgentsTab } from './settings/tabs/CloudAgentsTab';
-import { ModelsTab } from './settings/tabs/ModelsTab';
 import { GitPrsTab } from './settings/tabs/GitPrsTab';
 import { WorktreesTab } from './settings/tabs/WorktreesTab';
 import { BrowserNetworkTab } from './settings/tabs/BrowserNetworkTab';
 import { TabTab } from './settings/tabs/TabTab';
 import { CodeIntelligenceTab } from './settings/tabs/CodeIntelligenceTab';
 import { BetaTab } from './settings/tabs/BetaTab';
-import { CustomizeTabs } from './settings/tabs/CustomizeTabs';
+import { WorkspaceTab } from './settings/tabs/WorkspaceTab';
+import { SkillsTab } from './settings/tabs/SkillsTab';
+import { McpTab } from './settings/tabs/McpTab';
+import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
+import { AboutTab } from './settings/tabs/AboutTab';
 import { MemoriesTab } from './settings/tabs/MemoriesTab';
 import { DocsTab } from './settings/tabs/DocsTab';
 
@@ -56,6 +60,29 @@ export interface SettingsModalProps {
     onExecuteCommand?: (commandId: string) => void;
 }
 
+const ACTIVE_TAB_IDS = new Set<StudioSettingsTab>([
+    'general',
+    'profile',
+    'appearance',
+    'plan',
+    'models',
+    'agents',
+    'cloud-agents',
+    'git-prs',
+    'worktrees',
+    'browser-network',
+    'tab',
+    'code-intelligence',
+    'beta',
+    'workspace',
+    'skills',
+    'mcp',
+    'memories',
+    'shortcuts',
+    'about',
+    'docs'
+]);
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
     isOpen,
     initialTab = 'general',
@@ -77,16 +104,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onOpenKeyboardShortcuts,
     onExecuteCommand
 }) => {
-    // Normalize initial tab (map legacy 'guide' to 'general')
-    const normalizedInitialTab = initialTab === 'guide' ? 'general' : initialTab;
+    // Normalize initial tab (fallback to 'general' if tab is inactive or legacy 'guide')
+    const normalizedInitialTab = (initialTab && ACTIVE_TAB_IDS.has(initialTab)) ? initialTab : 'general';
     const [activeTab, setActiveTab] = React.useState<StudioSettingsTab>(normalizedInitialTab);
     const [searchQuery, setSearchQuery] = React.useState<string>('');
     const avatarInputRef = React.useRef<HTMLInputElement>(null);
 
     // All per-control settings live in one reducer-backed store (see settings/settingsReducer.ts)
     const { state: settingsState, setters: settingsSetters } = useSettingsStore({ propGoogleSearchGrounding });
-    const { isCustomizeBannerDismissed } = settingsState;
-    const { setIsCustomizeBannerDismissed } = settingsSetters;
     const activeUserName = getActiveUserName(`${settingsState.firstName} ${settingsState.lastName}`.trim());
 
     const settingsHandlers = useSettingsHandlers({
@@ -168,12 +193,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         return null;
     }
 
-    // Cursor Standard Navigation Items — NO ICONS, clean typography
+    // Active Scratchbox Settings Navigation Items — clean typography
     const sidebarNavSections: { id: StudioSettingsTab; label: string; isExternal?: boolean }[] = [
         { id: 'general', label: 'General' },
         { id: 'profile', label: 'Profile' },
         { id: 'appearance', label: 'Appearance' },
         { id: 'plan', label: 'Plan & Usage' },
+        { id: 'models', label: 'Models & AI' },
         { id: 'agents', label: 'Agents' },
         { id: 'cloud-agents', label: 'Cloud Agents' },
         { id: 'git-prs', label: 'Git & PRs' },
@@ -182,13 +208,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         { id: 'tab', label: 'Tab' },
         { id: 'code-intelligence', label: 'Code Intelligence' },
         { id: 'beta', label: 'Beta' },
-        { id: 'docs', label: 'Docs', isExternal: true },
-        { id: 'workspace', label: 'Workspace' },
+        { id: 'workspace', label: 'Workspace Rules' },
         { id: 'skills', label: 'Skills' },
-        { id: 'mcp', label: 'MCP' },
+        { id: 'mcp', label: 'MCP Tools' },
         { id: 'memories', label: 'Memories' },
         { id: 'shortcuts', label: 'Shortcuts' },
-        { id: 'about', label: 'About' }
+        { id: 'about', label: 'About' },
+        { id: 'docs', label: 'Docs', isExternal: true }
     ];
 
     const filteredNavSections = searchQuery.trim()
@@ -241,6 +267,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 type="button"
                                 className="sb-cursor-settings-back-btn"
                                 onClick={onClose}
+                                aria-label="← Back"
                             >
                                 <IconArrowLeft size={14} strokeWidth={2} />
                                 <span>← Back</span>
@@ -307,7 +334,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {/* Right Main Stage Content Area */}
                     <div className="sb-cursor-settings-main">
                         {/* Top Customize Relocation Banner */}
-                        {!isCustomizeBannerDismissed && (
+                        {!settingsState.isCustomizeBannerDismissed && (
                             <div className="sb-cursor-customize-banner">
                                 <div className="sb-cursor-banner-text">
                                     <div className="sb-cursor-banner-title">
@@ -321,7 +348,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     <button
                                         type="button"
                                         className="sb-cursor-banner-dismiss-btn"
-                                        onClick={() => setIsCustomizeBannerDismissed(true)}
+                                        onClick={() => settingsSetters.setIsCustomizeBannerDismissed(true)}
                                     >
                                         Dismiss
                                     </button>
@@ -335,20 +362,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 </div>
                             </div>
                         )}
+
                         {(activeTab === 'general' || activeTab === 'guide') && <GeneralTab />}
                         {activeTab === 'profile' && <ProfileTab />}
                         {activeTab === 'appearance' && <AppearanceTab />}
                         {activeTab === 'plan' && <PlanTab />}
+                        {activeTab === 'models' && <ModelsTab />}
                         {activeTab === 'agents' && <AgentsTab />}
                         {activeTab === 'cloud-agents' && <CloudAgentsTab />}
-                        {activeTab === 'models' && <ModelsTab />}
                         {activeTab === 'git-prs' && <GitPrsTab />}
                         {activeTab === 'worktrees' && <WorktreesTab />}
                         {activeTab === 'browser-network' && <BrowserNetworkTab />}
                         {activeTab === 'tab' && <TabTab />}
                         {activeTab === 'code-intelligence' && <CodeIntelligenceTab />}
                         {activeTab === 'beta' && <BetaTab />}
-                        {(activeTab === 'workspace' || activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'shortcuts' || activeTab === 'about') && <CustomizeTabs />}
+                        {activeTab === 'workspace' && <WorkspaceTab />}
+                        {activeTab === 'skills' && <SkillsTab />}
+                        {activeTab === 'mcp' && <McpTab />}
+                        {activeTab === 'shortcuts' && <ShortcutsTab />}
+                        {activeTab === 'about' && <AboutTab />}
                         {activeTab === 'memories' && <MemoriesTab />}
                         {activeTab === 'docs' && <DocsTab />}
                     </div>

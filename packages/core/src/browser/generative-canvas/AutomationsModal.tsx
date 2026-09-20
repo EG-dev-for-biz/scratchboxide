@@ -212,7 +212,7 @@ export default function App() {
                 title: 'Scratchbox 2.0: Architecture Blueprint',
                 subtitle: 'AI-Native Development with Collaborative Visual Canvas',
                 sections: [
-                    { id: 'sec-1', type: 'heading', level: 1, content: '1. Executive Summary' },
+                    { id: 'sec-1', type: 'heading', level: 1, content: '1. System Architecture & Objectives' },
                     { id: 'sec-2', type: 'paragraph', content: 'Scratchbox transforms software engineering into an interactive visual canvas.' },
                     { id: 'sec-3', type: 'callout', calloutType: 'tip', calloutTitle: 'Live MCP Telemetry', content: 'Typed MCP tools connect real-time financial balances and repositories directly to canvas blocks.' },
                     { id: 'sec-4', type: 'table', tableHeaders: ['Capability', 'Scratchbox IDE', 'Legacy IDEs'], tableRows: [['Visual Canvas', 'Interactive Live', 'None'], ['Live MCP', 'Built-in Streaming', 'Manual']] }

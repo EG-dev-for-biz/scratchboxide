@@ -9,7 +9,7 @@
 
 import * as React from 'react';
 import { CanvasArtifact, StudioLayoutMode, WorkspaceFileType } from '../canvas-types';
-import { IconChat, IconClose, IconDocument } from '../canvas-icons';
+import { IconChat, IconClose, IconDocument, IconSparkles } from '../canvas-icons';
 
 export interface StudioTopBarProps {
     activeArtifact: CanvasArtifact | undefined;
@@ -34,26 +34,35 @@ export interface StudioTopBarProps {
     getCanvasReopenLabel: () => string;
     getCanvasReopenTabTitle: () => string;
     showToast: (text: string, icon?: string) => void;
+    onOpenDemos?: () => void;
 }
 
 /** Minimal top navigation bar: sidebar toggle, version pager, layout controls and the conversation menu. */
 export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
-    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast } = props;
+    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, onOpenDemos } = props;
     return (
     <header className="sb-chatgpt-topbar">
-        <div className="sb-topbar-left">
+        <div className="sb-topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {!isSidebarOpen && (
-                <button
-                    type="button"
-                    className="sb-topbar-sidebar-open-btn"
-                    onClick={() => setIsSidebarOpen(true)}
-                    title="Open sidebar"
-                >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                        <line x1="9" y1="3" x2="9" y2="21" />
-                    </svg>
-                </button>
+                <>
+                    <button
+                        type="button"
+                        className="sb-topbar-sidebar-open-btn"
+                        onClick={() => setIsSidebarOpen(true)}
+                        title="Open sidebar"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <line x1="9" y1="3" x2="9" y2="21" />
+                        </svg>
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: '4px' }}>
+                        <div style={{ width: '20px', height: '20px', minWidth: '20px', borderRadius: '6px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', overflow: 'hidden' }}>
+                            <img src="/icons/ScratchboxIDE.png" alt="Scratchbox Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        </div>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', letterSpacing: '-0.02em' }}>Scratchbox</span>
+                    </div>
+                </>
             )}
         </div>
 
@@ -126,6 +135,18 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                 >
                     {getCanvasReopenIcon()}
                     <span>Show {getCanvasReopenTabTitle()}</span>
+                </button>
+            )}
+            {onOpenDemos && (
+                <button
+                    type="button"
+                    className="sb-btn sb-demos-launcher-btn"
+                    onClick={onOpenDemos}
+                    title="Preloaded Showcase Demos (3D Engine, VFX NLE, AI Graph, Breakout Sandbox)"
+                    style={{ marginRight: '6px' }}
+                >
+                    <IconSparkles size={13} className="text-amber-400" />
+                    <span>Demos</span>
                 </button>
             )}
             <button

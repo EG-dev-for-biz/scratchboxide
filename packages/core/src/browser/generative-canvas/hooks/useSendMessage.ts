@@ -14,6 +14,7 @@ import {
     ChartDataPoint,
     ChatMessage,
     ChatSession,
+    ContextMentionItem,
     GroundingMetadata,
     MarkdownDocumentData,
     McpExecutionState,
@@ -39,6 +40,7 @@ import {
     classifyFallbackPrompt,
     FallbackResult,
     synthesize3DFallback,
+    synthesizeChatFallback,
     synthesizeDataFileDashboard,
     synthesizeDefaultDocument,
     synthesizeDocumentFallback,
@@ -46,7 +48,8 @@ import {
     synthesizeKanbanFallback,
     synthesizeMediaFallback,
     synthesizeMetricsFallback,
-    synthesizeSandboxFallback
+    synthesizeSandboxFallback,
+    synthesizeVideoTimelineFallback
 } from './sendMessageFallbacks';
 
 type Setter<T> = (value: T | ((prev: T) => T)) => void;
@@ -108,11 +111,14 @@ export interface SendMessageDeps {
     recordArtifactVersion: (artifact: CanvasArtifact) => void;
     attachedDataFile: AttachedDataFile | undefined;
     setAttachedDataFile: Setter<AttachedDataFile | undefined>;
+    attachedContextMentions?: ContextMentionItem[];
+    setAttachedContextMentions?: Setter<ContextMentionItem[]>;
     showToast: (text: string, icon?: string) => void;
     graphControllerRef: React.MutableRefObject<ProjectArtifactController>;
     setGraphEpoch: Setter<number>;
     activeWorkspace: ProjectItem;
     persistSessionsImmediately: (updatedSessions: ChatSession[]) => void;
+    aiInteractionMode?: 'agent' | 'ask' | 'plan';
 }
 
 interface GenerationContext {
@@ -185,6 +191,7 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
     const attachedMcpObjects = mcpServers.filter(s => selectedMcpIds.includes(s.id));
 
     const targetSessionId = currentSessionId || `session-chat-${Date.now()}`;
+    activeSessionRef.current = targetSessionId;
     if (!currentSessionId) {
         setCurrentSessionId(targetSessionId);
     }
@@ -195,12 +202,16 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
         text: text.trim(),
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         attachedSkills: attachedSkillObjects.map(s => s.name),
-        attachedMcpTools: attachedMcpObjects.map(m => m.name)
+        attachedMcpTools: attachedMcpObjects.map(m => m.name),
+        attachedContextMentions: d.attachedContextMentions && d.attachedContextMentions.length > 0 ? [...d.attachedContextMentions] : undefined
     };
 
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setInputValue('');
+    if (d.setAttachedContextMentions) {
+        d.setAttachedContextMentions([]);
+    }
     setAutocompleteType(undefined);
     setIsGenerating(true);
     setLiveThinkingText('');
@@ -260,27 +271,99 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             text: m.text
         }));
 
+        // Format attached @-context items into groundable prompt context
+        let effectivePrompt = text.trim();
+        if (d.attachedContextMentions && d.attachedContextMentions.length > 0) {
+            const contextLines: string[] = ['\n\n--- INJECTED CONTEXT REFERENCES (@-Engine) ---'];
+            for (const ctxItem of d.attachedContextMentions) {
+                contextLines.push(`### @${ctxItem.type}: ${ctxItem.name}`);
+                if (ctxItem.description) contextLines.push(`> ${ctxItem.description}`);
+                if (ctxItem.detail) contextLines.push(ctxItem.detail);
+                if (ctxItem.payload) {
+                    if (typeof ctxItem.payload === 'string') {
+                        contextLines.push(`\`\`\`\n${ctxItem.payload}\n\`\`\``);
+                    } else {
+                        contextLines.push(`\`\`\`json\n${JSON.stringify(ctxItem.payload, null, 2)}\n\`\`\``);
+                    }
+                }
+            }
+            contextLines.push('--- END CONTEXT REFERENCES ---\n');
+            effectivePrompt = `${effectivePrompt}\n${contextLines.join('\n')}`;
+        }
+
         await GeminiClient.getInstance().streamGenerate(
             {
-                prompt: text.trim(),
+                prompt: effectivePrompt,
                 model: 'gemini-3.7-flash',
                 thinkingBudget: 1024,
                 enableGoogleSearch: googleSearchGrounding !== false,
                 attachedSkills: attachedSkillsContext,
                 attachedMcpTools: attachedMcpContext,
                 activeArtifact,
-                chatHistory
+                chatHistory,
+                mode: d.aiInteractionMode || 'agent',
+                enableWorkspaceTools: true,
+                autoVerify: true,
+                workspaceRoot: d.activeWorkspace?.path
             },
             event => {
                 if (signal.aborted) {
                     return;
                 }
-                usedBackend = true;
+                if (event.text || event.artifact || event.mcpExecution || event.type === 'delta') {
+                    usedBackend = true;
+                }
                 if (event.groundingMetadata) {
                     streamGroundingMetadata = event.groundingMetadata;
                 }
                 if (event.artifact) {
-                    const art = event.artifact;
+                    let art = event.artifact;
+                    const promptText = textToSend || '';
+                    const lowerPromptText = promptText.toLowerCase();
+                    const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(promptText) ||
+                        ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
+
+                    if (isVideoTimelinePrompt && art.type !== 'video-timeline') {
+                        const fallbackResult = synthesizeVideoTimelineFallback(promptText, activeArtifact);
+                        if (fallbackResult.artifact) {
+                            art = fallbackResult.artifact;
+                        }
+                    }
+
+                    const is3DPrompt = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
+                    if (is3DPrompt && !isVideoTimelinePrompt) {
+                        const sceneData = art.data as Scene3DData;
+                        const isMissing3DMeshes = art.type !== '3d-scene' || !sceneData?.customMeshes?.length;
+                        if (isMissing3DMeshes) {
+                            const fallbackResult = synthesize3DFallback(promptText, lowerPromptText, activeArtifact, updatedMessages, undefined);
+                            if (fallbackResult.artifact) {
+                                if (art.type === '3d-scene') {
+                                    const fbData = fallbackResult.artifact.data as Scene3DData;
+                                    art.data = {
+                                        ...fbData,
+                                        ...sceneData,
+                                        customMeshes: fbData.customMeshes,
+                                        environment: sceneData?.environment || fbData.environment,
+                                        camera: sceneData?.camera || fbData.camera,
+                                        features: { ...(fbData.features || {}), ...(sceneData?.features || {}) },
+                                        cppGenerator: fbData.cppGenerator || sceneData?.cppGenerator
+                                    };
+                                } else {
+                                    art = fallbackResult.artifact;
+                                }
+                            }
+                        }
+                    }
+
+                    const isSandboxPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
+                        /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
+                    if (isSandboxPrompt && !isVideoTimelinePrompt && !is3DPrompt && art.type !== 'live-code-sandbox') {
+                        const fallbackResult = synthesizeSandboxFallback(promptText, activeArtifact);
+                        if (fallbackResult.artifact) {
+                            art = fallbackResult.artifact;
+                        }
+                    }
+
                     const is3DActive = (layoutMode === '3d' || activeArtifact?.type === '3d-scene');
                     const isAnimPrompt = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(textToSend || '');
                     if (is3DActive && isAnimPrompt && art.type === '3d-scene') {
@@ -298,6 +381,10 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     }
                     generatedArtifact = art;
                     const resolvedMode = resolveModeForArtifact(art.type);
+                    if (!activeSessionRef.current || activeSessionRef.current === targetSessionId) {
+                        setActiveArtifact(art);
+                        setLayoutMode(resolvedMode);
+                    }
                     setSessions(prev => prev.map(s => {
                         if (s.id !== targetSessionId) return s;
                         return {
@@ -314,6 +401,40 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (activeSessionRef.current === targetSessionId) {
                     if (event.thought) {
                         setLiveThinkingText(prev => (prev ? `${prev}\n${event.thought}` : event.thought || ''));
+                    }
+                    if (event.type === 'plan_ready') {
+                        d.showToast?.('Implementation plan ready for review', 'clipboard');
+                    }
+                    if (event.type === 'verification_start') {
+                        setLiveSteps(prev => [
+                            ...prev,
+                            {
+                                id: `verify-${Date.now()}`,
+                                title: 'Automated verification & self-healing checks running...',
+                                status: 'running',
+                                kind: 'verify'
+                            }
+                        ]);
+                    }
+                    if (event.type === 'verification_result' && event.verification) {
+                        const v = event.verification;
+                        setLiveSteps(prev => {
+                            const lastVerifyIdx = prev.map(s => s.id).reverse().findIndex(id => id.startsWith('verify-'));
+                            const actualIdx = lastVerifyIdx >= 0 ? prev.length - 1 - lastVerifyIdx : -1;
+                            const step: AgentExecutionStep = {
+                                id: `verify-res-${Date.now()}`,
+                                title: v.passed ? '✓ Verification passed cleanly' : '⚠ Diagnostic issues found; self-healing...',
+                                status: v.passed ? 'completed' : 'failed',
+                                details: v.summary,
+                                kind: 'verify'
+                            };
+                            if (actualIdx >= 0) {
+                                const next = [...prev];
+                                next[actualIdx] = step;
+                                return next;
+                            }
+                            return [...prev, step];
+                        });
                     }
                     if (event.mcpExecution) {
                         streamExecs.push(event.mcpExecution);
@@ -373,7 +494,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                         }));
                     }
                 }
-            }
+            },
+            signal
         );
     } catch (err: any) {
         console.warn('Gemini backend streaming fallback to studio synthesis:', err?.message);
@@ -388,7 +510,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             setShowTerminalErrorToast(true);
         }
     }
-    return { usedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs };
+    const effectiveUsedBackend = usedBackend && (!!generatedArtifact || !!finalResponseText.trim());
+    return { usedBackend: effectiveUsedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs };
 }
 
 /** Step 4a — build the assistant message from a successful backend stream. */
@@ -441,8 +564,14 @@ function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): Fallba
     if (attachedDataFile && attachedDataFile.rowsCount > 0) {
         return synthesizeDataFileDashboard(attachedDataFile);
     }
+    if (c.isVideoTimelineRequest) {
+        return synthesizeVideoTimelineFallback(text, activeArtifact);
+    }
     if (c.isExplicitMedia) {
         return synthesizeMediaFallback(text, c.isExplicitVideo);
+    }
+    if (c.isDocumentRequest) {
+        return synthesizeDocumentFallback(text, activeArtifact);
     }
     if (c.is3DRequest) {
         return synthesize3DFallback(text, c.lower, activeArtifact, messages, c.docContentExtract);
@@ -459,67 +588,82 @@ function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): Fallba
     if (c.isSandboxRequest) {
         return synthesizeSandboxFallback(text, activeArtifact);
     }
-    if (c.isDocumentRequest) {
-        return synthesizeDocumentFallback(text, activeArtifact);
-    }
-    return synthesizeDefaultDocument(text);
+    return synthesizeChatFallback(text, activeArtifact);
 }
 
 /** Step 4c — play the simulated agent steps and progressively stream the local response. */
-async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, fallbackGen: CanvasArtifact | undefined, signal: AbortSignal): Promise<ChatMessage | undefined> {
+async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, fallbackResult: FallbackResult, signal: AbortSignal): Promise<ChatMessage | undefined> {
     const { setLiveThinkingText, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, setActiveArtifact, setArtifactHistory, setLayoutMode, recordArtifactVersion, attachedDataFile } = d;
     const { targetSessionId, generationStartTime } = ctx;
-    const targetAssistantText = buildFallbackAssistantText(attachedDataFile, fallbackGen);
+    const fallbackGen = fallbackResult.artifact;
+    const isPureChat = !fallbackGen;
+    const targetAssistantText = isPureChat
+        ? (fallbackResult.chatResponse || 'Here is the analysis and information you requested:')
+        : buildFallbackAssistantText(attachedDataFile, fallbackGen);
     const simulatedSteps = buildSimulatedSteps(fallbackGen);
     let finalAssistantMsg: ChatMessage;
 
-        const localThinkingText = `Analyzing workspace directives and formulating ${fallbackGen?.title || 'canvas artifact'} architecture...`;
+    const localThinkingText = isPureChat
+        ? 'Synthesizing conversational research and formulating structured response...'
+        : `Analyzing workspace directives and formulating ${fallbackGen?.title || 'canvas artifact'} architecture...`;
 
-        if (activeSessionRef.current === targetSessionId) {
-            setLiveThinkingText(localThinkingText);
-            setLiveSteps([...simulatedSteps]);
-        }
+    if (activeSessionRef.current === targetSessionId) {
+        setLiveThinkingText(localThinkingText);
+        setLiveSteps([...simulatedSteps]);
+    }
 
-        // Step 1: context indexing (75ms)
-        await new Promise(r => setTimeout(r, 75));
-        if (signal.aborted) {
-            return undefined;
-        }
-        simulatedSteps[0].status = 'completed';
-        simulatedSteps[0].durationMs = 75;
-        simulatedSteps[0].durationFormatted = '75ms';
-        simulatedSteps[1].status = 'running';
-        if (activeSessionRef.current === targetSessionId) {
-            setLiveSteps([...simulatedSteps]);
-        }
+    // Step 1: context indexing (60ms)
+    await new Promise(r => setTimeout(r, 60));
+    if (signal.aborted) {
+        return undefined;
+    }
+    simulatedSteps[0].status = 'completed';
+    simulatedSteps[0].durationMs = 60;
+    simulatedSteps[0].durationFormatted = '60ms';
+    simulatedSteps[1].status = 'running';
+    if (activeSessionRef.current === targetSessionId) {
+        setLiveSteps([...simulatedSteps]);
+    }
 
-        // Step 2: synthesis (140ms)
-        await new Promise(r => setTimeout(r, 140));
-        if (signal.aborted) {
-            return undefined;
-        }
-        simulatedSteps[1].status = 'completed';
-        simulatedSteps[1].durationMs = 140;
-        simulatedSteps[1].durationFormatted = '140ms';
-        simulatedSteps[2].status = 'running';
-        if (activeSessionRef.current === targetSessionId) {
-            setLiveSteps([...simulatedSteps]);
-        }
+    // Step 2: synthesis (120ms)
+    await new Promise(r => setTimeout(r, 120));
+    if (signal.aborted) {
+        return undefined;
+    }
+    simulatedSteps[1].status = 'completed';
+    simulatedSteps[1].durationMs = 120;
+    simulatedSteps[1].durationFormatted = '120ms';
+    simulatedSteps[2].status = 'running';
+    if (activeSessionRef.current === targetSessionId) {
+        setLiveSteps([...simulatedSteps]);
+    }
 
-        // Step 3: verification (35ms)
-        await new Promise(r => setTimeout(r, 35));
-        if (signal.aborted) {
-            return undefined;
-        }
-        simulatedSteps[2].status = 'completed';
-        simulatedSteps[2].durationMs = 35;
-        simulatedSteps[2].durationFormatted = '35ms';
-        if (activeSessionRef.current === targetSessionId) {
-            setLiveSteps([...simulatedSteps]);
-        }
+    // Step 3: verification (30ms)
+    await new Promise(r => setTimeout(r, 30));
+    if (signal.aborted) {
+        return undefined;
+    }
+    simulatedSteps[2].status = 'completed';
+    simulatedSteps[2].durationMs = 30;
+    simulatedSteps[2].durationFormatted = '30ms';
+    if (activeSessionRef.current === targetSessionId) {
+        setLiveSteps([...simulatedSteps]);
+    }
 
-        // Progressive Live Streaming Ticker for Instant Local Responsiveness
-        if (activeSessionRef.current === targetSessionId && fallbackGen) {
+    // Progressive Live Streaming Ticker for Instant Local Responsiveness
+    if (activeSessionRef.current === targetSessionId) {
+        if (isPureChat) {
+            await streamTokensAsync(
+                targetAssistantText,
+                streamed => {
+                    if (activeSessionRef.current === targetSessionId) {
+                        setLiveStreamedText(streamed);
+                    }
+                },
+                undefined,
+                12
+            );
+        } else if (fallbackGen) {
             const targetLayoutMode = resolveModeForArtifact(fallbackGen.type);
             setLayoutMode(targetLayoutMode);
             if (fallbackGen.type === 'markdown-document' && fallbackGen.data) {
@@ -589,18 +733,19 @@ async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, f
             recordArtifactVersion(fallbackGen);
             setArtifactHistory(prev => [fallbackGen!, ...prev.filter(a => a.id !== fallbackGen!.id)]);
         }
+    }
 
-        const localElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
-        finalAssistantMsg = {
-            id: `msg-assistant-${Date.now()}`,
-            sender: 'assistant',
-            text: targetAssistantText,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            artifacts: fallbackGen ? [fallbackGen] : undefined,
-            thinkingText: localThinkingText,
-            thinkingDurationSeconds: localElapsedSeconds,
-            steps: simulatedSteps
-        };
+    const localElapsedSeconds = parseFloat(((Date.now() - generationStartTime) / 1000).toFixed(1));
+    finalAssistantMsg = {
+        id: `msg-assistant-${Date.now()}`,
+        sender: 'assistant',
+        text: targetAssistantText,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        artifacts: fallbackGen ? [fallbackGen] : undefined,
+        thinkingText: localThinkingText,
+        thinkingDurationSeconds: localElapsedSeconds,
+        steps: simulatedSteps
+    };
     return finalAssistantMsg;
 }
 
@@ -611,10 +756,10 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     // Clear attached data file after generation
     setAttachedDataFile(undefined);
 
-    const artifactCandidate = generatedArtifact || fallbackGen || activeArtifact;
-    const finalArtifact = artifactCandidate
+    const newlyGeneratedArtifact = generatedArtifact || fallbackGen;
+    const finalArtifact = newlyGeneratedArtifact
         ? graphControllerRef.current.registerArtifact(
-            artifactCandidate,
+            newlyGeneratedArtifact,
             `chat-artifact-${targetSessionId}-${finalAssistantMsg.id}`
         )
         : undefined;
@@ -630,26 +775,31 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
 
     // Update or create chat session (auto-rename 'New Chat' to first prompt topic like Cursor)
     const currentTitle = targetSessionId ? sessions.find(s => s.id === targetSessionId)?.title : undefined;
-    const isDefaultTitle = !currentTitle || currentTitle === 'New Chat' || currentTitle === 'Untitled Chat';
+    const isDefaultTitle = !currentTitle || currentTitle === 'New Chat' || currentTitle === 'Untitled Chat' || currentTitle === 'New Canvas';
     const sessionTitle = isDefaultTitle
         ? (text.length > 36 ? text.slice(0, 34) + '...' : text)
         : (currentTitle || text.slice(0, 32));
 
     setSessions(prev => {
         const exists = prev.some(s => s.id === targetSessionId);
+        const existingSession = exists ? prev.find(s => s.id === targetSessionId) : undefined;
+        const currentActiveArtifact = finalArtifact || existingSession?.activeArtifact;
+        const currentLayoutMode = finalArtifact 
+            ? resolveModeForArtifact(finalArtifact.type) 
+            : (existingSession?.layoutMode || layoutMode || 'chat');
         const sessionData: ChatSession = {
             id: targetSessionId,
             title: sessionTitle,
-            fileType: exists ? prev.find(s => s.id === targetSessionId)?.fileType || 'chat' : 'chat',
+            fileType: exists ? existingSession?.fileType || 'chat' : 'chat',
             workspaceId: activeWorkspace.id,
             workspaceName: activeWorkspace.path.split('/').pop() || activeWorkspace.name,
             relativeTime: 'Just now',
             dateCategory: 'Today',
             updatedAt: 'Just now',
             messages: nextFullMessages,
-            activeArtifact: finalArtifact,
+            activeArtifact: currentActiveArtifact,
             artifactHistory: finalArtifact ? [finalArtifact, ...artifactHistory.filter(a => a.id !== finalArtifact.id)] : artifactHistory,
-            layoutMode: finalArtifact ? resolveModeForArtifact(finalArtifact.type) : (exists ? prev.find(s => s.id === targetSessionId)?.layoutMode || 'chat' : 'chat')
+            layoutMode: currentLayoutMode
         };
         const updated = exists ? prev.map(s => s.id === targetSessionId ? sessionData : s) : [sessionData, ...prev];
         persistSessionsImmediately(updated);
@@ -659,7 +809,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     clearInterval(thinkingTimer);
 
     // Only update active UI if user is still on this target session
-    if (activeSessionRef.current === targetSessionId) {
+    if (!activeSessionRef.current || activeSessionRef.current === targetSessionId) {
         setMessages(nextFullMessages);
         setIsGenerating(false);
         setLiveThinkingText('');
@@ -744,6 +894,65 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
         let finalAssistantMsg: ChatMessage;
         let fallbackGen: CanvasArtifact | undefined;
         if (backend.usedBackend) {
+            const promptText = ctx.text || '';
+            const lowerPromptText = promptText.toLowerCase();
+            const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(promptText) ||
+                ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
+            if (isVideoTimelinePrompt && (!backend.generatedArtifact || backend.generatedArtifact.type !== 'video-timeline')) {
+                const fb = synthesizeVideoTimelineFallback(promptText, depsRef.current.activeArtifact);
+                if (fb.artifact) {
+                    backend.generatedArtifact = fb.artifact;
+                    depsRef.current.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
+                }
+            }
+            const is3DDirective = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
+            if (is3DDirective && !isVideoTimelinePrompt) {
+                const currentArt = backend.generatedArtifact;
+                const sceneData = currentArt?.data as Scene3DData | undefined;
+                const isMissing3DMeshes = !currentArt || currentArt.type !== '3d-scene' || !sceneData?.customMeshes?.length;
+                if (isMissing3DMeshes) {
+                    const fb = synthesize3DFallback(promptText, lowerPromptText, depsRef.current.activeArtifact, ctx.updatedMessages, undefined);
+                    if (fb.artifact) {
+                        if (currentArt && currentArt.type === '3d-scene') {
+                            const fbData = fb.artifact.data as Scene3DData;
+                            const mergedArt: CanvasArtifact = {
+                                ...currentArt,
+                                data: {
+                                    ...fbData,
+                                    ...sceneData,
+                                    customMeshes: fbData.customMeshes,
+                                    environment: sceneData?.environment || fbData.environment,
+                                    camera: sceneData?.camera || fbData.camera,
+                                    features: { ...(fbData.features || {}), ...(sceneData?.features || {}) },
+                                    cppGenerator: fbData.cppGenerator || sceneData?.cppGenerator
+                                }
+                            };
+                            backend.generatedArtifact = mergedArt;
+                        } else {
+                            backend.generatedArtifact = fb.artifact;
+                        }
+                        const finalArt = backend.generatedArtifact;
+                        depsRef.current.setActiveArtifact(finalArt);
+                        depsRef.current.setLayoutMode('3d');
+                        depsRef.current.showToast(fb.toast?.text || `Synthesized 3D Scene: ${finalArt.title}`, fb.toast?.icon || '🪐');
+                    }
+                }
+            }
+            const isSandboxCreationPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
+                /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
+
+            if (isSandboxCreationPrompt && !isVideoTimelinePrompt && !is3DDirective) {
+                const currentArt = backend.generatedArtifact;
+                if (!currentArt || currentArt.type !== 'live-code-sandbox') {
+                    const fb = synthesizeSandboxFallback(promptText, depsRef.current.activeArtifact);
+                    if (fb.artifact) {
+                        backend.generatedArtifact = fb.artifact;
+                        depsRef.current.setActiveArtifact(fb.artifact);
+                        depsRef.current.setLayoutMode('code');
+                        depsRef.current.showToast(fb.toast?.text || `Synthesized Live Sandbox: ${fb.artifact.title}`, fb.toast?.icon || '💻');
+                    }
+                }
+            }
             finalAssistantMsg = finalizeBackendMessage(depsRef.current, ctx, backend);
         } else {
             const latest = depsRef.current;
@@ -752,7 +961,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             if (result.toast) {
                 latest.showToast(result.toast.text, result.toast.icon);
             }
-            const localMsg = await streamLocalFallback(depsRef.current, ctx, fallbackGen, signal);
+            const localMsg = await streamLocalFallback(depsRef.current, ctx, result, signal);
             if (signal.aborted || !localMsg) {
                 return;
             }

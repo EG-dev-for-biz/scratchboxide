@@ -28,7 +28,7 @@ export const BrowserNetworkTab: React.FC = () => {
                         value={browserAutomationMode}
                         onChange={e => setBrowserAutomationMode(e.target.value)}
                     >
-                        <option value="tab">Browser Tab ▾</option>
+                        <option value="tab">Browser Tab</option>
                         <option value="window">Dedicated Window</option>
                         <option value="headless">Headless Chromium</option>
                     </select>
@@ -52,7 +52,7 @@ export const BrowserNetworkTab: React.FC = () => {
 
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Open Local Links in Cursor Browser</div>
+                        <div className="sb-cursor-row-title">Open Local Links in Scratchbox Browser</div>
                         <div className="sb-cursor-row-desc">Automatically open localhost links in the Browser Tab</div>
                     </div>
                     <button
@@ -68,7 +68,7 @@ export const BrowserNetworkTab: React.FC = () => {
 
                 <div className="sb-cursor-row-item">
                     <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Open Web Links in Cursor Browser</div>
+                        <div className="sb-cursor-row-title">Open Web Links in Scratchbox Browser</div>
                         <div className="sb-cursor-row-desc">Automatically open http and https links in the Browser Tab</div>
                     </div>
                     <button
@@ -97,7 +97,7 @@ export const BrowserNetworkTab: React.FC = () => {
                             value={httpCompatibilityMode}
                             onChange={e => setHttpCompatibilityMode(e.target.value)}
                         >
-                            <option value="http2">HTTP/2 ▾</option>
+                            <option value="http2">HTTP/2</option>
                             <option value="http1">HTTP/1.1</option>
                         </select>
                     </div>
@@ -105,14 +105,14 @@ export const BrowserNetworkTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Required Domains</div>
-                            <div className="sb-cursor-row-desc">These domains must be accessible for Cursor to function. Add them to your firewall or proxy allowlist.</div>
+                            <div className="sb-cursor-row-desc">These domains must be accessible for Scratchbox to function. Add them to your firewall or proxy allowlist.</div>
                         </div>
                         <div className="flex items-center gap-2">
                             <button
                                 type="button"
                                 className="sb-cursor-row-btn"
                                 onClick={() => {
-                                    navigator.clipboard.writeText('api.cursor.sh\napi2.cursor.sh\nrepo.cursor.sh');
+                                    navigator.clipboard.writeText('api.scratchbox.dev\napi2.scratchbox.dev\nrepo.scratchbox.dev\nopen-vsx.org');
                                     setCopiedDomains(true);
                                     setTimeout(() => setCopiedDomains(false), 2000);
                                 }}
@@ -131,9 +131,9 @@ export const BrowserNetworkTab: React.FC = () => {
 
                     {showDomainsList && (
                         <div className="p-3 bg-zinc-900/60 border-t border-zinc-800/80 text-xs font-mono text-zinc-300 space-y-1 animate-fadeIn">
-                            <div>api.cursor.sh</div>
-                            <div>api2.cursor.sh</div>
-                            <div>repo.cursor.sh</div>
+                            <div>api.scratchbox.dev</div>
+                            <div>api2.scratchbox.dev</div>
+                            <div>repo.scratchbox.dev</div>
                             <div>open-vsx.org</div>
                         </div>
                     )}
@@ -141,7 +141,7 @@ export const BrowserNetworkTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Network Diagnostics</div>
-                            <div className="sb-cursor-row-desc">Check network connectivity to all Cursor services</div>
+                            <div className="sb-cursor-row-desc">Check network connectivity to all Scratchbox services</div>
                         </div>
                         <button
                             type="button"

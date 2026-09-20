@@ -210,10 +210,10 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
             'Add API Spec Table',
             'Add Architecture Callout',
             'Add Action Checklist',
-            'Executive Summary Section'
+            'Add Overview & Objectives Section'
         ],
         kanban: [
-            'Add Stripe Integration Task',
+            'Add Core Integration Task',
             'Add QA Review Column',
             'Prioritize Critical Bugs',
             'Move Tasks to In Progress'

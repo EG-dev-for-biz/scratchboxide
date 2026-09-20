@@ -50,7 +50,7 @@ export const MemoriesTab: React.FC = () => {
             <div className="flex items-center justify-between mb-2">
                 <div>
                     <h2 className="sb-cursor-content-title">User Memories</h2>
-                    <p className="text-xs text-zinc-400">
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
                         Manage persistent memory banks, writing style voice profiles, visual aesthetics, and project facts.
                     </p>
                 </div>
@@ -72,7 +72,7 @@ export const MemoriesTab: React.FC = () => {
                     <div className="sb-cursor-row-info">
                         <div className="sb-cursor-row-title flex items-center gap-2">
                             <span>Inject memories into AI generation</span>
-                            <span className="sb-badge-unified sb-badge-blue text-[9px]">ACTIVE</span>
+                            <span className="sb-badge-unified sb-badge-blue">ACTIVE</span>
                         </div>
                         <div className="sb-cursor-row-desc">
                             Automatically supply active writing voice profiles, visual presets, and project facts to Gemini 3.7 Flash and subagent orchestrators.
@@ -92,7 +92,7 @@ export const MemoriesTab: React.FC = () => {
 
             {/* Filter Sub-Tabs / Segments */}
             <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                <div className="flex items-center gap-1 bg-zinc-900/80 p-1 rounded-xl border border-zinc-800/80">
+                <div className="flex items-center gap-1 bg-zinc-100/80 dark:bg-zinc-900/80 p-1 rounded-xl border border-zinc-200 dark:border-zinc-800/80">
                     <button
                         type="button"
                         className={`sb-segment-btn ${memoriesFilterGroup === 'all' ? 'sb-segment-active' : ''}`}
@@ -155,7 +155,7 @@ export const MemoriesTab: React.FC = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div>
-                            <label className="block text-[11px] font-medium text-zinc-400 mb-1">Category</label>
+                            <label className="block text-xs font-medium text-zinc-400 mb-1">Category</label>
                             <select
                                 className="sb-cursor-select-dropdown w-full"
                                 value={newMemoryCategory}
@@ -180,7 +180,7 @@ export const MemoriesTab: React.FC = () => {
                         </div>
 
                         <div>
-                            <label className="block text-[11px] font-medium text-zinc-400 mb-1">Memory Key / Identifier</label>
+                            <label className="block text-xs font-medium text-zinc-400 mb-1">Memory Key / Identifier</label>
                             <input
                                 type="text"
                                 className="sb-cursor-text-input w-full"
@@ -193,7 +193,7 @@ export const MemoriesTab: React.FC = () => {
                     </div>
 
                     <div>
-                        <label className="block text-[11px] font-medium text-zinc-400 mb-1">Memory Value / Fact</label>
+                        <label className="block text-xs font-medium text-zinc-400 mb-1">Memory Value / Fact</label>
                         <textarea
                             className="sb-cursor-text-input w-full h-20 resize-y"
                             placeholder="Enter memory instruction or grounded fact..."
@@ -205,8 +205,8 @@ export const MemoriesTab: React.FC = () => {
 
                     <div className="flex items-center justify-between pt-1">
                         <div className="flex items-center gap-3">
-                            <label className="text-[11px] text-zinc-400 font-medium">Scope:</label>
-                            <label className="flex items-center gap-1 text-[11px] text-zinc-300 cursor-pointer">
+                            <label className="text-xs text-zinc-400 font-medium">Scope:</label>
+                            <label className="flex items-center gap-1 text-xs text-zinc-300 cursor-pointer">
                                 <input
                                     type="radio"
                                     name="memoryScope"
@@ -216,7 +216,7 @@ export const MemoriesTab: React.FC = () => {
                                 />
                                 <span>Global (All Projects)</span>
                             </label>
-                            <label className="flex items-center gap-1 text-[11px] text-zinc-300 cursor-pointer">
+                            <label className="flex items-center gap-1 text-xs text-zinc-300 cursor-pointer">
                                 <input
                                     type="radio"
                                     name="memoryScope"
@@ -253,7 +253,7 @@ export const MemoriesTab: React.FC = () => {
                     <div className="flex items-center justify-between sb-cursor-section-header">
                         <div className="flex items-center gap-2">
                             <span>Writing Style Profiles</span>
-                            <span className="sb-badge-unified sb-badge-blue text-[9px]">{writingProfiles.length}</span>
+                            <span className="sb-badge-unified sb-badge-blue">{writingProfiles.length}</span>
                         </div>
                         <button
                             type="button"
@@ -269,7 +269,7 @@ export const MemoriesTab: React.FC = () => {
                             <div className="text-xs font-semibold text-zinc-200">Create Writing Style Voice Profile</div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div>
-                                    <label className="block text-[11px] text-zinc-400 mb-1">Profile Name</label>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Profile Name</label>
                                     <input
                                         type="text"
                                         className="sb-cursor-text-input w-full"
@@ -280,7 +280,7 @@ export const MemoriesTab: React.FC = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-[11px] text-zinc-400 mb-1">Sample Reference Quotes (one per line)</label>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Sample Reference Quotes (one per line)</label>
                                     <input
                                         type="text"
                                         className="sb-cursor-text-input w-full"
@@ -291,7 +291,7 @@ export const MemoriesTab: React.FC = () => {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-[11px] text-zinc-400 mb-1">Style Prompt Instructions</label>
+                                <label className="block text-xs font-medium text-zinc-400 mb-1">Style Prompt Instructions</label>
                                 <textarea
                                     className="sb-cursor-text-input w-full h-16 resize-y"
                                     placeholder="Describe the cadence, vocabulary, rhythm, and tone..."
@@ -309,20 +309,20 @@ export const MemoriesTab: React.FC = () => {
 
                     <div className="sb-cursor-group-card">
                         {writingProfiles.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-zinc-400">
+                            <div className="p-4 text-center text-xs text-zinc-500 dark:text-zinc-400">
                                 No writing style profiles configured yet. Add a profile to guide AI voice.
                             </div>
                         ) : (
                             writingProfiles.map(profile => (
-                                <div key={profile.id} className="sb-cursor-row-item flex items-center justify-between p-3 border-b border-zinc-800/60 last:border-0">
+                                <div key={profile.id} className="sb-cursor-row-item flex items-center justify-between p-3 border-b border-zinc-200 dark:border-zinc-800/60 last:border-0">
                                     <div className="space-y-1 max-w-[70%]">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-xs font-semibold text-zinc-200">{profile.name}</span>
+                                            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{profile.name}</span>
                                             {profile.isActive && (
-                                                <span className="sb-badge-unified sb-badge-blue text-[9px] font-bold">ACTIVE VOICE</span>
+                                                <span className="sb-badge-unified sb-badge-blue font-bold">ACTIVE VOICE</span>
                                             )}
                                         </div>
-                                        <div className="text-[11px] text-zinc-400 line-clamp-2">{profile.stylePrompt}</div>
+                                        <div className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2">{profile.stylePrompt}</div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         {!profile.isActive && (
@@ -356,7 +356,7 @@ export const MemoriesTab: React.FC = () => {
                     <div className="flex items-center justify-between sb-cursor-section-header">
                         <div className="flex items-center gap-2">
                             <span>Visual & Cinematic Style Presets</span>
-                            <span className="sb-badge-unified sb-badge-purple text-[9px]">{stylePreferences.length}</span>
+                            <span className="sb-badge-unified sb-badge-purple">{stylePreferences.length}</span>
                         </div>
                         <button
                             type="button"
@@ -372,7 +372,7 @@ export const MemoriesTab: React.FC = () => {
                             <div className="text-xs font-semibold text-zinc-200">Create Visual / Video Style Preset</div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 <div>
-                                    <label className="block text-[11px] text-zinc-400 mb-1">Preset Name</label>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Preset Name</label>
                                     <input
                                         type="text"
                                         className="sb-cursor-text-input w-full"
@@ -383,7 +383,7 @@ export const MemoriesTab: React.FC = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-[11px] text-zinc-400 mb-1">Category</label>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Category</label>
                                     <select
                                         className="sb-cursor-select-dropdown w-full"
                                         value={newStyleCategory}
@@ -396,7 +396,7 @@ export const MemoriesTab: React.FC = () => {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-[11px] text-zinc-400 mb-1">Short Description</label>
+                                    <label className="block text-xs font-medium text-zinc-400 mb-1">Short Description</label>
                                     <input
                                         type="text"
                                         className="sb-cursor-text-input w-full"
@@ -407,7 +407,7 @@ export const MemoriesTab: React.FC = () => {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-[11px] text-zinc-400 mb-1">Visual Prompt Directives</label>
+                                <label className="block text-xs font-medium text-zinc-400 mb-1">Visual Prompt Directives</label>
                                 <textarea
                                     className="sb-cursor-text-input w-full h-16 resize-y"
                                     placeholder="Enter camera angles, lighting conditions, materials, and color palettes..."
@@ -417,7 +417,7 @@ export const MemoriesTab: React.FC = () => {
                                 />
                             </div>
                             <div className="flex items-center justify-between">
-                                <label className="flex items-center gap-1.5 text-[11px] text-zinc-300 cursor-pointer">
+                                <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
                                     <input
                                         type="checkbox"
                                         checked={newStyleIsDefault}
@@ -435,21 +435,21 @@ export const MemoriesTab: React.FC = () => {
 
                     <div className="sb-cursor-group-card">
                         {stylePreferences.length === 0 ? (
-                            <div className="p-4 text-center text-xs text-zinc-400">
+                            <div className="p-4 text-center text-xs text-zinc-500 dark:text-zinc-400">
                                 No visual presets created yet.
                             </div>
                         ) : (
                             stylePreferences.map(style => (
-                                <div key={style.id} className="sb-cursor-row-item flex items-center justify-between p-3 border-b border-zinc-800/60 last:border-0">
+                                <div key={style.id} className="sb-cursor-row-item flex items-center justify-between p-3 border-b border-zinc-200 dark:border-zinc-800/60 last:border-0">
                                     <div className="space-y-1 max-w-[70%]">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-xs font-semibold text-zinc-200">{style.name}</span>
+                                            <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{style.name}</span>
                                             {style.isDefault && (
-                                                <span className="sb-badge-unified sb-badge-purple text-[9px] font-bold">DEFAULT PRESET</span>
+                                                <span className="sb-badge-unified sb-badge-purple font-bold">DEFAULT PRESET</span>
                                             )}
-                                            <span className="sb-badge-unified sb-badge-zinc text-[9px]">{formatCategoryLabel(style.category)}</span>
+                                            <span className="sb-badge-unified sb-badge-zinc">{formatCategoryLabel(style.category)}</span>
                                         </div>
-                                        <div className="text-[11px] text-zinc-400 line-clamp-2">{style.stylePrompt}</div>
+                                        <div className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2">{style.stylePrompt}</div>
                                     </div>
                                     <button
                                         type="button"
@@ -505,10 +505,10 @@ export const MemoriesTab: React.FC = () => {
                                             <span className="text-xs font-semibold text-zinc-200">
                                                 {formatCategoryLabel(cat)}
                                             </span>
-                                            <span className="sb-badge-unified sb-badge-zinc text-[10px]">
+                                            <span className="sb-badge-unified sb-badge-zinc">
                                                 {items.length}
                                             </span>
-                                            <span className={`sb-badge-unified ${groupBadgeColor} text-[9px] uppercase`}>
+                                            <span className={`sb-badge-unified ${groupBadgeColor} uppercase`}>
                                                 {catGroup}
                                             </span>
                                         </div>
@@ -516,17 +516,17 @@ export const MemoriesTab: React.FC = () => {
                                         <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
                                             {confirmClearCategory === cat ? (
                                                 <div className="flex items-center gap-1.5 bg-red-950/80 px-2 py-1 rounded-lg border border-red-800">
-                                                    <span className="text-[10px] text-red-300 font-medium">Clear all {items.length}?</span>
+                                                    <span className="text-xs text-red-300 font-medium">Clear all {items.length}?</span>
                                                     <button
                                                         type="button"
-                                                        className="sb-btn sb-btn-danger sb-btn-xs text-[10px] px-2 py-0.5"
+                                                        className="sb-btn sb-btn-danger sb-btn-xs px-2 py-0.5"
                                                         onClick={() => handleClearCategory(cat)}
                                                     >
                                                         Yes
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        className="sb-btn sb-btn-ghost sb-btn-xs text-[10px] text-zinc-400 hover:text-zinc-200 px-1"
+                                                        className="sb-btn sb-btn-ghost sb-btn-xs text-zinc-400 hover:text-zinc-200 px-1"
                                                         onClick={() => setConfirmClearCategory(null)}
                                                     >
                                                         Cancel
@@ -535,7 +535,7 @@ export const MemoriesTab: React.FC = () => {
                                             ) : (
                                                 <button
                                                     type="button"
-                                                    className="sb-btn sb-btn-ghost sb-btn-xs text-[11px] text-zinc-500 hover:text-red-400 px-2 py-0.5 rounded hover:bg-zinc-800/60"
+                                                    className="sb-btn sb-btn-ghost sb-btn-xs text-xs text-zinc-500 hover:text-red-400 px-2 py-0.5 rounded hover:bg-zinc-800/60"
                                                     onClick={() => setConfirmClearCategory(cat)}
                                                     title="Clear all memories in this category"
                                                 >
@@ -547,15 +547,15 @@ export const MemoriesTab: React.FC = () => {
 
                                     {/* Accordion Body */}
                                     {isExpanded && (
-                                        <div className="divide-y divide-zinc-800/60">
+                                        <div className="divide-y divide-zinc-200 dark:divide-zinc-800/60">
                                             {items.map(item => (
-                                                <div key={item.id} className="p-3.5 hover:bg-zinc-900/40 transition-colors">
+                                                <div key={item.id} className="p-3.5 hover:bg-zinc-100/60 dark:hover:bg-zinc-900/40 transition-colors">
                                                     <div className="flex items-center justify-between mb-1.5">
                                                         <div className="flex items-center gap-2">
-                                                            <span className="font-mono text-xs font-semibold text-blue-300 bg-blue-950/40 px-2 py-0.5 rounded border border-blue-800/30">
+                                                            <span className="font-mono text-xs font-semibold text-blue-600 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-800/30">
                                                                 {item.key}
                                                             </span>
-                                                            <span className={`sb-badge-unified ${item.scope === 'workspace' ? 'sb-badge-emerald' : 'sb-badge-zinc'} text-[9px]`}>
+                                                            <span className={`sb-badge-unified ${item.scope === 'workspace' ? 'sb-badge-emerald' : 'sb-badge-zinc'}`}>
                                                                 {item.scope === 'workspace' ? 'Workspace' : 'Global'}
                                                             </span>
                                                         </div>
@@ -565,14 +565,14 @@ export const MemoriesTab: React.FC = () => {
                                                                 <>
                                                                     <button
                                                                         type="button"
-                                                                        className="sb-btn sb-btn-primary sb-btn-sm text-[10px] px-2 py-0.5"
+                                                                        className="sb-btn sb-btn-primary sb-btn-xs px-2 py-0.5"
                                                                         onClick={() => handleSaveEditMemory(item.id)}
                                                                     >
                                                                         Save
                                                                     </button>
                                                                     <button
                                                                         type="button"
-                                                                        className="sb-cursor-row-btn text-[10px] px-2 py-0.5"
+                                                                        className="sb-cursor-row-btn text-xs px-2 py-0.5"
                                                                         onClick={() => {
                                                                             setEditingMemoryId(null);
                                                                             setEditingMemoryValue('');
@@ -585,7 +585,7 @@ export const MemoriesTab: React.FC = () => {
                                                                 <>
                                                                     <button
                                                                         type="button"
-                                                                        className="sb-btn sb-btn-ghost sb-btn-xs text-[11px] px-1.5 py-0.5"
+                                                                        className="sb-btn sb-btn-ghost sb-btn-xs px-1.5 py-0.5"
                                                                         onClick={() => {
                                                                             setEditingMemoryId(item.id);
                                                                             setEditingMemoryValue(item.value);
@@ -595,7 +595,7 @@ export const MemoriesTab: React.FC = () => {
                                                                     </button>
                                                                     <button
                                                                         type="button"
-                                                                        className="sb-btn sb-btn-ghost sb-btn-xs text-[11px] px-1.5 py-0.5"
+                                                                        className="sb-btn sb-btn-ghost sb-btn-xs px-1.5 py-0.5"
                                                                         onClick={() => handleDeleteMemory(item.id)}
                                                                         title="Delete Memory"
                                                                     >
@@ -613,7 +613,7 @@ export const MemoriesTab: React.FC = () => {
                                                             onChange={e => setEditingMemoryValue(e.target.value)}
                                                         />
                                                     ) : (
-                                                        <div className="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                                                        <div className="text-xs text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed">
                                                             {item.value}
                                                         </div>
                                                     )}

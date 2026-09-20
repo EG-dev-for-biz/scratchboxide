@@ -38,7 +38,7 @@ export function getComposerPlaceholder(
     if (layoutMode === 'automation' || layoutMode === 'canvas') {
         return 'Ask AI to edit Canvas Workflow...';
     }
-    return 'Plan, Build, / for skills, @ for context';
+    return 'Prompt any creation (3D, apps, specs, boards)... (/ for skills, @ for context)';
 }
 
 export interface ComposerProps {

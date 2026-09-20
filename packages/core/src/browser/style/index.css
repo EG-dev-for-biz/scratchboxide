@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 @import "./unified-ui.css";
+@import "./video-nle.css";
 
 :root {
     --scratchbox-branding-logo: url(../icons/ScratchboxIDE.svg);
@@ -39,7 +40,7 @@
     --sb-system-cyan: #06b6d4;
     --sb-system-cyan-subtle: rgba(255, 255, 255, 0.06);
 
-    /* Scratchbox ChatGPT Dark Minimalist Obsidian & Graphite Surfaces */
+    /* Scratchbox ChatGPT Dark Minimalist Graphite Surfaces */
     --sb-surface-bg: #212121;
     --sb-surface-stage: #212121;
     --sb-surface-card: #2f2f2f;
@@ -2322,7 +2323,7 @@ body.theia-light .sb-doc-check-row:hover {
     background: rgba(0, 0, 0, 0.02);
 }
 
-.sb-doc-check-row input { display: none; }
+.sb-doc-check-row input[type="checkbox"] { display: none; }
 
 .sb-doc-check-box {
     width: 18px;
@@ -2337,13 +2338,13 @@ body.theia-light .sb-doc-check-row:hover {
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.sb-doc-check-row input:checked + .sb-doc-check-box {
+.sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box {
     background: var(--sb-system-blue);
     border-color: var(--sb-system-blue);
     box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
 }
 
-.sb-doc-check-row input:checked + .sb-doc-check-box::after {
+.sb-doc-check-row input[type="checkbox"]:checked + .sb-doc-check-box::after {
     content: "";
     display: block;
     width: 5px;
@@ -2404,20 +2405,18 @@ body.theia-light .sb-doc-check-row:hover {
     letter-spacing: -0.01em;
 }
 
-/* Inline AI Quick Edit Tooltip */
+/* Inline AI Quick Edit Tooltip (unified child of .sb-doc-section-hover-bar) */
 .sb-doc-inline-ai-toolbar {
-    position: absolute;
-    top: -12px;
-    right: 12px;
+    position: static;
     display: inline-flex;
-    gap: 4px;
-    background: var(--sb-surface-elevated);
-    border: 1px solid var(--sb-surface-border);
-    border-radius: var(--sb-radius-full);
-    padding: 2px 6px;
-    backdrop-filter: blur(18px);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-    animation: sbFadeIn 0.15s ease;
+    align-items: center;
+    gap: 3px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+    backdrop-filter: none;
 }
 
 .sb-doc-inline-btn {
@@ -2957,27 +2956,39 @@ body.theia-light .sb-doc-subtitle-editable:hover {
     resize: vertical;
 }
 
-/* Section Order & Delete Tools (Hover Bar) */
+/* Section Order & Delete Tools (Unified Hover Bar) */
 .sb-doc-section-hover-bar {
     position: absolute;
-    top: -12px;
+    top: -14px;
     right: 12px;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    z-index: 10;
+    z-index: 30;
+    background: var(--sb-surface-elevated);
+    border: 1px solid var(--sb-surface-border);
+    border-radius: var(--sb-radius-full);
+    padding: 3px 6px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    user-select: none;
+    pointer-events: auto;
 }
 
 .sb-section-order-tools {
     display: inline-flex;
     align-items: center;
     gap: 2px;
-    background: var(--sb-surface-elevated);
-    border: 1px solid var(--sb-surface-border);
-    border-radius: var(--sb-radius-full);
-    padding: 2px 4px;
-    backdrop-filter: blur(16px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    padding-right: 4px;
+    border-right: 1px solid var(--sb-surface-border);
+    background: transparent;
+    border-top: none;
+    border-bottom: none;
+    border-left: none;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
 }
 
 .sb-section-order-btn {
@@ -3120,7 +3131,7 @@ body.theia-light .sb-doc-subtitle-editable:hover {
 }
 
 /* ==========================================================================
-   Primitive 7: Interactive Flow Node Graph (Obsidian Canvas / Flow style)
+   Primitive 7: Interactive Flow Node Graph (Canvas / Flow style)
    ========================================================================== */
 
 .sb-primitive-node-graph {
@@ -3466,6 +3477,13 @@ body.theia-light .sb-graph-canvas-viewport {
     font-size: 11px;
     color: var(--sb-text-secondary);
     margin-top: 8px;
+}
+
+.sb-chart-x-labels-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 24px 0 24px;
 }
 
 .sb-chart-tooltip {
@@ -9825,8 +9843,8 @@ body.theia-light .sb-starter-card-icon {
 /* Left Sidebar */
 aside.sb-chatgpt-sidebar,
 .sb-chatgpt-sidebar {
-    width: 240px;
-    min-width: 240px;
+    width: 260px;
+    min-width: 260px;
     height: 100%;
     background: #171717;
     border-right: 1px solid rgba(255, 255, 255, 0.06);
@@ -10056,7 +10074,8 @@ body.theia-light .sb-history-item.sb-history-item-active {
     transition: opacity 0.15s ease;
 }
 
-.sb-history-item:hover .sb-history-item-delete {
+.sb-history-item:hover .sb-history-item-delete,
+.sb-workspace-thread-item:hover .sb-history-item-delete {
     opacity: 1;
 }
 
@@ -10365,11 +10384,12 @@ body.theia-light .sb-chatgpt-topbar {
 
 /* User Message Row - Right-aligned / clean capsule */
 .sb-msg-user-row {
+    display: flex;
     justify-content: flex-end;
     align-self: flex-end;
-    max-width: 85%;
+    width: 100%;
     margin-left: auto;
-    flex-direction: row-reverse;
+    flex-direction: row;
 }
 
 .sb-msg-user-row .sb-chat-avatar {
@@ -10379,10 +10399,11 @@ body.theia-light .sb-chatgpt-topbar {
 .sb-msg-user-row .sb-chat-bubble-content {
     background: var(--sb-surface-card);
     border: 1px solid var(--sb-surface-border);
-    border-radius: 20px 20px 4px 20px;
-    padding: 12px 18px;
+    border-radius: 18px 18px 4px 18px;
+    padding: 10px 16px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-    max-width: 100%;
+    max-width: 80%;
+    margin-left: auto;
 }
 
 body.theia-light .sb-msg-user-row .sb-chat-bubble-content {

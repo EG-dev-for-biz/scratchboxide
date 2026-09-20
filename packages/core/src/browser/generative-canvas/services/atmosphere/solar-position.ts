@@ -77,7 +77,8 @@ export function calculateNOAASolarPosition(date: Date, lat: number, lng: number)
     const elevationDeg = altitudeRad * DEG;
     const azimuthDeg = ((azimuthRad * DEG) + 360) % 360;
 
-    return { altitudeRad, azimuthRad, elevationDeg, azimuthDeg };
+    const distanceAU = 1.00014 - 0.01671 * Math.cos(g) - 0.00014 * Math.cos(2 * g);
+    return { altitudeRad, azimuthRad, elevationDeg, azimuthDeg, distanceAU, julianDay: jd };
 }
 
 /**

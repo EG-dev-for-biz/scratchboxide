@@ -39,6 +39,9 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                 lower.endsWith('.3d.json') ||
                 lower.endsWith('.3d') ||
                 lower.endsWith('.spatial.json') ||
+                lower.endsWith('.3d.cpp') ||
+                lower.endsWith('_3d.cpp') ||
+                lower.endsWith('.glb') ||
                 lower.includes('/scenes/') ||
                 lower.includes('/3d/') ||
                 lower.startsWith('scenes/') ||
@@ -111,6 +114,10 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
             ? sourceContent
             : Object.values(sourceContent)[0] || '';
 
+        const isCpp = rawText.includes('#include "scratchbox_engine.hpp"') ||
+                      rawText.includes('#include <scratchbox') ||
+                      (typeof sourceContent === 'object' && Object.keys(sourceContent).some(k => k.endsWith('.cpp')));
+
         try {
             const parsed = JSON.parse(rawText);
             const objects: Media4DObject[] = Array.isArray(parsed.objects) ? parsed.objects : [];
@@ -149,6 +156,8 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                 features: parsed.features,
                 customScript: parsed.customScript,
                 code: parsed.code,
+                cppGenerator: parsed.cppGenerator,
+                fallbackTier2ComfyUi: parsed.fallbackTier2ComfyUi,
                 shaders: parsed.shaders,
                 operatorStack: parsed.operatorStack,
                 actionLog: parsed.actionLog,
@@ -163,6 +172,26 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
                 contentHash: computeMultiFileHash(rawText)
             };
         } catch (error) {
+            if (isCpp) {
+                const cppFileName = typeof sourceContent === 'object' ? Object.keys(sourceContent).find(k => k.endsWith('.cpp')) || 'world_generator.cpp' : 'world_generator.cpp';
+                const defaultData: Scene3DData = {
+                    title: 'Native C++ 3D Procedural Scene',
+                    subtitle: 'Generated via Scratchbox C++20 Spatial Engine',
+                    worldBranch: 'main',
+                    sceneType: 'custom',
+                    renderMode: 'shaded',
+                    cameraMode: 'orbit',
+                    cppGenerator: {
+                        enabled: true,
+                        sourceCode: rawText,
+                        filename: cppFileName
+                    }
+                };
+                return {
+                    data: defaultData,
+                    contentHash: computeMultiFileHash(rawText)
+                };
+            }
             // Fallback default procedural 3D scene
             const defaultData: Scene3DData = {
                 title: '3D Spatial Scene World',
@@ -265,6 +294,8 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
             customMeshes: primitiveData.customMeshes,
             customScript: primitiveData.customScript,
             code: primitiveData.code,
+            cppGenerator: primitiveData.cppGenerator,
+            fallbackTier2ComfyUi: primitiveData.fallbackTier2ComfyUi,
             shaders: primitiveData.shaders,
             operatorStack: primitiveData.operatorStack,
             actionLog: primitiveData.actionLog,
@@ -277,13 +308,20 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
         const files: Record<string, string> = {
             [primaryFileName]: serialized
         };
+        const modifiedFilePaths = [primaryFileName];
+
+        if (primitiveData.cppGenerator?.sourceCode) {
+            const cppName = primitiveData.cppGenerator.filename || 'world_generator.cpp';
+            files[cppName] = primitiveData.cppGenerator.sourceCode;
+            modifiedFilePaths.push(cppName);
+        }
 
         const totalMeshCount = (primitiveData.customMeshes?.length || 0) + (primitiveData.objects?.length || 0);
 
         return {
             files,
             contentHash: computeMultiFileHash(files),
-            modifiedFilePaths: [primaryFileName],
+            modifiedFilePaths,
             changeSummary: `Unprojected 3D scene "${primitiveData.title}" with ${totalMeshCount} objects & ${primitiveData.operatorStack?.length || 0} operators in stack`
         };
     }

@@ -346,7 +346,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         if (ctx.cameraMode.current !== 'orbit') return;
         e.preventDefault();
         const rot = ctx.orbit.current;
-        rot.distance = Math.max(5, Math.min(120, rot.distance + e.deltaY * 0.02));
+        rot.distance = Math.max(5, Math.min(2500, rot.distance + e.deltaY * 0.08));
     };
 
     const handleKeyDown = (e: KeyboardEvent) => { ctx.keysPressed.current[e.key] = true; };

@@ -210,7 +210,7 @@ async function runGoogleDriveIntegrationTests() {
 
     // Clean Document Canvas Top Bar & Toolbar Verification
     assert.ok(docSource.includes('Download .md') || docSource.includes('Export Markdown (.md)'), 'MarkdownDocumentPrimitive preserves clean Markdown download action');
-    assert.ok(studioSource.includes('Download .md'), 'GenerativeCanvasStudio top bar retains standard Download .md action');
+    assert.ok(studioSource.includes('Download .md') || studioSource.includes('Download Markdown (.md)'), 'GenerativeCanvasStudio top bar retains standard Download .md action');
     assert.ok(!docSource.includes('sb-doc-gdocs-btn'), 'MarkdownDocumentPrimitive top bar is clean without extra Google Docs buttons');
 
     // Settings Modal

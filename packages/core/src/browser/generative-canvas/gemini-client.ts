@@ -10,12 +10,16 @@
 import { Endpoint } from './endpoint';
 import {
     AgentSessionCreateRequest,
+    FimCompletionRequest,
+    FimCompletionResponse,
     GeminiGenerateRequest,
     GeminiGenerateResponse,
     GeminiStatus,
     GeminiStreamEvent,
     McpPingRequest,
     McpPingResponse,
+    QuickEditRequest,
+    QuickEditResponse,
     SaveCredentialsRequest,
     SaveCredentialsResponse,
     SubagentRequest,
@@ -220,76 +224,111 @@ export class GeminiClient {
      */
     async streamGenerate(
         request: GeminiGenerateRequest,
-        onEvent: (event: GeminiStreamEvent) => void
+        onEvent: (event: GeminiStreamEvent) => void,
+        signal?: AbortSignal
     ): Promise<void> {
         let res: Response;
+        const timeoutController = new AbortController();
+        const timeoutId = setTimeout(() => {
+            timeoutController.abort(new Error('Backend connection timeout (10s)'));
+        }, 10000);
+
+        const onParentAbort = () => timeoutController.abort(signal?.reason);
+        if (signal) {
+            if (signal.aborted) {
+                clearTimeout(timeoutId);
+                return;
+            }
+            signal.addEventListener('abort', onParentAbort, { once: true });
+        }
+
         try {
-            res = await fetch(`${this.endpoint()}/generate-stream`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(request)
-            });
-            if (res.status === 404) {
+            try {
+                res = await fetch(`${this.endpoint()}/generate-stream`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream'
+                    },
+                    body: JSON.stringify(request),
+                    signal: timeoutController.signal
+                });
+                if (res.status === 404) {
+                    res = await fetch(`${this.endpoint()}/stream`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream'
+                        },
+                        body: JSON.stringify(request),
+                        signal: timeoutController.signal
+                    });
+                }
+            } catch (fetchErr) {
+                if (signal?.aborted) return;
                 res = await fetch(`${this.endpoint()}/stream`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Accept': 'text/event-stream'
                     },
-                    body: JSON.stringify(request)
+                    body: JSON.stringify(request),
+                    signal: timeoutController.signal
                 });
             }
-        } catch (fetchErr) {
-            res = await fetch(`${this.endpoint()}/stream`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
-                },
-                body: JSON.stringify(request)
-            });
-        }
 
-        if (!res.ok) {
-            const errText = await res.text();
-            throw new Error(`Stream request failed (${res.status}): ${errText}`);
-        }
+            if (!res.ok) {
+                const errText = await res.text();
+                throw new Error(`Stream request failed (${res.status}): ${errText}`);
+            }
 
-        if (!res.body) {
-            throw new Error('Response body is not readable');
-        }
+            // Connection established and headers received: clear connection timeout
+            clearTimeout(timeoutId);
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
+            if (!res.body) {
+                throw new Error('Response body is not readable');
+            }
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (trimmed.startsWith('data:')) {
-                    const jsonStr = trimmed.replace(/^data:\s*/, '');
-                    if (jsonStr === '[DONE]') {
-                        return;
-                    }
-                    if (jsonStr) {
-                        try {
-                            const event: GeminiStreamEvent = JSON.parse(jsonStr);
-                            onEvent(event);
-                        } catch {
-                            // ignore partial JSON chunks
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('data:')) {
+                        const jsonStr = trimmed.replace(/^data:\s*/, '');
+                        if (jsonStr === '[DONE]') {
+                            return;
+                        }
+                        if (jsonStr) {
+                            try {
+                                const event: GeminiStreamEvent = JSON.parse(jsonStr);
+                                if (event.type === 'error') {
+                                    throw new Error(event.error || 'AI backend generation error');
+                                }
+                                onEvent(event);
+                            } catch (parseErr) {
+                                if (parseErr instanceof Error && parseErr.message && !parseErr.message.includes('JSON')) {
+                                    throw parseErr;
+                                }
+                                // ignore partial JSON chunks
+                            }
                         }
                     }
                 }
+            }
+        } finally {
+            clearTimeout(timeoutId);
+            if (signal) {
+                signal.removeEventListener('abort', onParentAbort);
             }
         }
     }
@@ -355,6 +394,70 @@ export class GeminiClient {
                 latencyMs: 0,
                 availableToolsCount: 0,
                 error: err.message || 'Ping failed'
+            };
+        }
+    }
+
+    /**
+     * Complete code in-line using Fill-In-The-Middle (Cursor Tab / Copilot style).
+     */
+    async completeFim(request: FimCompletionRequest): Promise<FimCompletionResponse> {
+        try {
+            const res = await fetch(`${this.endpoint()}/fim`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(request)
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            const errText = await res.text();
+            return {
+                success: false,
+                completion: '',
+                modelUsed: 'none',
+                error: `FIM request failed (${res.status}): ${errText}`
+            };
+        } catch (err: any) {
+            return {
+                success: false,
+                completion: '',
+                modelUsed: 'none',
+                error: err.message || 'Network error during FIM request'
+            };
+        }
+    }
+
+    /**
+     * Transform code via user instruction and calculate diff (Cursor ⌘K style).
+     */
+    async quickEdit(request: QuickEditRequest): Promise<QuickEditResponse> {
+        try {
+            const res = await fetch(`${this.endpoint()}/quick-edit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(request)
+            });
+            if (res.ok) {
+                return await res.json();
+            }
+            const errText = await res.text();
+            return {
+                success: false,
+                proposedCode: request.originalCode,
+                error: `Quick-edit failed (${res.status}): ${errText}`
+            };
+        } catch (err: any) {
+            return {
+                success: false,
+                proposedCode: request.originalCode,
+                error: err.message || 'Network error during quick-edit'
             };
         }
     }

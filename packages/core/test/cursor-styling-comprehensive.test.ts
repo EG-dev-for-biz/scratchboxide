@@ -83,7 +83,7 @@ async function runCursorStylingComprehensiveTests() {
     assert.ok(settingsSource.includes('← Back'), 'Settings modal has "← Back" top action');
     assert.ok(settingsSource.includes('Search Settings'), 'Settings modal has search bar');
     assert.ok(settingsSource.includes('Plugins, MCPs, Skills, and Rules have moved to Customize'), 'Settings modal includes Customize banner');
-    assert.ok(settingsSource.includes('Cursor Account'), 'Settings modal contains Cursor Account section');
+    assert.ok(settingsSource.includes('Scratchbox Account') || settingsSource.includes('Cursor Account'), 'Settings modal contains account section');
     assert.ok(settingsSource.includes('sb-cursor-toggle'), 'Settings modal contains Apple/Cursor green toggle switches');
     console.log('  ✓ Test 4 Passed: Cursor Settings Page with typography-only no-icon sidebar verified');
 

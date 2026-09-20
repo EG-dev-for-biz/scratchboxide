@@ -64,7 +64,7 @@ export const NANO_BANANA_STYLES: NanoBananaStyle[] = [
         mediumDirective: 'abstract high-dimensional tensor network visualization, multi-modal transformer attention graphs, subagent DAG orchestration pipelines',
         opticsDirective: 'hyper-detailed volumetric 3D particle rendering, macro depth of field on critical weight pathways',
         lightingDirective: 'bioluminescent synaptic node glow, dynamic fiber optic data pulses, ambient occlusion in dark space',
-        colorGrading: 'deep obsidian slate backdrop with glowing electric cyan, vivid ultraviolet, and radiant magenta data streams'
+        colorGrading: 'deep graphite slate backdrop with glowing electric cyan, vivid ultraviolet, and radiant magenta data streams'
     },
     {
         id: 'modern-editorial',
@@ -246,6 +246,311 @@ export function extractLocationAndEraFromContext(prompt: string, title?: string)
         stylePreset: 'modern-editorial',
         visualPrompt: `Authentic architectural photograph of ${title || 'the location'} with realistic textures and refined daylighting.`
     };
+}
+
+export interface GeodeticCoordinate {
+    latitude: number;
+    longitude: number;
+    altitudeMeters: number;
+    datum?: 'WGS-84' | 'EGM96';
+}
+
+export interface CameraPoseLock {
+    headingDegrees: number;        // 0° to 360° (clockwise from True North)
+    pitchDegrees: number;          // -90° (nadir) to +90° (zenith)
+    rollDegrees?: number;          // Typically 0.0°
+    standoffDistanceMeters: number;// Distance to primary focus landmark
+    fieldOfViewDegrees?: number;   // Horizontal FOV (typically 60° - 75°)
+    focalLengthMm?: number;        // Sensor equivalent (e.g., 35mm, 50mm)
+}
+
+export interface GeometricInvariants {
+    foregroundStructure: string;   // e.g., "French Renaissance mansard dormer roof occluding left 35%"
+    primaryLandmark: string;       // e.g., "The Plaza Hotel limestone facade and Pulitzer Fountain court"
+    horizonLine?: string;          // e.g., "Upper third of frame, level at y = 0.32"
+    backgroundSkyline?: string;    // e.g., "Existing 6th Avenue and 58th Street silhouettes; no new towers"
+}
+
+export interface SpatialEnvelopeLock {
+    geodetic: GeodeticCoordinate;
+    camera_pose: CameraPoseLock;
+    cameraPose?: CameraPoseLock;
+    geometric_invariants: GeometricInvariants;
+    geometricInvariants?: GeometricInvariants;
+    framing_rules: string[];
+    framingRules?: string[];
+    viewport_crop_lock?: {
+        reference_tensor: string;
+        aspect_ratio: string;
+        enforcement_mode: string;
+    };
+    viewportCropLock?: {
+        referenceTensor: string;
+        aspectRatio: string;
+        enforcementMode: string;
+    };
+}
+
+/**
+ * Generates the empirical double-bracket framing anchor to lock the viewport crop
+ * against recency decay in the text-encoder attention layers.
+ */
+export function buildDoubleBracketFramingSuffix(aspectRatio: string = '16:9', imageRef: string = '@image1'): string {
+    const clause = `CRITICAL FRAMING RULES: Output MUST use the ${aspectRatio} aspect ratio, matching the horizontal primary reference canvas, locked to ${imageRef} viewport crop.`;
+    return `Style: ${clause} (${clause})`;
+}
+
+export interface HybridPromptPayload {
+    spatial_envelope_lock: SpatialEnvelopeLock;
+    rendering_instruction: string;
+    generation_parameters: {
+        aspect_ratio: string;
+        input_references: string[];
+        target_engine?: 'google-imagen-3' | 'google-omni-1.1' | 'google-veo';
+    };
+}
+
+export interface BuildHybridPromptOptions {
+    locationName: string;
+    coordinates: { lat: number; lng: number; altitudeM?: number };
+    heading: number;
+    pitch?: number;
+    standoffDistanceM?: number;
+    aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | string;
+    foregroundInvariant: string;
+    primaryLandmarkInvariant: string;
+    backgroundInvariant?: string;
+    atmosphereNarrative: string;
+    styleSuffix?: string;
+    earthUrl?: string;
+    targetEngine?: 'google-imagen-3' | 'google-omni-1.1' | 'google-veo';
+    viewportCropLock?: boolean;
+    imageRef?: string;
+}
+
+/**
+ * Builds the complete HybridPromptPayload object conforming to the Hybrid Prompting Architecture.
+ */
+export function buildHybridPromptPayload(options: BuildHybridPromptOptions): HybridPromptPayload {
+    const coordsStr = `${options.coordinates.lat.toFixed(6)}, ${options.coordinates.lng.toFixed(6)}`;
+    const heading = Math.round(options.heading);
+    const pitch = options.pitch !== undefined ? options.pitch : -20.0;
+    const standoff = options.standoffDistanceM !== undefined ? Math.round(options.standoffDistanceM) : 180;
+    const aspectRatio = options.aspectRatio || '16:9';
+    const earthUrl = options.earthUrl || googleEarthUrl(options.coordinates.lat, options.coordinates.lng, heading, 45);
+
+    const distanceHint = ` Subject distance: approximately ${standoff} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).`;
+    let styleSuffix = options.styleSuffix || '';
+    if (options.viewportCropLock) {
+        const doubleBracket = buildDoubleBracketFramingSuffix(aspectRatio, options.imageRef || '@image1');
+        if (!styleSuffix.includes('@image1') && !styleSuffix.includes('CRITICAL FRAMING RULES')) {
+            styleSuffix = styleSuffix ? `${styleSuffix} ${doubleBracket}` : ` ${doubleBracket}`;
+        }
+    }
+    let atmosphere = options.atmosphereNarrative || '';
+    if (atmosphere && !atmosphere.endsWith(' ')) {
+        atmosphere += ' ';
+    }
+
+    const renderingInstruction =
+        `Transform this photorealistic 3D tiles rendering of ${options.locationName} ` +
+        `(camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. ` +
+        `Map reference: ${earthUrl}. ${atmosphere}` +
+        `This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. ` +
+        `CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. ` +
+        `(2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. ` +
+        `(3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. ` +
+        `(4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. ` +
+        `Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.` +
+        `${distanceHint}${styleSuffix}`;
+
+    const cameraPose: CameraPoseLock = {
+        headingDegrees: heading,
+        pitchDegrees: pitch,
+        standoffDistanceMeters: standoff,
+        fieldOfViewDegrees: 65.0
+    };
+
+    const geometricInvariants: GeometricInvariants = {
+        foregroundStructure: options.foregroundInvariant,
+        primaryLandmark: options.primaryLandmarkInvariant,
+        backgroundSkyline: options.backgroundInvariant || 'Preserve existing skyline silhouettes without adding unverified towers.'
+    };
+
+    const framingRules = [
+        `RULE_1: Output MUST strictly match canvas aspect ratio (${aspectRatio})`,
+        'RULE_2: Preserve exact camera angle, pitch, yaw, viewpoint, and composition',
+        'RULE_3: Zero pan, zoom, crop, recomposition, or horizon shift',
+        'RULE_4: Zero hallucination of buildings or removal of visible blockout geometry'
+    ];
+
+    return {
+        spatial_envelope_lock: {
+            geodetic: {
+                latitude: Number(options.coordinates.lat.toFixed(6)),
+                longitude: Number(options.coordinates.lng.toFixed(6)),
+                altitudeMeters: options.coordinates.altitudeM || 85.0,
+                datum: 'WGS-84'
+            },
+            camera_pose: cameraPose,
+            cameraPose,
+            geometric_invariants: geometricInvariants,
+            geometricInvariants,
+            framing_rules: framingRules,
+            framingRules,
+            ...(options.viewportCropLock ? {
+                viewport_crop_lock: {
+                    reference_tensor: options.imageRef || '@image1',
+                    aspect_ratio: aspectRatio,
+                    enforcement_mode: 'double_bracket_tail_reinforcement'
+                },
+                viewportCropLock: {
+                    referenceTensor: options.imageRef || '@image1',
+                    aspectRatio: aspectRatio,
+                    enforcementMode: 'double_bracket_tail_reinforcement'
+                }
+            } : {})
+        },
+        rendering_instruction: renderingInstruction,
+        generation_parameters: {
+            aspect_ratio: aspectRatio,
+            input_references: ['<IMAGE_REF_0>'],
+            target_engine: options.targetEngine || 'google-imagen-3'
+        }
+    };
+}
+
+/**
+ * Builds the canonical serialized JSON string for the Hybrid Prompting Architecture.
+ */
+export function buildHybridBeautifyPrompt(options: BuildHybridPromptOptions): string {
+    return JSON.stringify(buildHybridPromptPayload(options), null, 2);
+}
+
+export const buildHybridPrompt = buildHybridBeautifyPrompt;
+
+export interface BeautifyPromptOptions {
+    locationName: string;
+    coords?: string | { lat: number; lng: number };
+    coordinates?: { lat: number; lng: number };
+    heading?: number;
+    earthUrl?: string;
+    aspectRatio?: '16:9' | '9:16' | '1:1' | '4:3' | string;
+    moodPromptContext?: string;
+    distance?: number;
+    subjectDistance?: number;
+    subjectDistanceHint?: string;
+    styleSuffix?: string;
+    format?: 'prose' | 'hybrid';
+    foregroundInvariant?: string;
+    primaryLandmarkInvariant?: string;
+    backgroundInvariant?: string;
+    pitch?: number;
+    viewportCropLock?: boolean;
+    imageRef?: string;
+}
+
+/**
+ * Builds the exact AI Beautify prompt template transforming a 3D tiles rendering into a photorealistic photograph.
+ *
+ * Exact template:
+ * Transform this photorealistic 3D tiles rendering of {locationName} (camera at coordinates {coords}, facing {heading}°) into a photorealistic photograph. Map reference: {earthUrl}. {moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly {aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.{subjectDistanceHint}{styleSuffix}
+ *
+ * When subject distance is available, {subjectDistanceHint} becomes:
+ * " Subject distance: approximately {distance} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze)."
+ * Otherwise, it is empty.
+ *
+ * {styleSuffix} contains any selected style and related generation modifiers supplied by the caller verbatim.
+ */
+export function buildBeautifyPrompt(options: BeautifyPromptOptions): string {
+    const coordsStr = typeof options.coords === 'string'
+        ? options.coords
+        : (options.coords
+            ? `${options.coords.lat.toFixed(6)}, ${options.coords.lng.toFixed(6)}`
+            : (options.coordinates
+                ? `${options.coordinates.lat.toFixed(6)}, ${options.coordinates.lng.toFixed(6)}`
+                : '0.000000, 0.000000'));
+
+    const heading = options.heading !== undefined ? Math.round(options.heading) : 0;
+
+    let earthUrl = options.earthUrl;
+    if (!earthUrl) {
+        if (options.coordinates) {
+            earthUrl = googleEarthUrl(options.coordinates.lat, options.coordinates.lng, heading, 45);
+        } else if (options.coords && typeof options.coords !== 'string') {
+            earthUrl = googleEarthUrl(options.coords.lat, options.coords.lng, heading, 45);
+        } else {
+            const match = coordsStr.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+            if (match) {
+                earthUrl = googleEarthUrl(parseFloat(match[1]), parseFloat(match[2]), heading, 45);
+            } else {
+                earthUrl = `https://earth.google.com/web/@${coordsStr.replace(/\s+/g, '')}`;
+            }
+        }
+    }
+
+    if (options.format === 'hybrid') {
+        let lat = 0;
+        let lng = 0;
+        if (options.coordinates) {
+            lat = options.coordinates.lat;
+            lng = options.coordinates.lng;
+        } else if (options.coords && typeof options.coords !== 'string') {
+            lat = options.coords.lat;
+            lng = options.coords.lng;
+        } else if (typeof options.coords === 'string') {
+            const m = options.coords.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+            if (m) {
+                lat = parseFloat(m[1]);
+                lng = parseFloat(m[2]);
+            }
+        }
+        return buildHybridBeautifyPrompt({
+            locationName: options.locationName,
+            coordinates: { lat, lng },
+            heading,
+            pitch: options.pitch,
+            standoffDistanceM: options.distance !== undefined ? options.distance : options.subjectDistance,
+            aspectRatio: options.aspectRatio,
+            foregroundInvariant: options.foregroundInvariant || 'Non-negotiable foreground architectural geometry matching blockout frame.',
+            primaryLandmarkInvariant: options.primaryLandmarkInvariant || `${options.locationName} structural massing and focal features.`,
+            backgroundInvariant: options.backgroundInvariant,
+            atmosphereNarrative: options.moodPromptContext || '',
+            styleSuffix: options.styleSuffix,
+            earthUrl,
+            viewportCropLock: options.viewportCropLock,
+            imageRef: options.imageRef
+        });
+    }
+
+    const aspectRatio = options.aspectRatio || '16:9';
+
+    let moodPromptContext = options.moodPromptContext !== undefined
+        ? options.moodPromptContext
+        : '';
+    if (moodPromptContext && !moodPromptContext.endsWith(' ')) {
+        moodPromptContext += ' ';
+    }
+
+    const dist = options.distance !== undefined ? options.distance : options.subjectDistance;
+    let subjectDistanceHint = '';
+    if (options.subjectDistanceHint !== undefined) {
+        subjectDistanceHint = options.subjectDistanceHint;
+    } else if (dist !== undefined && dist !== null) {
+        subjectDistanceHint = ` Subject distance: approximately ${Math.round(dist)} meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).`;
+    }
+
+    let styleSuffix = options.styleSuffix !== undefined
+        ? options.styleSuffix
+        : '';
+    if (options.viewportCropLock) {
+        const doubleBracket = buildDoubleBracketFramingSuffix(aspectRatio, options.imageRef || '@image1');
+        if (!styleSuffix.includes('@image1') && !styleSuffix.includes('CRITICAL FRAMING RULES')) {
+            styleSuffix = styleSuffix ? `${styleSuffix} ${doubleBracket}` : ` ${doubleBracket}`;
+        }
+    }
+
+    return `Transform this photorealistic 3D tiles rendering of ${options.locationName} (camera at coordinates ${coordsStr}, facing ${heading}°) into a photorealistic photograph. Map reference: ${earthUrl}. ${moodPromptContext}This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly ${aspectRatio} aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point.${subjectDistanceHint}${styleSuffix}`;
 }
 
 /**

@@ -48,19 +48,27 @@ export const DEFAULT_RECENT_PROJECTS: ProjectItem[] = [
         lastActive: 'Active now',
         tags: ['TypeScript', 'React', 'Liquid Glass'],
         isActive: true
-    },
+    }
+];
+
+/**
+ * Test & demo workspace definitions retained for unit test suites and offline mock fixtures.
+ * Kept separated from active runtime projects so users start with a clean, unencumbered workspace.
+ */
+export const DEMO_TEST_PROJECTS: ProjectItem[] = [
     {
-        id: 'proj-apple-hig',
+        id: 'proj-hig-design-system',
         name: 'HIG Design System',
-        path: '~/dev/apple-hig-design-system',
-        lastActive: 'Yesterday',
-        tags: ['Design System', 'SF Pro', 'Spring Physics']
+        path: '~/dev/hig-design-system',
+        lastActive: 'Offline fixture',
+        tags: ['Design System', 'React', 'TypeScript'],
+        isActive: false
     },
     {
         id: 'proj-test-workspace',
         name: 'scratchbox-test-workspace',
         path: '~/dev/scratchbox-test-workspace',
-        lastActive: 'Just now',
+        lastActive: 'Offline fixture',
         tags: ['Testing', 'Sandbox', 'Generative Canvas'],
         isActive: false
     }
@@ -130,6 +138,8 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     const [newProjectName, setNewProjectName] = React.useState<string>('');
     const [selectedTemplateId, setSelectedTemplateId] = React.useState<string>('template-blank-project');
     const [gitCloneUrl, setGitCloneUrl] = React.useState<string>('');
+    const [isCloning, setIsCloning] = React.useState<boolean>(false);
+    const [cloneError, setCloneError] = React.useState<string | null>(null);
     const [toastMessage, setToastMessage] = React.useState<string | undefined>(undefined);
 
     const searchInputRef = React.useRef<HTMLInputElement>(null);
@@ -140,13 +150,22 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
             setShowCloneDrawer(false);
             setSearchQuery('');
             setSelectedProjectIndex(0);
+            setIsCloning(false);
+            setCloneError(null);
             setTimeout(() => {
                 searchInputRef.current?.focus();
             }, 100);
         }
     }, [isOpen]);
 
-    // Close on Escape
+    const showToast = (msg: string) => {
+        setToastMessage(msg);
+        setTimeout(() => {
+            setToastMessage(undefined);
+        }, 3200);
+    };
+
+    // Close drawers on Escape if open, otherwise close modal
     React.useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape' && isOpen) {
@@ -163,28 +182,31 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, showNewProjectDrawer, showCloneDrawer, onClose]);
 
-    if (!isOpen) {
-        return null;
-    }
+    const filteredProjects = React.useMemo(() => {
+        if (!searchQuery.trim()) {
+            return projects;
+        }
+        const q = searchQuery.toLowerCase();
+        return projects.filter(
+            p =>
+                p.name.toLowerCase().includes(q) ||
+                p.path.toLowerCase().includes(q) ||
+                p.tags?.some(t => t.toLowerCase().includes(q))
+        );
+    }, [projects, searchQuery]);
 
-    const showToast = (msg: string) => {
-        setToastMessage(msg);
-        setTimeout(() => setToastMessage(undefined), 3000);
-    };
-
-    const filteredProjects = projects.filter(p =>
-        !searchQuery ||
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.path.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-
-    const filteredTemplates = STARTER_TEMPLATES.filter(t =>
-        !searchQuery ||
-        t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.subtitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.tag.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredTemplates = React.useMemo(() => {
+        if (!searchQuery.trim()) {
+            return STARTER_TEMPLATES;
+        }
+        const q = searchQuery.toLowerCase();
+        return STARTER_TEMPLATES.filter(
+            t =>
+                t.title.toLowerCase().includes(q) ||
+                t.subtitle.toLowerCase().includes(q) ||
+                t.tag.toLowerCase().includes(q)
+        );
+    }, [searchQuery]);
 
     const handleOpenProject = (project: ProjectItem) => {
         setProjects(prev => prev.map(p => ({
@@ -211,45 +233,69 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
         const createdProject: ProjectItem = {
             id: `proj-${Date.now()}`,
             name: newProjectName.trim(),
-            path: `~/dev/${newProjectName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-            lastActive: 'Just created',
-            tags: ['Custom', 'Scaffolded', 'Scratchbox'],
-            templateType: selectedTemplateId
+            path: `~/dev/${newProjectName.trim().toLowerCase().replace(/\s+/g, '-')}`,
+            lastActive: 'Just now',
+            tags: ['Custom', 'Active Workspace']
         };
         setProjects(prev => [createdProject, ...prev]);
         setShowNewProjectDrawer(false);
         setNewProjectName('');
-        showToast(`Project "${createdProject.name}" scaffolded successfully`);
-
-        const template = STARTER_TEMPLATES.find(t => t.id === selectedTemplateId);
-        onClose();
-        if (template && template.prompt && onSelectPromptStarter) {
-            onSelectPromptStarter(`Scaffolded new project workspace "${createdProject.name}". ${template.prompt}`);
-        } else if (onSelectProject) {
-            onSelectProject(createdProject);
-        }
-    };
-
-    const handleCloneRepo = () => {
-        if (!gitCloneUrl.trim()) {
-            return;
-        }
-        const repoName = gitCloneUrl.split('/').pop()?.replace('.git', '') || 'cloned-repository';
-        const clonedProject: ProjectItem = {
-            id: `proj-${Date.now()}`,
-            name: repoName,
-            path: `~/dev/${repoName}`,
-            lastActive: 'Just cloned',
-            tags: ['Git', 'Cloned', 'Remote']
-        };
-        setProjects(prev => [clonedProject, ...prev]);
-        setShowCloneDrawer(false);
-        setGitCloneUrl('');
-        showToast(`Cloning ${gitCloneUrl}... Workspace added!`);
+        showToast(`Workspace "${createdProject.name}" created!`);
 
         if (onSelectPromptStarter) {
             onClose();
-            onSelectPromptStarter(`Inspect and analyze cloned repository "${repoName}" from ${gitCloneUrl}.`);
+            const template = STARTER_TEMPLATES.find(t => t.id === selectedTemplateId);
+            const initialPrompt = template?.prompt || `Set up project ${createdProject.name} with architecture specs and file structure.`;
+            onSelectPromptStarter(initialPrompt);
+        }
+    };
+
+    const handleCloneRepo = async () => {
+        if (!gitCloneUrl.trim() || isCloning) {
+            return;
+        }
+        setIsCloning(true);
+        setCloneError(null);
+        const repoName = gitCloneUrl.split('/').pop()?.replace(/\.git$/, '') || 'cloned-repository';
+        showToast(`Cloning ${gitCloneUrl}...`);
+        try {
+            const res = await fetch('/git/clone', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    repoUrl: gitCloneUrl.trim(),
+                    name: repoName
+                })
+            });
+            const data = await res.json();
+            if (data.success && data.path) {
+                const clonedProject: ProjectItem = {
+                    id: `proj-${Date.now()}`,
+                    name: repoName,
+                    path: data.path,
+                    lastActive: 'Just cloned',
+                    tags: ['Git', 'Cloned', 'Remote']
+                };
+                setProjects(prev => [clonedProject, ...prev]);
+                setShowCloneDrawer(false);
+                setGitCloneUrl('');
+                showToast(`Cloned ${repoName} successfully!`);
+
+                if (onSelectProject) {
+                    onSelectProject(clonedProject);
+                } else if (onSelectPromptStarter) {
+                    onClose();
+                    onSelectPromptStarter(`Inspect and analyze cloned repository "${repoName}" from ${gitCloneUrl}.`);
+                }
+            } else {
+                setCloneError(data.error || 'Git clone failed');
+                showToast(`Clone failed: ${data.error || 'Unknown error'}`);
+            }
+        } catch (err: any) {
+            setCloneError(err.message);
+            showToast(`Clone error: ${err.message}`);
+        } finally {
+            setIsCloning(false);
         }
     };
 
@@ -534,10 +580,17 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                                     </span>
                                 </div>
 
+                                {cloneError && (
+                                    <div className="text-xs text-red-400 bg-red-950/40 border border-red-500/30 px-3 py-1.5 rounded-lg mb-3">
+                                        {cloneError}
+                                    </div>
+                                )}
+
                                 <div className="sb-drawer-actions-row">
                                     <button
                                         type="button"
                                         className="sb-btn sb-btn-secondary sb-btn-sm"
+                                        disabled={isCloning}
                                         onClick={() => setShowCloneDrawer(false)}
                                     >
                                         Cancel
@@ -545,10 +598,10 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                                     <button
                                         type="button"
                                         className="sb-btn sb-btn-primary sb-btn-sm"
-                                        disabled={!gitCloneUrl.trim()}
+                                        disabled={!gitCloneUrl.trim() || isCloning}
                                         onClick={handleCloneRepo}
                                     >
-                                        <span>Clone &amp; Open Workspace</span>
+                                        <span>{isCloning ? 'Cloning Repository...' : 'Clone & Open Workspace'}</span>
                                         <IconArrowRight size={13} />
                                     </button>
                                 </div>

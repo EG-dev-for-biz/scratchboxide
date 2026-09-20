@@ -20,7 +20,7 @@ import {
 import { resolveModeForArtifact } from '../guardrails-service';
 import { useStudioActions } from '../state/StudioContext';
 import { getPrimitiveIcon, getPrimitiveLabel } from '../studio/canvas-labels';
-import { AudioNarratedCard, CinematicVideoCard, GoogleMapsCard, ImageGeneratedCard } from './MediaCards';
+import { AudioNarratedCard, CinematicVideoCard, GoogleMapsCard, ImageGeneratedCard, TextureMatrixCard } from './MediaCards';
 
 export interface MessageItemProps {
     message: ChatMessage;
@@ -547,6 +547,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 {/* High-Fidelity Multimedia & Maps Grounding Cards */}
                 {(msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (
                     <ImageGeneratedCard imageContent={msg.imageContent} imagesContent={msg.imagesContent} />
+                )}
+                {msg.textureMatrixContent && (
+                    <TextureMatrixCard result={msg.textureMatrixContent} />
                 )}
                 {msg.audioContent && (
                     <AudioNarratedCard audioContent={msg.audioContent} />

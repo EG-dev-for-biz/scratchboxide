@@ -27,6 +27,10 @@ export function getActiveUserName(customName?: string): string {
     return DEFAULT_ACTIVE_USER_NAME;
 }
 
+import type { VideoTimelineData } from './services/video/videoTypes';
+export type { VideoTimelineData };
+export * from './services/video/videoTypes';
+
 export type PrimitiveType =
     | 'metric-dashboard'
     | 'kanban-board'
@@ -40,7 +44,8 @@ export type PrimitiveType =
     | 'live-code-sandbox'
     | '3d-scene'
     | 'interactive-browser'
-    | 'browser';
+    | 'browser'
+    | 'video-timeline';
 
 export type AccentColor = 'blue' | 'indigo' | 'emerald' | 'amber' | 'purple' | 'rose' | 'cyan';
 
@@ -274,6 +279,21 @@ export interface DiagramNode {
     y?: number;
 }
 
+export interface AiProvenanceData {
+    model?: string;
+    timestamp?: string;
+    prompt?: string;
+    isCollapsible?: boolean;
+    isCollapsed?: boolean;
+    originalContent?: string;
+}
+
+export interface SectionDiffPreview {
+    originalText: string;
+    proposedText: string;
+    actionLabel?: string;
+}
+
 export interface MarkdownSection {
     id: string;
     type: MarkdownSectionType;
@@ -281,12 +301,14 @@ export interface MarkdownSection {
     content?: string;
     codeLanguage?: string;
     language?: string;
-    calloutType?: 'info' | 'success' | 'warning' | 'tip';
+    calloutType?: 'info' | 'success' | 'warning' | 'tip' | 'ai' | 'note' | 'summary' | 'quote';
     calloutTitle?: string;
     tableHeaders?: string[];
     tableRows?: string[][];
     checklistItems?: { id: string; text: string; done: boolean }[];
     badgeItems?: { label: string; value: string; color?: AccentColor }[];
+    aiProvenance?: AiProvenanceData;
+    diffPreview?: SectionDiffPreview;
 
     // 4D Multi-Modal Section Extensions
     // 1. Location Imagery / Spatial Maps & Clean Editorial Imagery (Nano Banana Synthesis)
@@ -516,7 +538,7 @@ export interface McpHubData {
 // ==========================================
 // 10. Live Code Sandbox Primitive (Interactive Code & UI Playground)
 // ==========================================
-export type SandboxLanguage = 'html' | 'css' | 'javascript' | 'typescript' | 'react' | 'python' | 'json' | 'wasm' | 'markdown' | 'yaml';
+export type SandboxLanguage = 'html' | 'css' | 'javascript' | 'typescript' | 'react' | 'python' | 'json' | 'wasm' | 'markdown' | 'yaml' | 'cpp' | 'c';
 export type SandboxTemplate = 'react' | 'vanilla-html' | 'python' | 'webassembly' | 'node';
 export type SandboxViewportMode = 'desktop' | 'tablet' | 'mobile';
 export type SandboxViewMode = 'code' | 'split' | 'preview';
@@ -614,6 +636,8 @@ export interface ContentDimension {
         vertices?: number;
         sampleRate?: number;
         codecs?: string;
+        material?: any;
+        materials?: any;
         geoJson?: any;
     };
 }
@@ -655,11 +679,45 @@ export interface Media4DObject {
     lineage?: LineageDimension;
 }
 
+export interface PbrTextureSet {
+    albedoUrl?: string;
+    normalUrl?: string;
+    roughnessUrl?: string;
+    metallicUrl?: string;
+    aoUrl?: string;
+    ormUrl?: string;
+    heightUrl?: string;
+    albedoMap?: string;
+    normalMap?: string;
+    roughnessMap?: string;
+    metalnessMap?: string;
+    aoMap?: string;
+    ormMap?: string;
+    heightMap?: string;
+    displacementMap?: string;
+    emissiveMap?: string;
+    opacityMap?: string;
+    repeat?: [number, number];
+    mappingPreset?: 'triplanar' | 'uv' | 'spherical';
+}
+
+export interface VectorRoadmapConfig {
+    enabled?: boolean;
+    mapId?: string;
+    groundBlueprint?: boolean;
+    groundBlueprintOpacity?: number;
+    groundBlueprintSize?: number;
+    groundElevationOffset?: number;
+    minimap?: boolean;
+    minimapZoom?: number;
+    styleJson?: any;
+}
+
 export interface Scene3DData {
     title: string;
     subtitle?: string;
     worldBranch?: string;
-    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'general' | 'custom';
+    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom';
     parentCommitId?: string;
     objects?: Media4DObject[];
     renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr';
@@ -706,6 +764,20 @@ export interface Scene3DData {
             atmosphereShadowLength?: number;
             windVector?: [number, number];
         };
+        cinematicRig?: any;
+        lightingKelvin?: number;
+        exposure?: number;
+        ibl?: {
+            enabled?: boolean;
+            preset?: 'golden_hour' | 'clear_daylight' | 'overcast_studio' | 'cyberpunk_neon';
+            intensity?: number;
+            shCoefficients?: number[];
+        };
+        tonemapping?: {
+            curve?: 'aces' | 'reinhard' | 'linear';
+            exposure?: number;
+            vignette?: number;
+        };
     };
     geoAnchor?: {
         lat: number;
@@ -713,12 +785,15 @@ export interface Scene3DData {
         elevation?: number;
         active?: boolean;
         landmarkName?: string;
+        castingRationale?: string;
+        castingArchetype?: string;
     };
     droneRoute?: {
         pinA: { lat: number; lng: number };
         pinB: { lat: number; lng: number };
         active?: boolean;
     };
+    vectorRoadmap?: VectorRoadmapConfig;
     wasmPhysics?: {
         waveActive?: boolean;
         deformFactor?: number;
@@ -735,6 +810,29 @@ export interface Scene3DData {
     };
     customScript?: string;
     code?: string;
+    cppGenerator?: {
+        enabled?: boolean;
+        sourceCode?: string;
+        filename?: string;
+        lastCompiledTimeMs?: number;
+        lastExecutionDurationMs?: number;
+        vertexCount?: number;
+        triangleCount?: number;
+        glbBase64?: string;
+        glbPath?: string;
+        diagnostics?: any[];
+    };
+    fallbackTier2ComfyUi?: {
+        triggered: boolean;
+        goal?: string;
+        reason?: string;
+        blueprintId?: string;
+        promptId?: string;
+        status?: 'pending' | 'running' | 'completed' | 'failed';
+        assetUrls?: string[];
+        error?: string;
+        timestamp?: number;
+    };
     shaders?: Record<string, {
         vertexShader?: string;
         fragmentShader?: string;
@@ -819,12 +917,17 @@ export interface Scene3DData {
             color?: number | string;
             size?: number;
         }>;
+        curvatureAO?: boolean;
+        multiLayerWeathering?: boolean;
+        cinematic3PointLighting?: boolean;
+        studioPedestal?: boolean;
     };
     customMeshes?: Array<{
         id: string;
         name?: string;
         type?: 'box' | 'sphere' | 'cylinder' | 'plane' | 'torus' | 'custom' | 'procedural';
         geometry?: { type?: string; params?: any[] };
+        tier?: 'primary' | 'secondary' | 'tertiary';
         material?: {
             type?: string;
             color?: number | string;
@@ -832,6 +935,16 @@ export interface Scene3DData {
             metalness?: number;
             wireframe?: boolean;
             shaderKey?: string;
+            preset?: string;
+            emissive?: number | string;
+            emissiveIntensity?: number;
+            clearcoat?: number;
+            clearcoatRoughness?: number;
+            transmission?: number;
+            ior?: number;
+            sheen?: number;
+            anisotropy?: number;
+            weathering?: any;
         };
         position?: [number, number, number];
         rotation?: [number, number, number];
@@ -840,7 +953,87 @@ export interface Scene3DData {
         isContrail?: boolean;
         isControlSurface?: boolean;
         controlSurfaceType?: 'leftAileron' | 'rightAileron' | 'leftElevator' | 'rightElevator' | 'rudder' | 'flaps' | 'spoilers';
+        triplanar?: any;
+        subsurface?: any;
+        generator?: any;
+        terrainParams?: any;
+        foliageParams?: any;
+        pbrTextures?: PbrTextureSet;
+        normalTransfer?: any;
+        decimation?: { enabled: boolean; ratio?: number; targetTriangles?: number; method?: 'qem' | 'uniform' };
+        tangents?: { generated: boolean; standard?: 'mikktspace' };
+        uvUnwrap?: { method?: 'harmonic' | 'spherical' | 'lscm'; maxIterations?: number };
+        instanceTransforms?: Array<{
+            position: [number, number, number];
+            scale?: [number, number, number];
+            rotation?: [number, number, number, number] | [number, number, number];
+        }>;
+        lodLevels?: Array<{
+            geometryType?: string;
+            distance: number;
+        }>;
+        bvhAccelerated?: boolean;
+        rigidBody?: {
+            mass?: number;
+            isStatic?: boolean;
+            restitution?: number;
+            friction?: number;
+        };
+        xpbdCloth?: {
+            compliance?: number;
+            bendingCompliance?: number;
+            damping?: number;
+        };
+        hairStrands?: {
+            guideCount?: number;
+            strandCount?: number;
+            length?: number;
+            clumping?: number;
+            curlRadius?: number;
+            eumelanin?: number;
+            pheomelanin?: number;
+        };
+        fabric?: {
+            pattern?: 'plain' | 'twill' | 'satin' | 'knit';
+            warpCompliance?: number;
+            weftCompliance?: number;
+            shearCompliance?: number;
+            shearLockAngle?: number;
+            sheenIntensity?: number;
+            sheenRoughness?: number;
+            airDragCoeff?: number;
+        };
+        ragdoll?: {
+            scale?: number;
+            rootPosition?: [number, number, number];
+            bones?: string[];
+        };
+        triangles?: any[];
     }>;
+    customLights?: any[];
+    hairGroom?: {
+        guideCount?: number;
+        strandCount?: number;
+        length?: number;
+        clumping?: number;
+        curlRadius?: number;
+        eumelanin?: number;
+        pheomelanin?: number;
+    };
+    fabricProperties?: {
+        pattern?: 'plain' | 'twill' | 'satin' | 'knit';
+        warpCompliance?: number;
+        weftCompliance?: number;
+        shearCompliance?: number;
+        shearLockAngle?: number;
+        sheenIntensity?: number;
+        airDragCoeff?: number;
+    };
+    ragdoll?: {
+        scale?: number;
+        rootPosition?: [number, number, number];
+        bones?: string[];
+    };
     operatorStack?: Array<{
         operator: string;
         params?: any;
@@ -923,7 +1116,7 @@ export type StudioSettingsTab =
     | 'memories'
     | 'shortcuts'
     | 'about';
-export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser';
+export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser' | 'video';
 
 export interface StudioAppearanceConfig {
     glassBlur: 'subtle' | 'standard' | 'vibrant';
@@ -949,7 +1142,8 @@ export type ArtifactData =
     | McpHubData
     | LiveCodeSandboxData
     | Scene3DData
-    | InteractiveBrowserData;
+    | InteractiveBrowserData
+    | VideoTimelineData;
 
 export interface CanvasArtifact {
     id: string;
@@ -973,6 +1167,7 @@ export interface ChatMessage {
     suggestedFollowUps?: string[];
     attachedSkills?: string[];
     attachedMcpTools?: string[];
+    attachedContextMentions?: ContextMentionItem[];
     mcpExecutions?: McpExecutionState[];
     groundingMetadata?: GroundingMetadata;
     thinkingText?: string;
@@ -989,9 +1184,10 @@ export interface ChatMessage {
     deepWriteCheckpoint?: import('../../common/deep-write/deep-write-protocol').DeepWriteCheckpointEvent;
     deepWriteResumed?: boolean;
     visualAudit?: import('../../common/visual-verification-protocol').VisualAuditResult;
+    textureMatrixContent?: import('../../common/media-generation-protocol').TextureMatrixResult;
 }
 
-export type WorkspaceFileType = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | '3d' | 'browser';
+export type WorkspaceFileType = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | '3d' | 'browser' | 'video';
 
 export interface SessionViewState {
     activeSandboxTabId?: string;
@@ -1028,7 +1224,7 @@ export class SessionViewStateCache {
     }
 }
 
-export type ModalType = 'spotlight' | 'projects' | 'automations' | 'settings' | 'google-drive';
+export type ModalType = 'spotlight' | 'projects' | 'automations' | 'settings' | 'google-drive' | 'demos';
 
 export class ModalStackManager {
     private stack: ModalType[] = [];

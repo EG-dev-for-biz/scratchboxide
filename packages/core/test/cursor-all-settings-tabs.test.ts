@@ -86,7 +86,7 @@ async function runAllCursorSettingsTabsTests() {
     // -------------------------------------------------------------
     assert.ok(source.includes('Max Worktrees'), 'Worktrees tab must render "Max Worktrees" counter stepper');
     assert.ok(source.includes('Max Total Size (GB)'), 'Worktrees tab must render "Max Total Size (GB)" counter stepper');
-    assert.ok(source.includes('Cursor-Managed Worktrees'), 'Worktrees tab must render "Cursor-Managed Worktrees" section');
+    assert.ok(source.includes('Cursor-Managed Worktrees') || source.includes('Scratchbox-Managed Worktrees'), 'Worktrees tab must render "Cursor-Managed Worktrees" section');
     console.log('  ✓ Test 6 Passed: Worktrees tab with cleanup limits and worktree manager verified');
 
     // -------------------------------------------------------------
@@ -94,7 +94,7 @@ async function runAllCursorSettingsTabsTests() {
     // -------------------------------------------------------------
     assert.ok(source.includes('Browser Automation'), 'Browser & Network tab must render "Browser Automation" selector');
     assert.ok(source.includes('Browser Protection'), 'Browser & Network tab must render "Browser Protection" toggle');
-    assert.ok(source.includes('Open Local Links in Cursor Browser'), 'Browser & Network tab must render "Open Local Links" toggle');
+    assert.ok(source.includes('Open Local Links in Cursor Browser') || source.includes('Open Local Links in Scratchbox Browser'), 'Browser & Network tab must render "Open Local Links" toggle');
     assert.ok(source.includes('HTTP Compatibility Mode'), 'Browser & Network tab must render "HTTP Compatibility Mode" selector');
     assert.ok(source.includes('Required Domains'), 'Browser & Network tab must render "Required Domains" row with Copy/Show');
     assert.ok(source.includes('Network Diagnostics'), 'Browser & Network tab must render "Network Diagnostics" with Run Diagnostic');
@@ -103,7 +103,7 @@ async function runAllCursorSettingsTabsTests() {
     // -------------------------------------------------------------
     // Tab 8: Tab (Autocomplete) Tab
     // -------------------------------------------------------------
-    assert.ok(source.includes('Cursor Tab'), 'Tab settings must render "Cursor Tab" master toggle');
+    assert.ok(source.includes('Cursor Tab') || source.includes('Scratchbox Tab'), 'Tab settings must render "Cursor Tab" master toggle');
     assert.ok(source.includes('Partial Accepts'), 'Tab settings must render "Partial Accepts" toggle');
     assert.ok(source.includes('Suggestions While Commenting'), 'Tab settings must render "Suggestions While Commenting" toggle');
     assert.ok(source.includes('Whitespace-Only Suggestions'), 'Tab settings must render "Whitespace-Only Suggestions" toggle');
@@ -115,7 +115,7 @@ async function runAllCursorSettingsTabsTests() {
     // Tab 9: Code Intelligence Tab
     // -------------------------------------------------------------
     assert.ok(source.includes('Index Repositories for Instant Grep'), 'Code Intelligence tab must render "Index Repositories for Instant Grep" toggle');
-    assert.ok(source.includes('Hierarchical Cursor Ignore'), 'Code Intelligence tab must render "Hierarchical Cursor Ignore" toggle');
+    assert.ok(source.includes('Hierarchical Cursor Ignore') || source.includes('Hierarchical Scratchbox Ignore'), 'Code Intelligence tab must render "Hierarchical Cursor Ignore" toggle');
     assert.ok(source.includes('Enable LSPs'), 'Code Intelligence tab must render "Enable LSPs" toggle');
     assert.ok(source.includes('Maximum Local LSP Workspaces'), 'Code Intelligence tab must render "Maximum Local LSP Workspaces" stepper');
     console.log('  ✓ Test 9 Passed: Code Intelligence tab with codebase indexing, cursorignore, and LSP limits verified');

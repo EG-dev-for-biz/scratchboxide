@@ -19,12 +19,12 @@ export const WorktreesTab: React.FC = () => {
 
             <div className="sb-cursor-section-block">
                 <div className="sb-cursor-section-header">Cleanup</div>
-                <p className="text-xs text-zinc-400 mb-2">Cursor periodically removes old worktrees to free disk space. Tune how aggressively cleanup runs.</p>
+                <p className="text-xs text-zinc-400 mb-2">Scratchbox periodically removes old worktrees to free disk space. Tune how aggressively cleanup runs.</p>
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Max Worktrees</div>
-                            <div className="sb-cursor-row-desc">Maximum number of Cursor-managed worktrees to retain across all workspaces. Older worktrees are removed first.</div>
+                            <div className="sb-cursor-row-desc">Maximum number of Scratchbox-managed worktrees to retain across all workspaces. Older worktrees are removed first.</div>
                         </div>
                         <div className="sb-cursor-stepper">
                             <button type="button" className="sb-stepper-btn" onClick={() => setMaxWorktrees(Math.max(1, maxWorktrees - 5))}>−</button>
@@ -36,7 +36,7 @@ export const WorktreesTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Max Total Size (GB)</div>
-                            <div className="sb-cursor-row-desc">Maximum total size in GB across all Cursor-managed worktrees. Set to 0 to disable the size limit.</div>
+                            <div className="sb-cursor-row-desc">Maximum total size in GB across all Scratchbox-managed worktrees. Set to 0 to disable the size limit.</div>
                         </div>
                         <div className="sb-cursor-stepper">
                             <button type="button" className="sb-stepper-btn" onClick={() => setMaxTotalSizeGb(Math.max(0, maxTotalSizeGb - 10))}>−</button>
@@ -48,9 +48,9 @@ export const WorktreesTab: React.FC = () => {
             </div>
 
             <div className="sb-cursor-section-block pt-2">
-                <div className="sb-cursor-section-header">Cursor-Managed Worktrees</div>
+                <div className="sb-cursor-section-header">Scratchbox-Managed Worktrees</div>
                 <div className="p-8 text-center text-xs text-zinc-500 bg-zinc-900/40 rounded-xl border border-dashed border-zinc-800">
-                    No Cursor-managed worktrees on this machine.
+                    No Scratchbox-managed worktrees on this machine.
                 </div>
             </div>
         </div>

@@ -82,7 +82,8 @@ import {
     generateProceduralThreeMeshFromPrompt,
     sculptBuildingFrom3DTiles,
     snapFootprintsToTerrain,
-    inspectSceneMeshTopology
+    inspectSceneMeshTopology,
+    synthesizeContextual3DScene
 } from '../procedural-3d-synthesizer';
 import {
     createAtmosphericSkyDome as createAtmosphericSkyDomeModule,
@@ -131,7 +132,13 @@ import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCus
 import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShaders';
 import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { attachViewportControls, stepCamera } from './scene3d/attachViewportControls';
-import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle } from './scene3d/types';
+import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
+import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
+import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle } from './scene3d/types';
+import type { VectorRoadmapConfig } from '../canvas-types';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
+import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -397,108 +404,8 @@ export const createDroneMesh = (): THREE.Group => {
 
 // ---------------------------------------------------------
 // Volumetric God Rays & Light Shafts Generator
-// ---------------------------------------------------------
-export const createVolumetricGodRays = (
-    scene: THREE.Scene,
-    sunPosition: THREE.Vector3 = new THREE.Vector3(40, 60, 40),
-    isSunset: boolean = false,
-    config: { intensity?: number; color?: number | string } = {}
-) => {
-    const rayGroup = new THREE.Group();
-    rayGroup.name = 'volumetric-god-rays';
-    const rayCount = 8;
-
-    // Slender, tapered light shafts with smooth radial falloff
-    const rayGeo = new THREE.CylinderGeometry(0.6, 9.5, 110, 24, 1, true);
-    const colorHex = isSunset ? 0xffaa55 : 0xfffae0;
-
-    const rayMat = new THREE.ShaderMaterial({
-        uniforms: {
-            uTime: { value: 0 },
-            uColor: { value: new THREE.Color(config.color ? (typeof config.color === 'string' ? config.color : config.color) : colorHex) },
-            uIntensity: { value: config.intensity !== undefined ? config.intensity : 0.28 }
-        },
-        vertexShader: `
-            varying vec2 vUv;
-            varying vec3 vNormal;
-            varying vec3 vViewPosition;
-            void main() {
-                vUv = uv;
-                vNormal = normalize(normalMatrix * normal);
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                vViewPosition = -mvPosition.xyz;
-                gl_Position = projectionMatrix * mvPosition;
-            }
-        `,
-        fragmentShader: `
-            uniform float uTime;
-            uniform vec3 uColor;
-            uniform float uIntensity;
-            varying vec2 vUv;
-            varying vec3 vNormal;
-            varying vec3 vViewPosition;
-            void main() {
-                // View-dependent rim / Fresnel falloff to eliminate hard geometric mesh edges
-                vec3 viewDir = normalize(vViewPosition);
-                float rim = abs(dot(vNormal, viewDir));
-                float edgeFade = smoothstep(0.0, 0.45, rim);
-
-                // Smooth vertical falloff from sun source (vUv.y = 0) towards ground
-                float vFade = smoothstep(0.0, 0.12, vUv.y) * pow(1.0 - vUv.y, 1.3);
-
-                // Atmospheric shimmer
-                float shimmer = 0.88 + 0.12 * sin(uTime * 1.5 + vUv.x * 12.56 + vUv.y * 6.28);
-
-                // Ethereal, balanced per-shaft opacity
-                float alpha = vFade * edgeFade * shimmer * (uIntensity * 0.22);
-                gl_FragColor = vec4(uColor, alpha);
-            }
-        `,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        side: THREE.FrontSide,
-        depthWrite: false,
-        depthTest: true
-    });
-
-    const spreadRadius = 5.0;
-    for (let i = 0; i < rayCount; i++) {
-        const ray = new THREE.Mesh(rayGeo, rayMat);
-        const angle = (i / rayCount) * Math.PI * 2 + (i % 2 === 0 ? 0.15 : -0.15);
-        const radialOffset = spreadRadius * (0.6 + (i % 3) * 0.25);
-        
-        // Position shaft roots near sun position
-        ray.position.set(
-            sunPosition.x * 0.75 + Math.cos(angle) * radialOffset,
-            sunPosition.y * 0.75 + Math.sin(angle * 2.0) * 1.5,
-            sunPosition.z * 0.75 + Math.sin(angle) * radialOffset
-        );
-        
-        // Target towards ground / focal battlefield area with subtle dispersion
-        const targetX = (Math.cos(angle) - 0.5) * 12.0;
-        const targetZ = (Math.sin(angle) - 0.5) * 12.0;
-        ray.lookAt(targetX, 0, targetZ);
-        ray.rotateX(Math.PI / 2);
-        
-        // Subtle organic tilt
-        ray.rotation.z += (i % 2 === 0 ? 0.08 : -0.08);
-        rayGroup.add(ray);
-    }
-
-    scene.add(rayGroup);
-
-    return {
-        group: rayGroup,
-        update: (time: number, _delta: number) => {
-            rayMat.uniforms.uTime.value = time;
-        },
-        dispose: () => {
-            scene.remove(rayGroup);
-            rayGeo.dispose();
-            rayMat.dispose();
-        }
-    };
-};
+import { createVolumetricGodRays, VolumetricGodRays } from '../services/atmosphere';
+export { createVolumetricGodRays, VolumetricGodRays };
 
 // ---------------------------------------------------------
 // Dynamic Contrail Dynamics & Wingtip Vortex Particle Emitter
@@ -787,6 +694,7 @@ export const executeDynamicThreeScript = (
 };
 
 import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
+import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -794,93 +702,326 @@ import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 
 export interface ISplatViewer {
     loadSplatObservation(gaussians: BakedGaussian[]): void;
+    loadSplatBuffer?(buffer: ArrayBuffer, format?: 'splat' | 'spz'): Promise<void> | void;
+    updateCamera?(camera: THREE.Camera): void;
     group: THREE.Group;
     dispose(): void;
 }
 
 export class InHouseSplatViewer implements ISplatViewer {
     public group: THREE.Group;
-    private pointsMesh: THREE.Points | null = null;
+    private splatMesh: THREE.Mesh | null = null;
+    private rawGaussians: BakedGaussian[] = [];
+    private sortedIndices: Uint32Array | null = null;
+    private lastCameraPos = new THREE.Vector3();
+    private lastCameraRot = new THREE.Quaternion();
+    private lastSortTime = 0;
 
     constructor() {
         this.group = new THREE.Group();
     }
 
+    /**
+     * Loads raw BakedGaussian array into instanced 3D Gaussian Splatting geometry.
+     */
     public loadSplatObservation(gaussians: BakedGaussian[]): void {
         this.dispose();
-
+        this.rawGaussians = [...gaussians];
         const count = gaussians.length;
-        const positions = new Float32Array(count * 3);
-        const colors = new Float32Array(count * 3);
-        const opacities = new Float32Array(count);
-        const sizes = new Float32Array(count);
+        if (count === 0) return;
+
+        // Base unit quad geometry: 4 vertices [-1..1] spanning 2-sigma ellipse
+        const quadPositions = new Float32Array([
+            -1.0, -1.0, 0.0,
+             1.0, -1.0, 0.0,
+             1.0,  1.0, 0.0,
+            -1.0,  1.0, 0.0
+        ]);
+        const quadIndices = [0, 1, 2, 0, 2, 3];
+
+        const baseGeometry = new THREE.BufferGeometry();
+        baseGeometry.setAttribute('position', new THREE.BufferAttribute(quadPositions, 3));
+        baseGeometry.setIndex(quadIndices);
+
+        const instGeometry = new THREE.InstancedBufferGeometry();
+        instGeometry.copy(baseGeometry as any);
+        instGeometry.instanceCount = count;
+
+        const posArray = new Float32Array(count * 3);
+        const scaleArray = new Float32Array(count * 3);
+        const quatArray = new Float32Array(count * 4);
+        const colorArray = new Float32Array(count * 4);
 
         for (let i = 0; i < count; i++) {
             const g = gaussians[i];
-            positions[i * 3] = g.position[0];
-            positions[i * 3 + 1] = g.position[1];
-            positions[i * 3 + 2] = g.position[2];
+            posArray[i * 3] = g.position[0];
+            posArray[i * 3 + 1] = g.position[1];
+            posArray[i * 3 + 2] = g.position[2];
 
-            colors[i * 3] = g.colorRgb[0] / 255.0;
-            colors[i * 3 + 1] = g.colorRgb[1] / 255.0;
-            colors[i * 3 + 2] = g.colorRgb[2] / 255.0;
+            scaleArray[i * 3] = Math.max(0.001, g.scale[0]);
+            scaleArray[i * 3 + 1] = Math.max(0.001, g.scale[1]);
+            scaleArray[i * 3 + 2] = Math.max(0.001, g.scale[2]);
 
-            opacities[i] = g.opacity;
-            sizes[i] = (g.scale[0] + g.scale[1] + g.scale[2]) / 3.0;
+            const q = g.quaternion || [0, 0, 0, 1];
+            quatArray[i * 4] = q[0];
+            quatArray[i * 4 + 1] = q[1];
+            quatArray[i * 4 + 2] = q[2];
+            quatArray[i * 4 + 3] = q[3];
+
+            colorArray[i * 4] = g.colorRgb[0] > 1.0 ? g.colorRgb[0] / 255.0 : g.colorRgb[0];
+            colorArray[i * 4 + 1] = g.colorRgb[1] > 1.0 ? g.colorRgb[1] / 255.0 : g.colorRgb[1];
+            colorArray[i * 4 + 2] = g.colorRgb[2] > 1.0 ? g.colorRgb[2] / 255.0 : g.colorRgb[2];
+            colorArray[i * 4 + 3] = g.opacity;
         }
 
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        geometry.setAttribute('opacity', new THREE.BufferAttribute(opacities, 1));
-        geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+        instGeometry.setAttribute('instancePosition', new THREE.InstancedBufferAttribute(posArray, 3));
+        instGeometry.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(scaleArray, 3));
+        instGeometry.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(quatArray, 4));
+        instGeometry.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(colorArray, 4));
 
         const material = new THREE.ShaderMaterial({
             vertexShader: `
-                attribute float size;
-                attribute float opacity;
-                varying vec3 vColor;
-                varying float vOpacity;
+                attribute vec3 instancePosition;
+                attribute vec3 instanceScale;
+                attribute vec4 instanceQuat;
+                attribute vec4 instanceColor;
+
+                varying vec4 vColor;
+                varying vec2 vQuadPos;
+
+                mat3 quatToMat3(vec4 q) {
+                    float x2 = q.x + q.x, y2 = q.y + q.y, z2 = q.z + q.z;
+                    float xx = q.x * x2, xy = q.x * y2, xz = q.x * z2;
+                    float yy = q.y * y2, yz = q.y * z2, zz = q.z * z2;
+                    float wx = q.w * x2, wy = q.w * y2, wz = q.w * z2;
+                    return mat3(
+                        1.0 - (yy + zz), xy + wz, xz - wy,
+                        xy - wz, 1.0 - (xx + zz), yz + wx,
+                        xz + wy, yz - wx, 1.0 - (xx + yy)
+                    );
+                }
+
                 void main() {
-                    vColor = color;
-                    vOpacity = opacity;
-                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    gl_PointSize = size * (300.0 / -mvPosition.z);
-                    gl_Position = projectionMatrix * mvPosition;
+                    vColor = instanceColor;
+                    vQuadPos = position.xy * 2.0;
+
+                    vec4 camPos = modelViewMatrix * vec4(instancePosition, 1.0);
+                    if (camPos.z >= -0.01) {
+                        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                        return;
+                    }
+
+                    mat3 R = quatToMat3(instanceQuat);
+                    mat3 S = mat3(
+                        instanceScale.x, 0.0, 0.0,
+                        0.0, instanceScale.y, 0.0,
+                        0.0, 0.0, instanceScale.z
+                    );
+                    mat3 M = R * S;
+                    mat3 Sigma = M * transpose(M);
+
+                    mat3 W = mat3(modelViewMatrix);
+                    mat3 V = W * Sigma * transpose(W);
+
+                    float tz = -camPos.z;
+                    float tz2 = tz * tz;
+                    float fx = projectionMatrix[0][0];
+                    float fy = projectionMatrix[1][1];
+
+                    mat3 J = mat3(
+                        fx / tz, 0.0, 0.0,
+                        0.0, fy / tz, 0.0,
+                        -fx * camPos.x / tz2, -fy * camPos.y / tz2, 0.0
+                    );
+
+                    mat3 Sigma2D = J * V * transpose(J);
+
+                    float s00 = Sigma2D[0][0] + 0.0001;
+                    float s01 = Sigma2D[0][1];
+                    float s11 = Sigma2D[1][1] + 0.0001;
+
+                    float det = s00 * s11 - s01 * s01;
+                    float trace = s00 + s11;
+                    float disc = max(0.0, trace * trace * 0.25 - det);
+                    float lambda1 = trace * 0.5 + sqrt(disc);
+                    float lambda2 = max(0.0, trace * 0.5 - sqrt(disc));
+
+                    float radius1 = sqrt(max(lambda1, 1e-6));
+                    float radius2 = sqrt(max(lambda2, 1e-6));
+
+                    float theta = 0.5 * atan(2.0 * s01, s00 - s11);
+                    float cosT = cos(theta);
+                    float sinT = sin(theta);
+
+                    vec2 majorAxis = vec2(cosT, sinT) * radius1 * 3.0;
+                    vec2 minorAxis = vec2(-sinT, cosT) * radius2 * 3.0;
+
+                    vec2 ndcOffset = position.x * majorAxis + position.y * minorAxis;
+
+                    vec4 centerNdc = projectionMatrix * camPos;
+                    centerNdc.xy += ndcOffset * centerNdc.w;
+
+                    gl_Position = centerNdc;
                 }
             `,
             fragmentShader: `
-                varying vec3 vColor;
-                varying float vOpacity;
+                varying vec4 vColor;
+                varying vec2 vQuadPos;
+
                 void main() {
-                    vec2 coord = gl_PointCoord - vec2(0.5);
-                    float distSq = dot(coord, coord);
-                    if (distSq > 0.25) discard;
-                    float falloff = exp(-distSq * 10.0);
-                    gl_FragColor = vec4(vColor, vOpacity * falloff);
+                    float r2 = dot(vQuadPos, vQuadPos);
+                    if (r2 > 4.0) discard;
+                    float alpha = exp(-0.5 * r2) * vColor.a;
+                    if (alpha < 0.02) discard;
+                    gl_FragColor = vec4(vColor.rgb, alpha);
                 }
             `,
             transparent: true,
             depthWrite: false,
+            depthTest: true,
             blending: THREE.NormalBlending,
-            vertexColors: true
+            side: THREE.DoubleSide
         });
 
-        this.pointsMesh = new THREE.Points(geometry, material);
-        this.group.add(this.pointsMesh);
+        this.splatMesh = new THREE.Mesh(instGeometry as any, material);
+        this.splatMesh.frustumCulled = false;
+        this.group.add(this.splatMesh);
+    }
+
+    /**
+     * Loads a binary .splat or .spz ArrayBuffer directly into the viewer.
+     */
+    public async loadSplatBuffer(buffer: ArrayBuffer, format?: 'splat' | 'spz'): Promise<void> {
+        const bytes = new Uint8Array(buffer);
+        const isSpz = format === 'spz' || (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
+
+        if (isSpz) {
+            let decompressed = bytes;
+            if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+                if (typeof DecompressionStream !== 'undefined') {
+                    const ds = new DecompressionStream('gzip');
+                    const writer = ds.writable.getWriter();
+                    writer.write(bytes);
+                    writer.close();
+                    const reader = ds.readable.getReader();
+                    const chunks: Uint8Array[] = [];
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        if (value) chunks.push(value);
+                    }
+                    const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+                    decompressed = new Uint8Array(totalLen);
+                    let off = 0;
+                    for (const chunk of chunks) {
+                        decompressed.set(chunk, off);
+                        off += chunk.length;
+                    }
+                }
+            }
+            const gaussians = NativeSpatialBridge.decodeSpzPayload(decompressed);
+            this.loadSplatObservation(gaussians);
+        } else {
+            const gaussians = NativeSpatialBridge.parseSplatBuffer(buffer);
+            this.loadSplatObservation(gaussians);
+        }
+    }
+
+    /**
+     * Camera hook for real-time depth sorting and perspective projection updates.
+     */
+    public updateCamera(camera: THREE.Camera): void {
+        if (!this.splatMesh || this.rawGaussians.length === 0) return;
+
+        const now = performance.now();
+        // Throttle depth sorting to 30 Hz for maximum viewport performance
+        if (now - this.lastSortTime < 33) return;
+
+        const posDeltaSq = this.lastCameraPos.distanceToSquared(camera.position);
+        if (posDeltaSq < 0.01) return;
+
+        this.lastSortTime = now;
+        this.lastCameraPos.copy(camera.position);
+        this.lastCameraRot.copy(camera.quaternion);
+
+        const count = this.rawGaussians.length;
+        if (!this.sortedIndices || this.sortedIndices.length !== count) {
+            this.sortedIndices = new Uint32Array(count);
+            for (let i = 0; i < count; i++) this.sortedIndices[i] = i;
+        }
+
+        const depths = new Float32Array(count);
+        const cx = camera.position.x;
+        const cy = camera.position.y;
+        const cz = camera.position.z;
+
+        for (let i = 0; i < count; i++) {
+            const p = this.rawGaussians[i].position;
+            const dx = p[0] - cx;
+            const dy = p[1] - cy;
+            const dz = p[2] - cz;
+            depths[i] = dx * dx + dy * dy + dz * dz;
+        }
+
+        // Sort indices from farthest to nearest (back-to-front alpha compositing)
+        const indices = Array.from(this.sortedIndices);
+        indices.sort((a, b) => depths[b] - depths[a]);
+        this.sortedIndices.set(indices);
+
+        const geom = this.splatMesh.geometry as THREE.InstancedBufferGeometry;
+        const posAttr = geom.getAttribute('instancePosition') as THREE.InstancedBufferAttribute;
+        const scaleAttr = geom.getAttribute('instanceScale') as THREE.InstancedBufferAttribute;
+        const quatAttr = geom.getAttribute('instanceQuat') as THREE.InstancedBufferAttribute;
+        const colorAttr = geom.getAttribute('instanceColor') as THREE.InstancedBufferAttribute;
+
+        const pArr = posAttr.array as Float32Array;
+        const sArr = scaleAttr.array as Float32Array;
+        const qArr = quatAttr.array as Float32Array;
+        const cArr = colorAttr.array as Float32Array;
+
+        for (let dst = 0; dst < count; dst++) {
+            const src = this.sortedIndices[dst];
+            const g = this.rawGaussians[src];
+
+            pArr[dst * 3] = g.position[0];
+            pArr[dst * 3 + 1] = g.position[1];
+            pArr[dst * 3 + 2] = g.position[2];
+
+            sArr[dst * 3] = Math.max(0.001, g.scale[0]);
+            sArr[dst * 3 + 1] = Math.max(0.001, g.scale[1]);
+            sArr[dst * 3 + 2] = Math.max(0.001, g.scale[2]);
+
+            const q = g.quaternion || [0, 0, 0, 1];
+            qArr[dst * 4] = q[0];
+            qArr[dst * 4 + 1] = q[1];
+            qArr[dst * 4 + 2] = q[2];
+            qArr[dst * 4 + 3] = q[3];
+
+            cArr[dst * 4] = g.colorRgb[0] > 1.0 ? g.colorRgb[0] / 255.0 : g.colorRgb[0];
+            cArr[dst * 4 + 1] = g.colorRgb[1] > 1.0 ? g.colorRgb[1] / 255.0 : g.colorRgb[1];
+            cArr[dst * 4 + 2] = g.colorRgb[2] > 1.0 ? g.colorRgb[2] / 255.0 : g.colorRgb[2];
+            cArr[dst * 4 + 3] = g.opacity;
+        }
+
+        posAttr.needsUpdate = true;
+        scaleAttr.needsUpdate = true;
+        quatAttr.needsUpdate = true;
+        colorAttr.needsUpdate = true;
     }
 
     public dispose(): void {
-        if (this.pointsMesh) {
-            this.group.remove(this.pointsMesh);
-            this.pointsMesh.geometry.dispose();
-            if (Array.isArray(this.pointsMesh.material)) {
-                this.pointsMesh.material.forEach(m => m.dispose());
+        if (this.splatMesh) {
+            this.group.remove(this.splatMesh);
+            this.splatMesh.geometry.dispose();
+            if (Array.isArray(this.splatMesh.material)) {
+                this.splatMesh.material.forEach(m => m.dispose());
             } else {
-                this.pointsMesh.material.dispose();
+                this.splatMesh.material.dispose();
             }
-            this.pointsMesh = null;
+            this.splatMesh = null;
         }
+        this.rawGaussians = [];
+        this.sortedIndices = null;
     }
 }
 
@@ -993,19 +1134,115 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         environment: data?.environment || { skybox: 'cyberpunk', lighting: 'shaded', ground: true },
         features: data?.features,
         customScript: data?.customScript || data?.code,
+        cppGenerator: data?.cppGenerator || {
+            enabled: true,
+            filename: 'world_generator.cpp',
+            sourceCode: `#include "scratchbox_engine.hpp"
+#include "scratchbox_math.hpp"
+
+int main(int argc, char** argv) {
+    scratchbox::Engine engine;
+    auto scene = engine.create_scene("Procedural Biosphere");
+
+    // Signed Distance Field (SDF) + SIMD Vector Math
+    auto terrain = engine.generate_sdf_terrain({
+        .bounds_min = {-50.0f, -10.0f, -50.0f},
+        .bounds_max = {50.0f, 25.0f, 50.0f},
+        .voxel_resolution = 0.5f,
+        .noise_scale = 0.035f,
+        .octaves = 5,
+        .persistence = 0.5f
+    });
+
+    terrain->set_material({
+        .base_color = {0.18f, 0.45f, 0.28f, 1.0f},
+        .roughness = 0.85f,
+        .metallic = 0.1f
+    });
+
+    scene->add_node(terrain);
+    engine.export_glb_stdout(scene);
+    return 0;
+}`
+        },
         shaders: data?.shaders,
-        customMeshes: data?.customMeshes
+        customMeshes: (() => {
+            if (data?.customMeshes && data.customMeshes.length > 0) return data.customMeshes;
+            const isVehicle = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data?.title || '') ||
+                /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data?.worldBranch || '');
+            if (isVehicle) {
+                return synthesizeContextual3DScene(data?.title || '3D Car Visualization').customMeshes;
+            }
+            return data?.customMeshes;
+        })()
     }));
 
     // Rendering options
     const [renderMode, setRenderMode] = React.useState<'wireframe' | 'solid' | 'shaded' | 'pbr'>('shaded');
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
-    const [worldBranch, setWorldBranch] = React.useState<string>('earth/main');
+    const initialWorldBranch = (data?.worldBranch && /car|vehicle|automobile/i.test(data?.title || '') && /city|urban|street/i.test(data.worldBranch))
+        ? 'studio/showroom'
+        : (data?.worldBranch || 'earth/main');
+    const [worldBranch, setWorldBranch] = React.useState<string>(initialWorldBranch);
     const [hasGeoCoordinates, setHasGeoCoordinates] = React.useState<boolean>(false);
     const [lat, setLat] = React.useState<string>('37.7900');
     const [lng, setLng] = React.useState<string>('-122.4000');
     const [elevation, setElevation] = React.useState<string>('15.2');
     const [scriptError, setScriptError] = React.useState<string | null>(null);
+
+    // Lighting Rigs & Lightweight Scene Budget Telemetry States
+    const [selectedLightingRig, setSelectedLightingRig] = React.useState<string>(sceneData.environment?.cinematicRig || 'three_point_studio');
+    const [lightingKelvin, setLightingKelvin] = React.useState<number>(sceneData.environment?.lightingKelvin || 5600);
+    const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
+    const [showBudgetModal, setShowBudgetModal] = React.useState<boolean>(false);
+
+    // Native C++20 Astra Engine Studio States
+    const [showCppStudio, setShowCppStudio] = React.useState<boolean>(false);
+    const [isCompilingCpp, setIsCompilingCpp] = React.useState<boolean>(false);
+    const [cppCompilationLog, setCppCompilationLog] = React.useState<string | null>(null);
+
+    const handleCompileCpp = React.useCallback(async () => {
+        if (!sceneData.cppGenerator?.sourceCode) return;
+        setIsCompilingCpp(true);
+        setCppCompilationLog('Compiling C++20 via Apple Clang (-std=c++20 -O3)...');
+        try {
+            const compileUrl = typeof window !== 'undefined' && window.location.port === '3000'
+                ? 'http://localhost:3001/3d/compile'
+                : '/3d/compile';
+            const res = await fetch(compileUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sourceCode: sceneData.cppGenerator.sourceCode,
+                    optimization: '-O3',
+                    geoAnchor: sceneData.geoAnchor,
+                    assets: (sceneData.cppGenerator as any)?.assets
+                })
+            });
+            const result = await res.json();
+            if (result.success && result.glbBase64) {
+                const nextCpp = {
+                    ...sceneData.cppGenerator,
+                    glbBase64: result.glbBase64,
+                    lastCompiledTimeMs: Date.now(),
+                    lastExecutionDurationMs: result.executionTimeMs,
+                    vertexCount: result.vertexCount || sceneData.cppGenerator.vertexCount || 1024,
+                    diagnostics: result.diagnostics || []
+                };
+                setSceneData(prev => ({ ...prev, cppGenerator: nextCpp }));
+                if (onUpdate) {
+                    onUpdate({ ...sceneData, cppGenerator: nextCpp });
+                }
+                setCppCompilationLog(`Compiled in ${result.compilationTimeMs}ms, executed in ${result.executionTimeMs}ms. glTF loaded.`);
+            } else {
+                setCppCompilationLog(`Compiler Output:\n${result.compilerOutput || result.stderr || 'Compilation failed'}`);
+            }
+        } catch (err: any) {
+            setCppCompilationLog(`Compilation request error: ${err.message}`);
+        } finally {
+            setIsCompilingCpp(false);
+        }
+    }, [sceneData, onUpdate]);
 
     // ---------------------------------------------------------
     // 3D Sculpting & Interactive Transform Gizmo States
@@ -1090,6 +1327,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [mapTileDetailLevel, setMapTileDetailLevel] = React.useState<'low' | 'medium' | 'high'>('high');
     const [isIngestingTile, setIsIngestingTile] = React.useState<boolean>(false);
     const [mapTileStatusMsg, setMapTileStatusMsg] = React.useState<string | null>(null);
+
+    // Vector ROADMAP Reference & Cloud-Based Map Styling States
+    const [isVectorRoadmapHUDOpen, setIsVectorRoadmapHUDOpen] = React.useState<boolean>(false);
+    const [cameraHeading, setCameraHeading] = React.useState<number>(0);
+    const isVectorRoadmapHUDOpenRef = useLatest(isVectorRoadmapHUDOpen);
+    const vectorRoadmapHandleRef = React.useRef<VectorRoadmapHandle | null>(null);
 
     // Viewport & Three.js Refs
     const viewportRef = React.useRef<HTMLDivElement>(null);
@@ -1262,9 +1505,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         box.getSize(size);
         const maxDim = Math.max(size.x, size.y, size.z, 2);
 
-        // Smooth camera refocus
-        const targetDistance = maxDim * 2.2;
-        cameraRotationRef.current.distance = Math.max(6, Math.min(100, targetDistance));
+        // Smooth camera refocus on the selected object center
+        cameraTargetRef.current.copy(center);
+        const targetDistance = Math.max(6, Math.min(2500, maxDim * 2.2));
+        const eye = threeCameraRef.current.position.clone().sub(center);
+        const currentDist = eye.length() || 1;
+        const phi = Math.acos(Math.max(-1, Math.min(1, eye.y / currentDist)));
+        const theta = Math.atan2(eye.x, eye.z);
+        cameraRotationRef.current = { theta, phi, distance: targetDistance };
         threeCameraRef.current.lookAt(center);
     }, [selectObject]);
 
@@ -1344,6 +1592,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const cameraTargetRef = React.useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
 
     const animationFrameIdRef = React.useRef<number | null>(null);
+    const hasWarnedFrameErrorRef = React.useRef<boolean>(false);
     const cameraRotationRef = React.useRef<{ theta: number; phi: number; distance: number }>({
         theta: Math.PI / 4,
         phi: Math.PI / 3,
@@ -1389,25 +1638,47 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Sync Props to State
     React.useEffect(() => {
         if (data) {
+            const isVehicleTheme = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data.title || '') ||
+                /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data.worldBranch || '') ||
+                (data.objects && data.objects.some(o => /car|vehicle|automobile/i.test(o.id || '') || /car|vehicle|automobile/i.test(o.content?.durableUri || '') || /car|vehicle|automobile/i.test(o.content?.mimeType || '')));
+
+            let effectiveCustomMeshes = data.customMeshes;
+            let effectiveCamera = data.camera;
+            let effectiveEnvironment = data.environment;
+            let effectiveWorldBranch = data.worldBranch;
+
+            if (isVehicleTheme) {
+                if (!effectiveCustomMeshes || effectiveCustomMeshes.length === 0) {
+                    const synthesized = synthesizeContextual3DScene(data.title || '3D Car Visualization');
+                    effectiveCustomMeshes = synthesized.customMeshes;
+                    if (!effectiveCamera) effectiveCamera = synthesized.camera;
+                    if (!effectiveEnvironment) effectiveEnvironment = synthesized.environment;
+                }
+                if (effectiveWorldBranch && /city|urban|street/i.test(effectiveWorldBranch)) {
+                    effectiveWorldBranch = 'studio/showroom';
+                }
+            }
+
             setSceneData({
                 title: data.title || '4D Scene Workspace',
                 subtitle: data.subtitle || 'Interactive 4D spatial viewport with temporal simulation solver',
-                objects: data.objects || [],
-                sceneType: data.sceneType,
-                worldBranch: data.worldBranch,
-                camera: data.camera || { position: [15, 12, 15], target: [0, 0, 0] },
-                environment: data.environment || { skybox: 'cyberpunk', lighting: 'shaded', ground: true },
+                objects: isVehicleTheme && (!data.objects || data.objects.some(o => o.content?.durableUri === 'internal:plane')) ? [] : (data.objects || []),
+                sceneType: isVehicleTheme ? 'custom' : data.sceneType,
+                worldBranch: effectiveWorldBranch,
+                camera: effectiveCamera || { position: [15, 12, 15], target: [0, 0, 0] },
+                environment: effectiveEnvironment || { skybox: isVehicleTheme ? 'studio' : 'cyberpunk', lighting: isVehicleTheme ? 'studio' : 'shaded', ground: true },
                 features: data.features,
                 customScript: data.customScript || data.code,
+                cppGenerator: data.cppGenerator,
                 shaders: data.shaders,
-                customMeshes: data.customMeshes,
+                customMeshes: effectiveCustomMeshes,
                 timeline: data.timeline,
                 animation: data.animation,
                 geoAnchor: data.geoAnchor,
                 droneRoute: data.droneRoute
             });
 
-            if (data.worldBranch) setWorldBranch(data.worldBranch);
+            if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
             if (data.renderMode) setRenderMode(data.renderMode);
             if (data.cameraMode) setCameraMode(data.cameraMode);
             if (data.toolMode) setToolMode(data.toolMode);
@@ -1668,6 +1939,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const contentRef = React.useRef<SceneContentHandle | null>(null);
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
+    const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
 
     // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
     const cameraModeRef = useLatest(cameraMode);
@@ -1698,21 +1970,24 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const atmosphereInput = React.useMemo<AtmosphereInput>(() => ({
         skybox: sceneData.environment?.skybox,
         lighting: sceneData.environment?.lighting,
+        ambientIntensity: sceneData.environment?.ambientIntensity,
+        cinematicRig: sceneData.environment?.cinematicRig,
+        lightingKelvin: sceneData.environment?.lightingKelvin,
         ground: sceneData.environment?.ground,
-        title: sceneData.title,
-        dataTitle: data?.title,
-        dataSubtitle: data?.subtitle,
+        fog: sceneData.environment?.fog,
         worldBranch,
         renderMode,
         hasGeoCoordinates,
         has3DTiles,
         atmosphericScattering: sceneData.features?.atmosphericScattering,
+        atmosphere: (sceneData as any).atmosphere,
         godRays: sceneData.features?.godRays,
         terrainBiomes: sceneData.features?.terrainBiomes
     }), [
-        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ground,
-        sceneData.title, data?.title, data?.subtitle, worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
-        sceneData.features?.atmosphericScattering, sceneData.features?.godRays, sceneData.features?.terrainBiomes
+        sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig,
+        sceneData.environment?.lightingKelvin, sceneData.environment?.ground, sceneData.environment?.fog,
+        worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
+        sceneData.features?.atmosphericScattering, (sceneData as any).atmosphere, sceneData.features?.godRays, sceneData.features?.terrainBiomes
     ]);
     const atmosphereFingerprint = React.useMemo(() => JSON.stringify(atmosphereInput), [atmosphereInput]);
     const atmosphereInputRef = useLatest(atmosphereInput);
@@ -1731,11 +2006,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
         hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
+        hasCppGenerator: !!sceneData.cppGenerator?.glbBase64,
         selectedShape,
         sculptWireframe: !!sculptSettings.wireframeOverlay
     }), [
         sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects, selectedShape, sculptSettings.wireframeOverlay
+        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.cppGenerator?.glbBase64, selectedShape, sculptSettings.wireframeOverlay
     ]);
     // Shape / wireframe changes are applied in place by their own handlers, so they are excluded here.
     const contentFingerprint = React.useMemo(() => JSON.stringify({
@@ -1755,6 +2031,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const customMeshesRef = useLatest(sceneData.customMeshes);
     const shadersFingerprint = React.useMemo(() => JSON.stringify(sceneData.shaders ?? null), [sceneData.shaders]);
     const shadersRef = useLatest(sceneData.shaders);
+    const externalObjectsFingerprint = React.useMemo(() => {
+        return JSON.stringify(sceneData.objects?.map(o => ({
+            id: o.id,
+            uri: o.content?.durableUri,
+            space: o.space?.spatial3d
+        })) || []);
+    }, [sceneData.objects]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -1777,6 +2060,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         threeCameraRef.current = camera;
         threeRendererRef.current = renderer;
         customGridHelperRef.current = stack.gridHelper;
+        (window as any).__SB_3D_CAMERA__ = camera;
+        (window as any).__SB_3D_SCENE__ = scene;
+        (window as any).__SB_3D_STACK__ = stack;
+        (window as any).__SB_3D_SCENE_DATA__ = sceneData;
+        (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
+        (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
 
         // Brush cursor ring overlay (positioned on the hovered mesh surface in sculpt mode)
         const initRadius = sculptSettingsRef.current.radius || 2.0;
@@ -1828,6 +2117,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // ---------------------------------------------------------
         let lastTickTime = performance.now();
         let lastTerrainSnapTime = 0;
+        let lastHeadingUpdateTime = 0;
 
         const animate = () => {
             try {
@@ -1930,6 +2220,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 // 10. Camera (orbit or FPS)
                 stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);
 
+                // 10.5 Update camera heading for Vector Roadmap HUD
+                if (isVectorRoadmapHUDOpenRef.current && now - lastHeadingUpdateTime > 80) {
+                    lastHeadingUpdateTime = now;
+                    const dir = new THREE.Vector3();
+                    camera.getWorldDirection(dir);
+                    const hdg = (Math.atan2(dir.x, -dir.z) * 180 / Math.PI + 360) % 360;
+                    setCameraHeading(hdg);
+                }
+
                 // 11. Selection box helper
                 if (selectionBoxRef.current && selectionBoxRef.current.visible && selectedObjectRef.current) {
                     selectionBoxRef.current.update();
@@ -1949,6 +2248,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                 }
 
+                // 13. Gaussian Splat viewer camera sync & depth sort
+                if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
+                    splatViewerRef.current.updateCamera(camera);
+                }
+
                 if (aerialPerspectiveRef.current && skyDomeModuleRef.current) {
                     aerialPerspectiveRef.current.render(
                         renderer,
@@ -1962,7 +2266,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     renderer.render(scene, camera);
                 }
             } catch (frameErr) {
-                console.warn('[3D Animation Loop Warning]:', frameErr);
+                if (!hasWarnedFrameErrorRef.current) {
+                    hasWarnedFrameErrorRef.current = true;
+                    console.warn('[3D Animation Loop Warning]:', frameErr);
+                }
             }
             animationFrameIdRef.current = requestAnimationFrame(animate);
         };
@@ -2007,7 +2314,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             onTileLoaded: (terrainManager) => {
                 snapGroupFiguresToGround(contentRef.current?.proceduralSceneGroup ?? null, terrainManager);
                 const groundY = terrainManager.sampleGroundHeight(0, 0);
-                if (groundY !== null) {
+                if (groundY !== null && !sceneDataRef.current.camera?.target) {
                     cameraTargetRef.current.y = groundY + 1.5;
                 }
             }
@@ -2022,6 +2329,31 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             terrainManagerRef.current = null;
         };
     }, [tilesFingerprint]);
+
+    // ---- 2b. Vector ROADMAP ground blueprint underlay (Cloud-Based Map Styling) ----
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const handle = syncVectorRoadmapBlueprint(stack.scene, vectorRoadmapHandleRef.current, {
+            config: sceneData.vectorRoadmap,
+            geoAnchor: sceneData.geoAnchor
+        });
+        vectorRoadmapHandleRef.current = handle;
+        return () => {
+            handle.dispose();
+            vectorRoadmapHandleRef.current = null;
+        };
+    }, [
+        sceneData.vectorRoadmap?.enabled,
+        sceneData.vectorRoadmap?.groundBlueprint,
+        sceneData.vectorRoadmap?.groundBlueprintOpacity,
+        sceneData.vectorRoadmap?.groundBlueprintSize,
+        sceneData.vectorRoadmap?.groundElevationOffset,
+        sceneData.vectorRoadmap?.mapId,
+        sceneData.geoAnchor?.lat,
+        sceneData.geoAnchor?.lng,
+        sceneData.geoAnchor?.elevation
+    ]);
 
     // ---- 3. Atmosphere: background, fog, sky dome, lights, terrain floor, biomes, stars ----
     React.useEffect(() => {
@@ -2054,12 +2386,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         if (!stack) return;
         const cameraDef = sceneDataRef.current.camera;
         const groundY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
-        cameraTargetRef.current.set(
-            cameraDef?.target ? cameraDef.target[0] : 0,
-            cameraDef?.target ? cameraDef.target[1] : groundY + 1.5,
-            cameraDef?.target ? cameraDef.target[2] : 0
-        );
-        const [px, py, pz] = cameraDef?.position || [15, 12, 15];
+        const tx = cameraDef?.target ? cameraDef.target[0] : 0;
+        const ty = cameraDef?.target ? cameraDef.target[1] : (groundY + 1.5);
+        const tz = cameraDef?.target ? cameraDef.target[2] : 0;
+        cameraTargetRef.current.set(tx, ty, tz);
+
+        const [px, py, pz] = cameraDef?.position || [15, ty + 12, 15];
+        const dx = px - tx;
+        const dy = py - ty;
+        const dz = pz - tz;
+        const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
+        const theta = Math.atan2(dx, dz);
+
+        cameraRotationRef.current = { theta, phi, distance: dist };
         stack.camera.position.set(px, py, pz);
         stack.camera.lookAt(cameraTargetRef.current);
     }, [cameraFingerprint, tilesFingerprint]);
@@ -2163,8 +2503,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         setSceneEntities(initialEntities);
         if (initialEntities.length > 0) {
             const wanted = dataRef.current?.selectedMeshId;
-            const target = initialEntities.find(e => e.id === wanted || e.name === wanted) || initialEntities[0];
-            if (target?.object) selectObjectRef.current(target.object);
+            if (wanted) {
+                const target = initialEntities.find(e => e.id === wanted || e.name === wanted);
+                if (target?.object) selectObjectRef.current(target.object);
+            }
         }
 
         return () => {
@@ -2197,6 +2539,166 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             wasmPositionAttrRef.current = null;
         };
     }, [wantsWasmMesh, renderMode]);
+
+    // ---- 5b. Native C++ Generated GLB Ingestion (Streaming 3D AST) ---------------
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack || !sceneData.cppGenerator?.glbBase64) return;
+        try {
+            const b64 = sceneData.cppGenerator.glbBase64;
+            const binaryStr = typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+            }
+            const loader = new GLTFLoader();
+            loader.parse(bytes.buffer, '', (gltf) => {
+                const scene = stack.scene;
+                if (!scene) return;
+                const existing = scene.getObjectByName('scratchbox-cpp-generated-root');
+                if (existing) {
+                    scene.remove(existing);
+                }
+                gltf.scene.name = 'scratchbox-cpp-generated-root';
+                gltf.scene.traverse((child) => {
+                    if ((child as any).isMesh) {
+                        const m = child as THREE.Mesh;
+                        m.castShadow = true;
+                        m.receiveShadow = true;
+                        if ((child as any).isSkinnedMesh) {
+                            m.frustumCulled = false;
+                        }
+                        if (m.material) {
+                            const mat = m.material as THREE.MeshStandardMaterial;
+                            if (m.geometry && m.geometry.attributes.color) {
+                                mat.vertexColors = true;
+                            }
+                            mat.envMapIntensity = 1.35;
+                            mat.needsUpdate = true;
+                        }
+                    }
+                });
+                scene.add(gltf.scene);
+                refreshEntities();
+            }, (err) => {
+                console.warn('[C++ GLB Loader Error]:', err);
+            });
+        } catch (e) {
+            console.warn('[C++ GLB Ingestion Error]:', e);
+        }
+    }, [sceneData.cppGenerator?.glbBase64]);
+
+    // ---- 5c. External Model Objects Ingestion (sceneData.objects[].content.durableUri) ----
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        const scene = stack.scene;
+        if (!scene) return;
+
+        const objects = sceneData.objects || [];
+        const currentMap = externalObjectsMapRef.current;
+        const activeIds = new Set<string>();
+
+        const loader = new GLTFLoader();
+
+        objects.forEach(obj => {
+            const uri = obj.content?.durableUri;
+            if (!uri || !uri.match(/\.(glb|gltf)($|\?)/i)) return;
+            activeIds.add(obj.id);
+
+            const existing = currentMap.get(obj.id);
+            if (existing) {
+                const s = obj.space?.spatial3d;
+                if (s) {
+                    existing.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
+                    if (s.pitch !== undefined) existing.rotation.x = (s.pitch * Math.PI) / 180;
+                    if (s.yaw !== undefined) existing.rotation.y = (s.yaw * Math.PI) / 180;
+                    if (s.roll !== undefined) existing.rotation.z = (s.roll * Math.PI) / 180;
+                }
+                return;
+            }
+
+            loader.load(
+                uri,
+                (gltf) => {
+                    if (!stackRef.current?.scene) return;
+                    const model = gltf.scene;
+                    model.name = `external-object-${obj.id}`;
+                    const s = obj.space?.spatial3d;
+                    if (s) {
+                        model.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
+                        if (s.pitch !== undefined) model.rotation.x = (s.pitch * Math.PI) / 180;
+                        if (s.yaw !== undefined) model.rotation.y = (s.yaw * Math.PI) / 180;
+                        if (s.roll !== undefined) model.rotation.z = (s.roll * Math.PI) / 180;
+                    }
+
+                    model.traverse((child) => {
+                        if ((child as any).isMesh) {
+                            const m = child as THREE.Mesh;
+                            m.castShadow = true;
+                            m.receiveShadow = true;
+                            if ((child as any).isSkinnedMesh) {
+                                m.frustumCulled = false;
+                            }
+                            if (m.material) {
+                                const mat = m.material as THREE.MeshStandardMaterial;
+                                if (m.geometry && m.geometry.attributes.color) {
+                                    mat.vertexColors = true;
+                                }
+                                mat.envMapIntensity = 1.35;
+                                mat.needsUpdate = true;
+                            }
+                        }
+                    });
+
+                    scene.add(model);
+                    currentMap.set(obj.id, model);
+                    refreshEntities();
+                },
+                undefined,
+                (err) => {
+                    console.warn(`[External Model Loader Error] Failed to load ${uri}:`, err);
+                }
+            );
+        });
+
+        // Cleanup removed objects
+        for (const [id, obj3d] of currentMap.entries()) {
+            if (!activeIds.has(id)) {
+                scene.remove(obj3d);
+                obj3d.traverse((child) => {
+                    if ((child as any).geometry) (child as any).geometry.dispose();
+                    if ((child as any).material) {
+                        const m = (child as any).material;
+                        if (Array.isArray(m)) m.forEach(mat => mat.dispose());
+                        else m.dispose();
+                    }
+                });
+                currentMap.delete(id);
+            }
+        }
+    }, [externalObjectsFingerprint]);
+
+    React.useEffect(() => {
+        const stack = stackRef.current;
+        const currentMap = externalObjectsMapRef.current;
+        return () => {
+            if (stack && stack.scene) {
+                for (const [, obj3d] of currentMap.entries()) {
+                    stack.scene.remove(obj3d);
+                    obj3d.traverse((child) => {
+                        if ((child as any).geometry) (child as any).geometry.dispose();
+                        if ((child as any).material) {
+                            const m = (child as any).material;
+                            if (Array.isArray(m)) m.forEach(mat => mat.dispose());
+                            else m.dispose();
+                        }
+                    });
+                }
+            }
+            currentMap.clear();
+        };
+    }, []);
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
     React.useEffect(() => {
@@ -2406,20 +2908,55 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, [mutateSceneData]);
 
     const handleResetCamera = React.useCallback(() => {
-        cameraRotationRef.current = { theta: Math.PI / 4, phi: Math.PI / 3, distance: 25 };
+        const cameraDef = sceneData.camera;
         const groundCenterY = terrainManagerRef.current?.sampleGroundHeight(0, 0) ?? 0;
-        const targetY = sceneData.camera?.target ? sceneData.camera.target[1] : (groundCenterY + 1.5);
-        cameraTargetRef.current.set(0, targetY, 0);
+        const tx = cameraDef?.target ? cameraDef.target[0] : 0;
+        const ty = cameraDef?.target ? cameraDef.target[1] : (groundCenterY + 1.5);
+        const tz = cameraDef?.target ? cameraDef.target[2] : 0;
+        const [px, py, pz] = cameraDef?.position || [15, ty + 12, 15];
+
+        cameraTargetRef.current.set(tx, ty, tz);
+        const dx = px - tx;
+        const dy = py - ty;
+        const dz = pz - tz;
+        const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
+        const theta = Math.atan2(dx, dz);
+
+        cameraRotationRef.current = { theta, phi, distance: dist };
         if (threeCameraRef.current) {
-            const [px, , pz] = sceneData.camera?.position || [15, targetY + 12, 15];
-            threeCameraRef.current.position.set(px, targetY + 12, pz);
+            threeCameraRef.current.position.set(px, py, pz);
             threeCameraRef.current.lookAt(cameraTargetRef.current);
         }
         mutateSceneData(prev => ({
             ...prev,
-            camera: { position: [15, targetY + 12, 15], target: [0, targetY, 0] }
-        }), { operator: 'sb_set_camera', params: { position: [15, targetY + 12, 15], target: [0, targetY, 0] } });
+            camera: { position: [px, py, pz], target: [tx, ty, tz] }
+        }), { operator: 'sb_set_camera', params: { position: [px, py, pz], target: [tx, ty, tz] } });
     }, [sceneData.camera, mutateSceneData]);
+
+    const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
+        mutateSceneData(prev => ({
+            ...prev,
+            vectorRoadmap: {
+                ...prev.vectorRoadmap,
+                enabled: true,
+                ...updated
+            }
+        }), { operator: 'UPDATE_VECTOR_ROADMAP', params: updated });
+    }, [mutateSceneData]);
+
+    const refreshSceneBudget = React.useCallback(() => {
+        if (stackRef.current?.scene) {
+            const telemetry = computeSceneBudgetTelemetry(stackRef.current.scene);
+            setSceneBudget(telemetry);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        const timer = setInterval(refreshSceneBudget, 2000);
+        refreshSceneBudget();
+        return () => clearInterval(timer);
+    }, [refreshSceneBudget]);
 
     const handleImport3DMapTile = React.useCallback(async () => {
         setIsIngestingTile(true);
@@ -2626,30 +3163,42 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---------------------------------------------------------
     return (
         <div className="sb-scene3d-primitive-container relative w-full h-full bg-zinc-950 text-zinc-100 overflow-hidden rounded-[16px] border border-white/10 shadow-2xl backdrop-blur-2xl select-none">
-            {/* Ultra-Minimal Floating Glass Top Badge */}
-            <div className="sb-3d-minimal-badge-container absolute top-4 left-4 z-20 pointer-events-none flex items-center gap-2 animate-fadeIn flex-wrap">
-                <div className="sb-3d-minimal-badge pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#121216]/80 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-200 shadow-xl">
-                    <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shadow-[0_0_8px_rgba(96,165,250,0.8)]" />
-                    <span className="font-semibold text-white">{sceneData.title || '3D Scene'}</span>
-                    <span className="text-zinc-500">·</span>
-                    <span className="text-blue-400 font-mono text-[11px]">{worldBranch}</span>
+            {/* Ultra-Minimal Floating Glass Telemetry Badge (Docked bottom-left below vertical toolstrip) */}
+            <div className="sb-3d-minimal-badge-container absolute bottom-4 left-4 z-20 pointer-events-none flex items-center gap-2 animate-fadeIn max-w-[calc(40%-16px)]">
+                <div className="sb-3d-minimal-badge pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-300 shadow-xl overflow-hidden whitespace-nowrap">
+                    <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shadow-[0_0_8px_rgba(96,165,250,0.8)] shrink-0" />
+                    <span className="font-semibold text-white truncate max-w-[130px]">{sceneData.title || '3D Scene'}</span>
+                    <span className="text-zinc-500 shrink-0">·</span>
+                    <span className="text-blue-400 font-mono text-[11px] shrink-0">{worldBranch}</span>
                     {hasGeoCoordinates && (
                         <>
-                            <span className="text-zinc-500">·</span>
-                            <span className="text-emerald-400 font-mono text-[11px]">
+                            <span className="text-zinc-500 shrink-0">·</span>
+                            <span className="text-emerald-400 font-mono text-[11px] shrink-0">
                                 {parseFloat(lat).toFixed(2)}°N, {Math.abs(parseFloat(lng)).toFixed(2)}°W
                             </span>
                         </>
                     )}
-                    {activeFeatureBadges.length > 0 && (
+                    {sceneData.cppGenerator?.sourceCode && (
                         <>
-                            <span className="text-zinc-500">·</span>
-                            <span className="text-cyan-300 font-mono text-[10px] bg-cyan-950/60 border border-cyan-500/30 px-2 py-0.5 rounded-full">
-                                {activeFeatureBadges.slice(0, 3).join(' · ')}
+                            <span className="text-zinc-500 shrink-0">·</span>
+                            <span className="text-purple-300 font-mono text-[10px] bg-purple-950/60 border border-purple-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                                C++20
                             </span>
                         </>
                     )}
                 </div>
+
+                {sceneData.cppGenerator?.sourceCode && (
+                    <button
+                        type="button"
+                        onClick={() => setShowCppStudio(!showCppStudio)}
+                        className="sb-btn sb-btn-xs pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
+                    >
+                        <span>⚡</span>
+                        <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
+                    </button>
+                )}
 
                 {scriptError && (
                     <div className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/70 backdrop-blur-md border border-amber-500/40 text-[11px] text-amber-200 shadow-lg">
@@ -2950,21 +3499,23 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </button>
             </div>
 
-            {/* Top Contextual Options Bar (Precision Control Bar) */}
-            <div className="sb-3d-options-bar absolute top-4 right-4 z-20 pointer-events-auto flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-200 shadow-2xl animate-fadeIn">
+            {/* Top Viewport Unified Navigation & Control Bar */}
+            <div className="sb-3d-top-header-bar absolute top-4 left-[72px] right-4 z-20 flex items-center justify-between gap-3 pointer-events-none select-none overflow-hidden">
+                {/* Top-Left Contextual Tool Options Bar (Positioned alongside toolstrip) */}
+                <div className="sb-3d-tool-options-bar pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-200 shadow-2xl animate-fadeIn min-w-0 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] whitespace-nowrap shrink-1">
                 {/* 1. Sculpt Mode Options */}
                 {toolMode === 'sculpt' && (
                     <>
                         {/* Active Brush Badge */}
-                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-600/20 border border-blue-500/30 text-blue-300 text-[11px] font-semibold uppercase tracking-wider">
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-600/20 border border-blue-500/30 text-blue-300 text-[11px] font-semibold uppercase tracking-wider shrink-0">
                             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shadow-[0_0_6px_rgba(96,165,250,0.8)]" />
                             <span>{sculptSettings.brush}</span>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Radius / Size: Compact input + slider */}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Radius</span>
                             <input
                                 type="range"
@@ -2993,10 +3544,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             />
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Strength / Flow */}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Strength</span>
                             <input
                                 type="range"
@@ -3013,10 +3564,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </span>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Falloff Curve Selector */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
+                        <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Falloff</span>
                             <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
                                 {(['gaussian', 'smoothstep', 'spherical', 'linear', 'sharp', 'constant'] as const).map(f => (
@@ -3035,10 +3586,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Symmetry Chips */}
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Sym</span>
                             <div className="flex items-center gap-0.5">
                                 {(['x', 'y', 'z'] as const).map(axis => {
@@ -3065,10 +3616,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Base Mesh Preset Dropdown */}
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Mesh</span>
                             <select
                                 value={selectedShape}
@@ -3088,7 +3639,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         <button
                             type="button"
                             onClick={handleResetMesh}
-                            className="sb-3d-action-btn flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-300 border border-white/5 hover:border-red-500/30 text-[11px] font-medium transition-all"
+                            className="sb-3d-action-btn flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-red-950/40 text-zinc-400 hover:text-red-300 border border-white/5 hover:border-red-500/30 text-[11px] font-medium transition-all shrink-0"
                             title="Reset Mesh to Base Geometry"
                         >
                             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -3104,7 +3655,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 {toolMode === 'transform' && (
                     <>
                         {/* Manipulator Mode Buttons: Translate (W), Rotate (E), Scale (R) */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
+                        <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Manipulator</span>
                             <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
                                 {(
@@ -3129,10 +3680,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Coordinate Space: World vs Local */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
+                        <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Space</span>
                             <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
                                 {(['world', 'local'] as const).map(sp => (
@@ -3150,13 +3701,13 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Reset Origin Button */}
                         <button
                             type="button"
                             onClick={handleResetTransform}
-                            className="sb-3d-action-btn flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-white/10 text-[11px] font-medium transition-all"
+                            className="sb-3d-action-btn flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-white/10 text-[11px] font-medium transition-all shrink-0"
                             title="Reset Origin and Transform to (0,0,0)"
                         >
                             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -3171,17 +3722,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     </>
                 )}
 
-                {/* 3. View Mode Options */}
+                {/* 3. View Mode Options (Camera Mode + Shading Mode + Reset Camera) */}
                 {toolMode === 'view' && (
                     <>
                         {/* Camera Mode: Orbit vs FPS */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
+                        <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Camera</span>
                             <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
                                 {(
                                     [
-                                        { id: 'orbit', label: 'Orbit 3D' },
-                                        { id: 'fps', label: 'First-Person' }
+                                        { id: 'orbit', label: 'Orbit' },
+                                        { id: 'fps', label: 'FPS' }
                                     ] as const
                                 ).map(cm => (
                                     <button
@@ -3198,153 +3749,169 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Shading Mode */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
+                        <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                             <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Shading</span>
-                            <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
-                                {(['pbr', 'shaded', 'solid', 'wireframe'] as const).map(sm => (
-                                    <button
-                                        key={sm}
-                                        type="button"
-                                        onClick={() => setRenderMode(sm)}
-                                        className={`sb-3d-pill-btn px-2 py-0.5 rounded text-[11px] font-medium uppercase transition-all ${
-                                            renderMode === sm ? 'active' : ''
-                                        }`}
-                                    >
-                                        {sm}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
-
-                        {/* Diurnal Time-of-Day Atmosphere Presets */}
-                        <div className="sb-3d-pill-group-container flex items-center gap-1">
-                            <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Sky</span>
                             <div className="sb-3d-pill-group flex items-center gap-0.5 p-0.5 rounded-lg bg-zinc-900/80 border border-white/5">
                                 {(
                                     [
-                                        { id: 'dawn', label: 'Dawn' },
-                                        { id: 'golden_hour', label: 'Golden' },
-                                        { id: 'midday', label: 'Midday' },
-                                        { id: 'twilight', label: 'Twilight' },
-                                        { id: 'night', label: 'Night' },
-                                        { id: 'overcast', label: 'Cloud' }
+                                        { id: 'pbr', label: 'PBR' },
+                                        { id: 'shaded', label: 'Shaded' },
+                                        { id: 'solid', label: 'Solid' },
+                                        { id: 'wireframe', label: 'Wire' }
                                     ] as const
-                                ).map(presetItem => (
+                                ).map(sm => (
                                     <button
-                                        key={presetItem.id}
+                                        key={sm.id}
                                         type="button"
-                                        onClick={() => {
-                                            if (skyDomeModuleRef.current && skyDomeModuleRef.current.setPreset) {
-                                                skyDomeModuleRef.current.setPreset(presetItem.id);
-                                            }
-                                            mutateSceneData(prev => ({
-                                                ...prev,
-                                                environment: {
-                                                    ...prev.environment,
-                                                    lighting: presetItem.id,
-                                                    lightingPreset: presetItem.id,
-                                                    skybox: presetItem.id === 'night' ? 'night' : (presetItem.id === 'twilight' ? 'twilight' : (presetItem.id === 'golden_hour' ? 'golden_hour' : 'realistic-sky'))
-                                                },
-                                                features: {
-                                                    ...prev.features,
-                                                    atmosphericScattering: {
-                                                        ...(typeof prev.features?.atmosphericScattering === 'object' ? prev.features.atmosphericScattering : {}),
-                                                        enabled: true
-                                                    }
-                                                }
-                                            }), { operator: 'sb_setup_lighting', params: { preset: presetItem.id } });
-                                        }}
-                                        className="sb-3d-pill-btn px-2 py-0.5 rounded text-[10px] font-medium transition-all"
-                                        title={`${presetItem.label} Lighting & Physical Atmospheric Scattering`}
+                                        onClick={() => setRenderMode(sm.id)}
+                                        className={`sb-3d-pill-btn px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                                            renderMode === sm.id ? 'active' : ''
+                                        }`}
                                     >
-                                        {presetItem.label}
+                                        {sm.label}
                                     </button>
                                 ))}
                             </div>
                         </div>
 
-                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                        <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
 
                         {/* Reset Camera View Button */}
                         <button
                             type="button"
                             onClick={handleResetCamera}
-                            className="sb-3d-action-btn flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-white/10 text-[11px] font-medium transition-all"
+                            className="sb-3d-action-btn flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-white/10 text-[11px] font-medium transition-all shrink-0"
                             title="Reset Camera View Angle & Distance"
                         >
                             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
                                 <circle cx="12" cy="13" r="4" />
                             </svg>
-                            <span>Reset View</span>
+                            <span>Reset</span>
                         </button>
                     </>
                 )}
+            </div>
 
-                <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
+                {/* Top-Right Global Scene & Overlays HUD Bar */}
+                <div className="sb-3d-options-bar pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-200 shadow-2xl animate-fadeIn shrink-0 whitespace-nowrap">
+                    {/* Cinematic Lighting Rigs Selector */}
+                    <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
+                        <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Rig</span>
+                        <select
+                            value={sceneData.environment?.cinematicRig || 'three_point_studio'}
+                            onChange={(e) => {
+                                const nextRig = e.target.value;
+                                setSelectedLightingRig(nextRig);
+                                mutateSceneData(prev => ({
+                                    ...prev,
+                                    environment: {
+                                        ...prev.environment,
+                                        cinematicRig: nextRig
+                                    }
+                                }), { operator: 'sb_setup_lighting_rig', params: { preset: nextRig } });
+                            }}
+                            className="sb-3d-select bg-zinc-900/90 text-zinc-200 border border-white/10 rounded px-1.5 py-0.5 text-[10px] font-mono focus:outline-none focus:border-cyan-500/50"
+                            title="Cinematic & Studio Lighting Rig"
+                        >
+                            <option value="three_point_studio">3-Point Studio</option>
+                            <option value="rembrandt_chiaroscuro">Rembrandt Spot</option>
+                            <option value="paramount_glamour">Paramount</option>
+                            <option value="film_noir_split">Film Noir</option>
+                            <option value="golden_hour_sunset">Sunset</option>
+                            <option value="cyberpunk_dual_rim">Cyberpunk</option>
+                            <option value="torchlight_campfire">Campfire</option>
+                            <option value="high_key_product">High-Key</option>
+                        </select>
+                    </div>
 
-                {/* 3D Map Tile Ingestion Modal Trigger */}
-                <button
-                    type="button"
-                    onClick={() => {
-                        setIsMapTileModalOpen(!isMapTileModalOpen);
-                        if (isOutlinerOpen) setIsOutlinerOpen(false);
-                    }}
-                    className={`sb-3d-action-btn flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium transition-all ${
-                        isMapTileModalOpen
-                            ? 'bg-amber-600/30 text-amber-300 border-amber-500/50 shadow-md shadow-amber-900/30'
-                            : 'bg-zinc-900/90 text-amber-200/90 border-amber-500/30 hover:bg-amber-950/30 hover:text-amber-100 hover:border-amber-400/50'
-                    }`}
-                    title="Import 3D Google Photorealistic Map Tile & Clay Geometry"
-                >
-                    <span className="text-xs">🗺️</span>
-                    <span>3D Map Tiles</span>
-                </button>
-
-                <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10" />
-
-                {/* Scene Outliner Toggle */}
-                <button
-                    type="button"
-                    onClick={() => {
-                        refreshEntities();
-                        setIsOutlinerOpen(!isOutlinerOpen);
-                        if (isMapTileModalOpen) setIsMapTileModalOpen(false);
-                    }}
-                    className={`sb-3d-action-btn flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all ${
-                        isOutlinerOpen
-                            ? 'bg-blue-600/30 text-blue-300 border-blue-500/50 shadow-md shadow-blue-900/30'
-                            : 'bg-zinc-900/90 text-zinc-300 border-white/10 hover:bg-zinc-800'
-                    }`}
-                    title="Toggle Scene Outliner & Object Hierarchy"
-                >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 6H3M21 12H9M21 18H7" />
-                        <circle cx="5" cy="12" r="1" />
-                        <circle cx="4" cy="18" r="1" />
-                    </svg>
-                    <span>Outliner</span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-mono">
-                        {sceneEntities.length}
-                    </span>
-                    {selectedObjectName && (
-                        <span className="text-[10px] text-cyan-300 font-mono max-w-[90px] truncate bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
-                            {selectedObjectName}
+                    {/* Planckian Kelvin Color Temperature */}
+                    <div className="sb-3d-pill-group-container flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-zinc-900/80 border border-white/5 shrink-0" title="Physical Planckian Locus Kelvin Color Temperature (1850K - 9500K)">
+                        <span className="text-[10px] text-zinc-400 font-mono">
+                            {sceneData.environment?.lightingKelvin || 5600}K
                         </span>
+                        <input
+                            type="range"
+                            min={1850}
+                            max={9500}
+                            step={150}
+                            value={sceneData.environment?.lightingKelvin || 5600}
+                            onChange={(e) => {
+                                const nextK = Number(e.target.value);
+                                setLightingKelvin(nextK);
+                                mutateSceneData(prev => ({
+                                    ...prev,
+                                    environment: {
+                                        ...prev.environment,
+                                        lightingKelvin: nextK
+                                    }
+                                }), { operator: 'sb_setup_lighting', params: { kelvinTemperature: nextK } });
+                            }}
+                            className="w-12 h-1 bg-gradient-to-r from-amber-500 via-white to-blue-400 rounded-lg appearance-none cursor-pointer"
+                        />
+                    </div>
+
+                    {/* Scene Performance Budget Telemetry HUD Chip */}
+                    {sceneBudget && (
+                        <button
+                            type="button"
+                            onClick={() => setShowBudgetModal(prev => !prev)}
+                            className={`sb-3d-budget-btn flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] font-mono transition-all shrink-0 ${
+                                sceneBudget.withinWebBudget
+                                    ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/60'
+                                    : 'bg-amber-950/70 border-amber-500/40 text-amber-300 hover:bg-amber-900/60'
+                            }`}
+                            title="Click to inspect real-time 3D Scene Budget Telemetry & Optimizations"
+                        >
+                            <span className={`w-1.5 h-1.5 rounded-full ${sceneBudget.withinWebBudget ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                            <span>{sceneBudget.totalTriangles.toLocaleString()} tris</span>
+                            <span className="opacity-50">|</span>
+                            <span>{sceneBudget.estimatedFps} FPS</span>
+                        </button>
                     )}
-                </button>
+
+                    <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
+
+                    {/* Scene Outliner Toggle */}
+                    <button
+                        type="button"
+                        onClick={() => {
+                            refreshEntities();
+                            setIsOutlinerOpen(!isOutlinerOpen);
+                        }}
+                        className={`sb-3d-action-btn flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-all shrink-0 ${
+                            isOutlinerOpen
+                                ? 'bg-blue-600/30 text-blue-300 border-blue-500/50 shadow-md shadow-blue-900/30'
+                                : 'bg-zinc-900/90 text-zinc-300 border-white/10 hover:bg-zinc-800'
+                        }`}
+                        title="Toggle Scene Outliner & Object Hierarchy"
+                    >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 6H3M21 12H9M21 18H7" />
+                            <circle cx="5" cy="12" r="1" />
+                            <circle cx="4" cy="18" r="1" />
+                        </svg>
+                        <span>Outliner</span>
+                        <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-mono">
+                            {sceneEntities.length}
+                        </span>
+                        {selectedObjectName && (
+                            <span className="text-[10px] text-cyan-300 font-mono max-w-[90px] truncate bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                                {selectedObjectName}
+                            </span>
+                        )}
+                    </button>
+                </div>
             </div>
 
             {/* Floating Glassmorphic Scene Outliner HUD Panel */}
             {isOutlinerOpen && (
-                <div className="sb-3d-outliner-panel absolute top-16 right-4 z-30 w-72 max-h-[75vh] flex flex-col rounded-2xl bg-[#121216]/90 backdrop-blur-2xl border border-white/10 shadow-2xl p-3 animate-fadeIn text-zinc-200 pointer-events-auto select-none">
+                <div className="sb-3d-outliner-panel absolute top-16 right-4 z-30 w-72 max-h-[calc(100%-5rem)] flex flex-col rounded-2xl bg-[#121216]/95 backdrop-blur-2xl border border-white/10 shadow-2xl p-3 animate-fadeIn text-zinc-200 pointer-events-auto select-none">
                     {/* Header */}
-                    <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                    <div className="flex items-center justify-between pb-2 border-b border-white/10 shrink-0">
                         <div className="flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
                             <span className="text-xs font-semibold text-white tracking-wide uppercase">Scene Outliner</span>
@@ -3361,7 +3928,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     </div>
 
                     {/* Filter Input */}
-                    <div className="my-2 relative">
+                    <div className="my-2 relative shrink-0">
                         <input
                             type="text"
                             placeholder="Filter objects..."
@@ -3380,8 +3947,24 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         )}
                     </div>
 
+                    {/* Geospatial Creative Casting Info Card */}
+                    {sceneData.geoAnchor?.landmarkName && (
+                        <div className="p-2 mb-2 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex flex-col gap-1 text-[10px] shrink-0">
+                            <div className="flex items-center gap-1.5 text-emerald-300 font-medium">
+                                <span>📍</span>
+                                <span className="font-semibold text-emerald-200">Cast:</span>
+                                <span className="truncate">{sceneData.geoAnchor.landmarkName}</span>
+                            </div>
+                            {sceneData.geoAnchor.castingRationale && (
+                                <p className="text-zinc-300 text-[9.5px] leading-tight font-sans">
+                                    {sceneData.geoAnchor.castingRationale}
+                                </p>
+                            )}
+                        </div>
+                    )}
+
                     {/* Objects List */}
-                    <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar max-h-[50vh]">
+                    <div className="flex-1 overflow-y-auto min-h-0 space-y-1 pr-1 custom-scrollbar max-h-48">
                         {sceneEntities
                             .filter(e => !outlinerSearchQuery || e.name.toLowerCase().includes(outlinerSearchQuery.toLowerCase()))
                             .map(entity => {
@@ -3691,8 +4274,34 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             </>
                         )}
                     </button>
+
+                    {/* Vector Roadmap Quick-Launch */}
+                    <div className="mt-2.5 pt-2.5 border-t border-white/10 flex items-center justify-between">
+                        <span className="text-[10px] text-zinc-400">Vector Roadmap Reference</span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsMapTileModalOpen(false);
+                                setIsVectorRoadmapHUDOpen(true);
+                            }}
+                            className="sb-btn sb-btn-xs px-2 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-300 text-[10px] transition-all"
+                        >
+                            Open Roadmap HUD
+                        </button>
+                    </div>
                 </div>
             )}
+
+            {/* Vector Roadmap Reference Minimap & Ground Blueprint HUD */}
+            <VectorRoadmapHUD
+                config={sceneData.vectorRoadmap}
+                geoAnchor={sceneData.geoAnchor}
+                cameraHeading={cameraHeading}
+                onUpdateConfig={handleUpdateVectorRoadmap}
+                onResetCameraToAnchor={handleResetCamera}
+                isOpen={isVectorRoadmapHUDOpen}
+                onToggleOpen={() => setIsVectorRoadmapHUDOpen(!isVectorRoadmapHUDOpen)}
+            />
 
             {/* Ultra-Sleek Floating Bottom Scrubber Pill */}
             <div className="sb-3d-timeline-scrubber absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl select-none animate-fadeIn">
@@ -3720,6 +4329,154 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     {(currentTimeMs / 1000).toFixed(1)}s
                 </span>
             </div>
+
+            {/* Native C++20 3D Engine Studio Drawer */}
+            {showCppStudio && sceneData.cppGenerator?.sourceCode && (
+                <div
+                    className="sb-3d-cpp-studio-panel absolute top-4 right-4 bottom-16 w-96 max-w-[90vw] bg-[#0d0f17]/95 backdrop-blur-2xl border border-purple-500/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn"
+                    style={{ zIndex: 9999 }}
+                >
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-purple-950/30">
+                        <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
+                            <span className="text-xs font-semibold text-white tracking-wide">C++20 Spatial Engine</span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowCppStudio(false)}
+                            className="sb-btn sb-btn-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded-lg hover:bg-white/10 transition-colors"
+                        >
+                            ✕
+                        </button>
+                    </div>
+
+                    <div className="p-3 border-b border-white/10 bg-black/20 flex items-center justify-between text-xs font-mono">
+                        <span className="text-zinc-400 truncate">{sceneData.cppGenerator.filename || 'world_generator.cpp'}</span>
+                        <span className="text-purple-300 font-semibold">
+                            {sceneData.cppGenerator.vertexCount ? `${sceneData.cppGenerator.vertexCount.toLocaleString()} verts` : 'Procedural'}
+                        </span>
+                    </div>
+
+                    <div className="flex-1 min-h-0 p-3 overflow-auto font-mono text-[11px] leading-relaxed text-zinc-300 bg-black/40">
+                        <textarea
+                            value={sceneData.cppGenerator.sourceCode}
+                            onChange={(e) => {
+                                const newCode = e.target.value;
+                                setSceneData(prev => ({
+                                    ...prev,
+                                    cppGenerator: prev.cppGenerator ? { ...prev.cppGenerator, sourceCode: newCode } : undefined
+                                }));
+                            }}
+                            className="w-full h-full bg-transparent resize-none border-none outline-none font-mono text-[11px] text-zinc-200 leading-relaxed"
+                            spellCheck={false}
+                        />
+                    </div>
+
+                    {cppCompilationLog && (
+                        <div className="px-3 py-2 bg-black/70 border-t border-white/10 text-[10px] font-mono text-zinc-300 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                            {cppCompilationLog}
+                        </div>
+                    )}
+
+                    <div className="p-3 border-t border-white/10 bg-[#090b10] flex items-center justify-between text-[11px] text-zinc-400">
+                        <button
+                            type="button"
+                            disabled={isCompilingCpp}
+                            onClick={handleCompileCpp}
+                            className="sb-btn sb-btn-xs px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg shadow-sm flex items-center gap-1.5 transition-all disabled:opacity-50"
+                        >
+                            {isCompilingCpp ? (
+                                <>
+                                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    <span>Compiling...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>⚡ Compile & Stream GLB</span>
+                                </>
+                            )}
+                        </button>
+                        <span className={sceneData.cppGenerator?.glbBase64 ? "text-emerald-400 font-medium" : "text-amber-400"}>
+                            {sceneData.cppGenerator?.glbBase64 ? "● GLB Active" : "○ Ready to Compile"}
+                        </span>
+                    </div>
+                </div>
+            )}
+
+            {/* Real-time Lightweight Scene Budget Telemetry HUD Modal */}
+            {showBudgetModal && sceneBudget && (
+                <div
+                    className="sb-3d-budget-panel pointer-events-auto absolute top-14 right-4 z-50 w-80 bg-[#0f111a]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-4 text-zinc-200 animate-fadeIn select-none"
+                >
+                    <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                        <div className="flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${sceneBudget.withinWebBudget ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] animate-pulse'}`} />
+                            <span className="text-xs font-semibold uppercase tracking-wider text-white">Scene Performance Budget</span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowBudgetModal(false)}
+                            className="sb-btn sb-btn-xs text-zinc-400 hover:text-white px-1.5 py-0.5 rounded hover:bg-white/10"
+                        >
+                            ✕
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 my-3 font-mono text-xs">
+                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <div className="text-[10px] text-zinc-400 uppercase">Triangles</div>
+                            <div className="text-sm font-semibold text-white">{sceneBudget.totalTriangles.toLocaleString()}</div>
+                            <div className="text-[9px] text-zinc-500">{sceneBudget.totalVertices.toLocaleString()} verts</div>
+                        </div>
+                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <div className="text-[10px] text-zinc-400 uppercase">Est. FPS</div>
+                            <div className={`text-sm font-semibold ${sceneBudget.withinWebBudget ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {sceneBudget.estimatedFps} FPS
+                            </div>
+                            <div className="text-[9px] text-zinc-500">{sceneBudget.estimatedFrameTimeMs}ms / frame</div>
+                        </div>
+                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <div className="text-[10px] text-zinc-400 uppercase">Active Lights</div>
+                            <div className="text-sm font-semibold text-cyan-300">{sceneBudget.lightCount}</div>
+                            <div className="text-[9px] text-zinc-500">{sceneBudget.shadowCasters} shadow casters</div>
+                        </div>
+                        <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <div className="text-[10px] text-zinc-400 uppercase">Meshes / Draws</div>
+                            <div className="text-sm font-semibold text-purple-300">{sceneBudget.meshCount}</div>
+                            <div className="text-[9px] text-zinc-500">GPU passes</div>
+                        </div>
+                    </div>
+
+                    {sceneBudget.recommendations.length > 0 && (
+                        <div className="my-2 p-2 rounded-lg bg-amber-950/30 border border-amber-500/20 text-[10px] text-amber-200/90 flex flex-col gap-1">
+                            <span className="font-semibold text-amber-300">Optimization Advice:</span>
+                            {sceneBudget.recommendations.map((rec, i) => (
+                                <span key={i} className="leading-snug">• {rec}</span>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between text-xs">
+                        <span className={`text-[10px] font-mono ${sceneBudget.withinWebBudget ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {sceneBudget.withinWebBudget ? '✓ 60 FPS Target Achieved' : '⚠ High GPU Load'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const engine = createOperatorEngine(sceneData);
+                                if (stackRef.current?.scene) {
+                                    engine.attachThreeScene(stackRef.current.scene);
+                                    engine.dispatch('sb_optimize_light_budget', { autoApply: true, maxShadowCasters: 2 });
+                                    refreshSceneBudget();
+                                }
+                            }}
+                            className="sb-btn sb-btn-xs px-2 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-200 text-[10px] rounded font-mono"
+                        >
+                            Auto-Optimize
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

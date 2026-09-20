@@ -76,7 +76,7 @@ async function runCursorSettingsPageTests() {
     // -------------------------------------------------------------
     // Test 4: General Tab Grouped Settings Cards & Controls
     // -------------------------------------------------------------
-    assert.ok(settingsSource.includes('Cursor Account'), 'General tab must contain "Cursor Account" row');
+    assert.ok(settingsSource.includes('Scratchbox Account') || settingsSource.includes('Cursor Account'), 'General tab must contain account row');
     assert.ok(settingsSource.includes('Startup'), 'General tab must contain "Startup" group header');
     assert.ok(settingsSource.includes('Tips'), 'Startup group must contain "Tips" toggle');
     assert.ok(settingsSource.includes('Window Restoration'), 'Startup group must contain "Window Restoration" dropdown');

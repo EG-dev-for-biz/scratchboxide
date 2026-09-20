@@ -10,9 +10,9 @@
 import * as React from 'react';
 import { ChatSession, StudioSettingsTab, WorkspaceFileType, getActiveUserName } from '../canvas-types';
 import { initialsOf } from '../state/studio-defaults';
-import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings } from '../canvas-icons';
+import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFilm, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings, IconSparkles } from '../canvas-icons';
 import { ProjectItem } from '../ProjectsModal';
-import { POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
+import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
 
 export function getSessionIcon(session?: ChatSession): React.ReactElement | null {
@@ -33,6 +33,8 @@ export function getSessionIcon(session?: ChatSession): React.ReactElement | null
             return <IconAutomations size={11} className="text-emerald-400" strokeWidth={1.8} />;
         case '3d':
             return <Icon3D size={11} className="text-rose-400" strokeWidth={1.8} />;
+        case 'video':
+            return <IconFilm size={11} className="text-pink-400" strokeWidth={1.8} />;
         default:
             return null;
     }
@@ -45,6 +47,7 @@ export interface WorkspaceSidebarProps {
     sessions: ChatSession[];
     currentSessionId: string | undefined;
     isSidebarOpen: boolean;
+    setIsSidebarOpen: React.Dispatch<React.SetStateAction<boolean>>;
     handleCreateNewWorkspace: (workspaceName?: string, customPath?: string) => Promise<void>;
     onCreateWorkspaceFile: (type: WorkspaceFileType) => void;
     handleDeleteSession: (sessionId: string, e: React.MouseEvent) => void;
@@ -59,6 +62,7 @@ export interface WorkspaceSidebarProps {
     newWorkspaceInputName: string;
     setNewWorkspaceInputName: React.Dispatch<React.SetStateAction<string>>;
     onFileClick: (filePath: string, fileName: string) => void;
+    onOpenDemos?: () => void;
 }
 
 /**
@@ -67,15 +71,37 @@ export interface WorkspaceSidebarProps {
  */
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
     const activeUserName = getActiveUserName();
-    const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
+    const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick, onOpenDemos } = props;
 
-    // Cursor-Style Sidebar Layout & Navigation State
+    // Scratchbox Studio Sidebar Layout & Navigation State
     const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
     const [isSidebarSearchOpen, setIsSidebarSearchOpen] = React.useState<boolean>(false);
     const [isWorkspacesExpanded, setIsWorkspacesExpanded] = React.useState<boolean>(true);
     const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = React.useState<Record<string, boolean>>({});
     const [showAddFileMenu, setShowAddFileMenu] = React.useState<boolean>(false);
     const [sidebarViewMode, setSidebarViewMode] = React.useState<'threads' | 'explorer'>('threads');
+    const [serverTree, setServerTree] = React.useState<FileTreeNode[] | null>(null);
+
+    React.useEffect(() => {
+        let isMounted = true;
+        const fetchTree = async () => {
+            try {
+                const rootParam = activeWorkspace.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+                const res = await fetch(`/workspace/files${rootParam}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success && Array.isArray(data.files) && data.files.length > 0 && isMounted) {
+                        setServerTree(data.files);
+                    }
+                }
+            } catch {
+                // Ignore network error; fallback to static trees
+            }
+        };
+        fetchTree();
+        return () => { isMounted = false; };
+    }, [activeWorkspace.path, activeWorkspace.id]);
+
     const isWorkspaceCollapsed = (workspaceId: string): boolean => {
         return !!collapsedWorkspaceIds[workspaceId];
     };
@@ -103,14 +129,69 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
         return () => window.removeEventListener('click', handleGlobalClick);
     }, [showAddFileMenu]);
 
+    const handleWindowClose = React.useCallback(() => {
+        const desktop = (window as any).scratchboxDesktop;
+        if (desktop?.close) {
+            desktop.close();
+        } else if (window.opener) {
+            window.close();
+        } else {
+            console.log('[WorkspaceSidebar] Window close requested');
+        }
+    }, []);
+
+    const handleWindowMinimize = React.useCallback(() => {
+        const desktop = (window as any).scratchboxDesktop;
+        if (desktop?.minimize) {
+            desktop.minimize();
+        } else {
+            setIsSidebarOpen(false);
+        }
+    }, [setIsSidebarOpen]);
+
+    const handleWindowMaximize = React.useCallback(() => {
+        const desktop = (window as any).scratchboxDesktop;
+        if (desktop?.maximize) {
+            desktop.maximize();
+        } else if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+        } else {
+            document.documentElement.requestFullscreen().catch(() => {});
+        }
+    }, []);
+
     return (
     <aside className={`sb-chatgpt-sidebar ${isSidebarOpen ? 'sb-sidebar-open' : 'sb-sidebar-collapsed'}`}>
         {/* Sidebar Top Controls: Window Traffic Lights & Navigation */}
         <div className="sb-sidebar-top-header" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div className="sb-mac-traffic-lights" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span className="sb-traffic-light sb-tl-close" />
-                <span className="sb-traffic-light sb-tl-min" />
-                <span className="sb-traffic-light sb-tl-max" />
+                <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Close window"
+                    className="sb-traffic-light sb-tl-close"
+                    onClick={handleWindowClose}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowClose(); }}
+                    title="Close Window"
+                />
+                <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Minimize window"
+                    className="sb-traffic-light sb-tl-min"
+                    onClick={handleWindowMinimize}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMinimize(); }}
+                    title="Minimize Window"
+                />
+                <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Maximize window"
+                    className="sb-traffic-light sb-tl-max"
+                    onClick={handleWindowMaximize}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMaximize(); }}
+                    title="Maximize Window"
+                />
             </div>
             <div className="flex items-center gap-1">
                 <button
@@ -144,7 +225,18 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
             </div>
         </div>
 
-        {/* Primary Cursor-Style Navigation Actions */}
+        {/* Scratchbox Studio Brand Header */}
+        <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid rgba(128,128,128,0.15)', marginBottom: '8px' }}>
+            <div style={{ width: '28px', height: '28px', minWidth: '28px', borderRadius: '8px', background: '#18181b', border: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3px', overflow: 'hidden', boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>
+                <img src="/icons/ScratchboxIDE.png" alt="Scratchbox Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'inherit', letterSpacing: '-0.02em', lineHeight: '1.2' }}>Scratchbox IDE</span>
+                <span style={{ fontSize: '11px', opacity: 0.6, fontWeight: 500, lineHeight: '1.2' }}>Generative Studio 2.0</span>
+            </div>
+        </div>
+
+        {/* Primary Scratchbox Studio Navigation Actions */}
         <div className="sb-sidebar-nav-list">
             <button
                 type="button"
@@ -157,6 +249,24 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                 </span>
                 <span className="sb-nav-label">New Chat</span>
             </button>
+
+            {onOpenDemos && (
+                <button
+                    type="button"
+                    className="sb-sidebar-nav-row sb-sidebar-nav-demos"
+                    onClick={onOpenDemos}
+                    title="Preloaded Showcase Demos (3D Engine, VFX NLE, AI Graph, Breakout Sandbox)"
+                    style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)' }}
+                >
+                    <span className="sb-nav-icon text-amber-400">
+                        <IconSparkles size={14} strokeWidth={1.8} />
+                    </span>
+                    <span className="sb-nav-label" style={{ color: '#fbbf24', fontWeight: 600 }}>Showcase Demos</span>
+                    <span style={{ marginLeft: 'auto', fontSize: '9px', fontWeight: 700, background: '#f59e0b', color: '#000000', padding: '1px 5px', borderRadius: '4px' }}>
+                        LIVE
+                    </span>
+                </button>
+            )}
 
             <button
                 type="button"
@@ -206,7 +316,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
             </div>
         )}
 
-        {/* Workspaces Explorer & Chat Hierarchy (Cursor Organization) */}
+        {/* Workspaces Explorer & Chat Hierarchy (Scratchbox Studio Organization) */}
         <div className="sb-sidebar-workspaces-section">
             <div className="sb-workspaces-header" onClick={() => setIsWorkspacesExpanded(!isWorkspacesExpanded)}>
                 <div className="sb-workspaces-title-group">
@@ -284,24 +394,6 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                             title="Open Folder from Disk"
                         >
                             Open...
-                        </button>
-                    </div>
-                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '6px', marginTop: '2px' }}>
-                        <div style={{ fontSize: '10px', color: 'var(--sb-text-tertiary, #71717a)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Test Folder</div>
-                        <button
-                            type="button"
-                            className="sb-dropdown-item"
-                            style={{ padding: '4px 6px', fontSize: '11px', borderRadius: '6px' }}
-                            onClick={() => {
-                                setShowNewWorkspaceMenu(false);
-                                handleCreateNewWorkspace('scratchbox-test-workspace');
-                            }}
-                        >
-                            <IconFolder size={12} className="text-blue-400" />
-                            <div className="sb-dropdown-item-text">
-                                <span className="sb-dropdown-item-title" style={{ fontSize: '11px' }}>scratchbox-test-workspace</span>
-                                <span className="sb-dropdown-item-sub" style={{ fontSize: '10px' }}>~/dev/scratchbox-test-workspace</span>
-                            </div>
                         </button>
                     </div>
                 </div>
@@ -422,6 +514,17 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                         <span className="sb-dropdown-item-sub">Interactive AI-controlled web canvas</span>
                                     </div>
                                 </button>
+                                <button
+                                    type="button"
+                                    className="sb-dropdown-item"
+                                    onClick={() => handleCreateWorkspaceFile('video')}
+                                >
+                                    <IconFilm size={13} className="text-pink-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">Video Timeline</span>
+                                        <span className="sb-dropdown-item-sub">Multi-track NLE & WebGL compositor</span>
+                                    </div>
+                                </button>
                             </div>
                         )}
                     </div>
@@ -430,7 +533,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                     {!isWorkspaceCollapsed(activeWorkspace.id) && (
                         sidebarViewMode === 'explorer' ? (
                             <div className="sb-workspace-explorer-tree animate-fadeIn" style={{ paddingLeft: '8px', paddingBottom: '8px' }}>
-                                <WorkspaceFileTree nodes={activeWorkspace.id === 'proj-3dpose' ? POSE_3D_TREE : SCRATCHBOX_TREE} onFileClick={onFileClick} />
+                                <WorkspaceFileTree nodes={serverTree || (activeWorkspace.id === 'proj-3dpose' ? POSE_3D_TREE : SCRATCHBOX_TREE)} onFileClick={onFileClick} />
                             </div>
                         ) : (
                             <div className="sb-workspace-threads-list animate-fadeIn">
@@ -438,7 +541,8 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                     .filter(s => (s.workspaceId === activeWorkspace.id || (!s.workspaceId && activeWorkspace.id === 'proj-scratchbox-ide')) && (!sidebarSearchQuery || s.title.toLowerCase().includes(sidebarSearchQuery.toLowerCase())))
                                     .map((s, idx) => {
                                         const isSelected = currentSessionId === s.id;
-                                        const relTime = s.relativeTime || (idx === 0 ? '8m' : idx === 1 ? '47m' : idx === 2 ? '1h' : '4h');
+                                        const rawTime = s.relativeTime || (idx === 0 ? '8m' : idx === 1 ? '47m' : idx === 2 ? '1h' : '4h');
+                                        const relTime = rawTime === 'Just now' ? 'now' : rawTime.replace(' ago', '');
                                         return (
                                             <div
                                                 key={`ws-active-${s.id}`}
@@ -541,7 +645,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                                                         <span className="sb-ws-thread-title">{s.title}</span>
                                                     </div>
                                                     <div className="sb-ws-thread-right">
-                                                        <span className="sb-history-time-badge">{s.relativeTime || '2h'}</span>
+                                                        <span className="sb-history-time-badge">{(s.relativeTime === 'Just now' ? 'now' : (s.relativeTime || '2h')).replace(' ago', '')}</span>
                                                         <button
                                                             type="button"
                                                             className="sb-history-item-delete"

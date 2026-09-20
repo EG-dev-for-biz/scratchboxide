@@ -62,6 +62,8 @@ import { stableProjectArtifactId } from '../../common/project-artifact-graph-pro
 import { SettingsModal } from './SettingsModal';
 import { DEFAULT_RECENT_PROJECTS, ProjectItem } from './ProjectsModal';
 import { SpotlightLauncherModal } from './SpotlightLauncherModal';
+import { ShowcaseDemosModal } from './demos/ShowcaseDemosModal';
+import { ShowcaseDemoItem } from './demos/preloadedDemos';
 import { AutomationsModal } from './AutomationsModal';
 export { AutomationsModal };
 import { GoogleDriveConnectModal } from './GoogleDriveConnectModal';
@@ -161,6 +163,7 @@ import { StudioTopBar, StudioTopBarProps } from './studio/StudioTopBar';
 import { ArtifactStage, ArtifactStageProps } from './studio/ArtifactStage';
 import { useWorkspaceGraphCoordinator } from './studio/useWorkspaceGraphCoordinator';
 import { useResolvedWorkspaceRoot } from './hooks/useResolvedWorkspaceRoot';
+import { useComposerGitEnv } from './hooks/useComposerGitEnv';
 import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
 import { useArtifactSync } from './hooks/useArtifactSync';
@@ -287,6 +290,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const isSpotlightOpen = modalStack.includes('spotlight');
     const isSettingsOpen = modalStack.includes('settings');
     const isGoogleDriveOpen = modalStack.includes('google-drive');
+    const isDemosOpen = modalStack.includes('demos');
     const [globalToast, setGlobalToast] = React.useState<{ text: string; icon: string } | undefined>(undefined);
 
     const showToast = React.useCallback((text: string, icon: string = '') => {
@@ -317,6 +321,34 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const [stageLayoutMode, setStageLayoutMode] = React.useState<StageLayoutMode>('single');
     const [docReadOnly, setDocReadOnly] = React.useState<boolean>(false);
     const [documentPaneState, setDocumentPaneState] = React.useState<'split' | 'collapsed' | 'expanded'>('split');
+    const [splitRatio, setSplitRatio] = React.useState<number>(0.382); // Golden ratio ~38.2% chat, 61.8% stage
+    const [isDraggingSplitter, setIsDraggingSplitter] = React.useState<boolean>(false);
+    const splitContainerRef = React.useRef<HTMLDivElement | null>(null);
+
+    React.useEffect(() => {
+        if (!isDraggingSplitter) return;
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!splitContainerRef.current) return;
+            const rect = splitContainerRef.current.getBoundingClientRect();
+            if (rect.width <= 0) return;
+            const newRatio = (e.clientX - rect.left) / rect.width;
+            const clampedRatio = Math.max(0.22, Math.min(0.65, newRatio));
+            setSplitRatio(clampedRatio);
+        };
+        const handleMouseUp = () => {
+            setIsDraggingSplitter(false);
+        };
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        return () => {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isDraggingSplitter]);
 
     const layoutModeDeps: UseLayoutModeSwitchDeps = { activeArtifact, artifactHistory, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setDocumentPaneState, setLayoutMode, showToast, skills };
     const { handleSwitchMode } = useLayoutModeSwitch(layoutModeDeps);
@@ -331,8 +363,15 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
 
     // Terminal Error Capture & AI Debug Bridge
-    const [activeTerminalError, setActiveTerminalError] = React.useState<TerminalExecutionError | undefined>(undefined);
-    const [showTerminalErrorToast, setShowTerminalErrorToast] = React.useState<boolean>(false);
+    const [terminalErrorState, setTerminalErrorState] = React.useState<{ error?: TerminalExecutionError; showToast: boolean }>({ showToast: false });
+    const activeTerminalError = terminalErrorState.error;
+    const showTerminalErrorToast = terminalErrorState.showToast;
+    const setActiveTerminalError = React.useCallback((error?: TerminalExecutionError | ((prev?: TerminalExecutionError) => TerminalExecutionError | undefined)) => {
+        setTerminalErrorState(prev => ({ ...prev, error: typeof error === 'function' ? error(prev.error) : error }));
+    }, []);
+    const setShowTerminalErrorToast = React.useCallback((showToast: boolean | ((prev: boolean) => boolean)) => {
+        setTerminalErrorState(prev => ({ ...prev, showToast: typeof showToast === 'function' ? showToast(prev.showToast) : showToast }));
+    }, []);
 
     // Mock/Live Workspace file list & git status for @file / @git autocomplete
     const workspaceFilesList = DEFAULT_WORKSPACE_FILES;
@@ -341,13 +380,32 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const [workspaces, setWorkspaces] = React.useState<ProjectItem[]>(DEFAULT_RECENT_PROJECTS);
     const [activeWorkspace, setActiveWorkspace] = React.useState<ProjectItem>(DEFAULT_RECENT_PROJECTS[0]);
-    const [showNewWorkspaceMenu, setShowNewWorkspaceMenu] = React.useState<boolean>(false);
-    const [showComposerWorkspaceMenu, setShowComposerWorkspaceMenu] = React.useState<boolean>(false);
+    const [workspaceMenuOpen, setWorkspaceMenuOpen] = React.useState<{ newWs: boolean; composerWs: boolean }>({ newWs: false, composerWs: false });
+    const showNewWorkspaceMenu = workspaceMenuOpen.newWs;
+    const setShowNewWorkspaceMenu = React.useCallback((val: boolean | ((p: boolean) => boolean)) => {
+        setWorkspaceMenuOpen(prev => ({ ...prev, newWs: typeof val === 'function' ? val(prev.newWs) : val }));
+    }, []);
+    const showComposerWorkspaceMenu = workspaceMenuOpen.composerWs;
+    const setShowComposerWorkspaceMenu = React.useCallback((val: boolean | ((p: boolean) => boolean)) => {
+        setWorkspaceMenuOpen(prev => ({ ...prev, composerWs: typeof val === 'function' ? val(prev.composerWs) : val }));
+    }, []);
     const [newWorkspaceInputName, setNewWorkspaceInputName] = React.useState<string>('');
     useResolvedWorkspaceRoot(activeWorkspace, setActiveWorkspace, setWorkspaces);
 
+    const {
+        currentBranch,
+        gitBranches,
+        showGitBranchMenu,
+        setShowGitBranchMenu,
+        executionEnvironment,
+        setExecutionEnvironment,
+        showEnvironmentMenu,
+        setShowEnvironmentMenu,
+        handleCheckoutBranch
+    } = useComposerGitEnv({ activeWorkspace, showToast });
+
     const handleCreateNewWorkspace = React.useCallback(async (workspaceName?: string, customPath?: string) => {
-        const rawName = (workspaceName || newWorkspaceInputName || 'scratchbox-test-workspace').trim();
+        const rawName = (workspaceName || newWorkspaceInputName || 'new-workspace').trim();
         if (!rawName) return;
 
         const cleanName = rawName.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
@@ -539,6 +597,74 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setSessions, showToast, stageLayoutMode });
     const { syncSandboxSaveToMarkdown, triggerGoogleDocsExport, triggerGoogleDriveSave, triggerMarkdownExport } = useArtifactExports({ activeArtifact, artifactHistory, handleOpenInAppBrowser, handleUpdateArtifact, openModal, showToast });
 
+    // Cross-Primitive Event Listeners (Media cards -> 3D scene / Sandbox / Timeline / Composer)
+    React.useEffect(() => {
+        const handleOpenPrimitive = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.type) {
+                if (detail.forceNew) {
+                    handleCreateEmptyCanvas(detail.type, detail.title);
+                    return;
+                }
+                const existing = artifactHistory.find(a => a.type === detail.type);
+                if (existing) {
+                    setActiveArtifact(existing);
+                    setLayoutMode(resolveModeForArtifact(existing.type));
+                } else {
+                    handleCreateEmptyCanvas(detail.type, detail.title);
+                }
+            }
+        };
+        const handleInsertCode = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.snippet) {
+                if (activeArtifact?.type === 'live-code-sandbox') {
+                    const sandboxData = activeArtifact.data as LiveCodeSandboxData;
+                    const activeFile = sandboxData.files?.find(f => f.id === sandboxData.activeFileId) || sandboxData.files?.[0];
+                    if (activeFile) {
+                        const updatedFiles = sandboxData.files.map(f => f.id === activeFile.id ? { ...f, content: `${f.content}\n${detail.snippet}` } : f);
+                        handleUpdateArtifact({
+                            ...activeArtifact,
+                            data: { ...sandboxData, files: updatedFiles }
+                        });
+                    }
+                }
+                setLayoutMode('code');
+                showToast('Inserted code snippet into active sandbox', 'code');
+            }
+        };
+        const handleRemixPrompt = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.prompt) {
+                setInputValue(detail.prompt);
+                inputRef.current?.focus();
+                showToast('Remix prompt ready in Composer', 'sparkles');
+            }
+        };
+        const handleApply3DTexture = () => {
+            setLayoutMode('3d');
+            showToast('Texture applied to 3D Scene', 'cube');
+        };
+        const handleAddVideoToTimeline = () => {
+            setLayoutMode('video');
+            showToast('Video added to 4D Timeline', 'film');
+        };
+
+        window.addEventListener('scratchbox:open-primitive', handleOpenPrimitive);
+        window.addEventListener('scratchbox:insert-code', handleInsertCode);
+        window.addEventListener('scratchbox:remix-prompt', handleRemixPrompt);
+        window.addEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
+        window.addEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
+
+        return () => {
+            window.removeEventListener('scratchbox:open-primitive', handleOpenPrimitive);
+            window.removeEventListener('scratchbox:insert-code', handleInsertCode);
+            window.removeEventListener('scratchbox:remix-prompt', handleRemixPrompt);
+            window.removeEventListener('scratchbox:apply-3d-texture', handleApply3DTexture);
+            window.removeEventListener('scratchbox:add-video-to-timeline', handleAddVideoToTimeline);
+        };
+    }, [activeArtifact, artifactHistory, handleCreateEmptyCanvas, handleUpdateArtifact, setActiveArtifact, setLayoutMode, setInputValue, showToast]);
+
 
 
     const saveCurrentSessionViewState = React.useCallback(() => {
@@ -575,7 +701,20 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         if (activeArtifact && !list.some(a => a.id === activeArtifact.id)) {
             list.unshift(activeArtifact);
         }
-        return list;
+        // Deduplicate tabs by type and title to prevent identical runs from cluttering the tab strip
+        const seen = new Set<string>();
+        const deduped: typeof list = [];
+        for (const art of list) {
+            const key = art.title ? `${art.type}::${art.title.trim().toLowerCase()}` : art.id;
+            if (activeArtifact?.id === art.id) {
+                deduped.push(art);
+                seen.add(key);
+            } else if (!seen.has(key)) {
+                deduped.push(art);
+                seen.add(key);
+            }
+        }
+        return deduped;
     }, [artifactHistory, activeArtifact]);
 
     const getArtifactIcon = React.useCallback((type: PrimitiveType | string) => {
@@ -643,6 +782,28 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         showToast('Created new Live Code Preview tab', '⚡');
     }, [showToast]);
 
+    const handleLaunchDemo = React.useCallback((demo: ShowcaseDemoItem) => {
+        closeModal('demos');
+
+        setArtifactHistory(prev => {
+            const exists = prev.some(a => a.id === demo.artifact.id);
+            if (exists) return prev;
+            return [demo.artifact, ...prev];
+        });
+        setActiveArtifact(demo.artifact);
+        setLayoutMode(resolveModeForArtifact(demo.artifact.type));
+
+        const introMsg: ChatMessage = {
+            id: `msg-demo-${Date.now()}`,
+            sender: 'assistant',
+            text: `### 🚀 Showcase Demo Loaded: **${demo.title}**\n\n${demo.introMessage}\n\n* **Category**: ${demo.categoryLabel}\n* **Pipeline / Canvas Type**: \`${demo.artifact.type}\`\n* **Tags**: ${demo.tags.map(t => '`' + t + '`').join(', ')}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            artifacts: [demo.artifact]
+        };
+        setMessages(prev => [...prev, introMsg]);
+        showToast(`Mounted demo: ${demo.title}`, '✨');
+    }, [closeModal, resolveModeForArtifact, setActiveArtifact, setArtifactHistory, setMessages, showToast]);
+
     const activeSandboxData = activeArtifact?.type === 'live-code-sandbox' ? (activeArtifact.data as LiveCodeSandboxData) : null;
 
     const handleSetSandboxViewMode = React.useCallback((mode: 'code' | 'split' | 'preview') => {
@@ -656,6 +817,18 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             };
             setActiveArtifact(updated);
             setArtifactHistory(prev => prev.map(a => a.id === updated.id ? updated : a));
+        } else if (activeArtifact) {
+            const morphed = morphArtifact(activeArtifact, 'live-code-sandbox');
+            const updated = {
+                ...morphed,
+                data: {
+                    ...(morphed.data as LiveCodeSandboxData),
+                    viewMode: mode
+                }
+            };
+            setActiveArtifact(updated);
+            setArtifactHistory(prev => [...prev, updated]);
+            setLayoutMode('code');
         }
     }, [activeArtifact]);
 
@@ -802,11 +975,14 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         recordArtifactVersion,
         attachedDataFile,
         setAttachedDataFile,
+        attachedContextMentions,
+        setAttachedContextMentions,
         showToast,
         graphControllerRef,
         setGraphEpoch,
         activeWorkspace,
-        persistSessionsImmediately
+        persistSessionsImmediately,
+        aiInteractionMode
     });
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
@@ -876,6 +1052,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         sessions,
         currentSessionId,
         isSidebarOpen,
+        setIsSidebarOpen,
         handleCreateNewWorkspace,
         handleDeleteSession,
         handleNewChat,
@@ -889,7 +1066,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         newWorkspaceInputName,
         setNewWorkspaceInputName,
         onCreateWorkspaceFile: handleCreateWorkspaceFile,
-        onFileClick: handleFileClick
+        onFileClick: handleFileClick,
+        onOpenDemos: () => openModal('demos')
     };
 
     const topBarProps: StudioTopBarProps = {
@@ -914,7 +1092,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         getCanvasReopenIcon,
         getCanvasReopenLabel,
         getCanvasReopenTabTitle,
-        showToast
+        showToast,
+        onOpenDemos: () => openModal('demos')
     };
 
     const artifactStageProps: ArtifactStageProps = {
@@ -1026,7 +1205,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 />
             )}
 
-            {/* Left Cursor-Style Sidebar */}
+            {/* Left Scratchbox Studio Sidebar */}
             <WorkspaceSidebar {...sidebarProps} />
 
             {/* Main Stage Workspace Area */}
@@ -1043,6 +1222,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                 {messages.length === 0 ? (
                                     /* Empty / New Chat State: Centered Hero & Streamlined Starters */
                                     <div className="sb-chat-empty-hero-container animate-fadeIn">
+                                        <div style={{ width: '64px', height: '64px', borderRadius: '18px', background: 'linear-gradient(135deg, #27272a 0%, #09090b 100%)', border: '1px solid rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', padding: '10px', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.35)', backdropFilter: 'blur(12px)' }}>
+                                            <img src="/icons/ScratchboxIDE.png" alt="Scratchbox Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'drop-shadow(0 2px 8px rgba(255,255,255,0.2))' }} />
+                                        </div>
                                         <div className="sb-chat-empty-hero-badge">
                                             <span className="sb-chat-empty-hero-dot" />
                                             <span>Scratchbox 2.0 Canvas</span>
@@ -1137,64 +1319,128 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                         </div>
                                     )}
 
-                                    <button
-                                        type="button"
-                                        className="sb-cursor-context-dropdown-btn"
-                                        title="Git Branch"
-                                    >
-                                        <span>main</span>
-                                        <IconChevronDown size={10} className="text-zinc-500" />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="sb-cursor-context-dropdown-btn"
-                                        title="Execution Environment"
-                                    >
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400">
-                                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                                            <line x1="8" y1="21" x2="16" y2="21" />
-                                            <line x1="12" y1="17" x2="12" y2="21" />
-                                        </svg>
-                                        <span>This Mac</span>
-                                        <IconChevronDown size={10} className="text-zinc-500" />
-                                    </button>
+                                    {/* Git Branch Dropdown */}
+                                    <div style={{ position: 'relative' }}>
+                                        <button
+                                            type="button"
+                                            className="sb-cursor-context-dropdown-btn"
+                                            title="Git Branch"
+                                            onClick={() => {
+                                                setShowGitBranchMenu(!showGitBranchMenu);
+                                                setShowEnvironmentMenu(false);
+                                                setShowComposerWorkspaceMenu(false);
+                                            }}
+                                        >
+                                            <span>{currentBranch}</span>
+                                            <IconChevronDown size={10} className="text-zinc-500" />
+                                        </button>
+                                        {showGitBranchMenu && (
+                                            <div
+                                                className="sb-dropdown-menu animate-fadeIn"
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '100%',
+                                                    left: 0,
+                                                    marginTop: '6px',
+                                                    minWidth: '180px',
+                                                    zIndex: 100,
+                                                    background: '#18181b',
+                                                    border: '1px solid #27272a',
+                                                    borderRadius: '8px',
+                                                    padding: '4px',
+                                                    boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+                                                }}
+                                            >
+                                                <div style={{ padding: '4px 8px', fontSize: '11px', color: '#71717a', fontWeight: 600 }}>SWITCH BRANCH</div>
+                                                {gitBranches.map(b => (
+                                                    <button
+                                                        key={b}
+                                                        type="button"
+                                                        className="sb-dropdown-item flex items-center justify-between"
+                                                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', background: b === currentBranch ? '#27272a' : 'transparent', textAlign: 'left', cursor: 'pointer' }}
+                                                        onClick={() => handleCheckoutBranch(b)}
+                                                    >
+                                                        <span style={{ fontSize: '12px', color: b === currentBranch ? '#60a5fa' : '#e4e4e7' }}>{b}</span>
+                                                        {b === currentBranch && <span style={{ fontSize: '10px', color: '#60a5fa' }}>✓</span>}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Execution Environment Dropdown */}
+                                    <div style={{ position: 'relative' }}>
+                                        <button
+                                            type="button"
+                                            className="sb-cursor-context-dropdown-btn"
+                                            title="Execution Environment"
+                                            onClick={() => {
+                                                setShowEnvironmentMenu(!showEnvironmentMenu);
+                                                setShowGitBranchMenu(false);
+                                                setShowComposerWorkspaceMenu(false);
+                                            }}
+                                        >
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-400">
+                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                                                <line x1="8" y1="21" x2="16" y2="21" />
+                                                <line x1="12" y1="17" x2="12" y2="21" />
+                                            </svg>
+                                            <span>{executionEnvironment}</span>
+                                            <IconChevronDown size={10} className="text-zinc-500" />
+                                        </button>
+                                        {showEnvironmentMenu && (
+                                            <div
+                                                className="sb-dropdown-menu animate-fadeIn"
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '100%',
+                                                    left: 0,
+                                                    marginTop: '6px',
+                                                    minWidth: '220px',
+                                                    zIndex: 100,
+                                                    background: '#18181b',
+                                                    border: '1px solid #27272a',
+                                                    borderRadius: '8px',
+                                                    padding: '4px',
+                                                    boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+                                                }}
+                                            >
+                                                <div style={{ padding: '4px 8px', fontSize: '11px', color: '#71717a', fontWeight: 600 }}>RUNTIME TARGET</div>
+                                                {[
+                                                    { id: 'This Mac', label: 'This Mac (Native)' },
+                                                    { id: 'Cloud Run', label: 'Cloud Run Container (GCP)' },
+                                                    { id: 'WebAssembly', label: 'WASM Sandbox (In-Browser)' },
+                                                    { id: 'Remote SSH', label: 'Remote Linux Cluster' }
+                                                ].map(env => (
+                                                    <button
+                                                        key={env.id}
+                                                        type="button"
+                                                        className="sb-dropdown-item flex items-center justify-between"
+                                                        style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', background: env.id === executionEnvironment ? '#27272a' : 'transparent', textAlign: 'left', cursor: 'pointer' }}
+                                                        onClick={() => {
+                                                            setExecutionEnvironment(env.id);
+                                                            setShowEnvironmentMenu(false);
+                                                            showToast(`Switched execution environment to "${env.label}"`);
+                                                        }}
+                                                    >
+                                                        <span style={{ fontSize: '12px', color: env.id === executionEnvironment ? '#34d399' : '#e4e4e7' }}>{env.label}</span>
+                                                        {env.id === executionEnvironment && <span style={{ fontSize: '10px', color: '#34d399' }}>✓</span>}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <Composer {...composerProps} inSplitPane={false} />
 
-                                {/* Quick Action Suggestion Pills & System Footer */}
+                                {/* System Footer Note */}
                                 {messages.length === 0 && (
-                                    <>
-                                        <div className="sb-cursor-hero-pills-row">
-                                            <button
-                                                type="button"
-                                                className="sb-cursor-hero-pill-btn"
-                                                onClick={() => {
-                                                    setAiInteractionMode('plan');
-                                                    setInputValue('Plan new architecture idea: ');
-                                                    inputRef.current?.focus();
-                                                }}
-                                            >
-                                                <span>Plan New Idea</span>
-                                                <span style={{ fontSize: '10px', opacity: 0.6 }}>⇧Tab</span>
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="sb-cursor-hero-pill-btn"
-                                                onClick={() => {
-                                                    handleSendMessage('Run autonomous multi-agent swarm task in background');
-                                                }}
-                                            >
-                                                <span>Multitask</span>
-                                            </button>
-                                        </div>
-
-                                        <div className="sb-cursor-hero-footer-note">
-                                            <span>Use</span>
-                                            <span className="sb-code-token">/create-rule</span>
-                                            <span>to control agent behavior through system-level instructions</span>
-                                        </div>
-                                    </>
+                                    <div className="sb-cursor-hero-footer-note">
+                                        <span>Use</span>
+                                        <span className="sb-code-token">/create-rule</span>
+                                        <span>to control agent behavior through system-level instructions</span>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -1203,11 +1449,15 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                         <div className="sb-fullwindow-canvas-container">
                             <div className="sb-surface-with-chat-container" style={{ display: 'flex', flexDirection: 'row', width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
                                 {/* Unified Side-by-Side Split View for all Canvas Primitives */}
-                                <div className="sb-canvas-split-container sb-document-split-container" style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
-                                    {/* Left Pane (45% width or 100% if collapsed, 0% if expanded) */}
+                                <div
+                                    ref={splitContainerRef}
+                                    className="sb-canvas-split-container sb-document-split-container"
+                                    style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}
+                                >
+                                    {/* Left Pane (splitRatio width or 100% if collapsed, 0% if expanded) */}
                                     {documentPaneState !== 'expanded' && (
                                         <div className="sb-canvas-split-left-pane sb-document-split-left-pane" style={{
-                                            width: documentPaneState === 'collapsed' ? '100%' : '45%',
+                                            width: documentPaneState === 'collapsed' ? '100%' : `${(splitRatio * 100).toFixed(2)}%`,
                                             height: '100%',
                                             display: 'flex',
                                             flexDirection: 'column',
@@ -1216,6 +1466,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             boxSizing: 'border-box',
                                             background: 'transparent',
                                             minWidth: 0,
+                                            flexShrink: 0
                                         }}>
                                             {/* Floating Right-Edge Tab to Reopen Canvas when Collapsed */}
                                             {documentPaneState === 'collapsed' && (
@@ -1284,8 +1535,37 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                         </div>
                                     )}
 
-                                    {/* Right Pane (55% width or 100% if expanded, 0% if collapsed) */}
+                                    {/* Draggable Hairline Split Resizer */}
+                                    {documentPaneState === 'split' && (
+                                        <div
+                                            className={`sb-canvas-split-resizer ${isDraggingSplitter ? 'dragging' : ''}`}
+                                            onMouseDown={e => {
+                                                e.preventDefault();
+                                                setIsDraggingSplitter(true);
+                                            }}
+                                            onDoubleClick={() => setSplitRatio(0.382)}
+                                            title="Drag to resize split pane · Double-click to reset (38/62 golden ratio)"
+                                        >
+                                            <div className="sb-canvas-resizer-line" />
+                                            <div className="sb-canvas-resizer-knob" />
+                                        </div>
+                                    )}
+
+                                    {/* Right Pane (expanded 100%, or flex-1 filling remaining stage) */}
                                     {documentPaneState !== 'collapsed' && <ArtifactStage {...artifactStageProps} />}
+
+                                    {/* Full-screen invisible drag capture overlay to prevent iframe / Three.js mouse trapping */}
+                                    {isDraggingSplitter && (
+                                        <div
+                                            style={{
+                                                position: 'fixed',
+                                                inset: 0,
+                                                zIndex: 99999,
+                                                cursor: 'col-resize',
+                                                userSelect: 'none'
+                                            }}
+                                        />
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -1336,6 +1616,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     closeModal('spotlight');
                     const s = sessions.find(sess => sess.id === sessId);
                     if (s) handleSelectSession(s);
+                }}
+                onOpenDemos={() => {
+                    closeModal('spotlight');
+                    openModal('demos');
                 }}
             />
 
@@ -1399,6 +1683,13 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     </div>
                 </div>
             )}
+
+            {/* Scratchbox Studio Preloaded Showcase Demos Modal */}
+            <ShowcaseDemosModal
+                isOpen={isDemosOpen}
+                onClose={() => closeModal('demos')}
+                onLaunchDemo={handleLaunchDemo}
+            />
 
             {/* Google Drive & Docs 1-Click Connector Modal */}
             <GoogleDriveConnectModal

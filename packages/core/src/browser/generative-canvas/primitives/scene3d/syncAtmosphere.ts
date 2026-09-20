@@ -13,18 +13,20 @@ import {
     createAerialPerspectiveEffect,
     createTerrainCloudShadows
 } from '../../services/atmosphere';
+import { buildThreeJsLightingRig } from './lightingRigs';
 import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types';
 import { removeAndDispose } from './types';
-
-const SKY_KEYWORDS = /sky|realistic|flight|aviation|atmosphere|cloud|plane|aircraft|jet|airplane/i;
-const SUNSET_KEYWORDS = /sunset|dusk|golden\s*hour/i;
-const GOD_RAY_KEYWORDS = /god\s*ray|light\s*shaft|crepuscular/i;
 
 export interface AtmosphereInput {
     skybox?: string;
     lighting?: string;
+    ambientIntensity?: number;
+    cinematicRig?: string;
+    lightingKelvin?: number;
     ground?: boolean;
-    /** Live scene title (state) and the incoming prop title/subtitle used for keyword hints. */
+    backgroundHex?: number;
+    fog?: boolean | { color?: number | string; density?: number };
+    /** Live scene title (state) and the incoming prop title/subtitle. */
     title?: string;
     dataTitle?: string;
     dataSubtitle?: string;
@@ -33,6 +35,7 @@ export interface AtmosphereInput {
     hasGeoCoordinates: boolean;
     has3DTiles: boolean;
     atmosphericScattering?: any;
+    atmosphere?: any;
     godRays?: any;
     terrainBiomes?: any;
 }
@@ -44,42 +47,67 @@ export interface AtmosphereFactories {
 }
 
 export interface AtmosphereClassification {
+    hasAtmosphere: boolean;
     isSkySkybox: boolean;
     isSunset: boolean;
     hasGodRays: boolean;
     hasBiomes: boolean;
     biomeType: string;
     backgroundHex: number;
+    effectiveAtmosphericScattering?: any;
 }
 
 export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassification {
     const worldBranch = (input.worldBranch || '').toLowerCase();
-    const isSkySkybox =
-        input.skybox === 'realistic-sky' ||
-        input.skybox === 'daylight' ||
-        input.skybox === 'blue-sky' ||
-        input.skybox === 'sky' ||
-        input.skybox === 'sunset' ||
-        !!input.atmosphericScattering ||
-        SKY_KEYWORDS.test(input.title || '') ||
-        SKY_KEYWORDS.test(input.dataTitle || '') ||
-        SKY_KEYWORDS.test(input.dataSubtitle || '');
 
-    const isSunset = input.skybox === 'sunset' || SUNSET_KEYWORDS.test(input.title || '') || SUNSET_KEYWORDS.test(input.dataTitle || '');
-    const hasGodRays = !!input.godRays || GOD_RAY_KEYWORDS.test(input.title || '') || GOD_RAY_KEYWORDS.test(input.dataTitle || '');
+    // Atmosphere is an explicit part of the headless build of the scene.
+    // There are NO keyword heuristic presets, and scenes do not receive atmosphere by default.
+    // A scene has atmosphere IF AND ONLY IF the headless scene data explicitly specifies
+    // atmosphericScattering or atmosphere configuration.
+    const atmoConfig = input.atmosphericScattering || input.atmosphere;
+    const hasAtmosphere = !!(
+        atmoConfig && (
+            atmoConfig === true ||
+            (typeof atmoConfig === 'object' && atmoConfig.enabled !== false)
+        )
+    );
+
+    const isSkySkybox = hasAtmosphere;
+    const isSunset = hasAtmosphere && (
+        input.skybox === 'sunset' ||
+        (typeof atmoConfig === 'object' && (
+            (atmoConfig.timeOfDay !== undefined && atmoConfig.timeOfDay >= 18 && atmoConfig.timeOfDay <= 20) ||
+            (atmoConfig.sunElevation !== undefined && atmoConfig.sunElevation <= 15)
+        ))
+    );
+    const hasGodRays = hasAtmosphere && !!input.godRays;
     const hasBiomes = !!input.terrainBiomes;
     const biomeType = (typeof input.terrainBiomes === 'object' && input.terrainBiomes && input.terrainBiomes.biomeType)
         ? input.terrainBiomes.biomeType
         : 'alpine';
 
-    let backgroundHex = isSunset ? 0x1e1b4b : (isSkySkybox ? 0x0284c7 : 0x0a0a0f);
-    if (!isSkySkybox) {
-        if (worldBranch === 'earth/cyberpunk') backgroundHex = 0x0f0a1c;
-        else if (worldBranch === 'earth/post-apocalypse') backgroundHex = 0x0c120e;
-        else if (worldBranch === 'earth/mars-colony-2150') backgroundHex = 0x2a1a15;
+    let backgroundHex = 0x0a0a0f;
+    if (hasAtmosphere) {
+        backgroundHex = isSunset ? 0x1e1b4b : 0x0284c7;
+    } else {
+        if (input.backgroundHex !== undefined) {
+            backgroundHex = input.backgroundHex;
+        } else if (input.skybox === 'clear_daylight' || input.skybox === 'daylight' || input.skybox === 'sky') {
+            backgroundHex = 0x1a2333;
+        } else if (worldBranch === 'earth/cyberpunk') {
+            backgroundHex = 0x0f0a1c;
+        } else if (worldBranch === 'earth/post-apocalypse') {
+            backgroundHex = 0x0c120e;
+        } else if (worldBranch === 'earth/mars-colony-2150') {
+            backgroundHex = 0x2a1a15;
+        }
     }
 
-    return { isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex };
+    const effectiveAtmosphericScattering = hasAtmosphere
+        ? (typeof atmoConfig === 'object' ? atmoConfig : { enabled: true })
+        : undefined;
+
+    return { hasAtmosphere, isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex, effectiveAtmosphericScattering };
 }
 
 /**
@@ -95,9 +123,10 @@ export function tintGridHelper(gridHelper: THREE.GridHelper, centreHex: number, 
     const c2 = new THREE.Color(lineHex);
     for (let i = 0; i <= divisions; i++) {
         const c = i === centre ? c1 : c2;
-        for (let v = 0; v < 4; v++) {
-            colors.setXYZ(i * 4 + v, c.r, c.g, c.b);
-        }
+        colors.setXYZ(i * 4 + 0, c.r, c.g, c.b);
+        colors.setXYZ(i * 4 + 1, c.r, c.g, c.b);
+        colors.setXYZ(i * 4 + 2, c.r, c.g, c.b);
+        colors.setXYZ(i * 4 + 3, c.r, c.g, c.b);
     }
     colors.needsUpdate = true;
 }
@@ -142,13 +171,32 @@ export function syncAtmosphere(
     const height = container.clientHeight || 450;
     const cls = classifyAtmosphere(input);
     const { isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex } = cls;
+    const isLargeScale = !!(input.has3DTiles || input.hasGeoCoordinates || (input.worldBranch || '').startsWith('earth'));
 
     scene.background = new THREE.Color(backgroundHex);
-    scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : (isSkySkybox ? 0xbae6fd : backgroundHex), isSkySkybox ? 0.005 : 0.015);
+    if (isSkySkybox) {
+        scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : 0xbae6fd, isLargeScale ? 0.0005 : 0.005);
+    } else if (input.fog) {
+        let fogColor = backgroundHex;
+        if (typeof input.fog === 'object' && input.fog.color !== undefined) {
+            try {
+                fogColor = typeof input.fog.color === 'string'
+                    ? new THREE.Color(input.fog.color).getHex()
+                    : Number(input.fog.color);
+            } catch {
+                fogColor = backgroundHex;
+            }
+        }
+        const defaultDensity = isLargeScale ? 0.0003 : 0.015;
+        const fogDensity = (typeof input.fog === 'object' && input.fog.density !== undefined) ? input.fog.density : defaultDensity;
+        scene.fog = new THREE.FogExp2(fogColor, fogDensity);
+    } else {
+        scene.fog = null;
+    }
 
-    // Grid: tint + visibility (hidden for sky, biome, geo-city and 3D-tile scenes).
+    // Grid: tint + visibility (grid is cleanly visible on non-atmospheric / studio scenes).
     tintGridHelper(gridHelper, isSkySkybox ? 0x93c5fd : 0x3f3f5a, isSkySkybox ? 0x60a5fa : 0x1f1f2c);
-    gridHelper.visible = !isSkySkybox && !hasBiomes && !input.has3DTiles && !input.hasGeoCoordinates;
+    gridHelper.visible = !isSkySkybox && !hasBiomes && !input.has3DTiles && !input.hasGeoCoordinates && input.ground !== false;
 
     const owned: THREE.Object3D[] = [];
     let skyDomeModule: any | null = null;
@@ -231,17 +279,45 @@ export function syncAtmosphere(
             owned.push(terrainFloor);
         }
     } else {
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.15);
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(15, 30, 10);
-        dirLight.castShadow = true;
-        const pointLight = new THREE.PointLight(0x00f6ff, 1.2, 50);
-        pointLight.position.set(0, 5, 0);
-        const glowLight = new THREE.DirectionalLight(0xff00dd, 0.45);
-        glowLight.position.set(-15, 20, -10);
-        for (const light of [ambientLight, dirLight, pointLight, glowLight]) {
-            scene.add(light);
-            owned.push(light);
+        const rigKey = input.cinematicRig || input.lighting;
+        if (rigKey && rigKey !== 'default') {
+            const rigLights = buildThreeJsLightingRig(rigKey, {
+                kelvin: input.lightingKelvin,
+                scale: isLargeScale ? 100 : 1.0,
+                isLargeScale
+            });
+            for (const light of rigLights) {
+                scene.add(light);
+                owned.push(light);
+            }
+
+            // For macro/geospatial/city scenes, ensure directional sunlight cascades across facades
+            if (isLargeScale) {
+                const hasDirectional = rigLights.some(l => (l as any).isDirectionalLight);
+                if (!hasDirectional) {
+                    const citySun = new THREE.DirectionalLight(0xfffaed, 2.2);
+                    citySun.name = 'city_geospatial_sun';
+                    citySun.position.set(300, 600, 400);
+                    scene.add(citySun);
+                    owned.push(citySun);
+                }
+            }
+        } else {
+            const ambientIntensity = typeof input.ambientIntensity === 'number'
+                ? input.ambientIntensity
+                : (input.lighting === 'daylight' ? 0.75 : 0.25);
+            const ambientLight = new THREE.AmbientLight(0xffffff, ambientIntensity);
+            const dirLight = new THREE.DirectionalLight(0xffffff, input.lighting === 'daylight' ? 1.2 : 0.8);
+            dirLight.position.set(15, 30, 10);
+            dirLight.castShadow = true;
+            const pointLight = new THREE.PointLight(0x00f6ff, 1.2, 50);
+            pointLight.position.set(0, 5, 0);
+            const glowLight = new THREE.DirectionalLight(0xff00dd, 0.45);
+            glowLight.position.set(-15, 20, -10);
+            for (const light of [ambientLight, dirLight, pointLight, glowLight]) {
+                scene.add(light);
+                owned.push(light);
+            }
         }
     }
 
@@ -253,8 +329,9 @@ export function syncAtmosphere(
         }
     }
 
-    // Galaxy starfield for space / night / cyberpunk skies
-    if (!isSkySkybox) {
+    // Galaxy starfield only for explicit space or night environments
+    const isSpaceOrNight = input.skybox === 'space-stars' || input.skybox === 'space' || input.worldBranch === 'earth/space' || input.worldBranch === 'space';
+    if (isSpaceOrNight) {
         starsMesh = createStarfield(scene);
     }
 

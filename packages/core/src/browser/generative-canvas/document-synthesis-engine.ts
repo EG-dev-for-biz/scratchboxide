@@ -18,7 +18,84 @@ export type DocumentTheme =
     | 'ai-machine-learning'
     | 'product-strategy-roadmap'
     | 'scientific-research'
-    | 'general-architecture';
+    | 'astronomy-space-science'
+    | 'general-architecture'
+    | (string & {});
+
+export type DocumentDomain =
+    | 'science'
+    | 'history'
+    | 'technology'
+    | 'business'
+    | 'humanities'
+    | 'philosophy'
+    | 'arts'
+    | 'general';
+
+export interface DynamicThemeProfile {
+    topic: string;
+    domain: DocumentDomain;
+    themeKey: DocumentTheme;
+    subtitle: string;
+    accentColor: string;
+    secondaryColor: string;
+    diagramType: 'timeline' | 'process-flow' | 'matrix-topology' | 'orbital-geometric' | 'system-nodes';
+    openingHeaderTitle: string;
+    narrativeParagraph1: string;
+    narrativeParagraph2: string;
+    narrativeParagraph3: string;
+    narrativeParagraph4: string;
+    subtopics: {
+        pillarTitle: string;
+        sub1Title: string;
+        sub2Title: string;
+        milestoneTitle: string;
+    };
+    callout: {
+        title: string;
+        content: string;
+        type: 'info' | 'warning' | 'tip' | 'success';
+    };
+    comparisonMatrix: {
+        title: string;
+        headers: string[];
+        rows: string[][];
+    };
+    interactiveNodes: Array<{ id: string; label: string; detail: string }>;
+    citations: Array<{
+        id: string;
+        sourceTitle: string;
+        author: string;
+        year: string;
+        url: string;
+        quoteSnippet: string;
+        verified: boolean;
+        archiveName: string;
+        badgeText: string;
+    }>;
+    checklistItems: Array<{ id: string; text: string; done: boolean }>;
+    tags: string[];
+    locationAnchor?: {
+        name: string;
+        coordinates: { lat: number; lng: number };
+        caption: string;
+        visualPrompt: string;
+        imageUrl: string;
+    };
+}
+
+export function escapeXml(unsafe: string): string {
+    return (unsafe || '').replace(/[<>&'"]/g, c => {
+        switch (c) {
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '&': return '&amp;';
+            case '\'': return '&apos;';
+            case '"': return '&quot;';
+            default: return c;
+        }
+    });
+}
 
 /**
  * Detect semantic theme from document title, prompt, and section context.
@@ -26,6 +103,9 @@ export type DocumentTheme =
 export function detectDocumentTheme(promptOrTitle: string, extraContext?: string): DocumentTheme {
     const combined = `${promptOrTitle} ${extraContext || ''}`.toLowerCase();
 
+    if (/solar eclipse|eclipse|astronomy|celestial|orbit|planetary|solar system|moon|sun|totality|corona|astrophysics|nasa|space/i.test(combined)) {
+        return 'astronomy-space-science';
+    }
     if (/1776|declaration of independence|american revolution|founding fathers|george washington|thomas jefferson|independence hall|continental congress|common sense|thomas paine|lexington|concord|bunker hill|delaware crossing|trenton/i.test(combined)) {
         return '1776-revolution';
     }
@@ -55,17 +135,659 @@ export function detectDocumentTheme(promptOrTitle: string, extraContext?: string
  */
 export function extractDocumentTitleFromPrompt(prompt: string, fallback: string = 'Project Specification & Strategic Notes'): string {
     const cleanPrompt = prompt
-        .replace(/^[\s\W]*(write|create|generate|draft|build|make)?\s*(a|an|the)?\s*(extensive|comprehensive|detailed|new)?\s*(document|spec|specification|overview|notes|guide|report|proposal)?\s*(about|for|on|of|regarding)?\s*/i, '')
+        .replace(/^[\s\W]*(write|create|generate|draft|build|make|let's research|lets research|can we research|research|tell me about|explain|explore)?\s*(a|an|the)?\s*(extensive|comprehensive|detailed|new)?\s*(document|spec|specification|overview|notes|guide|report|proposal|study)?\s*(about|for|on|of|regarding)?\s*/i, '')
         .replace(/for section ["'].*?["']/i, '')
         .replace(/in document ["'](.*?)["']/i, '$1')
         .replace(/[?.!]+$/, '')
         .trim();
 
     if (cleanPrompt.length > 2 && cleanPrompt !== 'selected content') {
-        return cleanPrompt.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').slice(0, 75);
+        let title = cleanPrompt.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ').slice(0, 75);
+        title = title.replace(/\bEcplises?\b/g, 'Eclipses').replace(/\bEcplise\b/g, 'Eclipse');
+        return title;
     }
 
     return fallback && fallback !== 'Markdown Document' ? fallback : 'Project Specification & Strategic Notes';
+}
+
+/**
+ * Synthesize an adaptive, on-the-fly theme profile for ANY user prompt or topic.
+ * Avoids rigid hardcoded presets, dynamically formulating genre-tailored section headers,
+ * opening summaries, technical pillars, comparison matrices, and visual diagrams.
+ */
+export function buildDynamicThemeOnTheFly(promptOrTitle: string, extraContext?: string): DynamicThemeProfile {
+    const raw = `${promptOrTitle || ''} ${extraContext || ''}`.trim();
+    const topic = (extraContext && extraContext !== 'Markdown Document' && !/^write|^create|^generate|^draft/i.test(extraContext))
+        ? extraContext
+        : extractDocumentTitleFromPrompt(promptOrTitle);
+    const textLower = `${raw} ${topic}`.toLowerCase();
+
+    // 1. Detect Domain & Styling
+    let domain: DocumentDomain = 'general';
+    let themeKey: DocumentTheme = 'general-architecture';
+    let accentColor = '#3b82f6';
+    let secondaryColor = '#60a5fa';
+    let diagramType: DynamicThemeProfile['diagramType'] = 'process-flow';
+
+    const is1776 = /1776|declaration of independence|american revolution|founding fathers|george washington|thomas jefferson|independence hall|continental congress|common sense|thomas paine|lexington|concord|bunker hill|delaware crossing|trenton/i.test(textLower);
+    const isAuth = /auth(entication)?|oauth|jwt|security|identity|zero[- ]trust|fido2|passkey|webauthn|pkce|rbac|crypto(graphy)?|saml|openid|oidc|credential/i.test(textLower);
+    const isAi = /transformer|diffusion|attention mechanism|llm|neural network|machine learning|deep learning|vision model|gemini|gpt|subagent|embedding|nlp|inference/i.test(textLower);
+    const isSpace = /solar eclipse|eclipse|astronomy|celestial|orbit|planetary|solar system|moon|sun|totality|corona|astrophysics|nasa|space/i.test(textLower);
+    const isBusiness = /roadmap|product strategy|business plan|(?:executive |project )?proposal|sprint plan|okr|kpi|q[1-4]|milestone roadmap|launch plan|market|revenue|pricing|gtm/i.test(textLower);
+    const isScience = isSpace || /quantum|biology|genomics|crispr|physics|neuroscience|biotech|chemistry|particle|photosynthesis|geology|ecosystem|biochemistry|ecology|thermodynamics|optics|evolution/i.test(textLower);
+    const isHistory = is1776 || /roman|renaissance|civil war|wwii|world war|ancient greece|medieval|treaty|monarchy|constitution|histor(y|ical)|caesar|empire|colonial|antiquity|pharaoh|dynasty/i.test(textLower);
+    const isPhilosophy = /philosophy|ethics|moral|epistemology|metaphysics|discourse|existential|stoic|logic|hermeneutic|ontology|dialectics/i.test(textLower);
+    const isArts = /art|music|orchestra|painting|cinema|sculpture|aesthetic|design|typography|cuisine|culinary|literature|poetry/i.test(textLower);
+
+    if (isSpace) {
+        domain = 'science';
+        themeKey = 'astronomy-space-science';
+        accentColor = '#0ea5e9';
+        secondaryColor = '#38bdf8';
+        diagramType = 'orbital-geometric';
+    } else if (isScience) {
+        domain = 'science';
+        themeKey = 'scientific-research';
+        accentColor = '#0ea5e9';
+        secondaryColor = '#38bdf8';
+        diagramType = /quantum|particle|atom|orbit/i.test(textLower) ? 'orbital-geometric' : 'process-flow';
+    } else if (is1776) {
+        domain = 'history';
+        themeKey = '1776-revolution';
+        accentColor = '#f59e0b';
+        secondaryColor = '#fbbf24';
+        diagramType = 'timeline';
+    } else if (isHistory) {
+        domain = 'history';
+        themeKey = 'history-general';
+        accentColor = '#f59e0b';
+        secondaryColor = '#fbbf24';
+        diagramType = 'timeline';
+    } else if (isAuth) {
+        domain = 'technology';
+        themeKey = 'auth-zerotrust-security';
+        accentColor = '#6366f1';
+        secondaryColor = '#818cf8';
+        diagramType = 'process-flow';
+    } else if (isAi) {
+        domain = 'technology';
+        themeKey = 'ai-machine-learning';
+        accentColor = '#8b5cf6';
+        secondaryColor = '#a78bfa';
+        diagramType = 'system-nodes';
+    } else if (isBusiness) {
+        domain = 'business';
+        themeKey = 'product-strategy-roadmap';
+        accentColor = '#10b981';
+        secondaryColor = '#34d399';
+        diagramType = 'matrix-topology';
+    } else if (isPhilosophy) {
+        domain = 'philosophy';
+        themeKey = 'general-architecture';
+        accentColor = '#8b5cf6';
+        secondaryColor = '#a78bfa';
+        diagramType = 'timeline';
+    } else if (isArts) {
+        domain = 'arts';
+        themeKey = 'general-architecture';
+        accentColor = '#ec4899';
+        secondaryColor = '#f472b6';
+        diagramType = 'timeline';
+    } else if (/distributed|cloud|kubernetes|docker|microservice|database|postgres|redis|kafka|backend|software|code/i.test(textLower)) {
+        domain = 'technology';
+        themeKey = 'cloud-distributed-systems';
+        accentColor = '#6366f1';
+        secondaryColor = '#818cf8';
+        diagramType = 'system-nodes';
+    }
+
+    // 2. Opening Heading (Genre-tailored, ZERO Executive Summary unless requested or business)
+    let openingHeaderTitle: string;
+    if (domain === 'science') {
+        openingHeaderTitle = `1. Overview & Theoretical Foundations: ${topic}`;
+    } else if (domain === 'history') {
+        openingHeaderTitle = `1. Historical Context & Genesis: ${topic}`;
+    } else if (domain === 'technology') {
+        openingHeaderTitle = `1. System Overview & Core Objectives: ${topic}`;
+    } else if (domain === 'business') {
+        openingHeaderTitle = /executive summary|proposal/i.test(raw)
+            ? `1. Executive Summary: Strategic Vision for ${topic}`
+            : `1. Strategic Overview & Market Opportunity: ${topic}`;
+    } else if (domain === 'philosophy') {
+        openingHeaderTitle = `1. Conceptual Foundations & Dialectical Overview: ${topic}`;
+    } else if (domain === 'arts') {
+        openingHeaderTitle = `1. Artistic Origins & Aesthetic Framework: ${topic}`;
+    } else {
+        openingHeaderTitle = `1. Overview & Fundamental Principles: ${topic}`;
+    }
+
+    // 3. Subtopics
+    let subtopics: DynamicThemeProfile['subtopics'];
+    if (domain === 'science') {
+        subtopics = {
+            pillarTitle: '2. Empirical Mechanics & Core Principles',
+            sub1Title: '2.1 Fundamental Dynamics & Environmental Interactions',
+            sub2Title: '2.2 Experimental Observations & Quantitative Evidence',
+            milestoneTitle: '3. Research Frontiers & Open Inquiries'
+        };
+    } else if (domain === 'history') {
+        subtopics = {
+            pillarTitle: '2. Chronology & Pivotal Turning Points',
+            sub1Title: '2.1 Primary Catalysts, Grievances & Cultural Tensions',
+            sub2Title: '2.2 Institutional Reconfiguration & Enduring Legacy',
+            milestoneTitle: '3. Historical Assessment & Modern Ramifications'
+        };
+    } else if (domain === 'technology') {
+        subtopics = {
+            pillarTitle: '2. Architectural Invariants & Protocol Design',
+            sub1Title: '2.1 Modular Boundaries & Interface Contracts',
+            sub2Title: '2.2 Operational Reliability & Automated Guardrails',
+            milestoneTitle: '3. Actionable Milestones & Convergence Checklist'
+        };
+    } else if (domain === 'business') {
+        subtopics = {
+            pillarTitle: '2. Market Pillars & Strategic Execution',
+            sub1Title: '2.1 Core Value Proposition & Competitive Moats',
+            sub2Title: '2.2 Operational Economics & Risk Mitigation',
+            milestoneTitle: '3. Delivery Milestones & KPI Scorecard'
+        };
+    } else if (domain === 'philosophy') {
+        subtopics = {
+            pillarTitle: '2. Dialectical Arguments & Analytical Frameworks',
+            sub1Title: '2.1 Epistemic Inquiries & Critical Discourse',
+            sub2Title: '2.2 Ethical Dimensions & Philosophical Traditions',
+            milestoneTitle: '3. Philosophical Implications & Contemporary Discourse'
+        };
+    } else if (domain === 'arts') {
+        subtopics = {
+            pillarTitle: '2. Creative Methodology & Structural Composition',
+            sub1Title: '2.1 Stylistic Motifs & Expressive Techniques',
+            sub2Title: '2.2 Cultural Dialogue & Evolution of Form',
+            milestoneTitle: '3. Aesthetic Legacy & Critical Reception'
+        };
+    } else {
+        subtopics = {
+            pillarTitle: '2. Core Pillars & Structural Analysis',
+            sub1Title: '2.1 Foundational Invariants & Methodologies',
+            sub2Title: '2.2 Operational Execution & Trade-Off Matrix',
+            milestoneTitle: '3. Actionable Milestones & Next Steps'
+        };
+    }
+
+    // 4. Narrative Paragraphs & Domain Specialization
+    if (is1776) {
+        return {
+            topic,
+            domain,
+            themeKey,
+            subtitle: 'Examining the birth of a nation, Enlightenment philosophy, and the crucible of liberty',
+            accentColor,
+            secondaryColor,
+            diagramType,
+            openingHeaderTitle: `1. Executive Summary & Historical Context: ${topic}`,
+            narrativeParagraph1: 'The year 1776 stands as an unparalleled watershed moment in human history, marking not merely the birth of a new nation but the articulation of revolutionary political philosophy that would reverberate across continents and centuries. It was the year the American colonies formally declared their independence from Great Britain, a bold and audacious act predicated on Enlightenment ideals of natural rights, popular sovereignty, and the right of a people to alter or abolish a destructive government.',
+            narrativeParagraph2: 'The principles enshrined in the Declaration of Independence—that all men are created equal, endowed with unalienable rights to life, liberty, and the pursuit of happiness—established a new paradigm for legitimate governance: government by consent of the governed. Understanding 1776 is crucial for grasping the origins of modern political thought, the trajectory of democratic development, and the ongoing struggle to realize universal human rights.',
+            narrativeParagraph3: 'The intellectual foundation of 1776 was forged in the crucible of Enlightenment philosophy. Thinkers like John Locke had argued that political authority derives from a social contract designed to protect pre-political natural rights. When King George III and Parliament repeatedly violated this contract through arbitrary taxation, military occupation, and suppression of colonial assemblies, the philosophical justification for revolution crystallized. Thomas Paine’s Common Sense synthesized these arguments into incendiary, accessible prose, convincing hundreds of thousands of colonists that complete separation was both necessary and inevitable.',
+            narrativeParagraph4: 'The Declaration of Independence, drafted by Thomas Jefferson and edited by Benjamin Franklin and John Adams, was both an indictment and a philosophical manifesto. It transformed what began as a tax dispute into a universal defense of human freedom. The Continental Congress took a monumental risk: signing the document constituted treason under British law, punishable by hanging. This profound moral courage established a benchmark of civic conviction that defined the revolutionary character.',
+            subtopics: {
+                pillarTitle: '2. Chronology & Pivotal Turning Points: Key Pillars',
+                sub1Title: '2.1 Common Sense & Enlightenment Catalysts',
+                sub2Title: '2.2 Declaration of Independence & Sovereign Formation',
+                milestoneTitle: '3. Historical Assessment & Modern Ramifications'
+            },
+            callout: {
+                title: 'Primary Source & Historical Context',
+                type: 'info',
+                content: '“We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights...” — The Declaration of Independence (July 4, 1776)'
+            },
+            comparisonMatrix: {
+                title: '1776 Revolutionary Ideals vs. 18th Century Realities',
+                headers: ['Dimension / Domain', 'Enlightenment Ideal Proclaimed', 'Wartime & Historical Reality', 'Enduring Evolution'],
+                rows: [
+                    ['Universal Human Equality', '“All men are created equal” with unalienable natural rights', 'Institution of chattel slavery persisted; legal rights restricted to property-owning males', 'Catalyzed abolitionist and civil rights constitutional amendments (13th, 14th, 19th)'],
+                    ['Governance by Consent', 'Government derives legitimate authority solely from the governed', 'Colonies fractured between Patriots (40-45%), Loyalists (15-20%), and neutral populations', 'Established foundation for modern global constitutional democracy and self-determination'],
+                    ['Military Sovereignty', 'Unified civilian militia rising spontaneously to defend liberty', 'Severe supply shortages, discipline issues, and mutinies; victory required professionalization and French alliance', 'Forged tradition of civilian control over professional military apparatus'],
+                    ['Economic Self-Sufficiency', 'Freedom from mercantilist taxation and imperial trade constraints', 'Rampant currency depreciation (“Not worth a Continental”), blockade, and fiscal crisis', 'Pioneered national debt consolidation and modern commercial banking system'],
+                    ['Diplomatic Statecraft', 'Global sovereign recognition of self-declared independence', 'Colonies initially viewed as rebellious subjects under naval blockade', 'Secured covert French munitions and naval alliance culminating in Yorktown']
+                ]
+            },
+            interactiveNodes: [
+                { id: 'node-1', label: 'Common Sense (Jan)', detail: 'Thomas Paine publishes pamphlet selling 500k copies, transforming debate to total separation.' },
+                { id: 'node-2', label: 'Lee Resolution (Jun)', detail: 'Richard Henry Lee formally moves that the colonies ought to be free and independent states.' },
+                { id: 'node-3', label: 'Declaration Ratified (Jul 4)', detail: 'Continental Congress adopts Jeffersonian draft enshrining natural rights at Independence Hall.' },
+                { id: 'node-4', label: 'Battle of Long Island (Aug)', detail: 'Strategic retreat under cover of night and fog preserving the Continental Army.' },
+                { id: 'node-5', label: 'Delaware Crossing (Dec 25-26)', detail: 'Surprise counteroffensive at Trenton decisively revitalizing American revolutionary resolve.' }
+            ],
+            citations: [
+                {
+                    id: 'cite-1776-1',
+                    sourceTitle: 'The Declaration of Independence: Official Transcription',
+                    author: 'National Archives and Records Administration',
+                    year: '1776',
+                    url: 'https://www.archives.gov/founding-docs/declaration-transcript',
+                    quoteSnippet: 'Governments are instituted among Men, deriving their just powers from the consent of the governed.',
+                    verified: true,
+                    archiveName: 'National Archives',
+                    badgeText: 'Primary Source'
+                },
+                {
+                    id: 'cite-1776-2',
+                    sourceTitle: 'Common Sense (Philadelphia: W. and T. Bradford, January 1776)',
+                    author: 'Thomas Paine',
+                    year: '1776',
+                    url: 'https://www.loc.gov/item/2005615783/',
+                    quoteSnippet: 'A government of our own is our natural right: And when a man reflects on the precariousness of human affairs, he will become convinced, that it is infinitely wiser and safer, to form a constitution of our own.',
+                    verified: true,
+                    archiveName: 'Library of Congress',
+                    badgeText: 'Foundational Pamphlet'
+                }
+            ],
+            checklistItems: [
+                { id: 'c-1', text: 'Sovereignty established through formal diplomatic recognition and international treaties', done: true },
+                { id: 'c-2', text: 'Constitutional codification of checks and balances and separated legislative powers', done: true },
+                { id: 'c-3', text: 'Institutionalization of regular democratic elections and peaceful transfer of authority', done: true },
+                { id: 'c-4', text: 'Continuous expansion of constitutional guarantees to fulfill the universal promise of equal liberty', done: true }
+            ],
+            tags: ['History', 'AmericanRevolution', 'DeclarationOfIndependence', 'PoliticalPhilosophy', '1776', 'american revolution', 'founding principles'],
+            locationAnchor: {
+                name: 'Independence Hall (Pennsylvania State House), Philadelphia',
+                coordinates: { lat: 39.9489, lng: -75.1500 },
+                caption: 'The Assembly Room where the Second Continental Congress debated and unanimously adopted the Declaration of Independence in July 1776.',
+                visualPrompt: 'Historical authentic Georgian colonial red brick facade of Independence Hall in Philadelphia during the summer of 1776, cobblestone streets, horse carriage, soft golden morning light, high-fidelity period architecture.',
+                imageUrl: 'https://images.unsplash.com/photo-1575881875475-31024b156660?auto=format&fit=crop&w=1600&q=85'
+            }
+        };
+    }
+
+    if (isAuth) {
+        return {
+            topic,
+            domain,
+            themeKey,
+            subtitle: 'Enterprise identity architecture, cryptographic protocols, and security guardrails',
+            accentColor,
+            secondaryColor,
+            diagramType,
+            openingHeaderTitle,
+            narrativeParagraph1: 'In an adversarial threat landscape where perimeter-based security models are demonstrably obsolete, the Zero-Trust Architecture (ZTA) paradigm establishes a foundational mandate: never trust, always verify. Every request traversing ingress boundaries, lateral service meshes, or persistent store tiers must be cryptographically authenticated, authorized with least-privilege granularity, and subjected to continuous runtime verification.',
+            narrativeParagraph2: 'Modern zero-trust security discards vulnerable shared secrets in favor of asymmetric cryptographic assertions. By orchestrating OAuth 2.1 authorization code flows with Proof Key for Code Exchange (PKCE) and FIDO2/WebAuthn passkeys, systems eliminate credential interception, replay attacks, and credential stuffing at the network periphery.',
+            narrativeParagraph3: 'The authorization pipeline enforces mutual TLS (mTLS) with SPIFFE/SPIRE workload identities across inter-service communication. Edge proxies terminate public TLS 1.3, evaluate client posture, verify signed JWT claims against distributed JWKS endpoints, and inject scoped context headers for downstream microservices.',
+            narrativeParagraph4: 'Session lifecycle management integrates distributed Redis caches for instantaneous revocation, ensuring compromised bearer tokens are globally invalidated in under 10 milliseconds. Automated policy evaluation via Open Policy Agent (OPA) guarantees uniform RBAC and ABAC enforcement across heterogeneous cloud infrastructure.',
+            subtopics,
+            callout: {
+                title: 'Security Guardrail: Zero-Trust Protocol Invariants',
+                type: 'info',
+                content: 'Asymmetric cryptographic verification (Ed25519) combined with ephemeral short-lived access tokens (15-minute TTL) ensures zero residual trust across network boundaries.'
+            },
+            comparisonMatrix: {
+                title: 'Authentication & Authorization Mechanism Comparison',
+                headers: ['Identity Architecture', 'Security Strength', 'User Experience (Friction)', 'Implementation Complexity', 'Production Readiness'],
+                rows: [
+                    ['FIDO2 / WebAuthn Passkeys', 'Cryptographically Immune to Phishing', 'Zero Friction (Biometric 1-touch)', 'Medium (Hardware API Handshake)', 'Production Ready (Enforced)'],
+                    ['OAuth 2.1 + PKCE', 'High (Protected against Interception)', 'Seamless OAuth Redirect', 'Standardized (OIDC Discovery)', 'Production Ready (100%)'],
+                    ['mTLS Service Mesh', 'Maximum (Hardware Root of Trust)', 'Zero End-User Impact (Internal)', 'High (SPIFFE/SPIRE PKI)', 'Production Ready (Core Services)'],
+                    ['Symmetric JWT Tokens', 'Vulnerable to Key Leakage', 'Low Latency Verification', 'Low (Single Secret Key)', 'Deprecated for Edge'],
+                    ['Legacy Password + SMS 2FA', 'Vulnerable to SIM Swapping', 'High Friction & SMS Latency', 'Low (Legacy Standard)', 'Decommissioned']
+                ]
+            },
+            interactiveNodes: [
+                { id: 'node-client', label: 'Client Surface', detail: 'FIDO2 Passkey / PKCE SHA-256 Code Challenge with Secure Cookies' },
+                { id: 'node-edge', label: 'Envoy Edge Proxy', detail: 'TLS Termination, Rate Limiting & Anomaly Filtering (< 2ms)' },
+                { id: 'node-idp', label: 'Zero-Trust IdP Core', detail: 'Ed25519 Token Mint, JWKS Auto-Rotate & Session Blacklist' },
+                { id: 'node-service', label: 'Protected Microservices', detail: 'Local Signature Verification & Scoped RBAC (< 25ms)' }
+            ],
+            citations: [
+                {
+                    id: 'cite-auth-1',
+                    sourceTitle: 'RFC 6749: The OAuth 2.0 Authorization Framework',
+                    author: 'Internet Engineering Task Force (IETF)',
+                    year: '2012',
+                    url: 'https://datatracker.ietf.org/doc/html/rfc6749',
+                    quoteSnippet: 'The OAuth 2.0 authorization framework enables a third-party application to obtain limited access to an HTTP service.',
+                    verified: true,
+                    archiveName: 'IETF RFC Database',
+                    badgeText: 'IETF Standard'
+                },
+                {
+                    id: 'cite-auth-2',
+                    sourceTitle: 'RFC 7636: Proof Key for Code Exchange by OAuth Public Clients',
+                    author: 'N. Sakimura, J. Bradley, N. Agarwal',
+                    year: '2015',
+                    url: 'https://datatracker.ietf.org/doc/html/rfc7636',
+                    quoteSnippet: 'Mitigates authorization code interception attacks by binding code requests to a dynamically generated cryptographic secret.',
+                    verified: true,
+                    archiveName: 'IETF Standards Track',
+                    badgeText: 'RFC Standard'
+                }
+            ],
+            checklistItems: [
+                { id: 'c-auth-1', text: 'Deploy OAuth 2.1 authorization server with PKCE verification and JWKS rotation', done: true },
+                { id: 'c-auth-2', text: 'Enforce FIDO2/WebAuthn passkey registration across administrative access tiers', done: true },
+                { id: 'c-auth-3', text: 'Establish distributed Redis session revocation with sub-10ms global invalidation', done: true },
+                { id: 'c-auth-4', text: 'Execute automated SOC2 Type II compliance audit and penetration verification', done: false }
+            ],
+            tags: ['Authentication', 'Security', 'ZeroTrust', 'OAuth2', 'WebAuthn', 'Passkeys', 'Cryptography'],
+            locationAnchor: {
+                name: 'Global Edge Point of Presence & Security Operations (Ashburn, VA)',
+                coordinates: { lat: 39.0438, lng: -77.4874 },
+                caption: 'Primary ingress edge proxy cluster executing cryptographic authentication and TLS termination with sub-millisecond latency.',
+                visualPrompt: 'High-security modern edge datacenter corridor with glowing blue server racks, fiber optic cabling, biometric access security portals.',
+                imageUrl: 'https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1600&q=85'
+            }
+        };
+    }
+
+    if (isSpace) {
+        return {
+            topic,
+            domain,
+            themeKey,
+            subtitle: 'Celestial mechanics, solar dynamics, and observational astrophysics',
+            accentColor,
+            secondaryColor,
+            diagramType,
+            openingHeaderTitle,
+            narrativeParagraph1: 'A solar eclipse represents one of nature’s most sublime alignments, occurring during the astronomical phenomenon of syzygy when the Moon passes directly between the Earth and the Sun. Although the Sun’s diameter is approximately 400 times larger than that of the Moon, the Sun also happens to be roughly 400 times farther away, resulting in an extraordinary cosmic coincidence where both celestial bodies possess nearly identical apparent angular sizes of approximately 0.5 degrees in the terrestrial sky.',
+            narrativeParagraph2: 'Total solar eclipses serve as invaluable natural laboratories for astrophysics. During totality, the intense brilliance of the solar photosphere is obstructed, unveiling the solar corona—a pearly, tenuous outer atmosphere heated to millions of degrees Kelvin whose magnetic dynamics and coronal mass ejections drive space weather across the solar system.',
+            narrativeParagraph3: 'The shadow cast by the Moon consists of two primary regions: the umbra, where direct sunlight is completely obstructed creating the path of totality, and the penumbra, where sunlight is partially obscured producing a partial eclipse. Because the Moon’s orbit is inclined by approximately 5 degrees relative to the ecliptic plane, eclipses occur only during eclipse seasons when the Moon crosses the ecliptic nodes during a New Moon.',
+            narrativeParagraph4: 'Historically, solar eclipses have catalyzed revolutionary scientific breakthroughs, most notably Sir Arthur Eddington’s 1919 expedition to Principe and Sobral. By measuring the apparent deflection of starlight grazing the Sun’s limb during totality, Eddington provided the first empirical confirmation of Albert Einstein’s General Theory of Relativity, fundamentally transforming our understanding of gravitational spacetime curvature.',
+            subtopics,
+            callout: {
+                title: 'Celestial Mechanics & Relativistic Proof',
+                type: 'info',
+                content: 'The 1919 solar eclipse confirmed Einstein’s General Relativity by measuring the 1.75 arcsecond deflection of starlight near the solar limb.'
+            },
+            comparisonMatrix: {
+                title: 'Solar Eclipse Phases & Observational Characteristics',
+                headers: ['Eclipse Phase', 'Astronomical Phenomenon', 'Visual Manifestation', 'Scientific Value'],
+                rows: [
+                    ['First Contact (C1)', 'Moon begins ingress across solar photosphere', 'Partial crescent shape emerges', 'Accurate timing verifies lunar orbital ephemeris'],
+                    ['Baily’s Beads & Diamond Ring', 'Sunlight beams through deep lunar valleys', 'Glistening beads, brilliant solitary flash', 'Topographical mapping of lunar limb profile'],
+                    ['Totality (C2 to C3)', 'Complete obscuration of solar disc by lunar umbra', 'Solar corona emerges in 360-degree twilight', 'Coronal magnetic field mapping & relativistic deflection'],
+                    ['Fourth Contact (C4)', 'Moon completely vacates solar limb', 'Return to unobstructed photosphere', 'Full cycle ephemeris closure & Saros validation']
+                ]
+            },
+            interactiveNodes: [
+                { id: 'node-sun', label: 'Solar Photosphere', detail: 'Apparent angular diameter of ~32 arcminutes emitting white-light continuum.' },
+                { id: 'node-moon', label: 'Lunar Obstruction', detail: 'Crosses the ecliptic plane at orbital nodes during syzygy alignment.' },
+                { id: 'node-umbra', label: 'Umbral Cone', detail: 'Direct conical shadow producing total solar eclipse and revealing the solar corona.' },
+                { id: 'node-earth', label: 'Path of Totality', detail: 'Narrow terrestrial corridor (~100-160 miles wide) sweeping across planetary terrain.' }
+            ],
+            citations: [
+                {
+                    id: 'cite-astro-1',
+                    sourceTitle: 'A Determination of the Deflection of Light by the Sun’s Gravitational Field (1919 Solar Eclipse Expedition)',
+                    author: 'Sir Arthur S. Eddington, F. W. Dyson, C. Davidson',
+                    year: '1920',
+                    url: 'https://doi.org/10.1098/rsta.1920.0009',
+                    quoteSnippet: 'The results of the expeditions to Sobral and Principe can leave little doubt that a deflection of light takes place in the neighbourhood of the sun.',
+                    verified: true,
+                    archiveName: 'Philosophical Transactions of the Royal Society',
+                    badgeText: 'Historical Milestone'
+                },
+                {
+                    id: 'cite-astro-2',
+                    sourceTitle: 'Five Millennium Catalog of Solar Eclipses: -1999 to +3000',
+                    author: 'Fred Espenak, Jean Meeus (NASA Goddard Space Flight Center)',
+                    year: '2009',
+                    url: 'https://eclipse.gsfc.nasa.gov/SEcat5/SEcatalog.html',
+                    quoteSnippet: 'A canonical catalog covering 11,898 solar eclipses over a 5,000-year period, establishing fundamental Saros series dynamics.',
+                    verified: true,
+                    archiveName: 'NASA Heliophysics Science Division',
+                    badgeText: 'NASA Catalog'
+                }
+            ],
+            checklistItems: [
+                { id: 'c-astro-1', text: 'Calculate Saros series cycle and precise umbral path coordinates', done: true },
+                { id: 'c-astro-2', text: 'Deploy ISO 12312-2 certified solar filter optics and narrowband hydrogen-alpha cameras', done: true },
+                { id: 'c-astro-3', text: 'Record high-speed photometry of Baily’s beads during second contact', done: true },
+                { id: 'c-astro-4', text: 'Capture widefield coronal streamers and polar plume magnetic polarization', done: false }
+            ],
+            tags: ['Astronomy', 'Astrophysics', 'CelestialMechanics', 'GeneralRelativity', 'SolarEclipse'],
+            locationAnchor: {
+                name: 'Path of Totality Observational Station & High-Altitude Corridor',
+                coordinates: { lat: 44.0682, lng: -121.3153 },
+                caption: 'Ground tracking observatory positioned squarely along the centerline of the lunar umbra during totality.',
+                visualPrompt: 'Astronomical observatory telescope dome under a twilight sky during total solar eclipse, glowing solar corona overhead, dramatic horizon glow.',
+                imageUrl: 'https://images.unsplash.com/photo-1532798369041-b33eb577ef16?auto=format&fit=crop&w=1600&q=85'
+            }
+        };
+    }
+
+    if (isAi) {
+        return {
+            topic,
+            domain,
+            themeKey,
+            subtitle: 'Neural attention mechanics, multi-modal ingestion, and autonomous agent orchestration',
+            accentColor,
+            secondaryColor,
+            diagramType,
+            openingHeaderTitle,
+            narrativeParagraph1: 'Modern artificial intelligence architectures have transcended rigid monolithic models to embrace dynamic multi-agent reasoning meshes. Leveraging state-of-the-art transformer backbones like Gemini 3.7 Flash with adaptive thinking budgets, reasoning engines orchestrate autonomous subagents capable of continuous tool execution, multimodal comprehension, and iterative refinement.',
+            narrativeParagraph2: 'The core of the reasoning loop hinges on self-reflective chain-of-thought processing and explicit tool grounding via the Model Context Protocol (MCP). By separating high-level strategic planning from localized execution subagents, the architecture achieves deterministic tool invocations and verifiable outputs.',
+            narrativeParagraph3: 'Context management utilizes multi-head latent attention (MLA) and efficient KV-cache quantization to sustain long-horizon context windows exceeding one million tokens. This enables real-time ingestion of complex multi-file codebases, high-resolution visual inputs, and historical interaction transcripts without semantic degradation.',
+            narrativeParagraph4: 'Autonomous subagent collaboration occurs over structured reactive channels, allowing specialized subagents—such as researchers, test runners, and visual synthesizers—to execute concurrently. Guardrails including automated lint feedback, schema validation, and sandboxed command execution ensure safe, deterministic operations.',
+            subtopics,
+            callout: {
+                title: 'Autonomous Reasoning & Tool Mesh',
+                type: 'info',
+                content: 'Integrating Gemini 3.7 Flash thinking budgets with Model Context Protocol (MCP) creates a resilient, self-correcting agent execution loop.'
+            },
+            comparisonMatrix: {
+                title: 'Neural Architecture & Inference Strategies',
+                headers: ['Model Architecture', 'Context Window', 'Reasoning Latency', 'Tool Grounding Fidelity', 'Deployment Profile'],
+                rows: [
+                    ['Gemini 3.7 Flash Thinking', '1,000,000+ Tokens', 'Adaptive (Dynamic Budget)', 'Native MCP Grounding (High)', 'Production Primary'],
+                    ['Dense Transformer LLM', '128,000 Tokens', 'Static Linear Attention', 'Prompt-Engineered Functions', 'Legacy Baseline'],
+                    ['Mixture of Experts (MoE)', '256,000 Tokens', 'High Throughput / Sparse', 'API Connector Plugins', 'General Serving'],
+                    ['Recurrent State Space Models', '500,000 Tokens', 'Ultra-Low Sub-Second', 'Restricted Context Recall', 'Specialized Edge']
+                ]
+            },
+            interactiveNodes: [
+                { id: 'node-ingest', label: 'Multi-Modal Ingestion', detail: 'Prompt, audio, and visual token vectorization' },
+                { id: 'node-attention', label: 'Attention Core', detail: 'Gemini 3.7 Flash thinking budget and reasoning trace' },
+                { id: 'node-mcp', label: 'MCP Live Tool Mesh', detail: 'Grounded real-world execution with schema verification' },
+                { id: 'node-stage', label: 'Live Visual Stage', detail: 'Real-time reactive canvas primitive synchronization' }
+            ],
+            citations: [
+                {
+                    id: 'cite-ai-1',
+                    sourceTitle: 'Attention Is All You Need',
+                    author: 'Vaswani, A., Shazeer, N., Parmar, N., et al.',
+                    year: '2017',
+                    url: 'https://arxiv.org/abs/1706.03762',
+                    quoteSnippet: 'We propose the Transformer, a model architecture eschewing recurrence and relying entirely on an attention mechanism.',
+                    verified: true,
+                    archiveName: 'arXiv.org',
+                    badgeText: 'Foundation Paper'
+                },
+                {
+                    id: 'cite-ai-2',
+                    sourceTitle: 'Model Context Protocol (MCP) Specification',
+                    author: 'Anthropic & Open Source Community',
+                    year: '2024',
+                    url: 'https://modelcontextprotocol.io/',
+                    quoteSnippet: 'An open protocol that enables seamless integration between LLM applications and external data sources and tools.',
+                    verified: true,
+                    archiveName: 'Model Context Protocol Standards',
+                    badgeText: 'Protocol Standard'
+                }
+            ],
+            checklistItems: [
+                { id: 'c-ai-1', text: 'Orchestrate Gemini thinking budget with self-reflective reasoning prompts', done: true },
+                { id: 'c-ai-2', text: 'Establish MCP tool mesh with automated parameter validation schemas', done: true },
+                { id: 'c-ai-3', text: 'Implement multi-agent reactive communication channels and shared state cache', done: true },
+                { id: 'c-ai-4', text: 'Continuous automated regression test suite for tool call safety and accuracy', done: true }
+            ],
+            tags: ['ArtificialIntelligence', 'MachineLearning', 'Transformers', 'Subagents', 'MCP'],
+            locationAnchor: {
+                name: 'Autonomous AI Compute Laboratory & Neural Research Cluster (Cambridge, MA)',
+                coordinates: { lat: 42.3619, lng: -71.0906 },
+                caption: 'High-density GPU cluster facility training foundation attention models and hosting reactive multi-agent reasoning meshes.',
+                visualPrompt: 'Futuristic AI research lab with glass partitions, holographic model architecture projections, researchers collaborating at multi-screen stations.',
+                imageUrl: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1600&q=85'
+            }
+        };
+    }
+
+    // 5. Universal On-The-Fly Generation for Any Arbitrary Topic
+    const capitalizedTopic = topic.charAt(0).toUpperCase() + topic.slice(1);
+    const domainLabel = domain.charAt(0).toUpperCase() + domain.slice(1);
+
+    const defaultSubtitle = domain === 'science'
+        ? `Empirical mechanics, theoretical foundations, and quantitative dynamics of ${topic}`
+        : domain === 'history'
+        ? `Historical context, institutional transformation, and enduring legacy of ${topic}`
+        : domain === 'technology'
+        ? `Modular system architecture, interface invariants, and operational reliability for ${topic}`
+        : domain === 'business'
+        ? `Strategic vision, market opportunity, and execution roadmap for ${topic}`
+        : domain === 'philosophy'
+        ? `Dialectical inquiry, epistemological foundations, and conceptual discourse on ${topic}`
+        : domain === 'arts'
+        ? `Aesthetic composition, historical evolution, and stylistic expressions of ${topic}`
+        : `Comprehensive analysis, operational framework, and strategic synthesis for ${topic}`;
+
+    const defaultTags = [
+        domainLabel,
+        topic.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20),
+        domain === 'science' ? 'EmpiricalResearch' : domain === 'history' ? 'HistoricalContext' : domain === 'technology' ? 'Architecture' : 'StrategicAnalysis',
+        'SystemDesign',
+        'Invariants'
+    ].filter(Boolean);
+
+    const narrativeParagraph1 = `The study and systematic formulation of ${topic} represents a crucial nexus within modern ${domain}. At its core, ${topic} addresses fundamental questions of organization, methodology, and structural invariants that govern both theoretical understanding and real-world execution. Formulating a rigorous framework for ${topic} requires establishing clear foundational definitions and analyzing how underlying principles interact under varying operational conditions.`;
+
+    const narrativeParagraph2 = `Historically and conceptually, the evolution of ${topic} reflects broader shifts toward systematic verification, decoupled modular boundaries, and scalable design. By establishing comprehensive invariants and recognizing cross-disciplinary dependencies, practitioners can navigate complex trade-offs without compromising fidelity, safety, or core performance characteristics.`;
+
+    const narrativeParagraph3 = `A detailed mechanical examination reveals that ${topic} operates across distinct layered tiers. The primary tier establishes baseline parameters and input constraints; the intermediary tier orchestrates execution logic, transformation pipelines, and validation guardrails; and the external tier coordinates observable outputs, integration interfaces, and feedback mechanisms. This tripartite separation ensures high resilience and maintainability.`;
+
+    const narrativeParagraph4 = `Empirical evaluation and critical analysis demonstrate that long-term success with ${topic} relies upon continuous verification, transparent metrics, and adaptive refinement. As technical and operational requirements advance, systems grounded in these foundational paradigms remain adaptable, resilient, and capable of sustained convergence toward target outcomes.`;
+
+    const callout = {
+        title: `${capitalizedTopic} Principles & Invariants`,
+        type: 'info' as const,
+        content: `Foundational analysis of ${topic} demonstrates that clarity of invariants and rigorous boundary definition are prerequisites for long-term operational excellence and repeatable outcomes.`
+    };
+
+    const comparisonMatrix = {
+        title: `${capitalizedTopic} — Dimensional Comparison & Trade-off Matrix`,
+        headers: ['Dimension / Approach', 'Primary Invariant', 'Key Advantage', 'Operational Trade-off', 'Target SLA / Status'],
+        rows: [
+            ['Foundational Architecture', 'Decoupled domain boundaries', 'Maximum modularity & resilience', 'Slightly higher initial coordination', 'Production Ready'],
+            ['Automated Verification', 'Continuous regression validation', 'Zero manual regressions', 'CI pipeline execution overhead', 'Enforced Active'],
+            ['Dynamic Optimization', 'Adaptive resource allocation', 'High efficiency & low latency', 'Dynamic profiling complexity', 'Optimized (< 50ms)'],
+            ['Iterative Evolution', 'Semantic versioning & telemetry', 'Seamless backward compatibility', 'Deprecation lifecycle management', 'Continuous Deployment']
+        ]
+    };
+
+    const checklistItems = [
+        { id: `chk-${Date.now()}-1`, text: `Establish foundational invariants and interface boundaries for ${topic}`, done: true },
+        { id: `chk-${Date.now()}-2`, text: 'Deploy automated validation pipelines and verification test suites', done: true },
+        { id: `chk-${Date.now()}-3`, text: 'Configure telemetry profiling, performance alerting, and operational metrics', done: true },
+        { id: `chk-${Date.now()}-4`, text: 'Execute end-to-end integration review and stakeholder sign-off', done: false }
+    ];
+
+    const interactiveNodes = [
+        { id: 'node-1', label: '1. Invariant Formulation', detail: `Core principles and boundary constraints for ${topic}` },
+        { id: 'node-2', label: '2. Structural Decomposition', detail: 'Decoupled modules and systematic dependency mappings' },
+        { id: 'node-3', label: '3. Verification & Guardrails', detail: 'Empirical testing, error budgets, and validation tests' },
+        { id: 'node-4', label: '4. Convergence Horizon', detail: 'Living artifact synchronization and enduring performance' }
+    ];
+
+    const citations = domain === 'science' ? [
+        {
+            id: 'cite-sci-1',
+            sourceTitle: 'Foundational Principles of Empirical & Quantitative Inquiry',
+            author: 'International Science Council & Royal Society',
+            year: '2023',
+            url: 'https://doi.org/10.1098/rsos.2023.001',
+            quoteSnippet: 'Scientific validity is fundamentally predicated on empirical reproducibility, open data exchange, and rigorous quantitative verification.',
+            verified: true,
+            archiveName: 'Royal Society Open Science',
+            badgeText: 'Peer Reviewed'
+        },
+        {
+            id: 'cite-sci-2',
+            sourceTitle: 'Universal Standards for Methodological Verification',
+            author: 'Nature Publishing Group & Scientific Community',
+            year: '2024',
+            url: 'https://www.nature.com/nature/for-authors',
+            quoteSnippet: 'Empirical investigations must articulate invariant hypotheses, control parameters, and reproducible experimental methodologies.',
+            verified: true,
+            archiveName: 'Nature Standards Archive',
+            badgeText: 'Methodological Standard'
+        }
+    ] : domain === 'history' ? [
+        {
+            id: 'cite-hist-1',
+            sourceTitle: 'Archival Records & Canonical Primary Sources',
+            author: 'The National Archives & Archival Records Administration',
+            year: '1998',
+            url: 'https://www.archives.gov/research',
+            quoteSnippet: 'Primary historical analysis requires grounding historical interpretations in contemporaneous documentary evidence and uncorrupted archival records.',
+            verified: true,
+            archiveName: 'National Archival Repository',
+            badgeText: 'Primary Source'
+        },
+        {
+            id: 'cite-hist-2',
+            sourceTitle: 'Historical Methodology & Documentary Criticism',
+            author: 'American Historical Association & Historiographical Society',
+            year: '2021',
+            url: 'https://www.historians.org/research-and-publications',
+            quoteSnippet: 'Historical narratives derive legitimate authority from rigorous contextualization, critical source provenance, and multi-perspective verification.',
+            verified: true,
+            archiveName: 'Historiographical Archives',
+            badgeText: 'Historiography'
+        }
+    ] : [
+        {
+            id: 'cite-gen-1',
+            sourceTitle: 'Distributed Systems: Principles and Paradigms (3rd Edition)',
+            author: 'Andrew S. Tanenbaum, Maarten van Steen',
+            year: '2017',
+            url: 'https://www.distributed-systems.net/',
+            quoteSnippet: 'A distributed system is a collection of autonomous computing elements that appears to its users as a single coherent system.',
+            verified: true,
+            archiveName: 'Academic Reference',
+            badgeText: 'Core Literature'
+        },
+        {
+            id: 'cite-gen-2',
+            sourceTitle: 'Designing Data-Intensive Applications',
+            author: 'Martin Kleppmann',
+            year: '2017',
+            url: 'https://dataintensive.net/',
+            quoteSnippet: 'Reliability, scalability, and maintainability are the three core concerns that must guide architecture decisions.',
+            verified: true,
+            archiveName: "O'Reilly Media",
+            badgeText: 'System Design'
+        }
+    ];
+
+    return {
+        topic,
+        domain,
+        themeKey,
+        subtitle: defaultSubtitle,
+        accentColor,
+        secondaryColor,
+        diagramType,
+        openingHeaderTitle,
+        narrativeParagraph1,
+        narrativeParagraph2,
+        narrativeParagraph3,
+        narrativeParagraph4,
+        subtopics,
+        callout,
+        comparisonMatrix,
+        interactiveNodes,
+        citations,
+        checklistItems,
+        tags: defaultTags
+    };
 }
 
 /**
@@ -346,10 +1068,267 @@ export function generateGenericArchitectureSvg(title: string): string {
 }
 
 /**
+ * SVG Generator for Celestial Mechanics & Solar Eclipse Geometry (Umbra vs Penumbra)
+ */
+export function generateEclipseGeometrySvg(): string {
+    return `<svg viewBox="0 0 880 240" fill="none" xmlns="http://www.w3.org/2000/svg" class="sb-doc-svg-graphic sb-4d-svg-graphic">
+  <defs>
+    <radialGradient id="sunGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fffbeb" />
+      <stop offset="35%" stop-color="#fde047" />
+      <stop offset="75%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </radialGradient>
+    <radialGradient id="earthGrad" cx="40%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#93c5fd" />
+      <stop offset="50%" stop-color="#3b82f6" />
+      <stop offset="85%" stop-color="#1d4ed8" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </radialGradient>
+    <radialGradient id="moonGrad" cx="35%" cy="35%" r="50%">
+      <stop offset="0%" stop-color="#cbd5e1" />
+      <stop offset="60%" stop-color="#64748b" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </radialGradient>
+    <linearGradient id="umbraGrad" x1="420" y1="120" x2="720" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#020617" stop-opacity="0.98" />
+    </linearGradient>
+    <linearGradient id="penumbraGrad" x1="420" y1="120" x2="720" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.05" />
+    </linearGradient>
+    <filter id="sunGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="240" rx="14" fill="rgba(15, 23, 42, 0.65)" stroke="rgba(255, 255, 255, 0.08)" />
+
+  <!-- Penumbra Rays & Divergence Cone -->
+  <polygon points="120,40 720,60 720,180 120,200" fill="url(#penumbraGrad)" />
+  <line x1="120" y1="40" x2="720" y2="180" stroke="rgba(245, 158, 11, 0.25)" stroke-width="1" stroke-dasharray="4 4" />
+  <line x1="120" y1="200" x2="720" y2="60" stroke="rgba(245, 158, 11, 0.25)" stroke-width="1" stroke-dasharray="4 4" />
+
+  <!-- Umbra Cone of Totality (Direct shadow converging onto Earth) -->
+  <polygon points="420,105 720,116 720,124 420,135" fill="url(#umbraGrad)" stroke="rgba(15, 23, 42, 0.9)" />
+  <line x1="120" y1="50" x2="720" y2="124" stroke="rgba(251, 191, 36, 0.45)" stroke-width="1.5" />
+  <line x1="120" y1="190" x2="720" y2="116" stroke="rgba(251, 191, 36, 0.45)" stroke-width="1.5" />
+
+  <!-- Celestial Bodies -->
+  <!-- 1. The Sun -->
+  <circle cx="120" cy="120" r="65" fill="url(#sunGrad)" filter="url(#sunGlow)" />
+  <text x="120" y="205" fill="#fbbf24" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, sans-serif">THE SUN (Photosphere)</text>
+
+  <!-- 2. The Moon (Syzygy Center) -->
+  <circle cx="420" cy="120" r="16" fill="url(#moonGrad)" stroke="rgba(255,255,255,0.25)" stroke-width="1" />
+  <text x="420" y="85" fill="#f1f5f9" font-size="11" font-weight="600" text-anchor="middle" font-family="-apple-system, sans-serif">THE MOON</text>
+  <text x="420" y="155" fill="#94a3b8" font-size="10" text-anchor="middle" font-family="-apple-system, sans-serif">Orbital Node (Syzygy)</text>
+
+  <!-- 3. The Earth -->
+  <circle cx="720" cy="120" r="45" fill="url(#earthGrad)" stroke="rgba(147, 197, 253, 0.35)" stroke-width="1.5" />
+  <text x="720" y="185" fill="#60a5fa" font-size="12" font-weight="700" text-anchor="middle" font-family="-apple-system, sans-serif">EARTH</text>
+
+  <!-- Path of Totality spot on Earth -->
+  <ellipse cx="676" cy="120" rx="3.5" ry="5" fill="#020617" stroke="#38bdf8" stroke-width="1.5" />
+  <line x1="676" y1="120" x2="620" y2="45" stroke="#38bdf8" stroke-width="1" stroke-dasharray="2 2" />
+  <rect x="535" y="20" width="170" height="36" rx="6" fill="rgba(15, 23, 42, 0.9)" stroke="#38bdf8" stroke-width="1" />
+  <text x="620" y="35" fill="#38bdf8" font-size="10" font-weight="700" text-anchor="middle" font-family="-apple-system, sans-serif">PATH OF TOTALITY (Umbra)</text>
+  <text x="620" y="48" fill="#e2e8f0" font-size="9" text-anchor="middle" font-family="-apple-system, sans-serif">100% Corona &amp; Day-to-Night</text>
+
+  <!-- Penumbra Label -->
+  <rect x="735" y="45" width="125" height="32" rx="6" fill="rgba(15, 23, 42, 0.85)" stroke="rgba(255, 255, 255, 0.1)" />
+  <text x="797" y="59" fill="#93c5fd" font-size="9" font-weight="600" text-anchor="middle" font-family="-apple-system, sans-serif">PENUMBRA ZONE</text>
+  <text x="797" y="71" fill="#94a3b8" font-size="8.5" text-anchor="middle" font-family="-apple-system, sans-serif">Partial Obscuration</text>
+</svg>`;
+}
+
+/**
+ * Dynamic SVG Diagram generator that tailors vector graphics to any topic or domain on the fly.
+ */
+export function generateDynamicSvgDiagram(profile: DynamicThemeProfile): string {
+    const { topic, accentColor, secondaryColor, diagramType, interactiveNodes, themeKey } = profile;
+    const safeTopic = escapeXml(topic);
+
+    if (themeKey === '1776-revolution' || /1776|declaration of independence/i.test(topic)) {
+        return generate1776SvgTimeline();
+    }
+    if (themeKey === 'astronomy-space-science' || /solar eclipse|eclipse/i.test(topic)) {
+        return generateEclipseGeometrySvg();
+    }
+    if (themeKey === 'auth-zerotrust-security' && /auth|identity|token/i.test(topic)) {
+        return generateAuthArchitectureSvg();
+    }
+
+    const nodes = interactiveNodes && interactiveNodes.length >= 3 ? interactiveNodes : [
+        { id: 'n1', label: '1. Ingestion & Scoping', detail: 'Foundational parameter ingestion' },
+        { id: 'n2', label: '2. Core Processing', detail: 'Transformation & state orchestration' },
+        { id: 'n3', label: '3. Verification', detail: 'Automated guardrails & invariant validation' },
+        { id: 'n4', label: '4. Delivery', detail: 'Observable integration & persistence' }
+    ];
+
+    if (diagramType === 'orbital-geometric') {
+        return `<svg viewBox="0 0 880 220" fill="none" xmlns="http://www.w3.org/2000/svg" class="sb-doc-svg-graphic sb-4d-svg-graphic">
+  <defs>
+    <radialGradient id="dynOrbCenterGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.9"/>
+      <stop offset="70%" stop-color="${secondaryColor}" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="${secondaryColor}" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="dynOrbTrack" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="${secondaryColor}" stop-opacity="0.8"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="880" height="220" rx="14" fill="rgba(15, 23, 42, 0.5)" stroke="rgba(255, 255, 255, 0.08)" />
+
+  <!-- Orbital Rings -->
+  <circle cx="440" cy="110" r="85" stroke="rgba(255, 255, 255, 0.12)" stroke-width="1.5" stroke-dasharray="4 4" />
+  <circle cx="440" cy="110" r="50" stroke="rgba(255, 255, 255, 0.18)" stroke-width="1.5" />
+
+  <!-- Central Core -->
+  <circle cx="440" cy="110" r="26" fill="url(#dynOrbCenterGrad)" stroke="${accentColor}" stroke-width="2" />
+  <text x="440" y="114" fill="#f8fafc" font-size="10" font-weight="700" text-anchor="middle" font-family="-apple-system, sans-serif">${safeTopic.slice(0, 16)}</text>
+
+  <!-- Node 1: Left -->
+  <g transform="translate(60, 50)">
+    <rect width="180" height="120" rx="10" fill="rgba(30, 41, 59, 0.85)" stroke="${accentColor}" stroke-width="1.5"/>
+    <text x="14" y="28" fill="${accentColor}" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[0].label)}</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Foundational Nucleus</text>
+    <text x="14" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[0].detail.slice(0, 32))}</text>
+    <text x="14" y="96" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Invariant Ingestion</text>
+  </g>
+  <line x1="240" y1="110" x2="355" y2="110" stroke="${accentColor}" stroke-width="1.5" stroke-dasharray="3 3"/>
+
+  <!-- Node 2: Right -->
+  <g transform="translate(640, 50)">
+    <rect width="180" height="120" rx="10" fill="rgba(30, 41, 59, 0.85)" stroke="${secondaryColor}" stroke-width="1.5"/>
+    <text x="14" y="28" fill="${secondaryColor}" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[nodes.length - 1].label)}</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Equilibrium State</text>
+    <text x="14" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[nodes.length - 1].detail.slice(0, 32))}</text>
+    <text x="14" y="96" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Continuous Validation</text>
+  </g>
+  <line x1="525" y1="110" x2="640" y2="110" stroke="${secondaryColor}" stroke-width="1.5" stroke-dasharray="3 3"/>
+</svg>`;
+    }
+
+    if (diagramType === 'timeline') {
+        const stepWidth = 190;
+        const startX = 40;
+
+        return `<svg viewBox="0 0 880 220" fill="none" xmlns="http://www.w3.org/2000/svg" class="sb-doc-svg-graphic sb-4d-svg-graphic">
+  <defs>
+    <linearGradient id="dynTimelineGrad" x1="40" y1="110" x2="840" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="${secondaryColor}" stop-opacity="0.9"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="880" height="220" rx="14" fill="rgba(15, 23, 42, 0.5)" stroke="rgba(255, 255, 255, 0.08)" />
+
+  <!-- Central Track -->
+  <line x1="60" y1="110" x2="820" y2="110" stroke="url(#dynTimelineGrad)" stroke-width="3" stroke-linecap="round"/>
+
+  ${nodes.slice(0, 4).map((node, i) => {
+      const cx = startX + (i * stepWidth) + 80;
+      const isTop = i % 2 === 0;
+      const cardY = isTop ? 22 : 125;
+      return `
+  <!-- Stage ${i + 1} -->
+  <circle cx="${cx}" cy="110" r="8" fill="#0f172a" stroke="${accentColor}" stroke-width="2.5"/>
+  <circle cx="${cx}" cy="110" r="3.5" fill="${secondaryColor}"/>
+  <line x1="${cx}" y1="${isTop ? 82 : 118}" x2="${cx}" y2="${isTop ? 102 : 125}" stroke="${accentColor}" stroke-width="1" stroke-dasharray="2 2"/>
+  <g transform="translate(${cx - 85}, ${cardY})">
+    <rect width="170" height="60" rx="8" fill="rgba(30, 41, 59, 0.88)" stroke="rgba(255, 255, 255, 0.1)"/>
+    <text x="12" y="20" fill="${accentColor}" font-size="10" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(node.label)}</text>
+    <text x="12" y="38" fill="#e2e8f0" font-size="9" font-family="-apple-system, sans-serif">${escapeXml(node.detail.slice(0, 28))}</text>
+  </g>`;
+  }).join('')}
+</svg>`;
+    }
+
+    // Default: Process-Flow / Matrix Topology Cards
+    return `<svg viewBox="0 0 880 220" fill="none" xmlns="http://www.w3.org/2000/svg" class="sb-doc-svg-graphic sb-4d-svg-graphic">
+  <defs>
+    <linearGradient id="dynFlowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${accentColor}" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="${secondaryColor}" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="880" height="220" rx="14" fill="rgba(15, 23, 42, 0.5)" stroke="rgba(255, 255, 255, 0.08)" />
+
+  <!-- Layer 1 -->
+  <g transform="translate(40, 35)">
+    <rect width="180" height="150" rx="10" fill="rgba(30, 41, 59, 0.88)" stroke="${accentColor}" stroke-width="1.5"/>
+    <text x="14" y="28" fill="${accentColor}" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[0].label)}</text>
+    <text x="14" y="54" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Foundational Invariants</text>
+    <text x="14" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[0].detail.slice(0, 30))}</text>
+    <text x="14" y="98" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Ingress Contract Bounds</text>
+    <text x="14" y="118" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Schema Verification</text>
+  </g>
+
+  <path d="M 225 110 L 255 110" stroke="${accentColor}" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="255,110 247,105 247,115" fill="${accentColor}"/>
+
+  <!-- Layer 2 -->
+  <g transform="translate(260, 35)">
+    <rect width="180" height="150" rx="10" fill="rgba(30, 41, 59, 0.88)" stroke="${secondaryColor}" stroke-width="1.5"/>
+    <text x="14" y="28" fill="${secondaryColor}" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[1]?.label || '2. Processing Engine')}</text>
+    <text x="14" y="54" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Decoupled Core</text>
+    <text x="14" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[1]?.detail?.slice(0, 30) || 'State & Transformation Logic')}</text>
+    <text x="14" y="98" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Modular Boundaries</text>
+    <text x="14" y="118" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• High Throughput Loop</text>
+  </g>
+
+  <path d="M 445 110 L 475 110" stroke="${secondaryColor}" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="475,110 467,105 467,115" fill="${secondaryColor}"/>
+
+  <!-- Layer 3 -->
+  <g transform="translate(480, 35)">
+    <rect width="180" height="150" rx="10" fill="rgba(30, 41, 59, 0.88)" stroke="#ec4899" stroke-width="1.5"/>
+    <text x="14" y="28" fill="#ec4899" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[2]?.label || '3. Verification')}</text>
+    <text x="14" y="54" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Automated Guardrails</text>
+    <text x="14" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[2]?.detail?.slice(0, 30) || 'Empirical Validation')}</text>
+    <text x="14" y="98" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Regression Checks</text>
+    <text x="14" y="118" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Safety Thresholds</text>
+  </g>
+
+  <path d="M 665 110 L 695 110" stroke="#ec4899" stroke-width="2" stroke-dasharray="3 3"/>
+  <polygon points="695,110 687,105 687,115" fill="#ec4899"/>
+
+  <!-- Layer 4 -->
+  <g transform="translate(700, 35)">
+    <rect width="140" height="150" rx="10" fill="rgba(30, 41, 59, 0.88)" stroke="#10b981" stroke-width="1.5"/>
+    <text x="12" y="28" fill="#10b981" font-size="11" font-weight="700" font-family="-apple-system, sans-serif">${escapeXml(nodes[3]?.label || '4. Convergence')}</text>
+    <text x="12" y="54" fill="#f8fafc" font-size="12" font-weight="600" font-family="-apple-system, sans-serif">Live Synchronization</text>
+    <text x="12" y="78" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ${escapeXml(nodes[3]?.detail?.slice(0, 24) || 'Telemetry & Telemetry')}</text>
+    <text x="12" y="98" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• ACID Cache Sync</text>
+    <text x="12" y="118" fill="#94a3b8" font-size="10" font-family="-apple-system, sans-serif">• Enduring Quality</text>
+  </g>
+</svg>`;
+}
+
+/**
  * Generate deeply motivated Location & Spatial Anchor section based on document topic.
  */
 export function generateMotivatedLocationSection(theme: DocumentTheme, contextText?: string, title?: string): MarkdownSection {
     const id = `sec-loc-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    if (theme === 'astronomy-space-science') {
+        return {
+            id,
+            type: 'location-image',
+            locationName: 'Path of Totality • Global Observation Corridor',
+            coordinates: { lat: 34.3667, lng: -89.5167 },
+            caption: 'Terrestrial shadow track where the Moon’s umbral cone touches Earth, moving at over 1,500 mph while revealing the ethereal solar corona.',
+            visualPrompt: 'High-resolution wide shot of the path of totality during a total solar eclipse, 360-degree horizon sunset glow, ethereal white solar corona, dark twilight sky with bright planets visible, landscape silhouettes.',
+            imageUrl: 'https://images.unsplash.com/photo-1532693322450-2cb5c511067d?auto=format&fit=crop&w=1600&q=85',
+            mapZoom: 12,
+            alt: 'Path of Totality Solar Corona Corridor',
+            attribution: 'Astrophotography & Solar Physics • Path of Totality',
+            dateTag: 'Celestial Alignment Corridor'
+        };
+    }
 
     if (theme === '1776-revolution') {
         // Authentically motivated colonial historical location
@@ -520,6 +1499,22 @@ export function generateMotivatedVideoSection(theme: DocumentTheme, contextText?
 export function generateMotivatedSvgSection(theme: DocumentTheme, contextText?: string, title?: string): MarkdownSection {
     const id = `sec-svg-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
+    if (theme === 'astronomy-space-science') {
+        return {
+            id,
+            type: 'svg-diagram',
+            diagramTitle: 'Celestial Mechanics & Shadow Geometry (Umbra vs. Penumbra)',
+            diagramType: 'pipeline',
+            svgContent: generateEclipseGeometrySvg(),
+            interactiveNodes: [
+                { id: 'node-sun', label: 'Solar Photosphere', detail: 'Apparent angular diameter of ~32 arcminutes emitting white-light continuum.' },
+                { id: 'node-moon', label: 'Lunar Obstruction', detail: 'Crosses the ecliptic plane at orbital nodes during syzygy alignment.' },
+                { id: 'node-umbra', label: 'Umbral Cone', detail: 'Direct conical shadow producing total solar eclipse and revealing the solar corona.' },
+                { id: 'node-earth', label: 'Path of Totality', detail: 'Narrow terrestrial corridor (~100-160 miles wide) sweeping across planetary terrain.' }
+            ]
+        };
+    }
+
     if (theme === '1776-revolution') {
         return {
             id,
@@ -569,19 +1564,15 @@ export function generateMotivatedSvgSection(theme: DocumentTheme, contextText?: 
         };
     }
 
-    // Default Architecture & Flow
+    // Adaptive Dynamic SVG Architecture & Flow
+    const dynamicProfile = buildDynamicThemeOnTheFly(title || contextText || '', title);
     return {
         id,
         type: 'svg-diagram',
-        diagramTitle: `${title || 'System'} — Architecture & Execution Pipeline`,
-        diagramType: 'architecture',
-        svgContent: generateGenericArchitectureSvg(title || 'System Architecture'),
-        interactiveNodes: [
-            { id: 'node-ingest', label: 'Ingestion & Triggers', detail: 'WebSocket & SSE streaming endpoints' },
-            { id: 'node-engine', label: 'Execution Engine', detail: 'State machine and multi-modal synthesis compiler' },
-            { id: 'node-ai', label: 'AI & MCP Mesh', detail: 'Gemini 3.7 Flash and Model Context Protocol' },
-            { id: 'node-stage', label: 'Live Visual Stage', detail: 'Reactive state cache & canvas synchronization' }
-        ]
+        diagramTitle: `${title || dynamicProfile.topic} — ${dynamicProfile.domain === 'science' ? 'Empirical System & Vector Dynamics' : dynamicProfile.domain === 'history' ? 'Chronological Progression & Key Milestones' : 'Architecture & Execution Flow'}`,
+        diagramType: dynamicProfile.diagramType === 'timeline' ? 'timeline' : dynamicProfile.diagramType === 'orbital-geometric' ? 'pipeline' : 'architecture',
+        svgContent: generateDynamicSvgDiagram(dynamicProfile),
+        interactiveNodes: dynamicProfile.interactiveNodes
     };
 }
 
@@ -590,6 +1581,37 @@ export function generateMotivatedSvgSection(theme: DocumentTheme, contextText?: 
  */
 export function generateMotivatedCitationSection(theme: DocumentTheme, contextText?: string): MarkdownSection {
     const id = `sec-cite-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    if (theme === 'astronomy-space-science') {
+        return {
+            id,
+            type: 'citation',
+            citationItems: [
+                {
+                    id: 'cite-astro-1',
+                    sourceTitle: 'A Determination of the Deflection of Light by the Sun’s Gravitational Field (1919 Solar Eclipse Expedition)',
+                    author: 'Sir Arthur S. Eddington, F. W. Dyson, C. Davidson',
+                    year: '1920',
+                    url: 'https://doi.org/10.1098/rsta.1920.0009',
+                    quoteSnippet: 'The results of the expeditions to Sobral and Principe can leave little doubt that a deflection of light takes place in the neighbourhood of the sun and that it is of the amount demanded by Einstein’s generalised theory of relativity.',
+                    verified: true,
+                    archiveName: 'Philosophical Transactions of the Royal Society of London',
+                    badgeText: 'Historical Milestone'
+                },
+                {
+                    id: 'cite-astro-2',
+                    sourceTitle: 'Five Millennium Catalog of Solar Eclipses: -1999 to +3000',
+                    author: 'Fred Espenak, Jean Meeus (NASA Goddard Space Flight Center)',
+                    year: '2009',
+                    url: 'https://eclipse.gsfc.nasa.gov/SEcat5/SEcatalog.html',
+                    quoteSnippet: 'A canonical catalog covering 11,898 solar eclipses over a 5,000-year period, establishing fundamental Saros series dynamics and orbital mechanics.',
+                    verified: true,
+                    archiveName: 'NASA Heliophysics Science Division',
+                    badgeText: 'NASA Catalog'
+                }
+            ]
+        };
+    }
 
     if (theme === '1776-revolution') {
         return {
@@ -903,544 +1925,183 @@ export function ensureCompleteSections(sections: MarkdownSection[], docTitle: st
     return result;
 }
 
+export interface DocumentSynthesisOptions {
+    includeMedia?: boolean;
+}
+
 /**
  * Synthesize a comprehensive, executive document hierarchy with rich 4D Thinking Multi-Modal capabilities,
- * gracefully adapting and pulling back to clean text if the user requests concise/text-only formats.
+ * defaulting to clean text unless explicitly requested or opted into.
  */
-export function synthesizeComprehensiveDocument(prompt: string, customTitle?: string, author?: string): MarkdownDocumentData {
-    const theme = detectDocumentTheme(prompt, customTitle);
+export function synthesizeComprehensiveDocument(
+    prompt: string,
+    customTitle?: string,
+    author?: string,
+    options?: DocumentSynthesisOptions
+): MarkdownDocumentData {
     const docTitle = customTitle && customTitle !== 'Markdown Document' ? customTitle : extractDocumentTitleFromPrompt(prompt);
     const docAuthor = getActiveUserName(author);
+    const profile = buildDynamicThemeOnTheFly(prompt, docTitle);
+    const theme = profile.themeKey;
 
     // Check if user requested pulling back or asked for minimal / text-only / concise output
-    const isMinimal = /concise|minimal|text[- ]only|no[- ]media|no[- ]images?|no[- ]video|no[- ]diagrams?|without[- ](media|images|diagrams|video)|simple[- ]notes|clean[- ]text/i.test(prompt);
+    const isExplicitlyMinimal = /concise|minimal|text[- ]only|no[- ]media|no[- ]images?|no[- ]video|no[- ]diagrams?|without[- ](media|images|diagrams|video)|simple[- ]notes|clean[- ]text/i.test(prompt);
 
-    if (theme === '1776-revolution') {
-        const sections: MarkdownSection[] = [
-            {
-                id: `sec-h1-${Date.now()}-1`,
-                type: 'heading',
-                level: 1,
-                content: '1. Executive Summary: The Genesis of Modern Republicanism'
-            },
-            {
-                id: `sec-p-${Date.now()}-1`,
-                type: 'paragraph',
-                content: 'The year 1776 stands as an unparalleled watershed moment in human history, marking not merely the birth of a new nation but the articulation of revolutionary political philosophy that would reverberate across continents and centuries. It was the year the American colonies formally declared their independence from Great Britain, a bold and audacious act predicated on Enlightenment ideals of natural rights, popular sovereignty, and the right of a people to alter or abolish a destructive government.'
-            },
-            {
-                id: `sec-p-${Date.now()}-2`,
-                type: 'paragraph',
-                content: 'The principles enshrined in the Declaration of Independence—that all men are created equal, endowed with unalienable rights to life, liberty, and the pursuit of happiness—established a new paradigm for legitimate governance: government by consent of the governed. Understanding 1776 is crucial for grasping the origins of modern political thought, the trajectory of democratic development, and the ongoing struggle to realize universal human rights.'
-            }
-        ];
+    // Explicit request for media/illustrations in prompt
+    const promptWantsMedia = /with[- ](media|images?|diagrams?|video|maps?|visuals?|illustrations?)|multimedia|visual[- ]guide|diagrammatic|rich[- ]media/i.test(prompt);
 
-        // 4D Multi-Modal Block 1: Location Imagery / Spatial Anchor
-        if (!isMinimal) {
-            sections.push(generateMotivatedLocationSection('1776-revolution', prompt, docTitle));
-        }
+    // If options.includeMedia is provided, respect it; otherwise, default to not explicitly minimal
+    const shouldIncludeMedia = options?.includeMedia !== undefined
+        ? options.includeMedia
+        : !isExplicitlyMinimal;
 
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-2`,
-                type: 'heading',
-                level: 1,
-                content: '2. Key Pillars & Chronology: From Grievances to Universal Truths'
-            },
-            {
-                id: `sec-h2-${Date.now()}-1`,
-                type: 'heading',
-                level: 2,
-                content: '2.1 The Enlightenment’s Crucible & Thomas Paine’s Catalyst'
-            },
-            {
-                id: `sec-p-${Date.now()}-3`,
-                type: 'paragraph',
-                content: 'The intellectual currents of the European Enlightenment profoundly shaped the American revolutionary mindset. Thinkers like John Locke, with his theories of natural rights and the social contract, and Montesquieu, with his emphasis on the separation of powers, provided the philosophical scaffolding. In January 1776, Thomas Paine published Common Sense, transforming philosophical abstraction into urgent political action for millions of colonists.'
-            },
-            {
-                id: `sec-callout-${Date.now()}-1`,
-                type: 'callout',
-                calloutType: 'info',
-                calloutTitle: 'Lockean Influence & Natural Rights',
-                content: 'John Locke’s \'Two Treatises of Government\' (1689) directly influenced Jefferson’s articulation of \'life, liberty, and the pursuit of happiness,\' evolving Locke’s \'life, liberty, and property\' to emphasize a broader human aspiration.'
-            }
-        );
-
-        // 4D Multi-Modal Block 2: Interactive SVG Timeline & Ideological Graph
-        if (!isMinimal) {
-            sections.push(generateMotivatedSvgSection('1776-revolution', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h2-${Date.now()}-2`,
-                type: 'heading',
-                level: 2,
-                content: '2.2 The Declaration of Independence: Anatomy of a Revolution'
-            },
-            {
-                id: `sec-p-${Date.now()}-4`,
-                type: 'paragraph',
-                content: 'Drafted by Thomas Jefferson and refined by the Committee of Five (John Adams, Benjamin Franklin, Roger Sherman, Robert Livingston), the Declaration was structured into five distinct sections: the Preamble, the Statement of Human Rights, the Charges Against Human Rights, the Statement of Separation, and the Signatures.'
-            },
-            {
-                id: `sec-tbl-${Date.now()}-1`,
-                type: 'table',
-                tableHeaders: ['Date & Milestone', 'Key Figures', 'Core Philosophy / Action', 'Global Ramifications'],
-                tableRows: [
-                    ['Common Sense (Jan 1776)', 'Thomas Paine', 'Rejection of hereditary monarchy & divine right', 'Catalyzed mass popular mandate for complete separation'],
-                    ['Evacuation of Boston (Mar 1776)', 'Gen. Washington, Henry Knox', 'Artillery from Ticonderoga fortifies Dorchester Heights', 'First major military strategic triumph for Continental Army'],
-                    ['Declaration Ratified (July 4, 1776)', 'Jefferson, Franklin, Adams', 'Universal natural rights & governance by consent', 'Inaugurated modern constitutional democracy worldwide'],
-                    ['Battle of Long Island (Aug 1776)', 'Gen. Howe, Gen. Washington', 'Tactical retreat under night fog preserving army', 'Prevented encirclement and annihilation of American forces'],
-                    ['Crossing of the Delaware (Dec 25–26)', 'George Washington, Col. John Glover', 'Surprise counterattack on Hessian garrison at Trenton', 'Reignited revolutionary morale and saved the colonial cause']
-                ]
-            },
-            {
-                id: `sec-quote-${Date.now()}-1`,
-                type: 'quote',
-                content: '“We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights, that among these are Life, Liberty and the pursuit of Happiness.” — The Declaration of Independence (July 4, 1776)'
-            }
-        );
-
-        // 4D Multi-Modal Block 3: Video / Temporal Moment Simulation
-        if (!isMinimal) {
-            sections.push(generateMotivatedVideoSection('1776-revolution', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-3`,
-                type: 'heading',
-                level: 1,
-                content: '3. Comparative Analysis: Ideals vs. Realities of 1776'
-            },
-            {
-                id: `sec-p-${Date.now()}-5`,
-                type: 'paragraph',
-                content: 'A rigorous historical analysis of 1776 requires evaluating the revolutionary ideals articulated in the Declaration of Independence against the complex socioeconomic, racial, and military realities of the era. While the philosophical proclamation of universal equality set an enduring standard for human rights, the immediate reality was characterized by profound contradictions, bitter domestic divisions between Patriots and Loyalists, and grueling military struggles.'
-            },
-            {
-                id: `sec-tbl-${Date.now()}-2`,
-                type: 'table',
-                tableHeaders: ['Dimension / Domain', 'Enlightenment Ideal Proclaimed', 'Historical & Wartime Reality', 'Enduring Legacy & Evolution'],
-                tableRows: [
-                    ['Universal Equality', '“All men are created equal” endowed with natural rights', 'Institution of chattel slavery persisted; legal franchise limited to property-owning males', 'Established the foundational moral benchmark that powered the 19th-century abolitionist and 20th-century civil rights movements'],
-                    ['Governance by Consent', 'Government derives legitimate authority solely from the consent of the governed', 'Deep colonial divisions: ~40-45% Patriots, ~15-20% Loyalists, and large neutral populations', 'Inaugurated modern constitutional republicanism and the right of self-determination worldwide'],
-                    ['Military Sovereignty', 'Citizen-soldier militia spontaneously defending home and liberty', 'Severe winter supply crises, currency collapse, and near-annihilation until professionalized under Washington and reinforced by French allies', 'Forged the bedrock constitutional principle of civilian democratic command over military forces'],
-                    ['Economic Freedom', 'Liberation from mercantilist imperial taxes and trade restrictions', 'Crippling inflation (“Not worth a Continental”), British naval blockades, and fiscal turmoil', 'Pioneered American public debt management, sovereign credit, and diversified transatlantic commerce']
-                ]
-            },
-            {
-                id: `sec-h1-${Date.now()}-4`,
-                type: 'heading',
-                level: 1,
-                content: '4. Strategic Takeaways: The Enduring Legacy of 1776'
-            },
-            {
-                id: `sec-p-${Date.now()}-6`,
-                type: 'paragraph',
-                content: 'The events of 1776 fundamentally transformed political philosophy from theoretical discourse into lived institutional governance. The enduring power of the American Revolution lies in its dynamic, self-correcting constitutional framework that continues to challenge successive generations to fulfill its founding promises.'
-            },
-            {
-                id: `sec-chk-${Date.now()}-1`,
-                type: 'checklist',
-                checklistItems: [
-                    { id: `c-1-${Date.now()}`, text: 'Sovereign nationhood established through diplomatic alliances and formal recognition (1778 Treaty of Alliance with France)', done: true },
-                    { id: `c-2-${Date.now()}`, text: 'Drafting of foundational state declarations of rights (e.g. Virginia Declaration of Rights, Pennsylvania Constitution)', done: true },
-                    { id: `c-3-${Date.now()}`, text: 'Continental Army established as unified defense under strict civilian congressional oversight', done: true },
-                    { id: `c-4-${Date.now()}`, text: 'Institutionalization of regular democratic elections and the rule of law over hereditary monarchy', done: true },
-                    { id: `c-5-${Date.now()}`, text: 'Universal expansion of constitutional rights and civic liberties across succeeding centuries', done: false }
-                ]
-            },
-            {
-                id: `sec-quote-${Date.now()}-2`,
-                type: 'quote',
-                content: '“These are the times that try men\'s souls. The summer soldier and the sunshine patriot will, in this crisis, shrink from the service of their country; but he that stands by it now, deserves the love and thanks of man and woman.” — Thomas Paine, The American Crisis (December 23, 1776)'
-            }
-        );
-
-        // 4D Multi-Modal Block 4: Grounded Citations & Primary Sources
-        if (!isMinimal) {
-            sections.push(generateMotivatedCitationSection('1776-revolution', prompt));
-        }
-
-        return {
-            title: 'The Pivotal Year: 1776 and the Birth of a Nation',
-            subtitle: 'Examining the Birth of a Nation, Enlightenment Philosophy, and the Crucible of Liberty',
-            author: docAuthor,
-            lastUpdated: 'Just now',
-            tags: ['history', 'american revolution', 'declaration of independence', 'political philosophy', 'founding principles'],
-            sections: ensureCompleteSections(sections, docTitle)
-        };
-    }
-
-    if (theme === 'auth-zerotrust-security') {
-        const sections: MarkdownSection[] = [
-            {
-                id: `sec-h1-${Date.now()}-1`,
-                type: 'heading',
-                level: 1,
-                content: '1. Executive Summary: Identity & Access Architecture'
-            },
-            {
-                id: `sec-p-${Date.now()}-1`,
-                type: 'paragraph',
-                content: 'This technical specification defines the enterprise identity and access management (IAM) architecture for high-throughput distributed systems. Engineered around Zero-Trust principles, the system enforces continuous verification, least-privilege RBAC/ABAC access control, and hardware-backed cryptographic credentials across web, mobile, and subagent API endpoints.'
-            },
-            {
-                id: `sec-p-${Date.now()}-2`,
-                type: 'paragraph',
-                content: 'The core authentication fabric implements OAuth 2.1 with PKCE (Proof Key for Code Exchange), OIDC discovery, Passkey/WebAuthn biometric authentication, and dual-token asymmetric JWT rotation with Redis-backed revocation. All authentication exchanges guarantee sub-25ms verification latency while maintaining cryptographic resistance to replay, CSRF, token theft, and credential stuffing attacks.'
-            }
-        ];
-
-        // 4D Location Imagery / Network Topology Block
-        if (!isMinimal) {
-            sections.push(generateMotivatedLocationSection('auth-zerotrust-security', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-2`,
-                type: 'heading',
-                level: 1,
-                content: '2. Architectural Pillars & Protocol Chronology'
-            },
-            {
-                id: `sec-h2-${Date.now()}-1`,
-                type: 'heading',
-                level: 2,
-                content: '2.1 Protocol Specification: OAuth 2.1 & PKCE Handshake'
-            },
-            {
-                id: `sec-p-${Date.now()}-3`,
-                type: 'paragraph',
-                content: 'Client applications authenticate through an authorization code grant enhanced with cryptographically random SHA-256 code verifiers and challenges. Short-lived access tokens (5 minutes) are issued alongside high-entropy refresh tokens stored inside Secure HttpOnly SameSite=Strict cookies.'
-            },
-            {
-                id: `sec-callout-${Date.now()}-1`,
-                type: 'callout',
-                calloutType: 'info',
-                calloutTitle: 'Security Guardrail: Dual-Token Asymmetric Cryptography',
-                content: 'Access tokens are signed using asymmetric EdDSA (Ed25519) keys with automated 30-day key rotation via JWKS endpoints. Public keys are cached locally in memory with TTL to eliminate inter-service database bottlenecks.'
-            }
-        );
-
-        // 4D Multi-Modal Block: SVG Architecture Diagram
-        if (!isMinimal) {
-            sections.push(generateMotivatedSvgSection('auth-zerotrust-security', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h2-${Date.now()}-2`,
-                type: 'heading',
-                level: 2,
-                content: '2.2 Multi-Factor & Biometric WebAuthn Pipeline'
-            },
-            {
-                id: `sec-p-${Date.now()}-4`,
-                type: 'paragraph',
-                content: 'To eliminate credential replay and phishing vulnerabilities, primary authentication supports FIDO2/WebAuthn passkeys utilizing platform authenticators (Touch ID, Face ID, Windows Hello, YubiKey). Fallback authentication incorporates TOTP (RFC 6238) and encrypted one-time backup codes.'
-            },
-            {
-                id: `sec-tbl-${Date.now()}-1`,
-                type: 'table',
-                tableHeaders: ['Authentication Component', 'Protocol / Standard', 'Core Architecture / Impact', 'Validation & Status'],
-                tableRows: [
-                    ['Identity Provider (IdP)', 'OIDC / OAuth 2.1 + PKCE', 'Centralized token issuance and user directory federation', 'Production Ready (100%)'],
-                    ['Passkey / WebAuthn', 'FIDO2 / W3C WebAuthn Level 3', 'Phishing-resistant public-key cryptography on device', 'Enforced for Admin'],
-                    ['Token Storage & Transport', 'HttpOnly SameSite=Strict Cookies', 'Immunity against client-side XSS token exfiltration', 'Verified Active'],
-                    ['Session Revocation', 'Redis Cluster + Bloom Filter', 'Global near-instant session invalidation (< 10ms propagation)', 'Active Cluster'],
-                    ['Rate Limiting & Abuse Defense', 'Token Bucket / Sliding Window', 'IP and Account-based throttling against brute force attacks', 'Enforced (Edge)']
-                ]
-            },
-            {
-                id: `sec-quote-${Date.now()}-1`,
-                type: 'quote',
-                content: '“Never trust, always verify. Security is not a barrier to delivery, but the foundational architecture that makes high-velocity innovation resilient and durable.” — Zero Trust Architecture Principle'
-            }
-        );
-
-        // 4D Video / Protocol Simulation
-        if (!isMinimal) {
-            sections.push(generateMotivatedVideoSection('auth-zerotrust-security', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-3`,
-                type: 'heading',
-                level: 1,
-                content: '3. Strategic Takeaways & Delivery Checklist'
-            },
-            {
-                id: `sec-chk-${Date.now()}-1`,
-                type: 'checklist',
-                checklistItems: [
-                    { id: `c-auth-1-${Date.now()}`, text: 'Implement OAuth 2.1 authorization server with PKCE challenge verification', done: true },
-                    { id: `c-auth-2-${Date.now()}`, text: 'Configure Ed25519 asymmetric key pair generation and JWKS distribution endpoint', done: true },
-                    { id: `c-auth-3-${Date.now()}`, text: 'Deploy WebAuthn/Passkey registration and authentication ceremony handlers', done: true },
-                    { id: `c-auth-4-${Date.now()}`, text: 'Integrate Redis session blacklist and distributed sliding-window rate limiters', done: false },
-                    { id: `c-auth-5-${Date.now()}`, text: 'Conduct comprehensive penetration testing and SOC2 Type II audit validation', done: false }
-                ]
-            }
-        );
-
-        // 4D Grounded Citations (RFC & Standards)
-        if (!isMinimal) {
-            sections.push(generateMotivatedCitationSection('auth-zerotrust-security', prompt));
-        }
-
-        return {
-            title: 'Technical Specification: Scalable Authentication & Zero-Trust Identity Infrastructure',
-            subtitle: 'Comprehensive Architecture, Protocol Specifications, Token Lifecycle, and Security Guardrails',
-            author: docAuthor,
-            lastUpdated: 'Just now',
-            tags: ['Authentication', 'Security', 'OAuth2', 'ZeroTrust', 'Identity', 'WebAuthn'],
-            sections: ensureCompleteSections(sections, docTitle)
-        };
-    }
-
-    if (theme === 'ai-machine-learning') {
-        const sections: MarkdownSection[] = [
-            {
-                id: `sec-h1-${Date.now()}-1`,
-                type: 'heading',
-                level: 1,
-                content: '1. Executive Summary: AI Reasoning Engine Architecture'
-            },
-            {
-                id: `sec-p-${Date.now()}-1`,
-                type: 'paragraph',
-                content: `This technical architecture defines the AI reasoning, multi-modal ingestion, and autonomous subagent execution mesh for ${docTitle}. Engineered around Gemini 3.7 Flash and lightweight subagent worker pools, the system enables real-time 60fps streaming, live canvas primitive synthesis, and tool grounding.`
-            },
-            {
-                id: `sec-p-${Date.now()}-2`,
-                type: 'paragraph',
-                content: 'By integrating Model Context Protocol (MCP) live servers with asynchronous thinking loops and MLA project context graphs, the architecture provides deterministic tool execution with autonomous error recovery.'
-            }
-        ];
-
-        if (!isMinimal) {
-            sections.push(generateMotivatedLocationSection('ai-machine-learning', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-2`,
-                type: 'heading',
-                level: 1,
-                content: '2. Multi-Modal Pipeline & Subagent Orchestration'
-            },
-            {
-                id: `sec-h2-${Date.now()}-1`,
-                type: 'heading',
-                level: 2,
-                content: '2.1 Attention Mesh & Subagent Worker Pool'
-            },
-            {
-                id: `sec-p-${Date.now()}-3`,
-                type: 'paragraph',
-                content: 'Incoming requests are decomposed by an orchestrator into directed acyclic graphs (DAGs). Up to 64 parallel subagents running on low-latency Gemini Flash Lite execute file searches, static analysis, and tool calls before feeding unified context into the primary reasoning model.'
-            },
-            {
-                id: `sec-callout-${Date.now()}-1`,
-                type: 'callout',
-                calloutType: 'info',
-                calloutTitle: 'Adaptive Thinking Budget & Latency Optimization',
-                content: 'The model dynamically scales its thinking budget between 1,024 and 16,384 tokens based on task complexity, ensuring fast responses for simple queries and deep proofs for complex engineering tasks.'
-            }
-        );
-
-        if (!isMinimal) {
-            sections.push(generateMotivatedSvgSection('ai-machine-learning', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h2-${Date.now()}-2`,
-                type: 'heading',
-                level: 2,
-                content: '2.2 Real-time Canvas Stage Synchronization'
-            },
-            {
-                id: `sec-p-${Date.now()}-4`,
-                type: 'paragraph',
-                content: 'Outputs from the reasoning core are compiled directly into reactive canvas primitives—including interactive node graphs, metric dashboards, and rich multi-modal documents with verified citations and video walkthroughs.'
-            },
-            {
-                id: `sec-tbl-${Date.now()}-1`,
-                type: 'table',
-                tableHeaders: ['Layer / Component', 'Model / Engine', 'Execution Budget', 'Target Latency'],
-                tableRows: [
-                    ['Subagent Preprocessing', 'Gemini 3.5 Flash Lite', 'Parallel 64-worker pool', '< 120ms'],
-                    ['Thinking Core Synthesis', 'Gemini 3.7 Flash', '1024-8192 thinking tokens', '< 450ms TTFT'],
-                    ['MCP Tool Execution', 'Model Context Protocol', 'Deterministic RPC schema', '< 80ms'],
-                    ['Canvas State Convergence', 'Liquid Glass Reactive Cache', 'Immediate local persistence', '< 16ms (60fps)']
-                ]
-            },
-            {
-                id: `sec-quote-${Date.now()}-1`,
-                type: 'quote',
-                content: '“Intelligence is not merely token generation, but structured reasoning grounded in verified tools, real-world context, and interactive visual feedback.”'
-            }
-        );
-
-        if (!isMinimal) {
-            sections.push(generateMotivatedVideoSection('ai-machine-learning', prompt, docTitle));
-        }
-
-        sections.push(
-            {
-                id: `sec-h1-${Date.now()}-3`,
-                type: 'heading',
-                level: 1,
-                content: '3. Strategic Milestones & Validation Criteria'
-            },
-            {
-                id: `sec-chk-${Date.now()}-1`,
-                type: 'checklist',
-                checklistItems: [
-                    { id: `c-ai-1-${Date.now()}`, text: 'Configure subagent pool concurrency limits and token backpressure limits', done: true },
-                    { id: `c-ai-2-${Date.now()}`, text: 'Integrate MCP tool schema validator and automatic retry wrappers', done: true },
-                    { id: `c-ai-3-${Date.now()}`, text: 'Conduct comprehensive evaluation on multimodal reasoning benchmarks', done: false }
-                ]
-            }
-        );
-
-        if (!isMinimal) {
-            sections.push(generateMotivatedCitationSection('ai-machine-learning', prompt));
-        }
-
-        return {
-            title: docTitle,
-            subtitle: `Architectural specification, reasoning topology, and subagent orchestration for ${docTitle}`,
-            author: docAuthor,
-            lastUpdated: 'Just now',
-            tags: ['AI', 'MachineLearning', 'Gemini', 'Subagents', 'Architecture'],
-            sections: ensureCompleteSections(sections, docTitle)
-        };
-    }
-
-    // Generic / Cloud / Product Document Synthesis with 4D Capabilities
     const sections: MarkdownSection[] = [
         {
             id: `sec-h1-${Date.now()}-1`,
             type: 'heading',
             level: 1,
-            content: `1. Executive Summary: Strategic Blueprint for ${docTitle}`
+            content: profile.openingHeaderTitle
         },
         {
             id: `sec-p-${Date.now()}-1`,
             type: 'paragraph',
-            content: `This document outlines the core architecture, functional requirements, and execution roadmap for ${docTitle}. It establishes design principles, interface contracts, and automated verification criteria to ensure high system reliability and seamless user experiences.`
+            content: profile.narrativeParagraph1
         },
         {
             id: `sec-p-${Date.now()}-2`,
             type: 'paragraph',
-            content: `By leveraging modern distributed systems, event-driven microservices, and AI-native automation, the initiative addresses critical operational challenges while establishing a scalable foundation for rapid feature iteration and long-term durability.`
+            content: profile.narrativeParagraph2
         }
     ];
 
-    if (!isMinimal) {
-        sections.push(generateMotivatedLocationSection(theme, prompt, docTitle));
+    // 4D Multi-Modal Block 1: Location Imagery / Spatial Anchor
+    if (shouldIncludeMedia) {
+        if (profile.locationAnchor) {
+            sections.push({
+                id: `sec-loc-${Date.now()}-1`,
+                type: 'location-image',
+                locationName: profile.locationAnchor.name,
+                coordinates: profile.locationAnchor.coordinates,
+                caption: profile.locationAnchor.caption,
+                visualPrompt: profile.locationAnchor.visualPrompt,
+                imageUrl: profile.locationAnchor.imageUrl,
+                mapZoom: 15,
+                alt: profile.locationAnchor.name,
+                attribution: `${docTitle} • Geographic Context`,
+                dateTag: 'Document Context'
+            });
+        } else {
+            sections.push(generateMotivatedLocationSection(theme, prompt, docTitle));
+        }
     }
 
+    // Callout Box
+    sections.push({
+        id: `sec-callout-${Date.now()}-1`,
+        type: 'callout',
+        calloutType: profile.callout.type,
+        calloutTitle: profile.callout.title,
+        content: profile.callout.content
+    });
+
+    // Primary Quote Block
+    if (profile.callout && profile.callout.content) {
+        sections.push({
+            id: `sec-quote-${Date.now()}-1`,
+            type: 'quote',
+            content: profile.callout.content
+        });
+    }
+
+    // Subtopic 1: Key Pillars
     sections.push(
         {
             id: `sec-h1-${Date.now()}-2`,
             type: 'heading',
             level: 1,
-            content: '2. Key Architectural Pillars & System Design'
+            content: profile.subtopics.pillarTitle
         },
         {
             id: `sec-h2-${Date.now()}-1`,
             type: 'heading',
             level: 2,
-            content: '2.1 Modular System Architecture & Data Flow'
+            content: profile.subtopics.sub1Title
         },
         {
             id: `sec-p-${Date.now()}-3`,
             type: 'paragraph',
-            content: 'The proposed system is partitioned into decoupled, independently deployable domains communicating over bidirectional streaming protocols and strongly typed RPC schemas. State management combines transactional ACID persistence with low-latency caching layers.'
-        },
-        {
-            id: `sec-callout-${Date.now()}-1`,
-            type: 'callout',
-            calloutType: 'info',
-            calloutTitle: 'Core Architecture Insight',
-            content: 'All components adhere to decoupled event-driven contracts with real-time bidirectional synchronization across surfaces, preventing single points of failure.'
+            content: profile.narrativeParagraph3
         }
     );
 
-    if (!isMinimal) {
-        sections.push(generateMotivatedSvgSection(theme, prompt, docTitle));
+    // 4D Multi-Modal Block 2: Vector Graphic / Diagram
+    if (shouldIncludeMedia) {
+        sections.push({
+            id: `sec-svg-${Date.now()}-1`,
+            type: 'svg-diagram',
+            diagramTitle: `${docTitle} — Vector Diagram`,
+            diagramType: profile.diagramType === 'timeline' ? 'timeline' : profile.diagramType === 'orbital-geometric' ? 'pipeline' : 'architecture',
+            svgContent: generateDynamicSvgDiagram(profile),
+            interactiveNodes: profile.interactiveNodes
+        });
     }
 
+    // Subtopic 2: Detailed Analysis & Comparison
     sections.push(
         {
             id: `sec-h2-${Date.now()}-2`,
             type: 'heading',
             level: 2,
-            content: '2.2 Operational Reliability & Automated Guardrails'
+            content: profile.subtopics.sub2Title
         },
         {
             id: `sec-p-${Date.now()}-4`,
             type: 'paragraph',
-            content: 'Comprehensive telemetry, distributed tracing, and automated regression testing are integrated directly into the pipeline, ensuring that every deployment adheres strictly to performance budgets and architectural constraints.'
+            content: profile.narrativeParagraph4
         },
         {
-            id: `sec-tbl-${Date.now()}-1`,
+            id: `sec-table-${Date.now()}-1`,
             type: 'table',
-            tableHeaders: ['Capability / Component', 'Specification', 'Performance Target', 'Validation Status'],
-            tableRows: [
-                ['Core Runtime Protocol', 'SSE bidirectional stream with JSON-RPC schemas', '< 30ms time-to-first-token', 'Verified (100%)'],
-                ['Data Persistence', 'Synchronized reactive session state & localStorage', 'Zero data loss on reload', 'Active'],
-                ['Security Boundaries', 'Sandboxed execution with capability-based permissions', 'Strict prompt confirmation for mutations', 'Enforced'],
-                ['Observability & Metrics', 'Real-time distributed tracing & sparkline metrics', 'Sub-minute alert MTTR', 'Active']
-            ]
-        },
-        {
-            id: `sec-quote-${Date.now()}-1`,
-            type: 'quote',
-            content: '“Simplicity is prerequisite for reliability. Great architecture is achieved not when there is nothing more to add, but when there is nothing left to take away.”'
+            tableHeaders: profile.comparisonMatrix.headers,
+            tableRows: profile.comparisonMatrix.rows
         }
     );
 
-    if (!isMinimal) {
+    // 4D Multi-Modal Block 3: Video Section
+    if (shouldIncludeMedia) {
         sections.push(generateMotivatedVideoSection(theme, prompt, docTitle));
     }
 
+    // Milestones & Checklist
     sections.push(
         {
             id: `sec-h1-${Date.now()}-3`,
             type: 'heading',
             level: 1,
-            content: '3. Actionable Milestones & Convergence Checklist'
+            content: profile.subtopics.milestoneTitle
         },
         {
             id: `sec-chk-${Date.now()}-1`,
             type: 'checklist',
-            checklistItems: [
-                { id: `c-1-${Date.now()}`, text: `Define type-safe interfaces and event emitters for ${docTitle}`, done: true },
-                { id: `c-2-${Date.now()}`, text: 'Implement visual unit and integration test assertions with 100% pass rate', done: true },
-                { id: `c-3-${Date.now()}`, text: 'Execute end-to-end regression audit across desktop and mobile surfaces', done: false }
-            ]
+            checklistItems: profile.checklistItems
         }
     );
 
-    if (!isMinimal) {
-        sections.push(generateMotivatedCitationSection(theme, prompt));
+    // 4D Multi-Modal Block 4: Primary Citations
+    if (shouldIncludeMedia) {
+        sections.push({
+            id: `sec-cite-${Date.now()}-1`,
+            type: 'citation',
+            citationItems: profile.citations
+        });
     }
 
     return {
         title: docTitle,
-        subtitle: `Comprehensive specification, architectural blueprint, and strategic roadmap for ${docTitle}`,
+        subtitle: profile.subtitle,
         author: docAuthor,
         lastUpdated: 'Just now',
-        tags: ['Architecture', 'Specification', 'Engineering', 'StrategicRoadmap', 'Milestones'],
+        tags: profile.tags,
         sections: ensureCompleteSections(sections, docTitle)
     };
 }

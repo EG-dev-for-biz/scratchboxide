@@ -67,6 +67,7 @@ export interface MarkdownDocumentPrimitiveProps {
     onMorphToKanban?: (kanbanData: KanbanBoardData) => void;
     onMorphToNodeGraph?: (nodeGraphData: NodeGraphData) => void;
     onOpenInBrowser?: (url: string, title?: string) => void;
+    onOpenWikilink?: (target: string, anchor?: string) => void;
     readOnly?: boolean;
     isStreaming?: boolean;
     streamingSectionId?: string;
@@ -250,7 +251,6 @@ export function getLocationFallbackSvg(title: string, contextLabel?: string, met
   <rect width="1200" height="675" fill="url(#location-plate-bg)"/>
   <rect width="1200" height="675" fill="url(#location-plate-light)"/>
   <path d="M88 92h1024M88 583h1024" stroke="${palette.line}" stroke-opacity="0.28"/>
-  <text x="88" y="70" fill="${palette.quiet}" font-size="17" font-weight="600" letter-spacing="2.4" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif">${cleanContext.toUpperCase()}</text>
   <g transform="translate(600 260)" fill="none" stroke="${palette.line}" stroke-width="5">
     <path d="M0-67c-39 0-70 31-70 70 0 52 70 122 70 122S70 55 70 3c0-39-31-70-70-70Z"/>
     <path d="M-35 4h70M-27 4v39M-9 4v39M9 4v39M27 4v39M-39 45h78M-30-8 0-27 30-8Z" stroke-width="4"/>
@@ -262,16 +262,26 @@ export function getLocationFallbackSvg(title: string, contextLabel?: string, met
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-export function getMercatorTileUrl(lat: number, lng: number, zoom: number, layer: 'satellite' | 'street' = 'satellite'): string {
-    const clampedZoom = Math.max(1, Math.min(19, Math.round(zoom)));
-    const latRad = (Math.max(-85, Math.min(85, lat)) * Math.PI) / 180;
-    const n = Math.pow(2, clampedZoom);
-    const x = Math.floor(((lng + 180) / 360) * n);
-    const y = Math.floor(((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n);
-    if (layer === 'satellite') {
-        return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${clampedZoom}/${y}/${x}`;
+// Source: Google Maps Platform Code Assist
+export function getGoogleStaticMapUrl(lat: number, lng: number, zoom: number = 14, layer: 'satellite' | 'roadmap' | 'hybrid' = 'hybrid', apiKey?: string): string {
+    const key = apiKey || (typeof process !== 'undefined' ? process.env?.GOOGLE_MAPS_API_KEY : '') || '';
+    const clampedZoom = Math.max(1, Math.min(20, Math.round(zoom)));
+    const params = new URLSearchParams({
+        center: `${lat},${lng}`,
+        zoom: String(clampedZoom),
+        size: '600x400',
+        maptype: layer,
+        format: 'png'
+    });
+    if (key) {
+        params.set('key', key);
     }
-    return `https://tile.openstreetmap.org/${clampedZoom}/${x}/${y}.png`;
+    return `https://maps.googleapis.com/maps/api/staticmap?${params.toString()}`;
+}
+
+export function getMercatorTileUrl(lat: number, lng: number, zoom: number, layer: 'satellite' | 'street' = 'satellite'): string {
+    const key = (typeof process !== 'undefined' ? process.env?.GOOGLE_MAPS_API_KEY : '') || '';
+    return getGoogleStaticMapUrl(lat, lng, zoom, layer === 'satellite' ? 'hybrid' : 'roadmap', key);
 }
 
 export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps> = ({
@@ -284,6 +294,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
     onMorphToKanban,
     onMorphToNodeGraph,
     onOpenInBrowser,
+    onOpenWikilink,
     readOnly = false,
     isStreaming = false,
     streamingSectionId,
@@ -336,31 +347,54 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 // Check if content is empty or literal placeholder
                 if (!content || /^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3}|untitled(\s+section)?\.{0,3})$/i.test(content)) {
                     const num = currentHeadingIdx + 1;
-                    if (/1776/i.test(t)) {
-                        const fallback1776Headings = [
-                            '1. Executive Overview: The Genesis of Modern Republicanism',
-                            '2. Key Pillars & Chronology: From Grievances to Universal Truths',
-                            '2.1 The Enlightenment’s Crucible & Thomas Paine’s Catalyst',
-                            '2.2 The Declaration of Independence: Anatomy of a Revolution',
-                            '3. Strategic & Ideological Impact on Modern Governance'
+                    const isHistory = /history|revolution|1776|civil war|empire|dynasty|battle|treaty|antiquity|medieval|renaissance/i.test(t);
+                    const isScience = /astronomy|eclipse|physics|quantum|biology|chemistry|geology|relativity|space|cosmology|neuroscience/i.test(t);
+                    const isTech = /auth|security|identity|software|system|architecture|api|database|cloud|algorithm|kubernetes|pipeline/i.test(t);
+                    const isBusiness = /business|strategy|executive|market|finance|investment|roi|quarterly|startup/i.test(t);
+
+                    if (isScience) {
+                        const scienceHeadings = [
+                            `1. Overview & Theoretical Foundations: ${t}`,
+                            '2. Key Pillars & Empirical Principles',
+                            '2.1 Structural Dynamics & Observational Methodology',
+                            '2.2 Quantitative Analysis & Comparative Metrics',
+                            '3. Experimental Verification & Observational Synthesis'
                         ];
-                        content = fallback1776Headings[currentHeadingIdx] || `${num}. Strategic Historical Analysis & Ideological Turning Points`;
-                    } else if (/auth|security|identity/i.test(t)) {
-                        const fallbackAuthHeadings = [
-                            '1. Executive Summary: Identity & Access Architecture',
+                        content = scienceHeadings[currentHeadingIdx] || `${num}. Empirical Investigation & Findings`;
+                    } else if (isHistory) {
+                        const historyHeadings = [
+                            `1. Historical Context & Genesis: ${t}`,
+                            '2. Key Chronological Pillars & Turning Points',
+                            '2.1 Catalysts, Ideology & Primary Antecedents',
+                            '2.2 Critical Events, Battles & Structural Realignments',
+                            '3. Enduring Significance & Modern Historiography'
+                        ];
+                        content = historyHeadings[currentHeadingIdx] || `${num}. Historical Analysis & Primary Sources`;
+                    } else if (isTech) {
+                        const techHeadings = [
+                            `1. System Overview & Core Objectives: ${t}`,
                             '2. Architectural Pillars & Protocol Chronology',
-                            '2.1 Protocol Specification: OAuth 2.1 & PKCE Handshake',
-                            '2.2 Token Lifecycle & Revocation Semantics',
-                            '3. Verification, Automated Guardrails & Compliance'
+                            '2.1 Modular Architecture, Invariants & Interface Contracts',
+                            '2.2 Reliability Engineering & Automated Guardrails',
+                            '3. Verification, Automated Testing & Operational Compliance'
                         ];
-                        content = fallbackAuthHeadings[currentHeadingIdx] || `${num}. Architectural Specification & Security Verification`;
+                        content = techHeadings[currentHeadingIdx] || `${num}. System Specification & Architecture`;
+                    } else if (isBusiness) {
+                        const businessHeadings = [
+                            `1. Strategic Overview & Market Opportunity: ${t}`,
+                            '2. Key Strategic Pillars & Value Proposition',
+                            '2.1 Target Market Economics & Competitive Landscape',
+                            '2.2 Operational Execution & Risk Mitigation',
+                            '3. Actionable Milestones & Strategic Roadmap'
+                        ];
+                        content = businessHeadings[currentHeadingIdx] || `${num}. Strategic Analysis & Delivery`;
                     } else {
                         const genericHeadings = [
-                            `1. Executive Summary: Strategic Blueprint for ${t}`,
-                            '2. Key Architectural Pillars & System Design',
-                            '2.1 Modular System Architecture & Data Flow',
-                            '2.2 Operational Reliability & Automated Guardrails',
-                            '3. Actionable Milestones & Convergence Checklist'
+                            `1. Overview & Fundamental Principles: ${t}`,
+                            '2. Core Dimensions & System Design',
+                            '2.1 Invariant Structures & Primary Methodologies',
+                            '2.2 Operational Reliability & Comparative Analysis',
+                            '3. Actionable Milestones & Synthesis Checklist'
                         ];
                         content = genericHeadings[currentHeadingIdx] || `${num}. Implementation Details & Analysis`;
                     }
@@ -526,6 +560,254 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
         setSelectedText('');
         setSelectionCoords(undefined);
         window.getSelection()?.removeAllRanges();
+    };
+
+    const handleWikilinkNavigation = (target: string, anchor?: string) => {
+        if (onOpenWikilink) {
+            onOpenWikilink(target, anchor);
+            return;
+        }
+        const lookup = (anchor || target).trim().toLowerCase();
+        const targetSection = doc.sections.find(s =>
+            (s.type === 'heading' && s.content?.trim().toLowerCase() === lookup) ||
+            (s.calloutTitle && s.calloutTitle.trim().toLowerCase() === lookup)
+        );
+        if (targetSection) {
+            const el = document.getElementById(`doc-sec-${targetSection.id}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+        }
+        if (onOpenInBrowser) {
+            onOpenInBrowser(`#wikilink:${encodeURIComponent(target)}`, target);
+        }
+    };
+
+    const handleAutoLinkNotes = () => {
+        const concepts = new Set<string>();
+        if (doc.title && doc.title.length > 3) concepts.add(doc.title);
+        (doc.sections || []).forEach(s => {
+            if (s.type === 'heading' && s.content && s.content.trim().length > 3) {
+                const clean = s.content.replace(/^[\d.]+\s*/, '').trim();
+                if (clean.length > 3) concepts.add(clean);
+            }
+            if (s.calloutTitle && s.calloutTitle.trim().length > 3) {
+                concepts.add(s.calloutTitle.trim());
+            }
+        });
+        if (activeArtifactTitle && activeArtifactTitle.length > 3) {
+            concepts.add(activeArtifactTitle);
+        }
+
+        const sortedConcepts = Array.from(concepts).sort((a, b) => b.length - a.length);
+        if (sortedConcepts.length === 0) {
+            setExportToast('No concepts found to auto-link.');
+            setTimeout(() => setExportToast(undefined), 3000);
+            return;
+        }
+
+        let totalLinksCreated = 0;
+        const newSections = (doc.sections || []).map(sec => {
+            if (sec.type !== 'paragraph' && sec.type !== 'callout' && sec.type !== 'quote') {
+                return sec;
+            }
+            let text = sec.content || '';
+            for (const concept of sortedConcepts) {
+                const escaped = concept.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`\\b(${escaped})\\b`, 'gi');
+                text = text.replace(regex, (match, _p1, offset, fullStr) => {
+                    const before = fullStr.slice(0, offset);
+                    const openWikis = (before.match(/\[\[/g) || []).length;
+                    const closeWikis = (before.match(/\]\]/g) || []).length;
+                    if (openWikis > closeWikis) return match;
+                    const openBrackets = (before.match(/\[/g) || []).length;
+                    const closeBrackets = (before.match(/\]/g) || []).length;
+                    if (openBrackets > closeBrackets) return match;
+                    totalLinksCreated++;
+                    return `[[${match}]]`;
+                });
+            }
+            return text !== sec.content ? { ...sec, content: text } : sec;
+        });
+
+        if (totalLinksCreated > 0) {
+            updateAndNotify({ ...doc, sections: newSections });
+            setExportToast(`✨ Auto-linked ${totalLinksCreated} concept(s) across document!`);
+        } else {
+            setExportToast('All concepts are already linked with [[wikilinks]].');
+        }
+        setTimeout(() => setExportToast(undefined), 3500);
+    };
+
+    const attachDiffToSelectedSection = (origText: string, proposedText: string, actionLabel: string) => {
+        const targetSec = doc.sections.find(s => s.content && s.content.includes(origText));
+        if (targetSec) {
+            const updatedSec: MarkdownSection = {
+                ...targetSec,
+                diffPreview: {
+                    originalText: origText,
+                    proposedText: proposedText,
+                    actionLabel
+                }
+            };
+            updateAndNotify({
+                ...doc,
+                sections: doc.sections.map(s => s.id === targetSec.id ? updatedSec : s)
+            });
+            setExportToast(`✨ Proposed diff: ${actionLabel}. Review & Accept or Reject.`);
+        } else {
+            const newSection: MarkdownSection = {
+                id: `sec-${Date.now()}`,
+                type: 'paragraph',
+                content: origText,
+                diffPreview: {
+                    originalText: origText,
+                    proposedText: proposedText,
+                    actionLabel
+                }
+            };
+            updateAndNotify({ ...doc, sections: [...doc.sections, newSection] });
+            setExportToast(`✨ Proposed diff: ${actionLabel}. Review & Accept or Reject.`);
+        }
+        setTimeout(() => setExportToast(undefined), 3500);
+        setSelectedText('');
+        setSelectionCoords(undefined);
+        window.getSelection()?.removeAllRanges();
+    };
+
+    const handleAcceptDiff = (sectionId: string) => {
+        const sec = doc.sections.find(s => s.id === sectionId);
+        if (!sec || !sec.diffPreview) return;
+        const { originalText, proposedText } = sec.diffPreview;
+        const newContent = sec.content ? sec.content.replace(originalText, proposedText) : proposedText;
+        const updatedSec: MarkdownSection = {
+            ...sec,
+            content: newContent,
+            diffPreview: undefined
+        };
+        updateAndNotify({
+            ...doc,
+            sections: doc.sections.map(s => s.id === sectionId ? updatedSec : s)
+        });
+        setExportToast('✓ Accepted AI transformation changes.');
+        setTimeout(() => setExportToast(undefined), 2500);
+    };
+
+    const handleRejectDiff = (sectionId: string) => {
+        updateAndNotify({
+            ...doc,
+            sections: doc.sections.map(s => s.id === sectionId ? { ...s, diffPreview: undefined } : s)
+        });
+        setExportToast('✕ Discarded proposed transformation.');
+        setTimeout(() => setExportToast(undefined), 2000);
+    };
+
+    const handleSelectionToTable = () => {
+        if (!selectedText) return;
+        const lines = selectedText.split('\n').map(l => l.trim()).filter(Boolean);
+        let tableMarkdown = '';
+        if (lines.length > 0) {
+            const delimiter = lines[0].includes('|') ? '|' : (lines[0].includes(':') ? ':' : (lines[0].includes(',') ? ',' : '\t'));
+            const parsedRows = lines.map(line => {
+                if (delimiter === ':') {
+                    const parts = line.split(':');
+                    return [parts[0].trim(), parts.slice(1).join(':').trim()];
+                } else if (delimiter === '|') {
+                    return line.split('|').map(c => c.trim()).filter(Boolean);
+                } else {
+                    return line.split(delimiter).map(c => c.trim());
+                }
+            });
+
+            const colCount = Math.max(...parsedRows.map(r => r.length), 2);
+            const headers = parsedRows[0].length === colCount && parsedRows.length > 1
+                ? parsedRows[0]
+                : Array.from({ length: colCount }, (_, idx) => `Column ${idx + 1}`);
+            const dataRows = parsedRows[0].length === colCount && parsedRows.length > 1
+                ? parsedRows.slice(1)
+                : parsedRows;
+
+            tableMarkdown = `| ${headers.join(' | ')} |\n| ${headers.map(() => '---').join(' | ')} |\n` +
+                dataRows.map(r => `| ${Array.from({ length: colCount }, (_, i) => r[i] || '').join(' | ')} |`).join('\n');
+        }
+
+        attachDiffToSelectedSection(selectedText, tableMarkdown, 'Format as Markdown Table');
+    };
+
+    const handleSelectionToChecklist = () => {
+        if (!selectedText) return;
+        const lines = selectedText.split('\n').map(l => l.trim()).filter(Boolean);
+        const checklistMarkdown = lines.map(l => {
+            const clean = l.replace(/^[-*•\d.]+\s*/, '');
+            return `- [ ] ${clean}`;
+        }).join('\n');
+
+        attachDiffToSelectedSection(selectedText, checklistMarkdown, 'Convert to Actionable Checklist');
+    };
+
+    const handleSelectionToAiCallout = () => {
+        if (!selectedText) return;
+        const newSection: MarkdownSection = {
+            id: `sec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            type: 'callout',
+            calloutType: 'ai',
+            calloutTitle: 'AI Provenance & Synthesis',
+            content: selectedText,
+            aiProvenance: {
+                model: 'Gemini 2.5 Pro',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                prompt: 'Extracted key insight for document knowledge graph',
+                isCollapsed: false,
+                originalContent: selectedText
+            }
+        };
+
+        const insertIdx = activeSectionId ? doc.sections.findIndex(s => s.id === activeSectionId) + 1 : doc.sections.length;
+        const newSections = [...doc.sections];
+        newSections.splice(Math.max(0, insertIdx), 0, newSection);
+        updateAndNotify({ ...doc, sections: newSections });
+        setExportToast('✨ Wrapped selected excerpt into Collapsible AI Callout!');
+        setTimeout(() => setExportToast(undefined), 3000);
+        setSelectedText('');
+        setSelectionCoords(undefined);
+        window.getSelection()?.removeAllRanges();
+    };
+
+    const handlePromoteAiCallout = (sectionId: string) => {
+        const sec = doc.sections.find(s => s.id === sectionId);
+        if (!sec) return;
+        const promotedSection: MarkdownSection = {
+            ...sec,
+            type: 'paragraph',
+            calloutType: undefined,
+            calloutTitle: undefined,
+            aiProvenance: undefined
+        };
+        updateAndNotify({
+            ...doc,
+            sections: doc.sections.map(s => s.id === sectionId ? promotedSection : s)
+        });
+        setExportToast('✨ Promoted AI Callout to document body.');
+        setTimeout(() => setExportToast(undefined), 2500);
+    };
+
+    const handleToggleAiCollapse = (sectionId: string) => {
+        updateAndNotify({
+            ...doc,
+            sections: doc.sections.map(s => {
+                if (s.id === sectionId && s.aiProvenance) {
+                    return {
+                        ...s,
+                        aiProvenance: {
+                            ...s.aiProvenance,
+                            isCollapsed: !s.aiProvenance.isCollapsed
+                        }
+                    };
+                }
+                return s;
+            })
+        });
     };
 
     const handleToggleChecklist = (sectionId: string, itemId: string) => {
@@ -943,7 +1225,10 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                 });
                 md += '\n';
             } else if (sec.type === 'callout') {
-                md += `> **${sec.calloutTitle || 'Note'}**\n> ${sec.content}\n\n`;
+                const cType = sec.calloutType || 'info';
+                const collapseMark = sec.aiProvenance?.isCollapsed ? '-' : '+';
+                const meta = sec.aiProvenance?.model ? ` [${sec.aiProvenance.model}]` : '';
+                md += `> [!${cType}]${collapseMark} ${sec.calloutTitle || (cType === 'ai' ? 'AI Provenance' : 'Note')}${meta}\n> ${sec.content}\n\n`;
             } else if (sec.type === 'table') {
                 const headers = sec.tableHeaders || [];
                 const rows = sec.tableRows || [];
@@ -1139,9 +1424,9 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                 onClick={() => { if (!readOnly) setEditingSectionId(section.id); }}
                                 title={readOnly ? undefined : "Click to edit heading"}
                             >
-                                {section.level === 1 && <h2 className="sb-doc-h1"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '1. Executive Overview & Foundations'} onOpenInBrowser={onOpenInBrowser} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h2>}
-                                {section.level === 2 && <h3 className="sb-doc-h2"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '2. Key Technical Pillars & Analysis'} onOpenInBrowser={onOpenInBrowser} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h3>}
-                                {(!section.level || section.level === 3) && <h4 className="sb-doc-h3"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '3. Implementation Details'} onOpenInBrowser={onOpenInBrowser} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h4>}
+                                {section.level === 1 && <h2 className="sb-doc-h1"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '1. Executive Overview & Foundations'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h2>}
+                                {section.level === 2 && <h3 className="sb-doc-h2"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '2. Key Technical Pillars & Analysis'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h3>}
+                                {(!section.level || section.level === 3) && <h4 className="sb-doc-h3"><InlineMarkdown text={section.content && !/^(heading(\s+text)?\.{0,3}|new\s+section(\s+heading)?\.{0,3})$/i.test(section.content.trim()) ? section.content : '3. Implementation Details'} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />{isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}</h4>}
                             </div>
                         )}
                     </div>
@@ -1189,7 +1474,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                 title={readOnly ? undefined : "Click to edit paragraph"}
                             >
                                 <p className="sb-doc-p">
-                                    <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} />
+                                    <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />
                                     {isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}
                                 </p>
                             </div>
@@ -1793,18 +2078,18 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                     </p>
                                 )}
                                 {section.timelineEvents && section.timelineEvents.length > 0 && (
-                                    <div className="sb-video-timeline-events mt-3 pt-2 border-t border-zinc-800/40 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                        {section.timelineEvents.map((ev, idx) => (
-                                            <div key={idx} className="sb-video-event-item p-2 rounded-lg bg-zinc-950/40 border border-zinc-800/50 text-xs">
-                                                <div className="flex items-center gap-1.5 font-semibold text-blue-400 mb-0.5">
-                                                    <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-blue-500/10 text-blue-300">{ev.time}</span>
-                                                    <span>{ev.label}</span>
-                                                </div>
-                                                <div className="text-zinc-400 text-[11px] leading-tight">{ev.description}</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                                     <div className="sb-video-timeline-events" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--sb-surface-border)' }}>
+                                         {section.timelineEvents.map((ev, idx) => (
+                                             <div key={idx} className="sb-video-event-item" style={{ padding: '8px 10px', borderRadius: '8px', background: 'var(--sb-surface-card)', border: '1px solid var(--sb-surface-border)', fontSize: '12px' }}>
+                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--sb-system-blue, #3b82f6)', marginBottom: '3px' }}>
+                                                     <span style={{ fontFamily: 'monospace', fontSize: '11px', padding: '1px 5px', borderRadius: '4px', background: 'rgba(59, 130, 246, 0.12)', color: 'var(--sb-system-blue, #3b82f6)' }}>{ev.time}</span>
+                                                     <span>{ev.label}</span>
+                                                 </div>
+                                                 <div style={{ color: 'var(--sb-text-secondary)', fontSize: '11px', lineHeight: 1.35 }}>{ev.description}</div>
+                                             </div>
+                                         ))}
+                                     </div>
+                                 )}
                                 <div className="sb-editorial-footer-row">
                                     <span className="sb-editorial-attribution-text">
                                         {displayAttribution}
@@ -2066,61 +2351,121 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
                 {section.type === 'callout' && (
                     <div className={`sb-doc-callout sb-callout-${section.calloutType || 'info'}`}>
-                        <div className="sb-callout-body">
-                            {isEditing ? (
-                                <div className="sb-callout-seamless-edit">
-                                    <input
-                                        className="sb-callout-title-seamless"
-                                        value={section.calloutTitle || ''}
-                                        onChange={e => handleUpdateSection(section.id, { calloutTitle: e.target.value })}
-                                        onBlur={() => setEditingSectionId(undefined)}
-                                        onKeyDown={e => {
-                                            if (e.key === 'Enter' || e.key === 'Escape') setEditingSectionId(undefined);
-                                        }}
-                                        placeholder="Callout Title..."
-                                    />
-                                    <textarea
-                                        autoFocus
-                                        className="sb-callout-content-seamless"
-                                        value={section.content || ''}
-                                        onChange={e => {
-                                            handleUpdateSection(section.id, { content: e.target.value });
-                                            const target = e.currentTarget;
-                                            target.style.height = 'auto';
-                                            target.style.height = `${target.scrollHeight}px`;
-                                        }}
-                                        onInput={e => {
-                                            const target = e.currentTarget;
-                                            target.style.height = 'auto';
-                                            target.style.height = `${target.scrollHeight}px`;
-                                        }}
-                                        onBlur={() => setEditingSectionId(undefined)}
-                                        onKeyDown={e => { if (e.key === 'Escape') setEditingSectionId(undefined); }}
-                                        ref={el => {
-                                            if (el) {
-                                                el.style.height = 'auto';
-                                                el.style.height = `${el.scrollHeight}px`;
-                                            }
-                                        }}
-                                        placeholder="Callout body text..."
-                                    />
-                                </div>
-                            ) : (
-                                <div
-                                    className="sb-doc-editable-block"
-                                    onClick={() => { if (!readOnly) setEditingSectionId(section.id); }}
-                                    title={readOnly ? undefined : "Click to edit callout"}
-                                >
-                                    {section.calloutTitle && !/^(callout(\s+title)?\.{0,3}|title\.{0,3})$/i.test(section.calloutTitle.trim()) && (
-                                        <h5 className="sb-callout-title"><InlineMarkdown text={section.calloutTitle} onOpenInBrowser={onOpenInBrowser} /></h5>
+                        {section.calloutType === 'ai' && (
+                            <div className="sb-callout-ai-header">
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span className="sb-callout-badge-ai">
+                                        <IconSparkles size={11} />
+                                        <span>{section.aiProvenance?.model || 'Gemini 2.5 Pro'}</span>
+                                    </span>
+                                    {section.aiProvenance?.timestamp && (
+                                        <span className="sb-ai-provenance-meta">{section.aiProvenance.timestamp}</span>
                                     )}
-                                    <div className="sb-callout-text">
-                                        <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} />
-                                        {isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}
-                                    </div>
+                                    {section.aiProvenance?.prompt && (
+                                        <span className="sb-ai-provenance-meta" title={section.aiProvenance.prompt}>
+                                            • {section.aiProvenance.prompt.length > 32 ? section.aiProvenance.prompt.slice(0, 32) + '...' : section.aiProvenance.prompt}
+                                        </span>
+                                    )}
                                 </div>
-                            )}
-                        </div>
+                                <div className="sb-ai-callout-actions">
+                                    <button
+                                        type="button"
+                                        className="sb-btn sb-btn-secondary sb-btn-xs sb-ai-provenance-btn"
+                                        onClick={() => handleToggleAiCollapse(section.id)}
+                                        title={section.aiProvenance?.isCollapsed ? "Expand AI Callout" : "Collapse AI Callout"}
+                                    >
+                                        <span>{section.aiProvenance?.isCollapsed ? 'Expand ▾' : 'Collapse ▴'}</span>
+                                    </button>
+                                    {!readOnly && (
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-btn-secondary sb-btn-xs sb-ai-provenance-btn"
+                                            onClick={() => handlePromoteAiCallout(section.id)}
+                                            title="Promote AI Callout to regular document body paragraph"
+                                        >
+                                            <span>Promote to Body</span>
+                                        </button>
+                                    )}
+                                    {!readOnly && (
+                                        <button
+                                            type="button"
+                                            className="sb-btn sb-btn-secondary sb-btn-xs sb-ai-provenance-btn"
+                                            onClick={e => handleDeleteSection(section.id, e)}
+                                            title="Dismiss AI Callout"
+                                        >
+                                            <IconTrash size={11} />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {section.calloutType === 'ai' && section.aiProvenance?.isCollapsed ? (
+                            <div
+                                className="sb-doc-editable-block"
+                                style={{ padding: '6px 0', opacity: 0.75, fontStyle: 'italic', fontSize: '13px', cursor: 'pointer' }}
+                                onClick={() => handleToggleAiCollapse(section.id)}
+                                title="Click to expand AI Callout"
+                            >
+                                <span>{section.calloutTitle || 'AI Provenance & Synthesis'} ({(section.content || '').length} characters collapsed) — click to expand</span>
+                            </div>
+                        ) : (
+                            <div className="sb-callout-body">
+                                {isEditing ? (
+                                    <div className="sb-callout-seamless-edit">
+                                        <input
+                                            className="sb-callout-title-seamless"
+                                            value={section.calloutTitle || ''}
+                                            onChange={e => handleUpdateSection(section.id, { calloutTitle: e.target.value })}
+                                            onBlur={() => setEditingSectionId(undefined)}
+                                            onKeyDown={e => {
+                                                if (e.key === 'Enter' || e.key === 'Escape') setEditingSectionId(undefined);
+                                            }}
+                                            placeholder="Callout Title..."
+                                        />
+                                        <textarea
+                                            autoFocus
+                                            className="sb-callout-content-seamless"
+                                            value={section.content || ''}
+                                            onChange={e => {
+                                                handleUpdateSection(section.id, { content: e.target.value });
+                                                const target = e.currentTarget;
+                                                target.style.height = 'auto';
+                                                target.style.height = `${target.scrollHeight}px`;
+                                            }}
+                                            onInput={e => {
+                                                const target = e.currentTarget;
+                                                target.style.height = 'auto';
+                                                target.style.height = `${target.scrollHeight}px`;
+                                            }}
+                                            onBlur={() => setEditingSectionId(undefined)}
+                                            onKeyDown={e => { if (e.key === 'Escape') setEditingSectionId(undefined); }}
+                                            ref={el => {
+                                                if (el) {
+                                                    el.style.height = 'auto';
+                                                    el.style.height = `${el.scrollHeight}px`;
+                                                }
+                                            }}
+                                            placeholder="Callout body text..."
+                                        />
+                                    </div>
+                                ) : (
+                                    <div
+                                        className="sb-doc-editable-block"
+                                        onClick={() => { if (!readOnly) setEditingSectionId(section.id); }}
+                                        title={readOnly ? undefined : "Click to edit callout"}
+                                    >
+                                        {section.calloutTitle && !/^(callout(\s+title)?\.{0,3}|title\.{0,3})$/i.test(section.calloutTitle.trim()) && (
+                                            <h5 className="sb-callout-title"><InlineMarkdown text={section.calloutTitle} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} /></h5>
+                                        )}
+                                        <div className="sb-callout-text">
+                                            <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />
+                                            {isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -2169,7 +2514,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                             >
                                 <span className="sb-quote-mark">“</span>
                                 <div className="sb-quote-content">
-                                    <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} />
+                                    <InlineMarkdown text={section.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={handleWikilinkNavigation} />
                                     {isSectionStreaming && <span className="sb-chat-streaming-cursor animate-pulse">▊</span>}
                                 </div>
                             </blockquote>
@@ -2222,7 +2567,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                                                     className="sb-table-cell-input"
                                                     value={cell}
                                                     onChange={e => handleUpdateTableCell(section.id, rowIdx, cellIdx, e.target.value, false)}
-                                                    rows={Math.max(1, Math.min(6, Math.max((cell || '').split('\n').length, Math.ceil((cell || '').length / 28))))}
+                                                    rows={Math.max(1, Math.min(6, (cell || '').split('\n').length))}
                                                     readOnly={readOnly}
                                                     onInput={e => {
                                                         const target = e.currentTarget;
@@ -2375,6 +2720,44 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                     </div>
                 )}
 
+                {/* Inline Diff Preview for AI Transformation */}
+                {section.diffPreview && (
+                    <div className="sb-doc-diff-view animate-fadeIn">
+                        <div className="sb-diff-tag">
+                            <IconSparkles size={12} />
+                            <span>{section.diffPreview.actionLabel || 'Proposed AI Transformation'}</span>
+                        </div>
+                        <div className="sb-diff-del" title="Original text">
+                            <strong>- </strong>
+                            <InlineMarkdown text={section.diffPreview.originalText} onOpenWikilink={handleWikilinkNavigation} onOpenInBrowser={onOpenInBrowser} />
+                        </div>
+                        <div className="sb-diff-add" title="Proposed replacement">
+                            <strong>+ </strong>
+                            <InlineMarkdown text={section.diffPreview.proposedText} onOpenWikilink={handleWikilinkNavigation} onOpenInBrowser={onOpenInBrowser} />
+                        </div>
+                        <div className="sb-diff-actions">
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-primary sb-btn-xs sb-diff-accept-btn"
+                                onClick={() => handleAcceptDiff(section.id)}
+                                title="Accept proposed changes into document"
+                            >
+                                <IconCheck size={11} />
+                                <span>Accept Changes</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-secondary sb-btn-xs sb-diff-reject-btn"
+                                onClick={() => handleRejectDiff(section.id)}
+                                title="Discard proposed changes"
+                            >
+                                <IconClose size={11} />
+                                <span>Reject</span>
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Section Action Bar (Hovered) */}
                 {isHovered && !isEditing && !readOnly && (
                     <div className="sb-doc-section-hover-bar animate-fadeIn">
@@ -2475,11 +2858,29 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                     <button
                         type="button"
                         className="sb-selection-popover-pill"
-                        onClick={() => handleSelectionAction('Convert this excerpt into a checklist of actionable tasks')}
-                        title="Convert selected excerpt to tasks"
+                        onClick={handleSelectionToTable}
+                        title="Format selected text as Markdown table with inline diff preview"
+                    >
+                        <IconTable size={12} strokeWidth={1.8} />
+                        <span>To Table</span>
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-selection-popover-pill"
+                        onClick={handleSelectionToChecklist}
+                        title="Convert selected excerpt into checklist with inline diff preview"
                     >
                         <IconChecklist size={12} strokeWidth={1.8} />
-                        <span>Make Tasks</span>
+                        <span>To Checklist</span>
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-selection-popover-pill"
+                        onClick={handleSelectionToAiCallout}
+                        title="Wrap selected excerpt into a Collapsible AI Callout"
+                    >
+                        <IconCallout size={12} strokeWidth={1.8} />
+                        <span>AI Callout</span>
                     </button>
                 </div>
             )}
@@ -2508,7 +2909,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                         <button
                             type="button"
                             className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(0, 'editorial-image')}
+                            onClick={() => handleAddSection(doc.sections?.length || 0, 'editorial-image')}
                             title="Insert Clean Editorial Image (Nano Banana)"
                         >
                             <IconImage size={12} />
@@ -2517,7 +2918,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                         <button
                             type="button"
                             className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(0, 'svg-diagram')}
+                            onClick={() => handleAddSection(doc.sections?.length || 0, 'svg-diagram')}
                             title="Insert Interactive Diagram"
                         >
                             <IconDiagram size={12} />
@@ -2526,7 +2927,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                         <button
                             type="button"
                             className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(0, 'video')}
+                            onClick={() => handleAddSection(doc.sections?.length || 0, 'video')}
                             title="Insert Video Walkthrough"
                         >
                             <IconVideo size={12} />
@@ -2535,7 +2936,7 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                         <button
                             type="button"
                             className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(0, 'location-image')}
+                            onClick={() => handleAddSection(doc.sections?.length || 0, 'location-image')}
                             title="Insert Location Image / Map"
                         >
                             <IconPin size={12} />
@@ -2544,11 +2945,20 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                         <button
                             type="button"
                             className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(0, 'citation')}
+                            onClick={() => handleAddSection(doc.sections?.length || 0, 'citation')}
                             title="Insert Citations"
                         >
                             <IconCitation size={12} />
                             <span>+ Citation</span>
+                        </button>
+                        <button
+                            type="button"
+                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
+                            onClick={handleAutoLinkNotes}
+                            title="Scan document and automatically create [[wikilinks]] for known concepts and headings"
+                        >
+                            <IconSparkles size={12} />
+                            <span>Auto-Link Notes</span>
                         </button>
                     </div>
                     <button

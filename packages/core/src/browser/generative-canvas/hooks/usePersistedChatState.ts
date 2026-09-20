@@ -13,9 +13,9 @@ import { DEFAULT_APPEARANCE_CONFIG, DEFAULT_SESSIONS } from '../state/studio-def
 import { ChatState, Updater } from '../state/chatStore';
 
 
-const LS_SESSIONS_KEY = 'scratchbox_studio_sessions_v10';
-const LS_CURRENT_SESSION_KEY = 'scratchbox_studio_current_session_id_v10';
-const LS_VERSIONS_KEY = 'scratchbox_studio_artifact_versions_v10';
+const LS_SESSIONS_KEY = 'scratchbox_studio_sessions_v18';
+const LS_CURRENT_SESSION_KEY = 'scratchbox_studio_current_session_id_v18';
+const LS_VERSIONS_KEY = 'scratchbox_studio_artifact_versions_v18';
 const LS_APPEARANCE_KEY = 'scratchbox_studio_appearance_v6';
 
 const loadSavedSessions = (): ChatSession[] => {
@@ -25,7 +25,15 @@ const loadSavedSessions = (): ChatSession[] => {
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (Array.isArray(parsed) && parsed.length > 0) {
-                    return parsed;
+                    const filtered = parsed.filter(s =>
+                        s.id !== 'sess-active-threejs' &&
+                        s.id !== 'sess-active-agent' &&
+                        s.id !== 'sess-test-generative' &&
+                        s.workspaceId !== 'proj-test-workspace'
+                    );
+                    if (filtered.length > 0) {
+                        return filtered;
+                    }
                 }
             }
         } catch (e) {
