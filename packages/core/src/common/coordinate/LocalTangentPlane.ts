@@ -196,4 +196,28 @@ export class LocalTangentPlane {
     const ltp = new LocalTangentPlane(origin);
     return ltp.enuToGeodetic([east, north, up]);
   }
+
+  /**
+   * Google Maps Ground Surface & Elevation Standard Invariant:
+   * Across Google Maps Platform, Google Earth, and Scratchbox IDE:
+   * - origin.alt represents the real-world ground surface (street level / terrain) in meters above Mean Sea Level (EGM96 geoid).
+   * - In local ENU / Three.js metric space (+X East, +Y Up, -Z North), Y = 0.0m is strictly Ground Level.
+   * - Y > 0.0m represents Above Ground Level (AGL) (human eye height = 1.7m, drone survey stations, building height).
+   * - Y < 0.0m represents Sub-Surface (basements, foundations, tunnels).
+   */
+  public static readonly GROUND_SURFACE_LOCAL_Y = 0.0;
+
+  /**
+   * Returns the local Y coordinate of the canonical ground surface (0.0m).
+   */
+  public static groundLevel(): number {
+    return LocalTangentPlane.GROUND_SURFACE_LOCAL_Y;
+  }
+
+  /**
+   * Returns the ground surface elevation above Mean Sea Level in meters.
+   */
+  public getGroundElevationMsl(): number {
+    return this.origin.alt ?? 0.0;
+  }
 }

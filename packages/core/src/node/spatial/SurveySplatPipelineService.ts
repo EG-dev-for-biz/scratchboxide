@@ -43,6 +43,8 @@ export interface SurveySplatPipelineRequest {
     isoDate?: string;
     headingDeg?: number;
     maxRerolls?: number;
+    /** If true (default), drops organic foliage pixels to avoid lumpy melting mounds. */
+    dropFoliage?: boolean;
     tiles?: { maxDepth?: number; leafCapacity?: number; interiorBudget?: number };
 }
 
@@ -57,6 +59,9 @@ export interface SurveySplatStationReport {
     splatPath?: string;
     qc: BeautifyStationResult['qc'];
     prompt: string;
+    positionLocalENU?: [number, number, number];
+    forwardVector?: [number, number, number];
+    name?: string;
 }
 
 export interface SurveySplatPipelineResult {
@@ -74,6 +79,7 @@ export interface SurveySplatPipelineResult {
 export type ProgressReporter = (progress: number, message?: string) => void;
 
 /**
+ * High-throughput orchestration of the Zero-Drift Multi-View Generative 3DGS pipeline:
  * Stations -> beautify -> bake -> fuse -> 3D Tiles.
  *
  * Each accepted station image is unprojected with the mesh's own depth at the QC-aligned pose
@@ -89,8 +95,14 @@ export class SurveySplatPipelineService {
     constructor(private deps: { generator: StationImageGenerator }) {}
 
     async ensureBaker(): Promise<string> {
-        if (fs.existsSync(this.bakerPath)) return this.bakerPath;
         const src = path.resolve(process.cwd(), 'scripts/station_to_splats.cpp');
+        if (fs.existsSync(this.bakerPath)) {
+            const srcStat = await fs.stat(src);
+            const binStat = await fs.stat(this.bakerPath);
+            if (binStat.mtimeMs >= srcStat.mtimeMs) {
+                return this.bakerPath;
+            }
+        }
         await fs.ensureDir(path.dirname(this.bakerPath));
         await execAsync(`${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" -lz "${src}" -o "${this.bakerPath}"`);
         return this.bakerPath;
@@ -117,7 +129,7 @@ export class SurveySplatPipelineService {
             const beautifier = new BeautifyStationService(renderer, this.deps.generator);
 
             const reports: SurveySplatStationReport[] = [];
-            const splatSets: { splats: BakedGaussian[]; station: ColmapCameraPose }[] = [];
+            const bakedStations: { splatPath: string; station: ColmapCameraPose }[] = [];
             let reference: BeautifyStationResult | undefined;
             for (let i = 0; i < stations.length; i++) {
                 const st = stations[i];
@@ -129,48 +141,69 @@ export class SurveySplatPipelineService {
                 if (res.warp) await fs.outputFile(`${base}_warp.png`, res.warp.warpedPng);
                 const rep: SurveySplatStationReport = {
                     stationId: st.id, accepted: res.accepted, attempts: res.attempts, usedReference: !!res.warp, splatCount: 0,
-                    imagePath: `${base}_beautified.png`, blockoutPath: `${base}_blockout.png`, qc: res.qc, prompt: res.prompt
+                    imagePath: `${base}_beautified.png`, blockoutPath: `${base}_blockout.png`, qc: res.qc, prompt: res.prompt,
+                    positionLocalENU: res.alignedStation.positionLocalENU || st.positionLocalENU,
+                    forwardVector: res.alignedStation.forwardVector || st.forwardVector,
+                    name: st.name
                 };
                 if (res.accepted) {
                     const baked = await this.bakeStation(baker, res, `${base}.splat`, req);
-                    rep.splatCount = baked.length;
-                    rep.splatPath = `${base}.splat`;
-                    splatSets.push({ splats: baked, station: res.alignedStation });
+                    rep.splatCount = baked.splatCount;
+                    rep.splatPath = baked.splatPath;
+                    bakedStations.push({ splatPath: baked.splatPath, station: res.alignedStation });
                     if (mode === 'chained') reference = res;
                 }
                 reports.push(rep);
             }
-            if (splatSets.length === 0) throw new Error('No station passed QC; nothing to bake');
+            if (bakedStations.length === 0) throw new Error('No station passed QC; nothing to bake');
 
             report(0.8, 'Fusing station splats');
-            const medianSigma = SurveySplatPipelineService.medianSigma(splatSets.flatMap(s => s.splats));
-            const voxel = req.voxelSizeMeters ?? Math.max(0.01, medianSigma * 0.75);
-            const fused = SurveySplatPipelineService.fuse(splatSets, voxel);
-            await fs.outputFile(fusedSplatPath, SplatService.serializeSplatBuffer(fused));
+            const voxel = req.voxelSizeMeters ?? 0.20;
+            const listPath = path.join(outDir, 'stations_to_fuse.txt');
+            await fs.outputFile(listPath, bakedStations.map(s => s.splatPath).join('\n'));
+            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} --out-splat "${fusedSplatPath}" --json`;
+            const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
+            const fuseRes = JSON.parse(fuseStdout.trim());
+            await fs.remove(listPath).catch(() => {});
+            const fusedCount = fuseRes.fusedSplatCount ?? 0;
 
             report(0.88, 'Tiling');
             const tiles = new Splat3DTilesService();
             const tileRes = await tiles.convert({ inputPath: fusedSplatPath, outDir, origin: { lat: req.anchor.lat, lng: req.anchor.lng, alt: req.anchor.elevationMeters }, headingDeg: req.headingDeg ?? 0, maxDepth: req.tiles?.maxDepth ?? 5, leafCapacity: req.tiles?.leafCapacity, interiorBudget: req.tiles?.interiorBudget });
             if (!tileRes.success) throw new Error(tileRes.error || 'Tiling failed');
 
-            const cropBox = SurveySplatPipelineService.cropBox(splatSets.map(s => s.station), renderer.getMeshBounds()!, fused);
+            const meshBounds = renderer.getMeshBounds()!;
+            const fMin = fuseRes.bounds?.min ?? [-100, -100, -100];
+            const fMax = fuseRes.bounds?.max ?? [100, 100, 100];
+            const cropBox = {
+                min: [
+                    Math.max(fMin[0] - 0.5, meshBounds.min[0] - 0.5),
+                    Math.max(fMin[1] - 0.5, meshBounds.min[1] - 0.5),
+                    Math.max(fMin[2] - 0.5, meshBounds.min[2] - 0.5)
+                ] as [number, number, number],
+                max: [
+                    Math.min(fMax[0] + 0.5, meshBounds.max[0] + 0.5),
+                    Math.min(fMax[1] + 0.5, meshBounds.max[1] + 0.5),
+                    Math.min(fMax[2] + 0.5, meshBounds.max[2] + 0.5)
+                ] as [number, number, number]
+            };
             const meta = {
                 generator: this.deps.generator.name, mode, anchor: req.anchor, glbPath: req.glbPath,
                 eyeHeight: stations[0]?.cameraHeightAboveGround ?? 1.7,
-                cropBox, fusedSplatCount: fused.length, voxelSizeMeters: voxel,
+                cropBox, fusedSplatCount: fusedCount, voxelSizeMeters: voxel,
                 stations: reports, tiles: { tileCount: tileRes.tileCount, levels: tileRes.levels, tileBytes: tileRes.tileBytes },
                 createdAt: new Date().toISOString()
             };
             await fs.writeJson(metaPath, meta, { spaces: 2 });
             report(1, 'Done');
-            return { success: true, stations: reports, fusedSplatPath, fusedSplatCount: fused.length, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
+            return { success: true, stations: reports, fusedSplatPath, fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
         } catch (e: any) {
             return { success: false, stations: [], fusedSplatPath, fusedSplatCount: 0, tilesetPath, metaPath, cropBox: { min: [0, 0, 0], max: [0, 0, 0] }, durationMs: Date.now() - t0, error: e?.message || String(e) };
         }
     }
 
     /** Writes raw RGB + f32 depth + pose json for the aligned station and runs the native baker. */
-    private async bakeStation(baker: string, res: BeautifyStationResult, outSplat: string, req: SurveySplatPipelineRequest): Promise<BakedGaussian[]> {
+    private async bakeStation(baker: string, res: BeautifyStationResult, outSplat: string, req: SurveySplatPipelineRequest): Promise<{ splatCount: number; splatPath: string }> {
         const { width, height } = res.blockout;
         const img = res.image;
         // Resample the generated image onto the blockout grid if the model changed resolution
@@ -194,10 +227,19 @@ export class SurveySplatPipelineService {
         await fs.outputFile(`${base}.rgb`, rgb);
         await fs.outputFile(`${base}.depth.f32`, depth);
         await fs.writeJson(`${base}.pose.json`, pose);
-        const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --sigma-scale ${req.sigmaScale ?? 0.95} --min-cos-incidence ${req.minCosIncidence ?? 0.12} --json`;
-        await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024 });
+        const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
+        const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --sigma-scale ${req.sigmaScale ?? 0.95} --min-cos-incidence ${req.minCosIncidence ?? 0.12} ${dropFoliageArg} --json`;
+        const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024 });
         await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
-        return SplatService.parseSplatBuffer(await fs.readFile(outSplat));
+        let splatCount = 0;
+        try {
+            const parsed = JSON.parse(stdout.trim());
+            splatCount = parsed.numSplats ?? 0;
+        } catch {
+            const st = await fs.stat(outSplat);
+            splatCount = Math.floor(st.size / 32);
+        }
+        return { splatCount, splatPath: outSplat };
     }
 
     private meshCache: { path: string; mesh: any } | null = null;

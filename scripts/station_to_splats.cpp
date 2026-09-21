@@ -63,11 +63,155 @@ static bool jsonVec3(const std::string& s, const std::string& key, Vec3& out) {
     return true;
 }
 
+static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
+    auto t0 = std::chrono::high_resolution_clock::now();
+    std::ifstream listFile(listPath);
+    if (!listFile.is_open()) {
+        std::cerr << "ERROR: Failed to open fuse list: " << listPath << std::endl;
+        return 1;
+    }
+    std::vector<std::string> splatPaths;
+    std::string line;
+    while (std::getline(listFile, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+        size_t s = 0;
+        while (s < line.size() && (line[s] == ' ' || line[s] == '\t')) ++s;
+        if (s < line.size() && line[s] != '#') {
+            splatPaths.push_back(line.substr(s));
+        }
+    }
+    if (splatPaths.empty()) {
+        std::cerr << "ERROR: No valid splat paths found in fuse list" << std::endl;
+        return 1;
+    }
+
+    struct VoxelKey {
+        int64_t x, y, z;
+        bool operator==(const VoxelKey& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct VoxelKeyHash {
+        size_t operator()(const VoxelKey& k) const {
+            size_t h = 14695981039346656037ULL;
+            h = (h ^ static_cast<size_t>(k.x * 73856093)) * 1099511628211ULL;
+            h = (h ^ static_cast<size_t>(k.y * 19349663)) * 1099511628211ULL;
+            h = (h ^ static_cast<size_t>(k.z * 83492791)) * 1099511628211ULL;
+            return h;
+        }
+    };
+
+    std::unordered_map<VoxelKey, GaussianSplat, VoxelKeyHash> grid;
+    float invVoxel = 1.0f / std::max(0.001f, voxelSize);
+    size_t totalInputSplats = 0;
+
+    for (const auto& sp : splatPaths) {
+        std::vector<uint8_t> bytes = readAll(sp);
+        if (bytes.empty()) continue;
+        std::vector<GaussianSplat> stationSplats = SplatCodec::decode(bytes.data(), bytes.size());
+        totalInputSplats += stationSplats.size();
+
+        for (const auto& s : stationSplats) {
+            float distH = std::hypot(s.position.x, s.position.z);
+            if (cropRadius > 0.0f && distH > cropRadius) continue;
+
+            if (dropFoliage) {
+                const float rVal = s.color.x;
+                const float gVal = s.color.y;
+                const float bVal = s.color.z;
+                const float sumRgb = rVal + gVal + bVal + 1e-5f;
+                const float gn = gVal / sumRgb;
+                const float exg = 2.0f * gVal - rVal - bVal;
+                const bool isOrganic = (gn > 0.38f && gVal > rVal + 0.02f && gVal > bVal + 0.02f) || (exg > 0.10f);
+                // Also drop non-structural dark sludge outside the focal landmark ring
+                const bool isDarkSludge = (distH > 95.0f) && (rVal < 0.28f && gVal < 0.28f && bVal < 0.28f);
+                if (isOrganic || isDarkSludge) continue;
+            }
+
+            int64_t vx = static_cast<int64_t>(std::floor(s.position.x * invVoxel));
+            int64_t vy = static_cast<int64_t>(std::floor(s.position.y * invVoxel));
+            int64_t vz = static_cast<int64_t>(std::floor(s.position.z * invVoxel));
+            VoxelKey key{vx, vy, vz};
+
+            float sa = std::max(s.scale.x, s.scale.y) / std::max(1e-6f, std::min(s.scale.x, s.scale.y));
+
+            auto it = grid.find(key);
+            if (it == grid.end()) {
+                grid[key] = s;
+            } else {
+                float ea = std::max(it->second.scale.x, it->second.scale.y) / std::max(1e-6f, std::min(it->second.scale.x, it->second.scale.y));
+                if (sa < ea * 0.9f) {
+                    it->second = s;
+                } else if (sa <= ea * 1.1f) {
+                    it->second.color = (it->second.color + s.color) * 0.5f;
+                }
+            }
+        }
+    }
+
+    std::vector<GaussianSplat> fused;
+    fused.reserve(grid.size());
+    Vec3 bMin(1e9f, 1e9f, 1e9f), bMax(-1e9f, -1e9f, -1e9f);
+    for (auto& pair : grid) {
+        const auto& s = pair.second;
+        bMin.x = std::min(bMin.x, s.position.x);
+        bMin.y = std::min(bMin.y, s.position.y);
+        bMin.z = std::min(bMin.z, s.position.z);
+        bMax.x = std::max(bMax.x, s.position.x);
+        bMax.y = std::max(bMax.y, s.position.y);
+        bMax.z = std::max(bMax.z, s.position.z);
+        fused.push_back(s);
+    }
+    if (fused.empty()) {
+        bMin = Vec3(0, 0, 0);
+        bMax = Vec3(0, 0, 0);
+    }
+
+    // Median sigma from stride
+    float medianSigma = 0.05f;
+    if (!fused.empty()) {
+        size_t step = std::max(size_t(1), fused.size() / 5000);
+        std::vector<float> sigmas;
+        sigmas.reserve(fused.size() / step + 1);
+        for (size_t i = 0; i < fused.size(); i += step) {
+            sigmas.push_back(std::max(fused[i].scale.x, fused[i].scale.y));
+        }
+        std::sort(sigmas.begin(), sigmas.end());
+        medianSigma = sigmas[sigmas.size() / 2];
+    }
+
+    size_t splatBytes = 0, spzBytes = 0;
+    if (!outSplat.empty()) {
+        std::vector<uint8_t> bytes = SplatCodec::encode(fused);
+        std::ofstream o(outSplat, std::ios::binary);
+        o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        splatBytes = bytes.size();
+    }
+    if (!outSpz.empty()) {
+        std::vector<uint8_t> bytes = SpzCodec::encode(fused);
+        std::ofstream o(outSpz, std::ios::binary);
+        o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        spzBytes = bytes.size();
+    }
+
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
+    if (emitJson) {
+        std::cout << "{\"success\":true,\"totalInputSplats\":" << totalInputSplats
+                  << ",\"fusedSplatCount\":" << fused.size()
+                  << ",\"splatBytes\":" << splatBytes
+                  << ",\"spzBytes\":" << spzBytes
+                  << ",\"medianSigma\":" << medianSigma
+                  << ",\"bounds\":{\"min\":[" << bMin.x << "," << bMin.y << "," << bMin.z << "],\"max\":[" << bMax.x << "," << bMax.y << "," << bMax.z << "]}"
+                  << ",\"durationMs\":" << ms << "}" << std::endl;
+    } else {
+        std::cout << "[Fuse] " << totalInputSplats << " input splats -> " << fused.size() << " fused splats in " << ms << " ms" << std::endl;
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    std::string rgbPath, depthPath, posePath, outSplat, outSpz;
+    std::string rgbPath, depthPath, posePath, outSplat, outSpz, fuseListPath;
     int W = 0, H = 0, stride = 1;
-    float sigmaScale = 0.95f, tau = 0.08f, maxDepth = 400.0f, minCosIncidence = 0.12f;
-    bool emitJson = false;
+    float sigmaScale = 0.95f, tau = 0.08f, maxDepth = 400.0f, minCosIncidence = 0.12f, voxelSize = 0.20f, cropRadius = 0.0f;
+    bool emitJson = false, dropFoliage = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&](std::string& dst) { if (i + 1 < argc) dst = argv[++i]; };
@@ -76,6 +220,9 @@ int main(int argc, char** argv) {
         else if (a == "--pose") next(posePath);
         else if (a == "--out-splat") next(outSplat);
         else if (a == "--out-spz") next(outSpz);
+        else if (a == "--fuse-list") next(fuseListPath);
+        else if (a == "--voxel-size" && i + 1 < argc) voxelSize = std::stof(argv[++i]);
+        else if (a == "--crop-radius" && i + 1 < argc) cropRadius = std::stof(argv[++i]);
         else if (a == "--width" && i + 1 < argc) W = std::stoi(argv[++i]);
         else if (a == "--height" && i + 1 < argc) H = std::stoi(argv[++i]);
         else if (a == "--stride" && i + 1 < argc) stride = std::max(1, std::stoi(argv[++i]));
@@ -83,10 +230,17 @@ int main(int argc, char** argv) {
         else if (a == "--tau" && i + 1 < argc) tau = std::stof(argv[++i]);
         else if (a == "--max-depth" && i + 1 < argc) maxDepth = std::stof(argv[++i]);
         else if (a == "--min-cos-incidence" && i + 1 < argc) minCosIncidence = std::stof(argv[++i]);
+        else if (a == "--drop-foliage") dropFoliage = true;
         else if (a == "--json") emitJson = true;
     }
+
+    if (!fuseListPath.empty()) {
+        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, outSplat, outSpz, emitJson);
+    }
+
     if (rgbPath.empty() || depthPath.empty() || posePath.empty() || (outSplat.empty() && outSpz.empty()) || W <= 0 || H <= 0) {
-        std::cerr << "Usage: station_to_splats --rgb rgb24.raw --depth depth.f32 --width W --height H --pose pose.json --out-splat out.splat [--out-spz out.spz] [--stride 1] [--sigma-scale 0.95] [--tau 0.08] [--min-cos-incidence 0.12] [--json]" << std::endl;
+        std::cerr << "Usage: station_to_splats --rgb rgb24.raw --depth depth.f32 --width W --height H --pose pose.json --out-splat out.splat [--out-spz out.spz] [--stride 1] [--sigma-scale 0.95] [--tau 0.08] [--min-cos-incidence 0.12] [--drop-foliage] [--json]" << std::endl;
+        std::cerr << "   or: station_to_splats --fuse-list list.txt --voxel-size 0.20 [--crop-radius 115.0] [--drop-foliage] --out-splat fused.splat [--out-spz fused.spz] [--json]" << std::endl;
         return 1;
     }
 
@@ -122,7 +276,7 @@ int main(int argc, char** argv) {
 
     std::vector<GaussianSplat> splats;
     splats.reserve(static_cast<size_t>(W / stride) * (H / stride));
-    size_t severed = 0, grazing = 0;
+    size_t severed = 0, grazing = 0, foliageDropped = 0;
     for (int v = 0; v < H; v += stride) {
         for (int u = 0; u < W; u += stride) {
             if (!valid(u, v)) continue;
@@ -130,13 +284,29 @@ int main(int argc, char** argv) {
             const size_t ci = (static_cast<size_t>(v) * W + u) * channels;
             if (channels == 4 && rgb[ci + 3] < 16) continue;
 
+            const float rVal = rgb[ci] / 255.0f;
+            const float gVal = rgb[ci + 1] / 255.0f;
+            const float bVal = rgb[ci + 2] / 255.0f;
+            const float sumRgb = rVal + gVal + bVal + 1e-5f;
+            const float rn = rVal / sumRgb, gn = gVal / sumRgb, bn = bVal / sumRgb;
+
+            // Organic foliage / vegetation detection (Excess Green Index ExG = 2G - R - B)
+            const float exg = 2.0f * gVal - rVal - bVal;
+            const bool isOrganic = (gn > 0.38f && gVal > rVal + 0.02f && gVal > bVal + 0.02f) || (exg > 0.12f);
+            if (isOrganic && dropFoliage) {
+                foliageDropped++;
+                continue;
+            }
+
             const Vec3 p = world(u, v);
             // Neighbours for the tangent plane, respecting edge severance (relative depth jump > tau)
+            // On organic foliage, use tighter severance to prevent smooth canopy bridging
+            const float localTau = isOrganic ? tau * 0.35f : tau;
             auto pick = [&](int du, int dv, Vec3& out) -> bool {
                 int uu = u + du, vv = v + dv;
                 if (!valid(uu, vv)) return false;
                 float zn = depth[vv * W + uu];
-                if (std::fabs(zn - z) / z > tau) return false;
+                if (std::fabs(zn - z) / z > localTau) return false;
                 out = world(uu, vv);
                 return true;
             };
@@ -161,6 +331,7 @@ int main(int argc, char** argv) {
             const float spacing = z / fx * static_cast<float>(stride);
             float sigma = spacing * sigmaScale;
             if (isolated) sigma *= 0.6f;
+            if (isOrganic) sigma *= 0.5f;
             // Foreshortening compensation along the steepest direction (cap 2x)
             const float cosInc = std::max(0.5f, std::fabs(n.dot(toCam)));
             const float elong = 1.0f / cosInc;
@@ -204,9 +375,9 @@ int main(int argc, char** argv) {
     double ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
     if (emitJson) {
         std::cout << "{\"success\":true,\"numSplats\":" << splats.size() << ",\"severedEdges\":" << severed << ",\"grazingDropped\":" << grazing
-                  << ",\"splatBytes\":" << splatBytes << ",\"spzBytes\":" << spzBytes << ",\"durationMs\":" << ms << "}" << std::endl;
+                  << ",\"foliageDropped\":" << foliageDropped << ",\"splatBytes\":" << splatBytes << ",\"spzBytes\":" << spzBytes << ",\"durationMs\":" << ms << "}" << std::endl;
     } else {
-        std::cout << "[StationSplats] " << splats.size() << " splats (" << severed << " edge-severed) in " << ms << " ms" << std::endl;
+        std::cout << "[StationSplats] " << splats.size() << " splats (" << severed << " edge-severed, " << foliageDropped << " foliage-dropped) in " << ms << " ms" << std::endl;
     }
     return 0;
 }

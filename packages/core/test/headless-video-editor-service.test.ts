@@ -278,4 +278,211 @@ describe('HeadlessVideoEditorService', () => {
             })).rejects.toThrow('at least 2 clips');
         });
     });
+
+    describe('Storyboard Sheet (Dry Run)', () => {
+        it('constructs mosaic grid with timecode burn and tile filter', async () => {
+            const result = await service.generateStoryboardSheet({
+                inputPath: '/workspace/input.mp4',
+                outputPath: '/workspace/storyboard.png',
+                columns: 3,
+                rows: 3,
+                cellWidth: 640,
+                cellHeight: 360,
+                labelTimecode: true,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('tile=3x3:nb_frames=9');
+            expect(result.commandString).toContain('drawtext=text=');
+            expect(result.commandString).toContain('scale=640:360');
+            expect(result.commandString).toContain('-frames:v 1');
+        });
+    });
+
+    describe('3D LUT Grading (Dry Run)', () => {
+        it('constructs 100% intensity tetrahedral LUT3D filter', async () => {
+            const result = await service.applyLutGrade({
+                inputPath: '/workspace/input.mp4',
+                lutPath: '/workspace/kodak_2383.cube',
+                outputPath: '/workspace/graded.mp4',
+                intensity: 1.0,
+                interpolation: 'tetrahedral',
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain("lut3d=file='/workspace/kodak_2383.cube':interp=tetrahedral");
+            expect(result.commandString).toContain('-pix_fmt yuv420p');
+            expect(result.commandString).toContain('-movflags +faststart');
+        });
+
+        it('constructs blended intensity filter graph when intensity < 1.0', async () => {
+            const result = await service.applyLutGrade({
+                inputPath: '/workspace/input.mp4',
+                lutPath: '/workspace/kodak_2383.cube',
+                outputPath: '/workspace/graded_75.mp4',
+                intensity: 0.75,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('blend=all_mode=normal:all_opacity=0.75');
+            expect(result.commandString).toContain('-map [v]');
+        });
+    });
+
+    describe('Chroma Keying (Dry Run)', () => {
+        it('constructs green screen chromakey with despill and background overlay', async () => {
+            const result = await service.applyChromaKey({
+                inputPath: '/workspace/fg_green.mp4',
+                backgroundPath: '/workspace/bg_plate.mp4',
+                outputPath: '/workspace/composite.mp4',
+                keyColor: 'green',
+                similarity: 0.12,
+                blend: 0.08,
+                spillSuppression: true,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('chromakey=0x00FF00:0.12:0.08,despill=green');
+            expect(result.commandString).toContain('overlay=0:0:shortest=1');
+            expect(result.commandString).toContain('-pix_fmt yuv420p');
+        });
+    });
+
+    describe('Conditioning Maps (Dry Run)', () => {
+        it('constructs Sobel edge conditioning map', async () => {
+            const result = await service.generateConditioningMap({
+                inputPath: '/workspace/input.mp4',
+                outputPath: '/workspace/edge_map.mp4',
+                mapType: 'edge',
+                strength: 1.5,
+                threshold: 0.1,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('format=gray,sobel=scale=3.00,lut=y=val-26,format=yuv420p');
+            expect(result.commandString).toContain('-an');
+            expect(result.commandString).toContain('-pix_fmt yuv420p');
+        });
+
+        it('constructs height/displacement conditioning map', async () => {
+            const result = await service.generateConditioningMap({
+                inputPath: '/workspace/input.mp4',
+                outputPath: '/workspace/height_map.mp4',
+                mapType: 'height',
+                strength: 2.0,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('format=gray,lut=y=(val-128)*2.00+128,format=yuv420p');
+        });
+    });
+
+    describe('Camera Motion Stabilization (Dry Run)', () => {
+        it('constructs two-pass vidstabdetect and vidstabtransform pipeline', async () => {
+            const result = await service.stabilizeMotion({
+                inputPath: '/workspace/drone_shake.mp4',
+                outputPath: '/workspace/drone_stable.mp4',
+                shakiness: 8,
+                accuracy: 12,
+                smoothing: 45,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commands?.length).toBe(2);
+            expect(result.commands?.[0]).toContain('vidstabdetect=stepsize=6:shakiness=8:accuracy=12');
+            expect(result.commands?.[1]).toContain('vidstabtransform=input=');
+            expect(result.commands?.[1]).toContain('smoothing=45');
+        });
+    });
+
+    describe('Seamless Loop (Dry Run)', () => {
+        it('constructs ping-pong reverse concat loop', async () => {
+            const result = await service.createSeamlessLoop({
+                inputPath: '/workspace/ambient.mp4',
+                outputPath: '/workspace/ambient_loop.mp4',
+                mode: 'ping_pong',
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('reverse[rev]');
+            expect(result.commandString).toContain('concat=n=2:v=1:a=0');
+        });
+
+        it('constructs temporal crossfade transition loop', async () => {
+            const result = await service.createSeamlessLoop({
+                inputPath: '/workspace/ambient.mp4',
+                outputPath: '/workspace/ambient_xfade.mp4',
+                mode: 'crossfade',
+                crossfadeDurationSec: 1.5,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('xfade=transition=fade:duration=1.500:offset=0');
+        });
+    });
+
+    describe('Audio Loudness Normalization (Dry Run)', () => {
+        it('constructs EBU R128 loudnorm filter with video copy', async () => {
+            const result = await service.normalizeAudioLoudness({
+                inputPath: '/workspace/video_quiet.mp4',
+                outputPath: '/workspace/video_normalized.mp4',
+                targetLufs: -14,
+                loudnessRange: 7,
+                truePeak: -1.0,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('loudnorm=I=-14:LRA=7:TP=-1');
+            expect(result.commandString).toContain('-c:v copy');
+            expect(result.commandString).toContain('-c:a aac');
+        });
+    });
+
+    describe('Audio Ducking (Dry Run)', () => {
+        it('constructs sidechain compression ducking filter complex', async () => {
+            const result = await service.duckAudio({
+                musicTrackPath: '/workspace/bg_music.mp3',
+                voiceoverTrackPath: '/workspace/voice.wav',
+                outputPath: '/workspace/mixed_audio.mp4',
+                threshold: 0.08,
+                ratio: 4,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('sidechaincompress=threshold=0.08:ratio=4:attack=50:release=500');
+            expect(result.commandString).toContain('amix=inputs=2:dropout_transition=0');
+        });
+    });
+
+    describe('Frame Sequence Encoding (Dry Run)', () => {
+        it('constructs numbered frame sequence ingestion with progressive faststart', async () => {
+            const result = await service.encodeFrameSequence({
+                framePattern: '/workspace/renders/frame_%04d.png',
+                outputPath: '/workspace/render_output.mp4',
+                fps: 24,
+                codec: 'h264',
+                crf: 18,
+                faststart: true,
+                dryRun: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.commandString).toContain('-framerate 24');
+            expect(result.commandString).toContain('-i /workspace/renders/frame_%04d.png');
+            expect(result.commandString).toContain('-c:v libx264');
+            expect(result.commandString).toContain('-pix_fmt yuv420p');
+            expect(result.commandString).toContain('-movflags +faststart');
+        });
+    });
 });

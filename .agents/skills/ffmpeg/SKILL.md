@@ -1,6 +1,6 @@
 ---
 name: ffmpeg
-description: Authoritative reference for every FFmpeg / ffprobe operation in Scratchbox IDE. Use whenever building, running, or modifying server-side video features, agent video editing, keyframe extraction, clip trimming, safe N-way concat, 50/50 comparison splits, letterbox removal, GIF conversion, audio re-muxing, Kelvin color filter baking, and headless compositing.
+description: Authoritative reference for every FFmpeg / ffprobe operation in Scratchbox IDE. Use whenever building, running, or modifying server-side video features, agent video editing, keyframe extraction, clip trimming, safe N-way concat, 50/50 comparison splits, letterbox removal, GIF conversion, audio re-muxing, Kelvin color filter baking, 3D LUT grading, chroma keying, video conditioning maps, audio ducking, loudness normalization, and headless compositing.
 ---
 
 # FFmpeg & Video Engineering in Scratchbox IDE
@@ -11,7 +11,7 @@ This skill catalogs every FFmpeg and ffprobe operation available in Scratchbox I
 
 - **Always** use `execFile` with an argument array, never `exec` with a raw shell string. Untrusted user content (paths, prompts, filters) must never be shell-interpolated.
 - **Always** use system `ffmpeg` / `ffprobe` binaries auto-discovered via `resolveBinary` (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, or `PATH`). Do not bundle static binaries or import heavy wrapper libraries.
-- **Always** enforce `-pix_fmt yuv420p` and `-movflags +faststart` on H.264 MP4 exports to prevent the QuickTime/Chrome black-screen playback bug.
+- **Always** enforce `-pix_fmt yuv420p` and `-movflags +faststart` on H.264 MP4 exports to prevent the QuickTime/Chrome black-screen playback bug and allow zero-latency progressive download/scrubbing.
 - **Always** pass `-y` to overwrite destination files and prevent FFmpeg from hanging on interactive terminal prompts.
 - **Always** specify an explicit `timeout` on subprocesses and raise `maxBuffer` ($\ge 32\text{ MB}$) when parsing filters that log per-frame (`select` scene detection, `cropdetect`).
 - **Always** clean up temporary working files under `/tmp/scratchbox-ffmpeg-...-${randomUUID()}` in a `try/finally` block.
@@ -46,13 +46,49 @@ Compile synchronized 50/50 comparison split videos (mandated by Scratchbox IDE v
 - Automatically normalizes both video streams to matching heights and frame rates.
 - Maps audio safely from the primary video stream.
 
-### 4. `vfx_composite_patch`
+### 4. `vfx_ffmpeg_storyboard_sheet`
+Compile a video into a single high-resolution contact sheet mosaic grid (`tile` filter) for token-efficient multimodal Gemini Vision inspection:
+- Layouts: `columns` × `rows` (e.g. 3×3, 4×4, 5×5).
+- Optional timestamp/timecode overlay (`labelTimecode: true`) burnt into each frame cell.
+- Delivers complete temporal and spatial comprehension of the video in a single prompt image.
+
+### 5. `vfx_ffmpeg_lut_grade`
+Apply industry-standard 3D `.cube` or `.3dl` color grading LUTs (ACEScc, Kodak 2383, ARRI LogC) via `lut3d`:
+- Configurable intensity blending (0.0 to 1.0) and tetrahedral interpolation.
+- Preserves audio stream and embeds `+faststart` metadata.
+
+### 6. `vfx_ffmpeg_chromakey`
+Execute headless green or blue screen chroma keying with color despill suppression:
+- Color selection (`green`, `blue`, or hex RGB like `0x00FF00`).
+- Configurable similarity threshold and softness blend radius.
+- Composite directly onto a background video/image or export transparent RGBA video.
+
+### 7. `vfx_ffmpeg_controlnet_map`
+Extract zero-inference video conditioning maps in a single FFmpeg pass:
+- **`edge`**: Sobel filter chain with luminance thresholding and optional inversion for line-art/depth conditioning.
+- **`height`**: Luminance-to-displacement map with tunable contrast scaling.
+- Runs 10× to 50× faster than running heavy neural models or decoding frames to canvas.
+
+### 8. `vfx_ffmpeg_audio_normalize`
+Broadcast and streaming audio loudness normalization conforming to EBU R128 (`loudnorm`):
+- Targets: `-14 LUFS` for web/streaming (YouTube/Vimeo/Spotify) or `-23 LUFS` for EBU broadcast standards.
+- Copies video stream losslessly (`-c:v copy`).
+
+### 9. `vfx_ffmpeg_seamless_loop`
+Synthesize seamless infinite video loops for 3D environment plates, backgrounds, and generative media:
+- Modes: `ping_pong` (forward-reverse reflection) or `crossfade` (`xfade` blending tail into head).
+
+### 10. `vfx_ffmpeg_encode_sequence`
+Ingest numbered image sequences (`frame_%04d.png/jpg`) rendered from 3D viewports, Gaussian splats, or NeRFs into broadcast video:
+- Deterministic frame rate (`fps`), codec selection (`h264`, `prores`, `vp9`), and optional audio track muxing with `-shortest`.
+
+### 11. `vfx_composite_patch`
 Composite localized generative video patches or 3D overlays onto a master video plate:
 - Downscales patch to target bounding box using **Lanczos-8** resampling.
-- Generates an analytical soft-feathered alpha edge mask via `geq` (`format=rgba,geq=...:a='min(1,min(...))*255'`).
+- Generates an analytical soft-feathered alpha edge mask via `geq`.
 - Injects matching temporal film grain (`noise=alls=...:allf=t+u`) to eliminate AI plastic smoothness.
 
-### 5. `vfx_composite_timeline`
+### 12. `vfx_composite_timeline`
 Renders a complete multi-track `VideoTimelineData` structure:
 - Multi-track layering (V1 background to top overlays).
 - Chroma keying with Euclidean YCbCr tolerance and green/blue despill suppression.
@@ -82,52 +118,96 @@ ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of def
 ffmpeg -y -ss 00:00:01.500 -i INPUT.mp4 -frames:v 1 -q:v 2 OUT.png
 ```
 
-### 3. Clip Trimming
+### 3. Storyboard Contact Sheet Tiling (For Gemini Multimodal Vision)
 ```bash
-# Keyframe-accurate fast cut (no re-encode)
-ffmpeg -y -ss 00:00:02.000 -i INPUT.mp4 -t 00:00:05.000 -c copy -avoid_negative_ts make_zero OUT.mp4
-
-# Re-encoded cut with exact sub-frame accuracy
-ffmpeg -y -ss 00:00:02.000 -i INPUT.mp4 -t 00:00:05.000 -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -c:a aac -movflags +faststart OUT.mp4
+# Extract 9 evenly sampled frames with timecode burned in, packed into a 3x3 grid
+ffmpeg -y -i INPUT.mp4 \
+  -vf "fps=1/1.5,scale=640:360:flags=lanczos,drawtext=text='%{pts\\:hms}':x=10:y=h-24:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6,tile=3x3:padding=6:margin=6:color=black" \
+  -frames:v 1 -q:v 2 STORYBOARD.png
 ```
 
-### 4. Safe N-Way Concat with Audio Normalization
+### 4. 3D LUT Color Grading (.cube)
 ```bash
-# 1. Normalize each clip: SAR 1, 30fps, 44.1kHz audio (or anullsrc if silent), yuv420p
-ffmpeg -y -i INPUT.mp4 -f lavfi -i anullsrc=r=44100:cl=stereo -shortest \
-  -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p" \
-  -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p \
-  -c:a aac -ar 44100 -ac 2 -b:a 128k -movflags +faststart NORM_0.mp4
+# 100% intensity tetrahedral LUT grading
+ffmpeg -y -i INPUT.mp4 \
+  -vf "lut3d=file='kodak_2383.cube':interp=tetrahedral" \
+  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -c:a copy -movflags +faststart GRADED.mp4
 
-# 2. Concat demuxer (lossless -c copy)
-ffmpeg -y -f concat -safe 0 -i concat.txt -c copy -movflags +faststart STITCHED.mp4
+# Blended 75% intensity LUT grading
+ffmpeg -y -i INPUT.mp4 \
+  -filter_complex "[0:v]split[orig][lut];[lut]lut3d=file='look.cube':interp=tetrahedral[graded];[orig][graded]blend=all_mode=normal:all_opacity=0.75[v]" \
+  -map "[v]" -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -c:a copy -movflags +faststart GRADED_75.mp4
 ```
 
-### 5. 50/50 Side-by-Side Comparison Split
+### 5. Green Screen Chroma Keying & Despill
+```bash
+# Key green screen foreground over background plate
+ffmpeg -y -i FG_GREENSCREEN.mp4 -i BG_PLATE.mp4 \
+  -filter_complex "[0:v]chromakey=0x00FF00:0.12:0.08,despill=green[keyed];[1:v]scale=1920:1080[bg];[bg][keyed]overlay=0:0:shortest=1[v]" \
+  -map "[v]" -map 0:a:0? -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -movflags +faststart COMPOSITE.mp4
+```
+
+### 6. Real-Time Video Conditioning Maps (Sobel Edge / Height)
+```bash
+# Single-pass Sobel edge map for ControlNet/diffusion conditioning
+ffmpeg -y -i INPUT.mp4 \
+  -vf "format=gray,sobel=scale=2,lut=y=val-20,negate,format=yuv420p" \
+  -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p -an -movflags +faststart EDGE_MAP.mp4
+
+# Height/luminance displacement map
+ffmpeg -y -i INPUT.mp4 \
+  -vf "format=gray,lut=y=(val-128)*1.5+128,format=yuv420p" \
+  -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p -an -movflags +faststart HEIGHT_MAP.mp4
+```
+
+### 7. Broadcast EBU R128 Audio Normalization
+```bash
+# Conforming audio loudness to -14 LUFS (web) with video copy
+ffmpeg -y -i INPUT.mp4 \
+  -af "loudnorm=I=-14:LRA=7:TP=-1.0" \
+  -c:v copy -c:a aac -b:a 192k -movflags +faststart NORMALIZED.mp4
+```
+
+### 8. Intelligent Dynamic Audio Ducking
+```bash
+# Ducks background music whenever voiceover is speaking
+ffmpeg -y -i MUSIC.mp3 -i VOICEOVER.wav \
+  -filter_complex "[0:a]volume=0.8[music];[1:a]volume=1.0[voice];[music][voice]sidechaincompress=threshold=0.08:ratio=4:attack=50:release=500[ducked];[ducked][voice]amix=inputs=2:dropout_transition=0[aout]" \
+  -map "[aout]" -c:a aac -b:a 192k DUCKED_MIX.mp4
+```
+
+### 9. Seamless Infinite Video Looping
+```bash
+# Ping-pong reflection (forward + reverse)
+ffmpeg -y -i INPUT.mp4 \
+  -filter_complex "[0:v]reverse[rev];[0:v][rev]concat=n=2:v=1:a=0[v]" \
+  -map "[v]" -c:v libx264 -preset fast -crf 19 -pix_fmt yuv420p -movflags +faststart LOOP.mp4
+
+# Temporal crossfade transition between tail and head (1.0s crossfade on 5.0s clip)
+ffmpeg -y -i INPUT.mp4 \
+  -filter_complex "[0:v]split[v1][v2];[v1]trim=start=0:end=4,setpts=PTS-STARTPTS[head];[v2]trim=start=4:end=5,setpts=PTS-STARTPTS[tail];[tail][head]xfade=transition=fade:duration=1.0:offset=0[v]" \
+  -map "[v]" -c:v libx264 -preset fast -crf 19 -pix_fmt yuv420p -movflags +faststart SEAMLESS.mp4
+```
+
+### 10. Frame Sequence Ingestion
+```bash
+# Numbered PNG/JPG render sequence to broadcast MP4 with faststart
+ffmpeg -y -framerate 24 -i "/workspace/renders/frame_%04d.png" -i OPTIONAL_AUDIO.wav \
+  -map 0:v -map 1:a? -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k \
+  -shortest -movflags +faststart RENDER_OUTPUT.mp4
+```
+
+### 11. 50/50 Side-by-Side Comparison Split
 ```bash
 ffmpeg -y -i LEFT.mp4 -i RIGHT.mp4 \
   -filter_complex "[0:v]scale=960:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=960:1080[left];[1:v]scale=960:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=960:1080[right];[left][right]hstack[v]" \
   -map "[v]" -map 0:a:0? -c:v libx264 -preset fast -crf 19 -pix_fmt yuv420p -movflags +faststart COMPARISON.mp4
 ```
 
-### 6. Video Filter Bake & Color Temperature
+### 12. Two-Pass Camera Stabilization
 ```bash
-# Kelvin color temperature + exposure/contrast + film grain
-ffmpeg -y -i INPUT.mp4 \
-  -vf "colortemperature=temperature=3200:mix=0.85,eq=brightness=0.02:contrast=1.12:saturation=1.08,noise=alls=12:allf=t+u" \
-  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -c:a copy OUT.mp4
-```
-
-### 7. Audio Re-Muxing (Original Audio onto AI Video)
-```bash
-ffmpeg -y -i AI_VIDEO.mp4 -i ORIGINAL_PLATE.mp4 \
-  -map 0:v:0 -map 1:a:0? -c:v copy -c:a aac -ar 44100 -ac 2 -b:a 128k \
-  -shortest -movflags +faststart OUT.mp4
-```
-
-### 8. High-Quality 2-Pass Palette GIF
-```bash
-ffmpeg -y -ss 0 -i INPUT.mp4 -t 4 \
-  -vf "fps=15,scale=640:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
-  OUT.gif
+# Pass 1: Motion vector transform calculation
+ffmpeg -y -i INPUT.mp4 -vf "vidstabdetect=stepsize=6:shakiness=8:accuracy=10:result=transforms.trf" -f null -
+# Pass 2: Smoothing and optical zoom compensation
+ffmpeg -y -i INPUT.mp4 -vf "vidstabtransform=input=transforms.trf:smoothing=30:zoom=2:optzoom=1" -c:v libx264 -preset fast -crf 18 -c:a copy STABILIZED.mp4
 ```

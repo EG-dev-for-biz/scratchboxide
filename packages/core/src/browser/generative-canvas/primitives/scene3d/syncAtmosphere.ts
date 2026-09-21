@@ -274,7 +274,8 @@ export function syncAtmosphere(
             terrainCloudShadows?.attachToMaterial(terrainFloorMat);
             const terrainFloor = new THREE.Mesh(terrainFloorGeo, terrainFloorMat);
             terrainFloor.name = 'sb-terrain-floor';
-            terrainFloor.position.y = -8.0;
+            // Canonical Google Maps Ground Standard: street/terrain surface is strictly at Y = 0.0m
+            terrainFloor.position.y = 0.0;
             scene.add(terrainFloor);
             owned.push(terrainFloor);
         }

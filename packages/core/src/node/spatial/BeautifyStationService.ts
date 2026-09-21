@@ -237,6 +237,22 @@ export class BeautifyStationService {
             }
             return last!;
         };
+        const initialEdges = renderFunc(initial);
+        const initMetrics = evaluateEdgeOverlap(queryField, initialEdges);
+        if (initMetrics.overlapScorePercent >= 90.0 || thresholds.maxIterations === 0) {
+            return {
+                qc: {
+                    overlapPercent: initMetrics.overlapScorePercent,
+                    residualPx: initMetrics.residualPx,
+                    deltaYawDeg: 0,
+                    deltaPitchDeg: 0,
+                    deltaPositionM: 0,
+                    passed: true
+                },
+                aligned: station
+            };
+        }
+
         // Candidate A: fine-only from the station pose (wins when the model kept the framing).
         // Candidate B: coarse-to-fine on blurred fields (wins when the model recomposed by many pixels).
         // Both are scored on the unblurred structural edges; the better NCC decides.

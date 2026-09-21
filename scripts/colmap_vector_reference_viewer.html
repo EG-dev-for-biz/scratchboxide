@@ -272,6 +272,12 @@
         <button id="btn-beautify-station" onclick="beautifyStation()" disabled class="flex-1 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-[11px] font-bold text-white disabled:opacity-40">Beautify Station</button>
       </div>
       <button id="btn-beautify-all" onclick="beautifyRankedToSplats()" disabled class="w-full py-1.5 rounded-lg bg-purple-700 hover:bg-purple-600 text-[11px] font-bold text-white disabled:opacity-40">Beautify Ranked → Splat 3D Tiles</button>
+      <a id="btn-view-3dgs" href="/spatial_photoreal_3dgs_demo.html?tileset=/tilesets/survey_box/tileset.json&glb=/models/survey_box_ground.glb&mode=clay&hud=1" target="_blank" style="display:none;" class="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-xs font-bold text-white flex items-center justify-center gap-1.5 shadow-lg shadow-purple-900/40 border border-purple-400/40 transition-all text-center no-underline">
+        <span>🚀</span> View Splats + Google 3D Tiles in 3DGS Viewer
+      </a>
+      <a id="btn-view-sample-3dgs" href="/spatial_photoreal_3dgs_demo.html?tileset=/tilesets/survey_box/tileset.json&glb=/models/survey_box_ground.glb&mode=clay&hud=1" target="_blank" class="w-full py-1 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-[10px] text-cyan-300 flex items-center justify-center gap-1 border border-cyan-800/40 transition-all text-center no-underline">
+        <span>🗺️</span> Open Sample Survey (Box Ground)
+      </a>
     </div>
   </aside>
 
@@ -575,7 +581,15 @@
       const cap = document.getElementById('blockout-caption');
       try {
         const { job } = await surveyPost('/beautify-to-splats', { glbPath: currentClayMetadata.glbPath, stations: activePoses.filter(p => rankedStationIds.includes(p.id)), anchor: currentAnchor });
-        await pollJob(job.id, j => { if (cap) cap.textContent = `Splat tiles: ${j.status} ${(j.progress * 100).toFixed(0)}% ${j.message || ''}`; });
+        const done = await pollJob(job.id, j => { if (cap) cap.textContent = `Splat tiles: ${j.status} ${(j.progress * 100).toFixed(0)}% ${j.message || ''}`; });
+        if (done && done.status === 'done' && done.result?.tilesetUrl) {
+          const btn3dgs = document.getElementById('btn-view-3dgs');
+          if (btn3dgs) {
+            const glbTarget = currentClayMetadata?.glbUrl || ('/' + (currentClayMetadata?.glbPath || '').replace(/^public\//, ''));
+            btn3dgs.href = `/spatial_photoreal_3dgs_demo.html?tileset=${encodeURIComponent(done.result.tilesetUrl)}&glb=${encodeURIComponent(glbTarget)}&mode=clay&hud=1`;
+            btn3dgs.style.display = 'flex';
+          }
+        }
       } catch (err) { if (cap) cap.textContent = `Pipeline error: ${err.message}`; }
     };
     refreshSurveyCapabilities();

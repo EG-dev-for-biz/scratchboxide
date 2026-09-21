@@ -125,6 +125,117 @@ export interface ConcatClipsOptions {
     timeoutMs?: number;
 }
 
+export interface StoryboardSheetOptions {
+    inputPath: string;
+    outputPath: string;
+    columns?: number;
+    rows?: number;
+    totalFrames?: number;
+    cellWidth?: number;
+    cellHeight?: number;
+    padding?: number;
+    margin?: number;
+    labelTimecode?: boolean;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface LutGradeOptions {
+    inputPath: string;
+    lutPath: string;
+    outputPath: string;
+    intensity?: number;
+    interpolation?: 'nearest' | 'trilinear' | 'tetrahedral';
+    crf?: number;
+    preset?: string;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface ChromaKeyOptions {
+    inputPath: string;
+    backgroundPath?: string;
+    outputPath: string;
+    keyColor?: string;
+    similarity?: number;
+    blend?: number;
+    spillSuppression?: boolean;
+    crf?: number;
+    preset?: string;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface ConditioningMapOptions {
+    inputPath: string;
+    outputPath: string;
+    mapType: 'edge' | 'height' | 'luminance_contrast';
+    strength?: number;
+    threshold?: number;
+    invert?: boolean;
+    crf?: number;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface MotionStabilizationOptions {
+    inputPath: string;
+    outputPath: string;
+    shakiness?: number;
+    accuracy?: number;
+    smoothing?: number;
+    zoomPercent?: number;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface SeamlessLoopOptions {
+    inputPath: string;
+    outputPath: string;
+    mode?: 'ping_pong' | 'crossfade';
+    crossfadeDurationSec?: number;
+    crf?: number;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface AudioLoudnessOptions {
+    inputPath: string;
+    outputPath: string;
+    targetLufs?: number;
+    loudnessRange?: number;
+    truePeak?: number;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface AudioDuckingOptions {
+    musicTrackPath: string;
+    voiceoverTrackPath: string;
+    outputPath: string;
+    threshold?: number;
+    ratio?: number;
+    attackMs?: number;
+    releaseMs?: number;
+    musicVolume?: number;
+    voiceoverVolume?: number;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
+export interface EncodeFrameSequenceOptions {
+    framePattern: string;
+    outputPath: string;
+    fps?: number;
+    audioSourcePath?: string;
+    codec?: 'h264' | 'prores' | 'vp9';
+    crf?: number;
+    preset?: string;
+    faststart?: boolean;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
 export interface VideoEditorJobResult {
     success: boolean;
     outputPath?: string;
@@ -687,4 +798,715 @@ export class HeadlessVideoEditorService {
             }
         }
     }
+
+    /**
+     * Compiles a video into a single high-resolution contact sheet mosaic grid (`tile` filter)
+     * for token-efficient multimodal Gemini Vision inspection.
+     */
+    async generateStoryboardSheet(opts: StoryboardSheetOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, outputPath } = opts;
+        if (!inputPath || !outputPath) {
+            throw new Error('generateStoryboardSheet: "inputPath" and "outputPath" are required.');
+        }
+
+        const columns = opts.columns || 3;
+        const rows = opts.rows || 3;
+        const totalFrames = opts.totalFrames || (columns * rows);
+        const cellWidth = toEven(opts.cellWidth || 640);
+        const cellHeight = toEven(opts.cellHeight || 360);
+        const padding = opts.padding ?? 4;
+        const margin = opts.margin ?? 4;
+        const labelTimecode = opts.labelTimecode !== false;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 60000;
+
+        let fpsFilter = 'fps=1/2';
+        if (!dryRun && fs.existsSync(inputPath)) {
+            try {
+                const meta = await this.probeMedia(inputPath, 5000);
+                if (meta.durationSec > 0) {
+                    const interval = Math.max(0.1, meta.durationSec / totalFrames);
+                    fpsFilter = `fps=1/${interval.toFixed(4)}`;
+                }
+            } catch {
+                fpsFilter = 'fps=1/2';
+            }
+        }
+
+        const scaleFilter = `scale=${cellWidth}:${cellHeight}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${cellWidth}:${cellHeight}:(ow-iw)/2:(oh-ih)/2`;
+        const timecodeFilter = labelTimecode
+            ? `drawtext=text='%{pts\\:hms}':x=10:y=h-24:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6`
+            : '';
+        const tileFilter = `tile=${columns}x${rows}:nb_frames=${totalFrames}:padding=${padding}:margin=${margin}:color=black`;
+
+        const filterChain = [fpsFilter, scaleFilter, timecodeFilter, tileFilter].filter(Boolean).join(',');
+
+        const args = [
+            '-y',
+            '-i', inputPath,
+            '-vf', filterChain,
+            '-frames:v', '1',
+            '-q:v', '2',
+            outputPath
+        ];
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Applies an industry-standard .cube or .3dl 3D LUT color grade via `lut3d`.
+     */
+    async applyLutGrade(opts: LutGradeOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, lutPath, outputPath } = opts;
+        if (!inputPath || !lutPath || !outputPath) {
+            throw new Error('applyLutGrade: "inputPath", "lutPath", and "outputPath" are required.');
+        }
+
+        const intensity = Math.max(0.0, Math.min(1.0, opts.intensity ?? 1.0));
+        const interpolation = opts.interpolation || 'tetrahedral';
+        const crf = opts.crf ?? 18;
+        const preset = opts.preset || 'fast';
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        let args: string[];
+        if (intensity >= 0.999) {
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-vf', `lut3d=file='${lutPath}':interp=${interpolation}`,
+                '-c:v', 'libx264',
+                '-preset', preset,
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'copy',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        } else {
+            const filterComplex = `[0:v]split[orig][lut];[lut]lut3d=file='${lutPath}':interp=${interpolation}[graded];[orig][graded]blend=all_mode=normal:all_opacity=${intensity.toFixed(2)}[v]`;
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-filter_complex', filterComplex,
+                '-map', '[v]',
+                '-map', '0:a:0?',
+                '-c:v', 'libx264',
+                '-preset', preset,
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'copy',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        }
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Executes green or blue screen chroma keying with despill suppression and optional background composite.
+     */
+    async applyChromaKey(opts: ChromaKeyOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, backgroundPath, outputPath } = opts;
+        if (!inputPath || !outputPath) {
+            throw new Error('applyChromaKey: "inputPath" and "outputPath" are required.');
+        }
+
+        const rawColor = opts.keyColor || '0x00FF00';
+        const colorToken = rawColor.startsWith('#')
+            ? '0x' + rawColor.slice(1)
+            : rawColor.toLowerCase() === 'green'
+                ? '0x00FF00'
+                : rawColor.toLowerCase() === 'blue'
+                    ? '0x0000FF'
+                    : rawColor;
+
+        const similarity = Math.max(0.01, Math.min(1.0, opts.similarity ?? 0.12));
+        const blend = Math.max(0.0, Math.min(0.5, opts.blend ?? 0.08));
+        const spillSuppression = opts.spillSuppression !== false;
+        const despill = spillSuppression
+            ? colorToken.toLowerCase().includes('0000ff') || rawColor.toLowerCase() === 'blue'
+                ? ',despill=blue'
+                : ',despill=green'
+            : '';
+        const crf = opts.crf ?? 18;
+        const preset = opts.preset || 'fast';
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        let args: string[];
+        if (backgroundPath) {
+            const filterComplex = `[0:v]chromakey=${colorToken}:${similarity}:${blend}${despill}[keyed];[1:v]scale=1920:1080:flags=lanczos:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2[bg];[bg][keyed]overlay=0:0:shortest=1[v]`;
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-i', backgroundPath,
+                '-filter_complex', filterComplex,
+                '-map', '[v]',
+                '-map', '0:a:0?',
+                '-c:v', 'libx264',
+                '-preset', preset,
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'copy',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        } else {
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-vf', `chromakey=${colorToken}:${similarity}:${blend}${despill}`,
+                '-c:v', 'libx264',
+                '-preset', preset,
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-c:a', 'copy',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        }
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Extracts single-pass video conditioning maps (Sobel edge or height/luminance) for diffusion/ControlNet.
+     */
+    async generateConditioningMap(opts: ConditioningMapOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, outputPath, mapType } = opts;
+        if (!inputPath || !outputPath || !mapType) {
+            throw new Error('generateConditioningMap: "inputPath", "outputPath", and "mapType" are required.');
+        }
+
+        const strength = opts.strength ?? 1.5;
+        const threshold = Math.max(0.0, Math.min(1.0, opts.threshold ?? 0.1));
+        const invert = !!opts.invert;
+        const crf = opts.crf ?? 20;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        let filterChain: string;
+        if (mapType === 'edge') {
+            const sobelScale = (strength * 2).toFixed(2);
+            const lutThreshold = Math.round(threshold * 255);
+            filterChain = `format=gray,sobel=scale=${sobelScale},lut=y=val-${lutThreshold}${invert ? ',negate' : ''},format=yuv420p`;
+        } else {
+            filterChain = `format=gray,lut=y=(val-128)*${strength.toFixed(2)}+128${invert ? ',negate' : ''},format=yuv420p`;
+        }
+
+        const args = [
+            '-y',
+            '-i', inputPath,
+            '-vf', filterChain,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', String(crf),
+            '-pix_fmt', 'yuv420p',
+            '-an',
+            '-movflags', '+faststart',
+            outputPath
+        ];
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Executes two-pass camera motion stabilization via vidstabdetect and vidstabtransform.
+     */
+    async stabilizeMotion(opts: MotionStabilizationOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, outputPath } = opts;
+        if (!inputPath || !outputPath) {
+            throw new Error('stabilizeMotion: "inputPath" and "outputPath" are required.');
+        }
+
+        const shakiness = Math.max(1, Math.min(10, opts.shakiness ?? 5));
+        const accuracy = Math.max(1, Math.min(15, opts.accuracy ?? 10));
+        const smoothing = Math.max(1, opts.smoothing ?? 30);
+        const zoomPercent = Math.max(0, opts.zoomPercent ?? 0);
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 240000;
+
+        const trfPath = path.join(os.tmpdir(), `scratchbox-vidstab-${randomUUID()}.trf`);
+
+        const pass1Args = [
+            '-y',
+            '-i', inputPath,
+            '-vf', `vidstabdetect=stepsize=6:shakiness=${shakiness}:accuracy=${accuracy}:result=${trfPath}`,
+            '-f', 'null',
+            '-'
+        ];
+
+        const pass2Args = [
+            '-y',
+            '-i', inputPath,
+            '-vf', `vidstabtransform=input=${trfPath}:smoothing=${smoothing}:zoom=${zoomPercent}:optzoom=1`,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            outputPath
+        ];
+
+        const commands = [
+            `${this.ffmpegBin} ${pass1Args.join(' ')}`,
+            `${this.ffmpegBin} ${pass2Args.join(' ')}`
+        ];
+        const combinedCmd = commands.join(' && ');
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: combinedCmd,
+                commandString: combinedCmd,
+                ffmpegCommand: combinedCmd,
+                commands,
+                args: pass2Args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        try {
+            await execFileAsync(this.ffmpegBin, pass1Args, { timeout: timeoutMs });
+            await execFileAsync(this.ffmpegBin, pass2Args, { timeout: timeoutMs });
+            const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+            return {
+                success: true,
+                outputPath,
+                outputSizeBytes: sizeBytes,
+                command: combinedCmd,
+                commandString: combinedCmd,
+                ffmpegCommand: combinedCmd,
+                commands
+            };
+        } finally {
+            if (fs.existsSync(trfPath)) {
+                try { fs.unlinkSync(trfPath); } catch {}
+            }
+        }
+    }
+
+    /**
+     * Synthesizes an infinite seamless video loop (ping-pong reflection or temporal crossfade).
+     */
+    async createSeamlessLoop(opts: SeamlessLoopOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, outputPath } = opts;
+        if (!inputPath || !outputPath) {
+            throw new Error('createSeamlessLoop: "inputPath" and "outputPath" are required.');
+        }
+
+        const mode = opts.mode || 'ping_pong';
+        const crf = opts.crf ?? 19;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        let args: string[];
+        if (mode === 'ping_pong') {
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-filter_complex', '[0:v]reverse[rev];[0:v][rev]concat=n=2:v=1:a=0[v]',
+                '-map', '[v]',
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        } else {
+            let durationSec = 6.0;
+            if (!dryRun && fs.existsSync(inputPath)) {
+                try {
+                    const meta = await this.probeMedia(inputPath, 5000);
+                    if (meta.durationSec > 0) durationSec = meta.durationSec;
+                } catch {}
+            }
+            const crossfadeDur = Math.min(opts.crossfadeDurationSec || 1.0, durationSec / 2);
+            const headEnd = durationSec - crossfadeDur;
+
+            const filterComplex = `[0:v]split[v1][v2];[v1]trim=start=0:end=${headEnd.toFixed(3)},setpts=PTS-STARTPTS[head];[v2]trim=start=${headEnd.toFixed(3)}:end=${durationSec.toFixed(3)},setpts=PTS-STARTPTS[tail];[tail][head]xfade=transition=fade:duration=${crossfadeDur.toFixed(3)}:offset=0[v]`;
+            args = [
+                '-y',
+                '-i', inputPath,
+                '-filter_complex', filterComplex,
+                '-map', '[v]',
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', String(crf),
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                outputPath
+            ];
+        }
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Broadcast and streaming audio loudness normalization conforming to EBU R128 (`loudnorm`).
+     */
+    async normalizeAudioLoudness(opts: AudioLoudnessOptions): Promise<VideoEditorJobResult> {
+        const { inputPath, outputPath } = opts;
+        if (!inputPath || !outputPath) {
+            throw new Error('normalizeAudioLoudness: "inputPath" and "outputPath" are required.');
+        }
+
+        const targetLufs = opts.targetLufs ?? -14;
+        const loudnessRange = opts.loudnessRange ?? 7;
+        const truePeak = opts.truePeak ?? -1.0;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        const args = [
+            '-y',
+            '-i', inputPath,
+            '-af', `loudnorm=I=${targetLufs}:LRA=${loudnessRange}:TP=${truePeak}`,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-movflags', '+faststart',
+            outputPath
+        ];
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Dynamically ducks background music under a dialogue/voiceover track via sidechain compression.
+     */
+    async duckAudio(opts: AudioDuckingOptions): Promise<VideoEditorJobResult> {
+        const { musicTrackPath, voiceoverTrackPath, outputPath } = opts;
+        if (!musicTrackPath || !voiceoverTrackPath || !outputPath) {
+            throw new Error('duckAudio: "musicTrackPath", "voiceoverTrackPath", and "outputPath" are required.');
+        }
+
+        const threshold = opts.threshold ?? 0.08;
+        const ratio = opts.ratio ?? 4;
+        const attackMs = opts.attackMs ?? 50;
+        const releaseMs = opts.releaseMs ?? 500;
+        const musicVolume = opts.musicVolume ?? 0.8;
+        const voiceoverVolume = opts.voiceoverVolume ?? 1.0;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 120000;
+
+        const filterComplex = `[0:a]volume=${musicVolume}[music];[1:a]volume=${voiceoverVolume}[voice];[music][voice]sidechaincompress=threshold=${threshold}:ratio=${ratio}:attack=${attackMs}:release=${releaseMs}[ducked];[ducked][voice]amix=inputs=2:dropout_transition=0[aout]`;
+
+        const args = [
+            '-y',
+            '-i', musicTrackPath,
+            '-i', voiceoverTrackPath,
+            '-filter_complex', filterComplex,
+            '-map', '[aout]',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            outputPath
+        ];
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
+
+    /**
+     * Ingests numbered image sequences (`frame_%04d.png/jpg`) rendered from 3D viewports into broadcast video.
+     */
+    async encodeFrameSequence(opts: EncodeFrameSequenceOptions): Promise<VideoEditorJobResult> {
+        const { framePattern, outputPath } = opts;
+        if (!framePattern || !outputPath) {
+            throw new Error('encodeFrameSequence: "framePattern" and "outputPath" are required.');
+        }
+
+        const fps = opts.fps || 24;
+        const codec = opts.codec || 'h264';
+        const crf = opts.crf ?? 18;
+        const preset = opts.preset || 'medium';
+        const faststart = opts.faststart !== false;
+        const dryRun = !!opts.dryRun;
+        const timeoutMs = opts.timeoutMs || 300000;
+
+        const args: string[] = [
+            '-y',
+            '-framerate', String(fps),
+            '-i', framePattern
+        ];
+
+        if (opts.audioSourcePath) {
+            args.push('-i', opts.audioSourcePath);
+            args.push('-map', '0:v', '-map', '1:a?', '-c:a', 'aac', '-b:a', '192k', '-shortest');
+        } else {
+            args.push('-map', '0:v', '-an');
+        }
+
+        if (codec === 'prores') {
+            args.push('-c:v', 'prores_ks', '-profile:v', '3', '-pix_fmt', 'yuv422p10le');
+        } else if (codec === 'vp9') {
+            args.push('-c:v', 'libvpx-vp9', '-crf', String(crf), '-b:v', '0', '-pix_fmt', 'yuv420p');
+        } else {
+            args.push('-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p');
+        }
+
+        if (faststart && (outputPath.endsWith('.mp4') || outputPath.endsWith('.mov'))) {
+            args.push('-movflags', '+faststart');
+        }
+
+        args.push(outputPath);
+
+        const cmdStr = `${this.ffmpegBin} ${args.join(' ')}`;
+
+        if (dryRun) {
+            return {
+                success: true,
+                outputPath,
+                command: cmdStr,
+                commandString: cmdStr,
+                ffmpegCommand: cmdStr,
+                commands: [cmdStr],
+                args
+            };
+        }
+
+        const outDir = path.dirname(outputPath);
+        if (!fs.existsSync(outDir)) {
+            fs.mkdirSync(outDir, { recursive: true });
+        }
+
+        await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
+        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+
+        return {
+            success: true,
+            outputPath,
+            outputSizeBytes: sizeBytes,
+            command: cmdStr,
+            commandString: cmdStr,
+            ffmpegCommand: cmdStr,
+            commands: [cmdStr],
+            args
+        };
+    }
 }
+

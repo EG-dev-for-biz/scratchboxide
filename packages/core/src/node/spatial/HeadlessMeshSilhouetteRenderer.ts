@@ -298,6 +298,11 @@ export class HeadlessMeshSilhouetteRenderer {
                                 allIndices.push(indices[i] + vertexOffset);
                             }
                         }
+                    } else {
+                        // Non-indexed primitive: sequential triangles (glTF mode 4 TRIANGLES default)
+                        for (let i = 0; i < count; i++) {
+                            allIndices.push(vertexOffset + i);
+                        }
                     }
                     vertexOffset += count;
                 }

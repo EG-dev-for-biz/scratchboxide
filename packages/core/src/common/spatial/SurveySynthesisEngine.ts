@@ -137,7 +137,7 @@ export class SurveySynthesisEngine {
           const offset = t * (Math.PI / perTier);
           for (let i = 0; i < perTier && poses.length < count; i++) {
             const theta = (2 * Math.PI * i) / perTier + offset;
-            const eye: V3 = [tierRadius * Math.sin(theta), tiers[t] - anchor.elevationMeters, tierRadius * Math.cos(theta)];
+            const eye: V3 = [lookAt[0] + tierRadius * Math.sin(theta), tiers[t] - anchor.elevationMeters, lookAt[2] + tierRadius * Math.cos(theta)];
             poses.push(stationFromLookAt(id, eye, lookAt, optics, anchor, {
               name: `ORBIT_TIER_${t + 1}_STATION_${String(id).padStart(2, '0')}`
             }));

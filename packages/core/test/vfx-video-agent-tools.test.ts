@@ -20,6 +20,13 @@ describe('VFX & FFmpeg Gemini Agent Tools', () => {
         'vfx_ffmpeg_quick_edit',
         'vfx_ffmpeg_extract_frames',
         'vfx_ffmpeg_split_screen',
+        'vfx_ffmpeg_storyboard_sheet',
+        'vfx_ffmpeg_lut_grade',
+        'vfx_ffmpeg_chromakey',
+        'vfx_ffmpeg_controlnet_map',
+        'vfx_ffmpeg_audio_normalize',
+        'vfx_ffmpeg_seamless_loop',
+        'vfx_ffmpeg_encode_sequence',
         'vfx_composite_patch',
         'vfx_composite_timeline'
     ];
@@ -110,6 +117,111 @@ describe('VFX & FFmpeg Gemini Agent Tools', () => {
             expect(res.resultPayload.success).toBe(true);
             expect((res.resultPayload as any).commandString).toContain('hstack');
             expect(res.summaryResult).toContain('50/50 split comparison');
+        });
+
+        it('executes vfx_ffmpeg_storyboard_sheet in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_storyboard_sheet'];
+            const res = await handler({
+                inputPath: '/workspace/video.mp4',
+                outputPath: '/workspace/storyboard.png',
+                columns: 3,
+                rows: 3,
+                cellWidth: 640,
+                cellHeight: 360,
+                labelTimecode: true,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('tile=3x3:nb_frames=9');
+            expect(res.summaryResult).toContain('storyboard contact sheet');
+        });
+
+        it('executes vfx_ffmpeg_lut_grade in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_lut_grade'];
+            const res = await handler({
+                inputPath: '/workspace/video.mp4',
+                lutPath: '/workspace/grade.cube',
+                outputPath: '/workspace/graded.mp4',
+                intensity: 1.0,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain("lut3d=file='/workspace/grade.cube'");
+            expect(res.summaryResult).toContain('3D LUT grade');
+        });
+
+        it('executes vfx_ffmpeg_chromakey in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_chromakey'];
+            const res = await handler({
+                inputPath: '/workspace/green.mp4',
+                backgroundPath: '/workspace/bg.mp4',
+                outputPath: '/workspace/keyed.mp4',
+                keyColor: 'green',
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('chromakey=0x00FF00');
+            expect(res.summaryResult).toContain('chroma key composite');
+        });
+
+        it('executes vfx_ffmpeg_controlnet_map in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_controlnet_map'];
+            const res = await handler({
+                inputPath: '/workspace/video.mp4',
+                outputPath: '/workspace/sobel.mp4',
+                mapType: 'edge',
+                strength: 1.5,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('sobel=scale=3.00');
+            expect(res.summaryResult).toContain('edge conditioning map');
+        });
+
+        it('executes vfx_ffmpeg_audio_normalize in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_audio_normalize'];
+            const res = await handler({
+                inputPath: '/workspace/video.mp4',
+                outputPath: '/workspace/norm.mp4',
+                targetLufs: -14,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('loudnorm=I=-14');
+            expect(res.summaryResult).toContain('audio loudness normalization');
+        });
+
+        it('executes vfx_ffmpeg_seamless_loop in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_seamless_loop'];
+            const res = await handler({
+                inputPath: '/workspace/video.mp4',
+                outputPath: '/workspace/loop.mp4',
+                mode: 'ping_pong',
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('reverse[rev]');
+            expect(res.summaryResult).toContain('seamless ping_pong loop');
+        });
+
+        it('executes vfx_ffmpeg_encode_sequence in dryRun mode', async () => {
+            const handler = vfxVideoHandlers['vfx_ffmpeg_encode_sequence'];
+            const res = await handler({
+                framePattern: '/workspace/frames_%04d.png',
+                outputPath: '/workspace/video.mp4',
+                fps: 24,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            expect((res.resultPayload as any).commandString).toContain('-framerate 24');
+            expect(res.summaryResult).toContain('image sequence encode');
         });
 
         it('executes vfx_composite_patch in dryRun mode', async () => {

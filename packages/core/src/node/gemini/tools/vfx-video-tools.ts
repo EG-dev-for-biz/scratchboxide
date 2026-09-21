@@ -304,6 +304,292 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['leftVideoPath', 'rightVideoPath', 'outputPath']
         }
+    },
+    {
+        name: 'vfx_ffmpeg_storyboard_sheet',
+        description: 'Compile a video into a single high-resolution contact sheet mosaic grid (tile filter) with burned-in timecodes for token-efficient multimodal Gemini Vision inspection.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to source video file'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Output contact sheet image path (e.g. "/path/to/storyboard.png" or ".jpg")'
+                },
+                columns: {
+                    type: 'NUMBER',
+                    description: 'Number of columns in mosaic grid (default 3)'
+                },
+                rows: {
+                    type: 'NUMBER',
+                    description: 'Number of rows in mosaic grid (default 3)'
+                },
+                totalFrames: {
+                    type: 'NUMBER',
+                    description: 'Total frames to sample across the video duration (default columns * rows)'
+                },
+                cellWidth: {
+                    type: 'NUMBER',
+                    description: 'Width of each individual cell in pixels (default 640)'
+                },
+                cellHeight: {
+                    type: 'NUMBER',
+                    description: 'Height of each individual cell in pixels (default 360)'
+                },
+                labelTimecode: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to burn PTS timecode timestamps onto each cell (default true)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'outputPath']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_lut_grade',
+        description: 'Apply an industry-standard 3D .cube or .3dl color grading LUT (ACEScc, Kodak 2383, ARRI LogC) via lut3d filter with configurable intensity blending.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to source video file'
+                },
+                lutPath: {
+                    type: 'STRING',
+                    description: 'Path to .cube or .3dl color grading LUT file'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for color graded output video'
+                },
+                intensity: {
+                    type: 'NUMBER',
+                    description: 'LUT blend intensity from 0.0 (bypass) to 1.0 (100% grade, default 1.0)'
+                },
+                interpolation: {
+                    type: 'STRING',
+                    description: 'LUT interpolation: "nearest", "trilinear", or "tetrahedral" (default "tetrahedral")'
+                },
+                crf: {
+                    type: 'NUMBER',
+                    description: 'Constant Rate Factor quality (default 18)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'lutPath', 'outputPath']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_chromakey',
+        description: 'Execute green or blue screen chroma keying with despill color suppression and optional background plate compositing.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to foreground video with green/blue screen'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for output composited video'
+                },
+                backgroundPath: {
+                    type: 'STRING',
+                    description: 'Optional path to background video plate or image'
+                },
+                keyColor: {
+                    type: 'STRING',
+                    description: 'Key color in hex ("0x00FF00") or named ("green", "blue") (default "0x00FF00")'
+                },
+                similarity: {
+                    type: 'NUMBER',
+                    description: 'Chroma tolerance similarity threshold (0.01 to 1.0, default 0.12)'
+                },
+                blend: {
+                    type: 'NUMBER',
+                    description: 'Edge softness blend (0.0 to 0.5, default 0.08)'
+                },
+                spillSuppression: {
+                    type: 'BOOLEAN',
+                    description: 'Apply color despill suppression (default true)'
+                },
+                crf: {
+                    type: 'NUMBER',
+                    description: 'Constant Rate Factor quality (default 18)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'outputPath']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_controlnet_map',
+        description: 'Extract zero-inference video conditioning maps (Sobel edge or height/luminance displacement) in a single fast FFmpeg pass for diffusion/ControlNet.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to source video file'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for output conditioning map video'
+                },
+                mapType: {
+                    type: 'STRING',
+                    description: 'Map type: "edge" (Sobel edges) or "height" / "luminance_contrast" (depth/displacement)'
+                },
+                strength: {
+                    type: 'NUMBER',
+                    description: 'Edge scale or contrast multiplier (default 1.5)'
+                },
+                threshold: {
+                    type: 'NUMBER',
+                    description: 'Luminance floor threshold (0.0 to 1.0, default 0.1)'
+                },
+                invert: {
+                    type: 'BOOLEAN',
+                    description: 'Invert pixel polarity (default false)'
+                },
+                crf: {
+                    type: 'NUMBER',
+                    description: 'Constant Rate Factor quality (default 20)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'outputPath', 'mapType']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_audio_normalize',
+        description: 'Normalize audio loudness conforming to EBU R128 (-14 LUFS for web/streaming or -23 LUFS for broadcast) with lossless video stream copy.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to source video file'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for loudness-normalized output video'
+                },
+                targetLufs: {
+                    type: 'NUMBER',
+                    description: 'Integrated loudness target in LUFS (-14 for web/streaming, -23 for broadcast, default -14)'
+                },
+                loudnessRange: {
+                    type: 'NUMBER',
+                    description: 'Loudness range target in LU (default 7)'
+                },
+                truePeak: {
+                    type: 'NUMBER',
+                    description: 'Maximum true peak in dBTP (default -1.0)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'outputPath']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_seamless_loop',
+        description: 'Synthesize an infinite seamless video loop using ping-pong reflection or temporal crossfade transitions.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputPath: {
+                    type: 'STRING',
+                    description: 'Path to source video file'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for output seamless looping video'
+                },
+                mode: {
+                    type: 'STRING',
+                    description: 'Looping mode: "ping_pong" (forward-reverse) or "crossfade" (tail-to-head blend, default "ping_pong")'
+                },
+                crossfadeDurationSec: {
+                    type: 'NUMBER',
+                    description: 'Crossfade blend duration in seconds for crossfade mode (default 1.0)'
+                },
+                crf: {
+                    type: 'NUMBER',
+                    description: 'Constant Rate Factor quality (default 19)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['inputPath', 'outputPath']
+        }
+    },
+    {
+        name: 'vfx_ffmpeg_encode_sequence',
+        description: 'Ingest numbered image sequences (e.g. frame_%04d.png) rendered from 3D viewports or Gaussian splats into broadcast video with faststart.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                framePattern: {
+                    type: 'STRING',
+                    description: 'Image sequence path pattern (e.g. "/path/to/frame_%04d.png")'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Path for output encoded video file'
+                },
+                fps: {
+                    type: 'NUMBER',
+                    description: 'Frame rate in frames per second (default 24)'
+                },
+                audioSourcePath: {
+                    type: 'STRING',
+                    description: 'Optional path to audio track to mux into video'
+                },
+                codec: {
+                    type: 'STRING',
+                    description: 'Video codec: "h264" (default), "prores", or "vp9"'
+                },
+                crf: {
+                    type: 'NUMBER',
+                    description: 'Constant Rate Factor quality (default 18)'
+                },
+                preset: {
+                    type: 'STRING',
+                    description: 'Encoder preset (default "medium")'
+                },
+                faststart: {
+                    type: 'BOOLEAN',
+                    description: 'Enable progressive streaming faststart moov atom (default true)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns FFmpeg command without executing'
+                }
+            },
+            required: ['framePattern', 'outputPath']
+        }
     }
 ];
 
@@ -442,6 +728,233 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
             summaryResult: dryRun
                 ? `Prepared 50/50 split comparison for ${outputPath} (dry run).`
                 : `Compiled 50/50 comparison video at ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_storyboard_sheet: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const outputPath = asString(args.outputPath);
+        if (!inputPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_storyboard_sheet: "inputPath" and "outputPath" are required.');
+        }
+
+        const columns = asNumber(args.columns);
+        const rows = asNumber(args.rows);
+        const totalFrames = asNumber(args.totalFrames);
+        const cellWidth = asNumber(args.cellWidth);
+        const cellHeight = asNumber(args.cellHeight);
+        const labelTimecode = args.labelTimecode !== undefined ? asBoolean(args.labelTimecode) : undefined;
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.generateStoryboardSheet({
+            inputPath,
+            outputPath,
+            columns,
+            rows,
+            totalFrames,
+            cellWidth,
+            cellHeight,
+            labelTimecode,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned storyboard contact sheet for ${outputPath} (dry run).`
+                : `Generated storyboard contact sheet at ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_lut_grade: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const lutPath = asString(args.lutPath);
+        const outputPath = asString(args.outputPath);
+        if (!inputPath || !lutPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_lut_grade: "inputPath", "lutPath", and "outputPath" are required.');
+        }
+
+        const intensity = asNumber(args.intensity);
+        const interpolation = (args.interpolation as 'nearest' | 'trilinear' | 'tetrahedral') || undefined;
+        const crf = asNumber(args.crf);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.applyLutGrade({
+            inputPath,
+            lutPath,
+            outputPath,
+            intensity,
+            interpolation,
+            crf,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned 3D LUT grade for ${outputPath} (dry run).`
+                : `Applied 3D LUT grade to ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_chromakey: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const outputPath = asString(args.outputPath);
+        if (!inputPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_chromakey: "inputPath" and "outputPath" are required.');
+        }
+
+        const backgroundPath = asString(args.backgroundPath) || undefined;
+        const keyColor = asString(args.keyColor) || undefined;
+        const similarity = asNumber(args.similarity);
+        const blend = asNumber(args.blend);
+        const spillSuppression = args.spillSuppression !== undefined ? asBoolean(args.spillSuppression) : undefined;
+        const crf = asNumber(args.crf);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.applyChromaKey({
+            inputPath,
+            backgroundPath,
+            outputPath,
+            keyColor,
+            similarity,
+            blend,
+            spillSuppression,
+            crf,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned chroma key composite for ${outputPath} (dry run).`
+                : `Rendered chroma key composite to ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_controlnet_map: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const outputPath = asString(args.outputPath);
+        const mapType = (asString(args.mapType) as 'edge' | 'height' | 'luminance_contrast') || 'edge';
+        if (!inputPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_controlnet_map: "inputPath" and "outputPath" are required.');
+        }
+
+        const strength = asNumber(args.strength);
+        const threshold = asNumber(args.threshold);
+        const invert = asBoolean(args.invert);
+        const crf = asNumber(args.crf);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.generateConditioningMap({
+            inputPath,
+            outputPath,
+            mapType,
+            strength,
+            threshold,
+            invert,
+            crf,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned ${mapType} conditioning map for ${outputPath} (dry run).`
+                : `Generated ${mapType} conditioning map at ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_audio_normalize: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const outputPath = asString(args.outputPath);
+        if (!inputPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_audio_normalize: "inputPath" and "outputPath" are required.');
+        }
+
+        const targetLufs = asNumber(args.targetLufs);
+        const loudnessRange = asNumber(args.loudnessRange);
+        const truePeak = asNumber(args.truePeak);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.normalizeAudioLoudness({
+            inputPath,
+            outputPath,
+            targetLufs,
+            loudnessRange,
+            truePeak,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned audio loudness normalization for ${outputPath} (dry run).`
+                : `Normalized audio loudness for ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_seamless_loop: async (args, _ctx) => {
+        const inputPath = asString(args.inputPath);
+        const outputPath = asString(args.outputPath);
+        if (!inputPath || !outputPath) {
+            throw new Error('vfx_ffmpeg_seamless_loop: "inputPath" and "outputPath" are required.');
+        }
+
+        const mode = (asString(args.mode) as 'ping_pong' | 'crossfade') || 'ping_pong';
+        const crossfadeDurationSec = asNumber(args.crossfadeDurationSec);
+        const crf = asNumber(args.crf);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.createSeamlessLoop({
+            inputPath,
+            outputPath,
+            mode,
+            crossfadeDurationSec,
+            crf,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned seamless ${mode} loop for ${outputPath} (dry run).`
+                : `Generated seamless ${mode} loop at ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    vfx_ffmpeg_encode_sequence: async (args, _ctx) => {
+        const framePattern = asString(args.framePattern);
+        const outputPath = asString(args.outputPath);
+        if (!framePattern || !outputPath) {
+            throw new Error('vfx_ffmpeg_encode_sequence: "framePattern" and "outputPath" are required.');
+        }
+
+        const fps = asNumber(args.fps);
+        const audioSourcePath = asString(args.audioSourcePath) || undefined;
+        const codec = (asString(args.codec) as 'h264' | 'prores' | 'vp9') || undefined;
+        const crf = asNumber(args.crf);
+        const preset = asString(args.preset) || undefined;
+        const faststart = args.faststart !== undefined ? asBoolean(args.faststart) : undefined;
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await editorService.encodeFrameSequence({
+            framePattern,
+            outputPath,
+            fps,
+            audioSourcePath,
+            codec,
+            crf,
+            preset,
+            faststart,
+            dryRun
+        });
+
+        return {
+            resultPayload: result,
+            summaryResult: dryRun
+                ? `Planned image sequence encode for ${outputPath} (dry run).`
+                : `Encoded image sequence to ${outputPath} (${result.outputSizeBytes || 0} bytes).`
         };
     }
 };
