@@ -19,7 +19,11 @@ import {
     transferCanopyNormals,
     evaluateAiryThinFilm,
     blackbodyKelvinToLinearRgb,
-    evaluateAnalyticalGobo
+    evaluateAnalyticalGobo,
+    synthesizeMoistureRunoff,
+    applyNormalBevel,
+    evaluateAgXTonemapping,
+    applyBurleySubsurfaceScattering
 } from '../src/browser/generative-canvas/services/headless-realism-service';
 
 describe('Headless Realism Engine (Decoupled Numerical Solvers)', () => {
@@ -118,6 +122,34 @@ int main() {
 
     float foliageShadow = HeadlessPhotometricSolver::evaluateAnalyticalGobo(0.5f, 0.5f, 1.0f, 0, 4.0f);
     assert(foliageShadow >= 0.0f && foliageShadow <= 1.0f);
+
+    // 8. Headless Dynamic Gravity Moisture Runoff Operator
+    MoistureRunoffParams moistureParams;
+    moistureParams.runoffIntensity = 0.8f;
+    moistureParams.creviceAccumulation = 0.9f;
+    MoistureRunoffResult runoffRes = HeadlessMoistureRunoffOperator::applyMoistureRunoff(cube, moistureParams);
+    assert(runoffRes.moistureLevels.size() == cube.vertices.size());
+    for (float m : runoffRes.moistureLevels) {
+        assert(m >= 0.0f && m <= 1.0f);
+    }
+
+    // 9. Headless Analytical Edge-Normal Fillet Bevel Operator
+    EdgeFilletBevelParams bevelParams;
+    bevelParams.thresholdAngleDeg = 45.0f;
+    bevelParams.maxAngleDeg = 135.0f;
+    HeadlessEdgeFilletBevelOperator::applyEdgeFilletBevel(cube, bevelParams);
+    for (const auto& v : cube.vertices) {
+        assert(std::abs(v.normal.length() - 1.0f) < 1e-3f);
+    }
+
+    // 10. Headless AgX Photographic Log Tone Curve Operator
+    AgXParams agxParams;
+    agxParams.exposure = 1.5f;
+    Vec3 hdrColor(5.0f, 2.0f, 0.5f);
+    Vec3 agxOut = HeadlessAgXTonemappingOperator::evaluateAgX(hdrColor, agxParams);
+    assert(agxOut.x >= 0.0f && agxOut.x <= 1.0f);
+    assert(agxOut.y >= 0.0f && agxOut.y <= 1.0f);
+    assert(agxOut.z >= 0.0f && agxOut.z <= 1.0f);
 
     std::cout << "HEADLESS_REALISM_CPP20_VALIDATED_SUCCESSFULLY" << std::endl;
     return 0;
@@ -339,6 +371,159 @@ int main() {
             const goboVal = evaluateAnalyticalGobo(0.5, 0.5, 0.0, 0, 4.0);
             expect(goboVal).toBeGreaterThanOrEqual(0.0);
             expect(goboVal).toBeLessThanOrEqual(1.0);
+        });
+
+        it('dispatches sb_synthesize_moisture_runoff and simulates gravity drainage, crevice pooling, and darkening', () => {
+            const engine = createOperatorEngine();
+            const threeScene = new THREE.Scene();
+            const geom = new THREE.BoxGeometry(2, 2, 2, 4, 4, 4);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = 'runoff_box';
+            threeScene.add(mesh);
+            engine.attachThreeScene(threeScene);
+
+            engine.setSceneData({
+                customMeshes: [{
+                    id: 'runoff_box',
+                    name: 'runoff_box',
+                    type: 'box',
+                    position: [0, 0, 0]
+                }]
+            });
+
+            const result = engine.dispatch('sb_synthesize_moisture_runoff', {
+                targetId: 'runoff_box',
+                options: {
+                    gravityDirection: [0, -1, 0],
+                    runoffIntensity: 0.75,
+                    creviceAccumulation: 0.85,
+                    wetDarkeningFactor: 0.5
+                }
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.data.averageMoisture).toBeGreaterThanOrEqual(0.0);
+            expect(result.data.averageMoisture).toBeLessThanOrEqual(1.0);
+            expect(result.data.moistureRunoff.enabled).toBe(true);
+
+            // Also test direct function invocation
+            const directGeom = new THREE.CylinderGeometry(1, 1, 3, 16, 8);
+            const directRes = synthesizeMoistureRunoff(directGeom, {
+                runoffIntensity: 0.8,
+                creviceAccumulation: 0.9
+            });
+            expect(directRes.moistureLevels.length).toBe(directGeom.getAttribute('position').count);
+            expect(directRes.averageMoisture).toBeGreaterThanOrEqual(0.0);
+            const colorAttr = directGeom.getAttribute('color') as THREE.BufferAttribute;
+            expect(colorAttr).toBeDefined();
+            expect(colorAttr.getX(0)).toBeLessThanOrEqual(0.85); // Darkening applied
+        });
+
+        it('dispatches sb_apply_normal_bevel to calculate osculating cylindrical fillet normals', () => {
+            const engine = createOperatorEngine();
+            const threeScene = new THREE.Scene();
+            const geom = new THREE.BoxGeometry(2, 2, 2, 2, 2, 2);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = 'bevel_cube';
+            threeScene.add(mesh);
+            engine.attachThreeScene(threeScene);
+
+            engine.setSceneData({
+                customMeshes: [{
+                    id: 'bevel_cube',
+                    name: 'bevel_cube',
+                    type: 'box',
+                    position: [0, 0, 0]
+                }]
+            });
+
+            const result = engine.dispatch('sb_apply_normal_bevel', {
+                targetId: 'bevel_cube',
+                thresholdAngleDeg: 45,
+                maxAngleDeg: 135,
+                filletSharpness: 2.0
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.data.normalBevel.enabled).toBe(true);
+            expect(result.data.normalBevel.thresholdAngleDeg).toBe(45);
+
+            // Verify normals are normalized and valid unit vectors
+            const normAttr = geom.getAttribute('normal') as THREE.BufferAttribute;
+            const n = new THREE.Vector3();
+            for (let i = 0; i < normAttr.count; i++) {
+                n.fromBufferAttribute(normAttr, i);
+                expect(n.length()).toBeCloseTo(1.0, 3);
+            }
+        });
+
+        it('dispatches sb_apply_agx_tonemapping with gamut inset primaries and highlight roll-off', () => {
+            const engine = createOperatorEngine();
+            const result = engine.dispatch('sb_apply_agx_tonemapping', {
+                exposure: 1.25,
+                sampleRgb: [3.5, 1.2, 0.1]
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.data.tonemapping.mode).toBe('agx');
+            expect(result.data.tonemapping.exposure).toBe(1.25);
+            expect(result.data.mappedSample).toBeDefined();
+            expect(result.data.mappedSample[0]).toBeGreaterThanOrEqual(0.0);
+            expect(result.data.mappedSample[0]).toBeLessThanOrEqual(1.0);
+            expect(result.data.mappedSample[1]).toBeGreaterThanOrEqual(0.0);
+            expect(result.data.mappedSample[1]).toBeLessThanOrEqual(1.0);
+
+            // Verify direct evaluation
+            const tonemapped = evaluateAgXTonemapping([10.0, 5.0, 1.0], { exposure: 1.0 });
+            expect(tonemapped[0]).toBeLessThanOrEqual(1.0);
+            expect(tonemapped[1]).toBeLessThanOrEqual(1.0);
+            expect(tonemapped[2]).toBeLessThanOrEqual(1.0);
+        });
+
+        it('dispatches sb_apply_subsurface_scattering and configures Burley diffusion parameters', () => {
+            const engine = createOperatorEngine();
+            const threeScene = new THREE.Scene();
+            const geom = new THREE.SphereGeometry(1, 16, 16);
+            const mat = new THREE.MeshPhysicalMaterial({ color: 0xffffff });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.name = 'sss_sphere';
+            threeScene.add(mesh);
+            engine.attachThreeScene(threeScene);
+
+            engine.setSceneData({
+                customMeshes: [{
+                    id: 'sss_sphere',
+                    name: 'sss_sphere',
+                    type: 'sphere',
+                    position: [0, 0, 0]
+                }]
+            });
+
+            const result = engine.dispatch('sb_apply_subsurface_scattering', {
+                targetId: 'sss_sphere',
+                scatterColor: [0.98, 0.45, 0.35],
+                scatterDistance: 0.25,
+                ior: 1.42,
+                transmission: 0.4,
+                thickness: 0.6
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.data.subsurfaceScattering.enabled).toBe(true);
+            expect(result.data.subsurfaceScattering.scatterDistance).toBe(0.25);
+            expect(mat.transmission).toBe(0.4);
+            expect(mat.ior).toBe(1.42);
+            expect(mat.thickness).toBe(0.6);
+
+            // Test onBeforeCompile injection
+            const dummyShader: any = { uniforms: {}, fragmentShader: 'void main() { #include <lights_fragment_end> }' };
+            mat.onBeforeCompile(dummyShader);
+            expect(dummyShader.uniforms.uSssScatterColor).toBeDefined();
+            expect(dummyShader.uniforms.uSssScatterDistance.value).toBe(0.25);
+            expect(dummyShader.fragmentShader).toContain('uSssScatterColor');
+            expect(dummyShader.fragmentShader).toContain('sssInscatter');
         });
     });
 });

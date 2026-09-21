@@ -16,7 +16,15 @@ import {
     simulateGeomorphologyOnGeometry,
     transferCanopyNormals,
     evaluateAiryThinFilm,
-    blackbodyKelvinToLinearRgb
+    blackbodyKelvinToLinearRgb,
+    synthesizeMoistureRunoff,
+    type MoistureRunoffOptions,
+    applyNormalBevel,
+    type NormalBevelOptions,
+    evaluateAgXTonemapping,
+    type AgXOptions,
+    applyBurleySubsurfaceScattering,
+    type SubsurfaceScatteringOptions
 } from '../headless-realism-service';
 import {
     CINEMATIC_RIGS,
@@ -959,6 +967,171 @@ export const ADVANCED_REALISM_OPERATORS: OperatorDefinition[] = [
                 linearRgb,
                 lux,
                 intensity
+            };
+        }
+    },
+    {
+        name: 'sb_synthesize_moisture_runoff',
+        category: 'modifiers',
+        description: 'Simulates gravitational moisture advection, capillary crevice pooling, albedo darkening, and specular puddle roughness.',
+        execute: (ctx, params: {
+            targetId: string;
+            options?: MoistureRunoffOptions;
+        }) => {
+            if (!params.targetId) throw new Error("Parameter 'targetId' is required.");
+            const scene = ctx.getSceneData();
+            if (!scene.customMeshes) scene.customMeshes = [];
+            const mesh = scene.customMeshes.find(m => m.id === params.targetId);
+            if (!mesh) throw new Error(`Mesh with id '${params.targetId}' not found.`);
+
+            let averageMoisture = 0;
+            const threeMesh = ctx.getThreeObject(params.targetId) as THREE.Mesh;
+            if (threeMesh && threeMesh.geometry) {
+                const result = synthesizeMoistureRunoff(threeMesh.geometry, params.options);
+                averageMoisture = result.averageMoisture;
+            }
+
+            (mesh as any).moistureRunoff = {
+                enabled: true,
+                averageMoisture,
+                options: params.options || {}
+            };
+
+            ctx.recordState(`Synthesize Moisture Runoff on '${params.targetId}'`);
+
+            return {
+                success: true,
+                targetId: params.targetId,
+                averageMoisture,
+                moistureRunoff: (mesh as any).moistureRunoff
+            };
+        }
+    },
+    {
+        name: 'sb_apply_normal_bevel',
+        category: 'modifiers',
+        description: 'Synthesizes analytical osculating cylindrical fillet normals on hard-surface dihedral creases to catch specular edge highlights.',
+        execute: (ctx, params: {
+            targetId: string;
+            thresholdAngleDeg?: number;
+            maxAngleDeg?: number;
+            filletSharpness?: number;
+        }) => {
+            if (!params.targetId) throw new Error("Parameter 'targetId' is required.");
+            const scene = ctx.getSceneData();
+            if (!scene.customMeshes) scene.customMeshes = [];
+            const mesh = scene.customMeshes.find(m => m.id === params.targetId);
+            if (!mesh) throw new Error(`Mesh with id '${params.targetId}' not found.`);
+
+            const threeMesh = ctx.getThreeObject(params.targetId) as THREE.Mesh;
+            if (threeMesh && threeMesh.geometry) {
+                applyNormalBevel(threeMesh.geometry, {
+                    thresholdAngleDeg: params.thresholdAngleDeg,
+                    maxAngleDeg: params.maxAngleDeg,
+                    filletSharpness: params.filletSharpness
+                });
+            }
+
+            (mesh as any).normalBevel = {
+                enabled: true,
+                thresholdAngleDeg: params.thresholdAngleDeg ?? 35.0,
+                maxAngleDeg: params.maxAngleDeg ?? 150.0,
+                filletSharpness: params.filletSharpness ?? 2.0
+            };
+
+            ctx.recordState(`Apply Normal Bevel on '${params.targetId}'`);
+
+            return {
+                success: true,
+                targetId: params.targetId,
+                normalBevel: (mesh as any).normalBevel
+            };
+        }
+    },
+    {
+        name: 'sb_apply_agx_tonemapping',
+        category: 'lighting_camera',
+        description: 'Applies the Blender 4.0 AgX photographic log tone curve with gamut inset primaries and highlight desaturation roll-off.',
+        execute: (ctx, params: {
+            exposure?: number;
+            minEv?: number;
+            maxEv?: number;
+            sampleRgb?: [number, number, number];
+        }) => {
+            const scene = ctx.getSceneData();
+            const exposure = params.exposure ?? 1.0;
+
+            (scene as any).tonemapping = {
+                mode: 'agx',
+                exposure,
+                minEv: params.minEv ?? -12.47393,
+                maxEv: params.maxEv ?? 4.026069
+            };
+
+            let mappedSample: [number, number, number] | undefined;
+            if (params.sampleRgb) {
+                mappedSample = evaluateAgXTonemapping(params.sampleRgb, {
+                    exposure,
+                    minEv: params.minEv,
+                    maxEv: params.maxEv
+                });
+            }
+
+            ctx.recordState('Apply AgX Tonemapping');
+
+            return {
+                success: true,
+                tonemapping: (scene as any).tonemapping,
+                mappedSample
+            };
+        }
+    },
+    {
+        name: 'sb_apply_subsurface_scattering',
+        category: 'materials_pbr',
+        description: 'Injects Burley (Disney) normalized diffusion dipole subsurface scattering into target mesh material.',
+        execute: (ctx, params: {
+            targetId: string;
+            scatterColor?: [number, number, number];
+            scatterDistance?: number;
+            absorptionColor?: [number, number, number];
+            ior?: number;
+            transmission?: number;
+            thickness?: number;
+        }) => {
+            if (!params.targetId) throw new Error("Parameter 'targetId' is required.");
+            const scene = ctx.getSceneData();
+            if (!scene.customMeshes) scene.customMeshes = [];
+            const mesh = scene.customMeshes.find(m => m.id === params.targetId);
+            if (!mesh) throw new Error(`Mesh with id '${params.targetId}' not found.`);
+
+            const threeMesh = ctx.getThreeObject(params.targetId) as THREE.Mesh;
+            if (threeMesh) {
+                applyBurleySubsurfaceScattering(threeMesh, {
+                    scatterColor: params.scatterColor,
+                    scatterDistance: params.scatterDistance,
+                    absorptionColor: params.absorptionColor,
+                    ior: params.ior,
+                    transmission: params.transmission,
+                    thickness: params.thickness
+                });
+            }
+
+            (mesh as any).subsurfaceScattering = {
+                enabled: true,
+                scatterColor: params.scatterColor ?? [0.95, 0.45, 0.35],
+                scatterDistance: params.scatterDistance ?? 0.15,
+                ior: params.ior ?? 1.45,
+                transmission: params.transmission ?? 0.35,
+                thickness: params.thickness ?? 0.5
+            };
+
+            ctx.recordState(`Apply Subsurface Scattering on '${params.targetId}'`);
+
+            return {
+                success: true,
+                targetId: params.targetId,
+                subsurfaceScattering: (mesh as any).subsurfaceScattering
             };
         }
     }

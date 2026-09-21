@@ -585,6 +585,237 @@ public:
     }
 };
 
+// ============================================================================
+// 8. Headless Dynamic Gravity Moisture Runoff & Capillary Advection Operator
+// ============================================================================
+
+struct MoistureRunoffParams {
+    Vec3 gravityDirection = Vec3(0.0f, -1.0f, 0.0f);
+    float runoffIntensity = 0.6f;
+    float creviceAccumulation = 0.8f;
+    float rainStreakFrequency = 14.0f;
+    float wetDarkeningFactor = 0.45f;
+    float specularRoughness = 0.03f;
+};
+
+struct MoistureRunoffResult {
+    std::vector<float> moistureLevels;
+    float averageMoisture = 0.0f;
+};
+
+class HeadlessMoistureRunoffOperator {
+public:
+    /**
+     * Simulates gravitational moisture advection, capillary pooling in concave crevices,
+     * and porous wet albedo darkening coupled with specular highlight smoothing.
+     */
+    static MoistureRunoffResult applyMoistureRunoff(
+        ScratchboxMesh& mesh,
+        const MoistureRunoffParams& params = MoistureRunoffParams()
+    ) {
+        MoistureRunoffResult result;
+        size_t vCount = mesh.vertices.size();
+        result.moistureLevels.resize(vCount, 0.0f);
+        if (vCount == 0) return result;
+
+        CurvatureTensorField curvs = HeadlessDifferentialCurvatureOperator::evaluateCurvatureField(mesh);
+        Vec3 g = params.gravityDirection.normalized();
+        float totalM = 0.0f;
+
+        for (size_t i = 0; i < vCount; ++i) {
+            auto& v = mesh.vertices[i];
+            Vec3 n = v.normal.normalized();
+
+            // Downward slope advection vector v_flow = g - (g . n)n
+            float gDotN = g.dot(n);
+            Vec3 vFlow = g - n * gDotN;
+            float slopeMagnitude = vFlow.length();
+
+            // Capillary pooling in crevices (Shape Index S < 0)
+            float S = (i < curvs.shapeIndex.size()) ? curvs.shapeIndex[i] : 0.0f;
+            float crevicePool = (S < 0.0f) ? (-S * params.creviceAccumulation) : 0.0f;
+
+            // Gravitational streak harmonic modulation along surface
+            Vec3 tPerp = vFlow.cross(n);
+            if (tPerp.lengthSq() > 1e-6f) tPerp = tPerp.normalized();
+            else tPerp = Vec3(1, 0, 0);
+
+            float streakNoise = 0.5f * (1.0f + std::sin(v.position.dot(tPerp) * params.rainStreakFrequency) *
+                                              std::cos(v.position.dot(g) * (params.rainStreakFrequency * 0.7f)));
+
+            // Moisture scalar w in [0, 1]
+            float runoffWeight = slopeMagnitude * (streakNoise * 0.4f + 0.6f) * params.runoffIntensity;
+            float w = std::clamp(crevicePool + runoffWeight, 0.0f, 1.0f);
+            result.moistureLevels[i] = w;
+            totalM += w;
+
+            // Albedo darkening from internal Fresnel scattering in porous wet media
+            float darken = 1.0f - (w * params.wetDarkeningFactor);
+            v.color.x = std::clamp(v.color.x * darken, 0.0f, 1.0f);
+            v.color.y = std::clamp(v.color.y * darken, 0.0f, 1.0f);
+            v.color.z = std::clamp(v.color.z * darken, 0.0f, 1.0f);
+        }
+
+        result.averageMoisture = totalM / static_cast<float>(vCount);
+        return result;
+    }
+};
+
+// ============================================================================
+// 9. Headless Analytical Edge-Normal Fillet Bevel Operator
+// ============================================================================
+
+struct EdgeFilletBevelParams {
+    float thresholdAngleDeg = 35.0f;
+    float maxAngleDeg = 150.0f;
+    float filletSharpness = 2.0f;
+};
+
+class HeadlessEdgeFilletBevelOperator {
+public:
+    /**
+     * Synthesizes soft specular cylindrical fillet normal transitions on hard-surface
+     * creases, catching highlights without requiring polygon subdivision.
+     */
+    static void applyEdgeFilletBevel(
+        ScratchboxMesh& mesh,
+        const EdgeFilletBevelParams& params = EdgeFilletBevelParams()
+    ) {
+        size_t vCount = mesh.vertices.size();
+        if (vCount == 0 || mesh.indices.size() < 3) return;
+
+        size_t triCount = mesh.indices.size() / 3;
+        std::vector<Vec3> faceNormals(triCount);
+        std::vector<std::vector<size_t>> vertFaces(vCount);
+
+        for (size_t t = 0; t < triCount; ++t) {
+            uint32_t i0 = mesh.indices[t * 3];
+            uint32_t i1 = mesh.indices[t * 3 + 1];
+            uint32_t i2 = mesh.indices[t * 3 + 2];
+
+            if (i0 < vCount && i1 < vCount && i2 < vCount) {
+                vertFaces[i0].push_back(t);
+                vertFaces[i1].push_back(t);
+                vertFaces[i2].push_back(t);
+
+                Vec3 e1 = mesh.vertices[i1].position - mesh.vertices[i0].position;
+                Vec3 e2 = mesh.vertices[i2].position - mesh.vertices[i0].position;
+                Vec3 fn = e1.cross(e2);
+                if (fn.lengthSq() > 1e-8f) fn = fn.normalized();
+                else fn = Vec3(0, 1, 0);
+                faceNormals[t] = fn;
+            }
+        }
+
+        float cosMin = std::cos((params.maxAngleDeg * math::PI) / 180.0f);
+        float cosMax = std::cos((params.thresholdAngleDeg * math::PI) / 180.0f);
+
+        for (size_t v = 0; v < vCount; ++v) {
+            const auto& faces = vertFaces[v];
+            if (faces.size() < 2) continue;
+
+            Vec3 origN = mesh.vertices[v].normal;
+            Vec3 blendedN(0, 0, 0);
+            float totalW = 0.0f;
+
+            for (size_t fA : faces) {
+                const Vec3& nA = faceNormals[fA];
+                for (size_t fB : faces) {
+                    if (fA >= fB) continue;
+                    const Vec3& nB = faceNormals[fB];
+                    float dotProd = std::clamp(nA.dot(nB), -1.0f, 1.0f);
+
+                    // Check if dihedral angle falls in bevel fillet range
+                    if (dotProd >= cosMin && dotProd <= cosMax) {
+                        float angle = std::acos(dotProd);
+                        float w = std::pow(angle, params.filletSharpness);
+                        blendedN = blendedN + (nA + nB) * (0.5f * w);
+                        totalW += w;
+                    }
+                }
+            }
+
+            if (totalW > 1e-4f && blendedN.lengthSq() > 1e-6f) {
+                blendedN = blendedN.normalized();
+                mesh.vertices[v].normal = blendedN;
+            } else if (origN.lengthSq() > 1e-6f) {
+                mesh.vertices[v].normal = origN.normalized();
+            }
+        }
+    }
+};
+
+// ============================================================================
+// 10. Headless AgX Photographic Color Management & Gamut Inset Operator
+// ============================================================================
+
+struct AgXParams {
+    float exposure = 1.0f;
+    float saturation = 1.0f;
+    float minEv = -12.47393f;
+    float maxEv = 4.026069f;
+};
+
+class HeadlessAgXTonemappingOperator {
+public:
+    /**
+     * Blender 4.0 AgX photographic log tone reproduction curve.
+     * Compresses HDR luminance via gamut inset primaries, eliminating ACES cyan highlight clipping.
+     */
+    static Vec3 evaluateAgX(const Vec3& linearRgb, const AgXParams& params = AgXParams()) {
+        Vec3 c = linearRgb * params.exposure;
+        c.x = std::max(1e-6f, c.x);
+        c.y = std::max(1e-6f, c.y);
+        c.z = std::max(1e-6f, c.z);
+
+        // 1. AgX Inset Primary Matrix (Compresses Rec.709 into safe working gamut)
+        Vec3 inset(
+            0.842479f * c.x + 0.0784336f * c.y + 0.0792237f * c.z,
+            0.0637613f * c.x + 0.878481f * c.y + 0.0577577f * c.z,
+            0.0408752f * c.x + 0.0882901f * c.y + 0.870835f * c.z
+        );
+
+        // 2. AgX Log2 Encoding
+        auto logEncode = [&](float val) {
+            float logVal = std::log2(std::max(1e-5f, val));
+            return std::clamp((logVal - params.minEv) / (params.maxEv - params.minEv), 0.0f, 1.0f);
+        };
+
+        Vec3 logRgb(logEncode(inset.x), logEncode(inset.y), logEncode(inset.z));
+
+        // 3. Sigmoidal Tone Curve & Smooth Highlight Desaturation Roll-off
+        auto agxCurve = [](float x) {
+            float x2 = x * x;
+            float x4 = x2 * x2;
+            return 15.5f * x4 * x2 - 40.14f * x4 * x + 31.96f * x4 - 6.868f * x2 * x + 0.429f * x2 + 0.1144f * x;
+        };
+
+        Vec3 curved(
+            std::clamp(agxCurve(logRgb.x), 0.0f, 1.0f),
+            std::clamp(agxCurve(logRgb.y), 0.0f, 1.0f),
+            std::clamp(agxCurve(logRgb.z), 0.0f, 1.0f)
+        );
+
+        // 4. AgX Outset Primary Matrix (Return to Linear Display RGB)
+        Vec3 display(
+            1.19688f * curved.x - 0.052897f * curved.y - 0.143983f * curved.z,
+            -0.098834f * curved.x + 1.15198f * curved.y - 0.053146f * curved.z,
+            -0.099701f * curved.x - 0.098863f * curved.y + 1.19856f * curved.z
+        );
+
+        // High-luminance desaturation: highlights gracefully roll off to pure white
+        float luma = 0.2126f * display.x + 0.7152f * display.y + 0.0722f * display.z;
+        float desatFactor = math::smoothstep(0.85f, 1.0f, luma);
+        Vec3 out = display * (1.0f - desatFactor) + Vec3(luma, luma, luma) * desatFactor;
+
+        return Vec3(
+            std::clamp(out.x, 0.0f, 1.0f),
+            std::clamp(out.y, 0.0f, 1.0f),
+            std::clamp(out.z, 0.0f, 1.0f)
+        );
+    }
+};
+
 } // namespace realism
 } // namespace scratchbox
 

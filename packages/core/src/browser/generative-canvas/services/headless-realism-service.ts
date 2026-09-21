@@ -69,6 +69,41 @@ export interface ThinFilmOptions {
     nSubstrate?: number;
 }
 
+export interface MoistureRunoffOptions {
+    gravityDirection?: [number, number, number];
+    runoffIntensity?: number;
+    creviceAccumulation?: number;
+    rainStreakFrequency?: number;
+    wetDarkeningFactor?: number;
+    specularRoughness?: number;
+}
+
+export interface MoistureRunoffResult {
+    moistureLevels: Float32Array;
+    averageMoisture: number;
+}
+
+export interface NormalBevelOptions {
+    thresholdAngleDeg?: number;
+    maxAngleDeg?: number;
+    filletSharpness?: number;
+}
+
+export interface AgXOptions {
+    exposure?: number;
+    minEv?: number;
+    maxEv?: number;
+}
+
+export interface SubsurfaceScatteringOptions {
+    scatterColor?: [number, number, number];
+    scatterDistance?: number;
+    absorptionColor?: [number, number, number];
+    ior?: number;
+    transmission?: number;
+    thickness?: number;
+}
+
 // ============================================================================
 // 1. Headless Curvature Operator
 // ============================================================================
@@ -543,4 +578,291 @@ export function evaluateAnalyticalGobo(
         const slit = Math.sin(v * frequency * 2.0 * Math.PI);
         return Math.max(0, Math.min(1.0, (slit + 0.2) / 0.5));
     }
+}
+
+// ============================================================================
+// 8. Headless Dynamic Gravity Moisture Runoff Operator
+// ============================================================================
+
+export function synthesizeMoistureRunoff(
+    geometry: THREE.BufferGeometry,
+    options: MoistureRunoffOptions = {}
+): MoistureRunoffResult {
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const normAttr = geometry.getAttribute('normal') as THREE.BufferAttribute;
+    const vertexCount = posAttr ? posAttr.count : 0;
+    const moistureLevels = new Float32Array(vertexCount);
+    if (vertexCount === 0) return { moistureLevels, averageMoisture: 0 };
+
+    const curvature = estimateDifferentialCurvature(geometry);
+    const gDir = new THREE.Vector3(...(options.gravityDirection ?? [0, -1, 0])).normalize();
+    const runoffIntensity = options.runoffIntensity ?? 0.6;
+    const creviceAccumulation = options.creviceAccumulation ?? 0.8;
+    const rainStreakFreq = options.rainStreakFrequency ?? 14.0;
+    const wetDarkening = options.wetDarkeningFactor ?? 0.45;
+
+    let colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
+    if (!colorAttr) {
+        const defaultColors = new Float32Array(vertexCount * 4);
+        for (let i = 0; i < vertexCount; i++) {
+            defaultColors[i * 4] = 0.8;
+            defaultColors[i * 4 + 1] = 0.8;
+            defaultColors[i * 4 + 2] = 0.8;
+            defaultColors[i * 4 + 3] = 1.0;
+        }
+        colorAttr = new THREE.BufferAttribute(defaultColors, 4);
+        geometry.setAttribute('color', colorAttr);
+    }
+
+    const p = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const vFlow = new THREE.Vector3();
+    const tPerp = new THREE.Vector3();
+    let totalMoisture = 0;
+
+    for (let i = 0; i < vertexCount; i++) {
+        p.fromBufferAttribute(posAttr, i);
+        if (normAttr) n.fromBufferAttribute(normAttr, i);
+        else n.set(0, 1, 0);
+
+        // Downward slope advection vector v_flow = g - (g . n)n
+        const gDotN = gDir.dot(n);
+        vFlow.copy(gDir).addScaledVector(n, -gDotN);
+        const slopeMag = vFlow.length();
+
+        // Capillary pooling in crevices (Shape Index S < 0)
+        const S = curvature.shapeIndex[i] ?? 0;
+        const crevicePool = S < 0 ? -S * creviceAccumulation : 0;
+
+        // Gravitational streak harmonic modulation along surface
+        tPerp.crossVectors(vFlow, n);
+        if (tPerp.lengthSq() > 1e-6) tPerp.normalize();
+        else tPerp.set(1, 0, 0);
+
+        const streakNoise = 0.5 * (1.0 + Math.sin(p.dot(tPerp) * rainStreakFreq) *
+                                          Math.cos(p.dot(gDir) * (rainStreakFreq * 0.7)));
+
+        const runoffWeight = slopeMag * (streakNoise * 0.4 + 0.6) * runoffIntensity;
+        const w = Math.max(0, Math.min(1.0, crevicePool + runoffWeight));
+        moistureLevels[i] = w;
+        totalMoisture += w;
+
+        // Albedo darkening from internal Fresnel scattering
+        const darken = 1.0 - w * wetDarkening;
+        colorAttr.setXYZW(
+            i,
+            Math.max(0, Math.min(1.0, colorAttr.getX(i) * darken)),
+            Math.max(0, Math.min(1.0, colorAttr.getY(i) * darken)),
+            Math.max(0, Math.min(1.0, colorAttr.getZ(i) * darken)),
+            1.0
+        );
+    }
+
+    colorAttr.needsUpdate = true;
+    return {
+        moistureLevels,
+        averageMoisture: totalMoisture / vertexCount
+    };
+}
+
+// ============================================================================
+// 9. Headless Analytical Edge-Normal Fillet Bevel Operator
+// ============================================================================
+
+export function applyNormalBevel(
+    geometry: THREE.BufferGeometry,
+    options: NormalBevelOptions = {}
+): void {
+    const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute;
+    const normAttr = geometry.getAttribute('normal') as THREE.BufferAttribute;
+    if (!posAttr || !normAttr) return;
+
+    const vertexCount = posAttr.count;
+    const indices = geometry.index ? Array.from(geometry.index.array) : [];
+    if (indices.length < 3) return;
+
+    const threshDeg = options.thresholdAngleDeg ?? 35.0;
+    const maxDeg = options.maxAngleDeg ?? 150.0;
+    const sharpness = options.filletSharpness ?? 2.0;
+
+    const cosMin = Math.cos((maxDeg * Math.PI) / 180.0);
+    const cosMax = Math.cos((threshDeg * Math.PI) / 180.0);
+
+    const numFaces = Math.floor(indices.length / 3);
+    const faceNormals: THREE.Vector3[] = new Array(numFaces);
+    const vertFaces: number[][] = Array.from({ length: vertexCount }, () => []);
+
+    const p0 = new THREE.Vector3();
+    const p1 = new THREE.Vector3();
+    const p2 = new THREE.Vector3();
+    const e1 = new THREE.Vector3();
+    const e2 = new THREE.Vector3();
+    const fn = new THREE.Vector3();
+
+    for (let f = 0; f < numFaces; f++) {
+        const i0 = indices[f * 3];
+        const i1 = indices[f * 3 + 1];
+        const i2 = indices[f * 3 + 2];
+
+        vertFaces[i0].push(f);
+        vertFaces[i1].push(f);
+        vertFaces[i2].push(f);
+
+        p0.fromBufferAttribute(posAttr, i0);
+        p1.fromBufferAttribute(posAttr, i1);
+        p2.fromBufferAttribute(posAttr, i2);
+
+        e1.subVectors(p1, p0);
+        e2.subVectors(p2, p0);
+        fn.crossVectors(e1, e2);
+        if (fn.lengthSq() > 1e-8) fn.normalize();
+        else fn.set(0, 1, 0);
+
+        faceNormals[f] = fn.clone();
+    }
+
+    const blendedN = new THREE.Vector3();
+
+    for (let v = 0; v < vertexCount; v++) {
+        const faces = vertFaces[v];
+        if (faces.length < 2) continue;
+
+        blendedN.set(0, 0, 0);
+        let totalW = 0;
+
+        for (let a = 0; a < faces.length; a++) {
+            const fA = faces[a];
+            const nA = faceNormals[fA];
+            for (let b = a + 1; b < faces.length; b++) {
+                const fB = faces[b];
+                const nB = faceNormals[fB];
+                const dot = Math.max(-1.0, Math.min(1.0, nA.dot(nB)));
+
+                if (dot >= cosMin && dot <= cosMax) {
+                    const angle = Math.acos(dot);
+                    const w = Math.pow(angle, sharpness);
+                    blendedN.addScaledVector(nA, 0.5 * w);
+                    blendedN.addScaledVector(nB, 0.5 * w);
+                    totalW += w;
+                }
+            }
+        }
+
+        if (totalW > 1e-4 && blendedN.lengthSq() > 1e-6) {
+            blendedN.normalize();
+            normAttr.setXYZ(v, blendedN.x, blendedN.y, blendedN.z);
+        }
+    }
+
+    normAttr.needsUpdate = true;
+}
+
+// ============================================================================
+// 10. Headless AgX Photographic Color Management & Gamut Inset Operator
+// ============================================================================
+
+export function evaluateAgXTonemapping(
+    linearRgb: [number, number, number],
+    options: AgXOptions = {}
+): [number, number, number] {
+    const exposure = options.exposure ?? 1.0;
+    const minEv = options.minEv ?? -12.47393;
+    const maxEv = options.maxEv ?? 4.026069;
+
+    const r = Math.max(1e-6, linearRgb[0] * exposure);
+    const g = Math.max(1e-6, linearRgb[1] * exposure);
+    const b = Math.max(1e-6, linearRgb[2] * exposure);
+
+    // 1. AgX Inset Primary Matrix
+    const inR = 0.842479 * r + 0.0784336 * g + 0.0792237 * b;
+    const inG = 0.0637613 * r + 0.878481 * g + 0.0577577 * b;
+    const inB = 0.0408752 * r + 0.0882901 * g + 0.870835 * b;
+
+    // 2. AgX Log2 Encoding
+    const logEncode = (val: number) => {
+        const logVal = Math.log2(Math.max(1e-5, val));
+        return Math.max(0, Math.min(1.0, (logVal - minEv) / (maxEv - minEv)));
+    };
+
+    const logR = logEncode(inR);
+    const logG = logEncode(inG);
+    const logB = logEncode(inB);
+
+    // 3. Sigmoidal Tone Curve
+    const agxCurve = (x: number) => {
+        const x2 = x * x;
+        const x4 = x2 * x2;
+        return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.429 * x2 + 0.1144 * x;
+    };
+
+    const cR = Math.max(0, Math.min(1.0, agxCurve(logR)));
+    const cG = Math.max(0, Math.min(1.0, agxCurve(logG)));
+    const cB = Math.max(0, Math.min(1.0, agxCurve(logB)));
+
+    // 4. AgX Outset Primary Matrix
+    const outR = 1.19688 * cR - 0.052897 * cG - 0.143983 * cB;
+    const outG = -0.098834 * cR + 1.15198 * cG - 0.053146 * cB;
+    const outB = -0.099701 * cR - 0.098863 * cG + 1.19856 * cB;
+
+    // High-luminance desaturation roll-off
+    const luma = 0.2126 * outR + 0.7152 * outG + 0.0722 * outB;
+    const desat = Math.max(0, Math.min(1.0, (luma - 0.85) / 0.15));
+
+    return [
+        Math.max(0, Math.min(1.0, outR * (1 - desat) + luma * desat)),
+        Math.max(0, Math.min(1.0, outG * (1 - desat) + luma * desat)),
+        Math.max(0, Math.min(1.0, outB * (1 - desat) + luma * desat))
+    ];
+}
+
+// ============================================================================
+// 11. Headless Burley Subsurface Scattering Shader Bridge
+// ============================================================================
+
+export function applyBurleySubsurfaceScattering(
+    mesh: THREE.Mesh,
+    options: SubsurfaceScatteringOptions = {}
+): void {
+    let mat = mesh.material;
+    if (!(mat instanceof THREE.MeshPhysicalMaterial)) {
+        const oldMat = mat as THREE.Material;
+        mat = new THREE.MeshPhysicalMaterial({
+            color: (oldMat as any)?.color ?? 0xffffff,
+            roughness: (oldMat as any)?.roughness ?? 0.4,
+            metalness: 0.0
+        });
+        mesh.material = mat;
+        oldMat?.dispose();
+    }
+
+    const pbrMat = mat as THREE.MeshPhysicalMaterial;
+    pbrMat.transmission = options.transmission ?? 0.35;
+    pbrMat.ior = options.ior ?? 1.45;
+    pbrMat.thickness = options.thickness ?? 0.5;
+
+    const scatterColor = options.scatterColor ?? [0.95, 0.45, 0.35];
+    const scatterDist = options.scatterDistance ?? 0.15;
+
+    pbrMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uSssScatterColor = { value: new THREE.Vector3(...scatterColor) };
+        shader.uniforms.uSssScatterDistance = { value: scatterDist };
+
+        shader.fragmentShader = `
+            uniform vec3 uSssScatterColor;
+            uniform float uSssScatterDistance;
+        ` + shader.fragmentShader;
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <lights_fragment_end>',
+            `
+            #include <lights_fragment_end>
+            // Burley SSS back-scatter diffusion dipole approximation
+            float sssBackDot = max(0.0, dot(-geometryNormal, directionalLights[0].direction));
+            vec3 sssInscatter = uSssScatterColor * sssBackDot * uSssScatterDistance;
+            outgoingLight += sssInscatter;
+            `
+        );
+    };
+
+    pbrMat.needsUpdate = true;
 }
