@@ -94,6 +94,27 @@ Renders a complete multi-track `VideoTimelineData` structure:
 - Chroma keying with Euclidean YCbCr tolerance and green/blue despill suppression.
 - Layer affine transforms, picture-in-picture, and audio mixing.
 
+### 13. `vfx_mediapipe_track_video_motion`
+Coordinated motion analysis extracting articulated 3D kinematic telemetry:
+- Uses FFmpeg to extract sequential video frame samples at target sampling rates (default: 15 fps).
+- Runs MediaPipe 3D pose detection per frame, solving 3D joint Euler angles conforming to the Scratchbox Parametric Humanoid Standard (`SB-Human`).
+- Applies moving-average temporal smoothing across joint Euler angles and hip translation vectors to eliminate tracking jitter.
+- Streams motion data directly into the native C++20 Astra 3D engine for character driving, physics ragdolls, or WebGL playback.
+
+### 14. `vfx_video_auto_reframe`
+Intelligent subject-aware camera reframing:
+- Analyzes video frames with MediaPipe to detect and track human subjects (face or body center).
+- Calculates target aspect ratio crop boxes (`9:16`, `1:1`, `4:5`, or custom) with rule-of-thirds composition bias.
+- Generates smooth Catmull-Rom spline camera trajectory pan waypoints.
+- Compiles into an FFmpeg single-pass hardware-accelerated `crop=w:h:x:y` render with `-movflags +faststart`.
+
+### 15. `vfx_visual_critic_audit`
+Autonomous visual quality gate auditing against the 8-Dimension Visual Fidelity Rubric:
+- Uses FFmpeg to compile an automated 3×3 timestamped contact sheet.
+- Inspects MediaPipe anatomical consistency across frames (limb length stability ratio, joint flip detection).
+- Evaluates the 8 dimensions (Geometric Definition, Pixel/Splat Density, Material/Micro-surface, Environmental Grounding, Radiometric Lighting, Color Temperature, Volumetric Depth, Photographic Realism) with a strict $\ge 8.5/10$ passing gate.
+- Generates automated FFmpeg remediation recipes (e.g. Planckian Kelvin balance `colortemperature`, unsharp mask `unsharp=...`) when any dimension fails.
+
 ---
 
 ## Canonical FFmpeg Command Catalog
@@ -211,3 +232,26 @@ ffmpeg -y -i INPUT.mp4 -vf "vidstabdetect=stepsize=6:shakiness=8:accuracy=10:res
 # Pass 2: Smoothing and optical zoom compensation
 ffmpeg -y -i INPUT.mp4 -vf "vidstabtransform=input=transforms.trf:smoothing=30:zoom=2:optzoom=1" -c:v libx264 -preset fast -crf 18 -c:a copy STABILIZED.mp4
 ```
+
+### 13. High-Speed Frame Stills Extraction for MediaPipe Pose Kinematics
+```bash
+# Extract sequential stills at 15 fps directly to PNG/JPG for MediaPipe 3D joint tracking
+ffmpeg -y -ss 00:00:00.000 -i INPUT.mp4 -t 5.0 -r 15 -q:v 2 "/tmp/frames/frame_%04d.png"
+```
+
+### 14. Intelligent Subject-Centered Video Auto-Reframing (16:9 to 9:16)
+```bash
+# Single-pass 9:16 crop centered on MediaPipe solved subject coordinates with faststart
+ffmpeg -y -i WIDE_16X9.mp4 \
+  -vf "crop=608:1080:656:0" \
+  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -movflags +faststart -c:a copy REFRAMED_9X16.mp4
+```
+
+### 15. Automated Planckian Kelvin Color Cast Correction & Visual Remediation
+```bash
+# Correct cool or warm color cast and sharpen edge micro-contrast per Visual Critic audit
+ffmpeg -y -i INPUT.mp4 \
+  -vf "colortemperature=temperature=5600,unsharp=5:5:0.8:3:3:0.4" \
+  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p -movflags +faststart -c:a copy REMEDIATED.mp4
+```
+

@@ -124,6 +124,33 @@ export class SurveyStationRenderService {
 
     renderStationBlockout(station: ColmapCameraPose, options: StationBlockoutRenderOptions = {}): StationBlockoutRender {
         if (!this.mesh) throw new Error('SurveyStationRenderService: call loadMesh() first');
+        const minGroundClearance = 2.0;
+        const localSurfaceY = this.sampleLocalSurfaceHeight(station.positionLocalENU[0], station.positionLocalENU[2], 6.0);
+        const groundDatumY = Math.max(
+            this.meshBounds ? this.meshBounds.min[1] : 0.0,
+            localSurfaceY > -Infinity ? localSurfaceY : 0.0
+        );
+        if (station.positionLocalENU[1] < groundDatumY + minGroundClearance) {
+            const oldY = station.positionLocalENU[1];
+            const newY = Number((groundDatumY + minGroundClearance).toFixed(3));
+            station.positionLocalENU[1] = newY;
+            station.cameraHeightAboveGround = Number((station.positionLocalENU[1] - (station.groundElevationASL ?? 0)).toFixed(3));
+
+            const approxDist = Math.max(30.0, Math.hypot(station.positionLocalENU[0], station.positionLocalENU[2]));
+            const targetX = station.positionLocalENU[0] + approxDist * station.forwardVector[0];
+            const targetY = oldY + approxDist * station.forwardVector[1];
+            const targetZ = station.positionLocalENU[2] + approxDist * station.forwardVector[2];
+
+            const newDx = targetX - station.positionLocalENU[0];
+            const newDy = targetY - newY;
+            const newDz = targetZ - station.positionLocalENU[2];
+            const newLen = Math.hypot(newDx, newDy, newDz);
+            if (newLen > 1e-3) {
+                station.forwardVector = [newDx / newLen, newDy / newLen, newDz / newLen];
+                station.pitchDegrees = Number(((Math.asin(station.forwardVector[1]) * 180) / Math.PI).toFixed(2));
+                station.yawDegrees = Number(((Math.atan2(station.forwardVector[0], station.forwardVector[2]) * 180) / Math.PI).toFixed(2));
+            }
+        }
         const width = options.width ?? 1920;
         const height = options.height ?? Math.round(width / (station.aspectRatio || 16 / 9));
         const { pose, intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(station, width, height);
@@ -147,6 +174,27 @@ export class SurveyStationRenderService {
     }
 
     /**
+     * Samples local mesh surface height within a horizontal search radius.
+     */
+    public sampleLocalSurfaceHeight(x: number, z: number, searchRadius: number = 6.0): number {
+        if (!this.mesh) return -Infinity;
+        const v = this.mesh.vertices;
+        let maxY = -Infinity;
+        const r2 = searchRadius * searchRadius;
+        for (let i = 0; i < v.length; i += 3) {
+            const vx = v[i];
+            const vz = v[i + 2];
+            const dx = vx - x;
+            const dz = vz - z;
+            if (dx * dx + dz * dz <= r2) {
+                const vy = v[i + 1];
+                if (vy > maxY) maxY = vy;
+            }
+        }
+        return maxY;
+    }
+
+    /**
      * Fills `station.beautify` with mesh-grounded facts: standoff along the optical axis, horizon
      * row, sky fraction, footprint coverage of the mesh ground extent, and the sun for `isoDate`.
      */
@@ -158,6 +206,36 @@ export class SurveyStationRenderService {
         const isoDate = options.isoDate ?? date.toISOString();
 
         return stations.map(st => {
+            // Strict Invariant: Camera perspectives must never fall below the ground truth of the model.
+            // Check both global mesh bounds and local surface elevation (terrain / roofs) beneath camera.
+            const minGroundClearance = 2.0;
+            const localSurfaceY = this.sampleLocalSurfaceHeight(st.positionLocalENU[0], st.positionLocalENU[2], 6.0);
+            const groundDatumY = Math.max(
+                this.meshBounds ? this.meshBounds.min[1] : 0.0,
+                localSurfaceY > -Infinity ? localSurfaceY : 0.0
+            );
+            if (st.positionLocalENU[1] < groundDatumY + minGroundClearance) {
+                const oldY = st.positionLocalENU[1];
+                const newY = Number((groundDatumY + minGroundClearance).toFixed(3));
+                st.positionLocalENU[1] = newY;
+                st.cameraHeightAboveGround = Number((st.positionLocalENU[1] - (st.groundElevationASL ?? 0)).toFixed(3));
+
+                // Preserve gaze target when elevated
+                const approxDist = Math.max(30.0, Math.hypot(st.positionLocalENU[0], st.positionLocalENU[2]));
+                const targetX = st.positionLocalENU[0] + approxDist * st.forwardVector[0];
+                const targetY = oldY + approxDist * st.forwardVector[1];
+                const targetZ = st.positionLocalENU[2] + approxDist * st.forwardVector[2];
+
+                const newDx = targetX - st.positionLocalENU[0];
+                const newDy = targetY - newY;
+                const newDz = targetZ - st.positionLocalENU[2];
+                const newLen = Math.hypot(newDx, newDy, newDz);
+                if (newLen > 1e-3) {
+                    st.forwardVector = [newDx / newLen, newDy / newLen, newDz / newLen];
+                    st.pitchDegrees = Number(((Math.asin(st.forwardVector[1]) * 180) / Math.PI).toFixed(2));
+                    st.yawDegrees = Number(((Math.atan2(st.forwardVector[0], st.forwardVector[2]) * 180) / Math.PI).toFixed(2));
+                }
+            }
             const { pose, intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(st, width, height);
             const { depthBuffer } = HeadlessMeshSilhouetteRenderer.renderMesh(this.mesh!, pose, width, height, { clipNearPlane: true });
 

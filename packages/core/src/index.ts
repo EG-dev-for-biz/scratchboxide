@@ -69,5 +69,54 @@ export {
     type ColorTransferPlan
 } from './browser/generative-canvas/services/nano-banana-color-service';
 
+// Survey-to-Atlas Inverse Projection (SAIP) Engine
+export {
+    SurveyTextureUnprojector,
+    type SurveyTextureUnprojectorOptions,
+    type StationPlate,
+    type StationContribution,
+    type UnprojectionMetrics,
+    type SurveyTextureResult,
+    type SurveyTexturePipelineRequest
+} from './node/spatial/SurveyTextureUnprojector';
+
+// Zero-Preset Adaptive Material PBR Architecture
+export {
+    AdaptiveMaterialPbrService
+} from './node/3d-engine/adaptive-material-pbr-service';
+export type {
+    AdaptiveMaterialSchema,
+    IntrinsicSignalMetrics,
+    ContinuousBiophysicalFields,
+    AdaptivePbrOptions,
+    AdaptivePbrResult,
+    AdaptiveAtlasTelemetry
+} from './common/adaptive-material-types';
+
+// 4DAnyone 4D Gaussian Splatting Dynamic Humanoid Avatar Engine
+export {
+    Dynamic4DGaussianSplatService,
+    type HumanoidMotionData,
+    type HumanoidMotionFrame,
+    type DeformedGaussianFrame,
+    type Avatar4DGSDetails,
+    type SkinWeightedGaussian
+} from './node/3d-engine/Dynamic4DGaussianSplatService';
+export {
+    HumanoidMotionBridgeService,
+    type RetargetOptions
+} from './node/spatial/HumanoidMotionBridgeService';
+export {
+    ConcertStagePerformerService,
+    PerformerSkinningMode,
+    MUSIC_VENUE_PRESETS,
+    SMPLX_22_JOINT_NAMES,
+    SMPLX_22_PARENTS,
+    DEFAULT_CANONICAL_JOINTS,
+    type MusicVenuePreset,
+    type ConcertStageOptions,
+    type PerformerKinematicsFrame,
+    type PerformerTelemetry
+} from './browser/generative-canvas/services/ConcertStagePerformerService';
 
 

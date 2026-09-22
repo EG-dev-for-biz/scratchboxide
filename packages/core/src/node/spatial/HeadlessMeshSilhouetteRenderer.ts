@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
-import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
+import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer.js';
 
 export interface RenderMesh3D {
     /** Flat array of vertex positions [x0, y0, z0, x1, y1, z1, ...] */
@@ -256,7 +256,116 @@ export class HeadlessMeshSilhouetteRenderer {
         const allIndices: number[] = [];
         let vertexOffset = 0;
 
-        for (const mesh of gltf.meshes || []) {
+        // Traverse node hierarchy to accumulate world transform matrices
+        const nodeCount = gltf.nodes ? gltf.nodes.length : 0;
+        const worldMatrices: (number[] | null)[] = new Array(nodeCount).fill(null);
+
+        function getNodeLocalMat(node: any): number[] {
+            if (node.matrix && node.matrix.length === 16) return [...node.matrix];
+            const m = [
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            ];
+            const t = node.translation || [0, 0, 0];
+            const r = node.rotation || [0, 0, 0, 1];
+            const s = node.scale || [1, 1, 1];
+            const x = r[0], y = r[1], z = r[2], w = r[3];
+            const x2 = x + x, y2 = y + y, z2 = z + z;
+            const xx = x * x2, xy = x * y2, xz = x * z2;
+            const yy = y * y2, yz = y * z2, zz = z * z2;
+            const wx = w * x2, wy = w * y2, wz = w * z2;
+            const sx = s[0], sy = s[1], sz = s[2];
+            m[0] = (1 - (yy + zz)) * sx; m[1] = (xy + wz) * sx; m[2] = (xz - wy) * sx;
+            m[4] = (xy - wz) * sy; m[5] = (1 - (xx + zz)) * sy; m[6] = (yz + wx) * sy;
+            m[8] = (xz + wy) * sz; m[9] = (yz - wx) * sz; m[10] = (1 - (xx + yy)) * sz;
+            m[12] = t[0]; m[13] = t[1]; m[14] = t[2];
+            return m;
+        }
+
+        function multMat4(a: number[], b: number[]): number[] {
+            const out = new Array(16);
+            for (let col = 0; col < 4; col++) {
+                for (let row = 0; row < 4; row++) {
+                    out[col * 4 + row] =
+                        a[row] * b[col * 4] +
+                        a[4 + row] * b[col * 4 + 1] +
+                        a[8 + row] * b[col * 4 + 2] +
+                        a[12 + row] * b[col * 4 + 3];
+                }
+            }
+            return out;
+        }
+
+        const visited = new Set<number>();
+        function traverseNode(nodeIdx: number, parentMat: number[] | null) {
+            if (visited.has(nodeIdx)) return;
+            visited.add(nodeIdx);
+            const node = gltf.nodes[nodeIdx];
+            if (!node) return;
+            const localMat = getNodeLocalMat(node);
+            const worldMat = parentMat ? multMat4(parentMat, localMat) : localMat;
+            worldMatrices[nodeIdx] = worldMat;
+            if (node.children && Array.isArray(node.children)) {
+                for (const childIdx of node.children) {
+                    traverseNode(childIdx, worldMat);
+                }
+            }
+        }
+
+        const scenes = gltf.scenes || (gltf.scene !== undefined ? [gltf.scenes[gltf.scene]] : []);
+        for (const sc of scenes) {
+            if (sc && sc.nodes) {
+                for (const rootNode of sc.nodes) {
+                    traverseNode(rootNode, null);
+                }
+            }
+        }
+        for (let i = 0; i < nodeCount; i++) {
+            if (!visited.has(i)) traverseNode(i, null);
+        }
+
+        // Collect mesh instances to process
+        interface MeshInstance {
+            mesh: any;
+            worldMat: number[];
+        }
+        const meshInstances: MeshInstance[] = [];
+
+        if (gltf.nodes && gltf.nodes.length > 0) {
+            for (let i = 0; i < gltf.nodes.length; i++) {
+                const node = gltf.nodes[i];
+                if (node.mesh !== undefined && gltf.meshes && gltf.meshes[node.mesh]) {
+                    meshInstances.push({
+                        mesh: gltf.meshes[node.mesh],
+                        worldMat: worldMatrices[i] || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+                    });
+                }
+            }
+        }
+
+        // Fallback if no nodes reference meshes
+        if (meshInstances.length === 0 && gltf.meshes) {
+            for (const mesh of gltf.meshes) {
+                meshInstances.push({
+                    mesh,
+                    worldMat: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+                });
+            }
+        }
+
+        for (const inst of meshInstances) {
+            const mesh = inst.mesh;
+            const wm = inst.worldMat;
+            const isIdentity = (
+                wm[0] === 1 && wm[5] === 1 && wm[10] === 1 && wm[15] === 1 &&
+                wm[1] === 0 && wm[2] === 0 && wm[3] === 0 &&
+                wm[4] === 0 && wm[6] === 0 && wm[7] === 0 &&
+                wm[8] === 0 && wm[9] === 0 && wm[11] === 0 &&
+                wm[12] === 0 && wm[13] === 0 && wm[14] === 0
+            );
+
             for (const prim of mesh.primitives || []) {
                 if (prim.attributes && prim.attributes.POSITION !== undefined) {
                     const posAcc = gltf.accessors[prim.attributes.POSITION];
@@ -269,8 +378,18 @@ export class HeadlessMeshSilhouetteRenderer {
                         count * 3
                     );
 
-                    for (let i = 0; i < positions.length; i++) {
-                        allVertices.push(positions[i]);
+                    for (let i = 0; i < positions.length; i += 3) {
+                        const px = positions[i];
+                        const py = positions[i + 1];
+                        const pz = positions[i + 2];
+                        if (isIdentity) {
+                            allVertices.push(px, py, pz);
+                        } else {
+                            const tx = wm[0] * px + wm[4] * py + wm[8] * pz + wm[12];
+                            const ty = wm[1] * px + wm[5] * py + wm[9] * pz + wm[13];
+                            const tz = wm[2] * px + wm[6] * py + wm[10] * pz + wm[14];
+                            allVertices.push(tx, ty, tz);
+                        }
                     }
 
                     if (prim.indices !== undefined) {

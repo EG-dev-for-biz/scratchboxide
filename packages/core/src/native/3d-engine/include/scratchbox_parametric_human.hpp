@@ -378,6 +378,7 @@ public:
         }
 
         templateMesh.recomputeBounds();
+        initializeFacialLandmarks(*this);
         return true;
     }
 
@@ -566,18 +567,79 @@ public:
     }
 
     /**
-     * Presets for Male, Female, and Neutral archetypes
+     * Loads the canonical scan-grounded standard .sbhuman model (10,475 vertices, 20,908 triangles),
+     * scaling to target height if specified. Falls back cleanly to createProceduralAnatomical if binary assets are absent.
+     */
+    static SbHumanModel loadStandardModel(
+        skinning::GenderMorph gender = skinning::GenderMorph::Neutral,
+        float targetHeight = 1.72f
+    ) {
+        std::string filename;
+        switch (gender) {
+            case skinning::GenderMorph::Male:   filename = "sbhuman_male.sbhuman"; break;
+            case skinning::GenderMorph::Female: filename = "sbhuman_female.sbhuman"; break;
+            case skinning::GenderMorph::Neutral:
+            default:                            filename = "sbhuman_neutral.sbhuman"; break;
+        }
+
+        std::vector<std::string> searchPaths;
+        const char* envDir = std::getenv("SCRATCHBOX_HUMAN_ASSETS_DIR");
+        if (envDir && strlen(envDir) > 0) {
+            searchPaths.push_back(std::string(envDir) + "/" + filename);
+        }
+        searchPaths.push_back("packages/core/assets/models/" + filename);
+        searchPaths.push_back("public/models/" + filename);
+        searchPaths.push_back("../packages/core/assets/models/" + filename);
+        searchPaths.push_back("../../packages/core/assets/models/" + filename);
+        searchPaths.push_back("../../../packages/core/assets/models/" + filename);
+        searchPaths.push_back("/Users/eligreen/dev/scratchbox-ide-master/packages/core/assets/models/" + filename);
+
+        for (const auto& path : searchPaths) {
+            std::ifstream test(path, std::ios::binary);
+            if (test.good()) {
+                test.close();
+                SbHumanModel model;
+                if (model.loadFromFile(path)) {
+                    // Height adjustment if target differs from template height
+                    float curHeight = model.templateMesh.bounds.max.y - model.templateMesh.bounds.min.y;
+                    if (targetHeight > 0.1f && curHeight > 0.1f && std::abs(curHeight - targetHeight) > 0.01f) {
+                        float scale = targetHeight / curHeight;
+                        for (auto& v : model.templateMesh.vertices) {
+                            v.position.x *= scale;
+                            v.position.y *= scale;
+                            v.position.z *= scale;
+                        }
+                        for (auto& j : model.skeleton.joints) {
+                            j.restPosition.x *= scale;
+                            j.restPosition.y *= scale;
+                            j.restPosition.z *= scale;
+                        }
+                        model.skeleton.updateTransforms();
+                        model.templateMesh.recomputeBounds();
+                    }
+                    initializeFacialLandmarks(model);
+                    return model;
+                }
+            }
+        }
+
+        // Resilient fallback to procedural generator
+        return createProceduralAnatomical(targetHeight, gender);
+    }
+
+    /**
+     * Canonical Scan-Grounded Standards for Male, Female, and Neutral archetypes
      */
     static SbHumanModel createMale(float height = 1.80f) {
-        return createProceduralAnatomical(height, skinning::GenderMorph::Male);
+        return loadStandardModel(skinning::GenderMorph::Male, height);
     }
 
     static SbHumanModel createFemale(float height = 1.66f) {
-        return createProceduralAnatomical(height, skinning::GenderMorph::Female);
+        return loadStandardModel(skinning::GenderMorph::Female, height);
     }
 
     static SbHumanModel createNeutral(float height = 1.72f) {
-        return createProceduralAnatomical(height, skinning::GenderMorph::Neutral);
+        return loadStandardModel(skinning::GenderMorph::Neutral, height);
     }
 };
 

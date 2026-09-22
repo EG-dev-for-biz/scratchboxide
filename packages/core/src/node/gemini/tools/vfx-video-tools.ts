@@ -10,6 +10,7 @@
 import { buildBeautifyPrompt } from '../../../browser/generative-canvas/services/location-beautify-service';
 import { HeadlessVideoEditorService } from '../../video/HeadlessVideoEditorService';
 import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoCompositorService';
+import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
 import type { VideoTimelineData } from '../../../browser/generative-canvas/services/video/videoTypes';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -34,6 +35,7 @@ function asBoolean(val: unknown): boolean {
 
 const editorService = new HeadlessVideoEditorService();
 const compositorService = new HeadlessVideoCompositorService();
+const directorService = new MediaPipeVideoDirectorService(editorService);
 
 // ============================================================================
 // 1. AI Beautify Tools
@@ -1189,17 +1191,236 @@ export const compositorHandlers: Record<string, ToolHandler> = {
 };
 
 // ============================================================================
-// 4. Aggregated Tool Declarations & Handlers
+// 4. MediaPipe Video Director Tools (FFmpeg + MediaPipe + Gemini Coordination)
+// ============================================================================
+
+export const DIRECTOR_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'vfx_mediapipe_track_video_motion',
+        description: 'Ingest video footage, track full-body 3D anatomical joint kinematics across frames using MediaPipe and FFmpeg, apply temporal smoothing, and export articulated motion tracks ready for the native C++20 SB-Human engine or Three.js.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                videoPath: {
+                    type: 'STRING',
+                    description: 'Absolute path to input video file'
+                },
+                fps: {
+                    type: 'NUMBER',
+                    description: 'Sampling frame rate (default 15)'
+                },
+                startTime: {
+                    type: 'NUMBER',
+                    description: 'Start offset in seconds (default 0)'
+                },
+                duration: {
+                    type: 'NUMBER',
+                    description: 'Duration to analyze in seconds (default: entire clip)'
+                },
+                smoothingWindow: {
+                    type: 'NUMBER',
+                    description: 'Moving average window size for joint smoothing (default 3 frames)'
+                },
+                minConfidence: {
+                    type: 'NUMBER',
+                    description: 'Minimum pose confidence threshold (default 0.4)'
+                },
+                outputJsonPath: {
+                    type: 'STRING',
+                    description: 'Optional path to write JSON motion telemetry'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns planned kinematics without spawning processes'
+                }
+            },
+            required: ['videoPath']
+        }
+    },
+    {
+        name: 'vfx_video_auto_reframe',
+        description: 'Intelligently re-frame widescreen or arbitrary aspect ratio video into vertical (9:16), square (1:1), or custom formats by tracking human subjects across time with MediaPipe and executing smooth Catmull-Rom spline camera pans via FFmpeg.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputVideoPath: {
+                    type: 'STRING',
+                    description: 'Absolute path to input video file'
+                },
+                outputVideoPath: {
+                    type: 'STRING',
+                    description: 'Absolute path to output re-framed video file'
+                },
+                targetAspectRatio: {
+                    type: 'STRING',
+                    description: 'Target aspect ratio: "9:16", "1:1", "4:5", "16:9", or custom "W:H"'
+                },
+                focusMode: {
+                    type: 'STRING',
+                    description: 'Subject tracking focus mode: "body" (default), "face", "action", or "center"'
+                },
+                sampleIntervalSec: {
+                    type: 'NUMBER',
+                    description: 'Sampling interval for camera trajectory keyframes (default 0.5s)'
+                },
+                cropPadding: {
+                    type: 'NUMBER',
+                    description: 'Margin factor around detected subject (default 1.25)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns planned crop window and FFmpeg filtergraph without rendering'
+                }
+            },
+            required: ['inputVideoPath', 'targetAspectRatio']
+        }
+    },
+    {
+        name: 'vfx_visual_critic_audit',
+        description: 'Execute an autonomous visual fidelity and photorealism audit on video or VFX composites against the 8-Dimension Visual Fidelity Rubric using FFmpeg contact sheets and MediaPipe anatomical consistency tracking, synthesizing actionable remediation recipes if score < 8.5/10.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                videoPath: {
+                    type: 'STRING',
+                    description: 'Absolute path to the video file to audit'
+                },
+                promptContext: {
+                    type: 'STRING',
+                    description: 'Context description of the intended VFX shot or prompt'
+                },
+                referencePlatePath: {
+                    type: 'STRING',
+                    description: 'Optional path to original reference plate'
+                },
+                minPassingScore: {
+                    type: 'NUMBER',
+                    description: 'Minimum passing score threshold (default 8.5)'
+                },
+                dryRun: {
+                    type: 'BOOLEAN',
+                    description: 'If true, returns simulated rubric evaluation without rendering contact sheets'
+                }
+            },
+            required: ['videoPath']
+        }
+    }
+];
+
+export const directorHandlers: Record<string, ToolHandler> = {
+    vfx_mediapipe_track_video_motion: async (args, _ctx) => {
+        const videoPath = asString(args.videoPath);
+        if (!videoPath) {
+            return {
+                resultPayload: { error: 'videoPath is required' },
+                summaryResult: 'Failed: videoPath is required.'
+            };
+        }
+
+        const fps = asNumber(args.fps);
+        const startTime = asNumber(args.startTime);
+        const duration = asNumber(args.duration);
+        const smoothingWindow = asNumber(args.smoothingWindow);
+        const minConfidence = asNumber(args.minConfidence);
+        const outputJsonPath = asString(args.outputJsonPath) || undefined;
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await directorService.trackVideoMotion({
+            videoPath,
+            fps,
+            startTime,
+            duration,
+            smoothingWindow,
+            minConfidence,
+            outputJsonPath,
+            dryRun
+        });
+
+        return {
+            resultPayload: result as unknown as Record<string, unknown>,
+            summaryResult: dryRun
+                ? `Planned motion tracking for ${videoPath} (${result.totalFramesAnalyzed} frames, dry run).`
+                : `Tracked video motion: ${result.totalFramesAnalyzed} frames at ${result.sampleFps}fps (avg confidence ${(result.averageConfidence * 100).toFixed(1)}%, max displacement ${result.maxDisplacementMeters.toFixed(2)}m).`
+        };
+    },
+
+    vfx_video_auto_reframe: async (args, _ctx) => {
+        const inputVideoPath = asString(args.inputVideoPath);
+        const targetAspectRatio = asString(args.targetAspectRatio);
+        if (!inputVideoPath || !targetAspectRatio) {
+            return {
+                resultPayload: { error: 'inputVideoPath and targetAspectRatio are required' },
+                summaryResult: 'Failed: inputVideoPath and targetAspectRatio are required.'
+            };
+        }
+
+        const outputVideoPath = asString(args.outputVideoPath) || undefined;
+        const focusMode = (asString(args.focusMode) as 'face' | 'body' | 'action' | 'center') || 'body';
+        const sampleIntervalSec = asNumber(args.sampleIntervalSec);
+        const cropPadding = asNumber(args.cropPadding);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await directorService.autoReframeVideo({
+            inputVideoPath,
+            outputVideoPath,
+            targetAspectRatio,
+            focusMode,
+            sampleIntervalSec,
+            cropPadding,
+            dryRun
+        });
+
+        return {
+            resultPayload: result as unknown as Record<string, unknown>,
+            summaryResult: dryRun
+                ? `Planned auto-reframe for ${inputVideoPath} to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}, dry run).`
+                : `Auto-reframed video to ${result.targetAspectRatio} (${result.cropDimensions.width}x${result.cropDimensions.height}) -> ${result.outputVideoPath}.`
+        };
+    },
+
+    vfx_visual_critic_audit: async (args, _ctx) => {
+        const videoPath = asString(args.videoPath);
+        if (!videoPath) {
+            return {
+                resultPayload: { error: 'videoPath is required' },
+                summaryResult: 'Failed: videoPath is required.'
+            };
+        }
+
+        const promptContext = asString(args.promptContext) || undefined;
+        const referencePlatePath = asString(args.referencePlatePath) || undefined;
+        const minPassingScore = asNumber(args.minPassingScore);
+        const dryRun = asBoolean(args.dryRun);
+
+        const result = await directorService.auditVideoFidelity({
+            videoPath,
+            promptContext,
+            referencePlatePath,
+            minPassingScore,
+            dryRun
+        });
+
+        return {
+            resultPayload: result as unknown as Record<string, unknown>,
+            summaryResult: `Visual Critic audit: ${result.passed ? 'PASSED' : 'FAILED'} (score ${result.overallScore.toFixed(2)}/10, limb stability ${(result.anatomicalConsistency.limbLengthStabilityRatio * 100).toFixed(0)}%).`
+        };
+    }
+};
+
+// ============================================================================
+// 5. Aggregated Tool Declarations & Handlers
 // ============================================================================
 
 export const VFX_VIDEO_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...AI_BEAUTIFY_TOOL_DECLARATIONS,
     ...FFMPEG_TOOL_DECLARATIONS,
-    ...COMPOSITOR_TOOL_DECLARATIONS
+    ...COMPOSITOR_TOOL_DECLARATIONS,
+    ...DIRECTOR_TOOL_DECLARATIONS
 ];
 
 export const vfxVideoHandlers: Record<string, ToolHandler> = {
     ...aiBeautifyHandlers,
     ...ffmpegHandlers,
-    ...compositorHandlers
+    ...compositorHandlers,
+    ...directorHandlers
 };

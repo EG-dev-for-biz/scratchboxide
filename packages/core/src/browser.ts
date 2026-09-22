@@ -200,5 +200,19 @@ export type {
     CinematicBokehUniforms
 } from './browser/generative-canvas/services/optics/CinematicBokehPass';
 
+// Concert Stage & 4D Gaussian Splatting Performer Service
+export {
+    ConcertStagePerformerService,
+    PerformerSkinningMode,
+    MUSIC_VENUE_PRESETS,
+    SMPLX_22_JOINT_NAMES,
+    SMPLX_22_PARENTS,
+    DEFAULT_CANONICAL_JOINTS,
+    type MusicVenuePreset,
+    type ConcertStageOptions,
+    type PerformerKinematicsFrame,
+    type PerformerTelemetry
+} from './browser/generative-canvas/services/ConcertStagePerformerService';
+
 
 

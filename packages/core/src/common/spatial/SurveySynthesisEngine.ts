@@ -125,20 +125,56 @@ export class SurveySynthesisEngine {
     const lookAt: V3 = config.lookAtOffsetLocalENU || [0, 20, 0];
     const poses: ColmapCameraPose[] = [];
 
+    const minGroundClearance = Math.max(0.5, config.minCameraHeightAboveGroundMeters ?? 1.5);
+
     switch (config.type) {
       case 'orbital-multi-tier': {
+        const isMacro28 = count === 28 || (radius >= 100 && count >= 24 && (!config.altitudeTiersMeters || config.altitudeTiersMeters.length === 0));
+        if (isMacro28) {
+          // Macro landmark (>200m footprint) 3-tier distribution:
+          // Tier 3: 8 stations (110m altitude, 260m radius, -15.6° pitch)
+          // Tier 2: 12 stations (45m altitude, 160m radius, -8.0° pitch)
+          // Tier 1: 8 stations (3.5m altitude, 85m radius, 0.0° pitch, street corridor)
+          const tierSpecs = [
+            { count: 8, altENU: 110, tierRadius: Math.max(radius * 1.5, 260), targetY: 110 - Math.max(radius * 1.5, 260) * Math.tan(15.6 * RAD), name: 'TIER_3_AERIAL' },
+            { count: 12, altENU: 45, tierRadius: Math.max(radius * 0.95, 160), targetY: 45 - Math.max(radius * 0.95, 160) * Math.tan(8.0 * RAD), name: 'TIER_2_FACADE' },
+            { count: 8, altENU: 3.5, tierRadius: Math.max(radius * 0.5, 85), targetY: 3.5, name: 'TIER_1_STREET' }
+          ];
+          let id = 1;
+          for (let t = 0; t < tierSpecs.length; t++) {
+            const spec = tierSpecs[t];
+            const offset = t * (Math.PI / spec.count);
+            for (let i = 0; i < spec.count && poses.length < count; i++) {
+              const theta = (2 * Math.PI * i) / spec.count + offset;
+              const eye: V3 = [lookAt[0] + spec.tierRadius * Math.sin(theta), spec.altENU, lookAt[2] + spec.tierRadius * Math.cos(theta)];
+              const target: V3 = [lookAt[0], spec.targetY, lookAt[2]];
+              poses.push(stationFromLookAt(id, eye, target, optics, anchor, {
+                name: `ORBIT_${spec.name}_STATION_${String(id).padStart(2, '0')}`
+              }));
+              id++;
+            }
+          }
+          break;
+        }
+
         const tiers = config.altitudeTiersMeters && config.altitudeTiersMeters.length > 0
           ? config.altitudeTiersMeters
           : [anchor.elevationMeters + 25, anchor.elevationMeters + 75, anchor.elevationMeters + 140];
         const perTier = Math.ceil(count / tiers.length);
         let id = 1;
         for (let t = 0; t < tiers.length; t++) {
-          const tierRadius = radius * (1 + t * 0.2);
+          const tierRadius = config.tierRadiiMeters && config.tierRadiiMeters[t] !== undefined
+            ? config.tierRadiiMeters[t]
+            : radius * (1 + t * 0.2);
           const offset = t * (Math.PI / perTier);
+          const tierAltENU = Math.max(minGroundClearance, tiers[t] - anchor.elevationMeters);
+          const tierLookAt: V3 = config.lookAtTiersOffsetLocalENU && config.lookAtTiersOffsetLocalENU[t]
+            ? config.lookAtTiersOffsetLocalENU[t]
+            : lookAt;
           for (let i = 0; i < perTier && poses.length < count; i++) {
             const theta = (2 * Math.PI * i) / perTier + offset;
-            const eye: V3 = [lookAt[0] + tierRadius * Math.sin(theta), tiers[t] - anchor.elevationMeters, lookAt[2] + tierRadius * Math.cos(theta)];
-            poses.push(stationFromLookAt(id, eye, lookAt, optics, anchor, {
+            const eye: V3 = [tierLookAt[0] + tierRadius * Math.sin(theta), tierAltENU, tierLookAt[2] + tierRadius * Math.cos(theta)];
+            poses.push(stationFromLookAt(id, eye, tierLookAt, optics, anchor, {
               name: `ORBIT_TIER_${t + 1}_STATION_${String(id).padStart(2, '0')}`
             }));
             id++;
@@ -151,7 +187,7 @@ export class SurveySynthesisEngine {
         const n: [number, number] = [Math.sin(h), Math.cos(h)];
         const tg: [number, number] = [-n[1], n[0]];
         const widthM = radius * 1.5;
-        const minAlt = 10, maxAlt = 120, rows = 3;
+        const minAlt = Math.max(minGroundClearance, 10), maxAlt = 120, rows = 3;
         const cols = Math.ceil(count / rows);
         let id = 1;
         for (let r = 0; r < rows; r++) {
@@ -176,7 +212,7 @@ export class SurveySynthesisEngine {
         const lengthM = config.corridorLengthMeters || radius * 3;
         const step = lengthM / Math.max(1, count - 1);
         const isNadir = config.type === 'nadir-grid';
-        const y = isNadir ? 180 : (config.cameraHeightMeters ?? 25);
+        const y = isNadir ? 180 : Math.max(minGroundClearance, config.cameraHeightMeters ?? 25);
         for (let i = 0; i < count; i++) {
           const d = -lengthM / 2 + i * step;
           // heading clockwise from north: north = -Z, east = +X

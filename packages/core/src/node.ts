@@ -56,6 +56,15 @@ export {
     QuadRemeshMetrics,
     QuadRemeshResult
 } from './node/3d-engine/field-remesh-service';
+export { AdaptiveMaterialPbrService } from './node/3d-engine/adaptive-material-pbr-service';
+export type {
+    AdaptiveMaterialSchema,
+    IntrinsicSignalMetrics,
+    ContinuousBiophysicalFields,
+    AdaptivePbrOptions,
+    AdaptivePbrResult,
+    AdaptiveAtlasTelemetry
+} from './common/adaptive-material-types';
 export {
     BotanicalVegetationService,
     BotanicalMode,
@@ -151,6 +160,20 @@ export {
     resolveBinary,
     toEven
 } from './node/video/HeadlessVideoEditorService';
+
+// MediaPipe Video Director Service (FFmpeg + MediaPipe + Gemini Coordination)
+export {
+    MediaPipeVideoDirectorService,
+    TrackVideoMotionOptions,
+    VideoMotionPoseFrame,
+    VideoMotionTrackResult,
+    AutoReframeOptions,
+    ReframeWaypoint,
+    AutoReframeResult,
+    VisualCriticDimensionAudit,
+    VisualCriticAuditOptions,
+    VisualCriticAuditResult
+} from './node/video/MediaPipeVideoDirectorService';
 
 // Google 3D Tile Camera Blockout Pipeline Service (<VIDEO_REF_0>)
 export {
@@ -280,6 +303,8 @@ export { SurveySplatPipelineService } from './node/spatial/SurveySplatPipelineSe
 export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplatStationReport } from './node/spatial/SurveySplatPipelineService';
 export { Splat3DTilesService } from './node/spatial/Splat3DTilesService';
 export type { Splat3DTilesOptions, Splat3DTilesResult } from './node/spatial/Splat3DTilesService';
+export { NeuralMicroDepthDisplacementService } from './node/spatial/NeuralMicroDepthDisplacementService';
+export type { MicroDepthOptions, MicroDepthResult } from './node/spatial/NeuralMicroDepthDisplacementService';
 
 // GeoBox Multimodal Camera Resectioning & 100% Sub-Pixel Edge Alignment
 export {

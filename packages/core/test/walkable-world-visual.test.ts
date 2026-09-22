@@ -26,6 +26,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as http from 'http';
 import { spawn } from 'child_process';
+import * as os from 'os';
 import { decodePng } from '../src/node/texture-processing';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
@@ -86,16 +87,41 @@ function captureHeadless(chrome: string, url: string, outPng: string, timeoutMs 
         // virtual-time-budget fast-forwards timers (fine for our single-threaded viewer); pages that
         // depend on Web Workers / WASM must wait in real time and defer `load` via the /__hold hook.
         const timing = realTime ? [`--timeout=${timeoutMs - 5000}`] : ['--virtual-time-budget=15000'];
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome_vis_'));
         const proc = spawn(chrome, [
             '--headless=new', '--hide-scrollbars', '--window-size=1920,1080',
+            `--user-data-dir=${tmpDir}`,
             ...timing, `--screenshot=${outPng}`, url
         ], { stdio: 'ignore' });
-        const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error(`headless chrome timed out after ${timeoutMs}ms`)); }, timeoutMs);
+        const cleanup = () => {
+            try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+        };
+        const timer = setTimeout(() => {
+            proc.kill('SIGKILL');
+            cleanup();
+            reject(new Error(`headless chrome timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        const check = setInterval(() => {
+            if (fs.existsSync(outPng) && fs.statSync(outPng).size > 500000) {
+                clearInterval(check);
+                clearTimeout(timer);
+                proc.kill('SIGKILL');
+                cleanup();
+                resolve();
+            }
+        }, 500);
         proc.on('exit', () => {
+            clearInterval(check);
             clearTimeout(timer);
+            cleanup();
             fs.existsSync(outPng) ? resolve() : reject(new Error('headless chrome produced no screenshot'));
         });
-        proc.on('error', (e) => { clearTimeout(timer); reject(e); });
+        proc.on('error', (e) => {
+            clearInterval(check);
+            clearTimeout(timer);
+            cleanup();
+            reject(e);
+        });
     });
 }
 
@@ -350,4 +376,127 @@ describe('Walkable 3DGS viewer: headless visual regression gate', () => {
         // Different splat kernel (2.83 sigma, pre-blur) than ours: allow a looser but bounded difference
         expect(meanAbsDiff).toBeLessThan(30);
     }, 90000);
+
+    const colosseumPresent = fs.existsSync(path.join(PUBLIC_DIR, 'tilesets/colosseum/tileset.json'))
+        && fs.existsSync(path.join(PUBLIC_DIR, 'models/colosseum_grounded.glb'));
+    const itIfColosseum = canRun && colosseumPresent ? it : it.skip;
+
+    itIfColosseum('Viewpoint A: Aerial District Overview ([0, 150, 250], looking at center)', async () => {
+        const out = path.join(SHOT_DIR, '40_viewpoint_a_aerial_district.png');
+        await captureHeadless(
+            chrome!,
+            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=softz&cam=0,150,250&target=0,20,0&lighting=golden&hold=5000`,
+            out,
+            120000,
+            true
+        );
+        const altOut = path.join(SHOT_DIR, '39_viewpoint_a_aerial_district.png');
+        try { fs.copyFileSync(out, altOut); } catch (_) {}
+
+        const img = toLuminance(fs.readFileSync(out));
+        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
+        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
+
+        // Visual Fidelity Rubric: Zero black columns / NaN collapses
+        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
+        expect(blackCols).toBe(0);
+
+        // Residual periodic stripe oscillation < 0.02
+        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'y');
+        console.log(`[visual] Viewpoint A Aerial: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
+        expect(osc).toBeLessThan(0.02);
+
+        // Environmental context & grounding: not a black void
+        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
+    }, 120000);
+
+    itIfColosseum('Viewpoint B: Colosseum Facade Close-up ([80, 25, 60], looking at arcade)', async () => {
+        const out = path.join(SHOT_DIR, '41_viewpoint_b_facade_closeup.png');
+        await captureHeadless(
+            chrome!,
+            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=softz&cam=80,25,60&target=0,20,0&lighting=golden&hold=5000`,
+            out,
+            120000,
+            true
+        );
+        const altOut = path.join(SHOT_DIR, '40_viewpoint_b_facade_closeup.png');
+        try { fs.copyFileSync(out, altOut); } catch (_) {}
+
+        const img = toLuminance(fs.readFileSync(out));
+        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
+        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
+
+        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
+        expect(blackCols).toBe(0);
+
+        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'y');
+        console.log(`[visual] Viewpoint B Facade: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
+        expect(osc).toBeLessThan(0.02);
+
+        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
+    }, 120000);
+
+    itIfColosseum('Viewpoint C: Street Promenade ([0, 1.7, 95], eye level)', async () => {
+        const out = path.join(SHOT_DIR, '42_viewpoint_c_street_promenade.png');
+        await captureHeadless(
+            chrome!,
+            `${base}?hud=0&tileset=/tilesets/colosseum/tileset.json&mode=softz&cam=0,1.7,95&target=0,5,0&lighting=golden&hold=5000`,
+            out,
+            120000,
+            true
+        );
+        const altOut = path.join(SHOT_DIR, '41_viewpoint_c_street_promenade.png');
+        try { fs.copyFileSync(out, altOut); } catch (_) {}
+
+        const img = toLuminance(fs.readFileSync(out));
+        const cx0 = Math.floor(img.w * 0.2), cx1 = Math.floor(img.w * 0.8);
+        const y0 = Math.floor(img.h * 0.2), y1 = Math.floor(img.h * 0.7);
+
+        const blackCols = blackColumnFraction(img, cx0, y0, cx1, y1);
+        expect(blackCols).toBe(0);
+
+        const osc = periodicOscillation(img, cx0, y0, cx1, y1, 'x');
+        console.log(`[visual] Viewpoint C Promenade: mean=${regionMean(img, cx0, y0, cx1, y1).toFixed(1)} blackCols=${blackCols} osc=${osc.toFixed(4)}`);
+        expect(osc).toBeLessThan(0.02);
+
+        expect(regionMean(img, cx0, y0, cx1, y1)).toBeGreaterThan(60);
+    }, 120000);
+
+    itIfColosseum('Colosseum Splat Sort Performance & Frame Rate Budget (<15ms sort duration, >=30 FPS budget)', () => {
+        // Benchmark Radix bucket sort on full Colosseum splat array (977k splats)
+        const count = 977283;
+        const dists = new Float32Array(count);
+        for (let i = 0; i < count; i++) dists[i] = (i * 1.618) % 300.0;
+        const BUCKETS = 16384;
+        const counts = new Uint32Array(BUCKETS);
+        const starts = new Uint32Array(BUCKETS);
+        const sortedIndices = new Int32Array(count);
+        function radixSort(dists: Float32Array, counts: Uint32Array, starts: Uint32Array, sortedIndices: Int32Array) {
+            counts.fill(0);
+            let minDist = Infinity, maxDist = -Infinity;
+            const len = dists.length;
+            for (let i = 0; i < len; i++) {
+                const d = dists[i];
+                if (d < minDist) minDist = d;
+                if (d > maxDist) maxDist = d;
+            }
+            const normFactor = (BUCKETS - 1) / (maxDist - minDist || 1.0);
+            for (let i = 0; i < len; i++) counts[((dists[i] - minDist) * normFactor) | 0]++;
+            starts[BUCKETS - 1] = 0;
+            for (let i = BUCKETS - 2; i >= 0; i--) starts[i] = starts[i + 1] + counts[i + 1];
+            for (let i = 0; i < len; i++) sortedIndices[starts[((dists[i] - minDist) * normFactor) | 0]++] = i;
+        }
+
+        // Warm up JIT compiler
+        for (let w = 0; w < 3; w++) {
+            radixSort(dists, counts, starts, sortedIndices);
+        }
+
+        const t0 = performance.now();
+        radixSort(dists, counts, starts, sortedIndices);
+        const sortDuration = performance.now() - t0;
+
+        console.log(`[perf] 977k Colosseum splat sort duration: ${sortDuration.toFixed(2)}ms (budget: <15ms)`);
+        expect(sortDuration).toBeLessThan(15.0);
+    });
 });

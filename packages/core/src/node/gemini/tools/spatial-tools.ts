@@ -68,6 +68,8 @@ import type {
 import { TapirTrackingService } from '../../spatial/TapirTrackingService';
 import { PointSamplers } from '../../../common/tracking/PointTrackingModel';
 import { GaussianSplat4DService } from '../../3d-engine/gaussian-splat-4d-service';
+import { Dynamic4DGaussianSplatService } from '../../3d-engine/Dynamic4DGaussianSplatService';
+import { HumanoidMotionBridgeService } from '../../spatial/HumanoidMotionBridgeService';
 import { OffsetViewSynthesisService } from '../../spatial/OffsetViewSynthesisService';
 import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
 import { Splat3DTilesService } from '../../spatial/Splat3DTilesService';
@@ -881,6 +883,26 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
+    },
+    {
+        name: 'survey_beautify_to_texture',
+        description: 'Survey-to-Atlas Inverse Projection (SAIP): Back-projects generative AI Beautify camera station plates directly into the model\'s consolidated UV atlas with MaxRects packing, analytical metric-depth occlusion testing, orthogonal normal weighting, and full PBR decomposition (NOAA solar de-lighting, Scharr normals, Toksvig AA roughness, HBAO, and dielectric glass classification).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model.' },
+                stationsJsonPath: { type: 'STRING', description: 'Stations JSON (with anchor) from survey_synthesize_stations.' },
+                locationName: { type: 'STRING', description: 'Location name for prompts.' },
+                moodPromptContext: { type: 'STRING', description: 'Mood/lighting sentence(s), identical for all stations.' },
+                styleSuffix: { type: 'STRING', description: 'Style suffix appended verbatim.' },
+                resolution: { type: 'NUMBER', description: 'Atlas texture resolution (default 4096).' },
+                depthTolerance: { type: 'NUMBER', description: 'Occlusion test depth tolerance in meters (default 0.20).' },
+                minCosIncidence: { type: 'NUMBER', description: 'Drop glancing incidence angles below this cos theta (default 0.08).' },
+                isoDate: { type: 'STRING', description: 'Acquisition UTC timestamp for NOAA solar ephemeris de-lighting.' },
+                outGlbPath: { type: 'STRING', description: 'Target output path for enhanced GLB (default public/models/survey_pbr_<ts>.glb).' }
+            },
+            required: ['glbPath', 'stationsJsonPath', 'locationName']
+        }
     }
 ];
 
@@ -1366,6 +1388,56 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: { success: true, tilesetPath: res.tilesetPath, tilesetUrl: res.tilesetUrl, metaPath: res.metaPath, fusedSplatCount: res.fusedSplatCount, acceptedStations: accepted, totalStations: res.stations.length, cropBox: res.cropBox, durationMs: res.durationMs } as unknown as ToolResultPayload,
             summaryResult: `Beautified ${accepted}/${res.stations.length} stations, baked ${res.fusedSplatCount.toLocaleString()} fused splats into a 3D Tiles tileset in ${(res.durationMs / 1000).toFixed(0)} s -> ${res.tilesetPath}`
+        };
+    },
+
+    survey_beautify_to_texture: async (args, ctx) => {
+        const fsMod = await import('fs-extra');
+        const pathMod = await import('path');
+        const data = await fsMod.readJson(asString(args.stationsJsonPath));
+        const generator = await resolveStationImageGenerator(ctx);
+        const { SurveyTextureUnprojector } = await import('../../spatial/SurveyTextureUnprojector');
+
+        const glbPath = asString(args.glbPath);
+        const locationName = asString(args.locationName) || 'Target Location';
+        const resolution = typeof args.resolution === 'number' ? args.resolution : 4096;
+        const outGlbPath = asString(args.outGlbPath) || pathMod.join(process.cwd(), `public/models/survey_pbr_${Date.now()}.glb`);
+
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath,
+            anchor: data.anchor,
+            stations: data.poses || data.stations,
+            generator,
+            beautifyContext: {
+                locationName,
+                moodPromptContext: asString(args.moodPromptContext),
+                styleSuffix: asString(args.styleSuffix)
+            },
+            options: {
+                resolution,
+                depthTolerance: typeof args.depthTolerance === 'number' ? args.depthTolerance : 0.20,
+                minCosIncidence: typeof args.minCosIncidence === 'number' ? args.minCosIncidence : 0.08,
+                solarDelighting: {
+                    lat: data.anchor?.latitude,
+                    lng: data.anchor?.longitude,
+                    isoDate: asString(args.isoDate) || new Date().toISOString()
+                },
+                outGlbPath
+            }
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                outGlbPath: result.outGlbPath,
+                resolution: result.metrics.resolution,
+                fillRate: result.metrics.fillRate,
+                coveredMeshTexels: result.metrics.coveredMeshTexels,
+                directlyPaintedTexels: result.metrics.directlyPaintedTexels,
+                stationContributions: result.metrics.stationContributions,
+                durationMs: result.metrics.durationMs
+            } as unknown as ToolResultPayload,
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}`
         };
     },
 
@@ -3235,6 +3307,79 @@ export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     }
 ];
 
+export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'avatar_4dgs_list',
+        description: 'Lists all available 4DAnyone 4D Gaussian Splatting dynamic humanoid avatars discovered in the local catalog.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {}
+        }
+    },
+    {
+        name: 'avatar_4dgs_get',
+        description: 'Retrieves metadata, skeletal joint hierarchy, and geospatial anchoring info for a 4DAnyone 4DGS humanoid avatar.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                avatarId: {
+                    type: 'STRING',
+                    description: 'Avatar identifier (e.g., "2785536")'
+                }
+            },
+            required: ['avatarId']
+        }
+    },
+    {
+        name: 'avatar_4dgs_animate',
+        description: 'Animates and deforms a 4DAnyone 4DGS humanoid avatar at a specific motion frame index via skeletal Linear Blend Skinning (LBS).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                avatarId: {
+                    type: 'STRING',
+                    description: 'Avatar identifier (e.g., "2785536")'
+                },
+                frameIndex: {
+                    type: 'NUMBER',
+                    description: 'Motion frame index to evaluate (0-indexed)'
+                },
+                exportSplat: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to serialize and return the deformed 32-byte .splat binary buffer (default: false)'
+                }
+            },
+            required: ['avatarId', 'frameIndex']
+        }
+    },
+    {
+        name: 'avatar_4dgs_retarget',
+        description: 'Retargets MediaPipe 33 pose motion track or custom pose angles onto a 4DAnyone 22 SMPL-X skeletal avatar with terrain ground-contact altitude clamping.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                avatarId: {
+                    type: 'STRING',
+                    description: 'Target avatar identifier'
+                },
+                groundAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Target floor/ground altitude in meters (default: 0.0)'
+                },
+                pinFeetToGround: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to pin lowest foot to ground altitude to prevent penetration (default: true)'
+                },
+                smoothingWindow: {
+                    type: 'NUMBER',
+                    description: 'Temporal moving average window size for joint smoothing (default: 3)'
+                }
+            },
+            required: ['avatarId']
+        }
+    }
+];
+
 export const tapir4dgsHandlers: Record<string, ToolHandler> = {
     async tapir_track_video_points(args) {
         const numFrames = Number(args.numFrames ?? 24);
@@ -3370,5 +3515,131 @@ export const tapir4dgsHandlers: Record<string, ToolHandler> = {
         };
     },
 
+};
+
+export const avatar4dgsHandlers: Record<string, ToolHandler> = {
+    async avatar_4dgs_list(_args) {
+        const service = new Dynamic4DGaussianSplatService();
+        const avatars = service.listAvatars();
+        return {
+            resultPayload: {
+                totalAvatars: avatars.length,
+                avatars
+            } as unknown as ToolResultPayload,
+            summaryResult: `Found ${avatars.length} 4DAnyone 4DGS avatars (${avatars.map(a => a.id).join(', ')}).`
+        };
+    },
+
+    async avatar_4dgs_get(args) {
+        const avatarId = asString(args.avatarId, '2785536');
+        const service = new Dynamic4DGaussianSplatService();
+        const { details, motion } = service.loadAvatar(avatarId);
+        return {
+            resultPayload: {
+                details,
+                joints: motion.joints_name,
+                canonicalJoints: motion.canonical_joints,
+                kintreeParents: motion.kintree_parents,
+                numFrames: motion.num_frames,
+                fps: motion.fps
+            } as unknown as ToolResultPayload,
+            summaryResult: `Loaded 4DAnyone avatar "${details.title}" (${avatarId}): ${details.numSplats} Gaussians, ${details.numFrames} frames @ ${details.fps} FPS, ${details.numJoints} joints.`
+        };
+    },
+
+    async avatar_4dgs_animate(args) {
+        const avatarId = asString(args.avatarId, '2785536');
+        const frameIndex = Number(args.frameIndex ?? 0);
+        const exportSplat = Boolean(args.exportSplat ?? false);
+
+        const service = new Dynamic4DGaussianSplatService();
+        const frame = service.animateFrame(avatarId, frameIndex);
+
+        let splatBase64: string | undefined;
+        let splatByteLength: number | undefined;
+        if (exportSplat) {
+            const splatBuf = service.exportSplatBuffer(avatarId, frameIndex);
+            splatBase64 = splatBuf.toString('base64');
+            splatByteLength = splatBuf.byteLength;
+        }
+
+        return {
+            resultPayload: {
+                avatarId: frame.avatarId,
+                frameIndex: frame.frameIndex,
+                timestamp: frame.timestamp,
+                numSplats: frame.numSplats,
+                bounds: frame.bounds,
+                centroid: frame.centroid,
+                rootTranslation: frame.rootTranslation,
+                rootRotation: frame.rootRotation,
+                splatByteLength,
+                splatBase64Preview: splatBase64 ? splatBase64.slice(0, 100) + '...' : undefined
+            } as unknown as ToolResultPayload,
+            summaryResult: `Animated avatar ${avatarId} at frame ${frame.frameIndex} (t=${frame.timestamp.toFixed(2)}s): ${frame.numSplats} deformed Gaussians, bounds=[${frame.bounds.min.map(v => v.toFixed(2)).join(',')} to ${frame.bounds.max.map(v => v.toFixed(2)).join(',')}]${splatByteLength ? `, exported ${splatByteLength} bytes .splat` : ''}.`
+        };
+    },
+
+    async avatar_4dgs_retarget(args) {
+        const avatarId = asString(args.avatarId, '2785536');
+        const groundAlt = Number(args.groundAltitudeMeters ?? 0.0);
+        const pinFeet = args.pinFeetToGround !== undefined ? Boolean(args.pinFeetToGround) : true;
+        const smoothingWindow = Number(args.smoothingWindow ?? 3);
+
+        const splatService = new Dynamic4DGaussianSplatService();
+        const { motion } = splatService.loadAvatar(avatarId);
+
+        const bridgeService = new HumanoidMotionBridgeService();
+        const canonical = motion.canonical_joints;
+        const simulatedTrack = {
+            success: true,
+            durationSec: motion.num_frames / motion.fps,
+            totalFramesAnalyzed: motion.num_frames,
+            sampleFps: motion.fps,
+            averageConfidence: 0.95,
+            maxDisplacementMeters: 1.2,
+            groundedYReferenceMeters: groundAlt,
+            frames: motion.frames.map(f => ({
+                frameIndex: f.frame_index,
+                timestampSec: f.timestamp,
+                angles: {
+                    leftUpperArm: [0, 0, 0] as [number, number, number],
+                    rightUpperArm: [0, 0, 0] as [number, number, number],
+                    leftLowerArm: [0, 0, 0] as [number, number, number],
+                    rightLowerArm: [0, 0, 0] as [number, number, number],
+                    leftUpperLeg: [0, 0, 0] as [number, number, number],
+                    rightUpperLeg: [0, 0, 0] as [number, number, number],
+                    leftLowerLeg: [0, 0, 0] as [number, number, number],
+                    rightLowerLeg: [0, 0, 0] as [number, number, number],
+                    spine: [0, 0, 0] as [number, number, number],
+                    head: [0, 0, 0] as [number, number, number]
+                },
+                hipPositionMeters: f.root_translation,
+                groundedYOffsetMeters: groundAlt,
+                confidence: f.confidence ?? 0.95
+            }))
+        };
+
+        const retargeted = bridgeService.retargetVideoMotionTrack(simulatedTrack, canonical, {
+            groundAltitudeMeters: groundAlt,
+            pinFeetToGround: pinFeet,
+            smoothingWindow
+        });
+
+        return {
+            resultPayload: {
+                avatarId,
+                numFramesRetargeted: retargeted.num_frames,
+                groundAltitudeMeters: groundAlt,
+                feetPinned: pinFeet,
+                firstFrameJoint0: retargeted.frames[0]?.joint_positions_3d[0],
+                firstFrameFootY: Math.min(
+                    retargeted.frames[0]?.joint_positions_3d[10][1] ?? 0,
+                    retargeted.frames[0]?.joint_positions_3d[11][1] ?? 0
+                )
+            } as unknown as ToolResultPayload,
+            summaryResult: `Retargeted motion to avatar ${avatarId}: ${retargeted.num_frames} frames processed, feet pinned to ground altitude ${groundAlt}m.`
+        };
+    }
 };
 

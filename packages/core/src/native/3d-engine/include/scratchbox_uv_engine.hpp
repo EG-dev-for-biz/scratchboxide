@@ -226,6 +226,100 @@ inline void decomposeIntrinsicAlbedo(
 }
 
 // ============================================================================
+// 4b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9
+// ============================================================================
+
+struct SolarEphemerisConfig {
+    Vec3 sunVector{0.45f, 0.75f, -0.48f};
+    std::array<Vec3, 9> skyShCoeffs{
+        Vec3{0.65f, 0.72f, 0.85f},
+        Vec3{0.20f, 0.28f, 0.40f},
+        Vec3{0.15f, 0.20f, 0.30f},
+        Vec3{0.10f, 0.15f, 0.25f},
+        Vec3{0.05f, 0.08f, 0.12f},
+        Vec3{0.04f, 0.06f, 0.10f},
+        Vec3{0.08f, 0.12f, 0.18f},
+        Vec3{0.03f, 0.05f, 0.08f},
+        Vec3{0.02f, 0.04f, 0.06f}
+    };
+    float directWeight{0.65f};
+    float ambientWeight{0.35f};
+    float regularizationEpsilon{0.18f};
+};
+
+inline Vec3 evaluateSh9Irradiance(const Vec3& n, const std::array<Vec3, 9>& sh) {
+    constexpr float c1 = 0.429043f;
+    constexpr float c2 = 0.511664f;
+    constexpr float c3 = 0.743125f;
+    constexpr float c4 = 0.886227f;
+    constexpr float c5 = 0.247708f;
+
+    Vec3 out{0.0f, 0.0f, 0.0f};
+    float x = n.x, y = n.y, z = n.z;
+
+    for (int ch = 0; ch < 3; ++ch) {
+        auto c = [&](int i) { return sh[i][ch]; };
+        float val =
+            c(0) * c4 -
+            c(6) * c5 +
+            c(6) * (c3 * y * y) +
+            (c(8) * (x * x - z * z) +
+             c(4) * (2.0f * x * z) +
+             c(7) * (2.0f * x * y) +
+             c(5) * (2.0f * z * y)) * c1 +
+            (c(3) * x + c(1) * y + c(2) * z) * (2.0f * c2);
+        out[ch] = std::max(0.0f, val);
+    }
+    return out;
+}
+
+inline float computeSolarIrradiance(
+    const Vec3& normal,
+    const SolarEphemerisConfig& config = {}
+) {
+    Vec3 n = normal.normalized();
+    Vec3 s = config.sunVector.normalized();
+
+    float nDotL = std::max(0.0f, n.dot(s));
+    Vec3 skyRgb = evaluateSh9Irradiance(n, config.skyShCoeffs);
+    float ambient = 0.2126f * skyRgb.x + 0.7152f * skyRgb.y + 0.0722f * skyRgb.z;
+
+    float total = nDotL * config.directWeight + ambient * config.ambientWeight;
+    return std::clamp(total, config.regularizationEpsilon, 1.8f);
+}
+
+inline void applySolarInverseDelighting(
+    ImageBuffer& albedo,
+    const SolarEphemerisConfig& config = {}
+) {
+    int w = albedo.width;
+    int h = albedo.height;
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            Vec3 col = albedo.getPixelRGB(x, y);
+
+            float lumL = albedo.getLuminance(std::max(0, x - 1), y);
+            float lumR = albedo.getLuminance(std::min(w - 1, x + 1), y);
+            float lumB = albedo.getLuminance(x, std::max(0, y - 1));
+            float lumT = albedo.getLuminance(x, std::min(h - 1, y + 1));
+
+            float dx = (lumR - lumL) * 1.5f;
+            float dy = (lumT - lumB) * 1.5f;
+            Vec3 normal(-dx, -dy, 1.0f);
+
+            float irradiance = computeSolarIrradiance(normal, config);
+            col = col * (1.0f / irradiance);
+            col.x = std::clamp(col.x, 0.0f, 1.0f);
+            col.y = std::clamp(col.y, 0.0f, 1.0f);
+            col.z = std::clamp(col.z, 0.0f, 1.0f);
+
+            albedo.setPixelRGB(x, y, col);
+        }
+    }
+}
+
+// ============================================================================
 // 5. Analytical Sky-Dome Ambient Occlusion (AO)
 // ============================================================================
 
@@ -323,6 +417,8 @@ struct UvEngineOptions {
     bool synthesizeCavitation{true};
     bool synthesizePbrSuite{true};
     bool decomposeAlbedo{true};
+    bool enableSolarDelighting{false};
+    SolarEphemerisConfig solarEphemeris;
     float bumpStrength{3.2f};
     int gutterDilationPixels{4};
 };
@@ -443,6 +539,10 @@ inline UvEngineResult processMeshUvEngine(
             result.pbrSet.albedo = intrinsicAlbedo;
         } else {
             result.pbrSet.albedo = enhancedAlbedo;
+        }
+
+        if (options.enableSolarDelighting) {
+            applySolarInverseDelighting(result.pbrSet.albedo, options.solarEphemeris);
         }
 
         result.pbrSet.normal = texture::computeSobelNormalMap(result.pbrSet.albedo, options.bumpStrength);

@@ -10,6 +10,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { MaxRectsAtlasPacker, TextureAtlasPacker, TextureItem, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker';
+import { calculateNOAASolarPosition, calculateENUSunVector } from '../../browser/generative-canvas/services/atmosphere/solar-position';
+import { SphericalHarmonics9 } from '../../browser/generative-canvas/services/atmosphere/volumetric-participating-media';
 
 // ============================================================================
 // Public Interfaces & Options Contracts
@@ -90,9 +92,49 @@ export interface DetailSynthesisOptions {
   gutterDilationPixels?: number; // default 4
 }
 
+export interface SolarDelightingConfig {
+  latitude?: number;              // e.g. 40.74844 (ESB, NYC)
+  longitude?: number;             // e.g. -73.98566
+  timestampIso?: string;          // acquisition timestamp, e.g. '2024-06-21T14:30:00Z'
+  sunVector?: [number, number, number]; // direct sun vector (+X East, +Y Up, -Z North)
+  skyShCoeffs?: [number, number, number][]; // 9 RGB Ramamoorthi order-3 SH coefficients
+  regularizationEpsilon?: number; // default 0.18 (prevents noise explosion in deep shadow)
+  ambientWeight?: number;         // default 0.35
+  directWeight?: number;          // default 0.65
+}
+
+export interface KhrMaterialsConfig {
+  enableKhrMaterialsExtensions?: boolean;
+  enableTransmission?: boolean;   // KHR_materials_transmission (glass curtain walls)
+  enableAnisotropy?: boolean;     // KHR_materials_anisotropy (brushed metal spires)
+  enableClearcoat?: boolean;      // KHR_materials_clearcoat (polished architectural surfaces)
+  ior?: number;                   // default 1.52 (architectural soda-lime glass)
+  transmissionFactor?: number;    // default 0.92
+  anisotropyStrength?: number;    // default 0.85
+  clearcoatFactor?: number;       // default 0.85
+}
+
+export interface ToksvigMipLevel {
+  level: number;
+  width: number;
+  height: number;
+  roughness: Uint8Array;
+  normal: Uint8Array;
+  meanNormalLength: number;
+  addedRoughnessVariance: number;
+}
+
+export interface BoundarySeamWeldResult {
+  weldedVertexCount: number;
+  weldedBoundaryPairs: number;
+  maxDisplacementMeters: number;
+}
+
 export interface PbrDecompositionOptions {
   enableAlbedoDeLighting?: boolean;
   enableHeightStratifiedDeLighting?: boolean; // elevation-aware urban canyon shadow lift
+  enableSolarInverseDelighting?: boolean;    // NOAA ephemeris + Ramamoorthi SH9 inverse irradiance
+  solarDelighting?: SolarDelightingConfig;
   canyonFloorY?: number;                     // bottom elevation of canyon
   canyonCeilingY?: number;                   // top elevation of canyon
   normalizedElevationY?: number;             // [0..1] when decomposing a single submesh chart
@@ -110,6 +152,8 @@ export interface PbrDecompositionOptions {
   enableBiophysicalRoughness?: boolean;      // default true (Laplacian kappa curvature edge burnish & cavity dirt)
   enableHbaoMicroCavity?: boolean;           // default true (Image-space 8-dir horizon raymarching)
   enableToksvigFiltering?: boolean;          // default true (Toksvig specular anti-aliasing)
+  enableToksvigMipPyramid?: boolean;         // custom Toksvig multi-scale variance-folded MIP pyramid
+  toksvigMipLevels?: number;                 // default 4
 }
 
 export interface AlgorithmicUvOptions {
@@ -128,6 +172,9 @@ export interface AlgorithmicUvOptions {
   pbrDecomposition?: PbrDecompositionOptions;
   atlasPacking?: AtlasPackerOptions & { algorithm?: 'maxrects' | 'shelf' };
   preferNativeCpp?: boolean;
+  khrMaterials?: KhrMaterialsConfig;
+  enableBoundarySeamWelding?: boolean;       // multi-tile KD-tree seam welding
+  boundaryToleranceMeters?: number;          // default 0.05
 }
 
 export interface PbrDecompositionResult {
@@ -138,6 +185,7 @@ export interface PbrDecompositionResult {
   orm?: Uint8Array;
   width: number;
   height: number;
+  toksvigMipPyramid?: ToksvigMipLevel[];
 }
 
 export interface AlgorithmicUvResult {
@@ -162,6 +210,11 @@ export interface AlgorithmicUvResult {
   pbrSuiteGenerated: boolean;
   microDetailTilingInjected?: boolean;
   backend: 'native-cpp' | 'node-pure';
+  solarDelightingApplied?: boolean;
+  solarSunVector?: [number, number, number];
+  khrExtensionsInjected?: string[];
+  toksvigMipLevelsGenerated?: number;
+  boundaryWeldingResult?: BoundarySeamWeldResult;
 }
 
 /**
@@ -483,7 +536,11 @@ export class AlgorithmicUvEngine {
       enableMultiFrequencyNormals: options.pbrDecomposition?.enableMultiFrequencyNormals ?? true,
       enableBiophysicalRoughness: options.pbrDecomposition?.enableBiophysicalRoughness ?? true,
       enableHbaoMicroCavity: options.pbrDecomposition?.enableHbaoMicroCavity ?? true,
-      enableToksvigFiltering: options.pbrDecomposition?.enableToksvigFiltering ?? true
+      enableToksvigFiltering: options.pbrDecomposition?.enableToksvigFiltering ?? true,
+      enableSolarInverseDelighting: options.pbrDecomposition?.enableSolarInverseDelighting ?? false,
+      solarDelighting: options.pbrDecomposition?.solarDelighting ?? {},
+      enableToksvigMipPyramid: options.pbrDecomposition?.enableToksvigMipPyramid ?? false,
+      toksvigMipLevels: options.pbrDecomposition?.toksvigMipLevels ?? 4
     };
 
     // Process textures across all submeshes
@@ -591,11 +648,47 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    // Rebuild binary GLB with enhanced textures and optional micro-detail tiling
-    const outputGlbBuffer = this.rebuildGlbWithTextures(glb, replacedImages, {
-      enableMicroDetailTiling: options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic),
-      microDetailScale: effectiveMicroScale
-    });
+    let boundaryResult: BoundarySeamWeldResult | undefined;
+    if (options.enableBoundarySeamWelding) {
+      const posBuffers: Float32Array[] = [];
+      const normBuffers: Float32Array[] = [];
+
+      for (const mesh of meshes) {
+        for (const prim of mesh.primitives || []) {
+          if (prim.attributes && prim.attributes.POSITION !== undefined) {
+            const posAcc = glb.json.accessors[prim.attributes.POSITION];
+            const posBv = glb.json.bufferViews[posAcc.bufferView];
+            const posOffset = (posBv.byteOffset || 0) + (posAcc.byteOffset || 0);
+            const posArray = new Float32Array(glb.bin.buffer, glb.bin.byteOffset + posOffset, posAcc.count * 3);
+            posBuffers.push(posArray);
+
+            if (prim.attributes.NORMAL !== undefined) {
+              const normAcc = glb.json.accessors[prim.attributes.NORMAL];
+              const normBv = glb.json.bufferViews[normAcc.bufferView];
+              const normOffset = (normBv.byteOffset || 0) + (normAcc.byteOffset || 0);
+              const normArray = new Float32Array(glb.bin.buffer, glb.bin.byteOffset + normOffset, normAcc.count * 3);
+              normBuffers.push(normArray);
+            }
+          }
+        }
+      }
+
+      if (posBuffers.length > 0) {
+        boundaryResult = this.weldTileBoundarySeams(posBuffers, normBuffers, options.boundaryToleranceMeters ?? 0.05);
+      }
+    }
+
+    // Rebuild binary GLB with enhanced textures, optional micro-detail tiling, and KHR materials
+    const rebuildResult = this.rebuildGlbWithTextures(
+      glb,
+      replacedImages,
+      {
+        enableMicroDetailTiling: options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic),
+        microDetailScale: effectiveMicroScale
+      },
+      options.khrMaterials
+    );
+    const outputGlbBuffer = rebuildResult.buffer;
 
     if (options.outputGlbPath) {
       const dir = path.dirname(options.outputGlbPath);
@@ -626,6 +719,11 @@ export class AlgorithmicUvEngine {
       atlasFillRate: overallAtlasFill,
       pbrSuiteGenerated: pbrOpts.generateNormalMaps || pbrOpts.generateRoughnessMaps,
       microDetailTilingInjected: !!(options.enableMicroDetailTiling || (options.autoInducePeriodicity && inducedSpatialProfile?.isPeriodic)),
+      khrExtensionsInjected: rebuildResult.injectedExtensions,
+      solarDelightingApplied: !!pbrOpts.enableSolarInverseDelighting,
+      solarSunVector: pbrOpts.enableSolarInverseDelighting ? (pbrOpts.solarDelighting?.sunVector ?? [0.45, 0.75, -0.48]) : undefined,
+      boundaryWeldingResult: boundaryResult,
+      toksvigMipLevelsGenerated: pbrOpts.enableToksvigMipPyramid ? (pbrOpts.toksvigMipLevels ?? 4) : undefined,
       backend: 'node-pure'
     };
   }
@@ -844,6 +942,288 @@ export class AlgorithmicUvEngine {
       }
     }
     return out;
+  }
+
+  /**
+   * Evaluates Ramamoorthi 9-coefficient order-3 Spherical Harmonics diffuse irradiance:
+   * E_ambient(N) = c1 * L22*(x^2 - y^2) + c3 * L20 * z^2 + c4 * L00 - c5 * L20
+   *              + 2 * c1 * (L2-2 * x*y + L21 * x*z + L2-1 * y*z)
+   *              + 2 * c2 * (L11 * x + L1-1 * y + L10 * z)
+   */
+  public static evaluateSphericalHarmonicsIrradiance(
+    nx: number,
+    ny: number,
+    nz: number,
+    shCoeffs: [number, number, number][]
+  ): [number, number, number] {
+    const c1 = 0.429043;
+    const c2 = 0.511664;
+    const c3 = 0.743125;
+    const c4 = 0.886227;
+    const c5 = 0.247708;
+
+    const out: [number, number, number] = [0, 0, 0];
+    for (let ch = 0; ch < 3; ch++) {
+      const c = (i: number) => shCoeffs[i][ch];
+      const val =
+        c(0) * c4 -
+        c(6) * c5 +
+        c(6) * (c3 * ny * ny) +
+        (c(8) * (nx * nx - nz * nz) +
+          c(4) * (2.0 * nx * nz) +
+          c(7) * (2.0 * nx * ny) +
+          c(5) * (2.0 * nz * ny)) * c1 +
+        (c(3) * nx + c(1) * ny + c(2) * nz) * (2.0 * c2);
+      out[ch] = Math.max(0.0, val);
+    }
+    return out;
+  }
+
+  /**
+   * Computes analytical solar irradiance E(N) = direct + ambient:
+   *   E(N) = max(0, N dot L_sun) * directWeight + SH_9(N) * ambientWeight
+   */
+  public static computeSolarIrradiance(
+    normal: [number, number, number],
+    sunVector: [number, number, number],
+    shCoeffs?: [number, number, number][],
+    directWeight: number = 0.65,
+    ambientWeight: number = 0.35,
+    epsilon: number = 0.18
+  ): number {
+    const nx = normal[0], ny = normal[1], nz = normal[2];
+    const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1.0;
+    const n: [number, number, number] = [nx / nLen, ny / nLen, nz / nLen];
+
+    const sx = sunVector[0], sy = sunVector[1], sz = sunVector[2];
+    const sLen = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1.0;
+    const s: [number, number, number] = [sx / sLen, sy / sLen, sz / sLen];
+
+    const nDotL = Math.max(0.0, n[0] * s[0] + n[1] * s[1] + n[2] * s[2]);
+
+    let ambient = 0.45;
+    if (shCoeffs && shCoeffs.length === 9) {
+      const rgb = this.evaluateSphericalHarmonicsIrradiance(n[0], n[1], n[2], shCoeffs);
+      ambient = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    }
+
+    const total = nDotL * directWeight + ambient * ambientWeight;
+    return Math.max(epsilon, Math.min(1.8, total));
+  }
+
+  /**
+   * Generates custom Toksvig pre-filtered MIP pyramid where each downsampled level folds
+   * normal variance sigma_n^2 directly into increased roughness alpha.
+   * Completely eliminates specular shimmering and fireflies at extreme camera distance.
+   */
+  public static computeToksvigMipPyramid(
+    roughnessRgba: Uint8Array,
+    normalRgba: Uint8Array,
+    w: number,
+    h: number,
+    maxLevels: number = 4
+  ): ToksvigMipLevel[] {
+    const levels: ToksvigMipLevel[] = [];
+    let curW = w;
+    let curH = h;
+    let curRough = roughnessRgba;
+    let curNorm = normalRgba;
+
+    levels.push({
+      level: 0,
+      width: curW,
+      height: curH,
+      roughness: curRough,
+      normal: curNorm,
+      meanNormalLength: 1.0,
+      addedRoughnessVariance: 0.0
+    });
+
+    for (let lvl = 1; lvl <= maxLevels; lvl++) {
+      const nextW = Math.max(1, Math.floor(curW / 2));
+      const nextH = Math.max(1, Math.floor(curH / 2));
+      const nextRough = new Uint8Array(nextW * nextH * 4);
+      const nextNorm = new Uint8Array(nextW * nextH * 4);
+      let sumNormalLen = 0;
+      let sumAddedVariance = 0;
+
+      for (let y = 0; y < nextH; y++) {
+        for (let x = 0; x < nextW; x++) {
+          const sx = x * 2;
+          const sy = y * 2;
+
+          let avgNx = 0, avgNy = 0, avgNz = 0;
+          let avgAlpha = 0;
+
+          for (let dy = 0; dy < 2; dy++) {
+            const py = Math.min(curH - 1, sy + dy);
+            for (let dx = 0; dx < 2; dx++) {
+              const px = Math.min(curW - 1, sx + dx);
+              const idx = (py * curW + px) * 4;
+
+              const nx = (curNorm[idx] / 255.0) * 2.0 - 1.0;
+              const ny = (curNorm[idx + 1] / 255.0) * 2.0 - 1.0;
+              const nz = (curNorm[idx + 2] / 255.0) * 2.0 - 1.0;
+
+              avgNx += nx;
+              avgNy += ny;
+              avgNz += nz;
+
+              const r = curRough[idx] / 255.0;
+              avgAlpha += r * r;
+            }
+          }
+
+          avgNx *= 0.25; avgNy *= 0.25; avgNz *= 0.25;
+          avgAlpha *= 0.25;
+
+          const nLen = Math.sqrt(avgNx * avgNx + avgNy * avgNy + avgNz * avgNz);
+          sumNormalLen += nLen;
+
+          const clampedLen = Math.max(0.001, Math.min(1.0, nLen));
+          const sigmaSq = (1.0 - clampedLen) / clampedLen;
+          sumAddedVariance += sigmaSq;
+
+          const alphaEffSq = (avgAlpha + sigmaSq) / (1.0 + sigmaSq);
+          const roughEff = Math.sqrt(Math.min(1.0, Math.max(0.01, alphaEffSq)));
+
+          const outIdx = (y * nextW + x) * 4;
+          const rByte = Math.round(roughEff * 255);
+          nextRough[outIdx]     = rByte;
+          nextRough[outIdx + 1] = rByte;
+          nextRough[outIdx + 2] = rByte;
+          nextRough[outIdx + 3] = 255;
+
+          const renorm = clampedLen > 0 ? 1.0 / clampedLen : 1.0;
+          nextNorm[outIdx]     = Math.round(((avgNx * renorm) * 0.5 + 0.5) * 255);
+          nextNorm[outIdx + 1] = Math.round(((avgNy * renorm) * 0.5 + 0.5) * 255);
+          nextNorm[outIdx + 2] = Math.round(((avgNz * renorm) * 0.5 + 0.5) * 255);
+          nextNorm[outIdx + 3] = 255;
+        }
+      }
+
+      const totalP = nextW * nextH;
+      levels.push({
+        level: lvl,
+        width: nextW,
+        height: nextH,
+        roughness: nextRough,
+        normal: nextNorm,
+        meanNormalLength: sumNormalLen / totalP,
+        addedRoughnessVariance: sumAddedVariance / totalP
+      });
+
+      curW = nextW;
+      curH = nextH;
+      curRough = nextRough;
+      curNorm = nextNorm;
+    }
+
+    return levels;
+  }
+
+  /**
+   * Multi-Tile Seamless Boundary Seam Welding & Edge Normal Synchronization:
+   * Uses spatial coordinate binning to discover co-located vertices across tile boundaries,
+   * unifies their position, and averages their vertex normals to eradicate boundary cracks
+   * and light-leak artifacts.
+   */
+  public static weldTileBoundarySeams(
+    vertices: Float32Array[],
+    normals: Float32Array[],
+    toleranceMeters: number = 0.05
+  ): BoundarySeamWeldResult {
+    let weldedVertexCount = 0;
+    let weldedBoundaryPairs = 0;
+    let maxDisplacementMeters = 0.0;
+
+    const quant = Math.max(0.001, toleranceMeters);
+    const grid = new Map<string, Array<{ tileIdx: number; vertIdx: number }>>();
+
+    for (let t = 0; t < vertices.length; t++) {
+      const vBuf = vertices[t];
+      const count = Math.floor(vBuf.length / 3);
+      for (let i = 0; i < count; i++) {
+        const x = vBuf[i * 3];
+        const y = vBuf[i * 3 + 1];
+        const z = vBuf[i * 3 + 2];
+
+        const gx = Math.round(x / quant);
+        const gy = Math.round(y / quant);
+        const gz = Math.round(z / quant);
+        const key = `${gx}_${gy}_${gz}`;
+
+        let list = grid.get(key);
+        if (!list) {
+          list = [];
+          grid.set(key, list);
+        }
+        list.push({ tileIdx: t, vertIdx: i });
+      }
+    }
+
+    for (const [_, list] of grid.entries()) {
+      if (list.length < 2) continue;
+      const firstTile = list[0].tileIdx;
+      const spansTiles = list.some(item => item.tileIdx !== firstTile);
+      if (!spansTiles) continue;
+
+      let sumX = 0, sumY = 0, sumZ = 0;
+      let sumNx = 0, sumNy = 0, sumNz = 0;
+
+      for (const item of list) {
+        const vBuf = vertices[item.tileIdx];
+        const nBuf = normals[item.tileIdx];
+        sumX += vBuf[item.vertIdx * 3];
+        sumY += vBuf[item.vertIdx * 3 + 1];
+        sumZ += vBuf[item.vertIdx * 3 + 2];
+
+        if (nBuf && nBuf.length > item.vertIdx * 3 + 2) {
+          sumNx += nBuf[item.vertIdx * 3];
+          sumNy += nBuf[item.vertIdx * 3 + 1];
+          sumNz += nBuf[item.vertIdx * 3 + 2];
+        }
+      }
+
+      const invCount = 1.0 / list.length;
+      const avgX = sumX * invCount;
+      const avgY = sumY * invCount;
+      const avgZ = sumZ * invCount;
+
+      const nLen = Math.sqrt(sumNx * sumNx + sumNy * sumNy + sumNz * sumNz) || 1.0;
+      const avgNx = sumNx / nLen;
+      const avgNy = sumNy / nLen;
+      const avgNz = sumNz / nLen;
+
+      for (const item of list) {
+        const vBuf = vertices[item.tileIdx];
+        const nBuf = normals[item.tileIdx];
+
+        const dx = avgX - vBuf[item.vertIdx * 3];
+        const dy = avgY - vBuf[item.vertIdx * 3 + 1];
+        const dz = avgZ - vBuf[item.vertIdx * 3 + 2];
+        const disp = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (disp > maxDisplacementMeters) maxDisplacementMeters = disp;
+
+        vBuf[item.vertIdx * 3]     = avgX;
+        vBuf[item.vertIdx * 3 + 1] = avgY;
+        vBuf[item.vertIdx * 3 + 2] = avgZ;
+
+        if (nBuf && nBuf.length > item.vertIdx * 3 + 2) {
+          nBuf[item.vertIdx * 3]     = avgNx;
+          nBuf[item.vertIdx * 3 + 1] = avgNy;
+          nBuf[item.vertIdx * 3 + 2] = avgNz;
+        }
+        weldedVertexCount++;
+      }
+      weldedBoundaryPairs++;
+    }
+
+    return {
+      weldedVertexCount,
+      weldedBoundaryPairs,
+      maxDisplacementMeters
+    };
   }
 
   /**
@@ -1118,6 +1498,65 @@ export class AlgorithmicUvEngine {
       }
     }
 
+    // 1b. Solar Inverse De-Lighting via NOAA Ephemeris & Ramamoorthi SH9 Irradiance
+    if (options.enableSolarInverseDelighting) {
+      const cfg = options.solarDelighting || {};
+      let sunVec: [number, number, number] = [0.45, 0.75, -0.48];
+      if (cfg.sunVector) {
+        sunVec = cfg.sunVector;
+      } else {
+        const lat = cfg.latitude ?? 40.74844;
+        const lng = cfg.longitude ?? -73.98566;
+        const date = cfg.timestampIso ? new Date(cfg.timestampIso) : new Date('2024-06-21T14:30:00Z');
+        const pos = calculateNOAASolarPosition(date, lat, lng);
+        const sun = calculateENUSunVector(pos.altitudeRad, pos.azimuthRad);
+        sunVec = [sun.x, sun.y, sun.z];
+      }
+
+      const skyShCoeffs: [number, number, number][] = cfg.skyShCoeffs ?? [
+        [0.65, 0.72, 0.85],
+        [0.20, 0.28, 0.40],
+        [0.15, 0.20, 0.30],
+        [0.10, 0.15, 0.25],
+        [0.05, 0.08, 0.12],
+        [0.04, 0.06, 0.10],
+        [0.08, 0.12, 0.18],
+        [0.03, 0.05, 0.08],
+        [0.02, 0.04, 0.06]
+      ];
+
+      const directWeight = cfg.directWeight ?? 0.65;
+      const ambientWeight = cfg.ambientWeight ?? 0.35;
+      const eps = cfg.regularizationEpsilon ?? 0.18;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          const r = albedoOut[idx] / 255.0;
+          const g = albedoOut[idx + 1] / 255.0;
+          const b = albedoOut[idx + 2] / 255.0;
+
+          // Estimate local tangent-space normal from luminance gradient
+          const getL = (px: number, py: number) => {
+            const cx = Math.max(0, Math.min(width - 1, px));
+            const cy = Math.max(0, Math.min(height - 1, py));
+            const cidx = (cy * width + cx) * 4;
+            return (0.299 * albedoRgba[cidx] + 0.587 * albedoRgba[cidx + 1] + 0.114 * albedoRgba[cidx + 2]) / 255.0;
+          };
+          const dx = (getL(x + 1, y) - getL(x - 1, y)) * 1.5;
+          const dy = (getL(x, y + 1) - getL(x, y - 1)) * 1.5;
+          const normal: [number, number, number] = [-dx, -dy, 1.0];
+
+          const irradiance = this.computeSolarIrradiance(normal, sunVec, skyShCoeffs, directWeight, ambientWeight, eps);
+
+          // E(N) inverse division to obtain directional-light-free albedo
+          albedoOut[idx]     = Math.min(255, Math.max(0, Math.round((r / irradiance) * 255)));
+          albedoOut[idx + 1] = Math.min(255, Math.max(0, Math.round((g / irradiance) * 255)));
+          albedoOut[idx + 2] = Math.min(255, Math.max(0, Math.round((b / irradiance) * 255)));
+        }
+      }
+    }
+
     // Build luminance float buffer for differential operators
     const lumFloats = new Float32Array(totalPixels);
     for (let i = 0; i < totalPixels; i++) {
@@ -1271,6 +1710,17 @@ export class AlgorithmicUvEngine {
       ormMap[idx + 3] = 255;
     }
 
+    let toksvigMipPyramid: ToksvigMipLevel[] | undefined;
+    if (options.enableToksvigMipPyramid) {
+      toksvigMipPyramid = this.computeToksvigMipPyramid(
+        roughnessMap,
+        normalMap,
+        width,
+        height,
+        options.toksvigMipLevels ?? 4
+      );
+    }
+
     return {
       albedo: albedoOut,
       normal: normalMap,
@@ -1278,7 +1728,8 @@ export class AlgorithmicUvEngine {
       ao: aoMap,
       orm: ormMap,
       width,
-      height
+      height,
+      toksvigMipPyramid
     };
   }
 
@@ -1353,7 +1804,7 @@ export class AlgorithmicUvEngine {
   // glTF 2.0 Binary (GLB) Parsing & Packing Helpers
   // ==========================================================================
 
-  private static parseGlb(buffer: Buffer): { json: any; bin: Buffer } {
+  public static parseGlb(buffer: Buffer): { json: any; bin: Buffer } {
     const magic = buffer.readUInt32LE(0);
     if (magic !== 0x46546c67) {
       throw new Error(`Invalid GLB magic header: 0x${magic.toString(16)}`);
@@ -1384,13 +1835,15 @@ export class AlgorithmicUvEngine {
     return { json, bin };
   }
 
-  private static rebuildGlbWithTextures(
+  public static rebuildGlbWithTextures(
     glb: { json: any; bin: Buffer },
     replacements: Map<number, Buffer>,
-    tilingOpts?: { enableMicroDetailTiling?: boolean; microDetailScale?: number }
-  ): Buffer {
-    if (replacements.size === 0 && !tilingOpts?.enableMicroDetailTiling) {
-      return this.serializeGlb(glb.json, glb.bin);
+    tilingOpts?: { enableMicroDetailTiling?: boolean; microDetailScale?: number },
+    khrOpts?: KhrMaterialsConfig
+  ): { buffer: Buffer; injectedExtensions: string[] } {
+    const injectedExtensions: string[] = [];
+    if (replacements.size === 0 && !tilingOpts?.enableMicroDetailTiling && !khrOpts?.enableKhrMaterialsExtensions) {
+      return { buffer: this.serializeGlb(glb.json, glb.bin), injectedExtensions };
     }
 
     const newJson = JSON.parse(JSON.stringify(glb.json));
@@ -1401,6 +1854,7 @@ export class AlgorithmicUvEngine {
       if (!newJson.extensionsUsed.includes('KHR_texture_transform')) {
         newJson.extensionsUsed.push('KHR_texture_transform');
       }
+      injectedExtensions.push('KHR_texture_transform');
 
       const scaleVal = tilingOpts.microDetailScale ?? 32.0;
       for (const mat of newJson.materials || []) {
@@ -1416,6 +1870,77 @@ export class AlgorithmicUvEngine {
             KHR_texture_transform: {
               scale: [scaleVal, scaleVal]
             }
+          };
+        }
+      }
+    }
+
+    if (khrOpts?.enableKhrMaterialsExtensions) {
+      if (!newJson.extensionsUsed) newJson.extensionsUsed = [];
+      // Strip KHR_materials_unlit so modern WebGL/PBR engines evaluate directional sun and PBR maps
+      newJson.extensionsUsed = newJson.extensionsUsed.filter((e: string) => e !== 'KHR_materials_unlit');
+      for (const mat of newJson.materials || []) {
+        if (mat.extensions && mat.extensions.KHR_materials_unlit) {
+          delete mat.extensions.KHR_materials_unlit;
+        }
+      }
+
+      const addExt = (name: string) => {
+        if (!newJson.extensionsUsed.includes(name)) {
+          newJson.extensionsUsed.push(name);
+        }
+        if (!injectedExtensions.includes(name)) {
+          injectedExtensions.push(name);
+        }
+      };
+
+      const enableTrans = khrOpts.enableTransmission !== false;
+      const enableAniso = khrOpts.enableAnisotropy !== false;
+      const enableClear = khrOpts.enableClearcoat !== false;
+
+      if (enableTrans) {
+        addExt('KHR_materials_transmission');
+        addExt('KHR_materials_ior');
+      }
+      if (enableAniso) {
+        addExt('KHR_materials_anisotropy');
+      }
+      if (enableClear) {
+        addExt('KHR_materials_clearcoat');
+      }
+
+      for (const mat of newJson.materials || []) {
+        if (!mat.extensions) mat.extensions = {};
+
+        const name = (mat.name || '').toLowerCase();
+        const rough = mat.pbrMetallicRoughness?.roughnessFactor ?? 0.5;
+        const metal = mat.pbrMetallicRoughness?.metallicFactor ?? 0.0;
+
+        const isGlass = name.includes('glass') || name.includes('window') || name.includes('glaz') ||
+          (rough < 0.25 && metal < 0.15);
+        const isMetalSpire = name.includes('metal') || name.includes('spire') || name.includes('steel') ||
+          name.includes('mast') || (metal > 0.5);
+
+        if (enableTrans && isGlass) {
+          mat.extensions.KHR_materials_transmission = {
+            transmissionFactor: khrOpts.transmissionFactor ?? 0.92
+          };
+          mat.extensions.KHR_materials_ior = {
+            ior: khrOpts.ior ?? 1.52
+          };
+        }
+
+        if (enableAniso && (isMetalSpire || !isGlass)) {
+          mat.extensions.KHR_materials_anisotropy = {
+            anisotropyStrength: khrOpts.anisotropyStrength ?? 0.85,
+            anisotropyRotation: 1.5707963 // aligned to architectural vertical axis
+          };
+        }
+
+        if (enableClear) {
+          mat.extensions.KHR_materials_clearcoat = {
+            clearcoatFactor: khrOpts.clearcoatFactor ?? 0.85,
+            clearcoatRoughnessFactor: 0.05
           };
         }
       }
@@ -1443,10 +1968,10 @@ export class AlgorithmicUvEngine {
       }
     }
 
-    return this.serializeGlb(newJson, currentBin);
+    return { buffer: this.serializeGlb(newJson, currentBin), injectedExtensions };
   }
 
-  private static serializeGlb(json: any, bin: Buffer): Buffer {
+  public static serializeGlb(json: any, bin: Buffer): Buffer {
     const jsonStr = JSON.stringify(json);
     const jsonBuffer = Buffer.from(jsonStr, 'utf8');
     const jsonPadding = (4 - (jsonBuffer.length % 4)) % 4;

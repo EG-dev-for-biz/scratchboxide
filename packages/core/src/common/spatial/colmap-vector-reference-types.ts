@@ -137,10 +137,16 @@ export interface SurveyPatternConfig {
   focalLengthMm?: number;
   sensorWidthMm?: number;
   lookAtOffsetLocalENU?: [number, number, number];
+  /** Optional per-tier look-at offsets in local ENU. If provided, tier t uses lookAtTiersOffsetLocalENU[t]. */
+  lookAtTiersOffsetLocalENU?: [number, number, number][];
+  /** Optional per-tier radius in meters. If provided, tier t uses tierRadiiMeters[t]. */
+  tierRadiiMeters?: number[];
   corridorHeadingDeg?: number;
   corridorLengthMeters?: number;
   /** Camera height above ground for street-corridor stations (default 25 m; use ~1.7 m for eye height). */
   cameraHeightMeters?: number;
+  /** Minimum camera height above ground truth elevation (default 2.0 m). Enforces that camera perspectives never fall below ground. */
+  minCameraHeightAboveGroundMeters?: number;
   /** Image aspect ratio for the stations (default 16/9). */
   aspectRatio?: number;
 }

@@ -13,6 +13,13 @@ export const IMAGE_MODEL_PRIORITY = [
     'gemini-2.5-flash-image'
 ];
 
+export const IMAGE_MODEL_PRIORITY_DRAFT = [
+    'nano-banana-lite',
+    'gemini-2.5-flash-image',
+    'gemini-3.1-flash-image',
+    'nano-banana-2'
+];
+
 export const VIDEO_MODEL_PRIORITY = [
     'google/omni-1.1',
     'gemini-omni-flash-video',
@@ -71,6 +78,8 @@ export interface ImageGenerationRequest extends MediaGenerationRequestBase {
     kind: 'image';
     aspectRatio?: '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '4:5' | '5:4' | '9:16' | '16:9' | '21:9';
     imageSize?: '1K' | '2K' | '4K';
+    fidelity?: 'draft' | 'production';
+    draft?: boolean;
     referenceAssets?: MediaAssetRef[];
     sourceAsset?: MediaAssetRef;
 }

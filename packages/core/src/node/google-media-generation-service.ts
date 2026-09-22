@@ -8,6 +8,7 @@ import * as fs from 'fs-extra';
 import { GoogleGenAI } from '@google/genai';
 import {
     IMAGE_MODEL_PRIORITY,
+    IMAGE_MODEL_PRIORITY_DRAFT,
     ImageGenerationRequest,
     MediaCapabilities,
     MediaGenerationError,
@@ -100,7 +101,10 @@ export class GoogleMediaGenerationService {
             });
         }
 
-        const models = this.modelPriority(request.modelPriority, IMAGE_MODEL_PRIORITY);
+        const isDraft = request.fidelity === 'draft' || request.draft === true;
+        const defaultPriority = isDraft ? IMAGE_MODEL_PRIORITY_DRAFT : IMAGE_MODEL_PRIORITY;
+        const models = this.modelPriority(request.modelPriority, defaultPriority);
+        const resolvedImageSize = request.imageSize ?? (isDraft ? '1K' : undefined);
         let lastUnsupported: MediaGenerationError | undefined;
         for (const model of models) {
             try {
@@ -111,7 +115,7 @@ export class GoogleMediaGenerationService {
                         responseModalities: ['TEXT', 'IMAGE'],
                         imageConfig: {
                             aspectRatio: request.aspectRatio,
-                            imageSize: request.imageSize
+                            imageSize: resolvedImageSize
                         }
                     }
                 } as any);
@@ -381,7 +385,9 @@ export class GoogleMediaGenerationService {
         for (const model of rawList) {
             if (!model) continue;
             const m = model.toLowerCase();
-            if (m.includes('nano-banana') || m === 'nano-banana-2' || m === 'google/nano-banana-pro') {
+            if (m.includes('nano-banana-lite') || m === 'nano-banana-lite') {
+                expanded.push(model, 'gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'nano-banana-2');
+            } else if (m.includes('nano-banana') || m === 'nano-banana-2' || m === 'google/nano-banana-pro') {
                 expanded.push(model, 'gemini-3.1-flash-image', 'imagen-3.0-generate-002', 'gemini-3-pro-image', 'gemini-2.5-flash-image');
             } else if (m.includes('omni') || m === 'google/omni-1.1' || m === 'omni-1.1-video' || m === 'gemini-omni-flash-video' || m === 'omni-product') {
                 expanded.push(model, 'veo-3.1-fast-generate-preview', 'veo-3.1-generate-preview', 'veo-3.1-lite-generate-preview');

@@ -37,6 +37,7 @@
 #include "scratchbox_kinematics.hpp"
 #include "scratchbox_skinning.hpp"
 #include "scratchbox_parametric_human.hpp"
+#include "scratchbox_4dgs_humanoid.hpp"
 #include "scratchbox_texture.hpp"
 #include "scratchbox_lighting.hpp"
 #include "scratchbox_io.hpp"

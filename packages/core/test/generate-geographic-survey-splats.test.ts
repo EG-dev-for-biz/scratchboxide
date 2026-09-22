@@ -170,13 +170,32 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             formattedAddress: 'Empire State Building, New York'
         };
 
-        // 18 camera stations across 3 altitude tiers (Street / Lower Massing, Mid Tower Shaft, Spire & Mast)
+        // 28 camera stations across 7 vertical elevation tiers:
+        // Guarantees zero vertical blind spots across the entire 443m Art Deco skyscraper from street to spire
         const stations = engine.synthesize(anchor, {
             type: 'orbital-multi-tier',
-            cameraCount: 18,
-            targetRadiusMeters: 260,
-            altitudeTiersMeters: [anchor.elevationMeters + 65, anchor.elevationMeters + 220, anchor.elevationMeters + 390],
-            lookAtOffsetLocalENU: [0, 214, 0]
+            cameraCount: 28,
+            targetRadiusMeters: 200,
+            tierRadiiMeters: [120, 140, 160, 180, 200, 220, 240],
+            altitudeTiersMeters: [
+                anchor.elevationMeters + 10.0,
+                anchor.elevationMeters + 65.0,
+                anchor.elevationMeters + 135.0,
+                anchor.elevationMeters + 210.0,
+                anchor.elevationMeters + 285.0,
+                anchor.elevationMeters + 355.0,
+                anchor.elevationMeters + 415.0
+            ],
+            lookAtOffsetLocalENU: [0, 180, 0],
+            lookAtTiersOffsetLocalENU: [
+                [0, 25, 0],
+                [0, 75, 0],
+                [0, 150, 0],
+                [0, 225, 0],
+                [0, 300, 0],
+                [0, 370, 0],
+                [0, 425, 0]
+            ]
         });
 
         const result = await svc.run({
@@ -190,8 +209,10 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             },
             renderWidth: 960,
             mode: 'chained',
-            maxStations: 18,
-            bakeStride: 2,
+            maxStations: 28,
+            bakeStride: 1,
+            sigmaScale: 1.15,
+            forceRebake: true,
             voxelSizeMeters: 0.25,
             maxSplatCount: 800000
         }, (prog, msg) => console.log(`[ESB] ${(prog * 100).toFixed(0)}%: ${msg}`));
@@ -212,16 +233,29 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             formattedAddress: 'Colosseum, Rome'
         };
 
-        // 24 camera stations across 3 altitude tiers:
-        // Tier 1 (Street/Eye Level, ~20m): ground facades and pedestrian perspectives
-        // Tier 2 (Mid-Facade, ~55m): 30° downward pitch capturing rooflines and entablatures
-        // Tier 3 (High Overview, ~110m): 50° downward pitch into interior arena floor
+        // 24 camera stations across 4 authentic elevation tiers:
+        // Tier 1 (Pedestrian Street Level / Arcade Base, ~3.0m): human eye level surveying the ground arches, piazza, and foundation line
+        // Tier 2 (Mid-Level Arcades & Cavea, ~18m): surveying 2nd story colonnades and interior seating
+        // Tier 3 (Upper Colonnade & Attic, ~38m): surveying attic cornice and exterior wall
+        // Tier 4 (Aerial Oblique, ~65m): high vantage looking down into the hypogeum and arena floor
         const stations = engine.synthesize(anchor, {
             type: 'orbital-multi-tier',
             cameraCount: 24,
-            targetRadiusMeters: 220,
-            altitudeTiersMeters: [anchor.elevationMeters + 20, anchor.elevationMeters + 55, anchor.elevationMeters + 110],
-            lookAtOffsetLocalENU: [0, 24, 0]
+            targetRadiusMeters: 150,
+            tierRadiiMeters: [110, 135, 165, 195],
+            altitudeTiersMeters: [
+                anchor.elevationMeters + 3.0,
+                anchor.elevationMeters + 18.0,
+                anchor.elevationMeters + 38.0,
+                anchor.elevationMeters + 65.0
+            ],
+            lookAtOffsetLocalENU: [0, 20, 0],
+            lookAtTiersOffsetLocalENU: [
+                [0, 10, 0],
+                [0, 20, 0],
+                [0, 25, 0],
+                [0, 15, 0]
+            ]
         });
 
         const result = await svc.run({
@@ -237,6 +271,8 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             mode: 'chained',
             maxStations: 24,
             bakeStride: 1,
+            sigmaScale: 1.15,
+            forceRebake: true,
             dropFoliage: true,
             voxelSizeMeters: 0.20
         }, (prog, msg) => console.log(`[Colosseum] ${(prog * 100).toFixed(0)}%: ${msg}`));
@@ -244,7 +280,7 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(result.fusedSplatCount).toBeGreaterThan(25000);
         expect(fs.existsSync(result.tilesetPath)).toBe(true);
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
-    }, 600000);
+    }, 900000);
 
     it('bakes fresh 3DGS tileset for Location 3: Grand Army Plaza', async () => {
         const glbPath = path.resolve(process.cwd(), 'public/models/gap_grounded.glb');
@@ -257,13 +293,26 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             formattedAddress: 'Grand Army Plaza, New York'
         };
 
-        // 18 camera stations across 3 altitude tiers (Plaza ground level, mid monument level, aerial canopy)
+        // 18 camera stations across 3 authentic elevation tiers:
+        // Tier 1 (Plaza Pedestrian Level, ~2.0m): surveying Pulitzer Fountain, plaza steps, and monument base
+        // Tier 2 (Mid Monument & Fountain Basins, ~10.0m): surveying gilded bronze statue and fountain tiers
+        // Tier 3 (Plaza Canopy & Context, ~26.0m): surveying perimeter street grid and Central Park trees
         const stations = engine.synthesize(anchor, {
             type: 'orbital-multi-tier',
             cameraCount: 18,
-            targetRadiusMeters: 180,
-            altitudeTiersMeters: [anchor.elevationMeters + 22, anchor.elevationMeters + 60, anchor.elevationMeters + 135],
-            lookAtOffsetLocalENU: [0, 30, 0]
+            targetRadiusMeters: 55,
+            tierRadiiMeters: [38, 55, 80],
+            altitudeTiersMeters: [
+                anchor.elevationMeters + 2.0,
+                anchor.elevationMeters + 10.0,
+                anchor.elevationMeters + 26.0
+            ],
+            lookAtOffsetLocalENU: [0, 10, 0],
+            lookAtTiersOffsetLocalENU: [
+                [0, 4, 0],
+                [0, 10, 0],
+                [0, 14, 0]
+            ]
         });
 
         const result = await svc.run({
@@ -278,7 +327,9 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             renderWidth: 960,
             mode: 'chained',
             maxStations: 18,
-            bakeStride: 2,
+            bakeStride: 1,
+            sigmaScale: 1.15,
+            forceRebake: true,
             voxelSizeMeters: 0.20,
             maxSplatCount: 800000
         }, (prog, msg) => console.log(`[GAP] ${(prog * 100).toFixed(0)}%: ${msg}`));
@@ -286,5 +337,5 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(result.fusedSplatCount).toBeGreaterThan(25000);
         expect(fs.existsSync(result.tilesetPath)).toBe(true);
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
-    }, 500000);
+    }, 900000);
 });

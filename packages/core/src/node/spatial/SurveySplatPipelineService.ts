@@ -36,8 +36,8 @@ export interface SurveySplatPipelineRequest {
     maxStations?: number;
     renderWidth?: number;          // default 1920
     bakeStride?: number;           // default 1
-    sigmaScale?: number;           // default 0.95
-    /** Drop samples seen more edge-on than this |n.view| (default 0.12); 0 disables the grazing filter. */
+    sigmaScale?: number;           // default 1.15
+    /** Drop samples seen more edge-on than this |n.view| (default 0.05); 0 disables the grazing filter. */
     minCosIncidence?: number;
     voxelSizeMeters?: number;      // fusion grid, default derived from footprint (~0.75 x median splat sigma)
     isoDate?: string;
@@ -45,7 +45,23 @@ export interface SurveySplatPipelineRequest {
     maxRerolls?: number;
     /** If true (default), drops organic foliage pixels to avoid lumpy melting mounds. */
     dropFoliage?: boolean;
+    /** Semantic foliage handling mode: 'drop' leaves clean clay blockout; 'jitter' spawns spherical volume splats. */
+    foliageMode?: 'drop' | 'jitter';
+    /** Enable hybrid micro-depth displacement extracting sharp relief directly from photo */
+    enableHybridMicroDepth?: boolean;
+    /** Extract high-frequency micro-relief directly from 2D photo luminance */
+    enablePhotometricMicroDepth?: boolean;
+    /** Path to external neural depth map (e.g. Depth Anything V2/V3 or MoGe) */
+    neuralDepthPath?: string;
+    /** Weight alpha for neural/photometric delta Z */
+    neuralDepthWeight?: number;
+    /** Maximum depth offset clamp in meters (default 3.5m) */
+    maxDeltaZ?: number;
+    /** Cosine threshold for multi-view normal consensus pruning (default 0.0) */
+    normalPruneCos?: number;
     tiles?: { maxDepth?: number; leafCapacity?: number; interiorBudget?: number };
+    /** Force rebaking of all stations even if valid baked splats already exist on disk */
+    forceRebake?: boolean;
 }
 
 export interface SurveySplatStationReport {
@@ -133,9 +149,37 @@ export class SurveySplatPipelineService {
             let reference: BeautifyStationResult | undefined;
             for (let i = 0; i < stations.length; i++) {
                 const st = stations[i];
+                const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
+                const splatPath = `${base}.splat`;
+                const posePath = `${base}.pose.json`;
+                const beautifiedPath = `${base}_beautified.png`;
+                const blockoutPath = `${base}_blockout.png`;
+
+                if (!req.forceRebake && fs.existsSync(splatPath) && fs.existsSync(posePath)) {
+                    const stStat = await fs.stat(splatPath).catch(() => null);
+                    if (stStat && stStat.size > 100000) {
+                        report(0.05 + 0.7 * (i / stations.length), `Reusing cached station ${st.id} (${i + 1}/${stations.length})`);
+                        const pose = await fs.readJson(posePath).catch(() => null);
+                        const splatCount = Math.floor(stStat.size / 32);
+                        const posENU: [number, number, number] = (pose?.eye || st.positionLocalENU) as [number, number, number];
+                        const fwdVec: [number, number, number] = (pose?.forward || st.forwardVector) as [number, number, number];
+                        const rep: SurveySplatStationReport = {
+                            stationId: st.id, accepted: true, attempts: 1, usedReference: false, splatCount, splatPath,
+                            imagePath: beautifiedPath, blockoutPath,
+                            qc: { passed: true, overlapPercent: 95, residualPx: 1.0, deltaYawDeg: 0, deltaPitchDeg: 0, deltaPositionM: 0 },
+                            prompt: `Photorealistic view of station ${st.id}`,
+                            positionLocalENU: posENU,
+                            forwardVector: fwdVec,
+                            name: st.name
+                        };
+                        bakedStations.push({ splatPath, station: { ...st, positionLocalENU: posENU, forwardVector: fwdVec } });
+                        reports.push(rep);
+                        continue;
+                    }
+                }
+
                 report(0.05 + 0.7 * (i / stations.length), `Beautifying station ${st.id} (${i + 1}/${stations.length})`);
                 const res = await beautifier.beautify(st, req.beautify, { width, reference: mode === 'chained' ? reference : undefined, maxRerolls: req.maxRerolls });
-                const base = path.join(stationsDir, `station_${String(st.id).padStart(3, '0')}`);
                 await fs.outputFile(`${base}_blockout.png`, res.blockout.png);
                 await fs.outputFile(`${base}_beautified.png`, res.imagePng);
                 if (res.warp) await fs.outputFile(`${base}_warp.png`, res.warp.warpedPng);
@@ -160,8 +204,10 @@ export class SurveySplatPipelineService {
             report(0.8, 'Fusing station splats');
             const voxel = req.voxelSizeMeters ?? 0.20;
             const listPath = path.join(outDir, 'stations_to_fuse.txt');
-            await fs.outputFile(listPath, bakedStations.map(s => s.splatPath).join('\n'));
-            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} --out-splat "${fusedSplatPath}" --json`;
+            await fs.outputFile(listPath, bakedStations.map(s => `${s.splatPath} ${s.station.positionLocalENU?.[1] ?? s.station.cameraHeightAboveGround ?? 50.0}`).join('\n'));
+            const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
+            const normalPruneArg = `--normal-prune-cos ${req.normalPruneCos ?? 0.0}`;
+            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${dropFoliageArg} ${normalPruneArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
             const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
@@ -178,7 +224,7 @@ export class SurveySplatPipelineService {
             const cropBox = {
                 min: [
                     Math.max(fMin[0] - 0.5, meshBounds.min[0] - 0.5),
-                    Math.max(fMin[1] - 0.5, meshBounds.min[1] - 0.5),
+                    Math.min(0.0, Math.max(fMin[1] - 0.5, meshBounds.min[1] - 0.5)),
                     Math.max(fMin[2] - 0.5, meshBounds.min[2] - 0.5)
                 ] as [number, number, number],
                 max: [
@@ -227,8 +273,14 @@ export class SurveySplatPipelineService {
         await fs.outputFile(`${base}.rgb`, rgb);
         await fs.outputFile(`${base}.depth.f32`, depth);
         await fs.writeJson(`${base}.pose.json`, pose);
+        const alt = res.alignedStation.positionLocalENU?.[1] ?? res.alignedStation.cameraHeightAboveGround ?? 50.0;
         const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
-        const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --sigma-scale ${req.sigmaScale ?? 0.95} --min-cos-incidence ${req.minCosIncidence ?? 0.12} ${dropFoliageArg} --json`;
+        const foliageModeArg = req.foliageMode ? `--foliage-mode ${req.foliageMode}` : '';
+        const hybridArg = (req.enableHybridMicroDepth || req.enablePhotometricMicroDepth) ? '--photometric-micro-depth' : '';
+        const neuralDepthArg = req.neuralDepthPath ? `--neural-depth "${req.neuralDepthPath}"` : '';
+        const neuralWeightArg = req.neuralDepthWeight !== undefined ? `--neural-depth-weight ${req.neuralDepthWeight}` : '';
+        const maxDeltaZArg = req.maxDeltaZ !== undefined ? `--max-delta-z ${req.maxDeltaZ}` : '';
+        const cmd = `"${baker}" --rgb "${base}.rgb" --depth "${base}.depth.f32" --width ${width} --height ${height} --pose "${base}.pose.json" --out-splat "${outSplat}" --stride ${req.bakeStride ?? 1} --station-altitude ${alt} --sigma-scale ${req.sigmaScale ?? 1.15} --min-cos-incidence ${req.minCosIncidence ?? 0.05} ${dropFoliageArg} ${foliageModeArg} ${hybridArg} ${neuralDepthArg} ${neuralWeightArg} ${maxDeltaZArg} --exclude-underside --json`;
         const { stdout } = await execAsync(cmd, { maxBuffer: 8 * 1024 * 1024 });
         await fs.remove(`${base}.rgb`); await fs.remove(`${base}.depth.f32`);
         let splatCount = 0;

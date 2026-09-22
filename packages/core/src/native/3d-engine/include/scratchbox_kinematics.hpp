@@ -77,36 +77,38 @@ enum class Canonical55Joint : int32_t {
     Jaw,
     LeftEye,
     RightEye,
-    LeftThumb1,
-    LeftThumb2,
-    LeftThumb3,
+    // Left Hand (canonical SMPL-X order: Index, Middle, Pinky, Ring, Thumb)
     LeftIndex1,
     LeftIndex2,
     LeftIndex3,
     LeftMiddle1,
     LeftMiddle2,
     LeftMiddle3,
-    LeftRing1,
-    LeftRing2,
-    LeftRing3,
     LeftPinky1,
     LeftPinky2,
     LeftPinky3,
-    RightThumb1,
-    RightThumb2,
-    RightThumb3,
+    LeftRing1,
+    LeftRing2,
+    LeftRing3,
+    LeftThumb1,
+    LeftThumb2,
+    LeftThumb3,
+    // Right Hand (canonical SMPL-X order: Index, Middle, Pinky, Ring, Thumb)
     RightIndex1,
     RightIndex2,
     RightIndex3,
     RightMiddle1,
     RightMiddle2,
     RightMiddle3,
-    RightRing1,
-    RightRing2,
-    RightRing3,
     RightPinky1,
     RightPinky2,
     RightPinky3,
+    RightRing1,
+    RightRing2,
+    RightRing3,
+    RightThumb1,
+    RightThumb2,
+    RightThumb3,
     Count
 };
 
@@ -183,51 +185,112 @@ struct HandPcaSubspace {
     }
 
     void initDefault() {
-        meanPose.fill(0.0f);
-        for (size_t j = 0; j < NUM_JOINTS; ++j) {
-            meanPose[j * 3 + 2] = 0.08f;
-        }
-        meanPose[0] = 0.12f;  meanPose[1] = 0.05f;  meanPose[2] = -0.25f;
-        meanPose[3] = 0.10f;  meanPose[4] = -0.05f; meanPose[5] = -0.35f;
+        // Authentic Empirical Left Hand Mean Pose from SMPL-X (15 joints x 3 DOFs)
+        static constexpr std::array<float, NUM_DOFS> SMPLX_HANDS_MEAN_L = {
+            +0.1117f, +0.0429f, -0.4164f, // 0: Index1
+            +0.1088f, -0.0660f, -0.7562f, // 1: Index2
+            -0.0964f, -0.0909f, -0.1885f, // 2: Index3
+            -0.1181f, +0.0509f, -0.5296f, // 3: Middle1
+            -0.1437f, +0.0552f, -0.7049f, // 4: Middle2
+            -0.0192f, -0.0923f, -0.3379f, // 5: Middle3
+            -0.4570f, -0.1963f, -0.6255f, // 6: Pinky1
+            -0.2147f, -0.0660f, -0.5069f, // 7: Pinky2
+            -0.3697f, -0.0603f, -0.0795f, // 8: Pinky3
+            -0.1419f, -0.0859f, -0.6355f, // 9: Ring1
+            -0.3033f, -0.0579f, -0.6314f, // 10: Ring2
+            -0.1761f, -0.1321f, -0.3734f, // 11: Ring3
+            +0.8510f, +0.2769f, -0.0915f, // 12: Thumb1
+            -0.4998f, +0.0266f, +0.0529f, // 13: Thumb2
+            +0.5356f, +0.0460f, -0.2774f  // 14: Thumb3
+        };
+        meanPose = SMPLX_HANDS_MEAN_L;
 
         for (size_t c = 0; c < NUM_COMPONENTS; ++c) {
             components[c].fill(0.0f);
         }
 
-        // Component 0: Fist / Clench
-        for (size_t j = 0; j < NUM_JOINTS; ++j) {
-            components[0][j * 3 + 2] = 0.45f;
-        }
-        components[0][0] = 0.35f; components[0][1] = 0.20f; components[0][2] = -0.40f;
+        // Component 0: Anatomical Clenched Fist (full curl with thumb wrap)
+        components[0][ 0 * 3 + 0] = -0.0617f; components[0][ 0 * 3 + 1] = +0.0071f; components[0][ 0 * 3 + 2] = -0.8336f;
+        components[0][ 1 * 3 + 0] = -0.1088f; components[0][ 1 * 3 + 1] = +0.0660f; components[0][ 1 * 3 + 2] = -0.7938f;
+        components[0][ 2 * 3 + 0] = +0.0964f; components[0][ 2 * 3 + 1] = +0.0909f; components[0][ 2 * 3 + 2] = -0.9615f;
+        components[0][ 3 * 3 + 0] = +0.0981f; components[0][ 3 * 3 + 1] = -0.0509f; components[0][ 3 * 3 + 2] = -0.7704f;
+        components[0][ 4 * 3 + 0] = +0.1437f; components[0][ 4 * 3 + 1] = -0.0552f; components[0][ 4 * 3 + 2] = -0.8951f;
+        components[0][ 5 * 3 + 0] = +0.0192f; components[0][ 5 * 3 + 1] = +0.0923f; components[0][ 5 * 3 + 2] = -0.8621f;
+        components[0][ 6 * 3 + 0] = +0.3570f; components[0][ 6 * 3 + 1] = +0.0463f; components[0][ 6 * 3 + 2] = -0.6245f;
+        components[0][ 7 * 3 + 0] = +0.2147f; components[0][ 7 * 3 + 1] = +0.0660f; components[0][ 7 * 3 + 2] = -0.9931f;
+        components[0][ 8 * 3 + 0] = +0.3697f; components[0][ 8 * 3 + 1] = +0.0603f; components[0][ 8 * 3 + 2] = -1.0205f;
+        components[0][ 9 * 3 + 0] = +0.0919f; components[0][ 9 * 3 + 1] = +0.0059f; components[0][ 9 * 3 + 2] = -0.6445f;
+        components[0][10 * 3 + 0] = +0.3033f; components[0][10 * 3 + 1] = +0.0579f; components[0][10 * 3 + 2] = -0.9186f;
+        components[0][11 * 3 + 0] = +0.1761f; components[0][11 * 3 + 1] = +0.1321f; components[0][11 * 3 + 2] = -0.7766f;
+        components[0][12 * 3 + 0] = -0.7310f; components[0][12 * 3 + 1] = +0.8231f; components[0][12 * 3 + 2] = +0.5715f;
+        components[0][13 * 3 + 0] = +0.2498f; components[0][13 * 3 + 1] = -0.0266f; components[0][13 * 3 + 2] = -0.7029f;
+        components[0][14 * 3 + 0] = -0.3856f; components[0][14 * 3 + 1] = -0.0460f; components[0][14 * 3 + 2] = -0.4726f;
 
-        // Component 1: Finger Spread / Splay
-        components[1][3 * 3 + 1] =  0.25f;
-        components[1][9 * 3 + 1] = -0.15f;
-        components[1][12 * 3 + 1] = -0.30f;
+        // Component 1: Finger Spread / Splay (abduction / adduction)
+        components[1][ 0 * 3 + 1] = +0.25f; // Index splay +
+        components[1][ 3 * 3 + 1] = +0.05f; // Middle slight +
+        components[1][ 6 * 3 + 1] = -0.30f; // Pinky splay -
+        components[1][ 9 * 3 + 1] = -0.15f; // Ring splay -
+        components[1][12 * 3 + 1] = +0.35f; // Thumb splay out
 
-        // Component 2: Point
-        for (size_t j = 0; j < NUM_JOINTS; ++j) {
-            components[2][j * 3 + 2] = 0.40f;
-        }
-        components[2][3 * 3 + 2] = -0.35f;
-        components[2][4 * 3 + 2] = -0.35f;
-        components[2][5 * 3 + 2] = -0.35f;
+        // Component 2: Point (Index extends forward, others curl into fist)
+        components[2][ 0 * 3 + 0] = -0.0617f; components[2][ 0 * 3 + 1] = +0.0071f; components[2][ 0 * 3 + 2] = +0.3664f;
+        components[2][ 1 * 3 + 0] = -0.1088f; components[2][ 1 * 3 + 1] = +0.0660f; components[2][ 1 * 3 + 2] = +0.7562f;
+        components[2][ 2 * 3 + 0] = +0.0964f; components[2][ 2 * 3 + 1] = +0.0909f; components[2][ 2 * 3 + 2] = +0.1885f;
+        components[2][ 3 * 3 + 0] = +0.0981f; components[2][ 3 * 3 + 1] = -0.0509f; components[2][ 3 * 3 + 2] = -0.7704f;
+        components[2][ 4 * 3 + 0] = +0.1437f; components[2][ 4 * 3 + 1] = -0.0552f; components[2][ 4 * 3 + 2] = -0.8951f;
+        components[2][ 5 * 3 + 0] = +0.0192f; components[2][ 5 * 3 + 1] = +0.0923f; components[2][ 5 * 3 + 2] = -0.8621f;
+        components[2][ 6 * 3 + 0] = +0.3570f; components[2][ 6 * 3 + 1] = +0.0463f; components[2][ 6 * 3 + 2] = -0.6245f;
+        components[2][ 7 * 3 + 0] = +0.2147f; components[2][ 7 * 3 + 1] = +0.0660f; components[2][ 7 * 3 + 2] = -0.9931f;
+        components[2][ 8 * 3 + 0] = +0.3697f; components[2][ 8 * 3 + 1] = +0.0603f; components[2][ 8 * 3 + 2] = -1.0205f;
+        components[2][ 9 * 3 + 0] = +0.0919f; components[2][ 9 * 3 + 1] = +0.0059f; components[2][ 9 * 3 + 2] = -0.6445f;
+        components[2][10 * 3 + 0] = +0.3033f; components[2][10 * 3 + 1] = +0.0579f; components[2][10 * 3 + 2] = -0.9186f;
+        components[2][11 * 3 + 0] = +0.1761f; components[2][11 * 3 + 1] = +0.1321f; components[2][11 * 3 + 2] = -0.7766f;
+        components[2][12 * 3 + 0] = -0.7310f; components[2][12 * 3 + 1] = +0.8231f; components[2][12 * 3 + 2] = +0.5715f;
+        components[2][13 * 3 + 0] = +0.2498f; components[2][13 * 3 + 1] = -0.0266f; components[2][13 * 3 + 2] = -0.7029f;
+        components[2][14 * 3 + 0] = -0.3856f; components[2][14 * 3 + 1] = -0.0460f; components[2][14 * 3 + 2] = -0.4726f;
 
-        // Component 3: Pinch
-        components[3][0] = 0.50f; components[3][1] = 0.30f;
-        components[3][3 * 3 + 2] = 0.35f;
-        components[3][4 * 3 + 2] = 0.45f;
+        // Component 3: Pinch (Thumb + Index tips meet)
+        components[3][ 0 * 3 + 0] = -0.0617f; components[3][ 0 * 3 + 1] = +0.0071f; components[3][ 0 * 3 + 2] = -0.4336f;
+        components[3][ 1 * 3 + 0] = -0.1088f; components[3][ 1 * 3 + 1] = +0.0660f; components[3][ 1 * 3 + 2] = -0.1938f;
+        components[3][ 2 * 3 + 0] = +0.0964f; components[3][ 2 * 3 + 1] = +0.0909f; components[3][ 2 * 3 + 2] = -0.4615f;
+        components[3][12 * 3 + 0] = -0.5510f; components[3][12 * 3 + 1] = +0.5731f; components[3][12 * 3 + 2] = +0.3415f;
+        components[3][13 * 3 + 0] = +0.2998f; components[3][13 * 3 + 1] = -0.0266f; components[3][13 * 3 + 2] = -0.5029f;
+        components[3][14 * 3 + 0] = -0.4356f; components[3][14 * 3 + 1] = -0.0460f; components[3][14 * 3 + 2] = -0.2726f;
 
-        // Component 4: Thumbs Up
-        for (size_t j = 3; j < NUM_JOINTS; ++j) {
-            components[4][j * 3 + 2] = 0.45f;
-        }
-        components[4][0] = -0.30f; components[4][1] = -0.20f; components[4][2] = 0.10f;
+        // Component 4: Thumbs Up (4 fingers curled into fist, thumb extended)
+        components[4][ 0 * 3 + 0] = -0.0617f; components[4][ 0 * 3 + 1] = +0.0071f; components[4][ 0 * 3 + 2] = -0.8336f;
+        components[4][ 1 * 3 + 0] = -0.1088f; components[4][ 1 * 3 + 1] = +0.0660f; components[4][ 1 * 3 + 2] = -0.7938f;
+        components[4][ 2 * 3 + 0] = +0.0964f; components[4][ 2 * 3 + 1] = +0.0909f; components[4][ 2 * 3 + 2] = -0.9615f;
+        components[4][ 3 * 3 + 0] = +0.0981f; components[4][ 3 * 3 + 1] = -0.0509f; components[4][ 3 * 3 + 2] = -0.7704f;
+        components[4][ 4 * 3 + 0] = +0.1437f; components[4][ 4 * 3 + 1] = -0.0552f; components[4][ 4 * 3 + 2] = -0.8951f;
+        components[4][ 5 * 3 + 0] = +0.0192f; components[4][ 5 * 3 + 1] = +0.0923f; components[4][ 5 * 3 + 2] = -0.8621f;
+        components[4][ 6 * 3 + 0] = +0.3570f; components[4][ 6 * 3 + 1] = +0.0463f; components[4][ 6 * 3 + 2] = -0.6245f;
+        components[4][ 7 * 3 + 0] = +0.2147f; components[4][ 7 * 3 + 1] = +0.0660f; components[4][ 7 * 3 + 2] = -0.9931f;
+        components[4][ 8 * 3 + 0] = +0.3697f; components[4][ 8 * 3 + 1] = +0.0603f; components[4][ 8 * 3 + 2] = -1.0205f;
+        components[4][ 9 * 3 + 0] = +0.0919f; components[4][ 9 * 3 + 1] = +0.0059f; components[4][ 9 * 3 + 2] = -0.6445f;
+        components[4][10 * 3 + 0] = +0.3033f; components[4][10 * 3 + 1] = +0.0579f; components[4][10 * 3 + 2] = -0.9186f;
+        components[4][11 * 3 + 0] = +0.1761f; components[4][11 * 3 + 1] = +0.1321f; components[4][11 * 3 + 2] = -0.7766f;
+        components[4][12 * 3 + 0] = +0.0990f; components[4][12 * 3 + 1] = -0.1769f; components[4][12 * 3 + 2] = -0.0085f;
+        components[4][13 * 3 + 0] = +0.3998f; components[4][13 * 3 + 1] = -0.0266f; components[4][13 * 3 + 2] = -0.0529f;
+        components[4][14 * 3 + 0] = -0.4356f; components[4][14 * 3 + 1] = -0.0460f; components[4][14 * 3 + 2] = +0.2774f;
 
-        // Component 5: Flat Open Palm
-        for (size_t j = 0; j < NUM_JOINTS; ++j) {
-            components[5][j * 3 + 2] = -0.20f;
-        }
+        // Component 5: Flat Open Hand (flatten fingers out)
+        components[5][ 0 * 3 + 0] = -0.1117f; components[5][ 0 * 3 + 1] = -0.0429f; components[5][ 0 * 3 + 2] = +0.4164f;
+        components[5][ 1 * 3 + 0] = -0.1088f; components[5][ 1 * 3 + 1] = +0.0660f; components[5][ 1 * 3 + 2] = +0.7562f;
+        components[5][ 2 * 3 + 0] = +0.0964f; components[5][ 2 * 3 + 1] = +0.0909f; components[5][ 2 * 3 + 2] = +0.1885f;
+        components[5][ 3 * 3 + 0] = +0.1181f; components[5][ 3 * 3 + 1] = -0.0509f; components[5][ 3 * 3 + 2] = +0.5296f;
+        components[5][ 4 * 3 + 0] = +0.1437f; components[5][ 4 * 3 + 1] = -0.0552f; components[5][ 4 * 3 + 2] = +0.7049f;
+        components[5][ 5 * 3 + 0] = +0.0192f; components[5][ 5 * 3 + 1] = +0.0923f; components[5][ 5 * 3 + 2] = +0.3379f;
+        components[5][ 6 * 3 + 0] = +0.4570f; components[5][ 6 * 3 + 1] = +0.1963f; components[5][ 6 * 3 + 2] = +0.6255f;
+        components[5][ 7 * 3 + 0] = +0.2147f; components[5][ 7 * 3 + 1] = +0.0660f; components[5][ 7 * 3 + 2] = +0.5069f;
+        components[5][ 8 * 3 + 0] = +0.3697f; components[5][ 8 * 3 + 1] = +0.0603f; components[5][ 8 * 3 + 2] = +0.0795f;
+        components[5][ 9 * 3 + 0] = +0.1419f; components[5][ 9 * 3 + 1] = +0.0859f; components[5][ 9 * 3 + 2] = +0.6355f;
+        components[5][10 * 3 + 0] = +0.3033f; components[5][10 * 3 + 1] = +0.0579f; components[5][10 * 3 + 2] = +0.6314f;
+        components[5][11 * 3 + 0] = +0.1761f; components[5][11 * 3 + 1] = +0.1321f; components[5][11 * 3 + 2] = +0.3734f;
+        components[5][12 * 3 + 0] = -0.5010f; components[5][12 * 3 + 1] = -0.1269f; components[5][12 * 3 + 2] = +0.0415f;
+        components[5][13 * 3 + 0] = +0.4998f; components[5][13 * 3 + 1] = -0.0266f; components[5][13 * 3 + 2] = -0.0529f;
+        components[5][14 * 3 + 0] = -0.5356f; components[5][14 * 3 + 1] = -0.0460f; components[5][14 * 3 + 2] = +0.2774f;
     }
 
     std::array<math::Vec3, NUM_JOINTS> evaluate(const std::vector<float>& coeffs) const {
@@ -436,12 +499,7 @@ public:
         rig.addJoint("LeftEye", head, math::Vec3(0.034f, 1.680f, 0.055f) * scale);
         rig.addJoint("RightEye", head, math::Vec3(-0.034f, 1.680f, 0.055f) * scale);
 
-        // 6. Left Hand 5-Digit Finger Chains (childed to LeftWrist)
-        // Thumb (3 joints)
-        int32_t lt1 = rig.addJoint("LeftThumb1", lWrist, math::Vec3(0.77f * scale + armXOffset, 1.39f * scale, 0.03f * scale));
-        int32_t lt2 = rig.addJoint("LeftThumb2", lt1,    math::Vec3(0.80f * scale + armXOffset, 1.38f * scale, 0.04f * scale));
-        rig.addJoint("LeftThumb3", lt2,                   math::Vec3(0.82f * scale + armXOffset, 1.37f * scale, 0.05f * scale));
-
+        // 6. Left Hand 5-Digit Finger Chains (childed to LeftWrist, canonical SMPL-X order)
         // Index (3 joints)
         int32_t li1 = rig.addJoint("LeftIndex1", lWrist, math::Vec3(0.80f * scale + armXOffset, 1.43f * scale, 0.02f * scale));
         int32_t li2 = rig.addJoint("LeftIndex2", li1,    math::Vec3(0.83f * scale + armXOffset, 1.43f * scale, 0.02f * scale));
@@ -452,22 +510,22 @@ public:
         int32_t lm2 = rig.addJoint("LeftMiddle2", lm1,    math::Vec3(0.84f * scale + armXOffset, 1.41f * scale, 0.00f * scale));
         rig.addJoint("LeftMiddle3", lm2,                   math::Vec3(0.87f * scale + armXOffset, 1.41f * scale, 0.00f * scale));
 
-        // Ring (3 joints)
-        int32_t lr1 = rig.addJoint("LeftRing1", lWrist, math::Vec3(0.80f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
-        int32_t lr2 = rig.addJoint("LeftRing2", lr1,    math::Vec3(0.83f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
-        rig.addJoint("LeftRing3", lr2,                   math::Vec3(0.86f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
-
         // Pinky (3 joints)
         int32_t lp1 = rig.addJoint("LeftPinky1", lWrist, math::Vec3(0.79f * scale + armXOffset, 1.37f * scale, -0.03f * scale));
         int32_t lp2 = rig.addJoint("LeftPinky2", lp1,    math::Vec3(0.82f * scale + armXOffset, 1.37f * scale, -0.03f * scale));
         rig.addJoint("LeftPinky3", lp2,                   math::Vec3(0.84f * scale + armXOffset, 1.37f * scale, -0.03f * scale));
 
-        // 7. Right Hand 5-Digit Finger Chains (childed to RightWrist)
-        // Thumb (3 joints)
-        int32_t rt1 = rig.addJoint("RightThumb1", rWrist, math::Vec3(-0.77f * scale - armXOffset, 1.39f * scale, 0.03f * scale));
-        int32_t rt2 = rig.addJoint("RightThumb2", rt1,    math::Vec3(-0.80f * scale - armXOffset, 1.38f * scale, 0.04f * scale));
-        rig.addJoint("RightThumb3", rt2,                   math::Vec3(-0.82f * scale - armXOffset, 1.37f * scale, 0.05f * scale));
+        // Ring (3 joints)
+        int32_t lr1 = rig.addJoint("LeftRing1", lWrist, math::Vec3(0.80f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
+        int32_t lr2 = rig.addJoint("LeftRing2", lr1,    math::Vec3(0.83f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
+        rig.addJoint("LeftRing3", lr2,                   math::Vec3(0.86f * scale + armXOffset, 1.39f * scale, -0.02f * scale));
 
+        // Thumb (3 joints)
+        int32_t lt1 = rig.addJoint("LeftThumb1", lWrist, math::Vec3(0.77f * scale + armXOffset, 1.39f * scale, 0.03f * scale));
+        int32_t lt2 = rig.addJoint("LeftThumb2", lt1,    math::Vec3(0.80f * scale + armXOffset, 1.38f * scale, 0.04f * scale));
+        rig.addJoint("LeftThumb3", lt2,                   math::Vec3(0.82f * scale + armXOffset, 1.37f * scale, 0.05f * scale));
+
+        // 7. Right Hand 5-Digit Finger Chains (childed to RightWrist, canonical SMPL-X order)
         // Index (3 joints)
         int32_t ri1 = rig.addJoint("RightIndex1", rWrist, math::Vec3(-0.80f * scale - armXOffset, 1.43f * scale, 0.02f * scale));
         int32_t ri2 = rig.addJoint("RightIndex2", ri1,    math::Vec3(-0.83f * scale - armXOffset, 1.43f * scale, 0.02f * scale));
@@ -478,15 +536,20 @@ public:
         int32_t rm2 = rig.addJoint("RightMiddle2", rm1,    math::Vec3(-0.84f * scale - armXOffset, 1.41f * scale, 0.00f * scale));
         rig.addJoint("RightMiddle3", rm2,                   math::Vec3(-0.87f * scale - armXOffset, 1.41f * scale, 0.00f * scale));
 
+        // Pinky (3 joints)
+        int32_t rp1 = rig.addJoint("RightPinky1", rWrist, math::Vec3(-0.79f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
+        int32_t rp2 = rig.addJoint("RightPinky2", rp1,    math::Vec3(-0.82f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
+        rig.addJoint("RightPinky3", rp2,                   math::Vec3(-0.84f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
+
         // Ring (3 joints)
         int32_t rr1 = rig.addJoint("RightRing1", rWrist, math::Vec3(-0.80f * scale - armXOffset, 1.39f * scale, -0.02f * scale));
         int32_t rr2 = rig.addJoint("RightRing2", rr1,    math::Vec3(-0.83f * scale - armXOffset, 1.39f * scale, -0.02f * scale));
         rig.addJoint("RightRing3", rr2,                   math::Vec3(-0.86f * scale - armXOffset, 1.39f * scale, -0.02f * scale));
 
-        // Pinky (3 joints)
-        int32_t rp1 = rig.addJoint("RightPinky1", rWrist, math::Vec3(-0.79f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
-        int32_t rp2 = rig.addJoint("RightPinky2", rp1,    math::Vec3(-0.82f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
-        rig.addJoint("RightPinky3", rp2,                   math::Vec3(-0.84f * scale - armXOffset, 1.37f * scale, -0.03f * scale));
+        // Thumb (3 joints)
+        int32_t rt1 = rig.addJoint("RightThumb1", rWrist, math::Vec3(-0.77f * scale - armXOffset, 1.39f * scale, 0.03f * scale));
+        int32_t rt2 = rig.addJoint("RightThumb2", rt1,    math::Vec3(-0.80f * scale - armXOffset, 1.38f * scale, 0.04f * scale));
+        rig.addJoint("RightThumb3", rt2,                   math::Vec3(-0.82f * scale - armXOffset, 1.37f * scale, 0.05f * scale));
 
         rig.updateTransforms();
         return rig;
@@ -494,7 +557,7 @@ public:
 
     void applyHandPose(bool isLeft, const std::vector<float>& coeffs, const HandPcaSubspace& subspace = HandPcaSubspace::defaultSubspace()) {
         auto rotations = subspace.evaluate(coeffs);
-        int32_t baseIdx = isLeft ? static_cast<int32_t>(Canonical55Joint::LeftThumb1) : static_cast<int32_t>(Canonical55Joint::RightThumb1);
+        int32_t baseIdx = isLeft ? static_cast<int32_t>(Canonical55Joint::LeftIndex1) : static_cast<int32_t>(Canonical55Joint::RightIndex1);
         for (size_t j = 0; j < HandPcaSubspace::NUM_JOINTS; ++j) {
             int32_t targetIdx = baseIdx + static_cast<int32_t>(j);
             if (targetIdx < static_cast<int32_t>(joints.size())) {

@@ -45,7 +45,9 @@ import {
     PHYSICAL_CAMERA_TOOL_DECLARATIONS,
     physicalCameraHandlers,
     TAPIR_4DGS_TOOL_DECLARATIONS,
-    tapir4dgsHandlers
+    tapir4dgsHandlers,
+    AVATAR_4DGS_TOOL_DECLARATIONS,
+    avatar4dgsHandlers
 } from './spatial-tools';
 import { ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers } from './atmosphere-tools';
 import {
@@ -72,6 +74,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...POSE_DEPTH_TOOL_DECLARATIONS,
     ...PHYSICAL_CAMERA_TOOL_DECLARATIONS,
     ...TAPIR_4DGS_TOOL_DECLARATIONS,
+    ...AVATAR_4DGS_TOOL_DECLARATIONS,
     ...COMFYUI_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS
@@ -94,6 +97,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...poseDepthHandlers,
     ...physicalCameraHandlers,
     ...tapir4dgsHandlers,
+    ...avatar4dgsHandlers,
     ...comfyuiHandlers,
     ...lensHandlers,
     ...browserHandlers

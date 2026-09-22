@@ -28,7 +28,10 @@ describe('VFX & FFmpeg Gemini Agent Tools', () => {
         'vfx_ffmpeg_seamless_loop',
         'vfx_ffmpeg_encode_sequence',
         'vfx_composite_patch',
-        'vfx_composite_timeline'
+        'vfx_composite_timeline',
+        'vfx_mediapipe_track_video_motion',
+        'vfx_video_auto_reframe',
+        'vfx_visual_critic_audit'
     ];
 
     it('declares all expected VFX, video editing, and compositor tools', () => {
@@ -278,6 +281,56 @@ describe('VFX & FFmpeg Gemini Agent Tools', () => {
             expect(res.resultPayload.success).toBe(true);
             expect((res.resultPayload as any).ffmpegCommand).toBeDefined();
             expect(res.summaryResult).toContain('multi-track timeline composite');
+        });
+
+        it('executes vfx_mediapipe_track_video_motion with dryRun', async () => {
+            const handler = vfxVideoHandlers['vfx_mediapipe_track_video_motion'];
+            const res = await handler({
+                videoPath: '/workspace/breakdance.mp4',
+                fps: 12,
+                duration: 2.0,
+                smoothingWindow: 3,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            const payload = res.resultPayload as any;
+            expect(payload.totalFramesAnalyzed).toBeGreaterThan(0);
+            expect(payload.frames[0].angles).toBeDefined();
+            expect(res.summaryResult).toContain('Planned motion tracking');
+        });
+
+        it('executes vfx_video_auto_reframe with dryRun', async () => {
+            const handler = vfxVideoHandlers['vfx_video_auto_reframe'];
+            const res = await handler({
+                inputVideoPath: '/workspace/action_shot.mp4',
+                targetAspectRatio: '9:16',
+                focusMode: 'body',
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            const payload = res.resultPayload as any;
+            expect(payload.targetAspectRatio).toBe('9:16');
+            expect(payload.cropDimensions.width).toBe(608);
+            expect(payload.cropDimensions.height).toBe(1080);
+            expect(res.summaryResult).toContain('Planned auto-reframe');
+        });
+
+        it('executes vfx_visual_critic_audit with dryRun', async () => {
+            const handler = vfxVideoHandlers['vfx_visual_critic_audit'];
+            const res = await handler({
+                videoPath: '/workspace/final_composite.mp4',
+                promptContext: 'Photorealistic Roman forum archway at sunset',
+                minPassingScore: 8.5,
+                dryRun: true
+            }, {} as any);
+
+            expect(res.resultPayload.success).toBe(true);
+            const payload = res.resultPayload as any;
+            expect(payload.overallScore).toBeGreaterThanOrEqual(8.5);
+            expect(payload.passed).toBe(true);
+            expect(res.summaryResult).toContain('Visual Critic audit: PASSED');
         });
     });
 

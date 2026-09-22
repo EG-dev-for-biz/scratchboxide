@@ -343,6 +343,7 @@ export function createGoogleStationImageGenerator(deps: {
     workspaceRoot: string;
     modelPriority?: string[];
     imageSize?: '1K' | '2K' | '4K';
+    fidelity?: 'draft' | 'production';
 }): StationImageGenerator {
     return {
         name: 'google-nano-banana',
@@ -354,7 +355,10 @@ export function createGoogleStationImageGenerator(deps: {
             const res = await deps.mediaService.generateImage({
                 kind: 'image', prompt: args.prompt, workspaceRoot: deps.workspaceRoot,
                 sourceAsset: refs[0], referenceAssets: refs.slice(1),
-                aspectRatio: args.aspectRatio, imageSize: deps.imageSize ?? '2K', modelPriority: deps.modelPriority
+                aspectRatio: args.aspectRatio,
+                imageSize: deps.imageSize ?? (deps.fidelity === 'draft' ? '1K' : '2K'),
+                modelPriority: deps.modelPriority,
+                fidelity: deps.fidelity
             });
             const out = await fs.readFile(deps.assetStore.resolve(deps.workspaceRoot, res.asset));
             // Ensure PNG (models may return JPEG): re-encode via decode if needed

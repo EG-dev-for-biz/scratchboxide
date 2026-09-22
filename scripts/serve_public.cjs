@@ -146,6 +146,64 @@ async function fetchGoogle3DTilesObject(queryOrCoords, options = {}) {
     });
 }
 
+function getFfmpegBin() {
+    if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+    if (fs.existsSync('/opt/homebrew/bin/ffmpeg')) return '/opt/homebrew/bin/ffmpeg';
+    if (fs.existsSync('/usr/local/bin/ffmpeg')) return '/usr/local/bin/ffmpeg';
+    return 'ffmpeg';
+}
+
+function extractVideoFrame(videoPath, timeSec, outPath) {
+    return new Promise((resolve, reject) => {
+        const bin = getFfmpegBin();
+        const args = ['-y', '-ss', String(timeSec), '-i', videoPath, '-vframes', '1', '-q:v', '2', outPath];
+        execFile(bin, args, (err, stdout, stderr) => {
+            if (err) return reject(new Error(`Failed to extract frame: ${err.message}`));
+            resolve(outPath);
+        });
+    });
+}
+
+function renderVideoBranch(options) {
+    return new Promise((resolve, reject) => {
+        const bin = getFfmpegBin();
+        const { inputVideoPath, forkTimeSec, totalDurationSec, atmosphere, action, outPath } = options;
+        const total = totalDurationSec || 15.0;
+        const fork = Math.max(0.1, Math.min(total - 0.5, forkTimeSec || 4.0));
+        const branchDuration = Math.min(8.0, total - fork);
+
+        let atmosFilter = 'eq=contrast=1.0:brightness=0.0:saturation=1.0';
+        if (atmosphere === 'neon_rain') {
+            atmosFilter = 'colorbalance=rm=0.25:gm=-0.1:bm=0.35,eq=contrast=1.25:saturation=1.4';
+        } else if (atmosphere === 'golden_hour') {
+            atmosFilter = 'colorbalance=rm=0.35:gm=0.1:bm=-0.25,eq=contrast=1.15:saturation=1.35';
+        } else if (atmosphere === 'blizzard') {
+            atmosFilter = 'colorbalance=rm=-0.2:gm=0.0:bm=0.3,eq=contrast=1.2:saturation=0.5';
+        } else if (atmosphere === 'volcanic_eclipse') {
+            atmosFilter = 'colorbalance=rm=0.5:gm=-0.25:bm=-0.3,eq=contrast=1.4:saturation=1.2';
+        }
+
+        const filterGraph = `[0:v]trim=0:${fork},setpts=PTS-STARTPTS[vroot];[0:v]trim=${fork}:${fork + branchDuration},setpts=PTS-STARTPTS,${atmosFilter}[vbranch];[vroot][vbranch]concat=n=2:v=1:a=0[vout]`;
+
+        const args = [
+            '-y',
+            '-i', inputVideoPath,
+            '-filter_complex', filterGraph,
+            '-map', '[vout]',
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'fast',
+            '-crf', '22',
+            outPath
+        ];
+
+        execFile(bin, args, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) return reject(new Error(`Failed to render branch: ${err.message}`));
+            resolve(outPath);
+        });
+    });
+}
+
 const server = http.createServer(async (req, res) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -369,6 +427,83 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
+    // Endpoint: Extract Video Frame at Timestamp for Mid-Clip Branching
+    if (req.method === 'POST' && reqPath === '/api/video-branch/extract-frame') {
+        try {
+            const body = await parseBody(req);
+            let inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
+            let resolvedVideo = path.join(REPO_ROOT, inputVideo.replace(/^\//, ''));
+            if (!fs.existsSync(resolvedVideo)) {
+                resolvedVideo = path.join(PUBLIC_DIR, inputVideo.replace(/^\//, ''));
+            }
+            if (!fs.existsSync(resolvedVideo)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Video not found: ${inputVideo}` }));
+                return;
+            }
+            const timeSec = parseFloat(body.timestampSec !== undefined ? body.timestampSec : 4.0);
+            const timestamp = Date.now();
+            const frameFilename = `branch_seed_${timestamp}_${Math.round(timeSec * 100)}.png`;
+            const framePath = path.join(UPLOADS_DIR, frameFilename);
+
+            await extractVideoFrame(resolvedVideo, timeSec, framePath);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                frameUrl: `/uploads/${frameFilename}`,
+                timestampSec: timeSec
+            }));
+            return;
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+        }
+    }
+
+    // Endpoint: Render Mid-Clip Video Branch Resynthesis
+    if (req.method === 'POST' && reqPath === '/api/video-branch/render-branch') {
+        try {
+            const body = await parseBody(req);
+            let inputVideo = body.videoPath || 'public/videos/plaza_hotel_omni_15s_720p.mp4';
+            let resolvedVideo = path.join(REPO_ROOT, inputVideo.replace(/^\//, ''));
+            if (!fs.existsSync(resolvedVideo)) {
+                resolvedVideo = path.join(PUBLIC_DIR, inputVideo.replace(/^\//, ''));
+            }
+            if (!fs.existsSync(resolvedVideo)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Video not found: ${inputVideo}` }));
+                return;
+            }
+
+            const timestamp = Date.now();
+            const outFilename = `branch_resynthesis_${timestamp}.mp4`;
+            const outPath = path.join(PUBLIC_DIR, 'videos', outFilename);
+
+            await renderVideoBranch({
+                inputVideoPath: resolvedVideo,
+                forkTimeSec: parseFloat(body.forkTimeSec !== undefined ? body.forkTimeSec : 4.0),
+                totalDurationSec: parseFloat(body.totalDurationSec !== undefined ? body.totalDurationSec : 15.0),
+                atmosphere: body.atmosphere || 'neon_rain',
+                action: body.action || 'anti_gravity',
+                outPath
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                branchVideoUrl: `/videos/${outFilename}`,
+                forkTimeSec: body.forkTimeSec,
+                promptDirective: body.promptDirective
+            }));
+            return;
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+        }
+    }
+
     // Endpoint: Save binary GLB mesh
     if (req.method === 'POST' && reqPath === '/api/save_glb') {
         const searchParams = new URLSearchParams(urlParts[1] || '');
@@ -407,13 +542,29 @@ const server = http.createServer(async (req, res) => {
         const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-        res.writeHead(200, {
-            'Content-Type': contentType,
-            'Content-Length': stats.size,
-            'Cache-Control': 'no-cache'
-        });
-
-        fs.createReadStream(filePath).pipe(res);
+        const range = req.headers.range;
+        if (range) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+            const chunksize = (end - start) + 1;
+            const stream = fs.createReadStream(filePath, { start, end });
+            res.writeHead(206, {
+                'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': contentType,
+            });
+            stream.pipe(res);
+        } else {
+            res.writeHead(200, {
+                'Content-Type': contentType,
+                'Content-Length': stats.size,
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-cache'
+            });
+            fs.createReadStream(filePath).pipe(res);
+        }
     });
 });
 
