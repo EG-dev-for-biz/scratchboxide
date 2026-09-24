@@ -239,7 +239,15 @@ private:
         float voxel = std::cbrt(volume / static_cast<float>(opts_.interiorBudget));
         voxel = std::max(voxel, node.bounds.maxExtent() / 512.0f);
 
-        struct Acc { Vec3 pos{0,0,0}; Vec3 col{0,0,0}; Vec3 scale{0,0,0}; float opacity{0}; float w{0}; Quat rot{0,0,0,1}; };
+        struct Acc {
+            Vec3 pos{0,0,0};
+            Vec3 col{0,0,0};
+            Vec3 scale{0,0,0};
+            float opacity{0};
+            float w{0};
+            Quat rot{0,0,0,1};
+            std::vector<float> sh;
+        };
         std::unordered_map<uint64_t, Acc> grid;
         grid.reserve(opts_.interiorBudget * 2);
         const float inv = 1.0f / voxel;
@@ -254,6 +262,10 @@ private:
             a.col = a.col + s.color * w;
             a.scale = a.scale + s.scale * w;
             a.opacity = std::max(a.opacity, s.opacity);
+            if (!s.sh.empty()) {
+                if (a.sh.empty()) a.sh.resize(s.sh.size(), 0.0f);
+                for (size_t k = 0; k < s.sh.size(); ++k) a.sh[k] += s.sh[k] * w;
+            }
             a.w += w;
         }
         std::vector<GaussianSplat> out;
@@ -269,6 +281,10 @@ private:
             g.scale = Vec3(std::max(meanScale.x, minSigma), std::max(meanScale.y, minSigma), std::max(meanScale.z * 0.5f, minSigma * 0.25f));
             g.rotation = a.rot;
             g.opacity = a.opacity;
+            if (!a.sh.empty()) {
+                g.sh.resize(a.sh.size());
+                for (size_t k = 0; k < a.sh.size(); ++k) g.sh[k] = a.sh[k] * inw;
+            }
             out.push_back(g);
         }
         return out;
@@ -302,8 +318,8 @@ private:
 
 class SplatTileGlbWriter {
 public:
-    static std::vector<uint8_t> write(const std::vector<GaussianSplat>& splats, const std::string& generator = "scratchbox-splat-3dtiles") {
-        std::vector<uint8_t> spzBlob = spz::SpzCodec::encode(splats);
+    static std::vector<uint8_t> write(const std::vector<GaussianSplat>& splats, const std::string& generator = "scratchbox-splat-3dtiles", uint8_t shDegree = 0) {
+        std::vector<uint8_t> spzBlob = spz::SpzCodec::encode(splats, spz::SpzCodec::DEFAULT_FRACTIONAL_BITS, shDegree);
         const size_t n = splats.size();
 
         Aabb pb;
@@ -325,7 +341,11 @@ public:
            << "\"nodes\":[{\"mesh\":0,\"name\":\"GaussianSplats\"}],"
            << "\"meshes\":[{\"primitives\":[{"
            << "\"mode\":0,"
-           << "\"attributes\":{\"POSITION\":0,\"COLOR_0\":1,\"KHR_gaussian_splatting:SCALE\":2,\"KHR_gaussian_splatting:ROTATION\":3,\"KHR_gaussian_splatting:OPACITY\":4},"
+           << "\"attributes\":{\"POSITION\":0,\"COLOR_0\":1,\"KHR_gaussian_splatting:SCALE\":2,\"KHR_gaussian_splatting:ROTATION\":3,\"KHR_gaussian_splatting:OPACITY\":4";
+        if (shDegree > 0) {
+            js << ",\"KHR_gaussian_splatting:SPHERICAL_HARMONICS\":5";
+        }
+        js << "},"
            << "\"extensions\":{\"KHR_gaussian_splatting\":{\"kernel\":\"ellipse\",\"colorSpace\":\"srgb_rec709_display\","
            << "\"extensions\":{\"KHR_gaussian_splatting_compression_spz_2\":{\"bufferView\":0}}}}"
            << "}]}],"
@@ -335,8 +355,12 @@ public:
            << "{\"componentType\":5121,\"normalized\":true,\"count\":" << n << ",\"type\":\"VEC4\"},"
            << "{\"componentType\":5126,\"count\":" << n << ",\"type\":\"VEC3\"},"
            << "{\"componentType\":5126,\"count\":" << n << ",\"type\":\"VEC4\"},"
-           << "{\"componentType\":5126,\"count\":" << n << ",\"type\":\"SCALAR\"}"
-           << "],"
+           << "{\"componentType\":5126,\"count\":" << n << ",\"type\":\"SCALAR\"}";
+        if (shDegree > 0) {
+            size_t shDim = (shDegree == 1) ? 3 : (shDegree == 2) ? 8 : (shDegree == 3) ? 15 : 0;
+            js << ",{\"componentType\":5126,\"count\":" << (n * shDim) << ",\"type\":\"VEC3\"}";
+        }
+        js << "],"
            << "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":" << spzBlob.size() << "}],"
            << "\"buffers\":[{\"byteLength\":" << binLen << "}]"
            << "}";

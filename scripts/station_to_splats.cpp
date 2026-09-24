@@ -63,7 +63,7 @@ static bool jsonVec3(const std::string& s, const std::string& key, Vec3& out) {
     return true;
 }
 
-static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
+static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
     auto t0 = std::chrono::high_resolution_clock::now();
     std::ifstream listFile(listPath);
     if (!listFile.is_open()) {
@@ -118,20 +118,79 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         bool isGround = false;
         Vec3 normal{0.0f, 1.0f, 0.0f};
         float sigma = 0.05f;
+        int viewCount = 1;
+        float maxColorDelta = 0.0f;
     };
     std::unordered_map<VoxelKey, VoxelEntry, VoxelKeyHash> grid;
     float invVoxel = 1.0f / std::max(0.001f, voxelSize);
     size_t totalInputSplats = 0;
     size_t normalPruned = 0;
 
+    struct LoadedStation {
+        StationEntry entry;
+        std::vector<GaussianSplat> splats;
+        Vec3 meanColor{0.0f, 0.0f, 0.0f};
+        float meanLuma = 0.0f;
+    };
+    std::vector<LoadedStation> stations;
+    stations.reserve(splatEntries.size());
+
+    Vec3 globalTargetColor(0.0f, 0.0f, 0.0f);
+    size_t validStations = 0;
+
     for (const auto& entry : splatEntries) {
         std::vector<uint8_t> bytes = readAll(entry.path);
         if (bytes.empty()) continue;
-        std::vector<GaussianSplat> stationSplats = SplatCodec::decode(bytes.data(), bytes.size());
-        totalInputSplats += stationSplats.size();
-        const float wGround = 1.0f / (entry.altitude + 1.0f);
+        LoadedStation st;
+        st.entry = entry;
+        st.splats = SplatCodec::decode(bytes.data(), bytes.size());
+        if (st.splats.empty()) continue;
 
-        for (const auto& s : stationSplats) {
+        double sumR = 0.0, sumG = 0.0, sumB = 0.0;
+        size_t sampleCount = 0;
+        for (const auto& s : st.splats) {
+            float distH = std::hypot(s.position.x, s.position.z);
+            if (cropRadius > 0.0f && distH > cropRadius) continue;
+            if (s.position.y > 0.5f && s.position.y < 45.0f) {
+                sumR += s.color.x;
+                sumG += s.color.y;
+                sumB += s.color.z;
+                sampleCount++;
+            }
+        }
+        if (sampleCount > 200) {
+            st.meanColor = Vec3(float(sumR / sampleCount), float(sumG / sampleCount), float(sumB / sampleCount));
+            st.meanLuma = 0.299f * st.meanColor.x + 0.587f * st.meanColor.y + 0.114f * st.meanColor.z;
+            globalTargetColor = globalTargetColor + st.meanColor;
+            validStations++;
+        }
+        stations.push_back(std::move(st));
+    }
+
+    if (validStations > 0) {
+        globalTargetColor = globalTargetColor * (1.0f / float(validStations));
+        if (!stations.empty() && stations[0].meanLuma > 0.1f) {
+            globalTargetColor = globalTargetColor * 0.35f + stations[0].meanColor * 0.65f;
+        }
+    } else {
+        globalTargetColor = Vec3(0.50f, 0.45f, 0.38f);
+    }
+
+    for (auto& st : stations) {
+        Vec3 scale(1.0f, 1.0f, 1.0f);
+        if (st.meanLuma > 0.05f) {
+            scale.x = std::clamp(globalTargetColor.x / std::max(0.05f, st.meanColor.x), 0.65f, 1.55f);
+            scale.y = std::clamp(globalTargetColor.y / std::max(0.05f, st.meanColor.y), 0.65f, 1.55f);
+            scale.z = std::clamp(globalTargetColor.z / std::max(0.05f, st.meanColor.z), 0.65f, 1.55f);
+        }
+        totalInputSplats += st.splats.size();
+        const float wGround = 1.0f / (st.entry.altitude + 1.0f);
+
+        for (auto& s : st.splats) {
+            s.color.x = std::clamp(s.color.x * scale.x, 0.0f, 1.0f);
+            s.color.y = std::clamp(s.color.y * scale.y, 0.0f, 1.0f);
+            s.color.z = std::clamp(s.color.z * scale.z, 0.0f, 1.0f);
+
             float distH = std::hypot(s.position.x, s.position.z);
             if (cropRadius > 0.0f && distH > cropRadius) continue;
             if (excludeUnderside && s.position.y < minGroundY) continue;
@@ -170,40 +229,57 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
 
             auto it = grid.find(key);
             if (it == grid.end()) {
-                grid[key] = {s, wGround, isGround, sNormal, sSigma};
+                // Prevent macro anchors (altitude >= 50m) from inserting coarse blurry splats into the entire landmark zone
+                const float macroCropH = cropRadius > 0.0f ? cropRadius : 115.0f;
+                if (st.entry.altitude >= 50.0f && s.position.y < 45.0f && distH < macroCropH) {
+                    continue;
+                }
+                grid[key] = {s, wGround, isGround, sNormal, sSigma, 1, 0.0f};
             } else {
                 auto& existing = it->second;
+                existing.viewCount++;
+                float cdx = std::abs(s.color.x - existing.splat.color.x);
+                float cdy = std::abs(s.color.y - existing.splat.color.y);
+                float cdz = std::abs(s.color.z - existing.splat.color.z);
+                float maxDelta = std::max({cdx, cdy, cdz}) * 255.0f;
+                existing.maxColorDelta = std::max(existing.maxColorDelta, maxDelta);
+
                 // Voxel Normal Consensus Check / Prune
                 const float normalDot = sNormal.dot(existing.normal);
                 if (normalDot < normalPruneCos) {
                     // Conflicting normal orientations across views
                     // The view with smaller scale / higher sharpness / higher weight wins, outlier is pruned
                     if (sSigma < existing.sigma * 0.85f || wGround > existing.wGround * 1.25f) {
-                        existing = {s, wGround, isGround, sNormal, sSigma};
+                        existing = {s, wGround, isGround, sNormal, sSigma, existing.viewCount, existing.maxColorDelta};
                     }
                     normalPruned++;
                     continue;
                 }
 
+                // Blend color smoothly across consistent multi-view observations
+                float blendWeight = 1.0f / float(existing.viewCount);
+                existing.splat.color = existing.splat.color * (1.0f - blendWeight) + s.color * blendWeight;
+
+                float ea = std::max(existing.splat.scale.x, existing.splat.scale.y) / std::max(1e-6f, std::min(existing.splat.scale.x, existing.splat.scale.y));
                 if (isGround && existing.isGround) {
                     // Multi-Scale Ground Paver Resolution weighting:
-                    // Street-level ground splats (w_ground = 1.0 / (altitude + 1.0)) override low-res aerial splats
-                    if (wGround > existing.wGround * 1.15f) {
-                        existing = {s, wGround, isGround, sNormal, sSigma};
-                    } else if (wGround >= existing.wGround * 0.85f) {
-                        float ea = std::max(existing.splat.scale.x, existing.splat.scale.y) / std::max(1e-6f, std::min(existing.splat.scale.x, existing.splat.scale.y));
-                        if (sa < ea * 0.9f) {
-                            existing = {s, wGround, isGround, sNormal, sSigma};
-                        } else if (sa <= ea * 1.1f) {
-                            existing.splat.color = (existing.splat.color + s.color) * 0.5f;
-                        }
+                    // Street-level ground splats (lower sigma, higher wGround) override low-res aerial splats
+                    if (sSigma < existing.sigma * 0.85f || (wGround > existing.wGround * 1.15f && sSigma <= existing.sigma * 1.25f)) {
+                        existing = {s, wGround, isGround, sNormal, sSigma, existing.viewCount, existing.maxColorDelta};
+                    } else if (sSigma <= existing.sigma * 1.15f && sa < ea * 0.85f) {
+                        existing = {s, wGround, isGround, sNormal, sSigma, existing.viewCount, existing.maxColorDelta};
                     }
                 } else {
-                    float ea = std::max(existing.splat.scale.x, existing.splat.scale.y) / std::max(1e-6f, std::min(existing.splat.scale.x, existing.splat.scale.y));
-                    if (sa < ea * 0.9f) {
-                        existing = {s, wGround, isGround, sNormal, sSigma};
-                    } else if (sa <= ea * 1.1f) {
-                        existing.splat.color = (existing.splat.color + s.color) * 0.5f;
+                    // Multi-Tier GSD Resolution Priority:
+                    // Finer splats (lower physical sigma / closer standoff) strictly take precedence over coarse macro splats.
+                    // Coarse macro splats (sSigma > existing.sigma * 1.15f) can NEVER overwrite fine facade splats.
+                    if (sSigma < existing.sigma * 0.85f) {
+                        existing = {s, wGround, isGround, sNormal, sSigma, existing.viewCount, existing.maxColorDelta};
+                    } else if (sSigma <= existing.sigma * 1.15f) {
+                        // Comparable resolution: prefer the more perpendicular viewing ray or higher ground weight
+                        if (sa < ea * 0.85f || wGround > existing.wGround * 1.20f) {
+                            existing = {s, wGround, isGround, sNormal, sSigma, existing.viewCount, existing.maxColorDelta};
+                        }
                     }
                 }
             }
@@ -214,6 +290,9 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
     fused.reserve(grid.size());
     Vec3 bMin(1e9f, 1e9f, 1e9f), bMax(-1e9f, -1e9f, -1e9f);
     for (auto& pair : grid) {
+        if (dropInconsistent && pair.second.viewCount >= 2 && pair.second.maxColorDelta > colorConsistencyThresh) {
+            continue;
+        }
         const auto& s = pair.second.splat;
         bMin.x = std::min(bMin.x, s.position.x);
         bMin.y = std::min(bMin.y, s.position.y);
@@ -500,12 +579,18 @@ static std::vector<float> computeEffectiveDepth(
 int main(int argc, char** argv) {
     std::string rgbPath, depthPath, posePath, outSplat, outSpz, fuseListPath, neuralDepthPath;
     int W = 0, H = 0, stride = 1, smoothRadius = 15;
-    float sigmaScale = 1.15f, tau = 0.08f, maxDepth = 400.0f, minCosIncidence = 0.05f, voxelSize = 0.20f, cropRadius = 0.0f, minGroundY = -0.05f;
+    float sigmaScale = -1.0f, tau = 0.08f, maxDepth = 400.0f, minCosIncidence = 0.20f, voxelSize = 0.05f, cropRadius = 0.0f, minGroundY = -0.05f;
     float cavityDepth = 0.0f, cavityLum = 0.18f;
     float cameraAltitude = -1.0f;
     float neuralDepthWeight = 1.0f, maxDeltaZ = 3.5f, normalPruneCos = 0.0f;
     std::string foliageMode = "drop";
+    int erodeSilhouettePx = 2;
+    bool dropInconsistent = false;
+    float colorConsistencyThresh = 40.0f;
     bool emitJson = false, dropFoliage = false, excludeUnderside = true, enableHybridMicroDepth = false, enablePhotometricMicroDepth = false;
+    bool use2dgsPlanarSurfel = false;
+    float exposureScale = 1.0f;
+    int shDegree = 0;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&](std::string& dst) { if (i + 1 < argc) dst = argv[++i]; };
@@ -528,6 +613,9 @@ int main(int argc, char** argv) {
         else if (a == "--cavity-lum" && i + 1 < argc) cavityLum = std::stof(argv[++i]);
         else if (a == "--station-altitude" && i + 1 < argc) cameraAltitude = std::stof(argv[++i]);
         else if (a == "--foliage-mode" && i + 1 < argc) foliageMode = argv[++i];
+        else if (a == "--erode-silhouette" && i + 1 < argc) erodeSilhouettePx = std::stoi(argv[++i]);
+        else if (a == "--drop-inconsistent") dropInconsistent = true;
+        else if (a == "--color-consistency-thresh" && i + 1 < argc) colorConsistencyThresh = std::stof(argv[++i]);
         else if (a == "--width" && i + 1 < argc) W = std::stoi(argv[++i]);
         else if (a == "--height" && i + 1 < argc) H = std::stoi(argv[++i]);
         else if (a == "--stride" && i + 1 < argc) stride = std::max(1, std::stoi(argv[++i]));
@@ -539,17 +627,27 @@ int main(int argc, char** argv) {
         else if (a == "--exclude-underside") excludeUnderside = true;
         else if (a == "--include-underside") excludeUnderside = false;
         else if (a == "--min-y" && i + 1 < argc) minGroundY = std::stof(argv[++i]);
+        else if (a == "--2dgs" || (a == "--surface-model" && i + 1 < argc && std::string(argv[i+1]) == "planar")) {
+            use2dgsPlanarSurfel = true;
+            if (a == "--surface-model") ++i;
+        }
+        else if (a == "--exposure-scale" && i + 1 < argc) exposureScale = std::stof(argv[++i]);
+        else if (a == "--sh-degree" && i + 1 < argc) shDegree = std::clamp(std::stoi(argv[++i]), 0, 3);
         else if (a == "--json") emitJson = true;
     }
 
     if (!fuseListPath.empty()) {
-        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, outSplat, outSpz, emitJson);
+        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, outSplat, outSpz, emitJson);
     }
 
     if (rgbPath.empty() || depthPath.empty() || posePath.empty() || (outSplat.empty() && outSpz.empty()) || W <= 0 || H <= 0) {
         std::cerr << "Usage: station_to_splats --rgb rgb24.raw --depth depth.f32 --width W --height H --pose pose.json --out-splat out.splat [--out-spz out.spz] [--stride 1] [--sigma-scale 0.35] [--tau 0.08] [--min-cos-incidence 0.15] [--cavity-depth 3.5] [--station-altitude 3.5] [--drop-foliage] [--photometric-micro-depth] [--json]" << std::endl;
         std::cerr << "   or: station_to_splats --fuse-list list.txt --voxel-size 0.20 [--crop-radius 115.0] [--normal-prune-cos 0.35] [--drop-foliage] --out-splat fused.splat [--out-spz fused.spz] [--json]" << std::endl;
         return 1;
+    }
+
+    if ((enablePhotometricMicroDepth || enableHybridMicroDepth) && cavityDepth <= 0.0f) {
+        cavityDepth = 3.5f;
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();
@@ -570,7 +668,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (cameraAltitude < 0.0f) {
-        cameraAltitude = eye.y;
+        if (!jsonNumber(pose, "cameraAltitude", cameraAltitude)) {
+            cameraAltitude = eye.y;
+        }
     }
 
     // Hybrid Micro-Depth Displacement: Compute effective depth buffer
@@ -581,10 +681,41 @@ int main(int argc, char** argv) {
         neuralDepthWeight, maxDeltaZ, smoothRadius, cavityDepth, cavityLum, microDisplacedCount
     );
 
+    // Silhouette sky-bleed elimination: erode foreground validity mask by erodeSilhouettePx
+    std::vector<uint8_t> foregroundMask(W * H, 0);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            float d = effectiveDepth[y * W + x];
+            if (d > 0.05f && d < maxDepth && d < 1e8f) {
+                foregroundMask[y * W + x] = 1;
+            }
+        }
+    }
+    std::vector<uint8_t> validMask = foregroundMask;
+    if (erodeSilhouettePx > 0) {
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                if (!foregroundMask[y * W + x]) continue;
+                bool keep = true;
+                for (int dy = -erodeSilhouettePx; dy <= erodeSilhouettePx && keep; ++dy) {
+                    int ny = y + dy;
+                    if (ny < 0 || ny >= H) { keep = false; break; }
+                    for (int dx = -erodeSilhouettePx; dx <= erodeSilhouettePx; ++dx) {
+                        int nx = x + dx;
+                        if (nx < 0 || nx >= W || !foregroundMask[ny * W + nx]) {
+                            keep = false;
+                            break;
+                        }
+                    }
+                }
+                if (!keep) validMask[y * W + x] = 0;
+            }
+        }
+    }
+
     auto valid = [&](int u, int v) -> bool {
         if (u < 0 || v < 0 || u >= W || v >= H) return false;
-        float d = effectiveDepth[v * W + u];
-        return d > 0.05f && d < maxDepth && d < 1e8f;
+        return validMask[v * W + u] == 1;
     };
     auto world = [&](int u, int v) -> Vec3 {
         float z = effectiveDepth[v * W + u];
@@ -686,12 +817,18 @@ int main(int argc, char** argv) {
                 cavitiesCarved++;
             }
 
+            // Dynamic Splat Scaling by Camera Altitude:
+            // Tier 1 street stations use tighter sigma (0.45) to prevent disc bloat,
+            // Tier 2 facade stations use 0.70, and Tier 3 aerial uses 0.95
+            const float tierSigmaScale = (cameraAltitude <= 10.0f) ? 0.45f : ((cameraAltitude <= 40.0f) ? 0.70f : 0.95f);
+            const float effectiveSigmaScale = (sigmaScale > 0.0f) ? sigmaScale : tierSigmaScale;
+
             // Multi-Scale Ground Paver Synthesis for Tier 1 street stations:
             // Tight ground footprint stride (stride = 1) on surfaces where |n.y| > 0.85
             const bool isGround = (std::fabs(n.y) > 0.85f);
             const float effectiveStride = (cameraAltitude <= 10.0f && isGround) ? 1.0f : static_cast<float>(stride);
             const float spacing = z / fx * effectiveStride;
-            float sigma = spacing * sigmaScale;
+            float sigma = spacing * effectiveSigmaScale;
             if (isolated) sigma *= 0.6f;
             if (isOrganic) sigma *= 0.5f;
             // Foreshortening compensation along the steepest direction (cap 2x)
@@ -713,12 +850,30 @@ int main(int argc, char** argv) {
                 s1 = sigma * elong;
             }
 
+            float sz = std::max(0.001f, sigma * 0.12f);
+            if (use2dgsPlanarSurfel) {
+                sz = 0.0001f;
+            }
+            float rCol = (rgb[ci] / 255.0f) * exposureScale;
+            float gCol = (rgb[ci + 1] / 255.0f) * exposureScale;
+            float bCol = (rgb[ci + 2] / 255.0f) * exposureScale;
+
             GaussianSplat s;
             s.position = p;
-            s.scale = Vec3(s1, s2, std::max(0.001f, sigma * 0.12f));
+            s.scale = Vec3(s1, s2, sz);
             s.rotation = depthbox::DepthToGaussianEngine::quatFromBasis(t1, t2, n).normalized();
-            s.color = Vec3(rgb[ci] / 255.0f, rgb[ci + 1] / 255.0f, rgb[ci + 2] / 255.0f);
+            s.color = Vec3(std::clamp(rCol, 0.0f, 1.0f), std::clamp(gCol, 0.0f, 1.0f), std::clamp(bCol, 0.0f, 1.0f));
             s.opacity = channels == 4 ? rgb[ci + 3] / 255.0f : 1.0f;
+            if (shDegree > 0) {
+                s.sh.resize(9, 0.0f);
+                Vec3 rDir = toCam - n * (2.0f * toCam.dot(n));
+                float shScale = 0.15f;
+                for (int c = 0; c < 3; ++c) {
+                    s.sh[c * 3 + 0] = rDir.y * shScale;
+                    s.sh[c * 3 + 1] = rDir.z * shScale;
+                    s.sh[c * 3 + 2] = rDir.x * shScale;
+                }
+            }
             splats.push_back(s);
         }
     }
@@ -730,7 +885,7 @@ int main(int argc, char** argv) {
         splatBytes = bytes.size();
     }
     if (!outSpz.empty()) {
-        std::vector<uint8_t> bytes = SpzCodec::encode(splats);
+        std::vector<uint8_t> bytes = SpzCodec::encode(splats, SpzCodec::DEFAULT_FRACTIONAL_BITS, static_cast<uint8_t>(shDegree));
         std::ofstream o(outSpz, std::ios::binary); o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         spzBytes = bytes.size();
     }

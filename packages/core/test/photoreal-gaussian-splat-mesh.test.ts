@@ -74,7 +74,8 @@ describe('PhotorealGaussianSplatMesh & Spatial Engine Integration', () => {
       focalLengthMm: 35.0,
       apertureFStop: 1.8,
       dofStrength: 0.5,
-      contactAO: 0.8
+      contactAO: 0.8,
+      contactShadow: true
     });
 
     expect(splatMesh.isPhotorealGaussianSplatMesh).toBe(true);

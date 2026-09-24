@@ -75,6 +75,11 @@ export function stationToPinhole(pose: ColmapCameraPose, width: number, height: 
 }
 
 /** Builds a station from an eye position and look-at target (local frame). */
+export function normalizeAnchor(anchor: GeodeticAnchor): GeodeticAnchor {
+  const elevation = anchor.elevationMeters ?? (anchor as any).altMeters ?? (anchor as any).altitudeMeters ?? 0;
+  return { ...anchor, elevationMeters: elevation };
+}
+
 export function stationFromLookAt(
   id: number,
   eye: V3,
@@ -83,7 +88,8 @@ export function stationFromLookAt(
   anchor: GeodeticAnchor,
   extras: Partial<ColmapCameraPose> = {}
 ): ColmapCameraPose {
-  const ltp = new LocalTangentPlane({ lat: anchor.lat, lng: anchor.lng, alt: anchor.elevationMeters });
+  const safeAnchor = normalizeAnchor(anchor);
+  const ltp = new LocalTangentPlane({ lat: safeAnchor.lat, lng: safeAnchor.lng, alt: safeAnchor.elevationMeters });
   const fwd = norm([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
   const { yawDegrees, pitchDegrees } = yawPitchFromForward(fwd);
   const fov = horizontalFovDegrees(optics.focalLengthMm, optics.sensorWidthMm);
@@ -102,9 +108,10 @@ export function stationFromLookAt(
     sensorWidthMm: optics.sensorWidthMm,
     fovDegrees: Number(fov.toFixed(4)),
     aspectRatio: optics.aspectRatio ?? 16 / 9,
-    coordinatesWGS84: { lat: Number(wgs.lat.toFixed(8)), lng: Number(wgs.lng.toFixed(8)), elevation: Number((wgs.alt ?? anchor.elevationMeters + eye[1]).toFixed(3)) },
-    groundElevationASL: anchor.elevationMeters,
+    coordinatesWGS84: { lat: Number(wgs.lat.toFixed(8)), lng: Number(wgs.lng.toFixed(8)), elevation: Number((wgs.alt ?? safeAnchor.elevationMeters + eye[1]).toFixed(3)) },
+    groundElevationASL: safeAnchor.elevationMeters,
     cameraHeightAboveGround: Number(eye[1].toFixed(3)),
+    cameraAltitude: Number(eye[1].toFixed(3)),
     frustumFootprintWGS84: SurveySynthesisEngine.frustumGroundFootprint(eye, fwd, fov, optics.aspectRatio ?? 16 / 9, ltp),
     ...extras
   };
@@ -119,6 +126,7 @@ export interface RankOptions {
 export class SurveySynthesisEngine {
   /** Procedural survey pattern around an anchor. Zero presets: every parameter comes from the config. */
   synthesize(anchor: GeodeticAnchor, config: SurveyPatternConfig): ColmapCameraPose[] {
+    const safeAnchor = normalizeAnchor(anchor);
     const count = Math.max(3, config.cameraCount || 15);
     const radius = Math.max(10, config.targetRadiusMeters || 120);
     const optics: StationOptics = { focalLengthMm: config.focalLengthMm || 35, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
@@ -128,28 +136,171 @@ export class SurveySynthesisEngine {
     const minGroundClearance = Math.max(0.5, config.minCameraHeightAboveGroundMeters ?? 1.5);
 
     switch (config.type) {
+      case 'foveated-multi-tier': {
+        // 3-Tier Foveated Survey Pattern (weighted to Tiers 1 & 2 for high facade resolution):
+        // Tier 1 (Street Walkway): 12 stations at Y = 2-4m (3.0m), standoff 20-30m, 50mm lens
+        // Tier 2 (Facade Ring): 8 stations at Y = 25-35m (30.0m), standoff 40-60m, 35mm lens
+        // Tier 3 (Perimeter/Macro Orbit): 4 stations at Y = 75m, macro standoff, 24mm lens
+        const tierCounts = count === 24 ? [12, 8, 4] : [Math.ceil(count * 0.5), Math.ceil(count * 0.33), Math.max(1, count - Math.ceil(count * 0.5) - Math.ceil(count * 0.33))];
+        const defaultRadii = [
+          Math.max(15, Math.min(radius * 0.35, 25)),
+          Math.max(35, Math.min(radius * 0.65, 50)),
+          Math.max(90, Math.min(radius * 1.15, 120))
+        ];
+        const defaultAlts = [Math.max(minGroundClearance, 3.0), 30.0, 75.0];
+        const defaultTargets: V3[] = [
+          [lookAt[0], 6.0, lookAt[2]],
+          [lookAt[0], 28.0, lookAt[2]],
+          [lookAt[0], 20.0, lookAt[2]]
+        ];
+        const defaultFocals = [50, 35, 24];
+        const tierNames = ['TIER_1_STREET', 'TIER_2_FACADE', 'TIER_3_AERIAL'];
+
+        let id = 1;
+        for (let t = 0; t < 3 && poses.length < count; t++) {
+          const tCount = tierCounts[t];
+          const tRadius = config.tierRadiiMeters && config.tierRadiiMeters[t] !== undefined
+            ? config.tierRadiiMeters[t]
+            : defaultRadii[t];
+          const tAlt = config.altitudeTiersMeters && config.altitudeTiersMeters[t] !== undefined
+            ? Math.max(minGroundClearance, config.altitudeTiersMeters[t] - safeAnchor.elevationMeters)
+            : defaultAlts[t];
+          const tTarget: V3 = config.lookAtTiersOffsetLocalENU && config.lookAtTiersOffsetLocalENU[t]
+            ? config.lookAtTiersOffsetLocalENU[t]
+            : defaultTargets[t];
+          const tFocal = defaultFocals[t];
+
+          const tierOptics: StationOptics = {
+            focalLengthMm: tFocal,
+            sensorWidthMm: config.sensorWidthMm || 36,
+            aspectRatio: config.aspectRatio ?? 16 / 9
+          };
+          const offset = t * (Math.PI / Math.max(1, tCount));
+          for (let i = 0; i < tCount && poses.length < count; i++) {
+            const theta = (2 * Math.PI * i) / tCount + offset;
+            const eye: V3 = [tTarget[0] + tRadius * Math.sin(theta), tAlt, tTarget[2] + tRadius * Math.cos(theta)];
+            poses.push(stationFromLookAt(id, eye, tTarget, tierOptics, safeAnchor, {
+              name: `ORBIT_${tierNames[t]}_STATION_${String(id).padStart(2, '0')}`,
+              cameraAltitude: tAlt,
+              cameraHeightAboveGround: tAlt
+            }));
+            id++;
+          }
+        }
+        break;
+      }
+
+      case 'amphitheatre-complete': {
+        // 6-Tier Amphitheatre & Monument Watertight Survey Pattern:
+        // Tier 1 (Street Walkway & Doric Arches): 24 stations at Y = 3.5m, radius 110m, look at Y = 6m, 35mm lens
+        // Tier 2 (Exterior Mid-Facade): 24 stations at Y = 20.0m, radius 130m, look at Y = 22m, 35mm lens
+        // Tier 3 (Exterior Upper Attic): 16 stations at Y = 38.0m, radius 150m, look at Y = 44m, 50mm lens
+        // Tier 4 (Arena Floor & Hypogeum Rim): 16 stations at Y = 4.5m, radius 28m, looking OUTWARD/UP at seating, 24mm lens
+        // Tier 5 (Interior Mid-Cavea Seating Ring): 16 stations at Y = 20.0m, radius 55m, looking ACROSS/DOWN, 28mm lens
+        // Tier 6 (Oblique Attic Rim & Cornice): 16 stations at Y = 65.0m, radius 85m, looking DOWN at top rim, 35mm lens
+        let tierAllocations: { name: string; count: number; altENU: number; radius: number; focalLengthMm: number; mode: 'inward' | 'outward-up' | 'across-down' | 'rim-down'; targetY: number }[];
+
+        if (count <= 40) {
+          tierAllocations = [
+            { name: 'TIER_1_STREET', count: 12, altENU: Math.max(minGroundClearance, 3.5), radius: 110, focalLengthMm: 35, mode: 'inward', targetY: 6.0 },
+            { name: 'TIER_2_FACADE', count: 8, altENU: 20.0, radius: 130, focalLengthMm: 35, mode: 'inward', targetY: 22.0 },
+            { name: 'TIER_3_ATTIC', count: 4, altENU: 38.0, radius: 150, focalLengthMm: 50, mode: 'inward', targetY: 44.0 },
+            { name: 'TIER_4_ARENA_FLOOR', count: 8, altENU: 4.5, radius: 28, focalLengthMm: 24, mode: 'outward-up', targetY: 22.0 },
+            { name: 'TIER_5_CAVEA_SEATING', count: 8, altENU: 20.0, radius: 55, focalLengthMm: 28, mode: 'across-down', targetY: 8.0 }
+          ];
+        } else {
+          const baseCounts = count === 112 ? [24, 24, 16, 16, 16, 16] : [
+            Math.round(count * 0.22),
+            Math.round(count * 0.22),
+            Math.round(count * 0.14),
+            Math.round(count * 0.14),
+            Math.round(count * 0.14),
+            Math.max(1, count - 2 * Math.round(count * 0.22) - 3 * Math.round(count * 0.14))
+          ];
+          tierAllocations = [
+            { name: 'TIER_1_STREET', count: baseCounts[0], altENU: Math.max(minGroundClearance, 3.5), radius: 110, focalLengthMm: 35, mode: 'inward', targetY: 6.0 },
+            { name: 'TIER_2_FACADE', count: baseCounts[1], altENU: 20.0, radius: 130, focalLengthMm: 35, mode: 'inward', targetY: 22.0 },
+            { name: 'TIER_3_ATTIC', count: baseCounts[2], altENU: 38.0, radius: 150, focalLengthMm: 50, mode: 'inward', targetY: 44.0 },
+            { name: 'TIER_4_ARENA_FLOOR', count: baseCounts[3], altENU: 4.5, radius: 28, focalLengthMm: 24, mode: 'outward-up', targetY: 22.0 },
+            { name: 'TIER_5_CAVEA_SEATING', count: baseCounts[4], altENU: 20.0, radius: 55, focalLengthMm: 28, mode: 'across-down', targetY: 8.0 },
+            { name: 'TIER_6_RIM_SURVEY', count: baseCounts[5], altENU: 65.0, radius: 85, focalLengthMm: 35, mode: 'rim-down', targetY: 35.0 }
+          ];
+        }
+
+        const arXZ = config.aspectRatioXZ && config.aspectRatioXZ > 0 ? config.aspectRatioXZ : 1.0;
+        const scaleX = Math.sqrt(arXZ);
+        const scaleZ = 1.0 / Math.sqrt(arXZ);
+
+        let id = 1;
+        for (let t = 0; t < tierAllocations.length && poses.length < count; t++) {
+          const tier = tierAllocations[t];
+          const tierOptics: StationOptics = {
+            focalLengthMm: tier.focalLengthMm,
+            sensorWidthMm: config.sensorWidthMm || 36,
+            aspectRatio: config.aspectRatio ?? 16 / 9
+          };
+          const offset = t * (Math.PI / Math.max(1, tier.count));
+          for (let i = 0; i < tier.count && poses.length < count; i++) {
+            const theta = (2 * Math.PI * i) / tier.count + offset;
+            const eyeX = lookAt[0] + tier.radius * scaleX * Math.sin(theta);
+            const eyeY = tier.altENU;
+            const eyeZ = lookAt[2] + tier.radius * scaleZ * Math.cos(theta);
+            const eye: V3 = [eyeX, eyeY, eyeZ];
+
+            let target: V3;
+            if (tier.mode === 'inward') {
+              target = [lookAt[0], tier.targetY, lookAt[2]];
+            } else if (tier.mode === 'outward-up') {
+              const lookDist = 75.0;
+              target = [lookAt[0] + lookDist * scaleX * Math.sin(theta), tier.targetY, lookAt[2] + lookDist * scaleZ * Math.cos(theta)];
+            } else if (tier.mode === 'across-down') {
+              const oppositeDist = 25.0;
+              target = [lookAt[0] - oppositeDist * scaleX * Math.sin(theta), tier.targetY, lookAt[2] - oppositeDist * scaleZ * Math.cos(theta)];
+            } else {
+              target = [lookAt[0] + tier.radius * 0.85 * scaleX * Math.sin(theta), tier.targetY, lookAt[2] + tier.radius * 0.85 * scaleZ * Math.cos(theta)];
+            }
+
+            poses.push(stationFromLookAt(id, eye, target, tierOptics, safeAnchor, {
+              name: `AMPHITHEATRE_${tier.name}_STATION_${String(id).padStart(2, '0')}`,
+              cameraAltitude: eyeY,
+              cameraHeightAboveGround: eyeY
+            }));
+            id++;
+          }
+        }
+        break;
+      }
+
       case 'orbital-multi-tier': {
-        const isMacro28 = count === 28 || (radius >= 100 && count >= 24 && (!config.altitudeTiersMeters || config.altitudeTiersMeters.length === 0));
+        const hasCustomTiers = Array.isArray(config.altitudeTiersMeters) && config.altitudeTiersMeters.length > 0;
+        const isMacro28 = !hasCustomTiers && (count === 28 || (radius >= 100 && count >= 24));
         if (isMacro28) {
-          // Macro landmark (>200m footprint) 3-tier distribution:
-          // Tier 3: 8 stations (110m altitude, 260m radius, -15.6° pitch)
-          // Tier 2: 12 stations (45m altitude, 160m radius, -8.0° pitch)
-          // Tier 1: 8 stations (3.5m altitude, 85m radius, 0.0° pitch, street corridor)
+          // Macro landmark 3-tier foveated distribution:
+          // Tier 1 (Street Walkway): 12 stations (1.7m-3.5m altitude, 15m-25m standoff, 50mm lens)
+          // Tier 2 (Facade Ring): 12 stations (25m-35m altitude, 35m-50m standoff, 35mm lens)
+          // Tier 3 (Perimeter Orbit): 8 stations (75m altitude, 90m-120m standoff, 24mm lens)
           const tierSpecs = [
-            { count: 8, altENU: 110, tierRadius: Math.max(radius * 1.5, 260), targetY: 110 - Math.max(radius * 1.5, 260) * Math.tan(15.6 * RAD), name: 'TIER_3_AERIAL' },
-            { count: 12, altENU: 45, tierRadius: Math.max(radius * 0.95, 160), targetY: 45 - Math.max(radius * 0.95, 160) * Math.tan(8.0 * RAD), name: 'TIER_2_FACADE' },
-            { count: 8, altENU: 3.5, tierRadius: Math.max(radius * 0.5, 85), targetY: 3.5, name: 'TIER_1_STREET' }
+            { count: 12, altENU: Math.max(minGroundClearance, 2.5), tierRadius: Math.max(15, Math.min(radius * 0.35, 25)), targetY: 2.5, focalLengthMm: config.focalLengthMm || 50, name: 'TIER_1_STREET' },
+            { count: 12, altENU: 30, tierRadius: Math.max(35, Math.min(radius * 0.65, 50)), targetY: 25, focalLengthMm: config.focalLengthMm || 35, name: 'TIER_2_FACADE' },
+            { count: 8, altENU: 75, tierRadius: Math.max(90, Math.min(radius * 1.15, 120)), targetY: 35, focalLengthMm: config.focalLengthMm || 24, name: 'TIER_3_AERIAL' }
           ];
           let id = 1;
           for (let t = 0; t < tierSpecs.length; t++) {
             const spec = tierSpecs[t];
+            const tierOptics: StationOptics = {
+              focalLengthMm: spec.focalLengthMm,
+              sensorWidthMm: config.sensorWidthMm || 36,
+              aspectRatio: config.aspectRatio ?? 16 / 9
+            };
             const offset = t * (Math.PI / spec.count);
             for (let i = 0; i < spec.count && poses.length < count; i++) {
               const theta = (2 * Math.PI * i) / spec.count + offset;
               const eye: V3 = [lookAt[0] + spec.tierRadius * Math.sin(theta), spec.altENU, lookAt[2] + spec.tierRadius * Math.cos(theta)];
               const target: V3 = [lookAt[0], spec.targetY, lookAt[2]];
-              poses.push(stationFromLookAt(id, eye, target, optics, anchor, {
-                name: `ORBIT_${spec.name}_STATION_${String(id).padStart(2, '0')}`
+              poses.push(stationFromLookAt(id, eye, target, tierOptics, anchor, {
+                name: `ORBIT_${spec.name}_STATION_${String(id).padStart(2, '0')}`,
+                cameraAltitude: spec.altENU,
+                cameraHeightAboveGround: spec.altENU
               }));
               id++;
             }
@@ -159,7 +310,7 @@ export class SurveySynthesisEngine {
 
         const tiers = config.altitudeTiersMeters && config.altitudeTiersMeters.length > 0
           ? config.altitudeTiersMeters
-          : [anchor.elevationMeters + 25, anchor.elevationMeters + 75, anchor.elevationMeters + 140];
+          : [safeAnchor.elevationMeters + 25, safeAnchor.elevationMeters + 75, safeAnchor.elevationMeters + 140];
         const perTier = Math.ceil(count / tiers.length);
         let id = 1;
         for (let t = 0; t < tiers.length; t++) {
@@ -167,15 +318,17 @@ export class SurveySynthesisEngine {
             ? config.tierRadiiMeters[t]
             : radius * (1 + t * 0.2);
           const offset = t * (Math.PI / perTier);
-          const tierAltENU = Math.max(minGroundClearance, tiers[t] - anchor.elevationMeters);
+          const tierAltENU = Math.max(minGroundClearance, tiers[t] - safeAnchor.elevationMeters);
           const tierLookAt: V3 = config.lookAtTiersOffsetLocalENU && config.lookAtTiersOffsetLocalENU[t]
             ? config.lookAtTiersOffsetLocalENU[t]
             : lookAt;
           for (let i = 0; i < perTier && poses.length < count; i++) {
             const theta = (2 * Math.PI * i) / perTier + offset;
             const eye: V3 = [tierLookAt[0] + tierRadius * Math.sin(theta), tierAltENU, tierLookAt[2] + tierRadius * Math.cos(theta)];
-            poses.push(stationFromLookAt(id, eye, tierLookAt, optics, anchor, {
-              name: `ORBIT_TIER_${t + 1}_STATION_${String(id).padStart(2, '0')}`
+            poses.push(stationFromLookAt(id, eye, tierLookAt, optics, safeAnchor, {
+              name: `ORBIT_TIER_${t + 1}_STATION_${String(id).padStart(2, '0')}`,
+              cameraAltitude: tierAltENU,
+              cameraHeightAboveGround: tierAltENU
             }));
             id++;
           }
@@ -285,7 +438,8 @@ export class SurveySynthesisEngine {
 
   /** Parses COLMAP cameras.txt / images.txt into stations relative to the anchor. */
   fromColmapText(camerasText: string, imagesText: string, anchor: GeodeticAnchor): ColmapCameraPose[] {
-    const ltp = new LocalTangentPlane({ lat: anchor.lat, lng: anchor.lng, alt: anchor.elevationMeters });
+    const safeAnchor = normalizeAnchor(anchor);
+    const ltp = new LocalTangentPlane({ lat: safeAnchor.lat, lng: safeAnchor.lng, alt: safeAnchor.elevationMeters });
     const intrinsics = new Map<number, ColmapCameraIntrinsics>();
     for (const raw of camerasText.split('\n')) {
       const line = raw.trim();
@@ -346,9 +500,9 @@ export class SurveySynthesisEngine {
         sensorWidthMm: 36,
         fovDegrees: Number(fov.toFixed(4)),
         aspectRatio: aspect,
-        coordinatesWGS84: { lat: Number(wgs.lat.toFixed(8)), lng: Number(wgs.lng.toFixed(8)), elevation: Number((wgs.alt ?? anchor.elevationMeters).toFixed(3)) },
-        groundElevationASL: anchor.elevationMeters,
-        cameraHeightAboveGround: Number(((wgs.alt ?? 0) - anchor.elevationMeters).toFixed(3)),
+        coordinatesWGS84: { lat: Number(wgs.lat.toFixed(8)), lng: Number(wgs.lng.toFixed(8)), elevation: Number((wgs.alt ?? safeAnchor.elevationMeters).toFixed(3)) },
+        groundElevationASL: safeAnchor.elevationMeters,
+        cameraHeightAboveGround: Number(((wgs.alt ?? 0) - safeAnchor.elevationMeters).toFixed(3)),
         frustumFootprintWGS84: SurveySynthesisEngine.frustumGroundFootprint(C, fwd, fov, aspect, ltp)
       });
       i++; // skip POINTS2D line

@@ -59,6 +59,63 @@ describe('SurveySynthesisEngine: station synthesis', () => {
         expect(poses[4].positionLocalENU[0] - poses[0].positionLocalENU[0]).toBeCloseTo(100, 3);
     });
 
+    it('amphitheatre-complete: full 6 tiers with outward-looking arena floor and steep downward rim plunge', () => {
+        const poses = engine.synthesize(OPERA, { type: 'amphitheatre-complete', targetRadiusMeters: 150, cameraCount: 112 });
+        expect(poses).toHaveLength(112);
+
+        const arena = poses.filter(p => p.name.includes('ARENA_FLOOR'));
+        expect(arena).toHaveLength(16);
+        for (const p of arena) {
+            // Arena stations look OUTWARD and UPWARD towards spectator cavea seating
+            const posXZ = [p.positionLocalENU[0], p.positionLocalENU[2]];
+            const fwdXZ = [p.forwardVector[0], p.forwardVector[2]];
+            const dot = posXZ[0] * fwdXZ[0] + posXZ[1] * fwdXZ[1];
+            expect(dot).toBeGreaterThan(0); // pointing radially outward
+            expect(p.forwardVector[1]).toBeGreaterThan(0); // looking up
+        }
+
+        const rim = poses.filter(p => p.name.includes('RIM_SURVEY'));
+        expect(rim).toHaveLength(16);
+        for (const p of rim) {
+            expect(p.pitchDegrees).toBeLessThan(-20); // steep downward plunge onto wall tops
+        }
+    });
+
+    it('persists 112 and 40 station manifests and GeoJSON for Colosseum', async () => {
+        const fs = await import('fs');
+        const path = await import('path');
+        const colosseumAnchor: GeodeticAnchor = {
+            lat: 41.8902,
+            lng: 12.4922,
+            elevationMeters: 22.0,
+            headingDeg: 0,
+            formattedAddress: 'Colosseum, Rome, Italy'
+        };
+        const stns112 = engine.synthesize(colosseumAnchor, {
+            type: 'amphitheatre-complete',
+            targetRadiusMeters: 150,
+            aspectRatioXZ: 1.18,
+            cameraCount: 112
+        });
+        const outDir = path.resolve(process.cwd(), 'public/tilesets/colosseum');
+        if (fs.existsSync(outDir)) {
+            fs.writeFileSync(path.join(outDir, 'colosseum_survey_112_stations.json'), JSON.stringify(stns112, null, 2));
+            const geoJson112 = engine.toGeoJson(stns112, colosseumAnchor);
+            fs.writeFileSync(path.join(outDir, 'colosseum_survey_112.geojson'), JSON.stringify(geoJson112, null, 2));
+
+            const stns40 = engine.synthesize(colosseumAnchor, {
+                type: 'amphitheatre-complete',
+                targetRadiusMeters: 150,
+                aspectRatioXZ: 1.18,
+                cameraCount: 40
+            });
+            fs.writeFileSync(path.join(outDir, 'colosseum_survey_40_stations.json'), JSON.stringify(stns40, null, 2));
+            const geoJson40 = engine.toGeoJson(stns40, colosseumAnchor);
+            fs.writeFileSync(path.join(outDir, 'colosseum_survey_40.geojson'), JSON.stringify(geoJson40, null, 2));
+        }
+        expect(stns112).toHaveLength(112);
+    });
+
     it('frustum ground footprint has 4 corners within a plausible distance of the anchor', () => {
         const [p] = engine.synthesize(OPERA, { type: 'orbital-multi-tier', targetRadiusMeters: 100, cameraCount: 3 });
         expect(p.frustumFootprintWGS84).toHaveLength(4);

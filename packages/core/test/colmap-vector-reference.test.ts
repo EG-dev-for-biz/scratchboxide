@@ -151,6 +151,55 @@ describe('Universal COLMAP Vector Reference Pipeline (Zero Presets)', () => {
       expect(poses.length).toBe(6);
       expect(poses[0].name).toContain('STREET-CORRIDOR');
     });
+
+    it('should generate complete 112-station amphitheatre survey across all 6 tiers with interior arena and cavea', () => {
+      const poses = pipeline.generateSyntheticSurvey(tokyoAnchor, {
+        type: 'amphitheatre-complete',
+        targetRadiusMeters: 150.0,
+        cameraCount: 112
+      });
+
+      expect(poses.length).toBe(112);
+
+      // Verify all 6 architectural tiers are synthesized
+      const hasStreet = poses.some(p => p.name?.includes('TIER_1_STREET'));
+      const hasFacade = poses.some(p => p.name?.includes('TIER_2_FACADE'));
+      const hasAttic = poses.some(p => p.name?.includes('TIER_3_ATTIC'));
+      const hasArena = poses.some(p => p.name?.includes('TIER_4_ARENA_FLOOR'));
+      const hasCavea = poses.some(p => p.name?.includes('TIER_5_CAVEA_SEATING'));
+      const hasRim = poses.some(p => p.name?.includes('TIER_6_RIM_SURVEY'));
+
+      expect(hasStreet).toBe(true);
+      expect(hasFacade).toBe(true);
+      expect(hasAttic).toBe(true);
+      expect(hasArena).toBe(true);
+      expect(hasCavea).toBe(true);
+      expect(hasRim).toBe(true);
+
+      // Verify Arena stations are positioned inside (radius < 35m) with wide 24mm lens
+      const arenaStations = poses.filter(p => p.name?.includes('TIER_4_ARENA_FLOOR'));
+      expect(arenaStations.length).toBe(16);
+      for (const st of arenaStations) {
+        expect(st.focalLengthMm).toBe(24);
+        const radius = Math.hypot(st.positionLocalENU[0], st.positionLocalENU[2]);
+        expect(radius).toBeLessThan(35.0);
+        expect(st.positionLocalENU[1]).toBeCloseTo(4.5, 1);
+      }
+    });
+
+    it('should generate 40-station amphitheatre interior pilot survey', () => {
+      const poses = pipeline.generateSyntheticSurvey(tokyoAnchor, {
+        type: 'amphitheatre-complete',
+        targetRadiusMeters: 150.0,
+        cameraCount: 40
+      });
+
+      expect(poses.length).toBe(40);
+      const arenaStations = poses.filter(p => p.name?.includes('TIER_4_ARENA_FLOOR'));
+      expect(arenaStations.length).toBe(8);
+      const caveaStations = poses.filter(p => p.name?.includes('TIER_5_CAVEA_SEATING'));
+      expect(caveaStations.length).toBe(8);
+    });
   });
 
   describe('4. Raw COLMAP / GLOMAP Ingestion & Optical Geometry Parsing', () => {

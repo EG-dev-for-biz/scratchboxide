@@ -12,4 +12,6 @@ export * from './SoftZDepthInterleaver';
 export * from './RadiometricSolarHarmonizer';
 export * from './DualPayloadOctreeStreamer';
 export * from './PhotorealGaussianSplatMesh';
+export * from './SplatRadixSorter';
+export * from './SpatialSplatCalibrationGizmo';
 export * from './SpatialGenerativeRuntime';

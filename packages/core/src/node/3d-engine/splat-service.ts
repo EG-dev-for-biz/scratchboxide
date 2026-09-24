@@ -295,7 +295,9 @@ export class SplatService {
             const colorOff = alphaOff + n;
             const scaleOff = colorOff + 3 * n;
             const rotOff = scaleOff + 3 * n;
+            const shOff = rotOff + 3 * n;
             const cs = SplatService.SPZ_COLOR_SCALE, c0 = SplatService.SPZ_SH_C0;
+            const shCoeffsPerSplat = shDim * 3;
 
             for (let i = 0; i < n; i++) {
                 const position: [number, number, number] = [0, 0, 0];
@@ -319,7 +321,15 @@ export class SplatService {
                     const shDc = (raw[colorOff + i * 3 + k] / 255 - 0.5) / cs;
                     colorRgb[k] = Math.min(255, Math.max(0, Math.round((shDc * c0 + 0.5) * 255)));
                 }
-                splats.push({ position, scale, quaternion: [qx, qy, qz, qw], colorRgb, opacity: raw[alphaOff + i] / 255 });
+                const splatObj: BakedGaussian = { position, scale, quaternion: [qx, qy, qz, qw], colorRgb, opacity: raw[alphaOff + i] / 255 };
+                if (shDegree > 0 && shCoeffsPerSplat > 0) {
+                    const shArr: number[] = [];
+                    for (let c = 0; c < shCoeffsPerSplat; c++) {
+                        shArr.push((raw[shOff + i * shCoeffsPerSplat + c] - 127.5) / 127.5);
+                    }
+                    splatObj.sh = shArr;
+                }
+                splats.push(splatObj);
             }
             return splats;
         }
@@ -376,21 +386,23 @@ export class SplatService {
     }
 
     /**
-     * Encodes BakedGaussian[] as spec-exact Niantic SPZ v2 (SH degree 0), gzip-compressed.
-     * Body layout (SoA): positions 24-bit fixed | alphas u8 | colors u8 (SH-DC) | scales u8 (log) | rotations u8 (xyz, w >= 0).
+     * Encodes BakedGaussian[] as spec-exact Niantic SPZ v2 (SH degree 0..3), gzip-compressed.
+     * Body layout (SoA): positions 24-bit fixed | alphas u8 | colors u8 (SH-DC) | scales u8 (log) | rotations u8 (xyz, w >= 0) | sh u8.
      */
-    static serializeSpzBuffer(splats: BakedGaussian[], fractionalBits = 12): Buffer {
+    static serializeSpzBuffer(splats: BakedGaussian[], fractionalBits = 12, shDegree = 0): Buffer {
         const n = splats.length;
-        const raw = Buffer.alloc(16 + n * 19);
+        const shDim = shDegree === 1 ? 3 : shDegree === 2 ? 8 : shDegree === 3 ? 15 : 0;
+        const shCoeffsPerSplat = shDim * 3;
+        const raw = Buffer.alloc(16 + n * 19 + n * shCoeffsPerSplat);
         raw.writeUInt32LE(0x5053474e, 0); // 'NGSP'
         raw.writeUInt32LE(2, 4);          // version 2 (first-three rotation encoding)
         raw.writeUInt32LE(n, 8);
-        raw.writeUInt8(0, 12);            // shDegree
+        raw.writeUInt8(shDegree, 12);     // shDegree
         raw.writeUInt8(fractionalBits, 13);
         raw.writeUInt8(0, 14);            // flags
         raw.writeUInt8(0, 15);            // reserved
 
-        const posOff = 16, alphaOff = posOff + 9 * n, colorOff = alphaOff + n, scaleOff = colorOff + 3 * n, rotOff = scaleOff + 3 * n;
+        const posOff = 16, alphaOff = posOff + 9 * n, colorOff = alphaOff + n, scaleOff = colorOff + 3 * n, rotOff = scaleOff + 3 * n, shOff = rotOff + 3 * n;
         const posScale = 1 << fractionalBits;
         const u8 = (x: number) => Math.min(255, Math.max(0, Math.round(x)));
         const cs = SplatService.SPZ_COLOR_SCALE, c0 = SplatService.SPZ_SH_C0;
@@ -419,6 +431,14 @@ export class SplatService {
             raw[rotOff + i * 3] = u8(q[0] * sign + 127.5);
             raw[rotOff + i * 3 + 1] = u8(q[1] * sign + 127.5);
             raw[rotOff + i * 3 + 2] = u8(q[2] * sign + 127.5);
+
+            if (shDegree > 0 && shCoeffsPerSplat > 0) {
+                const sSh = s.sh || [];
+                for (let c = 0; c < shCoeffsPerSplat; c++) {
+                    const val = c < sSh.length ? sSh[c] : 0;
+                    raw[shOff + i * shCoeffsPerSplat + c] = u8(val * 127.5 + 127.5);
+                }
+            }
         }
         return zlib.gzipSync(raw);
     }

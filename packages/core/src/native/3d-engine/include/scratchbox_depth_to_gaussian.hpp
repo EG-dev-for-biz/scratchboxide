@@ -89,6 +89,11 @@ struct CameraPose {
 // 2. Conversion Configuration Options
 // ============================================================================
 
+enum class SurfaceModel {
+    SURFACE_3D_ELLIPSOID = 0,
+    SURFACE_2DGS_PLANAR_SURFEL = 1
+};
+
 struct DepthToGaussianOptions {
     float edgeSeveranceTau{0.08f}; // Maximum relative depth delta before severing splats
     float minDepth{0.1f};
@@ -97,6 +102,10 @@ struct DepthToGaussianOptions {
     float splatScaleMultiplier{2.10f}; // Radius multiplier to ensure gapless coverage
     float splatThicknessRatio{0.22f};  // Thickness along normal vs tangent radius
     bool computeSH1Radiance{true};     // Compute degree-1 spherical harmonics coefficients
+    SurfaceModel surfaceModel{SurfaceModel::SURFACE_3D_ELLIPSOID};
+    float planarSurfelThickness{0.0001f}; // In 2DGS mode: squashed normal axis
+    bool enablePhotometricNormalization{false};
+    float photometricExposureScale{1.0f}; // Multiplier for exposure normalization across station views
 };
 
 // ============================================================================
@@ -143,6 +152,12 @@ public:
                 float alpha = channels >= 4 ? (static_cast<float>(rgbBytes[cIdx + 3]) / 255.0f) : 1.0f;
 
                 if (alpha < 0.05f) continue;
+
+                if (options.enablePhotometricNormalization && options.photometricExposureScale > 0.0f) {
+                    r = std::clamp(r * options.photometricExposureScale, 0.0f, 1.0f);
+                    g = std::clamp(g * options.photometricExposureScale, 0.0f, 1.0f);
+                    b = std::clamp(b * options.photometricExposureScale, 0.0f, 1.0f);
+                }
 
                 // 4-connected spatial neighbor sampling for surface normal estimation
                 uint32_t xNext = std::min(W - 1, x + step);
@@ -196,6 +211,17 @@ public:
                 float sy = pixelFootprint;
                 float sz = pixelFootprint * options.splatThicknessRatio;
 
+                if (options.surfaceModel == SurfaceModel::SURFACE_2DGS_PLANAR_SURFEL) {
+                    sz = std::max(1e-5f, options.planarSurfelThickness);
+                    float txLen = tx.length();
+                    float tyLen = ty.length();
+                    if (txLen > 1e-6f && tyLen > 1e-6f) {
+                        float aspect = std::clamp(txLen / tyLen, 0.5f, 2.0f);
+                        sx = pixelFootprint * std::sqrt(aspect);
+                        sy = pixelFootprint / std::sqrt(aspect);
+                    }
+                }
+
                 // Sever edges to eliminate stretching artifacts
                 if (isEdge) {
                     sx *= 0.45f;
@@ -214,11 +240,67 @@ public:
                 splat.color = Vec3(r, g, b);
                 splat.opacity = alpha;
 
+                if (options.computeSH1Radiance) {
+                    splat.sh.resize(9, 0.0f);
+                    // Approximate degree-1 directional specular lobe oriented along reflection direction
+                    Vec3 rDir = ray - normal * (2.0f * ray.dot(normal)); // reflection vector
+                    float shScale = 0.15f; // subtle specular radiance perturbation
+                    // R channel
+                    splat.sh[0] = rDir.y * shScale;
+                    splat.sh[1] = rDir.z * shScale;
+                    splat.sh[2] = rDir.x * shScale;
+                    // G channel
+                    splat.sh[3] = rDir.y * shScale;
+                    splat.sh[4] = rDir.z * shScale;
+                    splat.sh[5] = rDir.x * shScale;
+                    // B channel
+                    splat.sh[6] = rDir.y * shScale;
+                    splat.sh[7] = rDir.z * shScale;
+                    splat.sh[8] = rDir.x * shScale;
+                }
+
                 splats.push_back(splat);
             }
         }
 
         return splats;
+    }
+
+    /**
+     * Estimates relative photometric exposure scaling factors across multiple station images.
+     * Computes the mean luminance of each station and normalizes them against the median luminance.
+     */
+    static std::vector<float> computePhotometricExposureScales(
+        const std::vector<const uint8_t*>& stationImages,
+        const std::vector<size_t>& imagePixelCounts,
+        size_t channels = 3
+    ) {
+        if (stationImages.empty()) return {};
+        std::vector<float> meanLuminances(stationImages.size(), 0.0f);
+        for (size_t s = 0; s < stationImages.size(); ++s) {
+            const uint8_t* img = stationImages[s];
+            size_t count = imagePixelCounts[s];
+            double sumLum = 0.0;
+            for (size_t i = 0; i < count; ++i) {
+                float r = static_cast<float>(img[i * channels + 0]) / 255.0f;
+                float g = static_cast<float>(img[i * channels + 1]) / 255.0f;
+                float b = static_cast<float>(img[i * channels + 2]) / 255.0f;
+                sumLum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            }
+            meanLuminances[s] = (count > 0) ? static_cast<float>(sumLum / count) : 0.5f;
+        }
+        std::vector<float> sorted = meanLuminances;
+        std::sort(sorted.begin(), sorted.end());
+        float targetLum = sorted[sorted.size() / 2];
+        if (targetLum < 0.01f) targetLum = 0.18f;
+
+        std::vector<float> scales(stationImages.size(), 1.0f);
+        for (size_t s = 0; s < stationImages.size(); ++s) {
+            if (meanLuminances[s] > 0.01f) {
+                scales[s] = std::clamp(targetLum / meanLuminances[s], 0.4f, 2.5f);
+            }
+        }
+        return scales;
     }
 
     /**

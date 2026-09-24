@@ -139,6 +139,123 @@ function createSyntheticCubeGlb(filePath: string, size: number = 10): Buffer {
     return fullGlb;
 }
 
+/**
+ * Builds a synthetic GLB with 2 submeshes (each having distinct vertices, [0, 1] UVs, and distinct materials).
+ */
+function createSyntheticMultiSubmeshGlb(filePath: string, size: number = 10): Buffer {
+    const s = size / 2;
+    // Primitive 0: South face (+Z)
+    const V0 = [-s, -s, s,  s, -s, s,  s, s, s,  -s, s, s];
+    const N0 = [0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1];
+    const UV0 = [0, 0,  1, 0,  1, 1,  0, 1];
+    const I0 = [0, 1, 2,  0, 2, 3];
+
+    // Primitive 1: North face (-Z)
+    const V1 = [s, -s, -s,  -s, -s, -s,  -s, s, -s,  s, s, -s];
+    const N1 = [0, 0, -1,  0, 0, -1,  0, 0, -1,  0, 0, -1];
+    const UV1 = [0, 0,  1, 0,  1, 1,  0, 1];
+    const I1 = [0, 1, 2,  0, 2, 3];
+
+    const pos0 = new Float32Array(V0);
+    const norm0 = new Float32Array(N0);
+    const uvs0 = new Float32Array(UV0);
+    const idx0 = new Uint32Array(I0);
+
+    const pos1 = new Float32Array(V1);
+    const norm1 = new Float32Array(N1);
+    const uvs1 = new Float32Array(UV1);
+    const idx1 = new Uint32Array(I1);
+
+    const bPos0 = Buffer.from(pos0.buffer);
+    const bNorm0 = Buffer.from(norm0.buffer);
+    const bUv0 = Buffer.from(uvs0.buffer);
+    const bIdx0 = Buffer.from(idx0.buffer);
+
+    const bPos1 = Buffer.from(pos1.buffer);
+    const bNorm1 = Buffer.from(norm1.buffer);
+    const bUv1 = Buffer.from(uvs1.buffer);
+    const bIdx1 = Buffer.from(idx1.buffer);
+
+    const bin = Buffer.concat([bPos0, bNorm0, bUv0, bIdx0, bPos1, bNorm1, bUv1, bIdx1]);
+
+    const offPos0 = 0;
+    const offNorm0 = bPos0.length;
+    const offUv0 = offNorm0 + bNorm0.length;
+    const offIdx0 = offUv0 + bUv0.length;
+    const offPos1 = offIdx0 + bIdx0.length;
+    const offNorm1 = offPos1 + bPos1.length;
+    const offUv1 = offNorm1 + bNorm1.length;
+    const offIdx1 = offUv1 + bUv1.length;
+
+    const json = {
+        asset: { version: '2.0' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ mesh: 0 }],
+        materials: [{ name: 'mat_south' }, { name: 'mat_north' }],
+        meshes: [{
+            primitives: [
+                {
+                    attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 },
+                    indices: 3,
+                    material: 0,
+                    mode: 4
+                },
+                {
+                    attributes: { POSITION: 4, NORMAL: 5, TEXCOORD_0: 6 },
+                    indices: 7,
+                    material: 1,
+                    mode: 4
+                }
+            ]
+        }],
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [-s, -s, s], max: [s, s, s] },
+            { bufferView: 1, componentType: 5126, count: 4, type: 'VEC3' },
+            { bufferView: 2, componentType: 5126, count: 4, type: 'VEC2' },
+            { bufferView: 3, componentType: 5125, count: 6, type: 'SCALAR' },
+            { bufferView: 4, componentType: 5126, count: 4, type: 'VEC3', min: [-s, -s, -s], max: [s, s, -s] },
+            { bufferView: 5, componentType: 5126, count: 4, type: 'VEC3' },
+            { bufferView: 6, componentType: 5126, count: 4, type: 'VEC2' },
+            { bufferView: 7, componentType: 5125, count: 6, type: 'SCALAR' }
+        ],
+        bufferViews: [
+            { buffer: 0, byteOffset: offPos0, byteLength: bPos0.length },
+            { buffer: 0, byteOffset: offNorm0, byteLength: bNorm0.length },
+            { buffer: 0, byteOffset: offUv0, byteLength: bUv0.length },
+            { buffer: 0, byteOffset: offIdx0, byteLength: bIdx0.length },
+            { buffer: 0, byteOffset: offPos1, byteLength: bPos1.length },
+            { buffer: 0, byteOffset: offNorm1, byteLength: bNorm1.length },
+            { buffer: 0, byteOffset: offUv1, byteLength: bUv1.length },
+            { buffer: 0, byteOffset: offIdx1, byteLength: bIdx1.length }
+        ],
+        buffers: [{ byteLength: bin.length }]
+    };
+
+    let js = Buffer.from(JSON.stringify(json));
+    while (js.length % 4) js = Buffer.concat([js, Buffer.from(' ')]);
+    let bb = bin;
+    while (bb.length % 4) bb = Buffer.concat([bb, Buffer.alloc(1)]);
+
+    const total = 12 + 8 + js.length + 8 + bb.length;
+    const h = Buffer.alloc(12);
+    h.writeUInt32LE(0x46546c67, 0);
+    h.writeUInt32LE(2, 4);
+    h.writeUInt32LE(total, 8);
+
+    const jc = Buffer.alloc(8);
+    jc.writeUInt32LE(js.length, 0);
+    jc.writeUInt32LE(0x4e4f534a, 4);
+
+    const bc = Buffer.alloc(8);
+    bc.writeUInt32LE(bb.length, 0);
+    bc.writeUInt32LE(0x004e4942, 4);
+
+    const fullGlb = Buffer.concat([h, jc, js, bc, bb]);
+    fs.outputFileSync(filePath, fullGlb);
+    return fullGlb;
+}
+
 describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', () => {
     const cubeGlbPath = path.join(TEST_DIR, 'test_cube.glb');
     const outGlbPath = path.join(TEST_DIR, 'test_cube_pbr.glb');
@@ -320,6 +437,231 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         }
     });
 
+    it('executes draft mode with auto aspect ratio, multiStationBlend, and metricJacobianScaling on synthetic geometry', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 8, 30], [0, 10, 0], optics, ANCHOR);
+        // North-up steep camera looking up at tower (pitch > 25 deg)
+        const stNorthSteep = stationFromLookAt(2, [0, 2, -20], [0, 25, 0], optics, ANCHOR);
+
+        let capturedAspectRatio = '';
+        const mockDraftGen: StationImageGenerator = {
+            name: 'mock-draft-generator',
+            async generate(args) {
+                capturedAspectRatio = args.aspectRatio || '';
+                const b = decodePng(args.blockoutPng);
+                const out = Buffer.alloc(b.rgba.length);
+                for (let i = 0; i < out.length; i += 4) {
+                    out[i] = 210;
+                    out[i + 1] = 200;
+                    out[i + 2] = 180;
+                    out[i + 3] = 255;
+                }
+                return encodePng(b.width, b.height, out);
+            }
+        };
+
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stSouth, stNorthSteep],
+            generator: mockDraftGen,
+            beautifyContext: {
+                locationName: 'Draft Aspect Ratio Synthetic Building'
+            },
+            options: {
+                resolution: 512,
+                draft: true,
+                aspectRatio: 'auto',
+                multiStationBlend: true,
+                metricJacobianScaling: true,
+                outGlbPath
+            }
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.metrics.resolution).toBe(512);
+        expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
+        expect(fs.existsSync(outGlbPath)).toBe(true);
+        expect(result.normalPng.length).toBeGreaterThan(100);
+        expect(result.ormPng.length).toBeGreaterThan(100);
+    });
+
+    it('resamples generated plate when mock generator returns different resolution than requested', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+
+        // Mock generator returning 1024x1024 plate regardless of requested dimensions (e.g. 512x288)
+        let generatedWidth = 0;
+        let generatedHeight = 0;
+        const mockMismatchedGen: StationImageGenerator = {
+            name: 'mock-mismatched-generator',
+            async generate() {
+                generatedWidth = 1024;
+                generatedHeight = 1024;
+                const buf = Buffer.alloc(1024 * 1024 * 4);
+                buf.fill(200);
+                return encodePng(1024, 1024, buf);
+            }
+        };
+
+        const outResampledGlbPath = path.join(TEST_DIR, 'cube_resampled_test.glb');
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [stSouth],
+            generator: mockMismatchedGen,
+            beautifyContext: { locationName: 'Resample Test' },
+            options: {
+                renderWidth: 512,
+                renderHeight: 288,
+                resolution: 512,
+                draft: true,
+                outGlbPath: outResampledGlbPath
+            }
+        });
+
+        expect(result.success).toBe(true);
+        expect(generatedWidth).toBe(1024);
+        expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
+        expect(fs.existsSync(outResampledGlbPath)).toBe(true);
+    });
+
+    it('enforces fidelity routing: rejects mismatched generator fidelity', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+
+        const prodGenerator: StationImageGenerator = {
+            name: 'prod-gen',
+            fidelity: 'production',
+            async generate(args) { return args.blockoutPng; }
+        };
+
+        // Draft mode with production generator must throw
+        await expect(
+            SurveyTextureUnprojector.processGlbWithSurveyStations({
+                glbPath: cubeGlbPath,
+                anchor: ANCHOR,
+                stations: [stSouth],
+                generator: prodGenerator,
+                options: { draft: true }
+            })
+        ).rejects.toThrow(/fidelity.*disagrees/i);
+
+        const draftGenerator: StationImageGenerator = {
+            name: 'draft-gen',
+            fidelity: 'draft',
+            async generate(args) { return args.blockoutPng; }
+        };
+
+        // Production mode with draft generator must throw
+        await expect(
+            SurveyTextureUnprojector.processGlbWithSurveyStations({
+                glbPath: cubeGlbPath,
+                anchor: ANCHOR,
+                stations: [stSouth],
+                generator: draftGenerator,
+                options: { draft: false }
+            })
+        ).rejects.toThrow(/fidelity.*disagrees/i);
+    });
+
+    it('chains stations by passing previousAccepted reference', async () => {
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const st1 = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+        const st2 = stationFromLookAt(2, [5, 0, 25], [0, 0, 0], optics, ANCHOR);
+
+        let receivedReferenceInSecondCall = false;
+        let callCount = 0;
+        const mockChainingGen: StationImageGenerator = {
+            name: 'mock-chaining-gen',
+            async generate(args) {
+                callCount++;
+                if (callCount === 2 && args.referencePng && args.referencePng.length > 0) {
+                    receivedReferenceInSecondCall = true;
+                }
+                const b = decodePng(args.blockoutPng);
+                return encodePng(b.width, b.height, b.rgba);
+            }
+        };
+
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: cubeGlbPath,
+            anchor: ANCHOR,
+            stations: [st1, st2],
+            generator: mockChainingGen,
+            options: {
+                resolution: 512,
+                draft: true
+            }
+        });
+
+        expect(result.success).toBe(true);
+        expect(callCount).toBe(2);
+        expect(receivedReferenceInSecondCall).toBe(true);
+    });
+
+    it('processes multi-submesh GLB into per-submesh original-UV atlases without repacking or UV write-backs', async () => {
+        const multiGlbPath = path.join(TEST_DIR, 'multi_submesh.glb');
+        createSyntheticMultiSubmeshGlb(multiGlbPath);
+
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stSouth = stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR);
+        const stNorth = stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR);
+
+        const mockGen: StationImageGenerator = {
+            name: 'mock-multi-gen',
+            async generate(args) {
+                const b = decodePng(args.blockoutPng);
+                return encodePng(b.width, b.height, b.rgba);
+            }
+        };
+
+        const outMultiGlbPath = path.join(TEST_DIR, 'multi_submesh_out.glb');
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath: multiGlbPath,
+            anchor: ANCHOR,
+            stations: [stSouth, stNorth],
+            generator: mockGen,
+            options: {
+                resolution: 512,
+                draft: true,
+                outGlbPath: outMultiGlbPath
+            }
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.submeshes).toBeDefined();
+        expect(result.submeshes!.length).toBe(2);
+
+        // Verify each submesh has its own textures
+        expect(result.submeshes![0].albedoPng.length).toBeGreaterThan(100);
+        expect(result.submeshes![1].albedoPng.length).toBeGreaterThan(100);
+
+        // Verify that the output GLB preserves distinct materials per submesh
+        const parsed = AlgorithmicUvEngine.parseGlb(result.glbBuffer);
+        expect(parsed.json.materials.length).toBeGreaterThanOrEqual(2);
+        const prim0 = parsed.json.meshes[0].primitives[0];
+        const prim1 = parsed.json.meshes[0].primitives[1];
+        expect(prim0.material).not.toBe(prim1.material);
+
+        // Verify original UV accessors were NOT modified or squashed into sub-rectangles:
+        // The original quad UVs had u=1.0 and v=1.0. If repacked into sub-rects, max UV would be < 1.0.
+        const uvAcc0 = parsed.json.accessors[prim0.attributes.TEXCOORD_0];
+        const uvAcc1 = parsed.json.accessors[prim1.attributes.TEXCOORD_0];
+        const view0 = parsed.json.bufferViews[uvAcc0.bufferView];
+        const view1 = parsed.json.bufferViews[uvAcc1.bufferView];
+        const uvs0 = new Float32Array(parsed.bin.buffer, parsed.bin.byteOffset + (view0.byteOffset || 0) + (uvAcc0.byteOffset || 0), uvAcc0.count * 2);
+        const uvs1 = new Float32Array(parsed.bin.buffer, parsed.bin.byteOffset + (view1.byteOffset || 0) + (uvAcc1.byteOffset || 0), uvAcc1.count * 2);
+
+        let maxU0 = 0, maxV0 = 0;
+        for (let i = 0; i < uvs0.length; i += 2) {
+            maxU0 = Math.max(maxU0, uvs0[i]);
+            maxV0 = Math.max(maxV0, uvs0[i + 1]);
+        }
+        expect(maxU0).toBeCloseTo(1.0, 2);
+        expect(maxV0).toBeCloseTo(1.0, 2);
+    });
+
     it('processes real-world Empire State Building mesh with orbital survey stations', async () => {
         const esbRawPath = path.resolve(process.cwd(), 'public/models/spce_esb_isolated_full_quality_raw.glb');
         if (!fs.existsSync(esbRawPath)) {
@@ -342,6 +684,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         // Generator simulating AI Beautify limestone and dark reflective glass
         const mockBeautifier: StationImageGenerator = {
             name: 'mock-esb-beautifier',
+            fidelity: 'draft',
             async generate(args) {
                 const b = decodePng(args.blockoutPng);
                 const out = Buffer.alloc(b.rgba.length);
@@ -375,6 +718,7 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
                 styleSuffix: 'photorealistic architectural photography'
             },
             options: {
+                draft: true,
                 resolution: 1024,
                 renderWidth: 640,
                 renderHeight: 360,
@@ -396,10 +740,10 @@ describe('SurveyTextureUnprojector: Survey-to-Atlas Inverse Projection (SAIP)', 
         expect(result.metrics.fillRate).toBeGreaterThan(0.01);
         expect(fs.existsSync(outEsbGlbPath)).toBe(true);
 
-        // Copy outputs to public/models for visual preview
-        const publicGlbPath = path.resolve(process.cwd(), 'public/models/spce_esb_saip_survey_pbr.glb');
-        const publicAlbedoPath = path.resolve(process.cwd(), 'public/models/spce_esb_saip_albedo.png');
-        await fs.copyFile(outEsbGlbPath, publicGlbPath);
-        await fs.writeFile(publicAlbedoPath, result.albedoPng);
+        // Save outputs to build/test_survey_texture/ (never public/models)
+        const testGlbPath = path.resolve(TEST_DIR, 'spce_esb_saip_survey_pbr.glb');
+        const testAlbedoPath = path.resolve(TEST_DIR, 'spce_esb_saip_albedo.png');
+        await fs.copyFile(outEsbGlbPath, testGlbPath);
+        await fs.writeFile(testAlbedoPath, result.albedoPng);
     }, 180000);
 });

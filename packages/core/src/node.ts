@@ -560,6 +560,17 @@ export {
 } from './node/3d-engine/gaussian-splat-4d-service';
 
 
+// Survey-to-Atlas Inverse Projection (SAIP) Engine
+export {
+    SurveyTextureUnprojector,
+    type SurveyTextureUnprojectorOptions,
+    type StationPlate,
+    type StationContribution,
+    type UnprojectionMetrics,
+    type SurveyTextureResult,
+    type SurveyTexturePipelineRequest
+} from './node/spatial/SurveyTextureUnprojector';
+
 // Spatial & Vision Node Services
 export {
     TextureCompressionService,

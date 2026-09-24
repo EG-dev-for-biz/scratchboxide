@@ -124,4 +124,49 @@ describe('BeautifyStationService: render -> prompt -> generate -> QC -> aligned 
         expect(Math.abs(rx - px)).toBeLessThan(2.5);
         expect(Math.abs(ry - py)).toBeLessThan(2.5);
     });
+
+    it('draft mode: fast 1-shot turnaround for aligned plate, verifies single-render initMetrics overlap >= 85%', async () => {
+        // High pitch station (> 25 deg upward look) -> auto aspect ratio resolves to 9:16 portrait
+        const steepStation = renderer.enrichStations([stationFromLookAt(3, [0, 2, 20], [0, 25, 0], OPTICS, ANCHOR)])[0];
+        const calls: any[] = [];
+        // Generator with 0px shift: perfectly aligned with blockout silhouette
+        const svc = new BeautifyStationService(renderer, mockGenerator(0, calls));
+        const res = await svc.beautify(
+            steepStation,
+            { locationName: 'High Pitch Test' },
+            { draft: true, aspectRatio: 'auto' }
+        );
+
+        expect(res.accepted).toBe(true);
+        expect(res.attempts).toBe(1);
+        expect(res.qc.passed).toBe(true);
+        expect(res.qc.overlapPercent).toBeGreaterThanOrEqual(85);
+        expect(res.qc.deltaYawDeg).toBe(0);
+        expect(res.qc.deltaPitchDeg).toBe(0);
+        expect(calls.length).toBe(1);
+        expect(calls[0].aspectRatio).toBe('9:16');
+        const decoded = decodePng(res.imagePng);
+        expect(decoded.width).toBe(768);
+        expect(decoded.height).toBe(Math.round(768 / (9 / 16))); // 1365
+    });
+
+    it('draft mode cheap QC: rerolls once below 85% overlap with zero optimizer iterations', async () => {
+        const steepStation = renderer.enrichStations([stationFromLookAt(4, [0, 2, 20], [0, 25, 0], OPTICS, ANCHOR)])[0];
+        const calls: any[] = [];
+        // Generator with 60px shift: severely misaligned, overlap drops well below 85%
+        const svc = new BeautifyStationService(renderer, mockGenerator(60, calls));
+        const res = await svc.beautify(
+            steepStation,
+            { locationName: 'Misaligned Draft Test' },
+            { draft: true, aspectRatio: 'auto' }
+        );
+
+        // Should reroll once (total 2 attempts), and reject
+        expect(res.attempts).toBe(2);
+        expect(res.accepted).toBe(false);
+        expect(res.qc.passed).toBe(false);
+        expect(res.qc.overlapPercent).toBeLessThan(85);
+        expect(calls.length).toBe(2);
+    });
 });
+

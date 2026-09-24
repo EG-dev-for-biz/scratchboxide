@@ -86,7 +86,8 @@ describe('SurveySplatPipelineService: stations -> beautify -> bake -> fuse -> 3D
         result = await svc.run({
             glbPath: GLB, anchor: ANCHOR, stations, outDir: OUT,
             beautify: { locationName: 'Test Box', moodPromptContext: 'Clear noon. ' },
-            renderWidth: 480, mode: 'chained', bakeStride: 2, isoDate: '2026-06-21T02:00:00Z'
+            renderWidth: 480, mode: 'chained', bakeStride: 2, isoDate: '2026-06-21T02:00:00Z',
+            clean: true, forceRebake: true
         }, (p, msg) => progress.push(`${(p * 100).toFixed(0)}% ${msg}`));
         expect(progress.length).toBeGreaterThan(5);
     }, 300000);

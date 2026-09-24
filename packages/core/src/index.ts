@@ -79,14 +79,14 @@ export {
 } from './browser/generative-canvas/services/nano-banana-color-service';
 
 // Survey-to-Atlas Inverse Projection (SAIP) Engine
-export {
+export type {
     SurveyTextureUnprojector,
-    type SurveyTextureUnprojectorOptions,
-    type StationPlate,
-    type StationContribution,
-    type UnprojectionMetrics,
-    type SurveyTextureResult,
-    type SurveyTexturePipelineRequest
+    SurveyTextureUnprojectorOptions,
+    StationPlate,
+    StationContribution,
+    UnprojectionMetrics,
+    SurveyTextureResult,
+    SurveyTexturePipelineRequest
 } from './node/spatial/SurveyTextureUnprojector';
 
 // Zero-Preset Adaptive Material PBR Architecture

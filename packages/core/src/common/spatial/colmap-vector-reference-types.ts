@@ -89,6 +89,7 @@ export interface ColmapCameraPose {
   };
   groundElevationASL?: number;
   cameraHeightAboveGround?: number;
+  cameraAltitude?: number;
   
   // Optional 4-corner ground projection footprint polygon [lng, lat]
   frustumFootprintWGS84?: [number, number][];
@@ -121,6 +122,8 @@ export interface StationBeautifyMetrics {
  */
 export type SurveyPatternType =
   | 'orbital-multi-tier'
+  | 'foveated-multi-tier'
+  | 'amphitheatre-complete'
   | 'facade-lawnmower'
   | 'street-corridor'
   | 'nadir-grid';
@@ -149,6 +152,8 @@ export interface SurveyPatternConfig {
   minCameraHeightAboveGroundMeters?: number;
   /** Image aspect ratio for the stations (default 16/9). */
   aspectRatio?: number;
+  /** Horizontal aspect ratio (X/Z) for elliptical landmark orbits (e.g. 1.15 - 1.25 for elliptical amphitheatres like the Colosseum). */
+  aspectRatioXZ?: number;
 }
 
 /**

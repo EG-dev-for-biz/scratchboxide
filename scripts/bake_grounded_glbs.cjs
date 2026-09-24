@@ -230,7 +230,7 @@ function computeNodeWorldMatrices(gltf) {
  * orients to the Google ground truth floor surface (Y = 0.00), clips subterranean
  * data below the floor surface, resets node matrices to identity, and recomputes accessor min/max bounds.
  */
-function bakeAndGroundGlb(inGlbPath, outGlbPaths, floorY = 0.0, rInner = 0, rOuter = 0) {
+function bakeAndGroundGlb(inGlbPath, outGlbPaths, floorY = 0.0, rInner = 0, rOuter = 0, customCenter = null, aspectRatioXZ = 1.0) {
   console.log(`\n======================================================`);
   console.log(`Processing: ${path.basename(inGlbPath)}`);
   console.log(`Target Google Ground Truth Floor Y: ${floorY.toFixed(2)}m`);
@@ -288,8 +288,8 @@ function bakeAndGroundGlb(inGlbPath, outGlbPaths, floorY = 0.0, rInner = 0, rOut
   console.log(`    Z: [${minZ.toFixed(2)}, ${maxZ.toFixed(2)}] (depth: ${(maxZ - minZ).toFixed(2)}m)`);
   console.log(`    Total Vertices: ${totalVertices} (Above Floor: ${aboveFloorVertices})`);
 
-  const centerX = (minX + maxX) / 2;
-  const centerZ = (minZ + maxZ) / 2;
+  const centerX = customCenter && customCenter.x !== undefined ? customCenter.x : (minX + maxX) / 2;
+  const centerZ = customCenter && customCenter.z !== undefined ? customCenter.z : (minZ + maxZ) / 2;
 
   console.log(`  Grounding Offsets to apply:`);
   console.log(`    Shift X by: ${(-centerX).toFixed(4)}m (centering)`);
@@ -331,8 +331,8 @@ function bakeAndGroundGlb(inGlbPath, outGlbPaths, floorY = 0.0, rInner = 0, rOut
         const finalZ = tz - centerZ;
 
         // Perimeter boundary feathering: smooth transition of surrounding terrain/streets down to 0.00m floor plane
-        if (rInner > 0 && rOuter > rInner && finalY < 25.0) {
-          const r = Math.hypot(finalX, finalZ);
+        if (rInner > 0 && rOuter > rInner) {
+          const r = Math.hypot(finalX / aspectRatioXZ, finalZ);
           if (r >= rOuter) {
             finalY = 0.0;
           } else if (r > rInner) {
@@ -468,33 +468,39 @@ function bakeAndGroundGlb(inGlbPath, outGlbPaths, floorY = 0.0, rInner = 0, rOut
 function main() {
   const models = [
     {
-      name: 'Grand Army Plaza',
+      name: 'Grand Army Plaza & Central Park District',
       source: 'public/models/nyc_grand_army_plaza_raw.glb',
-      floorY: -887.50,
-      rInner: 50.0,
-      rOuter: 68.0,
+      floorY: -936.87,
+      rInner: 0.0,
+      rOuter: 0.0,
+      customCenter: { x: 86.535, z: 75.63 },
+      aspectRatioXZ: 1.0,
       targets: [
         'public/models/gap_grounded.glb',
         'public/models/gap_clay.glb'
       ]
     },
     {
-      name: 'Rome Colosseum',
+      name: 'Rome Colosseum Full District',
       source: 'public/models/colosseum_rome_shape_grounded.glb',
-      floorY: -7.00,
-      rInner: 125.0,
-      rOuter: 165.0,
+      floorY: -42.06,
+      rInner: 0.0,
+      rOuter: 0.0,
+      customCenter: { x: 0.0, z: 0.0 },
+      aspectRatioXZ: 1.0,
       targets: [
         'public/models/colosseum_grounded.glb',
         'public/models/colosseum_clay.glb'
       ]
     },
     {
-      name: 'Empire State Building',
-      source: 'public/models/esb_grounded.glb',
-      floorY: 0.00,
-      rInner: 120.0,
-      rOuter: 175.0,
+      name: 'Midtown Manhattan & Empire State Building',
+      source: 'public/models/nyc_empire_state_building_pbr_enhanced.glb',
+      floorY: -33.16,
+      rInner: 0.0,
+      rOuter: 0.0,
+      customCenter: { x: -0.1148, z: -0.1921 },
+      aspectRatioXZ: 1.0,
       targets: [
         'public/models/esb_grounded.glb',
         'public/models/esb_clay.glb'
@@ -503,9 +509,10 @@ function main() {
   ];
 
   for (const m of models) {
-    bakeAndGroundGlb(m.source, m.targets, m.floorY, m.rInner, m.rOuter);
+    bakeAndGroundGlb(m.source, m.targets, m.floorY, m.rInner, m.rOuter, m.customCenter, m.aspectRatioXZ || 1.0);
   }
   console.log(`\nAll target GLBs successfully baked, oriented to floor surface, and subterranean-clipped!`);
 }
 
 main();
+

@@ -8,6 +8,8 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeRTC';
+import { SplatRadixSorter } from './SplatRadixSorter';
 
 export interface SplatData {
   count: number;
@@ -16,6 +18,9 @@ export interface SplatData {
   colors: Float32Array;
   opacities: Float32Array;
   quats: Float32Array;
+  positionsHigh?: Float32Array;
+  positionsLow?: Float32Array;
+  sh?: Float32Array;
   bounds?: {
     min: [number, number, number];
     max: [number, number, number];
@@ -41,6 +46,11 @@ export interface PhotorealSplatOptions {
   sortFrequencyFrames?: number;
   viewportWidth?: number;
   viewportHeight?: number;
+  depthInterleaveMode?: 'hardware' | 'soft-z' | 'none';
+  useLogarithmicDepth?: boolean;
+  enableRTC?: boolean;
+  enableAsyncWorkerSort?: boolean;
+  contactShadow?: boolean;
 }
 
 /**
@@ -65,6 +75,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   private lastSortedCamPos = new THREE.Vector3(Infinity, Infinity, Infinity);
   private lastSortedCamDir = new THREE.Vector3(0, 0, 0);
 
+  // High-performance radix sorter with Web Worker support
+  private radixSorter: SplatRadixSorter;
+
   // Depth sorting working buffers
   private sortIndices?: Uint32Array;
   private sortDistances?: Float32Array;
@@ -77,6 +90,14 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
     this.enableDepthSort = options.enableDepthSort ?? true;
     this.sortFrequencyFrames = options.sortFrequencyFrames ?? 4;
+    this.radixSorter = new SplatRadixSorter(options.enableAsyncWorkerSort ?? false);
+
+    // If Split-64 RTC is requested, ensure high/low position attributes are populated
+    if (options.enableRTC && (!splatData.positionsHigh || !splatData.positionsLow)) {
+      const split = CameraRelativeRTC.getSplit64Attributes(splatData.positions);
+      splatData.positionsHigh = split.high;
+      splatData.positionsLow = split.low;
+    }
 
     // 1. Build Instanced Quad Geometry
     const quadGeo = new THREE.PlaneGeometry(1, 1);
@@ -89,6 +110,25 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       'instanceCenter',
       new THREE.InstancedBufferAttribute(new Float32Array(splatData.positions), 3)
     );
+    if (splatData.positionsHigh && splatData.positionsLow) {
+      instancedGeo.setAttribute(
+        'instanceCenterHigh',
+        new THREE.InstancedBufferAttribute(new Float32Array(splatData.positionsHigh), 3)
+      );
+      instancedGeo.setAttribute(
+        'instanceCenterLow',
+        new THREE.InstancedBufferAttribute(new Float32Array(splatData.positionsLow), 3)
+      );
+    } else {
+      instancedGeo.setAttribute(
+        'instanceCenterHigh',
+        new THREE.InstancedBufferAttribute(new Float32Array(splatData.count * 3), 3)
+      );
+      instancedGeo.setAttribute(
+        'instanceCenterLow',
+        new THREE.InstancedBufferAttribute(new Float32Array(splatData.count * 3), 3)
+      );
+    }
     instancedGeo.setAttribute(
       'instanceScale',
       new THREE.InstancedBufferAttribute(new Float32Array(splatData.scales), 3)
@@ -129,10 +169,16 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       }
     }
 
+    const interleaveMode = options.depthInterleaveMode ?? (options.enableSoftZ ? 'soft-z' : 'hardware');
+    const isHardware = interleaveMode === 'hardware';
+    const isSoftZ = interleaveMode === 'soft-z';
+    const depthTest = interleaveMode !== 'none';
+
     this.splatMaterial = new THREE.ShaderMaterial({
       transparent: true,
-      depthTest: true,
+      depthTest: depthTest,
       depthWrite: false,
+      toneMapped: false,
       blending: THREE.NormalBlending,
       uniforms: {
         uClipZ: { value: 10000.0 },
@@ -149,17 +195,29 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         uSunColor: { value: new THREE.Color(1.0, 0.95, 0.88) },
         uSunIntensity: { value: 1.2 },
         uSunSpecular: { value: 0.3 },
-        uSkyAmbient: { value: new THREE.Color(0.25, 0.35, 0.5) },
+        uSkyAmbient: { value: new THREE.Color(0.35, 0.33, 0.30) },
         uContactAO: { value: options.contactAO ?? 0.7 },
         uViewDependenceSH: { value: options.viewDependenceSH ?? 0.8 },
-        // Soft-Z uniforms
+        // Soft-Z and hardware depth uniforms
         uTileDepthMap: { value: options.tileDepthMap ?? dummyDepth },
         uTileDepthNear: { value: options.tileDepthNear ?? 0.1 },
         uTileDepthFar: { value: options.tileDepthFar ?? 1000.0 },
         uSoftZEpsilon: { value: options.softZEpsilonMeters ?? 0.25 },
-        uSoftZEnabled: { value: options.enableSoftZ ? 1.0 : 0.0 }
+        uSoftZEnabled: { value: isSoftZ ? 1.0 : 0.0 },
+        uDepthInterleaveMode: { value: isHardware ? 0 : isSoftZ ? 1 : 2 },
+        // Split-64 RTC Uniforms
+        uCameraHigh: { value: new THREE.Vector3(0, 0, 0) },
+        uCameraLow: { value: new THREE.Vector3(0, 0, 0) },
+        uEnableRTC: { value: options.enableRTC ? 1.0 : 0.0 },
+        // Spatial Cropping Bounding Box Uniforms
+        uClipBoxMin: { value: new THREE.Vector3(-1e9, -1e9, -1e9) },
+        uClipBoxMax: { value: new THREE.Vector3(1e9, 1e9, 1e9) },
+        uClipBoxEnabled: { value: 0.0 }
       },
       vertexShader: `
+        ${CameraRelativeRTC.getVertexShaderRTCChunk()}
+        ${options.useLogarithmicDepth ? '#include <logdepthbuf_pars_vertex>' : ''}
+
         attribute vec3 instanceCenter;
         attribute vec3 instanceScale;
         attribute vec3 instanceColor;
@@ -172,6 +230,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         uniform float uAperture;
         uniform float uFocusDist;
         uniform float uDofStrength;
+        uniform vec3 uClipBoxMin;
+        uniform vec3 uClipBoxMax;
+        uniform float uClipBoxEnabled;
 
         varying vec2 vUv;
         varying vec3 vColor;
@@ -187,14 +248,24 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
         void main() {
           vUv = uv;
           vColor = instanceColor;
-          vCenter = instanceCenter;
+          vec3 effectiveCenter = evaluateRtcCenter(instanceCenter);
+          vCenter = effectiveCenter;
 
-          vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+          vec4 viewCenter = modelViewMatrix * vec4(effectiveCenter, 1.0);
           vDepth = -viewCenter.z;
 
-          if (-instanceCenter.z > uClipZ) {
+          if (-effectiveCenter.z > uClipZ) {
             gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
             return;
+          }
+
+          if (uClipBoxEnabled > 0.5) {
+            if (effectiveCenter.x < uClipBoxMin.x || effectiveCenter.x > uClipBoxMax.x ||
+                effectiveCenter.y < uClipBoxMin.y || effectiveCenter.y > uClipBoxMax.y ||
+                effectiveCenter.z < uClipBoxMin.z || effectiveCenter.z > uClipBoxMax.z) {
+              gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+              return;
+            }
           }
 
           // Decode normal from quaternion
@@ -215,8 +286,8 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
           vec3 S = instanceScale * uSplatScale;
           S = clamp(S, vec3(0.0015), vec3(0.035));
-          float rMajor = max(S.x, S.y) * 1.6;
-          float rMinor = max(0.0015, min(S.x, S.y) * 1.6 * cosIncidence);
+          float rMajor = max(S.x, S.y) * 3.6;
+          float rMinor = max(0.0015, min(S.x, S.y) * 3.2 * cosIncidence);
 
           // Physical Thin-Lens Depth of Field
           float fMeters = uFocalLength * 0.001;
@@ -247,9 +318,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           gl_Position = projectionMatrix * viewPos;
 
           vOpacity = instanceOpacity / (1.0 + coc * 0.75);
+          ${options.useLogarithmicDepth ? '#include <logdepthbuf_vertex>' : ''}
         }
       `,
       fragmentShader: `
+        ${options.useLogarithmicDepth ? '#include <logdepthbuf_pars_fragment>' : ''}
         uniform vec2 viewport;
         uniform float uExposureEV;
         uniform int uTonemap;
@@ -290,9 +363,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           float r2 = dot(d, d);
           if (r2 > 1.0) discard;
 
-          // Anisotropic EWA Gaussian Alpha Decay with tight core
-          float alpha = exp(-2.2 * r2) * vOpacity;
-          if (alpha < 0.02) discard;
+          // Anisotropic EWA Gaussian Alpha Decay with smooth boundary falloff (zero disc edge artifacts)
+          float alpha = clamp((1.0 - smoothstep(0.65, 1.0, r2)) * exp(-0.8 * r2) * 1.5 * vOpacity, 0.0, 1.0);
+          if (alpha < 0.015) discard;
 
           // Continuous Volumetric Soft-Z Depth Interleaving against Tile Mesh
           if (uSoftZEnabled > 0.5) {
@@ -353,6 +426,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           }
 
           gl_FragColor = vec4(color, alpha);
+          ${options.useLogarithmicDepth ? '#include <logdepthbuf_fragment>' : ''}
         }
       `
     });
@@ -361,8 +435,10 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     this.splatMesh.frustumCulled = false;
     this.add(this.splatMesh);
 
-    // 3. Build Soft Contact Ground Shadow
-    this.buildContactShadow(splatData, options);
+    // 3. Soft Contact Ground Shadow (disabled by default to honor zero artificial ground plane invariant)
+    if (options.contactShadow === true) {
+      this.buildContactShadow(splatData, options);
+    }
 
     // 4. Initialize Sort Buffers
     if (this.enableDepthSort) {
@@ -442,9 +518,10 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
 
   /**
    * Sorts Gaussian splats along the camera viewing ray for mathematically correct alpha blending.
+   * Utilizes high-performance O(N) radix sorting, with Web Worker async dispatch when enabled.
    */
   public updateDepthSort(camera: THREE.Camera, force = false): void {
-    if (!this.enableDepthSort || !this.sortIndices || !this.sortDistances) return;
+    if (!this.enableDepthSort) return;
 
     this.frameCounter++;
     if (!force && this.frameCounter % this.sortFrequencyFrames !== 0) return;
@@ -463,32 +540,26 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     this.lastSortedCamPos.copy(camPos);
     this.lastSortedCamDir.copy(camDir);
 
-    const positions = this.splatData.positions;
-    const count = this.splatCount;
-    const dx = camDir.x;
-    const dy = camDir.y;
-    const dz = camDir.z;
+    this.radixSorter.sort(
+      this.splatData.positions,
+      camPos,
+      camDir,
+      this.splatCount,
+      (sortedIndices) => this.applySortedIndices(sortedIndices)
+    );
+  }
 
-    // Project each splat center onto camera view vector: dot(P - C, D)
-    for (let i = 0; i < count; i++) {
-      const px = positions[i * 3 + 0] - camPos.x;
-      const py = positions[i * 3 + 1] - camPos.y;
-      const pz = positions[i * 3 + 2] - camPos.z;
-      this.sortDistances[i] = px * dx + py * dy + pz * dz;
-      this.sortIndices[i] = i;
-    }
-
-    // Sort back-to-front (largest distance first)
-    const indices = this.sortIndices;
-    const dists = this.sortDistances;
-    indices.sort((a, b) => dists[b] - dists[a]);
-
-    // Reorder attributes into temporary or updated buffer
+  /**
+   * Applies reordered index array to GPU instance buffer attributes.
+   */
+  public applySortedIndices(indices: Uint32Array): void {
     const centerAttr = this.splatGeometry.getAttribute('instanceCenter') as THREE.InstancedBufferAttribute;
     const scaleAttr = this.splatGeometry.getAttribute('instanceScale') as THREE.InstancedBufferAttribute;
     const colorAttr = this.splatGeometry.getAttribute('instanceColor') as THREE.InstancedBufferAttribute;
     const opacAttr = this.splatGeometry.getAttribute('instanceOpacity') as THREE.InstancedBufferAttribute;
     const quatAttr = this.splatGeometry.getAttribute('instanceQuat') as THREE.InstancedBufferAttribute;
+    const centerHighAttr = this.splatGeometry.getAttribute('instanceCenterHigh') as THREE.InstancedBufferAttribute | undefined;
+    const centerLowAttr = this.splatGeometry.getAttribute('instanceCenterLow') as THREE.InstancedBufferAttribute | undefined;
 
     const cArr = centerAttr.array as Float32Array;
     const sArr = scaleAttr.array as Float32Array;
@@ -501,6 +572,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     const srcCol = this.splatData.colors;
     const srcOpac = this.splatData.opacities;
     const srcQuat = this.splatData.quats;
+    const count = this.splatCount;
 
     for (let i = 0; i < count; i++) {
       const origIdx = indices[i];
@@ -525,11 +597,69 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       qArr[i * 4 + 3] = srcQuat[origIdx * 4 + 3];
     }
 
+    if (centerHighAttr && centerLowAttr && this.splatData.positionsHigh && this.splatData.positionsLow) {
+      const chArr = centerHighAttr.array as Float32Array;
+      const clArr = centerLowAttr.array as Float32Array;
+      const srcHigh = this.splatData.positionsHigh;
+      const srcLow = this.splatData.positionsLow;
+
+      for (let i = 0; i < count; i++) {
+        const origIdx = indices[i];
+        chArr[i * 3 + 0] = srcHigh[origIdx * 3 + 0];
+        chArr[i * 3 + 1] = srcHigh[origIdx * 3 + 1];
+        chArr[i * 3 + 2] = srcHigh[origIdx * 3 + 2];
+
+        clArr[i * 3 + 0] = srcLow[origIdx * 3 + 0];
+        clArr[i * 3 + 1] = srcLow[origIdx * 3 + 1];
+        clArr[i * 3 + 2] = srcLow[origIdx * 3 + 2];
+      }
+      centerHighAttr.needsUpdate = true;
+      centerLowAttr.needsUpdate = true;
+    }
+
     centerAttr.needsUpdate = true;
     scaleAttr.needsUpdate = true;
     colorAttr.needsUpdate = true;
     opacAttr.needsUpdate = true;
     quatAttr.needsUpdate = true;
+  }
+
+  /**
+   * Configures camera position for Split-64 Relative-to-Center emulation.
+   */
+  public setCameraRtc(cameraEcef: [number, number, number] | Float64Array | THREE.Vector3): void {
+    const cx = 'x' in cameraEcef ? cameraEcef.x : cameraEcef[0];
+    const cy = 'y' in cameraEcef ? cameraEcef.y : cameraEcef[1];
+    const cz = 'z' in cameraEcef ? cameraEcef.z : cameraEcef[2];
+    const split = CameraRelativeRTC.splitCameraPosition(cx, cy, cz);
+    const u = this.splatMaterial.uniforms;
+    u.uCameraHigh.value.set(split.high[0], split.high[1], split.high[2]);
+    u.uCameraLow.value.set(split.low[0], split.low[1], split.low[2]);
+    u.uEnableRTC.value = 1.0;
+  }
+
+  /**
+   * Switches depth interleaving mode between 'hardware', 'soft-z', and 'none'.
+   */
+  public setDepthInterleaveMode(mode: 'hardware' | 'soft-z' | 'none'): void {
+    this.splatMaterial.depthTest = mode !== 'none';
+    this.splatMaterial.depthWrite = false;
+    const isSoftZ = mode === 'soft-z';
+    this.splatMaterial.uniforms.uSoftZEnabled.value = isSoftZ ? 1.0 : 0.0;
+    this.splatMaterial.uniforms.uDepthInterleaveMode.value = mode === 'hardware' ? 0 : mode === 'soft-z' ? 1 : 2;
+  }
+
+  /**
+   * Sets real-time GPU bounding box clipping limits.
+   */
+  public setClipBox(box: THREE.Box3 | null): void {
+    if (!box) {
+      this.splatMaterial.uniforms.uClipBoxEnabled.value = 0.0;
+    } else {
+      this.splatMaterial.uniforms.uClipBoxEnabled.value = 1.0;
+      this.splatMaterial.uniforms.uClipBoxMin.value.copy(box.min);
+      this.splatMaterial.uniforms.uClipBoxMax.value.copy(box.max);
+    }
   }
 
   /**
@@ -770,6 +900,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
   }
 
   public override dispose(): void {
+    this.radixSorter.dispose();
     this.splatGeometry.dispose();
     this.splatMaterial.dispose();
     if (this.contactShadowMesh) {

@@ -17,8 +17,9 @@ import { BeautifyStationService, type StationImageGenerator, type BeautifyStatio
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { AlgorithmicUvEngine, type PbrDecompositionOptions, type PbrDecompositionResult } from './AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from './TextureAtlasPacker';
-import { encodePng, decodePng } from '../texture-processing';
+import { encodePng, decodePng, resampleRgba } from '../texture-processing';
 import type { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
+import { StationRadianceEqualizer, type RadianceEqualizationOptions } from './StationRadianceEqualizer';
 
 export interface StationPlate {
     station: ColmapCameraPose;
@@ -55,6 +56,16 @@ export interface SurveyTextureUnprojectorOptions {
         lng?: number;
         isoDate?: string;
     };
+    /** Fast draft mode: generates lightweight station plates, bypasses iterative rerolls, auto-selects aspect ratio. */
+    draft?: boolean;
+    /** Station plate aspect ratio mode ('auto' to derive dynamically per station, or explicit '16:9', '9:16', '3:4', etc.). */
+    aspectRatio?: string;
+    /** Multi-station angle-weighted super-resolution blending (default true). */
+    multiStationBlend?: boolean;
+    /** Cross-station radiance and color temperature equalization across overlapping camera frustums. */
+    radianceEqualization?: RadianceEqualizationOptions;
+    /** Metric Jacobian surface scaling for facet-level micro-tooth (default true). */
+    metricJacobianScaling?: boolean;
     /** PBR material decomposition options (Scharr normals, Toksvig roughness, HBAO, dielectric glass). */
     pbrDecomposition?: PbrDecompositionOptions;
     /** Output path for the enhanced GLB. */
@@ -77,6 +88,20 @@ export interface UnprojectionMetrics {
     durationMs: number;
 }
 
+export interface SubmeshTextureResult {
+    primitiveIndex: number;
+    materialIndex?: number;
+    resolution: number;
+    albedoPng: Buffer;
+    normalPng: Buffer;
+    ormPng: Buffer;
+    roughnessPng: Buffer;
+    aoPng: Buffer;
+    metallicPng: Buffer;
+    metrics: UnprojectionMetrics;
+    pbrResult?: PbrDecompositionResult;
+}
+
 export interface SurveyTextureResult {
     success: boolean;
     glbBuffer: Buffer;
@@ -89,6 +114,7 @@ export interface SurveyTextureResult {
     metallicPng: Buffer;
     metrics: UnprojectionMetrics;
     pbrResult?: PbrDecompositionResult;
+    submeshes?: SubmeshTextureResult[];
 }
 
 export interface SurveyTexturePipelineRequest {
@@ -120,6 +146,13 @@ interface PreparedCamera {
     rgba: Buffer | Uint8Array;
     depth: Float32Array;
     eye: [number, number, number];
+    right: [number, number, number];
+    up: [number, number, number];
+    fwd: [number, number, number];
+    P00: number;
+    P11: number;
+    halfW: number;
+    halfH: number;
     VP: Float32Array;
 }
 
@@ -139,7 +172,39 @@ export class SurveyTextureUnprojector {
         const startTime = performance.now();
         const glbBuffer = await fs.readFile(request.glbPath);
         const options = request.options || {};
-        const resolution = options.resolution || 4096;
+        const isDraft = options.draft === true;
+        const defaultResolution = options.resolution;
+
+        // Fidelity check: enforce agreement between generator and options.draft
+        let generator = request.generator;
+        if (generator) {
+            if (isDraft && generator.fidelity && generator.fidelity !== 'draft') {
+                throw new Error(`Generator fidelity (${generator.fidelity}) disagrees with options.draft (draft)`);
+            }
+            if (!isDraft && generator.fidelity === 'draft') {
+                throw new Error('Generator fidelity (draft) disagrees with options.draft (production)');
+            }
+        } else if (!request.precomputedPlates || request.precomputedPlates.length === 0) {
+            try {
+                const { GoogleMediaGenerationService } = await import('../google-media-generation-service');
+                const { GoogleMediaCredentialsService } = await import('../google-media-credentials-service');
+                const { MediaAssetStore } = await import('../media-asset-store');
+                const { createGoogleStationImageGenerator } = await import('./BeautifyStationService');
+
+                const credentials = new GoogleMediaCredentialsService();
+                const assetStore = new MediaAssetStore();
+                const mediaService = new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+                generator = createGoogleStationImageGenerator({
+                    mediaService,
+                    assetStore,
+                    workspaceRoot: process.cwd(),
+                    fidelity: isDraft ? 'draft' : 'production',
+                    imageSize: isDraft ? '1K' : '2K'
+                });
+            } catch {
+                // Ignore if Google GenAI unavailable in environment
+            }
+        }
 
         // 1. Prepare station plates (render blockouts + depth + beautified RGBA)
         let plates: StationPlate[] = [];
@@ -150,7 +215,7 @@ export class SurveyTextureUnprojector {
                 glbBuffer,
                 request.stations,
                 request.beautifyContext,
-                request.generator,
+                generator,
                 options
             );
         }
@@ -159,12 +224,26 @@ export class SurveyTextureUnprojector {
             throw new Error('SurveyTextureUnprojector: No valid station plates available for unprojection');
         }
 
-        // 2. Load GLB primitives and verify/generate UV coordinates
-        const { primitives, glbJson, glbBin } = this.loadMeshPrimitives(glbBuffer, resolution);
+        const { primitives, glbJson, glbBin } = this.loadMeshPrimitives(glbBuffer, defaultResolution || 1024);
 
-        // 3. Precompute station projection matrices
+        // 3. Precompute station projection matrices and camera basis frames
         const preparedCameras: PreparedCamera[] = plates.map(plate => {
             const VP = this.buildViewProjectionMatrix(plate.pose, plate.width, plate.height);
+            const pose = plate.pose;
+            const eye: [number, number, number] = [pose.x, pose.y, pose.z];
+            const target: [number, number, number] = [pose.targetX, pose.targetY, pose.targetZ];
+            let fx = target[0] - eye[0], fy = target[1] - eye[1], fz = target[2] - eye[2];
+            let fLen = Math.hypot(fx, fy, fz) || 1;
+            fx /= fLen; fy /= fLen; fz /= fLen;
+            const up = pose.up || [0, 1, 0];
+            let rx = fy * up[2] - fz * up[1], ry = fz * up[0] - fx * up[2], rz = fx * up[1] - fy * up[0];
+            let rLen = Math.hypot(rx, ry, rz);
+            if (rLen < 1e-6) { rx = 1; ry = 0; rz = 0; } else { rx /= rLen; ry /= rLen; rz /= rLen; }
+            const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+            const tanHalfFov = Math.tan(((pose.fov || 45) * Math.PI / 180) * 0.5);
+            const aspect = plate.width / plate.height;
+            const P00 = 1.0 / (aspect * tanHalfFov);
+            const P11 = 1.0 / tanHalfFov;
             return {
                 station: plate.station,
                 pose: plate.pose,
@@ -172,12 +251,101 @@ export class SurveyTextureUnprojector {
                 height: plate.height,
                 rgba: plate.rgba,
                 depth: plate.depth,
-                eye: [plate.pose.x, plate.pose.y, plate.pose.z],
+                eye,
+                right: [rx, ry, rz],
+                up: [ux, uy, uz],
+                fwd: [fx, fy, fz],
+                P00,
+                P11,
+                halfW: plate.width * 0.5,
+                halfH: plate.height * 0.5,
                 VP
             };
         });
 
-        // 4. Rasterize UV triangles into the target atlas
+        // 4. Unproject each submesh primitive into its own original-UV atlas
+        const submeshResults: SubmeshTextureResult[] = [];
+        for (let i = 0; i < primitives.length; i++) {
+            const prim = primitives[i];
+            const primRes = this.determinePrimitiveResolution(prim, glbJson, glbBin, defaultResolution);
+            console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length}: ${prim.indices.length / 3} tris, target res ${primRes}x${primRes}...`);
+            const subT0 = performance.now();
+            const sub = await this.unprojectPrimitiveToAtlas(prim, i, preparedCameras, options, primRes);
+            console.log(`[SurveyTextureUnprojector] Submesh ${i + 1}/${primitives.length} finished in ${((performance.now() - subT0) / 1000).toFixed(2)}s`);
+            submeshResults.push(sub);
+        }
+
+        // 5. Embed per-submesh textures into GLB without mutating original UV accessors
+        const updatedGlb = this.embedPerSubmeshTexturesIntoGlb(glbJson, glbBin, submeshResults);
+
+        if (options.outGlbPath) {
+            await fs.ensureDir(path.dirname(options.outGlbPath));
+            await fs.writeFile(options.outGlbPath, updatedGlb);
+        }
+
+        // 6. Aggregate overall metrics across submeshes
+        let totalCoveredTexels = 0;
+        let totalPaintedTexels = 0;
+        let totalTexelArea = 0;
+        const mergedStationTexels = new Map<number, number>();
+
+        for (const sub of submeshResults) {
+            totalCoveredTexels += sub.metrics.coveredMeshTexels;
+            totalPaintedTexels += sub.metrics.directlyPaintedTexels;
+            totalTexelArea += sub.resolution * sub.resolution;
+            for (const sc of sub.metrics.stationContributions) {
+                mergedStationTexels.set(sc.stationId, (mergedStationTexels.get(sc.stationId) || 0) + sc.texelCount);
+            }
+        }
+
+        const stationContributions: StationContribution[] = [];
+        for (const [stId, count] of mergedStationTexels.entries()) {
+            stationContributions.push({
+                stationId: stId,
+                texelCount: count,
+                fraction: totalPaintedTexels > 0 ? count / totalPaintedTexels : 0
+            });
+        }
+        stationContributions.sort((a, b) => b.texelCount - a.texelCount);
+
+        const primarySub = submeshResults[0];
+        const overallMetrics: UnprojectionMetrics = {
+            resolution: primarySub.metrics.resolution,
+            totalAtlasTexels: totalTexelArea,
+            coveredMeshTexels: totalCoveredTexels,
+            directlyPaintedTexels: totalPaintedTexels,
+            fillRate: totalTexelArea > 0 ? totalCoveredTexels / totalTexelArea : 0,
+            stationContributions,
+            durationMs: performance.now() - startTime
+        };
+
+        return {
+            success: true,
+            glbBuffer: updatedGlb,
+            outGlbPath: options.outGlbPath,
+            albedoPng: primarySub.albedoPng,
+            normalPng: primarySub.normalPng,
+            ormPng: primarySub.ormPng,
+            roughnessPng: primarySub.roughnessPng,
+            aoPng: primarySub.aoPng,
+            metallicPng: primarySub.metallicPng,
+            metrics: overallMetrics,
+            pbrResult: primarySub.pbrResult,
+            submeshes: submeshResults
+        };
+    }
+
+    /**
+     * Unprojects survey station plates into an individual submesh primitive's atlas
+     * using its native [0, 1] UV space without repacking or texture bleeding.
+     */
+    public static async unprojectPrimitiveToAtlas(
+        prim: MeshPrimitiveData,
+        primIndex: number,
+        preparedCameras: PreparedCamera[],
+        options: SurveyTextureUnprojectorOptions,
+        resolution: number
+    ): Promise<SubmeshTextureResult> {
         const atlasW = resolution;
         const atlasH = resolution;
         const totalTexels = atlasW * atlasH;
@@ -186,6 +354,18 @@ export class SurveyTextureUnprojector {
         const atlasBestStation = new Int32Array(totalTexels);
         atlasBestStation.fill(-1);
         const atlasCoverage = new Uint8Array(totalTexels);
+        const atlasTexelDensity = new Float32Array(totalTexels);
+        const atlasWorldPos = new Float32Array(totalTexels * 3);
+        const atlasWorldNorm = new Float32Array(totalTexels * 3);
+
+        // Multi-station angle-weighted super-resolution blending accumulators
+        const useMultiBlend = options.multiStationBlend ?? true;
+        const atlasR = new Float32Array(totalTexels);
+        const atlasG = new Float32Array(totalTexels);
+        const atlasB = new Float32Array(totalTexels);
+        const atlasWeight = new Float32Array(totalTexels);
+        const atlasColorSqSum = new Float32Array(totalTexels);
+        const atlasObsCount = new Uint8Array(totalTexels);
 
         const defaultCol = options.defaultColor || [210, 205, 195];
         const minCosIncidence = options.minCosIncidence ?? 0.08;
@@ -198,159 +378,167 @@ export class SurveyTextureUnprojector {
             stationTexelCounts.set(cam.station.id, 0);
         }
 
-        for (const prim of primitives) {
-            const { positions, normals, uvs, indices } = prim;
-            const triCount = Math.floor(indices.length / 3);
+        const { positions, normals, uvs, indices } = prim;
+        const triCount = Math.floor(indices.length / 3);
 
-            for (let t = 0; t < triCount; t++) {
-                const i0 = indices[t * 3];
-                const i1 = indices[t * 3 + 1];
-                const i2 = indices[t * 3 + 2];
+        for (let t = 0; t < triCount; t++) {
+            const i0 = indices[t * 3];
+            const i1 = indices[t * 3 + 1];
+            const i2 = indices[t * 3 + 2];
 
-                // 3D vertices
-                const p0: [number, number, number] = [positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2]];
-                const p1: [number, number, number] = [positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]];
-                const p2: [number, number, number] = [positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]];
+            // 3D vertices
+            const p0: [number, number, number] = [positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2]];
+            const p1: [number, number, number] = [positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]];
+            const p2: [number, number, number] = [positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]];
 
-                // 3D normals
-                const n0: [number, number, number] = [normals[i0 * 3], normals[i0 * 3 + 1], normals[i0 * 3 + 2]];
-                const n1: [number, number, number] = [normals[i1 * 3], normals[i1 * 3 + 1], normals[i1 * 3 + 2]];
-                const n2: [number, number, number] = [normals[i2 * 3], normals[i2 * 3 + 1], normals[i2 * 3 + 2]];
+            // 3D normals
+            const n0: [number, number, number] = [normals[i0 * 3], normals[i0 * 3 + 1], normals[i0 * 3 + 2]];
+            const n1: [number, number, number] = [normals[i1 * 3], normals[i1 * 3 + 1], normals[i1 * 3 + 2]];
+            const n2: [number, number, number] = [normals[i2 * 3], normals[i2 * 3 + 1], normals[i2 * 3 + 2]];
 
-                // UVs in [0, 1]^2
-                const u0 = uvs[i0 * 2], v0 = uvs[i0 * 2 + 1];
-                const u1 = uvs[i1 * 2], v1 = uvs[i1 * 2 + 1];
-                const u2 = uvs[i2 * 2], v2 = uvs[i2 * 2 + 1];
+            // UVs in [0, 1]^2
+            const u0 = uvs[i0 * 2], v0 = uvs[i0 * 2 + 1];
+            const u1 = uvs[i1 * 2], v1 = uvs[i1 * 2 + 1];
+            const u2 = uvs[i2 * 2], v2 = uvs[i2 * 2 + 1];
 
-                // Map to atlas pixel space
-                const U0 = u0 * (atlasW - 1), V0 = v0 * (atlasH - 1);
-                const U1 = u1 * (atlasW - 1), V1 = v1 * (atlasH - 1);
-                const U2 = u2 * (atlasW - 1), V2 = v2 * (atlasH - 1);
+            // Map to atlas pixel space
+            const U0 = u0 * (atlasW - 1), V0 = v0 * (atlasH - 1);
+            const U1 = u1 * (atlasW - 1), V1 = v1 * (atlasH - 1);
+            const U2 = u2 * (atlasW - 1), V2 = v2 * (atlasH - 1);
 
-                // 2D bounding box
-                const minX = Math.max(0, Math.floor(Math.min(U0, U1, U2)));
-                const maxX = Math.min(atlasW - 1, Math.ceil(Math.max(U0, U1, U2)));
-                const minY = Math.max(0, Math.floor(Math.min(V0, V1, V2)));
-                const maxY = Math.min(atlasH - 1, Math.ceil(Math.max(V0, V1, V2)));
+            // 2D bounding box
+            const minX = Math.max(0, Math.floor(Math.min(U0, U1, U2)));
+            const maxX = Math.min(atlasW - 1, Math.ceil(Math.max(U0, U1, U2)));
+            const minY = Math.max(0, Math.floor(Math.min(V0, V1, V2)));
+            const maxY = Math.min(atlasH - 1, Math.ceil(Math.max(V0, V1, V2)));
 
-                // 2D cross product for barycentric coordinates
-                const det = (V1 - V2) * (U0 - U2) + (U2 - U1) * (V0 - V2);
-                if (Math.abs(det) < 1e-7) continue;
-                const invDet = 1.0 / det;
+            const denom = (V1 - V2) * (U0 - U2) + (U2 - U1) * (V0 - V2);
+            if (Math.abs(denom) < 1e-8) continue;
+            const invDenom = 1.0 / denom;
 
-                // Triangle 3D geometric face normal & centroid
-                const e1: [number, number, number] = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-                const e2: [number, number, number] = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-                const cross: [number, number, number] = [
-                    e1[1] * e2[2] - e1[2] * e2[1],
-                    e1[2] * e2[0] - e1[0] * e2[2],
-                    e1[0] * e2[1] - e1[1] * e2[0]
-                ];
-                const crossLen = Math.hypot(cross[0], cross[1], cross[2]);
-                const faceNormal: [number, number, number] = crossLen > 1e-6
-                    ? [cross[0] / crossLen, cross[1] / crossLen, cross[2] / crossLen]
-                    : [0, 1, 0];
+            // Surface area metric for Jacobian texel density
+            const d1x = p1[0] - p0[0], d1y = p1[1] - p0[1], d1z = p1[2] - p0[2];
+            const d2x = p2[0] - p0[0], d2y = p2[1] - p0[1], d2z = p2[2] - p0[2];
+            const areaWorld = 0.5 * Math.hypot(
+                d1y * d2z - d1z * d2y,
+                d1z * d2x - d1x * d2z,
+                d1x * d2y - d1y * d2x
+            );
+            const du1 = u1 - u0, dv1 = v1 - v0;
+            const du2 = u2 - u0, dv2 = v2 - v0;
+            const areaUv = 0.5 * Math.abs(du1 * dv2 - dv1 * du2);
+            const texelsPerMeterSq = areaWorld > 1e-6 ? (areaUv * totalTexels) / areaWorld : 1.0;
 
-                const centroid: [number, number, number] = [
-                    (p0[0] + p1[0] + p2[0]) / 3,
-                    (p0[1] + p1[1] + p2[1]) / 3,
-                    (p0[2] + p1[2] + p2[2]) / 3
-                ];
+            for (let py = minY; py <= maxY; py++) {
+                for (let px = minX; px <= maxX; px++) {
+                    const w0 = ((V1 - V2) * (px - U2) + (U2 - U1) * (py - V2)) * invDenom;
+                    const w1 = ((V2 - V0) * (px - U2) + (U0 - U2) * (py - V2)) * invDenom;
+                    const w2 = 1.0 - w0 - w1;
 
-                // Candidate cameras facing towards triangle
-                const candidateCams = preparedCameras.filter(cam => {
-                    const vx = cam.eye[0] - centroid[0];
-                    const vy = cam.eye[1] - centroid[1];
-                    const vz = cam.eye[2] - centroid[2];
-                    const d = Math.hypot(vx, vy, vz);
-                    if (d < 1e-3) return false;
-                    const cosA = (faceNormal[0] * vx + faceNormal[1] * vy + faceNormal[2] * vz) / d;
-                    return cosA > 0.02;
-                });
-
-                if (candidateCams.length === 0) continue;
-                const activeCams = candidateCams;
-
-                // Rasterize texels inside the 2D UV triangle
-                for (let py = minY; py <= maxY; py++) {
-                    const rowOffset = py * atlasW;
-                    for (let px = minX; px <= maxX; px++) {
-                        const w0 = ((V1 - V2) * (px - U2) + (U2 - U1) * (py - V2)) * invDet;
-                        const w1 = ((V2 - V0) * (px - U2) + (U0 - U2) * (py - V2)) * invDet;
-                        const w2 = 1.0 - w0 - w1;
-
-                        if (w0 < -1e-3 || w1 < -1e-3 || w2 < -1e-3) continue;
-
-                        // Normalize barycentrics
-                        const bw0 = Math.max(0, w0);
-                        const bw1 = Math.max(0, w1);
-                        const bw2 = Math.max(0, w2);
-                        const sumW = bw0 + bw1 + bw2 || 1;
-                        const nw0 = bw0 / sumW, nw1 = bw1 / sumW, nw2 = bw2 / sumW;
-
-                        // World 3D position
-                        const wx = nw0 * p0[0] + nw1 * p1[0] + nw2 * p2[0];
-                        const wy = nw0 * p0[1] + nw1 * p1[1] + nw2 * p2[1];
-                        const wz = nw0 * p0[2] + nw1 * p1[2] + nw2 * p2[2];
-
-                        // World normal
-                        let nx = nw0 * n0[0] + nw1 * n1[0] + nw2 * n2[0];
-                        let ny = nw0 * n0[1] + nw1 * n1[1] + nw2 * n2[1];
-                        let nz = nw0 * n0[2] + nw1 * n1[2] + nw2 * n2[2];
-                        const nLen = Math.hypot(nx, ny, nz);
-                        if (nLen > 1e-6) { nx /= nLen; ny /= nLen; nz /= nLen; }
-                        else { nx = faceNormal[0]; ny = faceNormal[1]; nz = faceNormal[2]; }
-
-                        const texIdx = rowOffset + px;
+                    // Inside triangle (with small conservative border)
+                    if (w0 >= -0.005 && w1 >= -0.005 && w2 >= -0.005) {
+                        const texIdx = py * atlasW + px;
                         atlasCoverage[texIdx] = 1;
+                        atlasTexelDensity[texIdx] = texelsPerMeterSq;
 
-                        // Test visibility and score across candidate cameras
-                        for (let k = 0; k < activeCams.length; k++) {
-                            const cam = activeCams[k];
+                        // Interpolated 3D position & normal
+                        const wx = w0 * p0[0] + w1 * p1[0] + w2 * p2[0];
+                        const wy = w0 * p0[1] + w1 * p1[1] + w2 * p2[1];
+                        const wz = w0 * p0[2] + w1 * p1[2] + w2 * p2[2];
+
+                        atlasWorldPos[texIdx * 3] = wx;
+                        atlasWorldPos[texIdx * 3 + 1] = wy;
+                        atlasWorldPos[texIdx * 3 + 2] = wz;
+
+                        let nx = w0 * n0[0] + w1 * n1[0] + w2 * n2[0];
+                        let ny = w0 * n0[1] + w1 * n1[1] + w2 * n2[1];
+                        let nz = w0 * n0[2] + w1 * n1[2] + w2 * n2[2];
+                        const nLen = Math.hypot(nx, ny, nz);
+                        if (nLen > 1e-6) {
+                            nx /= nLen; ny /= nLen; nz /= nLen;
+                        }
+
+                        atlasWorldNorm[texIdx * 3] = nx;
+                        atlasWorldNorm[texIdx * 3 + 1] = ny;
+                        atlasWorldNorm[texIdx * 3 + 2] = nz;
+
+                        // Project into all candidate station cameras
+                        for (const cam of preparedCameras) {
                             const vx = cam.eye[0] - wx;
                             const vy = cam.eye[1] - wy;
                             const vz = cam.eye[2] - wz;
                             const dist = Math.hypot(vx, vy, vz);
-                            if (dist < 1e-3) continue;
+                            if (dist < 1e-4) continue;
 
-                            const cosIncidence = (nx * vx + ny * vy + nz * vz) / dist;
-                            if (cosIncidence < minCosIncidence) continue;
+                            const dirX = vx / dist;
+                            const dirY = vy / dist;
+                            const dirZ = vz / dist;
 
-                            // Fast projection into camera screen
-                            const proj = this.projectWorldToScreen(wx, wy, wz, cam.VP, cam.width, cam.height);
-                            if (!proj) continue;
-                            const [sx, sy, cameraZ] = proj;
-                            if (sx < 0 || sx >= cam.width || sy < 0 || sy >= cam.height) continue;
+                            // Cosine of incidence angle (surface normal dot ray to camera)
+                            const cosIncidence = nx * dirX + ny * dirY + nz * dirZ;
+                            if (cosIncidence < minCosIncidence) continue; // Grazing angle or backfacing
 
-                            // Depth occlusion test against station rasterizer depth buffer
-                            const depthIdx = Math.floor(sy) * cam.width + Math.floor(sx);
+                            // Forward metric depth along camera optical axis
+                            const dx = wx - cam.eye[0], dy = wy - cam.eye[1], dz = wz - cam.eye[2];
+                            const cameraZ = dx * cam.fwd[0] + dy * cam.fwd[1] + dz * cam.fwd[2];
+                            if (cameraZ <= 0.1) continue; // Behind near plane
+
+                            const camX = dx * cam.right[0] + dy * cam.right[1] + dz * cam.right[2];
+                            const camY = dx * cam.up[0] + dy * cam.up[1] + dz * cam.up[2];
+
+                            const invZ = 1.0 / cameraZ;
+                            const sx = (cam.P00 * camX * invZ + 1.0) * cam.halfW;
+                            const sy = (1.0 - cam.P11 * camY * invZ) * cam.halfH;
+
+                            const pxInt = Math.floor(sx);
+                            const pyInt = Math.floor(sy);
+                            if (pxInt < 0 || pxInt >= cam.width || pyInt < 0 || pyInt >= cam.height) continue;
+
+                            // Metric depth comparison for occlusion culling
+                            const depthIdx = pyInt * cam.width + pxInt;
                             const recordedDepth = cam.depth[depthIdx];
+
                             if (recordedDepth >= EMPTY_DEPTH * 0.5) continue;
 
                             const allowedTol = Math.max(depthTol, cameraZ * depthRelTol);
                             if (cameraZ > recordedDepth + allowedTol) continue; // Occluded!
 
-                            // Quality score favoring orthogonal angle and higher spatial resolution
+                            // Quality score favoring orthogonal angle and spatial resolution
                             const score = Math.pow(cosIncidence, angleExp) / Math.sqrt(Math.max(1.0, dist));
 
-                            if (score > atlasBestScore[texIdx]) {
-                                atlasBestScore[texIdx] = score;
-                                const prevStation = atlasBestStation[texIdx];
-                                atlasBestStation[texIdx] = cam.station.id;
+                            if (score > 1e-4) {
+                                const [r, g, b] = this.sampleBilinear(cam.rgba, cam.width, cam.height, sx, sy);
 
-                                if (prevStation !== cam.station.id) {
-                                    if (prevStation >= 0) {
-                                        stationTexelCounts.set(prevStation, (stationTexelCounts.get(prevStation) || 1) - 1);
-                                    }
-                                    stationTexelCounts.set(cam.station.id, (stationTexelCounts.get(cam.station.id) || 0) + 1);
+                                if (useMultiBlend) {
+                                    const weight = score * score;
+                                    atlasR[texIdx] += r * weight;
+                                    atlasG[texIdx] += g * weight;
+                                    atlasB[texIdx] += b * weight;
+                                    atlasWeight[texIdx] += weight;
+                                    atlasColorSqSum[texIdx] += (r * r + g * g + b * b) * weight;
+                                    atlasObsCount[texIdx]++;
                                 }
 
-                                const [r, g, b] = this.sampleBilinear(cam.rgba, cam.width, cam.height, sx, sy);
-                                const pIdx = texIdx * 4;
-                                atlasRgba[pIdx] = r;
-                                atlasRgba[pIdx + 1] = g;
-                                atlasRgba[pIdx + 2] = b;
-                                atlasRgba[pIdx + 3] = 255;
+                                if (score > atlasBestScore[texIdx]) {
+                                    atlasBestScore[texIdx] = score;
+                                    const prevStation = atlasBestStation[texIdx];
+                                    atlasBestStation[texIdx] = cam.station.id;
+
+                                    if (prevStation !== cam.station.id) {
+                                        if (prevStation >= 0) {
+                                            stationTexelCounts.set(prevStation, (stationTexelCounts.get(prevStation) || 1) - 1);
+                                        }
+                                        stationTexelCounts.set(cam.station.id, (stationTexelCounts.get(cam.station.id) || 0) + 1);
+                                    }
+
+                                    if (!useMultiBlend) {
+                                        const pIdx = texIdx * 4;
+                                        atlasRgba[pIdx] = r;
+                                        atlasRgba[pIdx + 1] = g;
+                                        atlasRgba[pIdx + 2] = b;
+                                        atlasRgba[pIdx + 3] = 255;
+                                    }
+                                }
                             }
                         }
                     }
@@ -358,19 +546,43 @@ export class SurveyTextureUnprojector {
             }
         }
 
-        // 5. Hole filling & gutter dilation (bleed)
+        // Normalize multi-station blended accumulators and derive view parallax variance
+        const atlasViewVariance = new Float32Array(totalTexels);
+        if (useMultiBlend) {
+            for (let i = 0; i < totalTexels; i++) {
+                if (atlasWeight[i] > 0) {
+                    const invW = 1.0 / atlasWeight[i];
+                    const meanR = atlasR[i] * invW;
+                    const meanG = atlasG[i] * invW;
+                    const meanB = atlasB[i] * invW;
+
+                    const pIdx = i * 4;
+                    atlasRgba[pIdx] = Math.min(255, Math.max(0, Math.round(meanR)));
+                    atlasRgba[pIdx + 1] = Math.min(255, Math.max(0, Math.round(meanG)));
+                    atlasRgba[pIdx + 2] = Math.min(255, Math.max(0, Math.round(meanB)));
+                    atlasRgba[pIdx + 3] = 255;
+
+                    if (atlasObsCount[i] > 1) {
+                        const meanSq = meanR * meanR + meanG * meanG + meanB * meanB;
+                        const weightedSq = atlasColorSqSum[i] * invW;
+                        atlasViewVariance[i] = Math.max(0, weightedSq - meanSq);
+                    }
+                }
+            }
+        }
+
+        // Hole filling & gutter dilation
         let coveredCount = 0;
         let paintedCount = 0;
         for (let i = 0; i < totalTexels; i++) {
             if (atlasCoverage[i] === 1) {
                 coveredCount++;
-                if (atlasBestScore[i] > 0) paintedCount++;
+                if (atlasBestScore[i] > 0 || (useMultiBlend && atlasWeight[i] > 0)) paintedCount++;
             }
         }
 
-        // Fill unobserved covered texels with default stone color
         for (let i = 0; i < totalTexels; i++) {
-            if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0) {
+            if (atlasCoverage[i] === 1 && atlasBestScore[i] === 0 && (!useMultiBlend || atlasWeight[i] === 0)) {
                 const pIdx = i * 4;
                 atlasRgba[pIdx] = defaultCol[0];
                 atlasRgba[pIdx + 1] = defaultCol[1];
@@ -379,28 +591,28 @@ export class SurveyTextureUnprojector {
             }
         }
 
-        // Bleed / dilate valid texels into chart gutters by edgeBleedPixels
         const bleedRadius = options.edgeBleedPixels ?? 4;
         if (bleedRadius > 0) {
             this.dilateGutters(atlasRgba, atlasCoverage, atlasW, atlasH, bleedRadius);
         }
 
-        // 6. Intrinsic PBR Material Decomposition (NOAA solar de-lighting, Scharr normals, Toksvig AA, ORM)
+        const isDraft = options.draft === true;
+        // PBR Material Decomposition (Activated in Phase 2 full mode, or via explicit pbrDecomposition options)
         const pbrOpts: PbrDecompositionOptions = {
-            enableAlbedoDeLighting: true,
+            enableAlbedoDeLighting: !isDraft || options.pbrDecomposition?.enableAlbedoDeLighting === true,
             generateNormalMaps: true,
             generateRoughnessMaps: true,
             generateAoMaps: true,
             packOrm: true,
-            enableMultiFrequencyNormals: true,
-            enableBiophysicalRoughness: true,
-            enableHbaoMicroCavity: true,
-            enableToksvigFiltering: true,
+            enableMultiFrequencyNormals: !isDraft || options.pbrDecomposition?.enableMultiFrequencyNormals === true,
+            enableBiophysicalRoughness: !isDraft || options.pbrDecomposition?.enableBiophysicalRoughness === true,
+            enableHbaoMicroCavity: !isDraft || options.pbrDecomposition?.enableHbaoMicroCavity === true,
+            enableToksvigFiltering: !isDraft || options.pbrDecomposition?.enableToksvigFiltering === true,
             ...options.pbrDecomposition
         };
 
-        // If solar ephemeris context is provided, configure analytical solar inverse de-lighting
-        if (options.solarDelighting?.lat && options.solarDelighting?.lng && options.solarDelighting?.isoDate) {
+        if ((!isDraft || options.pbrDecomposition?.enableSolarInverseDelighting === true) &&
+            options.solarDelighting?.lat && options.solarDelighting?.lng && options.solarDelighting?.isoDate) {
             pbrOpts.enableSolarInverseDelighting = true;
             pbrOpts.solarDelighting = {
                 latitude: options.solarDelighting.lat,
@@ -410,14 +622,22 @@ export class SurveyTextureUnprojector {
             };
         }
 
+        if (options.metricJacobianScaling !== false) {
+            pbrOpts.metricTexelDensityMap = atlasTexelDensity;
+        }
+        pbrOpts.viewVarianceMap = atlasViewVariance;
+        pbrOpts.worldPositionsMap = atlasWorldPos;
+        pbrOpts.worldNormalsMap = atlasWorldNorm;
+
+        const tPbr0 = performance.now();
         const pbrResult = await AlgorithmicUvEngine.decomposePbr(
             atlasRgba,
             pbrOpts,
             atlasW,
             atlasH
         );
+        console.log(`[Submesh ${primIndex}] decomposePbr finished in ${((performance.now() - tPbr0) / 1000).toFixed(2)}s`);
 
-        // 7. Rebuild and serialize the enhanced GLB
         const defaultNormal = Buffer.alloc(totalTexels * 4);
         for (let i = 0; i < totalTexels; i++) {
             defaultNormal[i * 4] = 128;
@@ -431,7 +651,6 @@ export class SurveyTextureUnprojector {
         const roughnessBuffer = pbrResult.roughness ? Buffer.from(pbrResult.roughness) : Buffer.alloc(totalTexels * 4, 200);
         const aoBuffer = pbrResult.ao ? Buffer.from(pbrResult.ao) : Buffer.alloc(totalTexels * 4, 255);
 
-        // Metallic extracted from ORM blue channel
         const metallicBuffer = Buffer.alloc(totalTexels * 4);
         for (let i = 0; i < totalTexels; i++) {
             const m = ormBuffer[i * 4 + 2];
@@ -448,20 +667,6 @@ export class SurveyTextureUnprojector {
         const aoPng = encodePng(atlasW, atlasH, aoBuffer);
         const metallicPng = encodePng(atlasW, atlasH, metallicBuffer);
 
-        const updatedGlb = this.embedTexturesIntoGlb(
-            glbJson,
-            glbBin,
-            albedoPng,
-            normalPng,
-            ormPng
-        );
-
-        if (options.outGlbPath) {
-            await fs.ensureDir(path.dirname(options.outGlbPath));
-            await fs.writeFile(options.outGlbPath, updatedGlb);
-        }
-
-        // Compute metrics
         const stationContributions: StationContribution[] = [];
         for (const [stId, count] of stationTexelCounts.entries()) {
             stationContributions.push({
@@ -472,27 +677,27 @@ export class SurveyTextureUnprojector {
         }
         stationContributions.sort((a, b) => b.texelCount - a.texelCount);
 
-        const durationMs = performance.now() - startTime;
+        const submeshMetrics: UnprojectionMetrics = {
+            resolution,
+            totalAtlasTexels: totalTexels,
+            coveredMeshTexels: coveredCount,
+            directlyPaintedTexels: paintedCount,
+            fillRate: totalTexels > 0 ? coveredCount / totalTexels : 0,
+            stationContributions,
+            durationMs: 0
+        };
 
         return {
-            success: true,
-            glbBuffer: updatedGlb,
-            outGlbPath: options.outGlbPath,
+            primitiveIndex: primIndex,
+            materialIndex: prim.materialIndex,
+            resolution,
             albedoPng,
             normalPng,
             ormPng,
             roughnessPng,
             aoPng,
             metallicPng,
-            metrics: {
-                resolution,
-                totalAtlasTexels: totalTexels,
-                coveredMeshTexels: coveredCount,
-                directlyPaintedTexels: paintedCount,
-                fillRate: totalTexels > 0 ? paintedCount / totalTexels : 0,
-                stationContributions,
-                durationMs
-            },
+            metrics: submeshMetrics,
             pbrResult
         };
     }
@@ -510,14 +715,28 @@ export class SurveyTextureUnprojector {
         const renderService = new SurveyStationRenderService();
         await renderService.loadMesh(glbBuffer);
 
-        const renderW = options?.renderWidth || (options?.resolution ? Math.min(1280, options.resolution) : 1280);
-        const renderH = options?.renderHeight || Math.round(renderW * (9 / 16));
+        const isDraft = options?.draft ?? false;
+        const defaultW = isDraft ? 768 : 1280;
+        const baseW = options?.renderWidth || (options?.resolution ? Math.min(defaultW, options.resolution) : defaultW);
         const plates: StationPlate[] = [];
+        let previousAccepted: BeautifyStationResult | undefined;
 
         for (const st of stations) {
+            // Auto aspect ratio resolution per station
+            let targetAspect = st.aspectRatio;
+            const pitch = Math.abs(st.pitchDegrees || 0);
+            if (options?.aspectRatio === 'auto' || isDraft) {
+                targetAspect = pitch > 25 ? 9 / 16 : (st.aspectRatio || 16 / 9);
+            } else if (!targetAspect || targetAspect <= 0) {
+                targetAspect = pitch > 25 ? 9 / 16 : 16 / 9;
+            }
+
+            const stationW = baseW;
+            const stationH = options?.renderHeight || Math.round(stationW / targetAspect);
+
             const blockout = renderService.renderStationBlockout(st, {
-                width: renderW,
-                height: renderH
+                width: stationW,
+                height: stationH
             });
 
             let stationRgba: Buffer = blockout.rgba;
@@ -527,20 +746,39 @@ export class SurveyTextureUnprojector {
                 const bRes = await beautifyService.beautify(
                     st,
                     beautifyContext || { locationName: 'Target Location' },
-                    { width: renderW, height: renderH }
+                    {
+                        width: stationW,
+                        height: stationH,
+                        aspectRatio: options?.aspectRatio || 'auto',
+                        draft: isDraft,
+                        reference: previousAccepted
+                    }
                 );
-                stationRgba = Buffer.from(bRes.image.rgba);
+                if (bRes.accepted) {
+                    previousAccepted = bRes;
+                }
+                if (bRes.image.width !== stationW || bRes.image.height !== stationH) {
+                    stationRgba = resampleRgba(bRes.image.rgba, bRes.image.width, bRes.image.height, stationW, stationH);
+                } else {
+                    stationRgba = Buffer.from(bRes.image.rgba);
+                }
             }
 
             plates.push({
                 station: st,
                 rgba: stationRgba,
-                width: renderW,
-                height: renderH,
+                width: stationW,
+                height: stationH,
                 depth: blockout.depth,
                 pose: blockout.cameraPose,
                 intrinsics: blockout.intrinsics
             });
+        }
+
+        if (options?.radianceEqualization?.enabled !== false && plates.length > 1) {
+            console.log(`[SurveyTextureUnprojector] Equalizing radiance across ${plates.length} station plates...`);
+            const eqRes = StationRadianceEqualizer.equalizePlates(plates, options?.radianceEqualization);
+            console.log(`[SurveyTextureUnprojector] Radiance equalized anchored to station ${eqRes.anchorStationId} (${eqRes.stationsEqualized} plates processed)`);
         }
 
         return plates;
@@ -635,87 +873,6 @@ export class SurveyTextureUnprojector {
                         indices,
                         materialIndex: prim.material
                     });
-                }
-            }
-        }
-
-        // When multiple submesh primitives exist, pack them into a unified non-overlapping atlas using MaxRectsAtlasPacker
-        if (primitives.length > 1) {
-            const packer = new MaxRectsAtlasPacker({
-                maxWidth: targetResolution,
-                maxHeight: targetResolution,
-                padding: 4,
-                powerOfTwo: true,
-                allowRotation: false
-            });
-
-            const areas: number[] = [];
-            let totalArea = 0;
-            for (let i = 0; i < primitives.length; i++) {
-                const prim = primitives[i];
-                let primArea = 0;
-                const triCount = Math.floor(prim.indices.length / 3);
-                for (let t = 0; t < triCount; t++) {
-                    const i0 = prim.indices[t * 3], i1 = prim.indices[t * 3 + 1], i2 = prim.indices[t * 3 + 2];
-                    const ax = prim.positions[i1 * 3] - prim.positions[i0 * 3];
-                    const ay = prim.positions[i1 * 3 + 1] - prim.positions[i0 * 3 + 1];
-                    const az = prim.positions[i1 * 3 + 2] - prim.positions[i0 * 3 + 2];
-                    const bx = prim.positions[i2 * 3] - prim.positions[i0 * 3];
-                    const by = prim.positions[i2 * 3 + 1] - prim.positions[i0 * 3 + 1];
-                    const bz = prim.positions[i2 * 3 + 2] - prim.positions[i0 * 3 + 2];
-                    const cx = ay * bz - az * by;
-                    const cy = az * bx - ax * bz;
-                    const cz = ax * by - ay * bx;
-                    primArea += 0.5 * Math.hypot(cx, cy, cz);
-                }
-                areas.push(Math.max(1.0, primArea));
-                totalArea += Math.max(1.0, primArea);
-            }
-
-            const availableTexels = targetResolution * targetResolution * 0.85;
-            for (let i = 0; i < primitives.length; i++) {
-                const targetAreaTexels = (areas[i] / totalArea) * availableTexels;
-                const side = Math.max(32, Math.round(Math.sqrt(targetAreaTexels)));
-                packer.addTexture({
-                    id: i,
-                    width: Math.min(targetResolution - 8, side),
-                    height: Math.min(targetResolution - 8, side)
-                });
-            }
-
-            const atlasRes = packer.pack();
-            const atlasW = atlasRes.width;
-            const atlasH = atlasRes.height;
-
-            let primIdx = 0;
-            for (const mesh of json.meshes || []) {
-                for (const prim of mesh.primitives || []) {
-                    if (prim.attributes && prim.attributes.POSITION !== undefined) {
-                        const packedPrim = primitives[primIdx];
-                        const rect = atlasRes.rects.get(primIdx);
-                        if (rect && packedPrim) {
-                            const vertCount = packedPrim.positions.length / 3;
-                            for (let v = 0; v < vertCount; v++) {
-                                const localU = packedPrim.uvs[v * 2];
-                                const localV = packedPrim.uvs[v * 2 + 1];
-                                packedPrim.uvs[v * 2] = (rect.x + localU * rect.width) / atlasW;
-                                packedPrim.uvs[v * 2 + 1] = (rect.y + localV * rect.height) / atlasH;
-                            }
-
-                            // Write back to binary buffer
-                            if (prim.attributes.TEXCOORD_0 !== undefined) {
-                                const uvAcc = json.accessors[prim.attributes.TEXCOORD_0];
-                                const uvView = json.bufferViews[uvAcc.bufferView];
-                                const uvOffset = (uvView.byteOffset || 0) + (uvAcc.byteOffset || 0);
-                                const uvStride = uvView.byteStride ? uvView.byteStride / 4 : 2;
-                                for (let v = 0; v < uvAcc.count; v++) {
-                                    bin.writeFloatLE(packedPrim.uvs[v * 2], bin.byteOffset + uvOffset + (v * uvStride) * 4);
-                                    bin.writeFloatLE(packedPrim.uvs[v * 2 + 1], bin.byteOffset + uvOffset + (v * uvStride + 1) * 4);
-                                }
-                            }
-                        }
-                        primIdx++;
-                    }
                 }
             }
         }
@@ -880,15 +1037,15 @@ export class SurveyTextureUnprojector {
         fx /= flen; fy /= flen; fz /= flen;
 
         const up = pose.up || [0, 1, 0];
-        let rx = up[1] * fz - up[2] * fy;
-        let ry = up[2] * fx - up[0] * fz;
-        let rz = up[0] * fy - up[1] * fx;
-        const rlen = Math.hypot(rx, ry, rz) || 1;
-        rx /= rlen; ry /= rlen; rz /= rlen;
+        let rx = fy * up[2] - fz * up[1];
+        let ry = fz * up[0] - fx * up[2];
+        let rz = fx * up[1] - fy * up[0];
+        const rlen = Math.hypot(rx, ry, rz);
+        if (rlen < 1e-6) { rx = 1; ry = 0; rz = 0; } else { rx /= rlen; ry /= rlen; rz /= rlen; }
 
-        const ux = fy * rz - fz * ry;
-        const uy = fz * rx - fx * rz;
-        const uz = fx * ry - fy * rx;
+        const ux = ry * fz - rz * fy;
+        const uy = rz * fx - rx * fz;
+        const uz = rx * fy - ry * fx;
 
         const aspect = width / height;
         const fovRad = (pose.fov * Math.PI) / 180;
@@ -1037,17 +1194,72 @@ export class SurveyTextureUnprojector {
     }
 
     /**
-     * Embeds the new albedo, normal, and ORM textures into the GLB JSON & BIN structures.
+     * Determines the unprojection resolution for a mesh primitive based on its source texture resolution.
      */
-    private static embedTexturesIntoGlb(
-        json: any,
-        bin: Buffer,
-        albedoPng: Buffer,
-        normalPng: Buffer,
-        ormPng: Buffer
+    public static determinePrimitiveResolution(
+        prim: MeshPrimitiveData,
+        glbJson: any,
+        glbBin: Buffer,
+        defaultResolution?: number
+    ): number {
+        if (defaultResolution !== undefined && defaultResolution > 0) {
+            return defaultResolution;
+        }
+        if (prim.materialIndex !== undefined && glbJson.materials?.[prim.materialIndex]) {
+            const mat = glbJson.materials[prim.materialIndex];
+            const texIdx = mat.pbrMetallicRoughness?.baseColorTexture?.index;
+            if (texIdx !== undefined && glbJson.textures?.[texIdx]) {
+                const imgIdx = glbJson.textures[texIdx].source;
+                if (imgIdx !== undefined && glbJson.images?.[imgIdx]) {
+                    const img = glbJson.images[imgIdx];
+                    if (img.bufferView !== undefined && glbJson.bufferViews?.[img.bufferView]) {
+                        const bv = glbJson.bufferViews[img.bufferView];
+                        const offset = bv.byteOffset || 0;
+                        const len = bv.byteLength;
+                        if (offset + len <= glbBin.length) {
+                            const imgBuf = Buffer.from(glbBin.buffer, glbBin.byteOffset + offset, len);
+                            // Check PNG IHDR: bytes 16-19 width, 20-23 height
+                            if (imgBuf.length >= 24 && imgBuf[0] === 0x89 && imgBuf[1] === 0x50 && imgBuf[2] === 0x4e && imgBuf[3] === 0x47) {
+                                const srcW = imgBuf.readUInt32BE(16);
+                                const srcH = imgBuf.readUInt32BE(20);
+                                const maxDim = Math.max(srcW, srcH);
+                                return Math.min(4096, Math.max(512, Math.pow(2, Math.ceil(Math.log2(maxDim * 2)))));
+                            }
+                            // Check JPEG: scan markers for SOF0 (0xFF, 0xC0) or SOF2 (0xFF, 0xC2)
+                            if (imgBuf.length >= 4 && imgBuf[0] === 0xff && imgBuf[1] === 0xd8) {
+                                let pos = 2;
+                                while (pos < imgBuf.length - 8) {
+                                    if (imgBuf[pos] === 0xff && (imgBuf[pos + 1] === 0xc0 || imgBuf[pos + 1] === 0xc2)) {
+                                        const srcH = imgBuf.readUInt16BE(pos + 5);
+                                        const srcW = imgBuf.readUInt16BE(pos + 7);
+                                        const maxDim = Math.max(srcW, srcH);
+                                        return Math.min(4096, Math.max(512, Math.pow(2, Math.ceil(Math.log2(maxDim * 2)))));
+                                    }
+                                    const markerLen = imgBuf.readUInt16BE(pos + 2);
+                                    pos += 2 + markerLen;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return defaultResolution || 1024;
+    }
+
+    public static embedPerSubmeshTexturesIntoGlb(
+        glbJson: any,
+        glbBin: Buffer,
+        submeshResults: Array<{
+            primitiveIndex: number;
+            materialIndex?: number;
+            albedoPng: Buffer;
+            normalPng: Buffer;
+            ormPng: Buffer;
+        }>
     ): Buffer {
-        const newJson = JSON.parse(JSON.stringify(json));
-        let currentBin = Buffer.from(bin);
+        const newJson = JSON.parse(JSON.stringify(glbJson));
+        let currentBin = Buffer.from(glbBin);
 
         const appendBuffer = (data: Buffer): { bufferViewIndex: number } => {
             const alignedOffset = (currentBin.length + 3) & ~3;
@@ -1070,70 +1282,81 @@ export class SurveyTextureUnprojector {
         if (!newJson.textures) newJson.textures = [];
         if (!newJson.materials) newJson.materials = [];
 
-        // 1. Albedo image & texture
-        const albBv = appendBuffer(albedoPng);
-        const albImgIdx = newJson.images.length;
-        newJson.images.push({ bufferView: albBv.bufferViewIndex, mimeType: 'image/png', name: 'albedo_atlas' });
-        const albTexIdx = newJson.textures.length;
-        newJson.textures.push({ source: albImgIdx });
+        let submeshIdx = 0;
+        for (const mesh of newJson.meshes || []) {
+            for (const prim of mesh.primitives || []) {
+                const submesh = submeshResults[submeshIdx];
+                if (!submesh) {
+                    submeshIdx++;
+                    continue;
+                }
 
-        // 2. Normal image & texture
-        const normBv = appendBuffer(normalPng);
-        const normImgIdx = newJson.images.length;
-        newJson.images.push({ bufferView: normBv.bufferViewIndex, mimeType: 'image/png', name: 'normal_atlas' });
-        const normTexIdx = newJson.textures.length;
-        newJson.textures.push({ source: normImgIdx });
+                // 1. Albedo image & texture
+                const albBv = appendBuffer(submesh.albedoPng);
+                const albImgIdx = newJson.images.length;
+                newJson.images.push({ bufferView: albBv.bufferViewIndex, mimeType: 'image/png', name: `albedo_atlas_submesh_${submeshIdx}` });
+                const albTexIdx = newJson.textures.length;
+                newJson.textures.push({ source: albImgIdx });
 
-        // 3. ORM image & texture
-        const ormBv = appendBuffer(ormPng);
-        const ormImgIdx = newJson.images.length;
-        newJson.images.push({ bufferView: ormBv.bufferViewIndex, mimeType: 'image/png', name: 'orm_atlas' });
-        const ormTexIdx = newJson.textures.length;
-        newJson.textures.push({ source: ormImgIdx });
+                // 2. Normal image & texture
+                const normBv = appendBuffer(submesh.normalPng);
+                const normImgIdx = newJson.images.length;
+                newJson.images.push({ bufferView: normBv.bufferViewIndex, mimeType: 'image/png', name: `normal_atlas_submesh_${submeshIdx}` });
+                const normTexIdx = newJson.textures.length;
+                newJson.textures.push({ source: normImgIdx });
 
-        // Update or create material
-        const matIdx = 0;
-        if (newJson.materials.length === 0) {
-            newJson.materials.push({
-                name: 'pbr_beautified_material',
-                pbrMetallicRoughness: {
-                    baseColorTexture: { index: albTexIdx },
-                    metallicRoughnessTexture: { index: ormTexIdx },
-                    roughnessFactor: 1.0,
-                    metallicFactor: 1.0
-                },
-                normalTexture: { index: normTexIdx },
-                occlusionTexture: { index: ormTexIdx }
-            });
-        } else {
-            const mat = newJson.materials[matIdx];
-            if (!mat.pbrMetallicRoughness) mat.pbrMetallicRoughness = {};
-            mat.pbrMetallicRoughness.baseColorTexture = { index: albTexIdx };
-            mat.pbrMetallicRoughness.metallicRoughnessTexture = { index: ormTexIdx };
-            mat.pbrMetallicRoughness.roughnessFactor = 1.0;
-            mat.pbrMetallicRoughness.metallicFactor = 1.0;
-            mat.normalTexture = { index: normTexIdx };
-            mat.occlusionTexture = { index: ormTexIdx };
+                // 3. ORM image & texture
+                const ormBv = appendBuffer(submesh.ormPng);
+                const ormImgIdx = newJson.images.length;
+                newJson.images.push({ bufferView: ormBv.bufferViewIndex, mimeType: 'image/png', name: `orm_atlas_submesh_${submeshIdx}` });
+                const normOrmIdx = newJson.textures.length;
+                newJson.textures.push({ source: ormImgIdx });
 
-            // Strip KHR_materials_unlit to ensure physical PBR shading
+                // Create distinct material for this submesh
+                const matIdx = newJson.materials.length;
+                newJson.materials.push({
+                    name: `pbr_beautified_submesh_${submeshIdx}`,
+                    pbrMetallicRoughness: {
+                        baseColorTexture: { index: albTexIdx },
+                        metallicRoughnessTexture: { index: normOrmIdx },
+                        roughnessFactor: 1.0,
+                        metallicFactor: 1.0
+                    },
+                    normalTexture: { index: normTexIdx },
+                    occlusionTexture: { index: normOrmIdx }
+                });
+
+                prim.material = matIdx;
+                submeshIdx++;
+            }
+        }
+
+        // Strip KHR_materials_unlit from all materials and extensionsUsed
+        for (const mat of newJson.materials) {
             if (mat.extensions && mat.extensions.KHR_materials_unlit) {
                 delete mat.extensions.KHR_materials_unlit;
             }
         }
-
-        // Assign material to all mesh primitives
-        for (const mesh of newJson.meshes || []) {
-            for (const prim of mesh.primitives || []) {
-                prim.material = matIdx;
-            }
-        }
-
-        // Clean unlit extension from extensionsUsed
         if (newJson.extensionsUsed) {
             newJson.extensionsUsed = newJson.extensionsUsed.filter((e: string) => e !== 'KHR_materials_unlit');
         }
 
         newJson.buffers[0].byteLength = currentBin.length;
         return AlgorithmicUvEngine.serializeGlb(newJson, currentBin);
+    }
+
+    public static embedTexturesIntoGlb(
+        glbJson: any,
+        glbBin: Buffer,
+        albedoPng: Buffer,
+        normalPng: Buffer,
+        ormPng: Buffer
+    ): Buffer {
+        return this.embedPerSubmeshTexturesIntoGlb(glbJson, glbBin, [{
+            primitiveIndex: 0,
+            albedoPng,
+            normalPng,
+            ormPng
+        }]);
     }
 }

@@ -44,6 +44,197 @@ export interface SurveyApiDeps {
     /** Registered by later phases: beautify one station / whole batch to splat tiles. */
     beautifyStation?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
     beautifyToSplats?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
+    rerunPipeline?: (args: any, report: (p: number, msg?: string) => void) => Promise<any>;
+}
+
+/**
+ * Resolves preset geographic locations (Colosseum, Empire State, Grand Army Plaza)
+ * into canonical anchors, foveated survey camera patterns, and bounding crop parameters
+ * when shorthand location keys are provided from the demo workbench.
+ */
+export function resolveSurveyPreset(args: any, workspaceRoot: string): {
+    glbPath: string;
+    outDir: string;
+    anchor: GeodeticAnchor;
+    stations: ColmapCameraPose[];
+    beautify: { locationName: string; architecturalStyle?: string; moodPromptContext?: string; styleSuffix?: string };
+    cropRadius?: number;
+    cropBox?: { min: [number, number, number]; max: [number, number, number] };
+    sigmaScale?: number;
+    voxelSizeMeters?: number;
+    erodeSilhouettePx?: number;
+    dropInconsistent?: boolean;
+    colorConsistencyThresh?: number;
+} {
+    const loc = (args?.location || args?.activeModel || '').toLowerCase();
+    const engine = new SurveySynthesisEngine();
+
+    if (loc.includes('colosseum')) {
+        const anchor: GeodeticAnchor = {
+            lat: 41.8902,
+            lng: 12.4922,
+            elevationMeters: 22.0,
+            headingDeg: 0,
+            formattedAddress: 'Colosseum, Rome'
+        };
+        const isCompleteAmphitheatre = args?.surveyPattern === 'amphitheatre-complete' ||
+            args?.surveyPreset === 'watertight-112' ||
+            args?.surveyPreset === 'interior-pilot-40' ||
+            (typeof args?.cameraCount === 'number' && args.cameraCount > 24);
+
+        const cameraCount = typeof args?.cameraCount === 'number'
+            ? args.cameraCount
+            : (args?.surveyPreset === 'watertight-112' ? 112 : (args?.surveyPreset === 'interior-pilot-40' ? 40 : 24));
+
+        const stations = isCompleteAmphitheatre
+            ? engine.synthesize(anchor, {
+                type: 'amphitheatre-complete',
+                cameraCount,
+                targetRadiusMeters: 150,
+                aspectRatioXZ: 1.18,
+                lookAtOffsetLocalENU: [0, 20, 0]
+            })
+            : engine.synthesize(anchor, {
+                type: 'foveated-multi-tier',
+                cameraCount: 24,
+                targetRadiusMeters: 150,
+                tierRadiiMeters: [110, 130, 180],
+                altitudeTiersMeters: [
+                    anchor.elevationMeters + 3.0,
+                    anchor.elevationMeters + 30.0,
+                    anchor.elevationMeters + 75.0
+                ],
+                lookAtOffsetLocalENU: [0, 20, 0],
+                lookAtTiersOffsetLocalENU: [
+                    [0, 6.0, 0],
+                    [0, 28.0, 0],
+                    [0, 20.0, 0]
+                ]
+            });
+        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/colosseum_grounded.glb'))
+            ? 'public/models/colosseum_grounded.glb'
+            : 'public/models/colosseum_clay.glb';
+        return {
+            glbPath: args?.glbPath || glb,
+            outDir: args?.outDir || 'public/tilesets/colosseum',
+            anchor: args?.anchor || anchor,
+            stations: args?.stations && args.stations.length ? args.stations : stations,
+            beautify: {
+                locationName: 'Rome Colosseum',
+                architecturalStyle: 'Ancient Roman travertine limestone amphitheatre with arched arcades, Corinthian columns, and authentic Roman masonry under warm Mediterranean sunlight',
+                ...(args?.beautify || {})
+            },
+            cropRadius: args?.cropRadius ?? 115.0,
+            cropBox: args?.cropBox || { min: [-115.0, -0.5, -115.0], max: [115.0, 50.0, 115.0] },
+            sigmaScale: args?.sigmaScale ?? 0.5,
+            voxelSizeMeters: args?.voxelSizeMeters ?? 0.05,
+            erodeSilhouettePx: args?.erodeSilhouettePx ?? 2,
+            dropInconsistent: args?.dropInconsistent ?? true,
+            colorConsistencyThresh: args?.colorConsistencyThresh ?? 40.0
+        };
+    } else if (loc.includes('esb') || loc.includes('empire')) {
+        const anchor: GeodeticAnchor = {
+            lat: 40.7484,
+            lng: -73.9857,
+            elevationMeters: 15.0,
+            headingDeg: 0,
+            formattedAddress: 'Empire State Building, New York'
+        };
+        const stations = engine.synthesize(anchor, {
+            type: 'orbital-multi-tier',
+            cameraCount: 24,
+            targetRadiusMeters: 120,
+            tierRadiiMeters: [80, 120, 160],
+            altitudeTiersMeters: [
+                anchor.elevationMeters + 5.0,
+                anchor.elevationMeters + 120.0,
+                anchor.elevationMeters + 350.0
+            ],
+            lookAtOffsetLocalENU: [0, 180, 0],
+            lookAtTiersOffsetLocalENU: [
+                [0, 20, 0],
+                [0, 150, 0],
+                [0, 320, 0]
+            ]
+        });
+        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/esb_grounded.glb'))
+            ? 'public/models/esb_grounded.glb'
+            : 'public/models/esb_clay.glb';
+        return {
+            glbPath: args?.glbPath || glb,
+            outDir: args?.outDir || 'public/tilesets/esb',
+            anchor: args?.anchor || anchor,
+            stations: args?.stations && args.stations.length ? args.stations : stations,
+            beautify: {
+                locationName: 'Empire State Building',
+                architecturalStyle: 'Art Deco limestone skyscraper with vertical piers, stainless steel crown spire, and Manhattan streetscape under crisp morning illumination',
+                ...(args?.beautify || {})
+            },
+            cropRadius: args?.cropRadius ?? 150.0,
+            sigmaScale: args?.sigmaScale ?? 0.8,
+            voxelSizeMeters: args?.voxelSizeMeters ?? 0.15
+        };
+    } else if (loc.includes('gap') || loc.includes('plaza') || loc.includes('grand')) {
+        const anchor: GeodeticAnchor = {
+            lat: 40.7648,
+            lng: -73.9733,
+            elevationMeters: 20.0,
+            headingDeg: 0,
+            formattedAddress: 'Grand Army Plaza, New York'
+        };
+        const stations = engine.synthesize(anchor, {
+            type: 'orbital-multi-tier',
+            cameraCount: 18,
+            targetRadiusMeters: 55,
+            tierRadiiMeters: [38, 55, 80],
+            altitudeTiersMeters: [
+                anchor.elevationMeters + 2.0,
+                anchor.elevationMeters + 10.0,
+                anchor.elevationMeters + 26.0
+            ],
+            lookAtOffsetLocalENU: [0, 10, 0],
+            lookAtTiersOffsetLocalENU: [
+                [0, 4, 0],
+                [0, 10, 0],
+                [0, 14, 0]
+            ]
+        });
+        const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/gap_grounded.glb'))
+            ? 'public/models/gap_grounded.glb'
+            : 'public/models/gap_clay.glb';
+        return {
+            glbPath: args?.glbPath || glb,
+            outDir: args?.outDir || 'public/tilesets/gap',
+            anchor: args?.anchor || anchor,
+            stations: args?.stations && args.stations.length ? args.stations : stations,
+            beautify: {
+                locationName: 'Grand Army Plaza',
+                architecturalStyle: 'Beaux-Arts neoclassical plaza with Pulitzer Fountain, gilded bronze Pomona statue, limestone balustrades, and Manhattan Fifth Avenue context under late afternoon sun',
+                ...(args?.beautify || {})
+            },
+            cropRadius: args?.cropRadius ?? 90.0,
+            sigmaScale: args?.sigmaScale ?? 0.5,
+            voxelSizeMeters: args?.voxelSizeMeters ?? 0.08
+        };
+    }
+
+    const glb = args?.glbPath || 'public/models/survey_box_ground.glb';
+    const anchor = args?.anchor || { lat: 0, lng: 0, elevationMeters: 0, headingDeg: 0, formattedAddress: 'Survey Target' };
+    const stations = args?.stations && args.stations.length ? args.stations : engine.synthesize(anchor, {
+        type: 'orbital-multi-tier',
+        cameraCount: args?.cameraCount || 12,
+        targetRadiusMeters: 25,
+        altitudeTiersMeters: [2, 10, 20]
+    });
+    return {
+        glbPath: glb,
+        outDir: args?.outDir || `public/tilesets/survey_${Date.now()}`,
+        anchor,
+        stations,
+        beautify: { locationName: args?.locationName || 'Survey Target', ...(args?.beautify || {}) },
+        sigmaScale: args?.sigmaScale ?? 1.0,
+        voxelSizeMeters: args?.voxelSizeMeters ?? 0.2
+    };
 }
 
 /**
@@ -67,20 +258,67 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         report(1, res.accepted ? 'Accepted' : `Rejected: ${res.qc.reason}`);
         return { stationId: station.id, accepted: res.accepted, attempts: res.attempts, qc: res.qc, prompt: res.prompt, imageBase64: res.imagePng.toString('base64'), imagePath: path.join(outDir, `station_${station.id}_beautified.png`), blockoutPath: path.join(outDir, `station_${station.id}_blockout.png`), alignedStation: res.alignedStation };
     };
-    deps.beautifyToSplats = async (args, report) => {
-        if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length === 0 || !args?.anchor) throw new Error('glbPath, stations[] and anchor are required');
+
+    const runSurveyPipeline = async (args: any, report: (p: number, msg?: string) => void) => {
+        let preset: ReturnType<typeof resolveSurveyPreset> | null = null;
+        if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length === 0 || !args?.anchor) {
+            preset = resolveSurveyPreset(args, workspaceRoot);
+        }
+        const glbPath = resolveGlb(args?.glbPath || preset?.glbPath!);
+        const anchor = args?.anchor || preset?.anchor!;
+        const stations = (args?.stations && args.stations.length) ? args.stations : preset?.stations!;
+        const outDir = path.resolve(workspaceRoot, args?.outDir || preset?.outDir || `public/tilesets/survey_${Date.now()}`);
+        const beautify = {
+            locationName: args?.locationName || preset?.beautify?.locationName || anchor.formattedAddress || 'the location',
+            architecturalStyle: args?.architecturalStyle || preset?.beautify?.architecturalStyle,
+            moodPromptContext: args?.moodPromptContext || preset?.beautify?.moodPromptContext,
+            styleSuffix: args?.styleSuffix || preset?.beautify?.styleSuffix
+        };
+
         const svc = new SurveySplatPipelineService({ generator });
-        const outDir = path.resolve(workspaceRoot, args.outDir || `public/tilesets/survey_${Date.now()}`);
         const res = await svc.run({
-            glbPath: resolveGlb(args.glbPath), anchor: args.anchor, stations: args.stations, outDir,
-            beautify: { locationName: args.locationName || args.anchor.formattedAddress || 'the location', moodPromptContext: args.moodPromptContext, styleSuffix: args.styleSuffix },
-            mode: args.mode, maxStations: args.maxStations, renderWidth: args.width, bakeStride: args.bakeStride, isoDate: args.isoDate, headingDeg: args.headingDeg, maxRerolls: args.maxRerolls
+            glbPath,
+            anchor,
+            stations,
+            outDir,
+            beautify,
+            mode: args?.mode ?? 'chained',
+            maxStations: args?.maxStations,
+            renderWidth: args?.width || args?.renderWidth || 1920,
+            bakeStride: args?.bakeStride,
+            isoDate: args?.isoDate,
+            headingDeg: args?.headingDeg,
+            maxRerolls: args?.maxRerolls,
+            // Calibrated splat parameters forwarded to C++ station_to_splats & octree voxel fusion
+            sigmaScale: args?.sigmaScale ?? preset?.sigmaScale,
+            voxelSizeMeters: args?.voxelSizeMeters ?? preset?.voxelSizeMeters,
+            forceRebake: args?.forceRebake !== false,
+            clean: args?.clean ?? false,
+            cropRadius: args?.cropRadius ?? preset?.cropRadius,
+            cropBox: args?.cropBox ?? preset?.cropBox,
+            erodeSilhouettePx: args?.erodeSilhouettePx ?? preset?.erodeSilhouettePx,
+            dropInconsistent: args?.dropInconsistent ?? preset?.dropInconsistent,
+            colorConsistencyThresh: args?.colorConsistencyThresh ?? preset?.colorConsistencyThresh,
+            dropFoliage: args?.dropFoliage,
+            enableHybridMicroDepth: args?.enableHybridMicroDepth,
+            enablePhotometricMicroDepth: args?.enablePhotometricMicroDepth,
+            use2dgs: args?.use2dgs === true || args?.surfaceModel === 'planar',
+            surfaceModel: args?.surfaceModel,
+            shDegree: args?.shDegree !== undefined ? parseInt(args.shDegree, 10) : undefined,
+            exposureScale: args?.exposureScale !== undefined ? parseFloat(args.exposureScale) : undefined
         }, report);
+
         if (!res.success) throw new Error(res.error || 'pipeline failed');
         const publicRoot = path.resolve(workspaceRoot, 'public');
         const rel = path.relative(publicRoot, res.tilesetPath);
-        return { ...res, tilesetUrl: rel && !rel.startsWith('..') ? '/' + rel.split(path.sep).join('/') : undefined };
+        return {
+            ...res,
+            tilesetUrl: rel && !rel.startsWith('..') ? '/' + rel.split(path.sep).join('/') : undefined
+        };
     };
+
+    deps.beautifyToSplats = runSurveyPipeline;
+    deps.rerunPipeline = runSurveyPipeline;
     return deps;
 }
 
@@ -223,11 +461,19 @@ export class SurveyApi {
         return this.startJob('beautify-to-splats', (report) => this.deps.beautifyToSplats!(body, report));
     }
 
+    /** POST /rerun-pipeline -> job */
+    rerunPipeline(body: any): SurveyJob {
+        if (this.deps.rerunPipeline) {
+            return this.startJob('rerun-pipeline', (report) => this.deps.rerunPipeline!(body, report));
+        }
+        return this.beautifyToSplats(body);
+    }
+
     /** GET /jobs/:id */
     job(id: string): SurveyJob | undefined { return this.jobs.get(id); }
 
     /** GET /jobs */
-    listJobs(): SurveyJob[] { return [...this.jobs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 50); }
+    listJobs(): SurveyJob[] { return Array.from(this.jobs.values()).sort((a, b) => b.createdAt - a.createdAt).slice(0, 50); }
 }
 
 /**
@@ -249,6 +495,7 @@ export function createSurveyRouter(express: any, api: SurveyApi) {
     router.post('/render-station', wrap(b => api.renderStation(b)));
     router.post('/beautify-station', wrap(b => ({ success: true, job: api.beautifyStation(b) })));
     router.post('/beautify-to-splats', wrap(b => ({ success: true, job: api.beautifyToSplats(b) })));
+    router.post('/rerun-pipeline', wrap(b => ({ success: true, job: api.rerunPipeline(b) })));
     router.get('/jobs', (_req: any, res: any) => res.json({ success: true, jobs: api.listJobs() }));
     router.get('/jobs/:id', (req: any, res: any) => {
         const job = api.job(req.params.id);
@@ -288,6 +535,7 @@ export function createNodeHttpHandler(api: SurveyApi, prefix = '/api/3d/survey')
                     case '/render-station': return send(res, 200, await api.renderStation(body));
                     case '/beautify-station': return send(res, 200, { success: true, job: api.beautifyStation(body) });
                     case '/beautify-to-splats': return send(res, 200, { success: true, job: api.beautifyToSplats(body) });
+                    case '/rerun-pipeline': return send(res, 200, { success: true, job: api.rerunPipeline(body) });
                 }
             }
             return send(res, 404, { success: false, error: 'not found' });

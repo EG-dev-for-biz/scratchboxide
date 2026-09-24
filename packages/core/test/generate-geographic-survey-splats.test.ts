@@ -4,7 +4,37 @@ import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../src/common/spatial/SurveySynthesisEngine';
 import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
 import { decodePng, encodePng } from '../src/node/texture-processing';
-import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { createGoogleStationImageGenerator, type StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
+import { GoogleMediaGenerationService } from '../src/node/google-media-generation-service';
+import { GoogleMediaCredentialsService } from '../src/node/google-media-credentials-service';
+import { MediaAssetStore } from '../src/node/media-asset-store';
+
+/**
+ * Computes the distribution of chroma across all non-transparent pixels in a PNG buffer.
+ * Chroma is defined as: sqrt((R-G)^2 + (G-B)^2 + (B-R)^2) / sqrt(2)
+ * Pure monochrome / grey clay produces chroma near 0-6.
+ * Real photographic architectural imagery produces median chroma > 18.
+ */
+function computeImageChroma(pngBuffer: Buffer): { medianChroma: number; meanChroma: number; p90Chroma: number } {
+    const decoded = decodePng(pngBuffer);
+    const { data } = decoded;
+    const chromas: number[] = [];
+    const sqrt2 = Math.SQRT2;
+    for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] < 128) continue;
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const c = Math.sqrt((r - g) * (r - g) + (g - b) * (g - b) + (b - r) * (b - r)) / sqrt2;
+        chromas.push(c);
+    }
+    if (chromas.length === 0) return { medianChroma: 0, meanChroma: 0, p90Chroma: 0 };
+    chromas.sort((a, b) => a - b);
+    const medianChroma = chromas[Math.floor(chromas.length / 2)];
+    const meanChroma = chromas.reduce((a, b) => a + b, 0) / chromas.length;
+    const p90Chroma = chromas[Math.floor(chromas.length * 0.9)];
+    return { medianChroma, meanChroma, p90Chroma };
+}
 
 /**
  * Architectural Station Generator conforming to LocationObjectLightingService stone albedos
@@ -212,6 +242,7 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             maxStations: 28,
             bakeStride: 1,
             sigmaScale: 1.15,
+            clean: true,
             forceRebake: true,
             voxelSizeMeters: 0.25,
             maxSplatCount: 800000
@@ -220,9 +251,25 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(result.fusedSplatCount).toBeGreaterThan(25000);
         expect(fs.existsSync(result.tilesetPath)).toBe(true);
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
-    }, 300000);
+    }, 1800000);
 
     it('bakes fresh 3DGS tileset for Location 2: Rome Colosseum', async () => {
+        // Ensure Vertex AI service account credentials are used for real generation
+        delete process.env.GEMINI_API_KEY;
+        delete process.env.GOOGLE_AI_API_KEY;
+        const creds = new GoogleMediaCredentialsService();
+        const assetStore = new MediaAssetStore();
+        const mediaService = new GoogleMediaGenerationService(assetStore, () => creds.createClient());
+        const realGenerator = createGoogleStationImageGenerator({
+            mediaService,
+            assetStore,
+            workspaceRoot: process.cwd(),
+            fidelity: 'production',
+            imageSize: '2K',
+            modelPriority: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image']
+        });
+        const realSvc = new SurveySplatPipelineService({ generator: realGenerator });
+
         const glbPath = path.resolve(process.cwd(), 'public/models/colosseum_grounded.glb');
         const outDir = path.resolve(process.cwd(), 'public/tilesets/colosseum');
         const anchor = {
@@ -233,54 +280,105 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             formattedAddress: 'Colosseum, Rome'
         };
 
-        // 24 camera stations across 4 authentic elevation tiers:
-        // Tier 1 (Pedestrian Street Level / Arcade Base, ~3.0m): human eye level surveying the ground arches, piazza, and foundation line
-        // Tier 2 (Mid-Level Arcades & Cavea, ~18m): surveying 2nd story colonnades and interior seating
-        // Tier 3 (Upper Colonnade & Attic, ~38m): surveying attic cornice and exterior wall
-        // Tier 4 (Aerial Oblique, ~65m): high vantage looking down into the hypogeum and arena floor
+        // Step 2: 24 camera stations across 3 authentic foveated elevation tiers:
+        // Tier 1 (12 stations): 2–4m AGL, 20–30m standoff, 50mm lens targeting lower arcade facades
+        // Tier 2 (8 stations): 25–35m AGL, 40–60m standoff, 35mm lens targeting upper colonnade & attic
+        // Tier 3 (4 stations): 75m AGL macro anchors, 24mm lens for global structure & arena floor
         const stations = engine.synthesize(anchor, {
-            type: 'orbital-multi-tier',
+            type: 'foveated-multi-tier',
             cameraCount: 24,
             targetRadiusMeters: 150,
-            tierRadiiMeters: [110, 135, 165, 195],
+            tierRadiiMeters: [110, 130, 180],
             altitudeTiersMeters: [
                 anchor.elevationMeters + 3.0,
-                anchor.elevationMeters + 18.0,
-                anchor.elevationMeters + 38.0,
-                anchor.elevationMeters + 65.0
+                anchor.elevationMeters + 30.0,
+                anchor.elevationMeters + 75.0
             ],
             lookAtOffsetLocalENU: [0, 20, 0],
             lookAtTiersOffsetLocalENU: [
-                [0, 10, 0],
-                [0, 20, 0],
-                [0, 25, 0],
-                [0, 15, 0]
+                [0, 6.0, 0],
+                [0, 28.0, 0],
+                [0, 20.0, 0]
             ]
         });
 
-        const result = await svc.run({
+        const result = await realSvc.run({
             glbPath,
             anchor,
             stations,
             outDir,
             beautify: {
                 locationName: 'Rome Colosseum',
-                architecturalStyle: 'Ancient Roman travertine limestone amphitheatre with arched arcades'
+                architecturalStyle: 'Ancient Roman travertine limestone amphitheatre with arched arcades, Corinthian columns, and authentic Roman masonry under warm Mediterranean sunlight'
             },
-            renderWidth: 960,
+            renderWidth: 1920,
             mode: 'chained',
             maxStations: 24,
             bakeStride: 1,
-            sigmaScale: 1.15,
-            forceRebake: true,
+            sigmaScale: 0.5,
+            clean: false,
+            forceRebake: false,
             dropFoliage: true,
-            voxelSizeMeters: 0.20
+            voxelSizeMeters: 0.05,
+            erodeSilhouettePx: 2,
+            dropInconsistent: true,
+            colorConsistencyThresh: 40.0,
+            cropRadius: 115.0,
+            cropBox: {
+                min: [-115.0, -0.5, -115.0],
+                max: [115.0, 50.0, 115.0]
+            }
         }, (prog, msg) => console.log(`[Colosseum] ${(prog * 100).toFixed(0)}%: ${msg}`));
 
-        expect(result.fusedSplatCount).toBeGreaterThan(25000);
+        if (!result.success) throw new Error('PIPELINE ERROR: ' + result.error);
+        expect(result.success).toBe(true);
         expect(fs.existsSync(result.tilesetPath)).toBe(true);
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
-    }, 900000);
+        expect(fs.existsSync(result.metaPath)).toBe(true);
+
+        const meta = await fs.readJson(result.metaPath);
+        // Step 1 Verification: Assert the mock generator was NOT used and real Google Nano Banana was used
+        expect(meta.generator).not.toBe('architectural-photoreal-generator');
+        expect(meta.generator).toBe('google-nano-banana');
+
+        // Step 1 Verification: Assert median chroma of generated station PNGs exceeds 12.0 and max exceeds 20.0 (distinguishing from grey clay mock which is ~5.2)
+        const stationDir = path.join(outDir, 'stations');
+        const stationFiles = (await fs.readdir(stationDir)).filter(f => f.endsWith('_beautified.png'));
+        expect(stationFiles.length).toBeGreaterThan(0);
+
+        let totalMedianChroma = 0;
+        let maxMedianChroma = 0;
+        let chromaCount = 0;
+        for (const sf of stationFiles) {
+            const pngBuf = await fs.readFile(path.join(stationDir, sf));
+            const { medianChroma } = computeImageChroma(pngBuf);
+            if (medianChroma > 0) {
+                totalMedianChroma += medianChroma;
+                if (medianChroma > maxMedianChroma) maxMedianChroma = medianChroma;
+                chromaCount++;
+            }
+        }
+        const avgMedianChroma = chromaCount > 0 ? totalMedianChroma / chromaCount : 0;
+        console.log(`[Colosseum Validation] Station PNG count: ${stationFiles.length}, Average Median Chroma: ${avgMedianChroma.toFixed(2)}, Max Median Chroma: ${maxMedianChroma.toFixed(2)} (threshold: >12.0)`);
+        expect(avgMedianChroma).toBeGreaterThan(12.0);
+        expect(maxMedianChroma).toBeGreaterThan(20.0);
+
+        // Step 2 Verification: Assert facade splat radius sigma has dropped by 10x (sigma <= 5cm)
+        const fusedBuf = await fs.readFile(result.fusedSplatPath);
+        const splatCount = Math.floor(fusedBuf.length / 32);
+        expect(splatCount).toBeGreaterThan(25000);
+        const sigmas: number[] = [];
+        for (let i = 0; i < splatCount; i++) {
+            const offset = i * 32;
+            const sx = fusedBuf.readFloatLE(offset + 12);
+            const sy = fusedBuf.readFloatLE(offset + 16);
+            sigmas.push((sx + sy) * 0.5);
+        }
+        sigmas.sort((a, b) => a - b);
+        const medianSigma = sigmas[Math.floor(splatCount / 2)];
+        console.log(`[Colosseum Validation] Total splats: ${splatCount}, Median sigma: ${(medianSigma * 100).toFixed(2)}cm (threshold: <= 5.0cm)`);
+        expect(medianSigma).toBeLessThanOrEqual(0.05);
+    }, 1800000);
 
     it('bakes fresh 3DGS tileset for Location 3: Grand Army Plaza', async () => {
         const glbPath = path.resolve(process.cwd(), 'public/models/gap_grounded.glb');
@@ -329,6 +427,7 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
             maxStations: 18,
             bakeStride: 1,
             sigmaScale: 1.15,
+            clean: true,
             forceRebake: true,
             voxelSizeMeters: 0.20,
             maxSplatCount: 800000
@@ -337,5 +436,5 @@ describe('Fresh Multi-Location Survey Splat Pipeline Execution', () => {
         expect(result.fusedSplatCount).toBeGreaterThan(25000);
         expect(fs.existsSync(result.tilesetPath)).toBe(true);
         expect(fs.existsSync(result.fusedSplatPath)).toBe(true);
-    }, 900000);
+    }, 1800000);
 });

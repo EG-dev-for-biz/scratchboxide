@@ -47,6 +47,7 @@ struct GaussianSplat {
     Quat rotation{0.0f, 0.0f, 0.0f, 1.0f}; // Orientation quaternion [x, y, z, w]
     Vec3 color{1.0f, 1.0f, 1.0f};         // Linear RGB color [0.0 - 1.0]
     float opacity{1.0f};                  // Alpha opacity [0.0 - 1.0]
+    std::vector<float> sh;                // Optional higher-order Spherical Harmonics coefficients (shDim * 3 floats)
 };
 
 // ============================================================================
@@ -260,12 +261,15 @@ public:
         return n * (9 + 1 + 3 + 3 + 3) + n * shDim * 3;
     }
 
-    static std::vector<uint8_t> encode(const std::vector<GaussianSplat>& splats, uint8_t fractionalBits = DEFAULT_FRACTIONAL_BITS) {
+    static std::vector<uint8_t> encode(const std::vector<GaussianSplat>& splats, uint8_t fractionalBits = DEFAULT_FRACTIONAL_BITS, uint8_t shDegree = 0) {
         const size_t n = splats.size();
-        std::vector<uint8_t> raw(sizeof(SpzHeader) + nianticBodyBytes(n, 0));
+        const size_t shDim = (shDegree == 1) ? 3 : (shDegree == 2) ? 8 : (shDegree == 3) ? 15 : 0;
+        const size_t shCoeffsPerSplat = shDim * 3;
+        std::vector<uint8_t> raw(sizeof(SpzHeader) + nianticBodyBytes(n, shDegree));
 
         SpzHeader header;
         header.numPoints = static_cast<uint32_t>(n);
+        header.shDegree = shDegree;
         header.fractionalBits = fractionalBits;
         std::memcpy(raw.data(), &header, sizeof(SpzHeader));
 
@@ -274,6 +278,7 @@ public:
         uint8_t* color = alpha + n;
         uint8_t* scale = color + 3 * n;
         uint8_t* rot = scale + 3 * n;
+        uint8_t* shPtr = rot + 3 * n;
         const float posScale = static_cast<float>(1 << fractionalBits);
 
         for (size_t i = 0; i < n; ++i) {
@@ -305,6 +310,13 @@ public:
             rot[i * 3 + 0] = toU8(q.x * sign + 127.5f);
             rot[i * 3 + 1] = toU8(q.y * sign + 127.5f);
             rot[i * 3 + 2] = toU8(q.z * sign + 127.5f);
+
+            if (shDegree > 0 && shCoeffsPerSplat > 0) {
+                for (size_t cIdx = 0; cIdx < shCoeffsPerSplat; ++cIdx) {
+                    float val = (cIdx < s.sh.size()) ? s.sh[cIdx] : 0.0f;
+                    shPtr[i * shCoeffsPerSplat + cIdx] = toU8(val * 127.5f + 127.5f);
+                }
+            }
         }
 
         return GzipCodec::compress(raw.data(), raw.size());
@@ -326,12 +338,15 @@ public:
         const size_t body = raw.size() - sizeof(SpzHeader);
 
         if (header.magic == SPZ_MAGIC_NIANTIC && body >= nianticBodyBytes(n, header.shDegree) && body != n * 22) {
-            // Spec-exact Niantic layout (SH bands beyond degree 0 are skipped, not decoded)
+            // Spec-exact Niantic layout (including SH bands when header.shDegree > 0)
             const uint8_t* pos = raw.data() + sizeof(SpzHeader);
             const uint8_t* alpha = pos + 9 * n;
             const uint8_t* color = alpha + n;
             const uint8_t* scale = color + 3 * n;
             const uint8_t* rot = scale + 3 * n;
+            const uint8_t* shPtr = rot + 3 * n;
+            const size_t shDim = (header.shDegree == 1) ? 3 : (header.shDegree == 2) ? 8 : (header.shDegree == 3) ? 15 : 0;
+            const size_t shCoeffsPerSplat = shDim * 3;
             const float posScale = 1.0f / static_cast<float>(1 << header.fractionalBits);
             splats.reserve(n);
             for (size_t i = 0; i < n; ++i) {
@@ -360,6 +375,14 @@ public:
                 float qz = rot[i * 3 + 2] / 127.5f - 1.0f;
                 float qw = std::sqrt(std::max(0.0f, 1.0f - (qx * qx + qy * qy + qz * qz)));
                 s.rotation = Quat(qx, qy, qz, qw).normalized();
+
+                if (header.shDegree > 0 && shCoeffsPerSplat > 0) {
+                    s.sh.resize(shCoeffsPerSplat);
+                    for (size_t cIdx = 0; cIdx < shCoeffsPerSplat; ++cIdx) {
+                        s.sh[cIdx] = (static_cast<float>(shPtr[i * shCoeffsPerSplat + cIdx]) - 127.5f) / 127.5f;
+                    }
+                }
+
                 splats.push_back(s);
             }
         } else if (header.magic == SPZ_MAGIC_NIANTIC && body == n * 22) {

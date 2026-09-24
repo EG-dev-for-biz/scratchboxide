@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8089;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8080;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const UPLOADS_DIR = path.join(PUBLIC_DIR, 'uploads');
 const REPO_ROOT = path.join(__dirname, '..');
@@ -520,6 +520,96 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, path: targetPath, size: buffer.length }));
         });
+        return;
+    }
+
+    // Endpoint: Colosseum Recipe PBR rebuild (geometry attributes + shared detail maps, ~2 s)
+    if (req.method === 'POST' && reqPath === '/api/3d/pbr/colosseum-recipe/rerun') {
+        const viteNodeBin = path.join(REPO_ROOT, 'node_modules', '.bin', 'vite-node');
+        const cliScript = path.join(REPO_ROOT, 'scripts', 'run_colosseum_recipe_pbr_cli.ts');
+        const reportPath = path.join(PUBLIC_DIR, 'models', 'colosseum_rome_recipe_pbr.report.json');
+        execFile(viteNodeBin, [cliScript], { cwd: REPO_ROOT, maxBuffer: 20 * 1024 * 1024, timeout: 300000 }, (err, stdout, stderr) => {
+            if (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: (stderr || err.message).slice(-2000) }));
+                return;
+            }
+            try {
+                const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(report));
+            } catch (readErr) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: readErr.message }));
+            }
+        });
+        return;
+    }
+
+    // Endpoint: In-demo Survey Splat Pipeline Rerun Trigger
+    if (req.method === 'POST' && (reqPath === '/api/3d/survey/rerun-pipeline' || reqPath === '/api/3d/survey/beautify-to-splats')) {
+        try {
+            const body = await parseBody(req);
+            const jobId = `rerun-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+            const jobsDir = path.join(PUBLIC_DIR, 'tilesets', 'jobs');
+            fs.mkdirSync(jobsDir, { recursive: true });
+            const jobFile = path.join(jobsDir, `${jobId}.json`);
+
+            const initialJob = {
+                id: jobId,
+                kind: 'rerun-pipeline',
+                status: 'running',
+                progress: 0.05,
+                message: 'Spawning Gaussian splat survey pipeline...',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                request: body
+            };
+            fs.writeFileSync(jobFile, JSON.stringify(initialJob, null, 2), 'utf8');
+
+            const viteNodeBin = path.join(REPO_ROOT, 'node_modules', '.bin', 'vite-node');
+            const runnerScript = path.join(REPO_ROOT, 'scripts', 'run_survey_pipeline_cli.ts');
+            execFile(viteNodeBin, [runnerScript, '--job-file', jobFile], { cwd: REPO_ROOT }, (err, stdout, stderr) => {
+                if (err) {
+                    console.error(`[survey-pipeline] Job ${jobId} error:`, err.message);
+                    try {
+                        const cur = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+                        cur.status = 'error';
+                        cur.error = err.message;
+                        cur.updatedAt = Date.now();
+                        fs.writeFileSync(jobFile, JSON.stringify(cur, null, 2), 'utf8');
+                    } catch {}
+                }
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, job: initialJob }));
+            return;
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+        }
+    }
+
+    // Endpoint: Query Survey Job Status
+    if (req.method === 'GET' && reqPath.startsWith('/api/3d/survey/jobs/')) {
+        const jobId = reqPath.slice('/api/3d/survey/jobs/'.length);
+        const jobFile = path.join(PUBLIC_DIR, 'tilesets', 'jobs', `${jobId}.json`);
+        if (fs.existsSync(jobFile)) {
+            try {
+                const jobData = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, job: jobData }));
+                return;
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err.message }));
+                return;
+            }
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Job not found' }));
         return;
     }
 

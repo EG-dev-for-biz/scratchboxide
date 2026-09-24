@@ -154,6 +154,10 @@ export interface PbrDecompositionOptions {
   enableToksvigFiltering?: boolean;          // default true (Toksvig specular anti-aliasing)
   enableToksvigMipPyramid?: boolean;         // custom Toksvig multi-scale variance-folded MIP pyramid
   toksvigMipLevels?: number;                 // default 4
+  metricTexelDensityMap?: Float32Array;
+  viewVarianceMap?: Float32Array;
+  worldPositionsMap?: Float32Array;
+  worldNormalsMap?: Float32Array;
 }
 
 export interface AlgorithmicUvOptions {
@@ -540,7 +544,11 @@ export class AlgorithmicUvEngine {
       enableSolarInverseDelighting: options.pbrDecomposition?.enableSolarInverseDelighting ?? false,
       solarDelighting: options.pbrDecomposition?.solarDelighting ?? {},
       enableToksvigMipPyramid: options.pbrDecomposition?.enableToksvigMipPyramid ?? false,
-      toksvigMipLevels: options.pbrDecomposition?.toksvigMipLevels ?? 4
+      toksvigMipLevels: options.pbrDecomposition?.toksvigMipLevels ?? 4,
+      metricTexelDensityMap: options.pbrDecomposition?.metricTexelDensityMap as any,
+      viewVarianceMap: options.pbrDecomposition?.viewVarianceMap as any,
+      worldPositionsMap: options.pbrDecomposition?.worldPositionsMap as any,
+      worldNormalsMap: options.pbrDecomposition?.worldNormalsMap as any
     };
 
     // Process textures across all submeshes
