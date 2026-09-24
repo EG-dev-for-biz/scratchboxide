@@ -18,6 +18,7 @@ export * from './vfx-video-tools';
 export * from './mesh-shaping-tools';
 export * from './nano-banana-tools';
 export * from './algorithmic-uv-tools';
+export * from './botanical-tree-tools';
 
 import type { ToolDeclaration, ToolHandler } from './types';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
@@ -56,11 +57,16 @@ import {
     AI_BEAUTIFY_TOOL_DECLARATIONS,
     aiBeautifyHandlers
 } from './vfx-video-tools';
+import {
+    BOTANICAL_TREE_TOOL_DECLARATIONS,
+    botanicalTreeHandlers
+} from './botanical-tree-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
     ...WORKSPACE_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
+    ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
     ...VFX_VIDEO_TOOL_DECLARATIONS,
@@ -100,7 +106,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...avatar4dgsHandlers,
     ...comfyuiHandlers,
     ...lensHandlers,
-    ...browserHandlers
+    ...browserHandlers,
+    ...botanicalTreeHandlers
 };
 
 

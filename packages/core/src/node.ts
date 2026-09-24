@@ -76,6 +76,15 @@ export {
     type UniversalPbrResult
 } from './node/3d-engine/universal-pbr-baking-kernel';
 export {
+    LivingFoliageKernel,
+    synthesizeLivingFoliage,
+    hash3D as livingFoliageHash3D,
+    valueNoise3D as livingFoliageValueNoise3D,
+    type LivingFoliageContext,
+    type LivingFoliageOutput,
+    type LivingFoliageOptions
+} from './node/3d-engine/living-foliage-kernel';
+export {
     VirtualBevelKernel,
     buildSubmeshAdjacency,
     pointSegmentDistance,
@@ -93,6 +102,31 @@ export {
     BotanicalPipelineTelemetry,
     BotanicalPipelineResult
 } from './node/3d-engine/botanical-vegetation-service';
+export {
+    SbVeggieService,
+    SmplTreeService
+} from './node/3d-engine/sb-veggie-service';
+export {
+    type SbVeggieArchetype,
+    type SbVeggieShapeParams,
+    type SbVeggiePoseParams,
+    type SbVeggiePhenologyParams,
+    type SbVeggieShapingParams,
+    type SbVeggieSynthesizeOptions,
+    type SbVeggieInversionOptions,
+    type SbVeggieInversionTelemetry,
+    type SbVeggieTelemetry,
+    type SbVeggieResult,
+    type SmplTreeArchetype,
+    type SmplTreeShapeParams,
+    type SmplTreePoseParams,
+    type SmplTreePhenologyParams,
+    type SmplTreeSynthesizeOptions,
+    type SmplTreeInversionOptions,
+    type SmplInversionTelemetry,
+    type SmplTreeTelemetry,
+    type SmplTreeResult
+} from './common/botanical/sb-veggie-protocol';
 export {
     UniversalTileDecompositionService,
     UtdraService,
@@ -561,6 +595,17 @@ export {
 } from './node/3d-engine/gaussian-splat-4d-service';
 
 
+// Google Solar API dataLayers & Multi-Class Foliage Segmentation
+export {
+    GeoTiffRasterParser,
+    TIFF_TAGS,
+    TIFF_TYPES,
+    type DecodedTiffIfd
+} from './node/spatial/GeoTiffRasterParser';
+export {
+    GoogleSolarFoliageClassifier
+} from './node/spatial/GoogleSolarFoliageClassifier';
+
 // Survey-to-Atlas Inverse Projection (SAIP) Engine
 export {
     SurveyTextureUnprojector,
@@ -615,6 +660,17 @@ export {
     type ArchConstantineResult,
     type TectonicAnalysisReport
 } from './node/3d-engine/sb-archi-service';
+
+// SB-Veggie Universal Botanical Bridge Service
+export {
+    UniversalBotanicalBridgeService,
+    type SupportedTreeSpecies,
+    type BotanicalSpeciesAdapter,
+    SPECIES_ADAPTERS,
+    type SpatialTreeEntity,
+    type TreeSynthesisBridgeOptions,
+    type TreeSynthesisBridgeResult
+} from './node/spatial/UniversalBotanicalBridgeService';
 
 // SB-Archi Universal Architectural Bridge Service
 export {

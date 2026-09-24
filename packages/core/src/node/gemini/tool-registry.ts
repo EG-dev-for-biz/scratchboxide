@@ -93,6 +93,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('atmosphere_')) return `Atmospheric Simulation: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Native Mesh Reshaping: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `VFX & Video Engine: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('botanical_')) return `SB-Veggie Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -102,6 +103,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('atmosphere_')) return `Atmosphere: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Mesh: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `VFX: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('botanical_')) return `Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
             return `Workspace: ${name}`;
         },
         stepTitle: name => {
@@ -111,6 +113,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('atmosphere_')) return `Simulate atmospheric lighting: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('mesh_')) return `Reshape 3D mesh via native C++20 engine: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `Execute video & VFX operation: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('botanical_')) return `Synthesize 1:1 metric botanical tree: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
             return `Invoke ${name}`;
         },
         durationMs: { completed: 25, failed: 25 },
@@ -186,6 +189,7 @@ export function inferToolGroup(name: string): ToolGroup {
         name.startsWith('nano_banana_') ||
         name.startsWith('algorithmic_uv_') ||
         name.startsWith('vfx_') ||
+        name.startsWith('botanical_') ||
         name === 'pbr_material_decompose' ||
         name === 'atlas_maxrects_pack' ||
         name === 'build_beautify_prompt'

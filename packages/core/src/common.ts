@@ -61,7 +61,12 @@ export * from './common/optics/PhysicalCameraModel';
 export * from './common/tracking/tapir-tracking-protocol';
 export * from './common/tracking/PointTrackingModel';
 
+// Google Solar API dataLayers & Multi-Class Foliage Segmentation
+export * from './common/spatial/GoogleSolarDataLayersTypes';
 
+// SB-Veggie (formerly SMPL-Tree) Parametric Botanical & Inversion Protocols
+export * from './common/botanical/sb-veggie-protocol';
+export * from './common/botanical/smpl-tree-protocol';
 
 // SB-Archi Parametric Architecture & Inversion Protocols
 export * from './common/spatial/sb-archi-protocol';

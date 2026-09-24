@@ -102,6 +102,12 @@ export type {
     UniversalPbrResult
 } from './node/3d-engine/universal-pbr-baking-kernel';
 export type {
+    LivingFoliageKernel,
+    LivingFoliageContext,
+    LivingFoliageOutput,
+    LivingFoliageOptions
+} from './node/3d-engine/living-foliage-kernel';
+export type {
     VirtualBevelKernel,
     EdgeAdjacencyRecord,
     TriangleGeometricFrame,
@@ -183,6 +189,15 @@ export type {
     TectonicStructureClass,
     TectonicAnalysisReport
 } from './common/spatial/sb-archi-protocol';
+
+export type {
+    UniversalBotanicalBridgeService,
+    SupportedTreeSpecies,
+    BotanicalSpeciesAdapter,
+    SpatialTreeEntity,
+    TreeSynthesisBridgeOptions,
+    TreeSynthesisBridgeResult
+} from './node/spatial/UniversalBotanicalBridgeService';
 
 export type {
     UniversalArchiBridgeService,

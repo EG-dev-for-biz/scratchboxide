@@ -80,6 +80,10 @@
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_atmosphere.hpp"
 #include "scratchbox_lens_shader.hpp"
+#include "scratchbox_smpl_tree.hpp"
+#include "scratchbox_smpl_optimizer.hpp"
+#include "scratchbox_sb_veggie.hpp"
+#include "scratchbox_sb_veggie_optimizer.hpp"
 #include "scratchbox_sb_archi.hpp"
 #include "scratchbox_sb_archi_optimizer.hpp"
 #include "scratchbox_tectonics.hpp"
@@ -130,6 +134,9 @@ namespace qrm = scratchbox::remesh;
 namespace rep = scratchbox::reprojector;
 namespace clm = scratchbox::colmap;
 namespace spz = scratchbox::spz;
+namespace smpl = scratchbox::smpl_tree;
+namespace veggie = scratchbox::sb_veggie;
+namespace sb_veggie = scratchbox::sb_veggie;
 namespace archi = scratchbox::sb_archi;
 namespace sb_archi = scratchbox::sb_archi;
 namespace tct = scratchbox::tectonics;
