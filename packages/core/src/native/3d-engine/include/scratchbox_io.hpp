@@ -235,9 +235,12 @@ public:
         int normalTexIdx = -1;
         int occTexIdx = -1;
         int emissiveTexIdx = -1;
+        bool hasWebp = false;
         bool hasTextureTransform = false;
-
         for (size_t i = 0; i < textures.size(); ++i) {
+            if (textures[i].mimeType == "image/webp") {
+                hasWebp = true;
+            }
             if (textures[i].usage == TextureUsage::BASE_COLOR && baseColorTexIdx == -1) baseColorTexIdx = static_cast<int>(i);
             else if ((textures[i].usage == TextureUsage::METALLIC_ROUGHNESS || textures[i].usage == TextureUsage::ORM) && mrTexIdx == -1) mrTexIdx = static_cast<int>(i);
             else if (textures[i].usage == TextureUsage::NORMAL && normalTexIdx == -1) normalTexIdx = static_cast<int>(i);
@@ -252,6 +255,10 @@ public:
                 std::abs(textures[i].offsetU) > 1e-4f || std::abs(textures[i].offsetV) > 1e-4f) {
                 hasTextureTransform = true;
             }
+        }
+
+        if (hasWebp) {
+            extensionsUsed.push_back("EXT_texture_webp");
         }
 
         if (hasTextureTransform) {
@@ -423,6 +430,12 @@ public:
             ss << "\"emissiveTexture\":" << appendTexInfo(emissiveTexIdx) << ",";
         }
         ss << "\"doubleSided\":" << (mesh.material.doubleSided ? "true" : "false");
+        if (mesh.material.alphaMode != "OPAQUE") {
+            ss << ",\"alphaMode\":\"" << mesh.material.alphaMode << "\"";
+            if (mesh.material.alphaMode == "MASK") {
+                ss << ",\"alphaCutoff\":" << mesh.material.alphaCutoff;
+            }
+        }
         if (hasExtensions) {
             ss << ",\"extensions\":{" << extJson.str() << "}";
         }
@@ -457,7 +470,11 @@ public:
             ss << "]";
             ss << ",\"textures\":[";
             for (size_t i = 0; i < textures.size(); ++i) {
-                ss << "{\"sampler\":0,\"source\":" << i << "}";
+                ss << "{\"sampler\":0,\"source\":" << i;
+                if (textures[i].mimeType == "image/webp") {
+                    ss << ",\"extensions\":{\"EXT_texture_webp\":{\"source\":" << i << "}}";
+                }
+                ss << "}";
                 if (i + 1 < textures.size()) ss << ",";
             }
             ss << "]";
@@ -812,6 +829,12 @@ public:
                 ss << "\"emissiveTexture\":" << appendTexInfo(emissiveTexIdx) << ",";
             }
             ss << "\"doubleSided\":" << (mat.doubleSided ? "true" : "false");
+            if (mat.alphaMode != "OPAQUE") {
+                ss << ",\"alphaMode\":\"" << mat.alphaMode << "\"";
+                if (mat.alphaMode == "MASK") {
+                    ss << ",\"alphaCutoff\":" << mat.alphaCutoff;
+                }
+            }
             if (mat.emissiveStrength > 1.001f) {
                 ss << ",\"extensions\":{\"KHR_materials_emissive_strength\":{\"emissiveStrength\":" << mat.emissiveStrength << "}}";
             }

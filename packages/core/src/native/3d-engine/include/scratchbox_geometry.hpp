@@ -52,6 +52,8 @@ struct PbrMaterial {
     float emissiveStrength{1.0f};
     float ior{1.5f};
     bool doubleSided{false};
+    std::string alphaMode{"OPAQUE"};
+    float alphaCutoff{0.5f};
 
     static PbrMaterial titanium() {
         PbrMaterial m;

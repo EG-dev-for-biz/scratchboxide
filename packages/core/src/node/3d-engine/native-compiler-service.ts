@@ -123,7 +123,8 @@ export class NativeCppCompilerService {
             }
         }
 
-        const binName = options.outputBinaryName || `generator_${Date.now()}`;
+        const randSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const binName = options.outputBinaryName || `generator_${randSuffix}`;
         const sourcePath = path.join(outputDir, `${binName}.cpp`);
         const binaryPath = path.join(outputDir, binName);
 
@@ -132,17 +133,32 @@ export class NativeCppCompilerService {
         const optFlag = options.optimization || '-O3';
         const extra = (options.extraFlags || []).join(' ');
 
-        // Cursor-grade compilation cache: SHA-256 binary replay
+        // Cursor-grade compilation cache: SHA-256 binary replay with SDK header mtime validation
         const cacheDir = path.join(outputDir, '.cache');
         if (!fs.existsSync(cacheDir)) {
             fs.mkdirSync(cacheDir, { recursive: true });
         }
-        const sourceHash = crypto.createHash('sha256')
+        const hasher = crypto.createHash('sha256')
             .update(sourceCode)
             .update(optFlag)
             .update(extra)
-            .update(this.sdkIncludePath)
-            .digest('hex');
+            .update(this.sdkIncludePath);
+
+        try {
+            if (fs.existsSync(this.sdkIncludePath)) {
+                const headerFiles = fs.readdirSync(this.sdkIncludePath);
+                for (const hFile of headerFiles) {
+                    if (hFile.endsWith('.hpp') || hFile.endsWith('.h')) {
+                        const stat = fs.statSync(path.join(this.sdkIncludePath, hFile));
+                        hasher.update(`${hFile}:${stat.mtimeMs}:${stat.size}`);
+                    }
+                }
+            }
+        } catch {
+            // Non-fatal if header stat fails
+        }
+
+        const sourceHash = hasher.digest('hex');
         const cachedBinaryPath = path.join(cacheDir, `bin_${sourceHash}`);
 
         if (fs.existsSync(cachedBinaryPath)) {
@@ -160,7 +176,7 @@ export class NativeCppCompilerService {
         try {
             const { stdout, stderr } = await execAsync(compileCmd, {
                 cwd: outputDir,
-                timeout: 30000,
+                timeout: 60000,
                 maxBuffer: 10 * 1024 * 1024
             });
 

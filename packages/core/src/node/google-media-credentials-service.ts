@@ -40,9 +40,19 @@ export class GoogleMediaCredentialsService {
 
         if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
             try {
-                const credential = typeof process.env.GOOGLE_SERVICE_ACCOUNT_JSON === 'string'
-                    ? JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+                let raw = typeof process.env.GOOGLE_SERVICE_ACCOUNT_JSON === 'string'
+                    ? process.env.GOOGLE_SERVICE_ACCOUNT_JSON.trim()
                     : process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+                if (typeof raw === 'string') {
+                    if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+                        raw = raw.slice(1, -1);
+                    }
+                    raw = raw.replace(/\\\\\"/g, '"');
+                }
+                const credential = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (credential?.private_key) {
+                    credential.private_key = credential.private_key.replace(/\\n/g, '\n');
+                }
                 if (credential?.project_id) {
                     return new GoogleGenAI({
                         vertexai: true,
@@ -118,12 +128,13 @@ export class GoogleMediaCredentialsService {
     }
 
     private async getApiKey(): Promise<string | undefined> {
-        if (process.env.GEMINI_API_KEY) {
-            return process.env.GEMINI_API_KEY;
+        const envKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY)?.trim();
+        if (envKey && /^AIza[0-9A-Za-z_-]{20,}$/.test(envKey)) {
+            return envKey;
         }
         const stored = await this.keyStore?.getPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
-        if (stored) {
-            return stored;
+        if (stored && /^AIza[0-9A-Za-z_-]{20,}$/.test(stored.trim())) {
+            return stored.trim();
         }
         return this.migrateLegacyPlaintextKey();
     }

@@ -838,3 +838,54 @@ export function generateProceduralTextureBuffer(width = 256, height = 256, baseC
     }
     return buf;
 }
+
+/**
+ * Bilinearly resamples an RGBA buffer from (srcW, srcH) to (dstW, dstH).
+ */
+export function resampleRgba(
+    src: Uint8Array | Buffer,
+    srcW: number,
+    srcH: number,
+    dstW: number,
+    dstH: number
+): Buffer {
+    if (srcW === dstW && srcH === dstH) {
+        return Buffer.isBuffer(src) ? Buffer.from(src) : Buffer.from(src.buffer, src.byteOffset, src.byteLength);
+    }
+    const dst = Buffer.alloc(dstW * dstH * 4);
+    for (let y = 0; y < dstH; y++) {
+        const v = (y + 0.5) / dstH;
+        const sy = Math.max(0, Math.min(srcH - 1, v * srcH - 0.5));
+        const y0 = Math.floor(sy);
+        const y1 = Math.min(srcH - 1, y0 + 1);
+        const fy = sy - y0;
+        const row0 = y0 * srcW * 4;
+        const row1 = y1 * srcW * 4;
+        const dstRow = y * dstW * 4;
+
+        for (let x = 0; x < dstW; x++) {
+            const u = (x + 0.5) / dstW;
+            const sx = Math.max(0, Math.min(srcW - 1, u * srcW - 0.5));
+            const x0 = Math.floor(sx);
+            const x1 = Math.min(srcW - 1, x0 + 1);
+            const fx = sx - x0;
+
+            const w00 = (1 - fx) * (1 - fy);
+            const w10 = fx * (1 - fy);
+            const w01 = (1 - fx) * fy;
+            const w11 = fx * fy;
+
+            const i00 = row0 + x0 * 4;
+            const i10 = row0 + x1 * 4;
+            const i01 = row1 + x0 * 4;
+            const i11 = row1 + x1 * 4;
+
+            const di = dstRow + x * 4;
+            dst[di] = Math.round(src[i00] * w00 + src[i10] * w10 + src[i01] * w01 + src[i11] * w11);
+            dst[di + 1] = Math.round(src[i00 + 1] * w00 + src[i10 + 1] * w10 + src[i01 + 1] * w01 + src[i11 + 1] * w11);
+            dst[di + 2] = Math.round(src[i00 + 2] * w00 + src[i10 + 2] * w10 + src[i01 + 2] * w01 + src[i11 + 2] * w11);
+            dst[di + 3] = Math.round(src[i00 + 3] * w00 + src[i10 + 3] * w10 + src[i01 + 3] * w01 + src[i11 + 3] * w11);
+        }
+    }
+    return dst;
+}

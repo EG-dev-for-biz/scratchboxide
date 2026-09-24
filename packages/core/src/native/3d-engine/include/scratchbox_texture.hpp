@@ -86,6 +86,20 @@ struct ImageBuffer {
         return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z;
     }
 
+    void setPixelLuminance(int x, int y, float val) {
+        if (x < 0 || x >= width || y < 0 || y >= height) return;
+        size_t idx = getIndex(x, y);
+        uint8_t byteVal = static_cast<uint8_t>(std::clamp(val, 0.0f, 1.0f) * 255.0f + 0.5f);
+        if (channels == 1) {
+            data[idx] = byteVal;
+        } else {
+            data[idx] = byteVal;
+            data[idx + 1] = byteVal;
+            data[idx + 2] = byteVal;
+            if (channels == 4) data[idx + 3] = 255;
+        }
+    }
+
     Vec3 sampleBilinear(float u, float v) const {
         if (width <= 0 || height <= 0) return {0, 0, 0};
         u = u - std::floor(u);

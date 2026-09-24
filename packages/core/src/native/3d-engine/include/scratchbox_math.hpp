@@ -49,6 +49,12 @@ struct Vec2 {
     constexpr Vec2 operator-(const Vec2& v) const { return {x - v.x, y - v.y}; }
     constexpr Vec2 operator*(float s) const { return {x * s, y * s}; }
     constexpr Vec2 operator/(float s) const { return {x / s, y / s}; }
+    constexpr Vec2 operator-() const { return {-x, -y}; }
+
+    Vec2& operator+=(const Vec2& v) { x += v.x; y += v.y; return *this; }
+    Vec2& operator-=(const Vec2& v) { x -= v.x; y -= v.y; return *this; }
+    Vec2& operator*=(float s) { x *= s; y *= s; return *this; }
+    Vec2& operator/=(float s) { x /= s; y /= s; return *this; }
 
     float lengthSq() const { return x * x + y * y; }
     float lengthSquared() const { return lengthSq(); }
@@ -486,9 +492,9 @@ public:
     FastNoise3D(uint32_t s = 1337) : seed(s) {}
 
     static float perlin(float x, float y, float z, uint32_t seed = 1337) {
-        int X = static_cast<int>(std::floor(x)) & 255;
-        int Y = static_cast<int>(std::floor(y)) & 255;
-        int Z = static_cast<int>(std::floor(z)) & 255;
+        int X = static_cast<int>(std::floor(x));
+        int Y = static_cast<int>(std::floor(y));
+        int Z = static_cast<int>(std::floor(z));
 
         x -= std::floor(x);
         y -= std::floor(y);
@@ -499,7 +505,10 @@ public:
         float w = fade(z);
 
         auto h3 = [&](int ix, int iy, int iz) {
-            return static_cast<int>(hash(seed ^ (ix + (iy * 57) + (iz * 321))));
+            uint32_t ux = static_cast<uint32_t>(ix);
+            uint32_t uy = static_cast<uint32_t>(iy);
+            uint32_t uz = static_cast<uint32_t>(iz);
+            return static_cast<int>(hash(seed ^ (ux + (uy * 57u) + (uz * 321u))));
         };
 
         int aaa = h3(X, Y, Z);

@@ -76,6 +76,7 @@
 #include "scratchbox_view_transform.hpp"
 #include "scratchbox_denoise.hpp"
 #include "scratchbox_pathtracer.hpp"
+#include "scratchbox_atmosphere.hpp"
 
 namespace sb = scratchbox;
 namespace gopt = scratchbox::gaussian_opt;

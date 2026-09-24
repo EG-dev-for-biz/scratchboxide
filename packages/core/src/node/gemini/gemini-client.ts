@@ -133,7 +133,11 @@ export function resolveFetch(): FetchLike {
         return globalFetch as FetchLike;
     }
      
-    return require('node-fetch') as FetchLike;
+    try {
+        return require('node-fetch') as FetchLike;
+    } catch {
+        throw new Error('No global fetch or node-fetch available.');
+    }
 }
 
 export function defaultServiceAccountCandidatePaths(): string[] {

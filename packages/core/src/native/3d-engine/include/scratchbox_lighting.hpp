@@ -13,6 +13,8 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_pbr.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_ephemeris.hpp"
+#include "scratchbox_atmosphere.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
@@ -847,7 +849,941 @@ public:
     }
 };
 
+// ============================================================================
+// 7. Cinematographic Light Path Bounces & Indirect Shaping (Blender/Cycles & Real-Time)
+// ============================================================================
+
+namespace bounce {
+
+/**
+ * Ray classification flags mimicking Blender's Light Path input node.
+ */
+enum RayType : uint32_t {
+    RAY_CAMERA          = 1 << 0, // Direct eye / primary camera ray
+    RAY_SHADOW          = 1 << 1, // Shadow testing ray
+    RAY_DIFFUSE_BOUNCE  = 1 << 2, // Indirect diffuse reflection
+    RAY_GLOSSY_BOUNCE   = 1 << 3, // Specular / glossy reflection
+    RAY_TRANSMISSION    = 1 << 4, // Refractive transmission through dielectric
+    RAY_VOLUME          = 1 << 5  // Participating media volumetric scatter
+};
+
+/**
+ * Production bounce limits and diminishing returns law calculator.
+ * Energy drops exponentially with diffuse bounces: E_n = E_0 * (R_avg)^n
+ */
+struct LightPathBounceBudget {
+    int maxTotalBounces = 12;
+    int diffuseBounces = 3;
+    int glossyBounces = 4;
+    int transmissionBounces = 12;
+    int transparentBounces = 32;
+    int volumeBounces = 0;
+
+    /**
+     * Calculates remaining energy ratio at bounce n for average albedo rAvg.
+     */
+    static float calculateRemainingEnergy(float rAvg, int bounce) {
+        if (bounce <= 0) return 1.0f;
+        return std::pow(std::clamp(rAvg, 0.0f, 1.0f), static_cast<float>(bounce));
+    }
+
+    static LightPathBounceBudget exteriorSunlight() {
+        return { 8, 2, 4, 8, 24, 0 };
+    }
+
+    static LightPathBounceBudget interiorArchviz() {
+        return { 16, 4, 5, 12, 32, 1 };
+    }
+
+    static LightPathBounceBudget studioCharacter() {
+        return { 12, 3, 6, 8, 16, 0 };
+    }
+
+    static LightPathBounceBudget transmissiveGlass() {
+        return { 24, 2, 6, 16, 32, 0 };
+    }
+
+    static LightPathBounceBudget foliageCanopy() {
+        return { 16, 2, 4, 8, 64, 0 };
+    }
+};
+
+/**
+ * Albedo Decoupler (Taming Color Bleed).
+ * Production hack: camera rays receive the rich base color texture,
+ * while indirect diffuse rays receive an art-directed desaturated/dimmed albedo.
+ * Eliminates radioactive, cartoonish neon color bleed on adjacent neutral geometry.
+ */
+class AlbedoDecoupler {
+public:
+    static Vec3 evaluatePerceivedAlbedo(
+        const Vec3& baseAlbedo,
+        uint32_t rayFlags,
+        float indirectSaturation = 0.35f,
+        float indirectAlbedoMultiplier = 0.75f
+    ) {
+        // Direct camera, glossy reflections, or shadow rays see true full-fidelity albedo
+        if (rayFlags & (RAY_CAMERA | RAY_GLOSSY_BOUNCE)) {
+            return baseAlbedo;
+        }
+
+        // Indirect diffuse bounce: desaturate and scale to prevent violent color bleeding
+        if (rayFlags & RAY_DIFFUSE_BOUNCE) {
+            float luma = 0.2126f * baseAlbedo.x + 0.7152f * baseAlbedo.y + 0.0722f * baseAlbedo.z;
+            Vec3 gray(luma, luma, luma);
+            Vec3 desaturated = gray + (baseAlbedo - gray) * std::clamp(indirectSaturation, 0.0f, 1.0f);
+            return desaturated * std::clamp(indirectAlbedoMultiplier, 0.0f, 2.0f);
+        }
+
+        return baseAlbedo;
+    }
+};
+
+/**
+ * Architectural Glass Shadow Ray Bypass.
+ * In production archviz, dielectric glass casts dark shadows unless thousands of caustics converge.
+ * This evaluator sets shadow ray transmittance to 1.0 (bypassing glass absorption),
+ * allowing direct exterior daylight to flood interior rooms with zero noise.
+ */
+class ArchitecturalGlassBypass {
+public:
+    static float evaluateTransmittance(
+        uint32_t rayFlags,
+        float physicalTransmittance = 0.90f
+    ) {
+        // Shadow rays see a 100% transparent void (caustic bypass)
+        if (rayFlags & RAY_SHADOW) {
+            return 1.0f;
+        }
+        // Camera and secondary bounces observe genuine dielectric transmission
+        return physicalTransmittance;
+    }
+};
+
+/**
+ * Virtual Polyboard (Positive Bounce Card).
+ * Simulates a large off-camera white reflector plane (foam-core / beadboard)
+ * struck by key or environmental light to cast soft-wrap, organic fill light.
+ */
+struct CinematicBounceCard {
+    Vec3 position;       // Center of reflector card
+    Vec3 normal;         // Card surface normal pointing toward the subject
+    float width = 30.0f; // Width in scene units
+    float height = 20.0f;// Height in scene units
+    float reflectance = 0.92f; // High diffuse albedo (non-metallic)
+    Vec3 tint = Vec3(1.0f, 0.96f, 0.90f); // Warm natural bounce
+    float intensity = 1.0f; // Lighting power multiplier
+
+    /**
+     * Evaluates bounced illuminance at a receiver surface point p with normal n.
+     */
+    Vec3 evaluateBounceIlluminance(
+        const Vec3& receiverPos,
+        const Vec3& receiverNormal,
+        const Vec3& incidentRadiance // Direct light hitting the card
+    ) const {
+        Vec3 toReceiver = receiverPos - position;
+        float distSq = toReceiver.lengthSquared();
+        if (distSq < 0.001f) return Vec3(0.0f, 0.0f, 0.0f);
+
+        float dist = std::sqrt(distSq);
+        Vec3 dirFromCard = toReceiver / dist;
+
+        // Card emission geometry factor: card must face the receiver
+        float cosCard = std::max(0.0f, normal.dot(dirFromCard));
+        if (cosCard <= 0.0f) return Vec3(0.0f, 0.0f, 0.0f);
+
+        // Receiver absorption factor: receiver must face the card
+        float cosReceiver = std::max(0.0f, receiverNormal.dot(-dirFromCard));
+        if (cosReceiver <= 0.0f) return Vec3(0.0f, 0.0f, 0.0f);
+
+        // Area of reflector
+        float area = width * height;
+
+        // Extended-source solid angle approximation with Lambertian falloff
+        float geometricFormFactor = (cosCard * cosReceiver * area) / (distSq + area / PI);
+        float bounceScale = (reflectance / PI) * geometricFormFactor * intensity;
+
+        return Vec3(
+            incidentRadiance.x * tint.x * bounceScale,
+            incidentRadiance.y * tint.y * bounceScale,
+            incidentRadiance.z * tint.z * bounceScale
+        );
+    }
+};
+
+/**
+ * Negative Fill Card (The Sculptural Chiaroscuro Secret).
+ * Simulates a large off-camera matte black velvet plane that absorbs ambient skylight
+ * and multi-bounce GI on the unlit side of the subject, restoring dramatic contrast.
+ */
+struct NegativeFillCard {
+    Vec3 position;       // Center of absorbing card
+    Vec3 normal;         // Absorber normal facing the subject
+    float width = 25.0f;
+    float height = 25.0f;
+    float absorptionStrength = 0.65f; // 0.0 = no effect, 1.0 = total ambient absorption
+
+    /**
+     * Evaluates the ambient attenuation factor (1.0 = unoccluded, < 1.0 = shadowed by negative fill).
+     */
+    float evaluateAmbientAttenuation(
+        const Vec3& receiverPos,
+        const Vec3& receiverNormal
+    ) const {
+        Vec3 toReceiver = receiverPos - position;
+        float distSq = toReceiver.lengthSquared();
+        if (distSq < 0.001f) return 1.0f;
+
+        float dist = std::sqrt(distSq);
+        Vec3 dirFromCard = toReceiver / dist;
+
+        // Card must face receiver
+        float cosCard = std::max(0.0f, normal.dot(dirFromCard));
+        if (cosCard <= 0.0f) return 1.0f;
+
+        // Receiver faces card
+        float cosReceiver = std::max(0.0f, receiverNormal.dot(-dirFromCard));
+        if (cosReceiver <= 0.0f) return 1.0f;
+
+        float area = width * height;
+        // Estimated solid angle fraction of hemisphere subtended by the card
+        float solidAngleFraction = (cosCard * cosReceiver * area) / (TWO_PI * distSq + area);
+        solidAngleFraction = std::clamp(solidAngleFraction, 0.0f, 1.0f);
+
+        // Attenuate ambient light arriving at receiver
+        return std::clamp(1.0f - (solidAngleFraction * absorptionStrength), 0.0f, 1.0f);
+    }
+};
+
+/**
+ * Indirect Light Clamper (Firefly Suppression).
+ * Clamps high-energy indirect sample spikes without truncating direct HDR specular highlights.
+ */
+class IndirectLightClamper {
+public:
+    static Vec3 clampRadiance(
+        const Vec3& radiance,
+        uint32_t rayFlags,
+        float directClamp = 0.0f,    // 0.0 = unclamped
+        float indirectClamp = 15.0f  // Standard production indirect clamp (10.0 - 20.0)
+    ) {
+        if (rayFlags & (RAY_CAMERA | RAY_SHADOW)) {
+            if (directClamp > 0.0f) {
+                float maxComp = std::max({radiance.x, radiance.y, radiance.z});
+                if (maxComp > directClamp) {
+                    return radiance * (directClamp / maxComp);
+                }
+            }
+            return radiance;
+        }
+
+        // Indirect rays (diffuse, glossy, volume)
+        if (indirectClamp > 0.0f) {
+            float maxComp = std::max({radiance.x, radiance.y, radiance.z});
+            if (maxComp > indirectClamp) {
+                return radiance * (indirectClamp / maxComp);
+            }
+        }
+        return radiance;
+    }
+};
+
+} // namespace bounce
+
+// ============================================================================
+// 8. Cinematic Shadows & Contact-Hardening PCSS (Percentage-Closer Soft Shadows)
+// ============================================================================
+
+namespace shadow {
+
+/**
+ * Physical solar angular dimensions observed from Earth surface.
+ * Mean apparent solar diameter is 32 arcminutes (~0.533 degrees = 0.009308 radians).
+ */
+constexpr float SOLAR_ANGULAR_DIAMETER_RAD = 0.0093084f; // ~0.533 degrees
+constexpr float SOLAR_ANGULAR_RADIUS_RAD   = 0.0046542f; // ~0.266 degrees
+
+/**
+ * Solar Disk Optics & Distance-Adaptive Penumbra Estimator.
+ * Computes exact physical optical penumbra width as a function of caster-to-receiver distance.
+ */
+struct SolarDiskOptics {
+    float solarAngularDiameter = SOLAR_ANGULAR_DIAMETER_RAD;
+
+    /**
+     * Computes the world-space penumbra width at the receiver.
+     * Uses similar triangles formed by the solar disc and occluder:
+     * w_penumbra = ((d_receiver - d_blocker) / d_blocker) * lightSize
+     * 
+     * @param receiverDist Distance from light source to receiver point along light ray.
+     * @param blockerDist  Distance from light source to average blocker along light ray.
+     * @return World-space penumbra radius (0.0 at contact, expands with distance).
+     */
+    float computePenumbraRadius(float receiverDist, float blockerDist) const {
+        if (blockerDist <= 0.001f || receiverDist <= blockerDist) {
+            return 0.0f; // Pin-sharp contact shadow
+        }
+        float deltaDist = receiverDist - blockerDist;
+        // In directional sun light, angular diameter subtends an effective source size:
+        // w_penumbra = deltaDist * tan(theta_sun)
+        return deltaDist * std::tan(solarAngularDiameter);
+    }
+
+    /**
+     * Converts a world-space penumbra width into shadow map UV filter radius.
+     */
+    float computeShadowFilterRadius(
+        float penumbraRadiusWorld,
+        float frustumSpanWorld,
+        uint32_t shadowMapSize,
+        float minRadiusTexels = 1.0f,
+        float maxRadiusTexels = 24.0f
+    ) const {
+        if (shadowMapSize == 0 || frustumSpanWorld <= 0.001f) return minRadiusTexels;
+        float texelSizeWorld = (frustumSpanWorld * 2.0f) / static_cast<float>(shadowMapSize);
+        float radiusTexels = penumbraRadiusWorld / texelSizeWorld;
+        return std::clamp(radiusTexels, minRadiusTexels, maxRadiusTexels);
+    }
+};
+
+/**
+ * Vogel Disk Low-Discrepancy Sampling Generator.
+ * Distributes samples using the golden angle (2.3999632 rad) for low-discrepancy circle packing,
+ * eliminating pattern banding in blocker searches and PCF filtering.
+ */
+struct VogelDiskSampler {
+    static constexpr float GOLDEN_ANGLE = 2.399963229728653f;
+
+    /**
+     * Generates a 2D sample position on a unit disk.
+     * @param sampleIndex Index of the sample (0 to sampleCount - 1).
+     * @param sampleCount Total number of samples.
+     * @param phi Random rotation angle in radians (interleaved gradient noise).
+     */
+    static Vec2 sample(int sampleIndex, int sampleCount, float phi = 0.0f) {
+        if (sampleCount <= 0) return Vec2(0.0f, 0.0f);
+        float r = std::sqrt((static_cast<float>(sampleIndex) + 0.5f) / static_cast<float>(sampleCount));
+        float theta = static_cast<float>(sampleIndex) * GOLDEN_ANGLE + phi;
+        return Vec2(std::cos(theta) * r, std::sin(theta) * r);
+    }
+
+    /**
+     * Generates a full array of Vogel disk samples for GPU shader uniforms.
+     */
+    static std::vector<Vec2> generateKernel(int sampleCount, float phi = 0.0f) {
+        std::vector<Vec2> kernel;
+        kernel.reserve(sampleCount);
+        for (int i = 0; i < sampleCount; ++i) {
+            kernel.push_back(sample(i, sampleCount, phi));
+        }
+        return kernel;
+    }
+};
+
+/**
+ * Auto-Calibrated Zero-Acne Bias Calculator.
+ * Dynamically scales depth bias and normal bias to guarantee zero shadow acne (self-shadowing moiré)
+ * while minimizing peter-panning (shadow detachment).
+ */
+struct AutoBiasCalculator {
+    /**
+     * Computes the optimal normal bias in world units based on shadow frustum scale and map resolution.
+     * Formula: normalBias = 1.25 * texelSizeWorld
+     */
+    static float computeOptimalNormalBias(float frustumSpanWorld, uint32_t shadowMapSize) {
+        if (shadowMapSize == 0) return 0.05f;
+        float texelSize = (frustumSpanWorld * 2.0f) / static_cast<float>(shadowMapSize);
+        return std::clamp(texelSize * 1.25f, 0.01f, 0.5f);
+    }
+
+    /**
+     * Computes the optimal constant depth bias for an orthographic directional light.
+     */
+    static float computeOptimalDepthBias(float frustumDepthFar) {
+        if (frustumDepthFar <= 0.0f) return 0.00002f;
+        // High-precision depth bias scaled to avoid negative self-intersection
+        return std::clamp(0.00002f * (400.0f / frustumDepthFar), 0.000005f, 0.0001f);
+    }
+
+    /**
+     * Slope-scaled depth bias evaluation for a triangle with normal N and light direction L.
+     */
+    static float computeSlopeBias(const Vec3& normal, const Vec3& lightDir, float baseBias = 0.00002f) {
+        float cosTheta = std::max(0.0f, normal.dot(lightDir));
+        float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+        float tanTheta = (cosTheta > 0.001f) ? (sinTheta / cosTheta) : 2.0f;
+        return baseBias * (1.0f + std::clamp(tanTheta, 0.0f, 3.0f));
+    }
+};
+
+/**
+ * Shadow Camera Frustum Fitter.
+ * Tight-fits an orthographic directional light projection to the focal landmark's bounding box,
+ * maximizing texel density on architectural subjects and eliminating wasted shadow resolution.
+ */
+struct ShadowCameraFrustum {
+    float halfWidth = 140.0f;
+    float halfHeight = 140.0f;
+    float nearPlane = 10.0f;
+    float farPlane = 450.0f;
+    Vec3 lightPosition;
+    Vec3 lightTarget;
+
+    float getTexelSize(uint32_t mapSize) const {
+        return (mapSize > 0) ? ((halfWidth * 2.0f) / static_cast<float>(mapSize)) : 0.1f;
+    }
+};
+
+class ShadowCameraFitter {
+public:
+    /**
+     * Fits an orthographic directional light shadow camera tightly around a target bounding box.
+     * 
+     * @param boxMin Minimum corner of subject bounding box (world space).
+     * @param boxMax Maximum corner of subject bounding box (world space).
+     * @param lightDir Normalized vector pointing FROM the light TOWARDS the scene.
+     * @param lightDistance Distance of light source origin from bounding center.
+     * @param paddingFactor Expansion factor to prevent clipping on boundaries (e.g. 1.15).
+     */
+    static ShadowCameraFrustum fitToBoundingBox(
+        const Vec3& boxMin,
+        const Vec3& boxMax,
+        const Vec3& lightDir,
+        float lightDistance = 250.0f,
+        float paddingFactor = 1.15f
+    ) {
+        ShadowCameraFrustum frustum;
+        Vec3 center = (boxMin + boxMax) * 0.5f;
+        Vec3 extents = (boxMax - boxMin) * 0.5f;
+        float radius = extents.length() * paddingFactor;
+
+        // Construct light-space coordinate frame
+        Vec3 forward = lightDir.normalized();
+        Vec3 up = (std::abs(forward.y) > 0.99f) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+        Vec3 right = forward.cross(up).normalized();
+        up = right.cross(forward).normalized();
+
+        // 8 corners of bounding box
+        Vec3 corners[8] = {
+            Vec3(boxMin.x, boxMin.y, boxMin.z),
+            Vec3(boxMax.x, boxMin.y, boxMin.z),
+            Vec3(boxMin.x, boxMax.y, boxMin.z),
+            Vec3(boxMax.x, boxMax.y, boxMin.z),
+            Vec3(boxMin.x, boxMin.y, boxMax.z),
+            Vec3(boxMax.x, boxMin.y, boxMax.z),
+            Vec3(boxMin.x, boxMax.y, boxMax.z),
+            Vec3(boxMax.x, boxMax.y, boxMax.z)
+        };
+
+        float minX = 1e9f, maxX = -1e9f;
+        float minY = 1e9f, maxY = -1e9f;
+        float minZ = 1e9f, maxZ = -1e9f;
+
+        for (int i = 0; i < 8; ++i) {
+            Vec3 rel = corners[i] - center;
+            float px = rel.dot(right);
+            float py = rel.dot(up);
+            float pz = rel.dot(forward);
+
+            minX = std::min(minX, px);
+            maxX = std::max(maxX, px);
+            minY = std::min(minY, py);
+            maxY = std::max(maxY, py);
+            minZ = std::min(minZ, pz);
+            maxZ = std::max(maxZ, pz);
+        }
+
+        float spanX = std::max(std::abs(minX), std::abs(maxX)) * paddingFactor;
+        float spanY = std::max(std::abs(minY), std::abs(maxY)) * paddingFactor;
+        float halfSpan = std::max({spanX, spanY, 40.0f});
+
+        frustum.halfWidth = halfSpan;
+        frustum.halfHeight = halfSpan;
+
+        float depthSpan = (maxZ - minZ) * paddingFactor;
+        float actualLightDist = std::max(lightDistance, depthSpan * 1.5f);
+
+        frustum.nearPlane = 5.0f;
+        frustum.farPlane = actualLightDist + depthSpan * 2.0f;
+        frustum.lightTarget = center;
+        frustum.lightPosition = center - forward * actualLightDist;
+
+        return frustum;
+    }
+};
+
+/**
+ * Atmospheric Rayleigh Umbra Fill.
+ * Computes non-pitch-black ambient fill for shadow umbras based on solar elevation,
+ * ensuring architectural cavities preserve stone texture and optical depth.
+ */
+struct AtmosphericUmbraFill {
+    /**
+     * Calculates the linear RGB umbra fill radiance given solar elevation in degrees.
+     * At midday: vibrant blue Rayleigh sky fill (~0x7dd3fc).
+     * At golden hour: warm amber rim fill (~0xf59e0b).
+     */
+    static Vec3 computeUmbraRadiance(float solarElevationDeg, float fillIntensity = 0.35f) {
+        float elevNorm = std::clamp(solarElevationDeg / 90.0f, 0.0f, 1.0f);
+        // Midday sky blue (0.45, 0.70, 0.95) vs golden twilight (0.85, 0.55, 0.25)
+        Vec3 middaySky(0.45f, 0.70f, 0.95f);
+        Vec3 goldenSky(0.85f, 0.55f, 0.25f);
+
+        Vec3 skyTint = goldenSky * (1.0f - elevNorm) + middaySky * elevNorm;
+        return skyTint * fillIntensity;
+    }
+};
+
+} // namespace shadow
+
+// ============================================================================
+// 9. Unified C++20 Real-Time Diurnal Lighting, Atmosphere & Shadow System
+// ============================================================================
+
+namespace diurnal {
+
+/**
+ * Complete synchronized diurnal frame state.
+ * Unified across solar/lunar ephemeris, Planckian CCT, dual-lobe atmosphere,
+ * analytical cloud shadow gobos, contact PCSS shadows, stone albedo de-lighting,
+ * and architectural portal lighting.
+ */
+struct DiurnalLightingFrame {
+    // 1. Geodetic & Ephemeris Geometry
+    float latitudeDeg{41.8902f};
+    float longitudeDeg{12.4922f};
+    int64_t unixTimestampSeconds{0};
+    float solarElevationDeg{0.0f};
+    float solarAzimuthDeg{0.0f};
+    math::Vec3 sunDirectionENU{0.0f, 0.0f, 1.0f};
+    math::Vec3 sunDirectionThreeJS{0.0f, 1.0f, 0.0f};
+    
+    // Diurnal Phase classification
+    std::string phase{"midday"};
+    std::string phaseLabel{"Midday"};
+    bool isDay{true};
+    bool isNight{false};
+    bool isGoldenHour{false};
+    bool isBlueHour{false};
+    bool isTwilight{false};
+
+    // 2. Photometrics & Planckian Radiance
+    float kelvin{5800.0f};
+    math::Vec3 sunColorLinearRgb{1.0f, 0.98f, 0.95f};
+    float sunIlluminanceLux{95000.0f};
+    float sunIntensityUnit{1.45f};       // Normalized multiplier for 3D direct lights
+    math::Vec3 skyAmbientLinearRgb{0.35f, 0.45f, 0.60f};
+    float skyLightIntensityUnit{1.10f};  // Normalized multiplier for ambient/hemi lights
+    math::Vec3 groundBounceTint{0.30f, 0.28f, 0.24f};
+    float groundBounceWarmth{0.50f};
+
+    // 3. Volumetric Atmosphere & Clouds
+    float cloudCoverage{0.15f};
+    float cloudDensityScale{1.0f};
+    float scatterAnisotropy1{0.82f};      // Forward Mie scattering lobe (g1)
+    float scatterAnisotropy2{-0.30f};     // Backscatter glory lobe (g2)
+    float scatterAnisotropyMix{0.85f};
+    float powderScale{1.50f};             // Andrew Schneider powdered sugar multiple scattering
+    float cloudSkyLightScale{1.0f};
+    float cloudGroundBounceScale{1.0f};
+    float aerialAlbedoBoost{1.10f};
+    math::Vec3 aerialExtinctionCoeff{1.0f, 1.0f, 1.0f}; // Multi-spectral Beer-Lambert transmission
+    float bloomIntensityScale{1.0f};
+
+    // 4. Analytical Cloud Shadows (Atmospheric Gobo)
+    float cloudShadowTransmittance{1.0f}; // 0.20 (deep cloud shadow) to 1.0 (unoccluded direct sun)
+    math::Vec2 cloudShadowUvOffset{0.0f, 0.0f};
+
+    // 5. Cinematic Shadows & Contact-Hardening PCSS
+    bool castShadows{true};
+    float solarDiskAngularDiameter{0.0093084f}; // 32 arcminutes (0.533 degrees)
+    float normalBiasMeters{0.080f};             // Auto-calibrated zero-acne normal bias
+    float depthBias{0.000020f};                 // Auto-calibrated depth bias
+    float penumbraScale{1.0f};
+    math::Vec3 rayleighUmbraFill{0.15f, 0.24f, 0.33f};
+    shadow::ShadowCameraFrustum shadowFrustum;
+
+    // 6. Photogrammetry Tile De-Lighting & Stone Calibration
+    float shadowLift{0.60f};
+    float highlightCompress{0.45f};
+    math::Vec3 stoneAlbedoTint{0.86f, 0.82f, 0.78f}; // Roman Travertine default
+    std::string stoneType{"travertine"};
+
+    // 7. Architectural Interior Portal Lighting (Blender VFX Trick for Dusk/Night)
+    bool architecturalPortalsActive{false};
+    float architecturalPortalIntensity{0.0f};   // 0.0 at midday -> 1.85 at twilight & night
+    math::Vec3 architecturalPortalColor{1.0f, 0.72f, 0.42f}; // Warm incandescent 2,850K amber
+
+    // 8. Film Tone Mapping & Photographic Exposure Adaptation
+    float toneMappingExposure{0.65f};
+};
+
+class UnifiedTimeOfDaySystem {
+public:
+    static math::Vec3 getStoneAlbedo(std::string_view stoneType) {
+        if (stoneType == "travertine") {
+            return math::Vec3(0.86f, 0.82f, 0.78f); // Roman Travertine
+        } else if (stoneType == "limestone") {
+            return math::Vec3(0.82f, 0.81f, 0.79f); // Portland / Indiana Limestone
+        } else if (stoneType == "marble") {
+            return math::Vec3(0.92f, 0.91f, 0.90f); // Carrara Marble
+        } else if (stoneType == "concrete") {
+            return math::Vec3(0.75f, 0.75f, 0.75f); // Grey Concrete
+        }
+        return math::Vec3(0.86f, 0.82f, 0.78f);
+    }
+
+    /**
+     * Continuous evaluation of full diurnal lighting, atmospheric, and shadow state
+     * from explicit solar elevation and azimuth degrees.
+     */
+    static DiurnalLightingFrame evaluateFromAngles(
+        float elevDeg,
+        float azDeg,
+        float cloudCoverage = 0.15f,
+        float turbidity = 2.2f,
+        std::string_view stoneType = "travertine",
+        float timeSeconds = 0.0f,
+        const math::Vec3& bboxMin = math::Vec3(-94.0f, 0.0f, -78.0f),
+        const math::Vec3& bboxMax = math::Vec3(94.0f, 48.0f, 78.0f)
+    ) {
+        DiurnalLightingFrame f;
+        f.solarElevationDeg = elevDeg;
+        f.solarAzimuthDeg = azDeg;
+        f.cloudCoverage = std::clamp(cloudCoverage, 0.0f, 1.0f);
+        f.stoneType = std::string(stoneType);
+        f.stoneAlbedoTint = getStoneAlbedo(stoneType);
+
+        float azRad = azDeg * math::DEG_TO_RAD;
+        float elRad = elevDeg * math::DEG_TO_RAD;
+
+        // Three.js solar direction (+X=East, +Y=Up, -Z=North):
+        f.sunDirectionThreeJS = math::Vec3(
+            std::cos(elRad) * std::sin(azRad),
+            std::sin(elRad),
+            -std::cos(elRad) * std::cos(azRad)
+        ).normalized();
+
+        // Local ENU solar direction (+X=East, +Y=North, +Z=Up):
+        f.sunDirectionENU = math::Vec3(
+            std::cos(elRad) * std::sin(azRad),
+            std::cos(elRad) * std::cos(azRad),
+            std::sin(elRad)
+        ).normalized();
+
+        // Diurnal Phase Segmentation & Continuous Interpolation
+        if (f.cloudCoverage > 0.75f && elevDeg > 5.0f) {
+            // Overcast state overrides direct sun dominance
+            f.phase = "overcast";
+            f.phaseLabel = "Overcast";
+            f.isDay = true;
+            f.isNight = false;
+            f.isGoldenHour = false;
+            f.isBlueHour = false;
+            f.isTwilight = false;
+            f.kelvin = 6500.0f;
+            f.sunIntensityUnit = 0.35f * (1.0f - f.cloudCoverage * 0.6f);
+            f.skyLightIntensityUnit = 1.60f;
+            f.castShadows = true;
+            f.penumbraScale = 2.5f; // Heavily diffused shadows
+            f.toneMappingExposure = 0.60f;
+            f.bloomIntensityScale = 0.15f;
+            f.cloudSkyLightScale = 1.45f;
+            f.cloudGroundBounceScale = 0.40f;
+            f.powderScale = 0.85f;
+            f.scatterAnisotropy1 = 0.75f;
+            f.skyAmbientLinearRgb = math::Vec3(0.55f, 0.60f, 0.68f);
+        } else if (elevDeg <= -12.0f) {
+            f.phase = "deep_night";
+            f.phaseLabel = "Deep Night";
+            f.isDay = false;
+            f.isNight = true;
+            f.isGoldenHour = false;
+            f.isBlueHour = false;
+            f.isTwilight = false;
+            f.kelvin = 15000.0f; // Starlight Kelvin
+            f.sunIntensityUnit = 0.04f; // Moonlight key
+            f.skyLightIntensityUnit = 0.06f;
+            f.castShadows = false;
+            f.toneMappingExposure = 0.32f;
+            f.bloomIntensityScale = 0.0f;
+            f.cloudSkyLightScale = 0.15f;
+            f.cloudGroundBounceScale = 0.05f;
+            f.powderScale = 0.50f;
+            f.scatterAnisotropy1 = 0.75f;
+            f.skyAmbientLinearRgb = math::Vec3(0.04f, 0.05f, 0.08f);
+            f.architecturalPortalsActive = true;
+            f.architecturalPortalIntensity = 1.85f;
+        } else if (elevDeg <= -4.0f) {
+            // Nautical twilight to blue hour
+            float t = math::smoothstep(-12.0f, -4.0f, elevDeg);
+            f.phase = "blue_hour";
+            f.phaseLabel = "Blue Hour";
+            f.isDay = false;
+            f.isNight = false;
+            f.isGoldenHour = false;
+            f.isBlueHour = true;
+            f.isTwilight = true;
+            f.kelvin = math::lerp(15000.0f, 9500.0f, t);
+            f.sunIntensityUnit = 0.0f;
+            f.skyLightIntensityUnit = math::lerp(0.06f, 0.28f, t);
+            f.castShadows = false;
+            f.toneMappingExposure = math::lerp(0.32f, 0.42f, t);
+            f.bloomIntensityScale = math::lerp(0.0f, 0.40f, t);
+            f.cloudSkyLightScale = math::lerp(0.15f, 0.35f, t);
+            f.cloudGroundBounceScale = math::lerp(0.05f, 0.15f, t);
+            f.powderScale = 0.60f;
+            f.scatterAnisotropy1 = 0.76f;
+            f.skyAmbientLinearRgb = math::Vec3(0.15f, 0.20f, 0.42f); // Deep cobalt Rayleigh
+            f.architecturalPortalsActive = true;
+            f.architecturalPortalIntensity = math::lerp(1.85f, 1.40f, t);
+        } else if (elevDeg <= 0.0f) {
+            // Civil twilight
+            float t = math::smoothstep(-4.0f, 0.0f, elevDeg);
+            f.phase = "twilight";
+            f.phaseLabel = "Civil Twilight";
+            f.isDay = false;
+            f.isNight = false;
+            f.isGoldenHour = false;
+            f.isBlueHour = false;
+            f.isTwilight = true;
+            f.kelvin = math::lerp(9500.0f, 3200.0f, t);
+            f.sunIntensityUnit = math::lerp(0.0f, 0.25f, t);
+            f.skyLightIntensityUnit = math::lerp(0.28f, 0.45f, t);
+            f.castShadows = (elevDeg > -1.0f);
+            f.toneMappingExposure = math::lerp(0.42f, 0.50f, t);
+            f.bloomIntensityScale = math::lerp(0.40f, 0.70f, t);
+            f.cloudSkyLightScale = math::lerp(0.35f, 0.55f, t);
+            f.cloudGroundBounceScale = math::lerp(0.15f, 0.25f, t);
+            f.powderScale = 0.65f;
+            f.scatterAnisotropy1 = 0.78f;
+            f.skyAmbientLinearRgb = math::Vec3(0.24f, 0.28f, 0.45f);
+            f.architecturalPortalsActive = true;
+            f.architecturalPortalIntensity = math::lerp(1.40f, 0.65f, t);
+        } else if (elevDeg <= 10.0f) {
+            // Golden Hour / Sunset / Dawn
+            float t = math::smoothstep(0.0f, 10.0f, elevDeg);
+            f.phase = (elevDeg <= 3.5f) ? "dawn" : "golden";
+            f.phaseLabel = (elevDeg <= 3.5f) ? "Dawn" : "Golden Hour";
+            f.isDay = true;
+            f.isNight = false;
+            f.isGoldenHour = true;
+            f.isBlueHour = false;
+            f.isTwilight = false;
+            f.kelvin = math::lerp(2200.0f, 4200.0f, t);
+            f.sunIntensityUnit = math::lerp(0.25f, 1.50f, t);
+            f.skyLightIntensityUnit = math::lerp(0.45f, 0.95f, t);
+            f.castShadows = true;
+            f.penumbraScale = math::lerp(1.8f, 1.1f, t);
+            f.toneMappingExposure = math::lerp(0.50f, 0.62f, t);
+            f.bloomIntensityScale = math::lerp(0.70f, 1.25f, t);
+            f.cloudSkyLightScale = math::lerp(0.55f, 1.0f, t);
+            f.cloudGroundBounceScale = math::lerp(0.25f, 0.75f, t);
+            f.powderScale = math::lerp(0.70f, 1.30f, t);
+            f.scatterAnisotropy1 = 0.82f;
+            f.skyAmbientLinearRgb = math::Vec3(0.45f, 0.38f, 0.32f); // Warm amber horizon
+            f.architecturalPortalsActive = (elevDeg <= 3.0f);
+            f.architecturalPortalIntensity = (elevDeg <= 3.0f) ? math::lerp(0.65f, 0.0f, elevDeg / 3.0f) : 0.0f;
+        } else if (elevDeg <= 35.0f) {
+            // Morning / Late Afternoon
+            float t = math::smoothstep(10.0f, 35.0f, elevDeg);
+            f.phase = (azDeg < 180.0f) ? "morning" : "afternoon";
+            f.phaseLabel = (azDeg < 180.0f) ? "Morning" : "Afternoon";
+            f.isDay = true;
+            f.isNight = false;
+            f.isGoldenHour = false;
+            f.isBlueHour = false;
+            f.isTwilight = false;
+            f.kelvin = math::lerp(4200.0f, 5600.0f, t);
+            f.sunIntensityUnit = math::lerp(1.50f, 1.55f, t);
+            f.skyLightIntensityUnit = math::lerp(0.95f, 1.05f, t);
+            f.castShadows = true;
+            f.penumbraScale = 1.0f;
+            f.toneMappingExposure = math::lerp(0.62f, 0.65f, t);
+            f.bloomIntensityScale = 1.0f;
+            f.cloudSkyLightScale = 1.0f;
+            f.cloudGroundBounceScale = 1.0f;
+            f.powderScale = 1.50f;
+            f.scatterAnisotropy1 = 0.82f;
+            f.skyAmbientLinearRgb = math::Vec3(0.35f, 0.45f, 0.60f);
+            f.architecturalPortalsActive = false;
+            f.architecturalPortalIntensity = 0.0f;
+        } else {
+            // Midday
+            f.phase = "midday";
+            f.phaseLabel = "Midday";
+            f.isDay = true;
+            f.isNight = false;
+            f.isGoldenHour = false;
+            f.isBlueHour = false;
+            f.isTwilight = false;
+            f.kelvin = 5800.0f;
+            f.sunIntensityUnit = 1.55f;
+            f.skyLightIntensityUnit = 1.10f;
+            f.castShadows = true;
+            f.penumbraScale = 1.0f;
+            f.toneMappingExposure = 0.65f;
+            f.bloomIntensityScale = 1.0f;
+            f.cloudSkyLightScale = 1.0f;
+            f.cloudGroundBounceScale = 1.0f;
+            f.powderScale = 1.50f;
+            f.scatterAnisotropy1 = 0.82f;
+            f.skyAmbientLinearRgb = math::Vec3(0.35f, 0.45f, 0.60f);
+            f.architecturalPortalsActive = false;
+            f.architecturalPortalIntensity = 0.0f;
+        }
+
+        // Continuous Cloud Scattering & Direct/Diffuse Lighting Modulation
+        if (f.cloudCoverage > 0.0f && f.phase != "overcast" && elevDeg > 0.0f) {
+            float tauCloud = f.cloudCoverage * 0.28f * 4.5f;
+            float directTransmittance = std::exp(-tauCloud);
+
+            // Attenuate direct sunlight beam by cloud transmittance
+            float sunScale = math::lerp(0.20f, 1.0f, directTransmittance);
+            f.sunIntensityUnit *= sunScale;
+
+            // Boost diffuse skylight by forward Mie inscattering from cloud deck
+            float skyScatterBoost = 1.0f + 0.45f * f.cloudCoverage * (1.0f - directTransmittance);
+            f.skyLightIntensityUnit *= skyScatterBoost;
+            f.cloudSkyLightScale = skyScatterBoost;
+
+            // Soften contact shadows as clouds expand effective source angle
+            f.penumbraScale = std::min(2.5f, f.penumbraScale * (1.0f + 1.2f * f.cloudCoverage * (1.0f - directTransmittance)));
+
+            // Shift ambient fill towards neutral cloud albedo
+            math::Vec3 cloudAmbient(0.55f, 0.60f, 0.68f);
+            f.skyAmbientLinearRgb = math::Vec3(
+                math::lerp(f.skyAmbientLinearRgb.x, cloudAmbient.x, f.cloudCoverage * 0.5f),
+                math::lerp(f.skyAmbientLinearRgb.y, cloudAmbient.y, f.cloudCoverage * 0.5f),
+                math::lerp(f.skyAmbientLinearRgb.z, cloudAmbient.z, f.cloudCoverage * 0.5f)
+            );
+        }
+
+        // Direct sunlight color from Planckian locus
+        f.sunColorLinearRgb = ephemeris::EphemerisService::kelvinToRgb(f.kelvin);
+
+        // Ground bounce warmth & tint calculation
+        f.groundBounceWarmth = std::max(0.0f, std::sin(std::max(0.0f, elRad)));
+        float gR = (f.sunColorLinearRgb.x * 0.25f + f.skyAmbientLinearRgb.x * 0.15f) * (0.8f + 0.4f * f.groundBounceWarmth);
+        float gG = (f.sunColorLinearRgb.y * 0.22f + f.skyAmbientLinearRgb.y * 0.15f) * (0.8f + 0.4f * f.groundBounceWarmth);
+        float gB = (f.sunColorLinearRgb.z * 0.18f + f.skyAmbientLinearRgb.z * 0.18f) * (0.8f + 0.4f * f.groundBounceWarmth);
+        f.groundBounceTint = math::Vec3(gR, gG, gB);
+
+        // Multi-spectral Beer-Lambert aerial perspective extinction
+        f.aerialExtinctionCoeff = atmosphere::HyperrealisticAtmosphereEngine::calculateAerialPerspectiveExtinction(
+            450.0f, // 450m representative viewing distance
+            50.0f,
+            turbidity
+        );
+
+        // Analytical ground cloud shadow (atmospheric gobo cookie)
+        math::Vec3 groundCenter = (bboxMin + bboxMax) * 0.5f;
+        groundCenter.y = 0.0f;
+        if (f.cloudCoverage > 0.05f) {
+            f.cloudShadowTransmittance = atmosphere::HyperrealisticAtmosphereEngine::calculateGroundCloudShadow(
+                groundCenter,
+                f.sunDirectionENU,
+                timeSeconds,
+                math::Vec3(8.0f, 0.0f, 4.0f),
+                1500.0f,
+                4500.0f,
+                f.cloudCoverage,
+                1.0f
+            );
+        } else {
+            f.cloudShadowTransmittance = 1.0f;
+        }
+
+        // Contact-Hardening PCSS parameters
+        f.solarDiskAngularDiameter = shadow::SOLAR_ANGULAR_DIAMETER_RAD;
+        float focalFrustumSpan = 140.0f;
+        f.normalBiasMeters = shadow::AutoBiasCalculator::computeOptimalNormalBias(focalFrustumSpan, 4096);
+        f.depthBias = shadow::AutoBiasCalculator::computeOptimalDepthBias(400.0f);
+        f.rayleighUmbraFill = shadow::AtmosphericUmbraFill::computeUmbraRadiance(elevDeg, 0.35f);
+        f.shadowFrustum = shadow::ShadowCameraFitter::fitToBoundingBox(bboxMin, bboxMax, f.sunDirectionThreeJS, 250.0f, 1.15f);
+
+        return f;
+    }
+
+    /**
+     * Presets factory method for standard photoreal lighting setups.
+     */
+    static DiurnalLightingFrame evaluatePreset(
+        std::string_view preset,
+        float latitudeDeg = 41.8902f,
+        float longitudeDeg = 12.4922f,
+        std::string_view stoneType = "travertine",
+        float timeSeconds = 0.0f
+    ) {
+        if (preset == "dawn") {
+            // Dawn 06:00
+            return evaluateFromAngles(2.5f, 75.0f, 0.15f, 2.2f, stoneType, timeSeconds);
+        } else if (preset == "morning") {
+            // Morning 08:30
+            return evaluateFromAngles(26.0f, 115.0f, 0.15f, 2.0f, stoneType, timeSeconds);
+        } else if (preset == "midday") {
+            // Midday 12:30 (Calibrated to Azimuth 132.0°, Elevation 49.5°)
+            return evaluateFromAngles(49.5f, 132.0f, 0.10f, 1.8f, stoneType, timeSeconds);
+        } else if (preset == "afternoon") {
+            // Afternoon 15:00
+            return evaluateFromAngles(42.0f, 220.0f, 0.20f, 2.2f, stoneType, timeSeconds);
+        } else if (preset == "golden") {
+            // Golden Hour 17:30
+            return evaluateFromAngles(6.5f, 248.0f, 0.15f, 2.5f, stoneType, timeSeconds);
+        } else if (preset == "twilight") {
+            // Civil Twilight 18:30
+            return evaluateFromAngles(-1.5f, 262.0f, 0.20f, 2.8f, stoneType, timeSeconds);
+        } else if (preset == "blue_hour") {
+            // Blue Hour 19:30
+            return evaluateFromAngles(-5.0f, 275.0f, 0.15f, 2.4f, stoneType, timeSeconds);
+        } else if (preset == "overcast") {
+            // Heavy Overcast 14:00
+            return evaluateFromAngles(50.0f, 205.0f, 0.88f, 4.2f, stoneType, timeSeconds);
+        } else if (preset == "night") {
+            // Deep Night 23:00
+            return evaluateFromAngles(-40.0f, 340.0f, 0.10f, 1.8f, stoneType, timeSeconds);
+        }
+        // Default golden
+        return evaluateFromAngles(6.5f, 248.0f, 0.15f, 2.5f, stoneType, timeSeconds);
+    }
+
+    /**
+     * Compute frame from NOAA Ephemeris date/time.
+     */
+    static DiurnalLightingFrame evaluateFromEphemeris(
+        float latDeg,
+        float lngDeg,
+        int64_t unixSeconds,
+        float cloudCoverage = 0.15f,
+        float turbidity = 2.2f,
+        std::string_view stoneType = "travertine",
+        float timeSeconds = 0.0f,
+        const math::Vec3& bboxMin = math::Vec3(-94.0f, 0.0f, -78.0f),
+        const math::Vec3& bboxMax = math::Vec3(94.0f, 48.0f, 78.0f)
+    ) {
+        ephemeris::EphemerisResult ephem = ephemeris::EphemerisService::calculate(latDeg, lngDeg, unixSeconds);
+        DiurnalLightingFrame frame = evaluateFromAngles(
+            ephem.angles.elevationDeg,
+            ephem.angles.azimuthDeg,
+            cloudCoverage,
+            turbidity,
+            stoneType,
+            timeSeconds,
+            bboxMin,
+            bboxMax
+        );
+        frame.latitudeDeg = latDeg;
+        frame.longitudeDeg = lngDeg;
+        frame.unixTimestampSeconds = unixSeconds;
+        return frame;
+    }
+};
+
+} // namespace diurnal
+
 } // namespace lighting
 } // namespace scratchbox
 
 #endif // SCRATCHBOX_LIGHTING_HPP
+
