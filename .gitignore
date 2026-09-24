@@ -49,6 +49,8 @@ temp_unwrap_rewrap/
 temp-artifacts/
 **/temp-artifacts/
 .chrome-profile/
+.tmp_chrome/
+.tmp_chrome_vis/
 scratch/
 qc_debug.json
 packages/.temp-cli-test-*/
@@ -59,3 +61,10 @@ public/
 data/s4d_dataset/
 **/s4d_tile_blockout_runner_*.html
 *.bak
+__pycache__/
+data/test_pilot_multiscene/
+
+# Compiled binaries of scripts/*.cpp
+scripts/run_smpl_tree
+scripts/station_to_splats
+scripts/scratchbox_uv_pipeline
