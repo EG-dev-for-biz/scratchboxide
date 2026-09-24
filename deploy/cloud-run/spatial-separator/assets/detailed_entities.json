@@ -1,0 +1,4582 @@
+[
+  {
+    "id": "arch-colosseum-outer-facade-north",
+    "name": "Colosseum North Outer Arcade Facade (4 Tiers)",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -113.9940185546875,
+        22.708200454711914,
+        30.135982513427734
+      ],
+      "max": [
+        57.93028259277344,
+        59.20756912231445,
+        152.55215454101562
+      ],
+      "dimensions": [
+        171.92430114746094,
+        36.49936866760254,
+        122.41617202758789
+      ],
+      "centroid": [
+        -28.03186798095703,
+        40.957884788513184,
+        91.34406852722168
+      ],
+      "volumeM3": 768177.2038917536
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -26.423693015498714,
+        40.957884788513184,
+        86.28784345495541
+      ],
+      "dimensions": [
+        187.73405228874657,
+        36.49936866760254,
+        131.1881286234567
+      ],
+      "halfExtents": [
+        93.86702614437328,
+        18.24968433380127,
+        65.59406431172835
+      ],
+      "yawDeg": 9.2,
+      "yawRad": 0.16064440938946645,
+      "quaternion": [
+        0,
+        0.0802358640048978,
+        0,
+        0.9967759056715745
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9871244122547751,
+          0,
+          0.15995435202164657
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.15995435202164657,
+          0,
+          0.9871244122547751
+        ]
+      ],
+      "volumeM3": 898923.9346943551,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 33164,
+    "triangleCount": 59695,
+    "submeshIndices": [
+      20,
+      22,
+      24,
+      30,
+      32,
+      50,
+      54
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#3b82f6",
+    "trellisPrompt": "Complete 3D model of the monumental intact north outer wall of the Colosseum featuring four tiers of classical arched arcades in travertine limestone with Doric, Ionic, and Corinthian pilasters.",
+    "material": {
+      "roughness": 0.88,
+      "metalness": 0.02,
+      "baseColor": "#d6cbba"
+    }
+  },
+  {
+    "id": "arch-colosseum-inner-cavea-south",
+    "name": "Colosseum South Inner Cavea Ambulatory Ring",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -113.0644760131836,
+        22.63463020324707,
+        -0.013885498046875
+      ],
+      "max": [
+        0.9416236877441406,
+        54.85703659057617,
+        74.74665069580078
+      ],
+      "dimensions": [
+        114.00609970092773,
+        32.2224063873291,
+        74.76053619384766
+      ],
+      "centroid": [
+        -56.06142616271973,
+        38.74583339691162,
+        37.36638259887695
+      ],
+      "volumeM3": 274636.63316515484
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -55.98921150653456,
+        38.74583339691162,
+        36.8530831479122
+      ],
+      "dimensions": [
+        123.28538990286101,
+        32.2224063873291,
+        88.83548168732786
+      ],
+      "halfExtents": [
+        61.64269495143051,
+        16.11120319366455,
+        44.41774084366393
+      ],
+      "yawDeg": 7.98,
+      "yawRad": 0.13936222795952743,
+      "quaternion": [
+        0,
+        0.06962473871828616,
+        0,
+        0.9975732533295039
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9903047915168208,
+          0,
+          0.13891155423083476
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.13891155423083476,
+          0,
+          0.9903047915168208
+        ]
+      ],
+      "volumeM3": 352903.56467989716,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 15436,
+    "triangleCount": 27784,
+    "submeshIndices": [
+      31,
+      32,
+      33,
+      39,
+      41,
+      54
+    ],
+    "gemini3DScaleDiscrepancyPercent": 31.29,
+    "colorHex": "#2563eb",
+    "trellisPrompt": "Curving interior tiered seating structure (ima and media cavea) of the Roman Colosseum showing exposed brick radial brick-faced concrete support vaults.",
+    "material": {
+      "roughness": 0.89,
+      "metalness": 0.01,
+      "baseColor": "#c4baa9"
+    }
+  },
+  {
+    "id": "arch-colosseum-hypogeum-arena",
+    "name": "Colosseum Hypogeum Subterranean Chamber Grid",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -90.1329345703125,
+        23.01767921447754,
+        19.676353454589844
+      ],
+      "max": [
+        4.0092010498046875,
+        31.99810218811035,
+        76.2849349975586
+      ],
+      "dimensions": [
+        94.14213562011719,
+        8.980422973632812,
+        56.60858154296875
+      ],
+      "centroid": [
+        -43.061866760253906,
+        27.507890701293945,
+        47.98064422607422
+      ],
+      "volumeM3": 47858.94392610848
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -41.279109175520425,
+        27.507890701293945,
+        51.89141862271908
+      ],
+      "dimensions": [
+        94.55504821096639,
+        8.980422973632812,
+        59.908819906393994
+      ],
+      "halfExtents": [
+        47.277524105483195,
+        4.490211486816406,
+        29.954409953196997
+      ],
+      "yawDeg": 7.67,
+      "yawRad": 0.1339512589096235,
+      "quaternion": [
+        0,
+        0.06692556819733554,
+        0,
+        0.9977579708132949
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9910419366429276,
+          0,
+          0.1335510382402006
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.1335510382402006,
+          0,
+          0.9910419366429276
+        ]
+      ],
+      "volumeM3": 50871.234574361704,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 3925,
+    "triangleCount": 7065,
+    "submeshIndices": [
+      14,
+      18,
+      30,
+      32,
+      34,
+      36,
+      39
+    ],
+    "gemini3DScaleDiscrepancyPercent": 28.87,
+    "colorHex": "#1d4ed8",
+    "trellisPrompt": "Subterranean network of hypogeum corridors, animal cage bays, manual elevator lift shafts, and brick wall foundations beneath the Colosseum arena floor.",
+    "material": {
+      "roughness": 0.94,
+      "metalness": 0,
+      "baseColor": "#965239"
+    }
+  },
+  {
+    "id": "arch-colosseum-arena-deck",
+    "name": "Colosseum Arena Floor Timber Deck Reconstruction",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -54.21766662597656,
+        25.1724796295166,
+        47.05757141113281
+      ],
+      "max": [
+        -5.256080627441406,
+        34.79349136352539,
+        76.28491973876953
+      ],
+      "dimensions": [
+        48.961585998535156,
+        9.621011734008789,
+        29.22734832763672
+      ],
+      "centroid": [
+        -29.736873626708984,
+        29.982985496520996,
+        61.67124557495117
+      ],
+      "volumeM3": 13767.834510537807
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -29.719275166324,
+        29.982985496520996,
+        61.69456651807825
+      ],
+      "dimensions": [
+        48.97305026992087,
+        9.621011734008789,
+        29.277532554698148
+      ],
+      "halfExtents": [
+        24.486525134960434,
+        4.8105058670043945,
+        14.638766277349074
+      ],
+      "yawDeg": 0.11,
+      "yawRad": 0.001977651782709924,
+      "quaternion": [
+        0,
+        0.0009888257302131597,
+        0,
+        0.9999995111117181
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9999980444473505,
+          0,
+          0.001977650493575695
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.001977650493575695,
+          0,
+          0.9999980444473505
+        ]
+      ],
+      "volumeM3": 13794.703542257776,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 2122,
+    "triangleCount": 3819,
+    "submeshIndices": [
+      29,
+      30,
+      32,
+      36
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#60a5fa",
+    "trellisPrompt": "Reconstructed modern timber plank stage floor covering the eastern half of the Roman Colosseum arena with sand surface layer.",
+    "material": {
+      "roughness": 0.78,
+      "metalness": 0.01,
+      "baseColor": "#bfa37e"
+    }
+  },
+  {
+    "id": "arch-colosseum-pulvinar-box",
+    "name": "North Imperial Podium Box (Pulvinar)",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -56.07721710205078,
+        28.223878860473633,
+        85.79105377197266
+      ],
+      "max": [
+        -55.14749526977539,
+        38.65754318237305,
+        104.5580825805664
+      ],
+      "dimensions": [
+        0.9297218322753906,
+        10.433664321899414,
+        18.76702880859375
+      ],
+      "centroid": [
+        -55.612356185913086,
+        33.44071102142334,
+        95.17456817626953
+      ],
+      "volumeM3": 182.04778967439904
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -55.69620084538026,
+        33.44071102142334,
+        95.16937871373445
+      ],
+      "dimensions": [
+        18.765289182124995,
+        10.433664321899414,
+        1.0175424953172152
+      ],
+      "halfExtents": [
+        9.382644591062498,
+        5.216832160949707,
+        0.5087712476586076
+      ],
+      "yawDeg": 89.22,
+      "yawRad": 1.5571754772278283,
+      "quaternion": [
+        0,
+        0.7022747224565387,
+        0,
+        0.711906043097396
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.013620428397183098,
+          0,
+          0.9999072376627129
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.9999072376627129,
+          0,
+          0.013620428397183098
+        ]
+      ],
+      "volumeM3": 199.2253861627856,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 58,
+    "triangleCount": 104,
+    "submeshIndices": [
+      20,
+      22,
+      30
+    ],
+    "gemini3DScaleDiscrepancyPercent": 76.28,
+    "colorHex": "#93c5fd",
+    "trellisPrompt": "Elevated marble Imperial box (Pulvinar) at the podium level of the Colosseum with classical balustrade and protective canopy awning.",
+    "material": {
+      "roughness": 0.82,
+      "metalness": 0.04,
+      "baseColor": "#ece4d8"
+    }
+  },
+  {
+    "id": "arch-colosseum-consular-tribune",
+    "name": "South Senatorial / Consular Tribune",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -29.736927032470703,
+        28.59636878967285,
+        24.906391143798828
+      ],
+      "max": [
+        -10.524177551269531,
+        41.896419525146484,
+        39.981441497802734
+      ],
+      "dimensions": [
+        19.212749481201172,
+        13.300050735473633,
+        15.075050354003906
+      ],
+      "centroid": [
+        -20.130552291870117,
+        35.24639415740967,
+        32.44391632080078
+      ],
+      "volumeM3": 3852.1358007198523
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -20.23899593506956,
+        35.24639415740967,
+        34.81650740308029
+      ],
+      "dimensions": [
+        20.52889512497033,
+        13.300050735473633,
+        13.647430949605653
+      ],
+      "halfExtents": [
+        10.264447562485165,
+        6.650025367736816,
+        6.823715474802826
+      ],
+      "yawDeg": 19.9,
+      "yawRad": 0.34732728506114485,
+      "quaternion": [
+        0,
+        0.17279203585407,
+        0,
+        0.9849583302583952
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9402858246908116,
+          0,
+          0.3403859102335471
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.3403859102335471,
+          0,
+          0.9402858246908116
+        ]
+      ],
+      "volumeM3": 3726.2310409625306,
+      "tightnessGainPercent": 3.3
+    },
+    "tightnessGainPercent": 3.3,
+    "vertexCount": 43,
+    "triangleCount": 77,
+    "submeshIndices": [
+      32,
+      34,
+      39
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#bfdbfe",
+    "trellisPrompt": "Marble-inscribed seating platform reserved for Roman senators, magistrates, and the Pontifex Maximus on the south podium terrace.",
+    "material": {
+      "roughness": 0.84,
+      "metalness": 0.02,
+      "baseColor": "#ded5c7"
+    }
+  },
+  {
+    "id": "arch-colosseum-porta-sanivivaria",
+    "name": "East Gladiator Gate (Porta Sanivivaria)",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        23.146620977081653,
+        23,
+        107.70131235092524
+      ],
+      "max": [
+        42.25337902291835,
+        37,
+        127.69868764907477
+      ],
+      "dimensions": [
+        19.1067580458367,
+        14,
+        19.997375298149535
+      ],
+      "centroid": [
+        32.7,
+        30,
+        117.7
+      ],
+      "volumeM3": 5349.190159229485
+    },
+    "orientedBoundingBox": {
+      "center": [
+        32.7,
+        30,
+        117.7
+      ],
+      "dimensions": [
+        16.000000000000014,
+        14,
+        12.000000000000018
+      ],
+      "halfExtents": [
+        8.000000000000007,
+        7,
+        6.000000000000009
+      ],
+      "yawDeg": -54.06,
+      "yawRad": -0.9434963267948974,
+      "quaternion": [
+        0,
+        -0.45444419960583654,
+        0,
+        0.8907752070217326
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.5869609388892212,
+          0,
+          -0.8096152519674292
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.8096152519674292,
+          0,
+          0.5869609388892212
+        ]
+      ],
+      "volumeM3": 2688.0000000000064,
+      "tightnessGainPercent": 49.7
+    },
+    "tightnessGainPercent": 49.7,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      18,
+      20,
+      29
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#38bdf8",
+    "trellisPrompt": "Monumental triumphal gladiator entrance portal on the east axis of the Colosseum connecting to the underground Ludus Magnus tunnel.",
+    "material": {
+      "roughness": 0.87,
+      "metalness": 0.02,
+      "baseColor": "#d6cbba"
+    }
+  },
+  {
+    "id": "arch-colosseum-porta-libitinaria",
+    "name": "West Gate of Death (Porta Libitinaria)",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -113.06414031982422,
+        23.899248123168945,
+        -0.013885498046875
+      ],
+      "max": [
+        -105.00702667236328,
+        40.90217971801758,
+        19.98371124267578
+      ],
+      "dimensions": [
+        8.057113647460938,
+        17.002931594848633,
+        19.997596740722656
+      ],
+      "centroid": [
+        -109.03558349609375,
+        32.40071392059326,
+        9.984912872314453
+      ],
+      "volumeM3": 2739.5618105654744
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -109.20817468748605,
+        32.40071392059326,
+        9.921796517101429
+      ],
+      "dimensions": [
+        20.319261464681198,
+        17.002931594848633,
+        8.835452757744786
+      ],
+      "halfExtents": [
+        10.159630732340599,
+        8.501465797424316,
+        4.417726378872393
+      ],
+      "yawDeg": -86.72,
+      "yawRad": -1.513577209999593,
+      "quaternion": [
+        0,
+        -0.6865901619303942,
+        0,
+        0.7270446681878597
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.05718789908079018,
+          0,
+          -0.9983634329234646
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.9983634329234646,
+          0,
+          0.05718789908079018
+        ]
+      ],
+      "volumeM3": 3052.534179494706,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 222,
+    "triangleCount": 399,
+    "submeshIndices": [
+      33,
+      34,
+      39
+    ],
+    "gemini3DScaleDiscrepancyPercent": 13.56,
+    "colorHex": "#0284c7",
+    "trellisPrompt": "Ancient Roman gate of death on the west axis of the Colosseum named for the Roman goddess of funerals Libitina.",
+    "material": {
+      "roughness": 0.9,
+      "metalness": 0.01,
+      "baseColor": "#c2b6a3"
+    }
+  },
+  {
+    "id": "arch-colosseum-vomitoria-ring-1",
+    "name": "Ground Level Radial Vomitoria Arches (Entrances 1-76)",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -113.06437683105469,
+        22.617563247680664,
+        -0.01393890380859375
+      ],
+      "max": [
+        51.42139434814453,
+        34.99477767944336,
+        76.2849349975586
+      ],
+      "dimensions": [
+        164.48577117919922,
+        12.377214431762695,
+        76.29887390136719
+      ],
+      "centroid": [
+        -30.821491241455078,
+        28.80617046356201,
+        38.135498046875
+      ],
+      "volumeM3": 155335.02032672823
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -32.103922577649875,
+        28.80617046356201,
+        38.17072358611512
+      ],
+      "dimensions": [
+        165.07865957496358,
+        12.377214431762695,
+        83.32925257859827
+      ],
+      "halfExtents": [
+        82.53932978748179,
+        6.188607215881348,
+        41.664626289299136
+      ],
+      "yawDeg": -2.49,
+      "yawRad": -0.04344301819712042,
+      "quaternion": [
+        0,
+        -0.02171980101745869,
+        0,
+        0.9997640972968383
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.999056500487524,
+          0,
+          -0.04342935451537308
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.04342935451537308,
+          0,
+          0.999056500487524
+        ]
+      ],
+      "volumeM3": 170259.4927838667,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 17658,
+    "triangleCount": 31784,
+    "submeshIndices": [
+      20,
+      30,
+      32,
+      39,
+      50,
+      54
+    ],
+    "gemini3DScaleDiscrepancyPercent": 2.32,
+    "colorHex": "#0369a1",
+    "trellisPrompt": "Radial ground-floor entry archways and vaulted exit passages (vomitoria) numbered with Roman numerals for spectator crowd circulation.",
+    "material": {
+      "roughness": 0.88,
+      "metalness": 0.01,
+      "baseColor": "#cfc4b3"
+    }
+  },
+  {
+    "id": "arch-colosseum-vomitoria-ring-2",
+    "name": "Second Tier Tuscan Arcade Ambulatory",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -113.064453125,
+        34.00484085083008,
+        -0.013885498046875
+      ],
+      "max": [
+        51.111717224121094,
+        47.99321365356445,
+        140.55369567871094
+      ],
+      "dimensions": [
+        164.1761703491211,
+        13.988372802734375,
+        140.5675811767578
+      ],
+      "centroid": [
+        -30.976367950439453,
+        40.999027252197266,
+        70.26990509033203
+      ],
+      "volumeM3": 322821.52945843816
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -33.5707132921932,
+        40.999027252197266,
+        69.31257974325288
+      ],
+      "dimensions": [
+        169.2228267092533,
+        13.988372802734375,
+        141.41615734477833
+      ],
+      "halfExtents": [
+        84.61141335462665,
+        6.9941864013671875,
+        70.70807867238916
+      ],
+      "yawDeg": 4.43,
+      "yawRad": 0.07733008998900302,
+      "quaternion": [
+        0,
+        0.03865541176635199,
+        0,
+        0.9992526002674067
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9970115182823476,
+          0,
+          0.07725304144386907
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.07725304144386907,
+          0,
+          0.9970115182823476
+        ]
+      ],
+      "volumeM3": 334753.5378160478,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 11884,
+    "triangleCount": 21391,
+    "submeshIndices": [
+      20,
+      22,
+      30,
+      32,
+      39,
+      50,
+      54
+    ],
+    "gemini3DScaleDiscrepancyPercent": 27.87,
+    "colorHex": "#075985",
+    "trellisPrompt": "Continuous circular annular barrel-vaulted ambulatory corridor behind the second tier Tuscan arcades of the Colosseum.",
+    "material": {
+      "roughness": 0.87,
+      "metalness": 0.01,
+      "baseColor": "#d6cbba"
+    }
+  },
+  {
+    "id": "arch-colosseum-attic-corbels",
+    "name": "Upper Attic Wall & Velarium Mast Brackets",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -122.9288101196289,
+        52.00651168823242,
+        6.446441650390625
+      ],
+      "max": [
+        51.112403869628906,
+        81.7318344116211,
+        140.55380249023438
+      ],
+      "dimensions": [
+        174.0412139892578,
+        29.725322723388672,
+        134.10736083984375
+      ],
+      "centroid": [
+        -35.908203125,
+        66.86917304992676,
+        73.5001220703125
+      ],
+      "volumeM3": 693795.2118263348
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -38.78606601595028,
+        66.86917304992676,
+        62.572299039350085
+      ],
+      "dimensions": [
+        145.10226153968878,
+        29.725322723388672,
+        171.45930381575312
+      ],
+      "halfExtents": [
+        72.55113076984439,
+        14.862661361694336,
+        85.72965190787656
+      ],
+      "yawDeg": -45.88,
+      "yawRad": -0.8007177963216121,
+      "quaternion": [
+        0,
+        -0.38974888431821453,
+        0,
+        0.9209211731590858
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6961916143454141,
+          0,
+          -0.71785599956755
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.71785599956755,
+          0,
+          0.6961916143454141
+        ]
+      ],
+      "volumeM3": 739540.2499435543,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 9721,
+    "triangleCount": 17497,
+    "submeshIndices": [
+      3,
+      20,
+      22,
+      24,
+      29
+    ],
+    "gemini3DScaleDiscrepancyPercent": 95.65,
+    "colorHex": "#0c4a6e",
+    "trellisPrompt": "Solid travertine masonry fourth-story attic wall featuring Corinthian pilasters and projecting stone corbel brackets used to seat 240 wooden masts supporting the canvas Velarium awning.",
+    "material": {
+      "roughness": 0.85,
+      "metalness": 0.03,
+      "baseColor": "#dfd5c4"
+    }
+  },
+  {
+    "id": "arch-colosseum-podium-parapet",
+    "name": "Arena Perimeter Parapet & Safety Fence Wall",
+    "category": "colosseum_architecture",
+    "boundingBox": {
+      "min": [
+        -92.68482499375177,
+        27.5,
+        16.837644015499528
+      ],
+      "max": [
+        5.844824993751772,
+        31.5,
+        108.24235598450048
+      ],
+      "dimensions": [
+        98.52964998750355,
+        4,
+        91.40471196900094
+      ],
+      "centroid": [
+        -43.42,
+        29.5,
+        62.540000000000006
+      ],
+      "volumeM3": 36024.297110056956
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -43.42,
+        29.5,
+        62.54
+      ],
+      "dimensions": [
+        84.00000000000003,
+        4,
+        52.000000000000014
+      ],
+      "halfExtents": [
+        42.000000000000014,
+        2,
+        26.000000000000007
+      ],
+      "yawDeg": 35.94,
+      "yawRad": 0.6273000000000002,
+      "quaternion": [
+        0,
+        0.30853261418573835,
+        0,
+        0.9512137646100977
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.8096152519674287,
+          0,
+          0.586960938889222
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.586960938889222,
+          0,
+          0.8096152519674287
+        ]
+      ],
+      "volumeM3": 17472.00000000001,
+      "tightnessGainPercent": 51.5
+    },
+    "tightnessGainPercent": 51.5,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      36,
+      38,
+      52
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#67e8f9",
+    "trellisPrompt": "Four-meter-high protective marble podium podium parapet wall with revolving bronze rollers preventing wild beasts from leaping into the audience.",
+    "material": {
+      "roughness": 0.86,
+      "metalness": 0.05,
+      "baseColor": "#d1c7b8"
+    }
+  },
+  {
+    "id": "mon-arch-constantine-central-fornix",
+    "name": "Arch of Constantine: Central Triumphal Fornix",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -144.7510256422791,
+        25.75,
+        -50.041402103520134
+      ],
+      "max": [
+        -134.4889743577209,
+        37.25,
+        -40.51859789647987
+      ],
+      "dimensions": [
+        10.262051284558197,
+        11.5,
+        9.522804207040267
+      ],
+      "centroid": [
+        -139.62,
+        31.5,
+        -45.28
+      ],
+      "volumeM3": 1123.8203091727185
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -139.62,
+        31.5,
+        -45.28
+      ],
+      "dimensions": [
+        8.500000000000043,
+        11.5,
+        7.400000000000044
+      ],
+      "halfExtents": [
+        4.250000000000021,
+        5.75,
+        3.700000000000022
+      ],
+      "yawDeg": 16.63,
+      "yawRad": 0.29019999999999535,
+      "quaternion": [
+        0,
+        0.14459137957848428,
+        0,
+        0.9894914516819187
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9581866659031814,
+          0,
+          0.28614386815961146
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.28614386815961146,
+          0,
+          0.9581866659031814
+        ]
+      ],
+      "volumeM3": 723.3500000000079,
+      "tightnessGainPercent": 35.6
+    },
+    "tightnessGainPercent": 35.6,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      60
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#8b5cf6",
+    "trellisPrompt": "Grand central triumphal archway of the Arch of Constantine in Rome with coffered barrel vault and spandrel winged Victory reliefs.",
+    "material": {
+      "roughness": 0.82,
+      "metalness": 0.03,
+      "baseColor": "#e0d8cd"
+    }
+  },
+  {
+    "id": "mon-arch-constantine-north-fornix",
+    "name": "Arch of Constantine: North Lateral Fornix & Medallions",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -137.0332923099001,
+        25.4,
+        -47.73372226832061
+      ],
+      "max": [
+        -129.16670769009988,
+        33.9,
+        -38.926277731679384
+      ],
+      "dimensions": [
+        7.866584619800221,
+        8.5,
+        8.807444536641228
+      ],
+      "centroid": [
+        -133.1,
+        29.65,
+        -43.33
+      ],
+      "volumeM3": 588.9183157193256
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -133.1,
+        29.65,
+        -43.33
+      ],
+      "dimensions": [
+        7.400000000000035,
+        8.5,
+        6.000000000000034
+      ],
+      "halfExtents": [
+        3.7000000000000175,
+        4.25,
+        3.000000000000017
+      ],
+      "yawDeg": -73.37,
+      "yawRad": -1.2805963267949032,
+      "quaternion": [
+        0,
+        -0.5974345704093421,
+        0,
+        0.8019176604114694
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.2861438681596096,
+          0,
+          -0.9581866659031819
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.9581866659031819,
+          0,
+          0.2861438681596096
+        ]
+      ],
+      "volumeM3": 377.4000000000039,
+      "tightnessGainPercent": 35.9
+    },
+    "tightnessGainPercent": 35.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      60
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#7c3aed",
+    "trellisPrompt": "North lateral pedestrian archway of the Arch of Constantine flanked by circular Hadrianic marble medallions depicting sacrificial hunts.",
+    "material": {
+      "roughness": 0.83,
+      "metalness": 0.02,
+      "baseColor": "#ded5c7"
+    }
+  },
+  {
+    "id": "mon-arch-constantine-south-fornix",
+    "name": "Arch of Constantine: South Lateral Fornix & Friezes",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -150.0732923099001,
+        25.4,
+        -51.63372226832061
+      ],
+      "max": [
+        -142.20670769009988,
+        33.9,
+        -42.82627773167938
+      ],
+      "dimensions": [
+        7.866584619800221,
+        8.5,
+        8.807444536641228
+      ],
+      "centroid": [
+        -146.14,
+        29.65,
+        -47.23
+      ],
+      "volumeM3": 588.9183157193256
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -146.14,
+        29.65,
+        -47.23
+      ],
+      "dimensions": [
+        7.400000000000032,
+        8.5,
+        6.00000000000003
+      ],
+      "halfExtents": [
+        3.700000000000016,
+        4.25,
+        3.000000000000015
+      ],
+      "yawDeg": -73.37,
+      "yawRad": -1.2805963267949028,
+      "quaternion": [
+        0,
+        -0.597434570409342,
+        0,
+        0.8019176604114695
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.28614386815961007,
+          0,
+          -0.9581866659031818
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.9581866659031818,
+          0,
+          0.28614386815961007
+        ]
+      ],
+      "volumeM3": 377.40000000000356,
+      "tightnessGainPercent": 35.9
+    },
+    "tightnessGainPercent": 35.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      60
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#6d28d9",
+    "trellisPrompt": "South lateral arched passageway with historical Constantinian relief friezes commemorating the Battle of the Milvian Bridge.",
+    "material": {
+      "roughness": 0.84,
+      "metalness": 0.02,
+      "baseColor": "#d8cfc0"
+    }
+  },
+  {
+    "id": "mon-arch-constantine-attic",
+    "name": "Arch of Constantine: Attic Inscription Block & Dacian Statues",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -139.0424346923828,
+        39.5981559753418,
+        -62.729736328125
+      ],
+      "max": [
+        -124.16856384277344,
+        45.211734771728516,
+        -43.6549072265625
+      ],
+      "dimensions": [
+        14.873870849609375,
+        5.613578796386719,
+        19.0748291015625
+      ],
+      "centroid": [
+        -131.60549926757812,
+        42.404945373535156,
+        -53.19232177734375
+      ],
+      "volumeM3": 1592.6651785858462
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -129.82107064024152,
+        42.404945373535156,
+        -54.62194336060674
+      ],
+      "dimensions": [
+        24.186352483035673,
+        5.613578796386719,
+        4.8915449716602115
+      ],
+      "halfExtents": [
+        12.093176241517837,
+        2.8067893981933594,
+        2.4457724858301058
+      ],
+      "yawDeg": 51.3,
+      "yawRad": 0.8953454830439482,
+      "quaternion": [
+        0,
+        0.43286878493506814,
+        0,
+        0.9014569401967227
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6252492300576754,
+          0,
+          0.7804251407484796
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.7804251407484796,
+          0,
+          0.6252492300576754
+        ]
+      ],
+      "volumeM3": 664.1348216880813,
+      "tightnessGainPercent": 58.3
+    },
+    "tightnessGainPercent": 58.3,
+    "vertexCount": 19,
+    "triangleCount": 34,
+    "submeshIndices": [
+      60
+    ],
+    "gemini3DScaleDiscrepancyPercent": 50.11,
+    "colorHex": "#5b21b6",
+    "trellisPrompt": "Upper attic story of the Arch of Constantine with gilded bronze letter inscription dedication to Constantine Augustus and eight freestanding pavonazzetto marble statues of captive Dacian warriors.",
+    "material": {
+      "roughness": 0.8,
+      "metalness": 0.06,
+      "baseColor": "#eae1d3"
+    }
+  },
+  {
+    "id": "mon-meta-sudans-core",
+    "name": "Meta Sudans Ancient Conical Fountain Core",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -108.4,
+        25,
+        -28.1
+      ],
+      "max": [
+        -96.4,
+        30,
+        -16.1
+      ],
+      "dimensions": [
+        12,
+        5,
+        12
+      ],
+      "centroid": [
+        -102.4,
+        27.5,
+        -22.1
+      ],
+      "volumeM3": 720
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -102.4,
+        27.5,
+        -22.1
+      ],
+      "dimensions": [
+        12,
+        5,
+        12
+      ],
+      "halfExtents": [
+        6,
+        2.5,
+        6
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 720,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      2,
+      4
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#10b981",
+    "trellisPrompt": "Conical Roman brick-faced concrete foundation core of the Meta Sudans fountain monument where victorious gladiators washed after arena combat.",
+    "material": {
+      "roughness": 0.95,
+      "metalness": 0,
+      "baseColor": "#a68a72"
+    }
+  },
+  {
+    "id": "mon-temple-venus-podium",
+    "name": "Temple of Venus & Roma Travertine Podium Terrace",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -302.60205078125,
+        27.866220474243164,
+        21.50391387939453
+      ],
+      "max": [
+        -226.98733520507812,
+        58.577022552490234,
+        152.56533813476562
+      ],
+      "dimensions": [
+        75.61471557617188,
+        30.71080207824707,
+        131.0614242553711
+      ],
+      "centroid": [
+        -264.79469299316406,
+        43.2216215133667,
+        87.03462600708008
+      ],
+      "volumeM3": 304349.34062181273
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -262.2010713211904,
+        43.2216215133667,
+        90.08877134399162
+      ],
+      "dimensions": [
+        131.1669554468382,
+        30.71080207824707,
+        80.48792824293923
+      ],
+      "halfExtents": [
+        65.5834777234191,
+        15.355401039123535,
+        40.24396412146962
+      ],
+      "yawDeg": 84.46,
+      "yawRad": 1.4741216897771838,
+      "quaternion": [
+        0,
+        0.672114528653399,
+        0,
+        0.7404472029611694
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.09652412074603847,
+          0,
+          0.9953306456219482
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.9953306456219482,
+          0,
+          0.09652412074603847
+        ]
+      ],
+      "volumeM3": 324224.88587496453,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 2634,
+    "triangleCount": 4741,
+    "submeshIndices": [
+      73,
+      75
+    ],
+    "gemini3DScaleDiscrepancyPercent": 86.34,
+    "colorHex": "#ec4899",
+    "trellisPrompt": "Massive elevated travertine terrace platform of the Temple of Venus and Roma designed by Emperor Hadrian, looking toward the Colosseum.",
+    "material": {
+      "roughness": 0.86,
+      "metalness": 0.02,
+      "baseColor": "#d1c7bc"
+    }
+  },
+  {
+    "id": "mon-temple-venus-colonnade",
+    "name": "Temple of Venus & Roma Monolithic Granite Colonnade",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -250.5,
+        35,
+        84
+      ],
+      "max": [
+        -205.5,
+        49,
+        106
+      ],
+      "dimensions": [
+        45,
+        14,
+        22
+      ],
+      "centroid": [
+        -228,
+        42,
+        95
+      ],
+      "volumeM3": 13860
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -228,
+        42,
+        95
+      ],
+      "dimensions": [
+        45,
+        14,
+        22
+      ],
+      "halfExtents": [
+        22.5,
+        7,
+        11
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 13860,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      78
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#db2777",
+    "trellisPrompt": "Re-erected gray Egyptian granite columns and Corinthian white marble capitals of the peripteral portico of the Temple of Venus and Roma.",
+    "material": {
+      "roughness": 0.81,
+      "metalness": 0.03,
+      "baseColor": "#c9c2b8"
+    }
+  },
+  {
+    "id": "mon-campanile-tower",
+    "name": "Santa Francesca Romana 5-Story Romanesque Campanile",
+    "category": "monuments_temples",
+    "boundingBox": {
+      "min": [
+        -241,
+        36,
+        108
+      ],
+      "max": [
+        -229,
+        68,
+        122
+      ],
+      "dimensions": [
+        12,
+        32,
+        14
+      ],
+      "centroid": [
+        -235,
+        52,
+        115
+      ],
+      "volumeM3": 5376
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -235,
+        52,
+        115
+      ],
+      "dimensions": [
+        14,
+        32,
+        12
+      ],
+      "halfExtents": [
+        7,
+        16,
+        6
+      ],
+      "yawDeg": 90,
+      "yawRad": 1.5707963267948966,
+      "quaternion": [
+        0,
+        0.7071067811865475,
+        0,
+        0.7071067811865476
+      ],
+      "rotationMatrix3x3": [
+        [
+          6.123233995736766e-17,
+          0,
+          1
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -1,
+          0,
+          6.123233995736766e-17
+        ]
+      ],
+      "volumeM3": 5376,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      76,
+      77
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#a855f7",
+    "trellisPrompt": "12th-century Romanesque five-tiered terracotta brick bell tower with white marble mullioned windows, polychrome ceramic bacini roundels, and tiled pyramid roof.",
+    "material": {
+      "roughness": 0.86,
+      "metalness": 0.02,
+      "baseColor": "#b46d4e"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-1",
+    "name": "Oppian Hill Crest Stone Pine #1 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        117.35111999511719,
+        37.765018463134766,
+        30.733787536621094
+      ],
+      "max": [
+        127.26712036132812,
+        38.3217887878418,
+        43.655616760253906
+      ],
+      "dimensions": [
+        9.916000366210938,
+        0.5567703247070312,
+        12.921829223632812
+      ],
+      "centroid": [
+        122.30912017822266,
+        38.04340362548828,
+        37.1947021484375
+      ],
+      "volumeM3": 71.3405759127871
+    },
+    "orientedBoundingBox": {
+      "center": [
+        122.30912017822266,
+        38.04340362548828,
+        37.1947021484375
+      ],
+      "dimensions": [
+        16.288054940582267,
+        0.5567703247070312,
+        0.01
+      ],
+      "halfExtents": [
+        8.144027470291133,
+        0.2783851623535156,
+        0.005
+      ],
+      "yawDeg": -52.5,
+      "yawRad": -0.9162621999223739,
+      "quaternion": [
+        0,
+        -0.44227270008503,
+        0,
+        0.896880626816912
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6087897175189942,
+          0,
+          -0.7933316329525397
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.7933316329525397,
+          0,
+          0.6087897175189942
+        ]
+      ],
+      "volumeM3": 0.09068705638113954,
+      "tightnessGainPercent": 99.9
+    },
+    "tightnessGainPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #1 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-2",
+    "name": "Oppian Hill Crest Stone Pine #2 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        131.60678100585938,
+        35.20940017700195,
+        53.49981689453125
+      ],
+      "max": [
+        152.67868041992188,
+        40.18819046020508,
+        73.805419921875
+      ],
+      "dimensions": [
+        21.0718994140625,
+        4.978790283203125,
+        20.30560302734375
+      ],
+      "centroid": [
+        142.14273071289062,
+        37.698795318603516,
+        63.652618408203125
+      ],
+      "volumeM3": 2130.3129594302654
+    },
+    "orientedBoundingBox": {
+      "center": [
+        140.61697650647653,
+        37.698795318603516,
+        62.63273923993745
+      ],
+      "dimensions": [
+        27.973754724491343,
+        4.978790283203125,
+        20.29542189250354
+      ],
+      "halfExtents": [
+        13.986877362245671,
+        2.4893951416015625,
+        10.14771094625177
+      ],
+      "yawDeg": -38.14,
+      "yawRad": -0.6657544877966578,
+      "quaternion": [
+        0,
+        -0.32676367790022337,
+        0,
+        0.9451060780701387
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.7864509976102381,
+          0,
+          -0.6176526761521083
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.6176526761521083,
+          0,
+          0.7864509976102381
+        ]
+      ],
+      "volumeM3": 2826.6541835829116,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 65,
+    "triangleCount": 117,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 55.74,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #2 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-3",
+    "name": "Oppian Hill Crest Stone Pine #3 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        153.2991485595703,
+        35.20563888549805,
+        81.80345916748047
+      ],
+      "max": [
+        163.8352508544922,
+        37.68107986450195,
+        92.87910461425781
+      ],
+      "dimensions": [
+        10.536102294921875,
+        2.4754409790039062,
+        11.075645446777344
+      ],
+      "centroid": [
+        158.56719970703125,
+        36.443359375,
+        87.34128189086914
+      ],
+      "volumeM3": 288.8694398513038
+    },
+    "orientedBoundingBox": {
+      "center": [
+        160.91011012269692,
+        36.443359375,
+        85.1862179442992
+      ],
+      "dimensions": [
+        13.120347407636153,
+        2.4754409790039062,
+        8.836554376309348
+      ],
+      "halfExtents": [
+        6.5601737038180765,
+        1.2377204895019531,
+        4.418277188154674
+      ],
+      "yawDeg": 49.75,
+      "yawRad": 0.8682532489760879,
+      "quaternion": [
+        0,
+        0.4206182026571587,
+        0,
+        0.9072377459042703
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6461606551869227,
+          0,
+          0.7632014201299725
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.7632014201299725,
+          0,
+          0.6461606551869227
+        ]
+      ],
+      "volumeM3": 286.9993181927823,
+      "tightnessGainPercent": 0.6
+    },
+    "tightnessGainPercent": 0.6,
+    "vertexCount": 19,
+    "triangleCount": 34,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 84.19,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #3 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-4",
+    "name": "Oppian Hill Crest Stone Pine #4 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        170.03341674804688,
+        35.21806716918945,
+        95.340087890625
+      ],
+      "max": [
+        192.34568786621094,
+        61.13084030151367,
+        114.41535949707031
+      ],
+      "dimensions": [
+        22.312271118164062,
+        25.91277313232422,
+        19.075271606445312
+      ],
+      "centroid": [
+        181.1895523071289,
+        48.17445373535156,
+        104.87772369384766
+      ],
+      "volumeM3": 11028.803568416699
+    },
+    "orientedBoundingBox": {
+      "center": [
+        180.10876469612066,
+        48.17445373535156,
+        103.40955339390746
+      ],
+      "dimensions": [
+        20.438200232870408,
+        25.91277313232422,
+        21.493088194917917
+      ],
+      "halfExtents": [
+        10.219100116435204,
+        12.95638656616211,
+        10.746544097458958
+      ],
+      "yawDeg": 76.35,
+      "yawRad": 1.3325754157614675,
+      "quaternion": [
+        0,
+        0.6180719397926717,
+        0,
+        0.7861215410106277
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.235974154481848,
+          0,
+          0.971759331530486
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.971759331530486,
+          0,
+          0.235974154481848
+        ]
+      ],
+      "volumeM3": 11382.964021977548,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 206,
+    "triangleCount": 370,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #4 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-5",
+    "name": "Oppian Hill Crest Stone Pine #5 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        191.10687255859375,
+        36.547359466552734,
+        110.72169494628906
+      ],
+      "max": [
+        214.03842163085938,
+        63.05697250366211,
+        134.72036743164062
+      ],
+      "dimensions": [
+        22.931549072265625,
+        26.509613037109375,
+        23.998672485351562
+      ],
+      "centroid": [
+        202.57264709472656,
+        49.80216598510742,
+        122.72103118896484
+      ],
+      "volumeM3": 14588.94880916057
+    },
+    "orientedBoundingBox": {
+      "center": [
+        203.00630007233048,
+        49.80216598510742,
+        122.599098489962
+      ],
+      "dimensions": [
+        22.789197412865878,
+        26.509613037109375,
+        23.65173011904023
+      ],
+      "halfExtents": [
+        11.394598706432939,
+        13.254806518554688,
+        11.825865059520115
+      ],
+      "yawDeg": -6.38,
+      "yawRad": -0.11139426669539292,
+      "quaternion": [
+        0,
+        -0.055668340811845185,
+        0,
+        0.9984493156045811
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9938020716625126,
+          0,
+          -0.11116403356885879
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.11116403356885879,
+          0,
+          0.9938020716625126
+        ]
+      ],
+      "volumeM3": 14288.78605616685,
+      "tightnessGainPercent": 2.1
+    },
+    "tightnessGainPercent": 2.1,
+    "vertexCount": 219,
+    "triangleCount": 394,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #5 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-crest-6",
+    "name": "Oppian Hill Crest Stone Pine #6 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        210.3199462890625,
+        35.98842239379883,
+        130.41098022460938
+      ],
+      "max": [
+        228.914306640625,
+        60.594242095947266,
+        152.5626678466797
+      ],
+      "dimensions": [
+        18.5943603515625,
+        24.605819702148438,
+        22.151687622070312
+      ],
+      "centroid": [
+        219.61712646484375,
+        48.29133224487305,
+        141.48682403564453
+      ],
+      "volumeM3": 10135.05008090961
+    },
+    "orientedBoundingBox": {
+      "center": [
+        219.76369162568204,
+        48.29133224487305,
+        141.0880518385384
+      ],
+      "dimensions": [
+        26.33358624595837,
+        24.605819702148438,
+        25.05986254837667
+      ],
+      "halfExtents": [
+        13.166793122979184,
+        12.302909851074219,
+        12.529931274188336
+      ],
+      "yawDeg": -69.95,
+      "yawRad": -1.2208434429043546,
+      "quaternion": [
+        0,
+        -0.5732130723006484,
+        0,
+        0.8194063544686797
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.3428535474873031,
+          0,
+          -0.9393888678153322
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.9393888678153322,
+          0,
+          0.3428535474873031
+        ]
+      ],
+      "volumeM3": 16237.7753874107,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 154,
+    "triangleCount": 277,
+    "submeshIndices": [
+      47,
+      48,
+      51,
+      62
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#22c55e",
+    "trellisPrompt": "Mature Italian stone pine tree #6 (Pinus pinea) with umbrella-like spreading horizontal canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters on the Oppian hilltop.",
+    "material": {
+      "roughness": 0.7,
+      "metalness": 0,
+      "baseColor": "#2d5a27"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-7",
+    "name": "Park Embankment Slope Pine #7 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        60.384239196777344,
+        28.121278762817383,
+        152.52792358398438
+      ],
+      "max": [
+        84.86540222167969,
+        47.439517974853516,
+        174.83303833007812
+      ],
+      "dimensions": [
+        24.481163024902344,
+        19.318239212036133,
+        22.30511474609375
+      ],
+      "centroid": [
+        72.62482070922852,
+        37.78039836883545,
+        163.68048095703125
+      ],
+      "volumeM3": 10548.824018165049
+    },
+    "orientedBoundingBox": {
+      "center": [
+        72.96582312617923,
+        37.78039836883545,
+        160.99242535652544
+      ],
+      "dimensions": [
+        30.056116196609537,
+        19.318239212036133,
+        28.460190655202005
+      ],
+      "halfExtents": [
+        15.028058098304768,
+        9.659119606018066,
+        14.230095327601003
+      ],
+      "yawDeg": 41.6,
+      "yawRad": 0.7260309183508733,
+      "quaternion": [
+        0,
+        0.35509478604979694,
+        0,
+        0.9348303016699068
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.7478153858404979,
+          0,
+          0.6639067319286854
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.6639067319286854,
+          0,
+          0.7478153858404979
+        ]
+      ],
+      "volumeM3": 16524.875861087407,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 519,
+    "triangleCount": 934,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #7 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-8",
+    "name": "Park Embankment Slope Pine #8 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        80.06278991699219,
+        38.917232513427734,
+        165.14181518554688
+      ],
+      "max": [
+        104.99346923828125,
+        58.836429595947266,
+        189.90806579589844
+      ],
+      "dimensions": [
+        24.930679321289062,
+        19.91919708251953,
+        24.766250610351562
+      ],
+      "centroid": [
+        92.52812957763672,
+        48.8768310546875,
+        177.52494049072266
+      ],
+      "volumeM3": 12298.89813006139
+    },
+    "orientedBoundingBox": {
+      "center": [
+        91.98204154814702,
+        48.8768310546875,
+        179.61392178588343
+      ],
+      "dimensions": [
+        29.85417426295982,
+        19.91919708251953,
+        32.688437942847926
+      ],
+      "halfExtents": [
+        14.92708713147991,
+        9.959598541259766,
+        16.344218971423963
+      ],
+      "yawDeg": -48.28,
+      "yawRad": -0.842569058476982,
+      "quaternion": [
+        0,
+        -0.4089330057727365,
+        0,
+        0.9125644069268071
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6655475935793501,
+          0,
+          -0.7463554117715877
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.7463554117715877,
+          0,
+          0.6655475935793501
+        ]
+      ],
+      "volumeM3": 19438.87199258875,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 1546,
+    "triangleCount": 2782,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #8 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-9",
+    "name": "Park Embankment Slope Pine #9 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        100.03532409667969,
+        39.009220123291016,
+        180.0626220703125
+      ],
+      "max": [
+        124.79255676269531,
+        58.94526290893555,
+        204.80517578125
+      ],
+      "dimensions": [
+        24.757232666015625,
+        19.93604278564453,
+        24.7425537109375
+      ],
+      "centroid": [
+        112.4139404296875,
+        48.97724151611328,
+        192.43389892578125
+      ],
+      "volumeM3": 12211.965729939942
+    },
+    "orientedBoundingBox": {
+      "center": [
+        114.04043523720247,
+        48.97724151611328,
+        189.3366707341268
+      ],
+      "dimensions": [
+        27.61752477335675,
+        19.93604278564453,
+        25.026517407145484
+      ],
+      "halfExtents": [
+        13.808762386678374,
+        9.968021392822266,
+        12.513258703572742
+      ],
+      "yawDeg": 33.03,
+      "yawRad": 0.5764491493819768,
+      "quaternion": [
+        0,
+        0.2842504848899335,
+        0,
+        0.9587500518069544
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.8384033236796754,
+          0,
+          0.5450503342287513
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.5450503342287513,
+          0,
+          0.8384033236796754
+        ]
+      ],
+      "volumeM3": 13779.203952100599,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 794,
+    "triangleCount": 1429,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #9 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-10",
+    "name": "Park Embankment Slope Pine #10 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        120.45445251464844,
+        40.828609466552734,
+        196.8052978515625
+      ],
+      "max": [
+        141.5272674560547,
+        58.76627731323242,
+        219.57241821289062
+      ],
+      "dimensions": [
+        21.07281494140625,
+        17.937667846679688,
+        22.767120361328125
+      ],
+      "centroid": [
+        130.99085998535156,
+        49.79744338989258,
+        208.18885803222656
+      ],
+      "volumeM3": 8605.906724431827
+    },
+    "orientedBoundingBox": {
+      "center": [
+        129.84252315717586,
+        49.79744338989258,
+        207.15844007292696
+      ],
+      "dimensions": [
+        24.341275199213136,
+        17.937667846679688,
+        20.565821706299666
+      ],
+      "halfExtents": [
+        12.170637599606568,
+        8.968833923339844,
+        10.282910853149833
+      ],
+      "yawDeg": -66.66,
+      "yawRad": -1.163424524655745,
+      "quaternion": [
+        0,
+        -0.5494553762164661,
+        0,
+        0.8355230634439852
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.39619757909364334,
+          0,
+          -0.9181652783242984
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.9181652783242984,
+          0,
+          0.39619757909364334
+        ]
+      ],
+      "volumeM3": 8979.566493719007,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 91,
+    "triangleCount": 163,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #10 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-11",
+    "name": "Park Embankment Slope Pine #11 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        140.28839111328125,
+        40.823543548583984,
+        210.95733642578125
+      ],
+      "max": [
+        164.4601593017578,
+        58.75484848022461,
+        234.3391571044922
+      ],
+      "dimensions": [
+        24.171768188476562,
+        17.931304931640625,
+        23.381820678710938
+      ],
+      "centroid": [
+        152.37427520751953,
+        49.7891960144043,
+        222.64824676513672
+      ],
+      "volumeM3": 10134.41401161544
+    },
+    "orientedBoundingBox": {
+      "center": [
+        152.71596185580455,
+        49.7891960144043,
+        224.65513038788373
+      ],
+      "dimensions": [
+        24.793819755447032,
+        17.931304931640625,
+        24.18613511605465
+      ],
+      "halfExtents": [
+        12.396909877723516,
+        8.965652465820312,
+        12.093067558027325
+      ],
+      "yawDeg": 13.93,
+      "yawRad": 0.2431784531072661,
+      "quaternion": [
+        0,
+        0.12128985329653615,
+        0,
+        0.9926171323764792
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9705775429746095,
+          0,
+          0.2407887727311431
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.2407887727311431,
+          0,
+          0.9705775429746095
+        ]
+      ],
+      "volumeM3": 10752.806000462439,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 241,
+    "triangleCount": 433,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #11 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-stone-pine-slope-12",
+    "name": "Park Embankment Slope Pine #12 (Pinus pinea)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        160.1217498779297,
+        40.823543548583984,
+        225.1080322265625
+      ],
+      "max": [
+        184.91250610351562,
+        58.75416946411133,
+        249.7215118408203
+      ],
+      "dimensions": [
+        24.790756225585938,
+        17.930625915527344,
+        24.613479614257812
+      ],
+      "centroid": [
+        172.51712799072266,
+        49.788856506347656,
+        237.4147720336914
+      ],
+      "volumeM3": 10941.030764916053
+    },
+    "orientedBoundingBox": {
+      "center": [
+        173.50726763804514,
+        49.788856506347656,
+        237.05256272809945
+      ],
+      "dimensions": [
+        31.413687370007395,
+        17.930625915527344,
+        32.59501266816864
+      ],
+      "halfExtents": [
+        15.706843685003697,
+        8.965312957763672,
+        16.29750633408432
+      ],
+      "yawDeg": 34.36,
+      "yawRad": 0.5997670428526124,
+      "quaternion": [
+        0,
+        0.29540892842524075,
+        0,
+        0.9553709044170494
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.825467130013302,
+          0,
+          0.5644501902449873
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.5644501902449873,
+          0,
+          0.825467130013302
+        ]
+      ],
+      "volumeM3": 18359.6975057791,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 325,
+    "triangleCount": 585,
+    "submeshIndices": [
+      49,
+      61,
+      45,
+      15
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#16a34a",
+    "trellisPrompt": "Tilted Mediterranean parasol stone pine tree #12 growing along the terraced hillside lawn with twisting trunk and asymmetrical sun-seeking crown.",
+    "material": {
+      "roughness": 0.72,
+      "metalness": 0,
+      "baseColor": "#2b5226"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-1",
+    "name": "Avenue Columnar Cypress #1 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        -94.78248596191406,
+        42.089542388916016,
+        230.01922607421875
+      ],
+      "max": [
+        -70.61091613769531,
+        58.1323356628418,
+        274.6292419433594
+      ],
+      "dimensions": [
+        24.17156982421875,
+        16.04279327392578,
+        44.610015869140625
+      ],
+      "centroid": [
+        -82.69670104980469,
+        50.110939025878906,
+        252.32423400878906
+      ],
+      "volumeM3": 17298.84955041604
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -83.75656997214648,
+        50.110939025878906,
+        251.66672100249
+      ],
+      "dimensions": [
+        47.06322239252552,
+        16.04279327392578,
+        27.279865800505114
+      ],
+      "halfExtents": [
+        23.53161119626276,
+        8.02139663696289,
+        13.639932900252557
+      ],
+      "yawDeg": 76.7,
+      "yawRad": 1.338691191874064,
+      "quaternion": [
+        0,
+        0.6204729180234081,
+        0,
+        0.7842278737710852
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.23002671599903415,
+          0,
+          0.9731843144680763
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.9731843144680763,
+          0,
+          0.23002671599903415
+        ]
+      ],
+      "volumeM3": 20596.995615792544,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 664,
+    "triangleCount": 1195,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #1 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-2",
+    "name": "Avenue Columnar Cypress #2 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        -74.94951629638672,
+        43.00618362426758,
+        239.55670166015625
+      ],
+      "max": [
+        -56.0457649230957,
+        58.73258590698242,
+        282.93634033203125
+      ],
+      "dimensions": [
+        18.903751373291016,
+        15.726402282714844,
+        43.379638671875
+      ],
+      "centroid": [
+        -65.49764060974121,
+        50.869384765625,
+        261.24652099609375
+      ],
+      "volumeM3": 12896.245967207671
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -65.39208435106833,
+        50.869384765625,
+        260.97770793296684
+      ],
+      "dimensions": [
+        42.336386653259204,
+        15.726402282714844,
+        22.178364660249056
+      ],
+      "halfExtents": [
+        21.168193326629602,
+        7.863201141357422,
+        11.089182330124528
+      ],
+      "yawDeg": 85.25,
+      "yawRad": 1.4878383741984718,
+      "quaternion": [
+        0,
+        0.6771769221337484,
+        0,
+        0.7358202335689494
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.08286283225892672,
+          0,
+          0.996560962023914
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.996560962023914,
+          0,
+          0.08286283225892672
+        ]
+      ],
+      "volumeM3": 14766.334070463878,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 397,
+    "triangleCount": 714,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #2 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-3",
+    "name": "Avenue Columnar Cypress #3 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        -45.75,
+        41,
+        258.25
+      ],
+      "max": [
+        -42.25,
+        55,
+        261.75
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "centroid": [
+        -44,
+        48,
+        260
+      ],
+      "volumeM3": 171.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -44,
+        48,
+        260
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "halfExtents": [
+        1.75,
+        7,
+        1.75
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 171.5,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #3 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-4",
+    "name": "Avenue Columnar Cypress #4 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        -27.75,
+        41,
+        263.25
+      ],
+      "max": [
+        -24.25,
+        55,
+        266.75
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "centroid": [
+        -26,
+        48,
+        265
+      ],
+      "volumeM3": 171.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -26,
+        48,
+        265
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "halfExtents": [
+        1.75,
+        7,
+        1.75
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 171.5,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #4 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-5",
+    "name": "Avenue Columnar Cypress #5 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        -9.75,
+        41,
+        268.25
+      ],
+      "max": [
+        -6.25,
+        55,
+        271.75
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "centroid": [
+        -8,
+        48,
+        270
+      ],
+      "volumeM3": 171.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -8,
+        48,
+        270
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "halfExtents": [
+        1.75,
+        7,
+        1.75
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 171.5,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #5 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "fol-cypress-avenue-6",
+    "name": "Avenue Columnar Cypress #6 (Cupressus sempervirens)",
+    "category": "foliage_trees",
+    "boundingBox": {
+      "min": [
+        8.25,
+        41,
+        273.25
+      ],
+      "max": [
+        11.75,
+        55,
+        276.75
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "centroid": [
+        10,
+        48,
+        275
+      ],
+      "volumeM3": 171.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        10,
+        48,
+        275
+      ],
+      "dimensions": [
+        3.5,
+        14,
+        3.5
+      ],
+      "halfExtents": [
+        1.75,
+        7,
+        1.75
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "rotationMatrix3x3": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
+      "volumeM3": 171.5,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [
+      74,
+      44,
+      13
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0,
+    "colorHex": "#059669",
+    "trellisPrompt": "Tall slender columnar Mediterranean Italian cypress tree #6 (Cupressus sempervirens) with dense dark-green vertical silhouette lining the historic boulevard.",
+    "material": {
+      "roughness": 0.68,
+      "metalness": 0,
+      "baseColor": "#1d3b22"
+    }
+  },
+  {
+    "id": "ruin-velian-brick-wall",
+    "name": "Velian Hill Opus Latericium Brick Retaining Wall",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        -192.95855712890625,
+        40.865848541259766,
+        -242.9546661376953
+      ],
+      "max": [
+        -149.57598876953125,
+        55.10642623901367,
+        -214.03465270996094
+      ],
+      "dimensions": [
+        43.382568359375,
+        14.240577697753906,
+        28.920013427734375
+      ],
+      "centroid": [
+        -171.26727294921875,
+        47.98613739013672,
+        -228.49465942382812
+      ],
+      "volumeM3": 17866.577096766305
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -170.84711155308085,
+        47.98613739013672,
+        -229.70033882950446
+      ],
+      "dimensions": [
+        48.26071641511412,
+        14.240577697753906,
+        28.059309404065694
+      ],
+      "halfExtents": [
+        24.13035820755706,
+        7.120288848876953,
+        14.029654702032847
+      ],
+      "yawDeg": -29.57,
+      "yawRad": -0.5160768118749335,
+      "quaternion": [
+        0,
+        -0.2551843936609557,
+        0,
+        0.9668924062334394
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.8697618504637809,
+          0,
+          -0.4934717048401253
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.4934717048401253,
+          0,
+          0.8697618504637809
+        ]
+      ],
+      "volumeM3": 19284.05450166054,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 262,
+    "triangleCount": 471,
+    "submeshIndices": [
+      70,
+      71,
+      72
+    ],
+    "gemini3DScaleDiscrepancyPercent": 60.7,
+    "colorHex": "#f59e0b",
+    "trellisPrompt": "Roman brick-faced concrete retaining wall with opus latericium masonry, weep holes, and barrel vault foundation buttresses.",
+    "material": {
+      "roughness": 0.92,
+      "metalness": 0.01,
+      "baseColor": "#965239"
+    }
+  },
+  {
+    "id": "ruin-travertine-cippi-north",
+    "name": "Ancient Travertine Boundary Cippi (North Arc)",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        -49.87333679199219,
+        31.64183235168457,
+        152.5289306640625
+      ],
+      "max": [
+        -0.15185165405273438,
+        40.608768463134766,
+        174.52645874023438
+      ],
+      "dimensions": [
+        49.72148513793945,
+        8.966936111450195,
+        21.997528076171875
+      ],
+      "centroid": [
+        -25.01259422302246,
+        36.12530040740967,
+        163.52769470214844
+      ],
+      "volumeM3": 9807.58426745546
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -24.934301247931717,
+        36.12530040740967,
+        163.2854825945309
+      ],
+      "dimensions": [
+        49.04531066904804,
+        8.966936111450195,
+        23.98241802448151
+      ],
+      "halfExtents": [
+        24.52265533452402,
+        4.483468055725098,
+        11.991209012240756
+      ],
+      "yawDeg": -3.26,
+      "yawRad": -0.05696352287687993,
+      "quaternion": [
+        0,
+        -0.028477910809523492,
+        0,
+        0.9995944220512262
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9983780171918496,
+          0,
+          -0.056932721593744004
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.056932721593744004,
+          0,
+          0.9983780171918496
+        ]
+      ],
+      "volumeM3": 10547.135706426467,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 1655,
+    "triangleCount": 2979,
+    "submeshIndices": [
+      7,
+      26,
+      38
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#d97706",
+    "trellisPrompt": "Cut monolithic travertine boundary stones (cippi) and barrier bollard posts marking the sacred religious perimeter of the amphitheater.",
+    "material": {
+      "roughness": 0.9,
+      "metalness": 0,
+      "baseColor": "#c7bcab"
+    }
+  },
+  {
+    "id": "ruin-travertine-cippi-south",
+    "name": "Ancient Travertine Boundary Cippi (South Arc)",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        -73.41095733642578,
+        32.748538970947266,
+        -59.65277099609375
+      ],
+      "max": [
+        -25.069664001464844,
+        44.56577682495117,
+        -21.503265380859375
+      ],
+      "dimensions": [
+        48.34129333496094,
+        11.817237854003906,
+        38.149505615234375
+      ],
+      "centroid": [
+        -49.24031066894531,
+        38.65715789794922,
+        -40.57801818847656
+      ],
+      "volumeM3": 21793.30799906507
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -50.82496820038623,
+        38.65715789794922,
+        -41.91823972477537
+      ],
+      "dimensions": [
+        51.501121605398566,
+        11.817237854003906,
+        41.76104203087051
+      ],
+      "halfExtents": [
+        25.750560802699283,
+        5.908618927001953,
+        20.880521015435257
+      ],
+      "yawDeg": 22.16,
+      "yawRad": 0.38684780360463156,
+      "quaternion": [
+        0,
+        0.19222006747248976,
+        0,
+        0.981351846006758
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.926102891321743,
+          0,
+          0.37727103610734275
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.37727103610734275,
+          0,
+          0.926102891321743
+        ]
+      ],
+      "volumeM3": 25415.81209800851,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 298,
+    "triangleCount": 536,
+    "submeshIndices": [
+      34,
+      39,
+      42
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#b45309",
+    "trellisPrompt": "Row of weathered cylindrical travertine bollards set into basalt cobblestones outside the south arcade.",
+    "material": {
+      "roughness": 0.9,
+      "metalness": 0,
+      "baseColor": "#c7bcab"
+    }
+  },
+  {
+    "id": "ruin-via-sacra-pavers",
+    "name": "Via Sacra Ancient Basalt Paver Corridor",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        -275.3262023925781,
+        21.670434951782227,
+        -74.4219970703125
+      ],
+      "max": [
+        -201.0183563232422,
+        34.674739837646484,
+        -45.50209045410156
+      ],
+      "dimensions": [
+        74.30784606933594,
+        13.004304885864258,
+        28.919906616210938
+      ],
+      "centroid": [
+        -238.17227935791016,
+        28.172587394714355,
+        -59.96204376220703
+      ],
+      "volumeM3": 27945.93869557298
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -238.3227797630335,
+        28.172587394714355,
+        -62.91331207648996
+      ],
+      "dimensions": [
+        73.72968067749184,
+        13.004304885864258,
+        31.266623980776153
+      ],
+      "halfExtents": [
+        36.86484033874592,
+        6.502152442932129,
+        15.633311990388076
+      ],
+      "yawDeg": 8.16,
+      "yawRad": 0.1425032379406093,
+      "quaternion": [
+        0,
+        0.07119134598283094,
+        0,
+        0.9974626771248901
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9898635845143057,
+          0,
+          0.1420214211043177
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.1420214211043177,
+          0,
+          0.9898635845143057
+        ]
+      ],
+      "volumeM3": 29978.540585100673,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 424,
+    "triangleCount": 763,
+    "submeshIndices": [
+      78,
+      60
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#78350f",
+    "trellisPrompt": "Authentic Roman road surface made of large polygonal basalt flagstones (saxa quadrata / basoli) with worn carriage wheel ruts.",
+    "material": {
+      "roughness": 0.94,
+      "metalness": 0.01,
+      "baseColor": "#4b4d52"
+    }
+  },
+  {
+    "id": "ruin-clivus-palatinus-ramp",
+    "name": "Clivus Palatinus Roman Ramp Substructure",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        -184.90484619140625,
+        58.627681732177734,
+        -131.64694213867188
+      ],
+      "max": [
+        -133.4630126953125,
+        66.72920989990234,
+        -96.57284545898438
+      ],
+      "dimensions": [
+        51.44183349609375,
+        8.10152816772461,
+        35.0740966796875
+      ],
+      "centroid": [
+        -159.18392944335938,
+        62.67844581604004,
+        -114.10989379882812
+      ],
+      "volumeM3": 14617.391551628423
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -157.25564886500902,
+        62.67844581604004,
+        -111.95987124926906
+      ],
+      "dimensions": [
+        51.09539689985283,
+        8.10152816772461,
+        42.53456745212758
+      ],
+      "halfExtents": [
+        25.547698449926415,
+        4.050764083862305,
+        21.26728372606379
+      ],
+      "yawDeg": 13.14,
+      "yawRad": 0.22926279432872967,
+      "quaternion": [
+        0,
+        0.11438051247234783,
+        0,
+        0.9934370127826742
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9738341967331262,
+          0,
+          0.22725966926216126
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.22725966926216126,
+          0,
+          0.9738341967331262
+        ]
+      ],
+      "volumeM3": 17607.21810643838,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 486,
+    "triangleCount": 874,
+    "submeshIndices": [
+      68,
+      78
+    ],
+    "gemini3DScaleDiscrepancyPercent": 63.03,
+    "colorHex": "#ea580c",
+    "trellisPrompt": "Sloping ancient Roman paved road ramp ascending from the Arch of Constantine toward the Flavian Palace on the Palatine Hill.",
+    "material": {
+      "roughness": 0.91,
+      "metalness": 0.01,
+      "baseColor": "#7a5a4a"
+    }
+  },
+  {
+    "id": "ruin-ludus-magnus-ruins",
+    "name": "Ludus Magnus Gladiator Barracks Excavated Ruins",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        127.26486206054688,
+        60.990474700927734,
+        -113.80387878417969
+      ],
+      "max": [
+        216.51300048828125,
+        73.38258361816406,
+        -38.11888122558594
+      ],
+      "dimensions": [
+        89.24813842773438,
+        12.392108917236328,
+        75.68499755859375
+      ],
+      "centroid": [
+        171.88893127441406,
+        67.1865291595459,
+        -75.96138000488281
+      ],
+      "volumeM3": 83705.53747081076
+    },
+    "orientedBoundingBox": {
+      "center": [
+        172.01523875634118,
+        67.1865291595459,
+        -72.23266197897053
+      ],
+      "dimensions": [
+        98.45784518299479,
+        12.392108917236328,
+        81.51141931413412
+      ],
+      "halfExtents": [
+        49.228922591497394,
+        6.196054458618164,
+        40.75570965706706
+      ],
+      "yawDeg": 11.28,
+      "yawRad": 0.19695781891721736,
+      "quaternion": [
+        0,
+        0.09831981031292421,
+        0,
+        0.9951548698067204
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.9806664298000612,
+          0,
+          0.19568687606275909
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.19568687606275909,
+          0,
+          0.9806664298000612
+        ]
+      ],
+      "volumeM3": 99452.11052209322,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 393,
+    "triangleCount": 707,
+    "submeshIndices": [
+      57
+    ],
+    "gemini3DScaleDiscrepancyPercent": 70,
+    "colorHex": "#c2410c",
+    "trellisPrompt": "Excavated Roman brick foundations, miniature training arena cavea, and gladiator cell barracks of the Ludus Magnus complex.",
+    "material": {
+      "roughness": 0.93,
+      "metalness": 0.01,
+      "baseColor": "#8a4b36"
+    }
+  },
+  {
+    "id": "ruin-titus-baths-wall",
+    "name": "Baths of Titus Terraced Wall Remains",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        0.9108352661132812,
+        58.03347396850586,
+        127.32452392578125
+      ],
+      "max": [
+        14.855865478515625,
+        62.70029067993164,
+        135.63148498535156
+      ],
+      "dimensions": [
+        13.945030212402344,
+        4.666816711425781,
+        8.306961059570312
+      ],
+      "centroid": [
+        7.883350372314453,
+        60.36688232421875,
+        131.4780044555664
+      ],
+      "volumeM3": 540.6078884035114
+    },
+    "orientedBoundingBox": {
+      "center": [
+        7.670870806903247,
+        60.36688232421875,
+        131.53451732655563
+      ],
+      "dimensions": [
+        15.779187571630104,
+        4.666816711425781,
+        2.2727010587099348
+      ],
+      "halfExtents": [
+        7.889593785815052,
+        2.3334083557128906,
+        1.1363505293549674
+      ],
+      "yawDeg": -27.69,
+      "yawRad": -0.48322219533213545,
+      "quaternion": [
+        0,
+        -0.23926723759974428,
+        0,
+        0.9709537522515619
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.885502378022775,
+          0,
+          -0.4646348442766754
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.4646348442766754,
+          0,
+          0.885502378022775
+        ]
+      ],
+      "volumeM3": 167.35847020982484,
+      "tightnessGainPercent": 69
+    },
+    "tightnessGainPercent": 69,
+    "vertexCount": 139,
+    "triangleCount": 250,
+    "submeshIndices": [
+      12,
+      14
+    ],
+    "gemini3DScaleDiscrepancyPercent": 97.21,
+    "colorHex": "#9a3412",
+    "trellisPrompt": "Exposed Roman concrete terrace substructures and brick vaulting from the public bath complex of Emperor Titus.",
+    "material": {
+      "roughness": 0.92,
+      "metalness": 0.01,
+      "baseColor": "#965239"
+    }
+  },
+  {
+    "id": "ruin-domus-aurea-vault",
+    "name": "Domus Aurea Subterranean Vault Entrance Wall",
+    "category": "archaeology_ruins",
+    "boundingBox": {
+      "min": [
+        57.898109436035156,
+        23.807077407836914,
+        79.3291015625
+      ],
+      "max": [
+        115.84811401367188,
+        58.78219223022461,
+        148.5514373779297
+      ],
+      "dimensions": [
+        57.95000457763672,
+        34.975114822387695,
+        69.22233581542969
+      ],
+      "centroid": [
+        86.87311172485352,
+        41.29463481903076,
+        113.94026947021484
+      ],
+      "volumeM3": 140300.38844383325
+    },
+    "orientedBoundingBox": {
+      "center": [
+        88.09970337307573,
+        41.29463481903076,
+        113.98628148638683
+      ],
+      "dimensions": [
+        65.72562294069436,
+        34.975114822387695,
+        65.7987121187659
+      ],
+      "halfExtents": [
+        32.86281147034718,
+        17.487557411193848,
+        32.89935605938295
+      ],
+      "yawDeg": -68.93,
+      "yawRad": -1.2031199731836826,
+      "quaternion": [
+        0,
+        -0.5659292983208456,
+        0,
+        0.8244537763283489
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.3594480586041506,
+          0,
+          -0.933165094270948
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.933165094270948,
+          0,
+          0.3594480586041506
+        ]
+      ],
+      "volumeM3": 151255.5270289195,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 3543,
+    "triangleCount": 6377,
+    "submeshIndices": [
+      16,
+      17
+    ],
+    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "colorHex": "#7c2d12",
+    "trellisPrompt": "Monumental entrance retaining facade into Emperor Nero Golden House (Domus Aurea) subterranean vaulted chambers on the Oppian slope.",
+    "material": {
+      "roughness": 0.9,
+      "metalness": 0.02,
+      "baseColor": "#8c5d4b"
+    }
+  },
+  {
+    "id": "urb-metro-colosseo-pavilion",
+    "name": "Colosseo Metro Station Entrance Pavilion & Stairwell",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        29.411476135253906,
+        38.81476974487305,
+        190.662109375
+      ],
+      "max": [
+        57.92198944091797,
+        52.56325912475586,
+        228.8118896484375
+      ],
+      "dimensions": [
+        28.510513305664062,
+        13.748489379882812,
+        38.1497802734375
+      ],
+      "centroid": [
+        43.66673278808594,
+        45.68901443481445,
+        209.73699951171875
+      ],
+      "volumeM3": 14953.816942884432
+    },
+    "orientedBoundingBox": {
+      "center": [
+        43.66673277747984,
+        45.68901443481445,
+        209.73696900210672
+      ],
+      "dimensions": [
+        47.625478404237256,
+        13.748489379882812,
+        45.70659562827089
+      ],
+      "halfExtents": [
+        23.812739202118628,
+        6.874244689941406,
+        22.853297814135445
+      ],
+      "yawDeg": 53.09,
+      "yawRad": 0.9265997738063793,
+      "quaternion": [
+        0,
+        0.4469025563707611,
+        0,
+        0.8945826429734028
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6005562102185574,
+          0,
+          0.7995825400594512
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.7995825400594512,
+          0,
+          0.6005562102185574
+        ]
+      ],
+      "volumeM3": 29927.690826020007,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 2482,
+    "triangleCount": 4467,
+    "submeshIndices": [
+      5,
+      10
+    ],
+    "gemini3DScaleDiscrepancyPercent": 64.95,
+    "colorHex": "#0d9488",
+    "trellisPrompt": "Modern travertine-clad metro station entrance pavilion for Linea B Colosseo with pedestrian stairwell, handrails, and metro signage.",
+    "material": {
+      "roughness": 0.75,
+      "metalness": 0.08,
+      "baseColor": "#d9d2c5"
+    }
+  },
+  {
+    "id": "urb-via-nicola-salvi-bldg-1",
+    "name": "Via Nicola Salvi Residential Facade Block A",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        -56.53600311279297,
+        58.301700592041016,
+        196.9703369140625
+      ],
+      "max": [
+        -27.56111717224121,
+        73.18348693847656,
+        226.8128662109375
+      ],
+      "dimensions": [
+        28.974885940551758,
+        14.881786346435547,
+        29.842529296875
+      ],
+      "centroid": [
+        -42.04856014251709,
+        65.74259376525879,
+        211.8916015625
+      ],
+      "volumeM3": 12868.040797382844
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -38.14771335036913,
+        65.74259376525879,
+        214.89454050071768
+      ],
+      "dimensions": [
+        41.321941519277715,
+        14.881786346435547,
+        18.181133860321964
+      ],
+      "halfExtents": [
+        20.660970759638857,
+        7.440893173217773,
+        9.090566930160982
+      ],
+      "yawDeg": -52.41,
+      "yawRad": -0.9147335626407223,
+      "quaternion": [
+        0,
+        -0.44158706838601475,
+        0,
+        0.8972184020818148
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.6100017220684902,
+          0,
+          -0.7924000877545865
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0.7924000877545865,
+          0,
+          0.6100017220684902
+        ]
+      ],
+      "volumeM3": 11180.384727843859,
+      "tightnessGainPercent": 13.1
+    },
+    "tightnessGainPercent": 13.1,
+    "vertexCount": 1505,
+    "triangleCount": 2709,
+    "submeshIndices": [
+      12
+    ],
+    "gemini3DScaleDiscrepancyPercent": 12.87,
+    "colorHex": "#14b8a6",
+    "trellisPrompt": "Four-story 19th-century Roman residential apartment building facade in warm ochre plaster with shuttered windows and corniced roofline overlooking the Colosseum.",
+    "material": {
+      "roughness": 0.82,
+      "metalness": 0.02,
+      "baseColor": "#c79257"
+    }
+  },
+  {
+    "id": "urb-via-nicola-salvi-bldg-2",
+    "name": "Via Nicola Salvi Residential Facade Block B",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        -27.576868057250977,
+        58.38161087036133,
+        196.66268920898438
+      ],
+      "max": [
+        1.0882835388183594,
+        73.18704986572266,
+        228.8126678466797
+      ],
+      "dimensions": [
+        28.665151596069336,
+        14.805438995361328,
+        32.14997863769531
+      ],
+      "centroid": [
+        -13.244292259216309,
+        65.78433036804199,
+        212.73767852783203
+      ],
+      "volumeM3": 13644.455860770322
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -15.304488189869064,
+        65.78433036804199,
+        216.0150955806409
+      ],
+      "dimensions": [
+        41.460766496031354,
+        14.805438995361328,
+        29.078950965252453
+      ],
+      "halfExtents": [
+        20.730383248015677,
+        7.402719497680664,
+        14.539475482626226
+      ],
+      "yawDeg": 33.41,
+      "yawRad": 0.5830584583685887,
+      "quaternion": [
+        0,
+        0.28741726467823653,
+        0,
+        0.957805468748681
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.8347826319297611,
+          0,
+          0.5505796558432041
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.5505796558432041,
+          0,
+          0.8347826319297611
+        ]
+      ],
+      "volumeM3": 17849.964266027848,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 3014,
+    "triangleCount": 5425,
+    "submeshIndices": [
+      35
+    ],
+    "gemini3DScaleDiscrepancyPercent": 30.91,
+    "colorHex": "#2dd4bf",
+    "trellisPrompt": "Historic terracotta-hued Roman townhouse facade with wrought iron balconies, arched doorways, and Roman tile roof.",
+    "material": {
+      "roughness": 0.84,
+      "metalness": 0.02,
+      "baseColor": "#b06b4b"
+    }
+  },
+  {
+    "id": "urb-via-nicola-salvi-bldg-3",
+    "name": "Via Nicola Salvi Residential Facade Block C",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        29.102066040039062,
+        39.42783737182617,
+        192.20050048828125
+      ],
+      "max": [
+        58.23198699951172,
+        59.05112838745117,
+        228.81202697753906
+      ],
+      "dimensions": [
+        29.129920959472656,
+        19.623291015625,
+        36.61152648925781
+      ],
+      "centroid": [
+        43.66702651977539,
+        49.23948287963867,
+        210.50626373291016
+      ],
+      "volumeM3": 20928.060763202484
+    },
+    "orientedBoundingBox": {
+      "center": [
+        46.13262727184811,
+        49.23948287963867,
+        212.2557178197957
+      ],
+      "dimensions": [
+        40.76478885700707,
+        19.623291015625,
+        40.114541039679764
+      ],
+      "halfExtents": [
+        20.382394428503535,
+        9.8116455078125,
+        20.057270519839882
+      ],
+      "yawDeg": 60.13,
+      "yawRad": 1.0495084887986523,
+      "quaternion": [
+        0,
+        0.5010003313353035,
+        0,
+        0.8654470913937582
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.49799733600383217,
+          0,
+          0.8671785590828952
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.8671785590828952,
+          0,
+          0.49799733600383217
+        ]
+      ],
+      "volumeM3": 32089.198478075257,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 1559,
+    "triangleCount": 2806,
+    "submeshIndices": [
+      28
+    ],
+    "gemini3DScaleDiscrepancyPercent": 52.94,
+    "colorHex": "#5eead4",
+    "trellisPrompt": "Classical Roman apartment block with pastel sienna facade, stucco moldings, and street-level commercial storefronts.",
+    "material": {
+      "roughness": 0.81,
+      "metalness": 0.02,
+      "baseColor": "#d4a373"
+    }
+  },
+  {
+    "id": "urb-via-fori-imperiali-corridor",
+    "name": "Via dei Fori Imperiali Street & Promenade Corridor",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        -170.05380249023438,
+        34.40312576293945,
+        152.52029418945312
+      ],
+      "max": [
+        -113.0336685180664,
+        41.55390548706055,
+        228.8194580078125
+      ],
+      "dimensions": [
+        57.02013397216797,
+        7.150779724121094,
+        76.29916381835938
+      ],
+      "centroid": [
+        -141.5437355041504,
+        37.978515625,
+        190.6698760986328
+      ],
+      "volumeM3": 31110.10034047163
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -139.08834186631506,
+        37.978515625,
+        190.76161002907102
+      ],
+      "dimensions": [
+        81.5674071203112,
+        7.150779724121094,
+        60.50105694373559
+      ],
+      "halfExtents": [
+        40.7837035601556,
+        3.575389862060547,
+        30.250528471867796
+      ],
+      "yawDeg": 83.44,
+      "yawRad": 1.4563689518703085,
+      "quaternion": [
+        0,
+        0.6655156546435327,
+        0,
+        0.7463838914555901
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.11417782684878032,
+          0,
+          0.993460328274909
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.993460328274909,
+          0,
+          0.11417782684878032
+        ]
+      ],
+      "volumeM3": 35288.48542376123,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 1227,
+    "triangleCount": 2208,
+    "submeshIndices": [
+      6,
+      7
+    ],
+    "gemini3DScaleDiscrepancyPercent": 35.77,
+    "colorHex": "#99f6e4",
+    "trellisPrompt": "Wide asphalt and sampietrini cobblestone vehicular boulevard with curbed sidewalks, pedestrian crossing lines, and streetlights.",
+    "material": {
+      "roughness": 0.92,
+      "metalness": 0.01,
+      "baseColor": "#4e5157"
+    }
+  },
+  {
+    "id": "urb-tram-line-3-tracks",
+    "name": "Tram Line 3 Loop Tracks & Overhead Infrastructure",
+    "category": "urban_infrastructure",
+    "boundingBox": {
+      "min": [
+        0.9169731140136719,
+        28.791040420532227,
+        152.5287628173828
+      ],
+      "max": [
+        29.427085876464844,
+        40.07625961303711,
+        190.67813110351562
+      ],
+      "dimensions": [
+        28.510112762451172,
+        11.285219192504883,
+        38.14936828613281
+      ],
+      "centroid": [
+        15.172029495239258,
+        34.43365001678467,
+        171.60344696044922
+      ],
+      "volumeM3": 12274.287306962466
+    },
+    "orientedBoundingBox": {
+      "center": [
+        15.249520760193082,
+        34.43365001678467,
+        171.65229544148605
+      ],
+      "dimensions": [
+        38.33354420229803,
+        11.285219192504883,
+        28.662284255374004
+      ],
+      "halfExtents": [
+        19.166772101149014,
+        5.642609596252441,
+        14.331142127687002
+      ],
+      "yawDeg": 89.43,
+      "yawRad": 1.5607772357768592,
+      "quaternion": [
+        0,
+        0.7035556398054679,
+        0,
+        0.7106401773738372
+      ],
+      "rotationMatrix3x3": [
+        [
+          0.010018923395837645,
+          0,
+          0.9999498093274424
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          -0.9999498093274424,
+          0,
+          0.010018923395837645
+        ]
+      ],
+      "volumeM3": 12399.3743556006,
+      "tightnessGainPercent": 0
+    },
+    "tightnessGainPercent": 0,
+    "vertexCount": 449,
+    "triangleCount": 808,
+    "submeshIndices": [
+      8
+    ],
+    "gemini3DScaleDiscrepancyPercent": 0.79,
+    "colorHex": "#ccfbf1",
+    "trellisPrompt": "Urban electric tram tracks embedded in asphalt pavement with steel rails, curb borders, and overhead catenary pole base.",
+    "material": {
+      "roughness": 0.88,
+      "metalness": 0.05,
+      "baseColor": "#5a5d63"
+    }
+  }
+]

@@ -150,6 +150,25 @@ export type {
     GlbCompressionStats,
     GlbCompressionOptions
 } from './node/texture-compression-service';
+export type {
+    Colosseum3DMeshSeparatorService,
+    Separated3DObject,
+    Separated3DScene,
+    BoundingBox3DMetric,
+    SpatialEntityDefinition,
+    SpatialCategory
+} from './node/spatial/Colosseum3DMeshSeparatorService';
+export type {
+    OrientedBoundingBoxSolver,
+    OrientedBoundingBox3D,
+    DualBoundingBoxResult
+} from './node/spatial/OrientedBoundingBoxSolver';
+export type {
+    GeminiMultimodalObjectDetectorService,
+    GeminiDetectedObject2D,
+    GeminiObjectDetectionTelemetry,
+    GeminiDetectionResult
+} from './node/spatial/GeminiMultimodalObjectDetectorService';
 
 export { SbArchiService } from './node/3d-engine/sb-archi-service';
 export type {

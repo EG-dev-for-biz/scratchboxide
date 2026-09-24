@@ -1943,6 +1943,36 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/3d/cleanup-tiles', tileCleanupRouter);
 
     // ==========================================
+    // 1K PBR Engine API: Roman Colosseum & 3D Tile Material Synthesis
+    // ==========================================
+    const pbrRouter = express.Router();
+    pbrRouter.post('/colosseum/rerun', async (_req: Request, res: Response) => {
+        try {
+            const { runColosseum1kPbrPipeline } = require(path.resolve(process.cwd(), 'scripts/apply_colosseum_1k_pbr_suite.cjs'));
+            const result = await runColosseum1kPbrPipeline();
+            res.json({ success: true, ...result });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Colosseum PBR synthesis failed' });
+        }
+    });
+    pbrRouter.get('/colosseum/status', async (_req: Request, res: Response) => {
+        const glbPath = path.resolve(process.cwd(), 'public/models/colosseum_rome_1k_pbr.glb');
+        if (fs.existsSync(glbPath)) {
+            const stat = fs.statSync(glbPath);
+            res.json({
+                exists: true,
+                fileSizeBytes: stat.size,
+                fileSizeMb: (stat.size / (1024 * 1024)).toFixed(2),
+                lastModified: stat.mtime.toISOString(),
+                glbUrl: '/models/colosseum_rome_1k_pbr.glb'
+            });
+        } else {
+            res.json({ exists: false });
+        }
+    });
+    app.use('/api/3d/pbr', pbrRouter);
+
+    // ==========================================
     // Survey Synthesis API: station cameras for blockout render, AI Beautify, splat tiles.
     // Backs the Vector Dock "Survey Synthesis" panel (clay ingestion, rank, render, export).
     // ==========================================

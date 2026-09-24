@@ -339,6 +339,7 @@ export { SurveyApi, createSurveyRouter, createNodeHttpHandler, registerBeautifyH
 export type { SurveyApiDeps, SurveyJob } from './node/spatial/survey-router';
 export { BeautifyStationService, warpStationImage, createGoogleStationImageGenerator } from './node/spatial/BeautifyStationService';
 export type { StationImageGenerator, BeautifyStationOptions, BeautifyStationResult, BeautifyQc, StationWarp } from './node/spatial/BeautifyStationService';
+export { ColosseumObjectSeparationService, type GeocodedPlaceEntity, type GeminiVisionBoundingBox, type SeparatedSceneObject, type ColosseumSeparationResult } from './node/spatial/ColosseumObjectSeparationService';
 export { SurveySplatPipelineService } from './node/spatial/SurveySplatPipelineService';
 export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplatStationReport } from './node/spatial/SurveySplatPipelineService';
 export { Splat3DTilesService } from './node/spatial/Splat3DTilesService';
@@ -580,6 +581,29 @@ export {
     type GlbCompressionStats,
     type GlbCompressionOptions
 } from './node/texture-compression-service';
+export {
+    Colosseum3DMeshSeparatorService,
+    COLOSSEUM_3D_ENTITIES,
+    COLOSSEUM_GRANULAR_3D_ENTITIES,
+    COLOSSEUM_TOTAL_IDENTIFIABLE_ENTITIES,
+    generateTotalIdentifiableEntities,
+    type Separated3DObject,
+    type Separated3DScene,
+    type BoundingBox3DMetric,
+    type SpatialEntityDefinition,
+    type SpatialCategory
+} from './node/spatial/Colosseum3DMeshSeparatorService';
+export {
+    OrientedBoundingBoxSolver,
+    type OrientedBoundingBox3D,
+    type DualBoundingBoxResult
+} from './node/spatial/OrientedBoundingBoxSolver';
+export {
+    GeminiMultimodalObjectDetectorService,
+    type GeminiDetectedObject2D,
+    type GeminiObjectDetectionTelemetry,
+    type GeminiDetectionResult
+} from './node/spatial/GeminiMultimodalObjectDetectorService';
 
 // SB-Archi Monumental Architecture Inversion Service
 export {
