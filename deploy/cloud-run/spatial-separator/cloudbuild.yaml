@@ -1,0 +1,43 @@
+# Google Cloud Build pipeline for Scratchbox Spatial Separator Cloud Run
+steps:
+  # 1. Build Docker image directly inside deploy/cloud-run/spatial-separator
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/scratchbox-spatial-separator:latest'
+      - '.'
+
+  # 2. Push image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/scratchbox-spatial-separator:latest']
+
+  # 3. Deploy container image to Google Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    env:
+      - 'CLOUDSDK_METRICS_ENVIRONMENT=datacloud.antigravity'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scratchbox-spatial-separator'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/scratchbox-spatial-separator:latest'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--cpu'
+      - '2'
+      - '--memory'
+      - '4Gi'
+      - '--timeout'
+      - '300'
+      - '--set-env-vars'
+      - 'NODE_ENV=production,HOST=0.0.0.0'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/scratchbox-spatial-separator:latest'
