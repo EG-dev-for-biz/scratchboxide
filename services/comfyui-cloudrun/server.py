@@ -140,6 +140,20 @@ BASE_NODE_OBJECT_INFO: Dict[str, Any] = {
         "name": "Trellis3DGenerator",
         "category": "3d/mesh"
     },
+    "TrellisUrbanRemeshNode": {
+        "input": {
+            "required": {
+                "tile_mesh": ["MESH_3D"],
+                "vector_metadata": ["STRING", {"default": "{}"}],
+                "building_category": [["commercial_highrise", "residential_block", "historic_landmark", "industrial"]],
+                "target_resolution": [["512", "1024", "1536"]],
+                "planar_regularization": ["FLOAT", {"default": 0.85, "min": 0.0, "max": 1.0}]
+            }
+        },
+        "output": ["MESH_3D"],
+        "name": "TrellisUrbanRemeshNode",
+        "category": "3d/urban"
+    },
     "SaveMesh3D": {
         "input": {
             "required": {
@@ -662,7 +676,7 @@ async def run_cloudrun_execution(prompt_id: str, prompt: Dict[str, Any], client_
     outputs = {}
     for node_id, node_def in prompt.items():
         ctype = node_def.get("class_type")
-        is_mesh_node = ctype in ("SaveMesh3D", "SaveGLB", "SaveMesh3D_Advanced", "Trellis3DGenerator", "MeshDecimatorNode")
+        is_mesh_node = ctype in ("SaveMesh3D", "SaveGLB", "SaveMesh3D_Advanced", "Trellis3DGenerator", "TrellisUrbanRemeshNode", "MeshDecimatorNode")
         is_image_node = ctype in ("SaveImage", "VAEDecode", "MarigoldDepthEstimation", "DepthAnythingV3", "PBRMaterialComposer", "NormalMapPreprocessor")
 
         if is_mesh_node:

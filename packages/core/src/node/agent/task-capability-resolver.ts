@@ -15,6 +15,7 @@ export type PrimaryNativeEngine =
     | 'cpp-3d-engine'
     | 'threejs-webgl'
     | 'vfx-matchmove-nle'
+    | 'adaptive-matchmove-calibration'
     | 'google-models'
     | 'workspace-coding'
     | 'skills'
@@ -65,10 +66,19 @@ export interface CapabilityResolutionResult {
     tier2Fallback: Tier2ComfyUiFallback;
     /** Recommended resolution route. */
     recommendedResolutionRoute: 'tier1-native' | 'tier2-comfyui';
+    /** Convenience alias for recommendedResolutionRoute matching TwoTierExecutionResult */
+    tier?: 'tier1-native' | 'tier2-comfyui';
+    /** Convenience alias for tier1Assessment.rationale */
+    rationale?: string;
+    /** Convenience alias for recommended native tool */
+    recommendedNativeTool?: string;
 }
 
 export interface CapabilityOptions {
     domainHint?: TaskDomain | 'auto';
+    promptContext?: string;
+    userGoal?: string;
+    goal?: string;
     hasInputImage?: boolean;
     hasInputVideo?: boolean;
     hasCameraTrack?: boolean;
@@ -85,14 +95,14 @@ export class TaskCapabilityResolver {
 
         // Generative Diffusion / Neural (Check first so neural diffusion doesn't get masked by generic mesh/video keywords)
         if (
-            /diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.1|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana/i.test(lower)
+            /diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.[12]|4danyone|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana/i.test(lower)
         ) {
             return 'generative';
         }
 
         // VFX & Video
         if (
-            /vfx|visual\s*effects|matchmove|camera\s*solve|ephemeris|solar\s*position|holdout|occlusion\s*matte|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
+            /vfx|visual\s*effects|matchmove|camera\s*solve|keyframe\s*calibrat|camera\s*track|ephemeris|solar\s*position|holdout|occlusion\s*matte|nle|video\s*timeline|clip\s*split|ripple\s*delete|audio\s*track|b-roll/i.test(lower)
         ) {
             return 'vfx';
         }
@@ -119,11 +129,21 @@ export class TaskCapabilityResolver {
      * 1. Inspects native app capabilities (C++20 3D engine, Three.js shaders, Video NLE, VFX matchmoving, solar ephemeris, Google models, skills).
      * 2. If incapable (neural diffusion, image-to-3D, video restyling, monocular depth), formulates Tier 2 ComfyUI fallback.
      */
-    static resolveTaskCapability(taskGoal: string, options: CapabilityOptions = {}): CapabilityResolutionResult {
-        const goal = taskGoal || '';
+    static resolveTaskCapability(
+        taskGoal: string | { userGoal?: string; goal?: string; promptContext?: string; domainHint?: any },
+        options: CapabilityOptions = {}
+    ): CapabilityResolutionResult {
+        let goal = '';
+        let opts: CapabilityOptions = { ...options };
+        if (typeof taskGoal === 'object' && taskGoal !== null) {
+            goal = taskGoal.userGoal || taskGoal.goal || '';
+            opts = { ...(taskGoal as CapabilityOptions), ...options };
+        } else {
+            goal = taskGoal || '';
+        }
         const lower = goal.toLowerCase();
-        const domain = (options.domainHint && options.domainHint !== 'auto')
-            ? options.domainHint
+        const domain = (opts.domainHint && opts.domainHint !== 'auto')
+            ? opts.domainHint
             : this.classifyTaskDomain(goal);
 
         // Check for specific neural/generative triggers that exceed native algorithmic and Google model capabilities
@@ -148,8 +168,49 @@ export class TaskCapabilityResolver {
         let rationale = '';
         let suggestedNativeAction: Tier1Assessment['suggestedNativeAction'] | undefined;
 
-        if (domain === 'vfx') {
-            // Check if the VFX task is matchmoving, solar tracking, NLE, or holdout compositing
+        const isAdaptiveMatchmove = /adaptive\s*matchmove|calibrat\w*.*keyframe|keyframe.*calibrat|matchmove.*calibrat|calibrat.*matchmove|bundle\s*adjust|camera\s*track|6-?dof\s*resect|hermite\s*spline/i.test(lower);
+
+        const isFrameMotivatedPerformerPrompt =
+            /build_?frame_?motivated_?performer_?prompt|buildframemotivatedperformerprompt|frame\s*motivated.*(?:prompt|video)|motivated\s*by\s*the\s*frame.*(?:prompt|format)|format.*motivated\s*by/i.test(lower) ||
+            (opts.promptContext ? /buildframemotivatedperformerprompt|frame_?motivated/i.test(opts.promptContext) : false);
+
+        const isWan4DAnyoneDiffusionExecution =
+            (/wan2\.2|4danyone|all\s*(?:the\s*)?different\s*video\s*positions/i.test(lower) &&
+            /video\s*model|capture|diffusion|generate|run/i.test(lower) &&
+            !/prompt\s*only|format\s*prompt|text\s*only|author/i.test(lower)) ||
+            (opts.promptContext ? /comfyui_execute_pipeline|wan2\.2|4danyone/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
+
+        const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral.*(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist).*(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image).*(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
+
+        if (isWan4DAnyoneDiffusionExecution) {
+            canSolveNatively = false;
+            primaryNativeEngine = 'none';
+            rationale = 'Multi-view 360-degree video capture using the 4DAnyone / Wan2.2-TI2V-5B video diffusion backbone requires heavy multi-camera video generation with Reference Context Packing (RCP) and Target Context Routing (TCR), requiring GPU ComfyUI / Cloud Run acceleration.';
+        } else if (isFrameMotivatedPerformerPrompt) {
+            canSolveNatively = true;
+            primaryNativeEngine = 'google-models';
+            nativeCapabilities.push('Frame-Motivated Performer Video Prompt Pipeline (buildFrameMotivatedPerformerVideoPrompt)');
+            nativeCapabilities.push('build_frame_motivated_performer_prompt Agent Tool (<FIRST_FRAME> Syntax, A-Pose Invariant, Multi-View Video Positions)');
+            nativeCapabilities.push('Wan2.2-TI2V-5B conditioning tags & A-pose continuity');
+            rationale = 'Native Frame-Motivated Performer Video Prompt Pipeline formulates exact <FIRST_FRAME> conditioning, A-pose continuity clauses, camera viewpoint angles (0°, 45°, 180°), and prompt neutrality rules.';
+            suggestedNativeAction = {
+                primitiveType: 'markdown-document',
+                serviceOrTool: 'build_frame_motivated_performer_prompt',
+                details: 'Invoke build_frame_motivated_performer_prompt with referenceFrameRef, subject, wardrobe, and cameraPosition.'
+            };
+        } else if (isNeutralPerformerPrompt) {
+            canSolveNatively = true;
+            primaryNativeEngine = 'google-models';
+            nativeCapabilities.push('Neutral Performer Studio Prompt Pipeline (buildNeutralPerformerPrompt)');
+            nativeCapabilities.push('build_neutral_performer_prompt Agent Tool (Zero Context, Shadowless Lighting, A-Frame Pose)');
+            nativeCapabilities.push('Prompt Neutrality Contract & Head-to-Toe Vertical 9:16 Framing');
+            rationale = 'Native Neutral Performer Studio Prompt Pipeline constructs strictly uncropped head-to-toe portraits in symmetrical A-frame pose with zero background context (#808080 studio grey) and shadowless high-CRI diffuse lighting to prevent backprojection cavities and SMPL distortion.';
+            suggestedNativeAction = {
+                primitiveType: 'markdown-document',
+                serviceOrTool: 'buildNeutralPerformerPrompt or build_neutral_performer_prompt tool',
+                details: 'Invoke build_neutral_performer_prompt with subject, wardrobe, aspectRatio ("9:16"), kind ("image" or "video"), and isAFramePose (true).'
+            };
+        } else if (domain === 'vfx') {
             const isMatchmoveOrSolar = /matchmove|camera\s*solve|sub-frame|brown-conrady|lens\s*distortion|ephemeris|solar\s*position|sun\s*altitude|sun\s*heading|noaa/i.test(lower);
             const isNleEditing = /timeline|nle|clip\s*split|ripple\s*delete|multi-track|audio\s*track|trim\s*clip|playhead/i.test(lower);
             const isHoldoutMatte = /holdout|occlusion|matte|destination-out|actor\s*occlusion/i.test(lower);
@@ -159,6 +220,19 @@ export class TaskCapabilityResolver {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
                 rationale = 'The requested video transformation requires deep generative neural restyling / temporal diffusion (e.g. Omni/AnimateDiff), which cannot be computed deterministically by the native Video NLE timeline or VFX plate matchmove services.';
+            } else if (isAdaptiveMatchmove) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'adaptive-matchmove-calibration';
+                nativeCapabilities.push('AdaptiveMatchmoveCalibrationService (6-DOF resection, LM bundle adjustment, Hermite splines)');
+                nativeCapabilities.push('Brown-Conrady radial lens distortion & breathing model');
+                nativeCapabilities.push('Gimbal-free facade-normal slerp & drone kinematic safety audit');
+                nativeCapabilities.push('SequenceMetrologyReport (sub-pixel RMS residual & Sobel NCC)');
+                rationale = 'Native AdaptiveMatchmoveCalibrationService solves 6-DOF camera resection, Levenberg-Marquardt bundle adjustment across milestones, Hermite trajectory splines, and metrology certification directly in Tier 1.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'adaptive_matchmove_calibrate_sequence',
+                    details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
+                };
             } else if (isMatchmoveOrSolar) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'vfx-matchmove-nle';
@@ -195,6 +269,19 @@ export class TaskCapabilityResolver {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
                 rationale = 'Single-image to 3D mesh reconstruction requires a neural generative diffusion model (such as Trellis, TripoSR, or SV3D). The native C++20 engine is built for procedural geometry, SDFs, and photogrammetric tiles, not zero-shot 2D-to-3D neural reconstruction.';
+            } else if (isAdaptiveMatchmove) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'adaptive-matchmove-calibration';
+                nativeCapabilities.push('AdaptiveMatchmoveCalibrationService (6-DOF resection, LM bundle adjustment, Hermite splines)');
+                nativeCapabilities.push('Brown-Conrady radial lens distortion & breathing model');
+                nativeCapabilities.push('Gimbal-free facade-normal slerp & drone kinematic safety audit');
+                nativeCapabilities.push('SequenceMetrologyReport (sub-pixel RMS residual & Sobel NCC)');
+                rationale = 'Native AdaptiveMatchmoveCalibrationService solves 6-DOF camera resection, Levenberg-Marquardt bundle adjustment across milestones, Hermite trajectory splines, and metrology certification directly in Tier 1.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'adaptive_matchmove_calibrate_sequence',
+                    details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
+                };
             } else if (/reshape|deform|taper|twist|bend|bulge|squash|shear|sculpt.*mesh|mesh.*shaping|lattice.*deform/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -479,9 +566,32 @@ export class TaskCapabilityResolver {
             if (isNeuralImageTo3D) {
                 category = 'image-to-3d';
                 executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy 3D offloads to Cloud Run GPU
-                suggestedNodes.push('LoadImage', 'TrellisImageTo3D', 'MeshDecimatorNode', 'SaveGLB');
+                if (lower.includes('urban') || lower.includes('tile') || lower.includes('vector') || lower.includes('remesh')) {
+                    suggestedNodes.push('TrellisUrbanRemeshNode', 'SaveMesh3D');
+                    requiresDynamicNodes = false;
+                } else {
+                    suggestedNodes.push('LoadImage', 'TrellisImageTo3D', 'MeshDecimatorNode', 'SaveGLB');
+                    requiresDynamicNodes = true;
+                    suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
+                }
+            } else if (isWan4DAnyoneDiffusionExecution) {
+                category = 'video-generation';
+                executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy multi-view video offloads to Cloud Run GPU
+                suggestedNodes.push(
+                    'LoadImage',
+                    'Wan22TI2VModelLoader',
+                    'SkeletonConditioningNode',
+                    'WanMultiViewCameraRigNode',
+                    'Wan22MultiViewSampler',
+                    'SaveVideo'
+                );
                 requiresDynamicNodes = true;
-                suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
+                suggestedDynamicClasses.push(
+                    'Wan22TI2VModelLoader',
+                    'SkeletonConditioningNode',
+                    'WanMultiViewCameraRigNode',
+                    'Wan22MultiViewSampler'
+                );
             } else if (isNeuralVideoRestyle) {
                 category = 'video-generation';
                 executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy video offloads to Cloud Run GPU
@@ -531,12 +641,18 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction
             },
             tier2Fallback,
-            recommendedResolutionRoute: canSolveNatively ? 'tier1-native' : 'tier2-comfyui'
+            recommendedResolutionRoute: canSolveNatively ? 'tier1-native' : 'tier2-comfyui',
+            tier: canSolveNatively ? 'tier1-native' : 'tier2-comfyui',
+            rationale,
+            recommendedNativeTool: suggestedNativeAction?.serviceOrTool
         };
     }
 }
 
-export function resolveTaskCapability(taskGoal: string, options?: CapabilityOptions): CapabilityResolutionResult {
+export function resolveTaskCapability(
+    taskGoal: string | { userGoal?: string; goal?: string; promptContext?: string; domainHint?: any },
+    options?: CapabilityOptions
+): CapabilityResolutionResult {
     return TaskCapabilityResolver.resolveTaskCapability(taskGoal, options);
 }
 

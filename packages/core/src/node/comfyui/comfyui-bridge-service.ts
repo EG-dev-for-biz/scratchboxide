@@ -485,6 +485,21 @@ export class ComfyUiBridgeService {
                 },
                 output: ['MESH_3D']
             },
+            TrellisUrbanRemeshNode: {
+                name: 'TrellisUrbanRemeshNode',
+                display_name: 'Trellis Urban 3D Remesher (Google Tiles + Vector)',
+                category: '3d/urban',
+                input: {
+                    required: {
+                        tile_mesh: ['MESH_3D'],
+                        vector_metadata: ['STRING', { default: '{}' }],
+                        building_category: [['commercial_highrise', 'residential_block', 'historic_landmark', 'industrial']],
+                        target_resolution: [['512', '1024', '1536']],
+                        planar_regularization: ['FLOAT', { default: 0.85, min: 0.0, max: 1.0 }]
+                    }
+                },
+                output: ['MESH_3D']
+            },
             SaveMesh3D: {
                 name: 'SaveMesh3D',
                 display_name: 'Save 3D Mesh (.glb)',

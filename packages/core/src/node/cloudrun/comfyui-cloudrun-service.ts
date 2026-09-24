@@ -110,6 +110,7 @@ export class ComfyUiCloudRunService {
                     'sd_xl_base_1.0.safetensors',
                     'flux1-schnell.safetensors',
                     'trellis-image-to-3d',
+                    'trellis-urban-remesh.safetensors',
                     'marigold-v1-0'
                 ],
                 latencyMs: 14,
@@ -154,7 +155,7 @@ export class ComfyUiCloudRunService {
                 projectId: this.projectId,
                 gpuAccelerated: hasGpu,
                 gpuType: gpuName,
-                availableModels: ['sd_xl_base_1.0.safetensors', 'flux1-schnell.safetensors', 'trellis-image-to-3d'],
+                availableModels: ['sd_xl_base_1.0.safetensors', 'flux1-schnell.safetensors', 'trellis-image-to-3d', 'trellis-urban-remesh.safetensors'],
                 latencyMs,
                 activeRevisions: 'scratchbox-comfyui-runner-live',
                 details: 'Cloud Run service verified'
@@ -325,7 +326,7 @@ export class ComfyUiCloudRunService {
             const baseNodes = new Set([
                 'KSampler', 'CheckpointLoaderSimple', 'CLIPTextEncode', 'VAEDecode',
                 'EmptyLatentImage', 'SaveImage', 'LoadImage', 'Trellis3DGenerator',
-                'SaveMesh3D', 'MarigoldDepthEstimation'
+                'TrellisUrbanRemeshNode', 'SaveMesh3D', 'MarigoldDepthEstimation'
             ]);
 
             const requiredNodes = new Set<string>();
@@ -463,12 +464,30 @@ export class ComfyUiCloudRunService {
             const assets: ComfyGeneratedAsset[] = [];
             await fs.ensureDir(outputDir);
 
-            // Check if prompt contains 3D mesh nodes
+            // Check if prompt contains 3D splat or mesh nodes
+            const hasSplat = Object.values(prompt).some(n =>
+                ['Save4DGSPLY', 'SplatfactoTrainerNode', 'LoadNerfstudioDatasetNode'].includes(n.class_type)
+            );
             const has3D = blueprint.category === 'image-to-3d' || Object.values(prompt).some(n => 
-                ['SaveMesh3D', 'SaveGLB', 'SaveMesh3D_Advanced', 'Trellis3DGenerator', 'MeshDecimatorNode'].includes(n.class_type)
+                ['SaveMesh3D', 'SaveGLB', 'SaveMesh3D_Advanced', 'Trellis3DGenerator', 'TrellisUrbanRemeshNode', 'MeshDecimatorNode'].includes(n.class_type)
             );
 
-            if (has3D) {
+            if (hasSplat) {
+                const plyFilename = `performer_splatfacto_${promptId}.ply`;
+                const plyPath = path.join(outputDir, plyFilename);
+                const mockPly = Buffer.from('ply\nformat ascii 1.0\nelement vertex 0\nend_header\n');
+                await fs.writeFile(plyPath, mockPly);
+
+                assets.push({
+                    filename: plyFilename,
+                    type: 'output',
+                    mediaKind: 'model-3d',
+                    localPath: plyPath,
+                    url: `/models/${plyFilename}`,
+                    byteLength: mockPly.length,
+                    mimeType: 'application/octet-stream'
+                });
+            } else if (has3D) {
                 const meshFilename = `cloudrun_mesh_${promptId}.glb`;
                 const meshPath = path.join(outputDir, meshFilename);
                 const mockGlb = Buffer.from('glTF\x02\x00\x00\x00 \x00\x00\x00\x0c\x00\x00\x00JSON{}\x00\x00\x00\x00BIN\x00');

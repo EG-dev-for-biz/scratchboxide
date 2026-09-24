@@ -691,7 +691,7 @@ export class ComfyUiPipelineAgent {
         if (/inpaint|remove shadow|de-light|restore facade|erase|replace area/i.test(lower)) {
             return 'inpainting';
         }
-        if (/video|animate|motion|camera pan|orbit|cinematic clip|svd|wan/i.test(lower)) {
+        if (/video|animate|motion|camera pan|orbit|cinematic clip|svd|wan|4danyone|capture.*positions|camera.*positions|multiview/i.test(lower)) {
             return 'video-generation';
         }
         if (/upscale|hires|super resolution|4k|denoise/i.test(lower)) {
@@ -715,6 +715,101 @@ export class ComfyUiPipelineAgent {
         const defaultCkpt = availableModels.checkpoints[0] || 'v1-5-pruned-emaonly.safetensors';
 
         if (category === 'image-to-3d') {
+            const isSplatfacto = /splatfacto|nerfstudio|4dgs|gaussian|performer/i.test(goal);
+            if (isSplatfacto) {
+                return {
+                    id,
+                    goal,
+                    category,
+                    rationale: 'Multi-view 3D Gaussian Splatting & Performer Reconstruction via Splatfacto with Perceptual Loss (λ_perc = 0.4) and Nerfstudio Dataset',
+                    requiredModels: [{ type: 'checkpoint', name: 'splatfacto-perceptual' }],
+                    requiredCustomNodes: ['LoadNerfstudioDatasetNode', 'SplatfactoTrainerNode', 'Save4DGSPLY'],
+                    nodes: [
+                        {
+                            id: '1',
+                            classType: 'LoadNerfstudioDatasetNode',
+                            title: 'Nerfstudio Multi-Camera Dataset',
+                            category: '3d/nerfstudio',
+                            inputs: {
+                                dataset_path: 'nerfstudio_dataset',
+                                transforms_json: 'transforms.json',
+                                mask_threshold: 128,
+                                initial_point_cloud: 'sparse_pcd.ply'
+                            },
+                            outputs: [
+                                { name: 'DATASET', type: 'NERFSTUDIO_DATASET' },
+                                { name: 'INITIAL_PCD', type: 'POINT_CLOUD' }
+                            ]
+                        },
+                        {
+                            id: '2',
+                            classType: 'SplatfactoTrainerNode',
+                            title: 'Splatfacto 3DGS Optimizer',
+                            category: '3d/splats',
+                            inputs: {
+                                iterations: 30000,
+                                perceptual_loss_weight: 0.4,
+                                depth_loss_weight: 0.2,
+                                random_background: true
+                            },
+                            outputs: [{ name: 'SPLATS_3D', type: 'SPLATS_3D' }]
+                        },
+                        {
+                            id: '3',
+                            classType: 'Save4DGSPLY',
+                            title: 'Export 3D Gaussian PLY File',
+                            category: '3d/io',
+                            inputs: { filename_prefix: 'performer_splatfacto_output' },
+                            outputs: []
+                        }
+                    ],
+                    connections: [
+                        { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '2', toInputName: 'dataset' },
+                        { fromNodeId: '1', fromOutputIndex: 1, toNodeId: '2', toInputName: 'initial_pcd' },
+                        { fromNodeId: '2', fromOutputIndex: 0, toNodeId: '3', toInputName: 'splats' }
+                    ]
+                };
+            }
+
+            const isUrban = /urban|tile|remesh|footprint|vector/i.test(goal);
+            if (isUrban) {
+                return {
+                    id,
+                    goal,
+                    category,
+                    rationale: 'Urban 3D Remeshing using fine-tuned Trellis Urban DiT conditioned on Google 3D Tiles and Vector Maps',
+                    requiredModels: [{ type: 'checkpoint', name: 'trellis-urban-remesh.safetensors' }],
+                    requiredCustomNodes: ['TrellisUrbanRemeshNode', 'SaveMesh3D'],
+                    nodes: [
+                        {
+                            id: '1',
+                            classType: 'TrellisUrbanRemeshNode',
+                            title: 'Trellis Urban 3D Remesher',
+                            category: '3d/urban',
+                            inputs: {
+                                tile_mesh: 'input_tile.glb',
+                                vector_metadata: '{"category":"commercial_highrise"}',
+                                building_category: 'commercial_highrise',
+                                target_resolution: '1024',
+                                planar_regularization: 0.85
+                            },
+                            outputs: [{ name: 'MESH_3D', type: 'MESH_3D' }]
+                        },
+                        {
+                            id: '2',
+                            classType: 'SaveMesh3D',
+                            title: 'Export Binary GLB Mesh',
+                            category: '3d/io',
+                            inputs: { filename_prefix: 'Scratchbox_Urban_Remeshed' },
+                            outputs: []
+                        }
+                    ],
+                    connections: [
+                        { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '2', toInputName: 'mesh' }
+                    ]
+                };
+            }
+
             return {
                 id,
                 goal,
@@ -801,6 +896,204 @@ export class ComfyUiPipelineAgent {
                     { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '2', toInputName: 'image' },
                     { fromNodeId: '2', fromOutputIndex: 0, toNodeId: '4', toInputName: 'images' },
                     { fromNodeId: '2', fromOutputIndex: 1, toNodeId: '3', toInputName: 'images' }
+                ]
+            };
+        }
+
+        if (category === 'video-generation') {
+            const isWan4DAnyone = /wan|4danyone|multiview|camera.*positions|capture.*positions|a.?pose.*video|motivated/i.test(goal);
+            if (isWan4DAnyone) {
+                return {
+                    id,
+                    goal,
+                    category: 'video-generation',
+                    rationale: '4DAnyone Multi-View Video Diffusion using Wan2.2-TI2V-5B backbone with Reference Context Packing (RCP), Target Context Routing (TCR), and 3D Skeleton Conditioning for multi-camera 4DGS capture positions',
+                    requiredModels: [{ type: 'checkpoint', name: 'Wan2.2-TI2V-5B' }],
+                    requiredCustomNodes: [
+                        'Wan22TI2VModelLoader',
+                        'SkeletonConditioningNode',
+                        'WanMultiViewCameraRigNode',
+                        'Wan22MultiViewSampler',
+                        'SaveVideo'
+                    ],
+                    nodes: [
+                        {
+                            id: '1',
+                            classType: 'LoadImage',
+                            title: 'Hero Reference Frame (Frame 0)',
+                            category: 'image',
+                            inputs: { image: goal.includes('a-pose') ? 'performer_a_pose_frame_00.png' : 'performer_frame_00.png' },
+                            outputs: [{ name: 'IMAGE', type: 'IMAGE' }]
+                        },
+                        {
+                            id: '2',
+                            classType: 'Wan22TI2VModelLoader',
+                            title: 'Wan2.2-TI2V-5B Video Diffusion Backbone',
+                            category: 'loaders/video',
+                            inputs: {
+                                model_name: 'Wan2.2-TI2V-5B',
+                                precision: 'bf16',
+                                offload_device: 'gpu',
+                                context_packing: 'RCP',
+                                context_routing: 'TCR'
+                            },
+                            outputs: [
+                                { name: 'MODEL', type: 'WAN_MODEL' },
+                                { name: 'VAE', type: 'WAN_VAE' }
+                            ]
+                        },
+                        {
+                            id: '3',
+                            classType: 'SkeletonConditioningNode',
+                            title: '3D Skeleton Depth Guidance (SMPL-X / MediaPipe)',
+                            category: 'conditioning/skeleton',
+                            inputs: {
+                                skeleton_source: goal.includes('a-pose') ? 'smpl_a_pose_motion.json' : 'smpl_motion.json',
+                                depth_buffer_render: true,
+                                confidence_threshold: 0.85
+                            },
+                            outputs: [{ name: 'SKELETON_CUE', type: 'SKELETON_CUE' }]
+                        },
+                        {
+                            id: '4',
+                            classType: 'WanMultiViewCameraRigNode',
+                            title: '4DAnyone Multi-View Camera Rig (6-View / 24-View Orbit / 48-View MultiPitch)',
+                            category: 'camera/multiview',
+                            inputs: {
+                                rig_preset: goal.includes('24-view') ? '24-view-dense' : (goal.includes('48-view') ? '48-view-multipitch' : '6-view-orbit'),
+                                camera_positions: 'front,left_45,right_45,rear_180',
+                                orbit_radius: 2.2,
+                                elevation_m: 1.25,
+                                fov_deg: 50
+                            },
+                            outputs: [{ name: 'CAMERA_RIG', type: 'CAMERA_RIG' }]
+                        },
+                        {
+                            id: '5',
+                            classType: 'Wan22MultiViewSampler',
+                            title: 'Wan2.2 Multi-View DiT Sampler (RCP & TCR)',
+                            category: 'sampling/video',
+                            inputs: {
+                                steps: 25,
+                                cfg: 6.0,
+                                reference_context_packing: true,
+                                target_context_routing: true,
+                                frames_per_view: 24,
+                                fps: 24,
+                                prompt: goal
+                            },
+                            outputs: [{ name: 'MULTIVIEW_VIDEOS', type: 'VIDEO_STREAM_BATCH' }]
+                        },
+                        {
+                            id: '6',
+                            classType: 'SaveVideo',
+                            title: 'Export Multi-View Video Captures',
+                            category: 'video/io',
+                            inputs: { filename_prefix: 'wan22_4danyone_multiview' },
+                            outputs: []
+                        }
+                    ],
+                    connections: [
+                        { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '5', toInputName: 'reference_frame' },
+                        { fromNodeId: '2', fromOutputIndex: 0, toNodeId: '5', toInputName: 'wan_model' },
+                        { fromNodeId: '2', fromOutputIndex: 1, toNodeId: '5', toInputName: 'vae' },
+                        { fromNodeId: '3', fromOutputIndex: 0, toNodeId: '5', toInputName: 'skeleton_guidance' },
+                        { fromNodeId: '4', fromOutputIndex: 0, toNodeId: '5', toInputName: 'camera_rig' },
+                        { fromNodeId: '5', fromOutputIndex: 0, toNodeId: '6', toInputName: 'videos' }
+                    ]
+                };
+            }
+
+            // General Image-to-Video via SVD
+            return {
+                id,
+                goal,
+                category: 'video-generation',
+                rationale: 'Image-to-Video generation using SVD / AnimateDiff diffusion backbone',
+                requiredModels: [{ type: 'checkpoint', name: 'svd_xt.safetensors' }],
+                requiredCustomNodes: ['SVD_img2vid_Conditioning'],
+                nodes: [
+                    {
+                        id: '1',
+                        classType: 'LoadImage',
+                        title: 'Reference Frame',
+                        category: 'image',
+                        inputs: { image: 'input_frame.png' },
+                        outputs: [{ name: 'IMAGE', type: 'IMAGE' }]
+                    },
+                    {
+                        id: '2',
+                        classType: 'ImageOnlyCheckpointLoader',
+                        title: 'Load SVD Model',
+                        category: 'loaders',
+                        inputs: { ckpt_name: 'svd_xt.safetensors' },
+                        outputs: [
+                            { name: 'MODEL', type: 'MODEL' },
+                            { name: 'CLIP_VISION', type: 'CLIP_VISION' },
+                            { name: 'VAE', type: 'VAE' }
+                        ]
+                    },
+                    {
+                        id: '3',
+                        classType: 'SVD_img2vid_Conditioning',
+                        title: 'SVD Video Conditioning',
+                        category: 'conditioning/video',
+                        inputs: {
+                            width: 576,
+                            height: 1024,
+                            video_frames: 25,
+                            motion_bucket_id: 127,
+                            fps: 12,
+                            augmentation_level: 0.0
+                        },
+                        outputs: [
+                            { name: 'POSITIVE', type: 'CONDITIONING' },
+                            { name: 'NEGATIVE', type: 'CONDITIONING' },
+                            { name: 'LATENT', type: 'LATENT' }
+                        ]
+                    },
+                    {
+                        id: '4',
+                        classType: 'KSampler',
+                        title: 'Video Diffusion Sampler',
+                        category: 'sampling',
+                        inputs: {
+                            seed: 42,
+                            steps: 20,
+                            cfg: 2.5,
+                            sampler_name: 'euler',
+                            scheduler: 'karras',
+                            denoise: 1.0
+                        },
+                        outputs: [{ name: 'LATENT', type: 'LATENT' }]
+                    },
+                    {
+                        id: '5',
+                        classType: 'VAEDecode',
+                        title: 'Decode Video Frames',
+                        category: 'latent',
+                        inputs: {},
+                        outputs: [{ name: 'IMAGE', type: 'IMAGE' }]
+                    },
+                    {
+                        id: '6',
+                        classType: 'SaveVideo',
+                        title: 'Save Video',
+                        category: 'video/io',
+                        inputs: { filename_prefix: 'svd_output' },
+                        outputs: []
+                    }
+                ],
+                connections: [
+                    { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '3', toInputName: 'init_image' },
+                    { fromNodeId: '2', fromOutputIndex: 1, toNodeId: '3', toInputName: 'clip_vision' },
+                    { fromNodeId: '2', fromOutputIndex: 0, toNodeId: '4', toInputName: 'model' },
+                    { fromNodeId: '3', fromOutputIndex: 0, toNodeId: '4', toInputName: 'positive' },
+                    { fromNodeId: '3', fromOutputIndex: 1, toNodeId: '4', toInputName: 'negative' },
+                    { fromNodeId: '3', fromOutputIndex: 2, toNodeId: '4', toInputName: 'latent_image' },
+                    { fromNodeId: '4', fromOutputIndex: 0, toNodeId: '5', toInputName: 'samples' },
+                    { fromNodeId: '2', fromOutputIndex: 2, toNodeId: '5', toInputName: 'vae' },
+                    { fromNodeId: '5', fromOutputIndex: 0, toNodeId: '6', toInputName: 'images' }
                 ]
             };
         }
@@ -962,6 +1255,107 @@ class ${sanitizedClass}:
 
     def compose_pbr(self, image, roughness_factor=0.5, metallic_factor=0.0):
         return (image, image, image)
+
+NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
+`;
+        } else if (sanitizedClass === 'Wan22TI2VModelLoader' || sanitizedClass.toLowerCase().includes('wan22')) {
+            category = 'loaders/video';
+            code = `
+class ${sanitizedClass}:
+    """Dynamic Wan2.2-TI2V-5B model loader synthesized for 4DAnyone multi-view video generation."""
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model_name": ("STRING", {"default": "Wan2.2-TI2V-5B"}),
+                "precision": (["bf16", "fp16", "fp32"], {"default": "bf16"}),
+                "offload_device": (["gpu", "cpu"], {"default": "gpu"})
+            }
+        }
+    RETURN_TYPES = ("WAN_MODEL", "WAN_VAE")
+    FUNCTION = "load_model"
+    CATEGORY = "${category}"
+
+    def load_model(self, model_name="Wan2.2-TI2V-5B", precision="bf16", offload_device="gpu"):
+        return ({"model": model_name, "precision": precision}, {"vae": "wan_vae"})
+
+NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
+`;
+        } else if (sanitizedClass === 'Wan22MultiViewSampler' || sanitizedClass.toLowerCase().includes('multiviewsampler')) {
+            category = 'sampling/video';
+            code = `
+class ${sanitizedClass}:
+    """Dynamic Wan2.2 Multi-View DiT Sampler with Reference Context Packing (RCP) & Target Context Routing (TCR)."""
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "wan_model": ("WAN_MODEL",),
+                "vae": ("WAN_VAE",),
+                "reference_frame": ("IMAGE",),
+                "skeleton_guidance": ("SKELETON_CUE",),
+                "camera_rig": ("CAMERA_RIG",),
+                "steps": ("INT", {"default": 25, "min": 1, "max": 100}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 1.0, "max": 20.0}),
+                "reference_context_packing": ("BOOLEAN", {"default": True}),
+                "target_context_routing": ("BOOLEAN", {"default": True}),
+                "frames_per_view": ("INT", {"default": 24, "min": 8, "max": 120}),
+                "fps": ("INT", {"default": 24, "min": 12, "max": 60})
+            },
+            "optional": {
+                "prompt": ("STRING", {"default": ""})
+            }
+        }
+    RETURN_TYPES = ("VIDEO_STREAM_BATCH",)
+    FUNCTION = "sample_multiview"
+    CATEGORY = "${category}"
+
+    def sample_multiview(self, **kwargs):
+        return (["cam_00.mp4", "cam_01.mp4", "cam_02.mp4", "cam_03.mp4"],)
+
+NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
+`;
+        } else if (sanitizedClass === 'WanMultiViewCameraRigNode' || sanitizedClass === 'SkeletonConditioningNode') {
+            category = 'camera/multiview';
+            code = `
+class ${sanitizedClass}:
+    """Dynamic multi-view camera rig / skeleton conditioning node for 4DAnyone."""
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "input_config": ("STRING", {"default": "default"})
+            }
+        }
+    RETURN_TYPES = ("*",)
+    FUNCTION = "configure"
+    CATEGORY = "${category}"
+
+    def configure(self, input_config="default"):
+        return ({"config": input_config},)
+
+NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
+`;
+        } else if (sanitizedClass === 'SaveVideo' || sanitizedClass.toLowerCase().includes('savevideo')) {
+            category = 'video/io';
+            code = `
+class ${sanitizedClass}:
+    """Dynamic video saver node for 4DAnyone and ComfyUI."""
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "videos": ("*",),
+                "filename_prefix": ("STRING", {"default": "video_output"})
+            }
+        }
+    RETURN_TYPES = ()
+    FUNCTION = "save_video"
+    CATEGORY = "${category}"
+    OUTPUT_NODE = True
+
+    def save_video(self, videos=None, filename_prefix="video_output"):
+        return {"ui": {"videos": [f"{filename_prefix}.mp4"]}}
 
 NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
 `;
