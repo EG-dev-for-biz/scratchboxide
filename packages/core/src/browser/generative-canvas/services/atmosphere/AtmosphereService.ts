@@ -522,6 +522,19 @@ export class AtmosphereService {
         return SphericalHarmonics9.getSkyForestCanopySH();
     }
 
+    /**
+     * Filament cmgen-style projection:
+     * Projects any equirectangular HDR/linear RGB radiance map into 9 Spherical Harmonic coefficients.
+     */
+    public static projectEquirectangularToSH(
+        rgbData: Float32Array | number[] | Uint8ClampedArray | Uint8Array,
+        width: number,
+        height: number,
+        channels: number = 3
+    ): SphericalHarmonics9 {
+        return SphericalHarmonics9.projectEquirectangular(rgbData, width, height, channels);
+    }
+
     public static estimateFromImage(request: ImageAtmosphereRequest): Promise<AtmosphericEstimationResult> {
         return AtmosphereImageEstimationService.estimateFromImage(request);
     }

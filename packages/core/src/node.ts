@@ -66,6 +66,26 @@ export type {
     AdaptiveAtlasTelemetry
 } from './common/adaptive-material-types';
 export {
+    UniversalPbrBakingKernel,
+    applyUniversalSleightOfHand,
+    applyToksvigRoughnessCoupling,
+    type UniversalTexelContext,
+    type UniversalTexelOutput,
+    type UniversalPbrOptions,
+    type UniversalPbrTelemetry,
+    type UniversalPbrResult
+} from './node/3d-engine/universal-pbr-baking-kernel';
+export {
+    VirtualBevelKernel,
+    buildSubmeshAdjacency,
+    pointSegmentDistance,
+    evaluateGeometricNormal,
+    type EdgeAdjacencyRecord,
+    type TriangleGeometricFrame,
+    type SubmeshAdjacencyGraph,
+    type GeometricNormalResult
+} from './node/3d-engine/virtual-bevel-kernel';
+export {
     BotanicalVegetationService,
     BotanicalMode,
     LeafMorphologyType,
@@ -117,6 +137,14 @@ export {
     GlomapOptions,
     GlomapResult
 } from './node/3d-engine/colmap-reconstruction-service';
+export {
+    NativeTileLightingService,
+    type NativeSunEstimateOptions,
+    type NativeSunEstimateResult,
+    type NativeDelightOptions,
+    type NativePerFaceMaterialResult,
+    type NativeMaterialClassifyOptions
+} from './node/3d-engine/native-tile-lighting-service';
 export {
     SplatService,
     SplatConversionOptions,
@@ -531,4 +559,14 @@ export {
     type Build4DFromCanonicalOptions
 } from './node/3d-engine/gaussian-splat-4d-service';
 
+
+// Spatial & Vision Node Services
+export {
+    TextureCompressionService,
+    type TextureMapType,
+    type TextureCompressionOptions,
+    type TextureCompressionResult,
+    type GlbCompressionStats,
+    type GlbCompressionOptions
+} from './node/texture-compression-service';
 

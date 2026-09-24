@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { SphericalHarmonics9 } from './atmosphere/volumetric-participating-media';
 
 // ============================================================================
 // Types & Mathematical Interfaces
@@ -865,4 +866,212 @@ export function applyBurleySubsurfaceScattering(
     };
 
     pbrMat.needsUpdate = true;
+}
+
+// ============================================================================
+// 12. Headless Multi-Scattering GGX Energy Compensation (Google Filament)
+// ============================================================================
+
+export interface GgxEnergyCompensationResult {
+    energyFactor: [number, number, number];
+    directionalAlbedo: number;
+}
+
+export function evaluateGgxEnergyCompensation(
+    roughness: number,
+    NoV: number,
+    f0: [number, number, number] = [0.04, 0.04, 0.04]
+): GgxEnergyCompensationResult {
+    const clampedNoV = Math.max(1e-4, Math.min(1.0, NoV));
+    const clampedRoughness = Math.max(0.0, Math.min(1.0, roughness));
+
+    const oneMinusNoV = 1.0 - clampedNoV;
+    const oneMinusNoV4 = oneMinusNoV * oneMinusNoV * oneMinusNoV * oneMinusNoV;
+    let directionalAlbedo = 1.0 - clampedRoughness * (0.35 + 0.65 * oneMinusNoV4);
+    directionalAlbedo = Math.max(0.01, Math.min(1.0, directionalAlbedo));
+
+    const invEminusOne = (1.0 / directionalAlbedo) - 1.0;
+    const energyFactor: [number, number, number] = [
+        1.0 + f0[0] * invEminusOne,
+        1.0 + f0[1] * invEminusOne,
+        1.0 + f0[2] * invEminusOne
+    ];
+
+    return { energyFactor, directionalAlbedo };
+}
+
+export function applyFilamentEnergyCompensation(mesh: THREE.Mesh): void {
+    const mat = mesh.material as THREE.MeshStandardMaterial | THREE.MeshPhysicalMaterial;
+    if (!mat || !(mat as any).isMaterial) return;
+
+    mat.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <lights_fragment_end>',
+            `
+            // Filament Multi-Scattering GGX Energy Compensation
+            float sb_NoV = clamp(dot(geometryNormal, geometryViewDir), 0.0001, 1.0);
+            float sb_oneMinusNoV = 1.0 - sb_NoV;
+            float sb_oneMinusNoV4 = sb_oneMinusNoV * sb_oneMinusNoV * sb_oneMinusNoV * sb_oneMinusNoV;
+            float sb_E = clamp(1.0 - roughness * (0.35 + 0.65 * sb_oneMinusNoV4), 0.01, 1.0);
+            #ifdef STANDARD
+                vec3 sb_f0 = material.specularColor;
+            #else
+                vec3 sb_f0 = vec3(0.04);
+            #endif
+            vec3 sb_energyCompensation = 1.0 + sb_f0 * (1.0 / sb_E - 1.0);
+            reflectedLight.directSpecular *= sb_energyCompensation;
+            reflectedLight.indirectSpecular *= sb_energyCompensation;
+
+            #include <lights_fragment_end>
+            `
+        );
+    };
+    mat.needsUpdate = true;
+}
+
+// ============================================================================
+// 13. Headless Cloth & Micro-Velvet Sheen BRDF (Google Filament / Charlie NDF)
+// ============================================================================
+
+export interface FilamentClothOptions {
+    sheenColor?: [number, number, number];
+    sheenRoughness?: number;
+    subsurfaceColor?: [number, number, number];
+    subsurfaceWrap?: number;
+}
+
+export interface ClothSheenEvaluation {
+    sheenSpecular: [number, number, number];
+    subsurfaceDiffuse: [number, number, number];
+}
+
+export function evaluateCharlieSheen(
+    NoH: number,
+    NoV: number,
+    NoL: number,
+    options: FilamentClothOptions = {}
+): ClothSheenEvaluation {
+    const roughness = Math.max(0.01, Math.min(1.0, options.sheenRoughness ?? 0.5));
+    const clampedNoH = Math.max(0.0, Math.min(1.0, NoH));
+    const clampedNoV = Math.max(1e-4, Math.min(1.0, NoV));
+    const clampedNoL = Math.max(0.0, Math.min(1.0, NoL));
+
+    const sheenColor = options.sheenColor ?? [0.9, 0.9, 0.9];
+    const subColor = options.subsurfaceColor ?? [0.0, 0.0, 0.0];
+    const wrap = options.subsurfaceWrap ?? 0.5;
+
+    // 1. Charlie NDF
+    const invAlpha = 1.0 / roughness;
+    const sinThetaM2 = Math.max(0.0, 1.0 - clampedNoH * clampedNoH);
+    const D_charlie = ((2.0 + invAlpha) / (2.0 * Math.PI)) * Math.pow(sinThetaM2, invAlpha * 0.5);
+
+    // 2. Neubelt & Pettineo Cloth Visibility Term
+    const denom = 4.0 * (clampedNoV + clampedNoL - clampedNoV * clampedNoL);
+    const V_cloth = denom > 1e-5 ? 1.0 / denom : 0.0;
+
+    // 3. Sheen Specular Term
+    const sheenFactor = D_charlie * V_cloth * clampedNoL * Math.PI;
+    const sheenSpecular: [number, number, number] = [
+        sheenColor[0] * sheenFactor,
+        sheenColor[1] * sheenFactor,
+        sheenColor[2] * sheenFactor
+    ];
+
+    // 4. Wrap-Diffuse Fabric Subsurface
+    const wrapL = Math.max(0.0, clampedNoL + wrap) / ((1.0 + wrap) * (1.0 + wrap));
+    const subsurfaceDiffuse: [number, number, number] = [
+        subColor[0] * wrapL,
+        subColor[1] * wrapL,
+        subColor[2] * wrapL
+    ];
+
+    return { sheenSpecular, subsurfaceDiffuse };
+}
+
+export function applyFilamentClothSheen(
+    mesh: THREE.Mesh,
+    options: FilamentClothOptions = {}
+): void {
+    let mat = mesh.material;
+    if (!(mat instanceof THREE.MeshPhysicalMaterial)) {
+        const oldMat = mat as any;
+        mat = new THREE.MeshPhysicalMaterial({
+            color: oldMat?.color ?? 0xcccccc,
+            roughness: options.sheenRoughness ?? oldMat?.roughness ?? 0.6,
+            metalness: 0.0
+        });
+        mesh.material = mat;
+        oldMat?.dispose?.();
+    }
+
+    const pbrMat = mat as THREE.MeshPhysicalMaterial;
+    const sheenCol = options.sheenColor ?? [0.95, 0.9, 0.85];
+    const subCol = options.subsurfaceColor ?? [0.0, 0.0, 0.0];
+    const sheenRoughness = options.sheenRoughness ?? 0.5;
+    const wrap = options.subsurfaceWrap ?? 0.5;
+
+    pbrMat.sheen = 1.0;
+    pbrMat.sheenColor = new THREE.Color(sheenCol[0], sheenCol[1], sheenCol[2]);
+    pbrMat.sheenRoughness = sheenRoughness;
+
+    pbrMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uClothSheenColor = { value: new THREE.Vector3(...sheenCol) };
+        shader.uniforms.uClothSheenRoughness = { value: sheenRoughness };
+        shader.uniforms.uClothSubsurfaceColor = { value: new THREE.Vector3(...subCol) };
+        shader.uniforms.uClothWrap = { value: wrap };
+
+        shader.fragmentShader = `
+            uniform vec3 uClothSheenColor;
+            uniform float uClothSheenRoughness;
+            uniform vec3 uClothSubsurfaceColor;
+            uniform float uClothWrap;
+        ` + shader.fragmentShader;
+
+        shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <lights_fragment_end>',
+            `
+            #include <lights_fragment_end>
+            // Filament Charlie Cloth Sheen & Subsurface Wrap Injection
+            float cloth_NoV = clamp(dot(geometryNormal, geometryViewDir), 0.0001, 1.0);
+            #if NUM_DIR_LIGHTS > 0
+                for (int i = 0; i < NUM_DIR_LIGHTS; ++i) {
+                    vec3 cloth_L = directionalLights[i].direction;
+                    vec3 cloth_H = normalize(cloth_L + geometryViewDir);
+                    float cloth_NoH = clamp(dot(geometryNormal, cloth_H), 0.0, 1.0);
+                    float cloth_NoL = clamp(dot(geometryNormal, cloth_L), 0.0, 1.0);
+
+                    // Charlie NDF
+                    float cloth_invA = 1.0 / max(0.01, uClothSheenRoughness);
+                    float cloth_sin2 = max(0.0, 1.0 - cloth_NoH * cloth_NoH);
+                    float cloth_D = ((2.0 + cloth_invA) / 6.2831853) * pow(cloth_sin2, cloth_invA * 0.5);
+
+                    // Cloth Visibility
+                    float cloth_denom = 4.0 * (cloth_NoV + cloth_NoL - cloth_NoV * cloth_NoL);
+                    float cloth_V = cloth_denom > 1e-5 ? (1.0 / cloth_denom) : 0.0;
+
+                    vec3 cloth_sheen = uClothSheenColor * (cloth_D * cloth_V * cloth_NoL * 3.14159265);
+                    float cloth_wrapL = max(0.0, cloth_NoL + uClothWrap) / ((1.0 + uClothWrap) * (1.0 + uClothWrap));
+                    vec3 cloth_sub = uClothSubsurfaceColor * cloth_wrapL;
+
+                    outgoingLight += (cloth_sheen + cloth_sub) * directionalLights[i].color;
+                }
+            #endif
+            `
+        );
+    };
+
+    pbrMat.needsUpdate = true;
+}
+
+// ============================================================================
+// 14. Filament cmgen-Style Analytical Spherical Harmonics Projector
+// ============================================================================
+
+export function projectEquirectangularToSH(
+    rgbData: Float32Array | number[] | Uint8ClampedArray | Uint8Array,
+    width: number,
+    height: number,
+    channels: number = 3
+): SphericalHarmonics9 {
+    return SphericalHarmonics9.projectEquirectangular(rgbData, width, height, channels);
 }

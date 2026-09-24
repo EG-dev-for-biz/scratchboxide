@@ -140,6 +140,18 @@ export const GLB_RECOLOR_PRESETS: Record<string, NanoBananaGlbPalette> = {
     midtone: { L: 56.5, a: 0.0, b: 0.0 },
     highlight: { L: 94.0, a: 0.0, b: 0.0 },
     accent: { L: 80.0, a: 0.0, b: 0.0 }
+  },
+  sophisticated_v2_realistic: {
+    shadow: { L: 16.0, a: 1.0, b: -8.0 },
+    midtone: { L: 66.0, a: 14.0, b: 22.0 },
+    highlight: { L: 88.0, a: 8.0, b: 26.0 },
+    accent: { L: 60.0, a: 4.0, b: -20.0 }
+  },
+  realistic_travertine: {
+    shadow: { L: 18.0, a: 2.0, b: -4.0 },
+    midtone: { L: 72.0, a: 8.5, b: 20.0 },
+    highlight: { L: 92.0, a: 4.0, b: 16.0 },
+    accent: { L: 65.0, a: -6.0, b: 16.0 }
   }
 };
 

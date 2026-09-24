@@ -127,6 +127,65 @@ struct SphericalHarmonics9 {
         sh.L[8] = Vec3(0.18f, 0.12f, 0.22f);
         return sh;
     }
+
+    /**
+     * Filament cmgen-style analytical projection:
+     * Projects any equirectangular HDR/linear RGB radiance map into 9 Spherical Harmonic coefficients.
+     * Integrates over the sphere using solid angle dOmega = sin(theta) * dTheta * dPhi.
+     */
+    static SphericalHarmonics9 projectEquirectangular(
+        const float* rgbData,
+        int width,
+        int height,
+        int channels = 3
+    ) {
+        SphericalHarmonics9 sh;
+        if (!rgbData || width <= 0 || height <= 0) return sh;
+
+        constexpr float PI = 3.14159265358979323846f;
+        float dTheta = PI / static_cast<float>(height);
+        float dPhi = (2.0f * PI) / static_cast<float>(width);
+
+        for (int v = 0; v < height; ++v) {
+            float theta = (static_cast<float>(v) + 0.5f) * dTheta;
+            float sinTheta = std::sin(theta);
+            float cosTheta = std::cos(theta);
+            float dOmega = sinTheta * dTheta * dPhi;
+
+            for (int u = 0; u < width; ++u) {
+                float phi = (static_cast<float>(u) + 0.5f) * dPhi;
+                float sinPhi = std::sin(phi);
+                float cosPhi = std::cos(phi);
+
+                // Cartesian direction vector (Y-up convention)
+                float x = -sinTheta * sinPhi;
+                float y = cosTheta;
+                float z = -sinTheta * cosPhi;
+
+                // Spherical harmonics basis functions Y_lm for L <= 2 (Ramamoorthi & Hanrahan / Filament cmgen)
+                float Y[9];
+                Y[0] = 0.282095f;                               // Y00
+                Y[1] = 0.488603f * y;                           // Y1-1
+                Y[2] = 0.488603f * z;                           // Y10
+                Y[3] = 0.488603f * x;                           // Y11
+                Y[4] = 1.092548f * x * y;                       // Y2-2
+                Y[5] = 1.092548f * y * z;                       // Y2-1
+                Y[6] = 0.315392f * (3.0f * z * z - 1.0f);       // Y20
+                Y[7] = 1.092548f * x * z;                       // Y21
+                Y[8] = 0.546274f * (x * x - y * y);             // Y22
+
+                int idx = (v * width + u) * channels;
+                Vec3 radiance(rgbData[idx], rgbData[idx + 1], rgbData[idx + 2]);
+
+                Vec3 weightedRadiance = radiance * dOmega;
+                for (int i = 0; i < 9; ++i) {
+                    sh.L[i] = sh.L[i] + weightedRadiance * Y[i];
+                }
+            }
+        }
+
+        return sh;
+    }
 };
 
 // ============================================================================

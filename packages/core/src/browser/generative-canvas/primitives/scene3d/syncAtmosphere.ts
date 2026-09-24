@@ -263,22 +263,8 @@ export function syncAtmosphere(
             );
         }
 
-        if (!hasBiomes && !input.hasGeoCoordinates && !input.has3DTiles && input.ground !== false) {
-            const terrainFloorGeo = new THREE.PlaneGeometry(500, 500, 32, 32);
-            terrainFloorGeo.rotateX(-Math.PI / 2);
-            const terrainFloorMat = new THREE.MeshStandardMaterial({
-                color: isSunset ? 0x1e293b : 0x0284c7,
-                roughness: 0.2,
-                metalness: 0.7
-            });
-            terrainCloudShadows?.attachToMaterial(terrainFloorMat);
-            const terrainFloor = new THREE.Mesh(terrainFloorGeo, terrainFloorMat);
-            terrainFloor.name = 'sb-terrain-floor';
-            // Canonical Google Maps Ground Standard: street/terrain surface is strictly at Y = 0.0m
-            terrainFloor.position.y = 0.0;
-            scene.add(terrainFloor);
-            owned.push(terrainFloor);
-        }
+        // Zero Ground Plane Invariant: 3D environments do not use artificial flat ground planes.
+        // Radiometric illumination and atmospheric scattering interact directly with genuine scene geometry.
     } else {
         const rigKey = input.cinematicRig || input.lighting;
         if (rigKey && rigKey !== 'default') {

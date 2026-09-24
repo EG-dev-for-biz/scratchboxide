@@ -57,6 +57,8 @@
 #include "scratchbox_tiles.hpp"
 #include "scratchbox_photoreal_reconstruction.hpp"
 #include "scratchbox_tile_cleanup.hpp"
+#include "scratchbox_delight.hpp"
+#include "scratchbox_material.hpp"
 #include "scratchbox_botanical_pipeline.hpp"
 #include "scratchbox_texture_inducer.hpp"
 #include "scratchbox_nanite.hpp"
@@ -77,6 +79,7 @@
 #include "scratchbox_denoise.hpp"
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_atmosphere.hpp"
+#include "scratchbox_lens_shader.hpp"
 
 namespace sb = scratchbox;
 namespace gopt = scratchbox::gaussian_opt;

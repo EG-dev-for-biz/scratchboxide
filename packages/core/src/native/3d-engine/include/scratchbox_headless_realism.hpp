@@ -816,6 +816,102 @@ public:
     }
 };
 
+// ============================================================================
+// 11. Headless Multi-Scattering GGX Energy Compensation Operator (Google Filament)
+// ============================================================================
+
+struct GgxEnergyCompensationResult {
+    Vec3 energyFactor;       // Specular scale multiplier >= 1.0 (restores lost multi-scattering energy)
+    float directionalAlbedo; // E(NoV, roughness) in [0, 1]
+};
+
+class HeadlessGgxEnergyCompensationOperator {
+public:
+    /**
+     * Computes the multi-scattering energy compensation factor following Google Filament (brdf.fs / Turquin).
+     * Prevents rough surfaces (metals, coarse stone) from darkening unrealistically.
+     */
+    static GgxEnergyCompensationResult evaluate(
+        float roughness,
+        float NoV,
+        const Vec3& f0 = Vec3(0.04f, 0.04f, 0.04f)
+    ) {
+        float clampedNoV = std::clamp(NoV, 1e-4f, 1.0f);
+        float clampedRoughness = std::clamp(roughness, 0.0f, 1.0f);
+
+        // Analytical directional albedo approximation E(NoV, alpha) for GGX microfacets
+        // Based on Filament's DFG integration fit
+        float oneMinusNoV = 1.0f - clampedNoV;
+        float oneMinusNoV4 = oneMinusNoV * oneMinusNoV * oneMinusNoV * oneMinusNoV;
+        float directionalAlbedo = 1.0f - clampedRoughness * (0.35f + 0.65f * oneMinusNoV4);
+        directionalAlbedo = std::clamp(directionalAlbedo, 0.01f, 1.0f);
+
+        // Filament multi-scattering compensation term: 1.0 + f0 * (1.0 / E - 1.0)
+        float invEminusOne = (1.0f / directionalAlbedo) - 1.0f;
+        Vec3 energyFactor = Vec3(1.0f, 1.0f, 1.0f) + f0 * invEminusOne;
+
+        return { energyFactor, directionalAlbedo };
+    }
+};
+
+// ============================================================================
+// 12. Headless Cloth & Micro-Velvet Sheen BRDF Operator (Google Filament / Charlie NDF)
+// ============================================================================
+
+struct ClothSheenParameters {
+    float roughness = 0.5f;
+    Vec3 sheenColor = Vec3(0.9f, 0.9f, 0.9f);
+    Vec3 subsurfaceColor = Vec3(0.0f, 0.0f, 0.0f); // Optional fabric subsurface wrap
+    float subsurfaceWrap = 0.5f;                    // Subsurface diffuse wrap constant
+};
+
+struct ClothSheenEvaluation {
+    Vec3 sheenSpecular;
+    Vec3 subsurfaceDiffuse;
+};
+
+class HeadlessClothSheenOperator {
+public:
+    /**
+     * Evaluates the Estevez & Kulla "Charlie" cloth sheen BRDF as implemented in Google Filament.
+     * Models forward and backward scattering from fabric micro-fibers (velvet, silk, cotton).
+     */
+    static ClothSheenEvaluation evaluate(
+        float NoH,
+        float NoV,
+        float NoL,
+        const ClothSheenParameters& params
+    ) {
+        float clampedRoughness = std::clamp(params.roughness, 0.01f, 1.0f);
+        float clampedNoH = std::clamp(NoH, 0.0f, 1.0f);
+        float clampedNoV = std::clamp(NoV, 1e-4f, 1.0f);
+        float clampedNoL = std::clamp(NoL, 0.0f, 1.0f);
+
+        // 1. Charlie Normal Distribution Function (NDF)
+        // D(alpha, NoH) = (2 + 1/alpha) / (2 * pi) * (1 - NoH^2)^(1 / (2 * alpha))
+        constexpr float PI = 3.14159265358979323846f;
+        float invAlpha = 1.0f / clampedRoughness;
+        float sinThetaM2 = std::max(0.0f, 1.0f - clampedNoH * clampedNoH);
+        float D_charlie = ((2.0f + invAlpha) / (2.0f * PI)) * std::pow(sinThetaM2, invAlpha * 0.5f);
+
+        // 2. Neubelt & Pettineo Cloth Visibility Term
+        // V_cloth = 1 / (4 * (NoV + NoL - NoV * NoL))
+        float denom = 4.0f * (clampedNoV + clampedNoL - clampedNoV * clampedNoL);
+        float V_cloth = (denom > 1e-5f) ? (1.0f / denom) : 0.0f;
+
+        // 3. Sheen Specular Term
+        Vec3 sheenSpecular = params.sheenColor * (D_charlie * V_cloth * clampedNoL * PI);
+
+        // 4. Wrap-Diffuse Fabric Subsurface Scattering
+        // Diffuse wrap: max(0, NoL + w) / (1 + w)^2
+        float w = params.subsurfaceWrap;
+        float wrapL = std::max(0.0f, clampedNoL + w) / ((1.0f + w) * (1.0f + w));
+        Vec3 subsurfaceDiffuse = params.subsurfaceColor * wrapL;
+
+        return { sheenSpecular, subsurfaceDiffuse };
+    }
+};
+
 } // namespace realism
 } // namespace scratchbox
 

@@ -249,4 +249,70 @@ export class SphericalHarmonics9 {
             [0.04, 0.05, 0.03]
         ]);
     }
+
+    /**
+     * Filament cmgen-style analytical projection:
+     * Projects any equirectangular HDR/linear RGB radiance map into 9 Spherical Harmonic coefficients.
+     * Integrates over the sphere using solid angle dOmega = sin(theta) * dTheta * dPhi.
+     */
+    public static projectEquirectangular(
+        rgbData: Float32Array | number[] | Uint8ClampedArray | Uint8Array,
+        width: number,
+        height: number,
+        channels: number = 3
+    ): SphericalHarmonics9 {
+        const sh = new SphericalHarmonics9();
+        if (!rgbData || width <= 0 || height <= 0) return sh;
+
+        const isByte = rgbData instanceof Uint8ClampedArray || rgbData instanceof Uint8Array;
+        const scale = isByte ? 1.0 / 255.0 : 1.0;
+
+        const dTheta = Math.PI / height;
+        const dPhi = (2.0 * Math.PI) / width;
+
+        for (let v = 0; v < height; ++v) {
+            const theta = (v + 0.5) * dTheta;
+            const sinTheta = Math.sin(theta);
+            const cosTheta = Math.cos(theta);
+            const dOmega = sinTheta * dTheta * dPhi;
+
+            for (let u = 0; u < width; ++u) {
+                const phi = (u + 0.5) * dPhi;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+
+                // Cartesian unit vector (Y-up convention)
+                const x = -sinTheta * sinPhi;
+                const y = cosTheta;
+                const z = -sinTheta * cosPhi;
+
+                // 9 SH Basis Functions (Ramamoorthi & Hanrahan / Filament cmgen)
+                const Y0 = 0.282095;
+                const Y1 = 0.488603 * y;
+                const Y2 = 0.488603 * z;
+                const Y3 = 0.488603 * x;
+                const Y4 = 1.092548 * x * y;
+                const Y5 = 1.092548 * y * z;
+                const Y6 = 0.315392 * (3.0 * z * z - 1.0);
+                const Y7 = 1.092548 * x * z;
+                const Y8 = 0.546274 * (x * x - y * y);
+
+                const Y = [Y0, Y1, Y2, Y3, Y4, Y5, Y6, Y7, Y8];
+
+                const idx = (v * width + u) * channels;
+                const r = rgbData[idx] * scale;
+                const g = rgbData[idx + 1] * scale;
+                const b = rgbData[idx + 2] * scale;
+
+                for (let i = 0; i < 9; ++i) {
+                    const wY = dOmega * Y[i];
+                    sh.coeffs[i][0] += r * wY;
+                    sh.coeffs[i][1] += g * wY;
+                    sh.coeffs[i][2] += b * wY;
+                }
+            }
+        }
+
+        return sh;
+    }
 }

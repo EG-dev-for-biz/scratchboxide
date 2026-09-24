@@ -52,6 +52,15 @@ export type {
     MeshReshapingResult
 } from './node/3d-engine/native-mesh-reshaper-service';
 
+// Native Physical De-Lighting & Per-Face Material Assignment (Types)
+export type {
+    NativeSunEstimateOptions,
+    NativeSunEstimateResult,
+    NativeDelightOptions,
+    NativePerFaceMaterialResult,
+    NativeMaterialClassifyOptions
+} from './node/3d-engine/native-tile-lighting-service';
+
 // Nano Banana Color Transfer Pipeline (Method 2: Two-Step Extract-then-Apply)
 export {
     NanoBananaColorService,
@@ -81,9 +90,24 @@ export {
 } from './node/spatial/SurveyTextureUnprojector';
 
 // Zero-Preset Adaptive Material PBR Architecture
-export {
+export type {
     AdaptiveMaterialPbrService
 } from './node/3d-engine/adaptive-material-pbr-service';
+export type {
+    UniversalPbrBakingKernel,
+    UniversalTexelContext,
+    UniversalTexelOutput,
+    UniversalPbrOptions,
+    UniversalPbrTelemetry,
+    UniversalPbrResult
+} from './node/3d-engine/universal-pbr-baking-kernel';
+export type {
+    VirtualBevelKernel,
+    EdgeAdjacencyRecord,
+    TriangleGeometricFrame,
+    SubmeshAdjacencyGraph,
+    GeometricNormalResult
+} from './node/3d-engine/virtual-bevel-kernel';
 export type {
     AdaptiveMaterialSchema,
     IntrinsicSignalMetrics,
@@ -118,5 +142,13 @@ export {
     type PerformerKinematicsFrame,
     type PerformerTelemetry
 } from './browser/generative-canvas/services/ConcertStagePerformerService';
+export type {
+    TextureCompressionService,
+    TextureMapType,
+    TextureCompressionOptions,
+    TextureCompressionResult,
+    GlbCompressionStats,
+    GlbCompressionOptions
+} from './node/texture-compression-service';
 
 

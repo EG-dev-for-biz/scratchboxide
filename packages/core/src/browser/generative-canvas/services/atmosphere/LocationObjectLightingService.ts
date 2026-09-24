@@ -16,6 +16,8 @@ export type StoneType = 'travertine' | 'limestone' | 'sandstone' | 'granite' | '
 
 export interface DelightUniformsConfig {
     uDelightEnabled: boolean;
+    uRealDelightEnabled?: boolean;
+    uMeshShading?: number;
     uShadowLift: number;
     uHighlightCompress: number;
     uStoneAlbedoTint: [number, number, number];
@@ -160,19 +162,28 @@ export function generateCanonicalAmbulatoryFixtures(baseRadius = 52.0, count = 1
  */
 export const LOCATION_DELIGHT_FRAGMENT_CHUNK = `
 #ifdef DELIGHT_ENABLED
-    // Luminance of photogrammetric diffuse sample
-    float dLuma = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+    vec3 baseRgb = gl_FragColor.rgb;
 
-    // 1. Lift baked shadow crevices toward stone albedo baseline
-    float shadowFactor = clamp(1.0 - (dLuma * 2.2), 0.0, 1.0);
-    vec3 liftedRgb = gl_FragColor.rgb + (vec3(dLuma * 1.6 + 0.14) - gl_FragColor.rgb) * (shadowFactor * uShadowLift);
+    #ifdef REAL_DELIGHT_ENABLED
+        // Real physical de-lighting: true color = texture / max(shading, epsilon)
+        // Cycles Diffuse Color pass split: removes baked illumination
+        float meshShading = clamp(uMeshShading, 0.10, 1.0);
+        baseRgb = baseRgb / meshShading;
+    #else
+        // Luminance of photogrammetric diffuse sample
+        float dLuma = dot(baseRgb, vec3(0.299, 0.587, 0.114));
 
-    // 2. Compress burnt midday solar highlights
-    float highlightFactor = smoothstep(0.60, 0.98, dLuma);
-    vec3 compressedRgb = mix(liftedRgb, liftedRgb * 0.76, highlightFactor * uHighlightCompress);
+        // 1. Lift baked shadow crevices toward stone albedo baseline
+        float shadowFactor = clamp(1.0 - (dLuma * 2.2), 0.0, 1.0);
+        vec3 liftedRgb = baseRgb + (vec3(dLuma * 1.6 + 0.14) - baseRgb) * (shadowFactor * uShadowLift);
+
+        // 2. Compress burnt midday solar highlights
+        float highlightFactor = smoothstep(0.60, 0.98, dLuma);
+        baseRgb = mix(liftedRgb, liftedRgb * 0.76, highlightFactor * uHighlightCompress);
+    #endif
 
     // 3. Apply calibrated stone albedo reflectance tint
-    vec3 stoneDelit = compressedRgb * uStoneAlbedoTint;
+    vec3 stoneDelit = baseRgb * uStoneAlbedoTint;
 
     // 4. Normal-dependent sky dome irradiance catch-light on upward-facing ledges
     vec3 worldNorm = normalize(vDelightNormal);
@@ -416,6 +427,8 @@ export class LocationObjectLightingService {
     ): void {
         const u = {
             uDelightEnabled: { value: config?.uDelightEnabled !== false ? 1.0 : 0.0 },
+            uRealDelightEnabled: { value: config?.uRealDelightEnabled ? 1.0 : 0.0 },
+            uMeshShading: { value: config?.uMeshShading ?? 1.0 },
             uShadowLift: { value: config?.uShadowLift ?? 0.60 },
             uHighlightCompress: { value: config?.uHighlightCompress ?? 0.45 },
             uStoneAlbedoTint: {
@@ -468,6 +481,9 @@ export class LocationObjectLightingService {
             // Inject fragment de-lighting chunk
             shader.fragmentShader = `
                 #define DELIGHT_ENABLED 1
+                ${config?.uRealDelightEnabled ? '#define REAL_DELIGHT_ENABLED 1' : ''}
+                uniform float uRealDelightEnabled;
+                uniform float uMeshShading;
                 uniform float uShadowLift;
                 uniform float uHighlightCompress;
                 uniform vec3 uStoneAlbedoTint;

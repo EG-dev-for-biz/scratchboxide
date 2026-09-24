@@ -214,5 +214,17 @@ export {
     type PerformerTelemetry
 } from './browser/generative-canvas/services/ConcertStagePerformerService';
 
+// Headless Realism & Filament PBR Extensions
+export {
+    evaluateGgxEnergyCompensation,
+    applyFilamentEnergyCompensation,
+    evaluateCharlieSheen,
+    applyFilamentClothSheen,
+    projectEquirectangularToSH,
+    type GgxEnergyCompensationResult,
+    type FilamentClothOptions,
+    type ClothSheenEvaluation
+} from './browser/generative-canvas/services/headless-realism-service';
+
 
 
