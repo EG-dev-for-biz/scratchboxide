@@ -7,10 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import fs from 'fs';
-import path from 'path';
-import zlib from 'zlib';
-import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as zlib from 'zlib';
+import { SobelEdgeField, computeSobelField, CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 
 export interface RenderMesh3D {
     /** Flat array of vertex positions [x0, y0, z0, x1, y1, z1, ...] */

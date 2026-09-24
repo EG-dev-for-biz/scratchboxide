@@ -15,7 +15,7 @@ import {
     PhysicalCameraConfig,
     OpticalFrustumCalculation,
     DynamicFocusTrackingState
-} from './physical-camera-protocol';
+} from './physical-camera-protocol.js';
 
 /**
  * High-precision physical camera and optical geometry engine.

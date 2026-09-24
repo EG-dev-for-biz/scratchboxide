@@ -21,6 +21,7 @@ export interface BakedGaussian {
   opacity: number;
   scale: [number, number, number];
   quaternion?: [number, number, number, number];
+  sh?: number[];
 }
 
 export interface BoundingVolume {

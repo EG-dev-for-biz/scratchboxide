@@ -16,6 +16,7 @@ import {
 import { Google3DTileService } from '../src/browser/generative-canvas/services/Google3DTileService';
 import { GooglePhotorealistic3DTilesLayer } from '../src/browser/generative-canvas/services/GooglePhotorealistic3DTilesLayer';
 import { createOperatorEngine } from '../src/browser/generative-canvas/services/direct-dispatch-operator-engine';
+import { CLAY_PRESETS } from '../src/browser/generative-canvas/services/TileClayProcessor';
 
 async function runTests() {
   console.log('🗺️ Running Real-World 3D Tile Scene Synthesis Test Suite...\n');
@@ -184,7 +185,7 @@ async function runTests() {
       preset: 'alabaster'
     });
     assert.strictEqual(clayRes.success, true);
-    assert.strictEqual(engine.getSceneData().customMeshes![0].material?.roughness, 0.80, 'Roughness should update to alabaster clay');
+    assert.strictEqual(engine.getSceneData().customMeshes![0].material?.roughness, CLAY_PRESETS.alabaster.roughness, 'Roughness should update to alabaster clay');
 
     // 3. Undo operator
     const undoRes = engine.dispatch('sb_undo', {});

@@ -84,7 +84,28 @@ When providing 3D spatial blockouts for video generation, camera trajectory cond
    - `clayGlbPath`: Standardized binary glTF 2.0 (`.glb`) containing the real-world geodetic volumetric massing for downstream simulation or compositing.
 3. **Trajectory Presets & Raycast Collision Avoidance**:
    - Supported trajectories: `cinematic_arc` (default 72-frame orbital descent), `orbit_360` (full 360-degree orbital survey), and `canyon_push` (street-level forward push-in).
-   - All trajectories utilize real-time octree raycasting with Catmull-Rom spline altitude compensation to guarantee zero building or terrain penetration.
+
+### Rule: Zero Building Clipping During Tile Extraction & Ingestion (Atomic Building Integrity)
+When extracting, downloading, or ingesting 3D tile submeshes, bounding volumes, or real-world district geometry:
+1. **Atomic Architectural Entity Invariant (Zero-Cut Extraction)**:
+   - Buildings, towers, and architectural structures are indivisible atomic entities. Under NO circumstance may a tile extraction boundary, bounding volume, geofence, elevation slice, camera frustum, or polygonization algorithm bisect, truncate, shear, or clip a building.
+   - Slicing through facades, walls, or rooms to expose open, non-manifold hollow "dollhouse" shells or paper-thin vertical walls without roof caps is strictly prohibited.
+2. **Unbounded Vertical Skyward Extent ($Y_{\max} = +\infty$ Invariant)**:
+   - The vertical bounding volume for tile extraction must NEVER cap the skyward dimension. $Y_{\max}$ must be unbounded ($+\infty$) or set well above the tallest structure on Earth ($\ge 2,500\text{m}$).
+   - Architectural crowns, mansard roofs, mechanical penthouses, spires, and antennae must be 100% preserved with zero horizontal planar shearing.
+   - Vertical grounding or elevation datum slicing applies strictly below the lowest natural foundation level ($Y \le Y_{\text{ground}}$) to prune subterranean noise, never slicing downward from above into architectural envelopes.
+3. **Boundary Dilation & Connected Component Expansion**:
+   - Extraction boundaries (geofences, radii, or bounding boxes) must snap to natural clearings (street canyons, boulevards, plazas, parks, or waterways) rather than bisecting parcels.
+   - If an extraction boundary intersects any portion of a building structure:
+     - Dilate the boundary outward to encompass the entire connected structure and its full footprint, OR
+     - Retain the entire connected component cluster of the building mesh.
+4. **Multi-Tier Zenith & Horizon Frustum Encompassment in Headless Streaming**:
+   - In automated 3D tile streaming (`Google3DTileBlockoutPipelineService.ts`, `3d-tiles-renderer`), contextual cameras must never be restricted to low-altitude multipliers (e.g. `maxAlt * 2.2` which fails for skyscrapers).
+   - Contextual camera rigs must incorporate a high-altitude zenith camera array ($\ge 1,800\text{m} - 2,500\text{m}$, FOV 75°, far plane $\ge 25,000\text{m}$) and upward-inclined horizon cameras covering the entire vertical envelope of metropolitan skylines, guaranteeing leaf LOD tiles for all building crowns and upper stories without near-plane or frustum culling.
+5. **Unified Multi-District Contiguous Tile Streaming**:
+   - When ingesting adjacent or contiguous tiles across a district, the extraction must be executed as a single unified bounding volume or with overlapping boundary dilation to prevent artificial vertical planar seams between tiles.
+6. **Automated Verification & Rejection Gate**:
+   - Automated test suites, pipeline validators, and the `visual-critic` skill must audit extracted models for open upper boundary edges, sliced non-manifold facades, and flat horizontal cuts through vertical walls. Any extracted model displaying clipped building geometry must be rejected.
 
 ## Code Quality & Engineering Principles
 

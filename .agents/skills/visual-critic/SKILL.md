@@ -50,7 +50,8 @@ Every visual scene or capture must be evaluated against these 8 dimensions. Each
   - Amorphous, lumpy, or melting silhouettes.
   - "Cotton ball" or "cloud" appearance where solid surfaces should be.
   - Low-poly facetting or missing geometric massing.
-- **Passing Standard ($\ge 8.5$)**: Sharp, continuous edge definition matching human optical perception; solid interior opacity without ghostly transparency on opaque objects.
+  - Bisected building shafts, horizontally sheared roofs, or open-shell dollhouse geometry caused by tile extraction clipping.
+- **Passing Standard ($\ge 8.5$)**: Sharp, continuous edge definition matching human optical perception; solid interior opacity without ghostly transparency on opaque objects; 100% complete architectural massings with intact facades, roofs, and spires.
 
 ### Dimension 2: Splat Density & Anisotropic Covariance Realism
 - **Criteria**: Are 3D Gaussian splats rendered using authentic 3D-to-2D projected covariance ($\Sigma' = J W V W^T J^T$), producing anisotropic ellipses aligned with surface tangents? Is the density sufficient to resolve sub-centimeter details?
@@ -123,6 +124,7 @@ If a scene exhibits ANY of the following, it is an **AUTOMATIC CRITICAL FAILURE*
 | ❌ 4 | **Floating Geometry** | Buildings or objects ending abruptly in mid-air with empty space underneath instead of continuous streetscape. |
 | ❌ 5 | **Untextured Flat Grey Planes** | Placing characters on featureless uniform grey polygons (`#475569`, `#cccccc`) masquerading as "sidewalks" or "plazas". |
 | ❌ 6 | **False Photorealism Declaration** | Labeling an output as "photoreal" when it fails the Squint Test or any of the above red lines. |
+| ❌ 7 | **Bisected or Sliced Building Envelope** | Buildings or towers with roofs sheared horizontally (exposing hollow "dollhouse" shells), vertical facades bisected by extraction boundaries, or cut-off spires/crowns. |
 
 ---
 

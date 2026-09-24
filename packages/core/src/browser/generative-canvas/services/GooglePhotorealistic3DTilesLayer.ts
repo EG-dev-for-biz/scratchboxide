@@ -155,10 +155,11 @@ export class GooglePhotorealistic3DTilesLayer {
 
     try {
       this.tilesRenderer = new TilesRendererClass();
-      this.tilesRenderer.errorTarget = options.errorTarget ?? 5.0;
+      // Enforce highest quality leaf LOD error budget (<= 0.5) per AGENTS.md
+      this.tilesRenderer.errorTarget = options.errorTarget ?? 0.5;
 
       // LRU cache budget
-      const maxBytes = (options.maxMemoryMB ?? 1024) * 1024 * 1024;
+      const maxBytes = (options.maxMemoryMB ?? 2048) * 1024 * 1024;
       this.tilesRenderer.lruCache.maxBytesSize = maxBytes;
       this.tilesRenderer.lruCache.minBytesSize = Math.floor(maxBytes * 0.7);
 

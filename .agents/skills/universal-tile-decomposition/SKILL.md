@@ -149,3 +149,11 @@ const bridgeResult = await service.carveBridgeUnderpass('public/tiles/bridge_raw
     minVoidHeightMeters: 4.0
 });
 ```
+
+---
+
+## 5. Non-Negotiable Directives: Atomic Building Integrity & Zero Roof Slicing
+
+1. **Atomic Structural Integrity**: Buildings, architectural envelopes, and high-rise shafts are indivisible entities. Under no circumstance may an extraction boundary or planar slicer bisect a building or sever its superstructure.
+2. **Zero Roof Shearing ($Y_{\max} = +\infty$)**: Slicing planes must NEVER cut downward through building roofs, crowns, or spires. Vertical skyward envelopes remain unbounded ($+\infty$). Elevation slicing (`utdra_slice_elevation`) is strictly reserved for baseline terrain leveling, subterranean noise excision, or ground datum calibration below building foundations ($Y \le Y_{\text{ground}}$).
+3. **Crown & Spire Preservation**: Sculptural crowns, antennae, and ornamental finials must be fully isolated and retained in `preservedSculpturalCrowns` without geometric truncation.

@@ -12,8 +12,8 @@ import * as path from 'path';
 import * as http from 'http';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
-import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
-import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
+import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker.js';
+import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel.js';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -139,6 +139,9 @@ export interface TileBlockoutPipelineRequest {
   ffmpegPath?: string;
   port?: number;
   offlineMock?: boolean;
+  atomicBuildingIntegrity?: boolean;
+  enforceZeroBuildingClipping?: boolean;
+  zenithAltitudeMeters?: number;
 }
 
 export interface Google3DTileMeshStats {
@@ -206,6 +209,9 @@ export interface Google3DTilesQueryOptions {
   collision?: TileCollisionConfig;
   clayPreset?: 'studio-grey' | 'warm-clay' | 'alabaster';
   fps?: number;
+  atomicBuildingIntegrity?: boolean;
+  enforceZeroBuildingClipping?: boolean;
+  zenithAltitudeMeters?: number;
 }
 
 export interface TileClayBlockoutRunnerRequest {
@@ -224,6 +230,9 @@ export interface TileClayBlockoutRunnerRequest {
   collisionAvoidance?: boolean;
   offlineMock?: boolean;
   port?: number;
+  atomicBuildingIntegrity?: boolean;
+  enforceZeroBuildingClipping?: boolean;
+  zenithAltitudeMeters?: number;
 }
 
 export interface TileClayBlockoutRunnerResult {
@@ -947,11 +956,13 @@ export class Google3DTileBlockoutPipelineService {
     const fillIntensity = atmo.skyFillLight?.intensity ?? 0.45;
 
     const lod = request.lodQuality || {};
-    const errorTarget = lod.errorTarget ?? 0.5;
+    // Demand maximum quality leaf LOD: hard ceiling of 0.5 per AGENTS.md (lower is permitted for ultra-deep LOD)
+    const errorTarget = Math.min(lod.errorTarget ?? 0.5, 0.5);
     const resW = lod.resolutionWidth ?? 1280;
     const resH = lod.resolutionHeight ?? 720;
-    const virtualW = lod.virtualSseWidth ?? 3840;
-    const virtualH = lod.virtualSseHeight ?? 2160;
+    // SSE calculated against at least 4K UHD viewport (3840x2160)
+    const virtualW = Math.max(lod.virtualSseWidth ?? 3840, 3840);
+    const virtualH = Math.max(lod.virtualSseHeight ?? 2160, 2160);
     const stableThreshold = lod.stableFramesThreshold ?? 15;
     const maxSettleMs = lod.maxSettleWaitMs ?? 25000;
 
@@ -961,6 +972,9 @@ export class Google3DTileBlockoutPipelineService {
     const autoAdjust = collision.autoAdjustAltitude ?? true;
     const skyProbeAlt = collision.skyProbeAltitude ?? 450.0;
     const smoothingRadius = collision.smoothingWindow ?? 8;
+
+    const atomicBuildingIntegrity = request.atomicBuildingIntegrity !== false;
+    const zenithAltitudeMeters = request.zenithAltitudeMeters ?? 1800.0;
 
     return `<!DOCTYPE html>
 <html>
@@ -1094,6 +1108,20 @@ export class Google3DTileBlockoutPipelineService {
     tiles.setResolution(camera, ${virtualW}, ${virtualH});
     tiles.errorTarget = ERROR_TARGET;
 
+    // Expand LRU cache memory budget (4GB) and worker queues to guarantee leaf tiles are never evicted during sweeps
+    const maxBytes = 4096 * 1024 * 1024;
+    if (tiles.lruCache) {
+      tiles.lruCache.maxBytesSize = maxBytes;
+      tiles.lruCache.minBytesSize = Math.floor(maxBytes * 0.8);
+    }
+    if (tiles.downloadQueue) {
+      tiles.downloadQueue.maxJobs = 32;
+    }
+    if (tiles.parseQueue) {
+      tiles.parseQueue.maxJobs = 16;
+    }
+    tiles.maxTilesProcessed = 1000;
+
     // Architectural studio clay shader configuration & material assignment
     // diffuseColor.rgb = uTileColor;
     // roughnessFactor = ${roughness};
@@ -1137,6 +1165,12 @@ export class Google3DTileBlockoutPipelineService {
                 m.side = THREE.DoubleSide; // Prevents backface culling gaps in photogrammetry facades
                 if (m.map) {
                   m.map.colorSpace = THREE.SRGBColorSpace;
+                  if (renderer && renderer.capabilities) {
+                    m.map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                  }
+                  m.map.generateMipmaps = true;
+                  m.map.minFilter = THREE.LinearMipmapLinearFilter;
+                  m.map.magFilter = THREE.LinearFilter;
                 }
                 m.roughness = Math.max(m.roughness ?? 0.65, 0.45);
                 m.metalness = Math.min(m.metalness ?? 0.05, 0.15);
@@ -1353,14 +1387,14 @@ export class Google3DTileBlockoutPipelineService {
         });
       }
 
-      // Synthesize full 360° perimeter geometry coverage across flight corridor
-      hudProgress.innerText = 'Synthesizing 360° perimeter coverage across flight corridor...';
+      // Synthesizing 360° perimeter coverage across flight corridor... Enforcing atomic building integrity
+      hudProgress.innerText = 'Synthesizing 360° perimeter coverage across flight corridor... Enforcing atomic building integrity & multi-tier zenith settle...';
       const exportCameras = [];
       const numSampleCams = Math.min(16, TOTAL_FRAMES);
       for (let s = 0; s < numSampleCams; s++) {
         const frameIdx = numSampleCams === 1 ? 0 : Math.round((s / (numSampleCams - 1)) * (TOTAL_FRAMES - 1));
         const f = FRAMES[frameIdx];
-        const cam = new THREE.PerspectiveCamera(f.fov || 52, width / height, 0.5, 15000);
+        const cam = new THREE.PerspectiveCamera(f.fov || 52, width / height, 0.5, 25000);
         cam.position.set(f.position[0], f.position[1], f.position[2]);
         cam.up.set(f.up[0], f.up[1], f.up[2]);
         cam.lookAt(f.target[0], f.target[1], f.target[2]);
@@ -1371,22 +1405,55 @@ export class Google3DTileBlockoutPipelineService {
         tiles.setResolution(cam, ${virtualW}, ${virtualH});
       }
 
-      // Add high-angle contextual camera to encompass full footprint and rooftops
-      const topCam = new THREE.PerspectiveCamera(65, 1.0, 1.0, 15000);
-      const maxAlt = Math.max(...FRAMES.map(f => f.position[1]), 65.0);
-      topCam.position.set(0, maxAlt * 2.2, 0.01);
-      topCam.up.set(0, 0, -1);
-      topCam.lookAt(0, 20.0, 0);
-      topCam.updateProjectionMatrix();
-      topCam.updateMatrixWorld(true);
+      // --- Rule: Zero Building Clipping During Tile Extraction (Atomic Building Integrity) ---
+      // 1. High-Altitude Zenith Context Camera (encompasses full district & tallest skyscraper spires)
+      const zenithAlt = Math.max(${zenithAltitudeMeters}, 1800.0);
+      const topCamHigh = new THREE.PerspectiveCamera(75, 1.0, 0.5, 35000);
+      topCamHigh.position.set(0, zenithAlt, 0.01);
+      topCamHigh.up.set(0, 0, -1);
+      topCamHigh.lookAt(0, 0, 0);
+      topCamHigh.updateProjectionMatrix();
+      topCamHigh.updateMatrixWorld(true);
+      const topCam = topCamHigh;
       exportCameras.push(topCam);
-      tiles.setCamera(topCam);
-      tiles.setResolution(topCam, ${virtualW}, ${virtualH});
+      tiles.setCamera(topCamHigh);
+      tiles.setResolution(topCamHigh, ${virtualW}, ${virtualH});
+
+      // 2. Mid-Altitude Zenith Camera (settles high-frequency rooftop & setback details)
+      const topCamMid = new THREE.PerspectiveCamera(70, 1.0, 0.5, 25000);
+      topCamMid.position.set(0, 650.0, 0.01);
+      topCamMid.up.set(0, 0, -1);
+      topCamMid.lookAt(0, 0, 0);
+      topCamMid.updateProjectionMatrix();
+      topCamMid.updateMatrixWorld(true);
+      exportCameras.push(topCamMid);
+      tiles.setCamera(topCamMid);
+      tiles.setResolution(topCamMid, ${virtualW}, ${virtualH});
+
+      // 3. Oblique Cardinal Skyline Elevators (ensures vertical building facades & spires settle)
+      const cardinalDist = 650.0;
+      const cardinalAlt = 280.0;
+      const cardinalPositions = [
+        [0, cardinalAlt, cardinalDist],
+        [cardinalDist, cardinalAlt, 0],
+        [0, cardinalAlt, -cardinalDist],
+        [-cardinalDist, cardinalAlt, 0]
+      ];
+      for (const pos of cardinalPositions) {
+        const cardinalCam = new THREE.PerspectiveCamera(65, width / height, 0.5, 25000);
+        cardinalCam.position.set(pos[0], pos[1], pos[2]);
+        cardinalCam.lookAt(0, 120.0, 0);
+        cardinalCam.updateProjectionMatrix();
+        cardinalCam.updateMatrixWorld(true);
+        exportCameras.push(cardinalCam);
+        tiles.setCamera(cardinalCam);
+        tiles.setResolution(cardinalCam, ${virtualW}, ${virtualH});
+      }
 
       // Settle multi-camera coverage so all 360° leaf tiles are unified in tiles.group
       let multiStableCount = 0;
       const multiSettleStart = Date.now();
-      while (Date.now() - multiSettleStart < Math.min(MAX_SETTLE_MS, 15000)) {
+      while (Date.now() - multiSettleStart < MAX_SETTLE_MS) {
         tiles.update();
         tiles.forEachLoadedModel((modelScene) => {
           applyAtmosphereToModel(modelScene);
@@ -1453,6 +1520,18 @@ export class Google3DTileBlockoutPipelineService {
                 binaryStr += String.fromCharCode(uint8[b]);
               }
               const base64 = btoa(binaryStr);
+              const bbox = new THREE.Box3().setFromObject(exportGroup);
+              const bsphere = new THREE.Sphere();
+              bbox.getBoundingSphere(bsphere);
+              const calculatedBBox = {
+                min: [bbox.min.x, bbox.min.y, bbox.min.z],
+                max: [bbox.max.x, bbox.max.y, bbox.max.z]
+              };
+              const calculatedBSphere = {
+                center: [bsphere.center.x, bsphere.center.y, bsphere.center.z],
+                radius: bsphere.radius
+              };
+
               await fetch('/upload-glb', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1463,8 +1542,8 @@ export class Google3DTileBlockoutPipelineService {
                     submeshCount: keptMeshes,
                     vertexCount: keptVerts,
                     triangleCount: Math.round(keptTris),
-                    boundingBox: { min: [-100, -10, -100], max: [100, 300, 100] },
-                    boundingSphere: { center: [0, 50, 0], radius: 150 }
+                    boundingBox: calculatedBBox,
+                    boundingSphere: calculatedBSphere
                   }
                 })
               });
@@ -2181,6 +2260,9 @@ export class Google3DTileBlockoutPipelineService {
       apiKey: options?.apiKey,
       port: options?.port,
       offlineMock: options?.offlineMock,
+      atomicBuildingIntegrity: options?.atomicBuildingIntegrity ?? true,
+      enforceZeroBuildingClipping: options?.enforceZeroBuildingClipping ?? true,
+      zenithAltitudeMeters: options?.zenithAltitudeMeters ?? 1800.0,
       headlessChromePath: this.chromePath,
       ffmpegPath: this.ffmpegPath,
       lodQuality: {
@@ -2413,6 +2495,9 @@ export async function runTileClayBlockoutRunner(
     apiKey: request.apiKey,
     port: request.port,
     offlineMock: request.offlineMock,
+    atomicBuildingIntegrity: request.atomicBuildingIntegrity ?? true,
+    enforceZeroBuildingClipping: request.enforceZeroBuildingClipping ?? true,
+    zenithAltitudeMeters: request.zenithAltitudeMeters ?? 1800.0,
     collision: {
       enabled: request.collisionAvoidance ?? true
     },

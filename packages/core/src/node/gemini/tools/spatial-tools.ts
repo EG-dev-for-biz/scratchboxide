@@ -115,6 +115,18 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 mockExecution: {
                     type: 'BOOLEAN',
                     description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                },
+                atomicBuildingIntegrity: {
+                    type: 'BOOLEAN',
+                    description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
+                },
+                enforceZeroBuildingClipping: {
+                    type: 'BOOLEAN',
+                    description: 'Strictly prohibit planar building clipping and skyward capping (defaults to true)'
+                },
+                zenithAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Altitude in meters for zenith contextual sky camera (defaults to 1800m, min 1800m)'
                 }
             },
             required: ['query']
@@ -137,6 +149,18 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 mockExecution: {
                     type: 'BOOLEAN',
                     description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                },
+                atomicBuildingIntegrity: {
+                    type: 'BOOLEAN',
+                    description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
+                },
+                enforceZeroBuildingClipping: {
+                    type: 'BOOLEAN',
+                    description: 'Strictly prohibit planar building clipping and skyward capping (defaults to true)'
+                },
+                zenithAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Altitude in meters for zenith contextual sky camera (defaults to 1800m, min 1800m)'
                 }
             },
             required: ['query']
@@ -175,6 +199,18 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 mockExecution: {
                     type: 'BOOLEAN',
                     description: 'Run in offline emulation mode using synthetic geodetic tiles'
+                },
+                atomicBuildingIntegrity: {
+                    type: 'BOOLEAN',
+                    description: 'Enforce Atomic Building Integrity rule: guarantees zero horizontal roof slicing, zero bisected building envelopes, and multi-tier zenith camera settle (defaults to true)'
+                },
+                enforceZeroBuildingClipping: {
+                    type: 'BOOLEAN',
+                    description: 'Strictly prohibit planar building clipping and skyward capping (defaults to true)'
+                },
+                zenithAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Altitude in meters for zenith contextual sky camera (defaults to 1800m, min 1800m)'
                 }
             },
             required: ['query']
@@ -242,10 +278,16 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         if (!query) throw new Error('google_3d_tiles_get_full_texture: "query" argument is required.');
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
         const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const atomicBuildingIntegrity = typeof args.atomicBuildingIntegrity === 'boolean' ? args.atomicBuildingIntegrity : undefined;
+        const enforceZeroBuildingClipping = typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined;
+        const zenithAltitudeMeters = typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined;
 
         const result = await getGoogle3DTilesFullTexture(query, {
             outputGlbPath,
-            offlineMock
+            offlineMock,
+            atomicBuildingIntegrity,
+            enforceZeroBuildingClipping,
+            zenithAltitudeMeters
         });
 
         return {
@@ -268,10 +310,16 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         if (!query) throw new Error('google_3d_tiles_get_clay: "query" argument is required.');
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
         const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const atomicBuildingIntegrity = typeof args.atomicBuildingIntegrity === 'boolean' ? args.atomicBuildingIntegrity : undefined;
+        const enforceZeroBuildingClipping = typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined;
+        const zenithAltitudeMeters = typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined;
 
         const result = await getGoogle3DTilesClay(query, {
             outputGlbPath,
-            offlineMock
+            offlineMock,
+            atomicBuildingIntegrity,
+            enforceZeroBuildingClipping,
+            zenithAltitudeMeters
         });
 
         return {
@@ -298,6 +346,9 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
         const outputGlbPath = asString(args.outputGlbPath) || undefined;
         const firstFramePngPath = asString(args.firstFramePngPath) || undefined;
         const offlineMock = typeof args.mockExecution === 'boolean' ? args.mockExecution : undefined;
+        const atomicBuildingIntegrity = typeof args.atomicBuildingIntegrity === 'boolean' ? args.atomicBuildingIntegrity : undefined;
+        const enforceZeroBuildingClipping = typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined;
+        const zenithAltitudeMeters = typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined;
 
         const result = await runTileClayBlockoutRunner({
             query,
@@ -306,7 +357,10 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             outputVideoPath,
             outputGlbPath,
             firstFramePngPath,
-            offlineMock
+            offlineMock,
+            atomicBuildingIntegrity,
+            enforceZeroBuildingClipping,
+            zenithAltitudeMeters
         });
 
         return {

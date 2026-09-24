@@ -337,4 +337,63 @@ export class CameraRelativeRTC {
     this.invEnuRotationMatrix[7] = this.enuRotationMatrix[5];
     this.invEnuRotationMatrix[8] = this.enuRotationMatrix[8];
   }
+
+  /**
+   * GLSL vertex shader chunk for Split-64 Relative-To-Center (RTC) precision emulation.
+   */
+  public static getVertexShaderRTCChunk(): string {
+    return `
+      attribute vec3 instanceCenterHigh;
+      attribute vec3 instanceCenterLow;
+      uniform vec3 uCameraHigh;
+      uniform vec3 uCameraLow;
+      uniform float uEnableRTC;
+
+      vec3 evaluateRtcCenter(vec3 fallbackCenter) {
+        if (uEnableRTC > 0.5) {
+          return (instanceCenterHigh - uCameraHigh) + (instanceCenterLow - uCameraLow);
+        }
+        return fallbackCenter;
+      }
+    `;
+  }
+
+  /**
+   * Splits an array of 3D positions into float32 high and low arrays for GPU upload.
+   */
+  public static getSplit64Attributes(positions: Float32Array | Float64Array | number[]): {
+    high: Float32Array;
+    low: Float32Array;
+  } {
+    const count = Math.floor(positions.length / 3);
+    const high = new Float32Array(count * 3);
+    const low = new Float32Array(count * 3);
+
+    for (let i = 0; i < count; i++) {
+      const idx = i * 3;
+      const [xh, xl] = CameraRelativeRTC.splitFloat32(positions[idx]);
+      const [yh, yl] = CameraRelativeRTC.splitFloat32(positions[idx + 1]);
+      const [zh, zl] = CameraRelativeRTC.splitFloat32(positions[idx + 2]);
+      high[idx] = xh;
+      high[idx + 1] = yh;
+      high[idx + 2] = zh;
+      low[idx] = xl;
+      low[idx + 1] = yl;
+      low[idx + 2] = zl;
+    }
+
+    return { high, low };
+  }
+
+  /**
+   * Splits a single 3D camera coordinate into high and low Float32 components for uniform binding.
+   */
+  public static splitCameraPosition(x: number, y: number, z: number): {
+    high: [number, number, number];
+    low: [number, number, number];
+  } {
+    const v = CameraRelativeRTC.splitVec3Float32(x, y, z);
+    return { high: v.high, low: v.low };
+  }
 }
+

@@ -1,26 +1,11 @@
-const fs = require("fs");
-const path = require("path");
-
-// Load the authentic /spce/ Three.js atmospheric shader engine
-const atmoPath = path.join(__dirname, "../packages/core/src/browser/generative-canvas/services/atmosphere/AtmosphericSkyDome.ts");
-const atmoCode = fs.readFileSync(atmoPath, "utf8");
-
-const vertMatch = atmoCode.match(/export const ATMOSPHERE_VERTEX_SHADER = \/\* glsl \*\/ \`([\s\S]*?)\`;/);
-const fragMatch = atmoCode.match(/export const ATMOSPHERE_FRAGMENT_SHADER = \/\* glsl \*\/ \`([\s\S]*?)\`;/);
-
-if (!vertMatch || !fragMatch) {
-    throw new Error("Failed to extract AtmosphericSkyDome shaders from " + atmoPath);
-}
-
-const VERTEX_SHADER_STR = JSON.stringify(vertMatch[1]);
-const FRAGMENT_SHADER_STR = JSON.stringify(fragMatch[1]);
+const fs = require('fs');
 
 const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scratchbox IDE: Empire State Building Scene-Wide Material-Adaptive PBR & 4x Loupe Proof</title>
+    <title>Scratchbox IDE: NYC Midtown Manhattan / ESB Algorithmic UV & PBR Proof</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -53,270 +38,244 @@ const html = `<!DOCTYPE html>
 
         /* Header */
         header {
-            padding: 8px 20px;
+            padding: 10px 20px;
             background: linear-gradient(180deg, #0d1527 0%, #060910 100%);
             border-bottom: 1px solid var(--bg-card-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            flex-shrink: 0;
+            z-index: 10;
         }
-        .header-title {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .logo-badge {
-            background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
-            color: white;
+        .header-left h1 {
+            font-size: 16px;
             font-weight: 800;
-            font-size: 11px;
-            padding: 4px 8px;
-            border-radius: 5px;
-            letter-spacing: 0.5px;
-            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
-        }
-        h1 {
-            font-size: 14px;
-            font-weight: 700;
-            letter-spacing: -0.2px;
-            color: #fff;
+            background: linear-gradient(135deg, #38bdf8 0%, #c084fc 50%, #f59e0b 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
             display: flex;
             align-items: center;
             gap: 8px;
         }
-        .sub-tag {
+        .header-left p {
             font-size: 11px;
             color: var(--text-sub);
-            font-weight: 400;
-            border-left: 1px solid var(--bg-card-border);
-            padding-left: 8px;
-            margin-left: 4px;
+            margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
         }
+
         .pills {
             display: flex;
-            gap: 8px;
-            align-items: center;
+            gap: 6px;
         }
         .pill {
-            font-size: 10px;
+            font-size: 11px;
             font-weight: 600;
             padding: 3px 8px;
-            border-radius: 999px;
-            background: rgba(30, 41, 59, 0.7);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 9999px;
+            border: 1px solid var(--bg-card-border);
+            background: rgba(15, 23, 42, 0.8);
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 4px;
         }
-        .pill.cyan { color: var(--accent-cyan); border-color: rgba(56, 189, 248, 0.3); }
-        .pill.blue { color: var(--accent-blue); border-color: rgba(59, 130, 246, 0.3); }
-        .pill.amber { color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.3); }
-        .pill.green { color: var(--accent-green); border-color: rgba(16, 185, 129, 0.3); }
-        .pill.purple { color: var(--accent-purple); border-color: rgba(192, 132, 252, 0.3); }
+        .pill.cyan { border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; }
+        .pill.amber { border-color: rgba(245, 158, 11, 0.5); color: #fbbf24; }
+        .pill.green { border-color: rgba(16, 185, 129, 0.4); color: #34d399; }
+        .pill.purple { border-color: rgba(192, 132, 252, 0.4); color: #c084fc; }
 
-        /* Toolbar Controls */
+        /* Secondary Toolbar */
         .controls-toolbar {
-            padding: 6px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 20px;
             background: #090e18;
             border-bottom: 1px solid var(--bg-card-border);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            flex-shrink: 0;
-            font-size: 11px;
+            z-index: 9;
         }
         .btn-group {
             display: flex;
-            background: #0d1424;
+            background: rgba(15, 23, 42, 0.8);
             border: 1px solid var(--bg-card-border);
             border-radius: 6px;
             overflow: hidden;
+            gap: 1px;
         }
         .btn {
-            background: transparent;
-            border: none;
+            background: #131c2e;
             color: var(--text-sub);
-            padding: 5px 10px;
+            border: none;
+            padding: 5px 12px;
             font-size: 11px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.15s ease;
+            font-family: 'Inter', sans-serif;
             display: flex;
             align-items: center;
             gap: 5px;
-            border-right: 1px solid var(--bg-card-border);
-            white-space: nowrap;
         }
-        .btn:last-child { border-right: none; }
-        .btn:hover { background: rgba(255,255,255,0.05); color: #fff; }
-        .btn.active { background: #0284c7; color: #fff; }
-        .btn.active-cyan { background: #0284c7; color: #fff; }
-        .btn.active-amber { background: #d97706; color: #fff; }
-        .btn.active-purple { background: #9333ea; color: #fff; }
+        .btn:hover {
+            color: var(--text-main);
+            background: #1e293b;
+        }
+        .btn.active {
+            color: #fff;
+            background: var(--accent-blue);
+        }
+        .btn.active-cyan {
+            color: #000;
+            background: var(--accent-cyan);
+            font-weight: 700;
+        }
+        .btn.active-amber {
+            color: #000;
+            background: var(--accent-amber);
+            font-weight: 700;
+        }
 
-        /* Stage Layout */
+        /* Stage Container */
         .stage-container {
-            display: flex;
             flex: 1;
             position: relative;
+            background: #020408;
             overflow: hidden;
         }
+
+        /* Views */
         .view-panel {
-            flex: 1;
-            display: flex;
-            position: relative;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
             height: 100%;
+            display: flex;
         }
         .view-panel.hidden {
-            display: none !important;
+            display: none;
         }
+
+        /* 3D Viewport Panels */
         .viewport-panel {
             flex: 1;
             position: relative;
-            background: #060910;
             border-right: 1px solid var(--bg-card-border);
             overflow: hidden;
         }
-        .viewport-panel:last-child { border-right: none; }
+        .viewport-panel:last-child {
+            border-right: none;
+        }
+        .viewport-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
 
+        /* Badges & Telemetry HUD */
         .viewport-badge {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(13, 19, 31, 0.85);
+            top: 14px;
+            left: 14px;
+            background: rgba(6, 9, 16, 0.85);
             backdrop-filter: blur(8px);
             border: 1px solid var(--bg-card-border);
-            padding: 6px 12px;
+            padding: 8px 12px;
             border-radius: 6px;
             pointer-events: none;
-            z-index: 10;
+            z-index: 5;
         }
         .viewport-badge h2 {
-            font-size: 11px;
+            font-size: 13px;
             font-weight: 700;
-            letter-spacing: 0.5px;
-            margin-bottom: 2px;
+            letter-spacing: 0.3px;
         }
         .viewport-badge p {
-            font-size: 10px;
+            font-size: 11px;
             color: var(--text-sub);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 2px;
         }
         .badge-left h2 { color: #94a3b8; }
         .badge-right h2 { color: var(--accent-cyan); }
 
-        .viewport-canvas {
-            width: 100%;
-            height: 100%;
-            outline: none;
-        }
-
-        .loading-overlay {
-            position: absolute;
-            inset: 0;
-            background: rgba(6, 9, 16, 0.85);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-            gap: 12px;
-            color: var(--accent-cyan);
-            font-size: 12px;
-            font-weight: 600;
-            z-index: 20;
-        }
-        .spinner {
-            width: 28px;
-            height: 28px;
-            border: 3px solid rgba(56, 189, 248, 0.2);
-            border-top-color: var(--accent-cyan);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* 2D Texture Atlas & Loupe Panel */
+        /* 2D Texture Atlas View */
         .texture-view {
             width: 100%;
             height: 100%;
             display: flex;
-            background: #04070e;
-            position: relative;
-            padding: 16px;
-            gap: 16px;
-            box-sizing: border-box;
-            overflow: auto;
+            background: #040711;
         }
         .texture-col {
             flex: 1;
             display: flex;
             flex-direction: column;
-            background: #080d1a;
-            border: 1px solid var(--bg-card-border);
-            border-radius: 8px;
-            overflow: hidden;
-            min-width: 320px;
-        }
-        .atlas-meta-box {
-            padding: 10px 14px;
-            background: #0d1527;
-            border-bottom: 1px solid var(--bg-card-border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .atlas-meta-box h3 {
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-        }
-        .atlas-meta-box p {
-            font-size: 10px;
-            color: var(--text-sub);
-        }
-        .texture-frame {
-            flex: 1;
-            position: relative;
-            display: flex;
             align-items: center;
             justify-content: center;
-            background: #020408;
+            padding: 16px;
+            position: relative;
+            overflow: auto;
+        }
+        .texture-col:first-child {
+            border-right: 1px solid var(--bg-card-border);
+        }
+        .texture-frame {
+            position: relative;
+            background: #0b1120;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
             overflow: hidden;
-            padding: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         .texture-frame img {
-            max-width: 100%;
-            max-height: 100%;
+            display: block;
+            width: 460px;
+            height: 460px;
             object-fit: contain;
-            image-rendering: auto;
-            border-radius: 4px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+            image-rendering: pixelated;
+        }
+        .atlas-meta-box {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            background: rgba(6, 10, 20, 0.9);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            z-index: 4;
+        }
+        .atlas-meta-box h3 {
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .atlas-meta-box p {
+            font-size: 11px;
+            color: var(--text-sub);
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 2px;
         }
 
         /* 4x Zoom Loupe Card */
         .loupe-card {
             position: absolute;
-            bottom: 24px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(13, 19, 31, 0.94);
+            bottom: 20px;
+            right: 20px;
+            width: 580px;
+            background: rgba(13, 19, 31, 0.95);
             backdrop-filter: blur(12px);
-            border: 1px solid rgba(56, 189, 248, 0.4);
+            border: 1px solid var(--bg-card-border);
             border-radius: 10px;
-            padding: 12px 16px;
-            box-shadow: 0 12px 36px rgba(0,0,0,0.8);
-            z-index: 100;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            width: 680px;
-            max-width: calc(100vw - 40px);
+            padding: 14px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.7);
+            z-index: 8;
         }
         .loupe-card h4 {
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 700;
-            color: #fff;
+            color: var(--accent-cyan);
+            margin-bottom: 8px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -327,161 +286,132 @@ const html = `<!DOCTYPE html>
         }
         .loupe-box {
             flex: 1;
-            background: #020408;
-            border: 1px solid var(--bg-card-border);
-            border-radius: 6px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 6px;
+            text-align: center;
         }
         .loupe-box canvas {
             width: 100%;
-            height: 160px;
-            object-fit: contain;
+            height: 200px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #020408;
             image-rendering: pixelated;
-            border-radius: 4px;
+            display: block;
         }
         .loupe-box .box-lbl {
-            font-size: 10px;
+            font-size: 11px;
             color: var(--text-sub);
-            margin-top: 6px;
-            font-weight: 600;
+            margin-top: 4px;
+            font-family: 'JetBrains Mono', monospace;
         }
-        .sub-note {
-            font-size: 10px;
-            color: #94a3b8;
+        .loupe-card .sub-note {
+            font-size: 11px;
+            color: #64748b;
+            font-family: 'JetBrains Mono', monospace;
+            margin-top: 8px;
             line-height: 1.4;
-            background: rgba(2, 6, 23, 0.5);
-            padding: 6px 10px;
-            border-radius: 4px;
-            border-left: 2px solid var(--accent-cyan);
         }
 
-        /* Footer Telemetry */
+        /* Telemetry Footer */
         footer {
-            padding: 6px 20px;
-            background: #060910;
+            padding: 8px 20px;
+            background: #080d1a;
             border-top: 1px solid var(--bg-card-border);
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 16px;
-            font-size: 10px;
             font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
             color: var(--text-sub);
-            flex-shrink: 0;
-            overflow-x: auto;
-            white-space: nowrap;
+            z-index: 10;
         }
         .telemetry-item strong {
-            color: #fff;
-            font-weight: 600;
+            color: var(--text-main);
         }
-        .telemetry-item.green strong { color: var(--accent-green); }
-        .telemetry-item.blue strong { color: var(--accent-blue); }
-        .telemetry-item.amber strong { color: var(--accent-amber); }
         .telemetry-item.cyan strong { color: var(--accent-cyan); }
-        .telemetry-item.purple strong { color: var(--accent-purple); }
+        .telemetry-item.amber strong { color: var(--accent-amber); }
+        .telemetry-item.green strong { color: var(--accent-green); }
+
+        .loading-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(6, 9, 16, 0.9);
+            border: 1px solid var(--bg-card-border);
+            padding: 16px 24px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 20;
+        }
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(56, 189, 248, 0.2);
+            border-top-color: var(--accent-cyan);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <header>
-        <div class="header-title">
-            <div class="logo-badge">SCRATCHBOX 3D</div>
-            <h1>NYC Midtown Manhattan · Empire State Building <span class="sub-tag">Zero-Preset Adaptive Material PBR</span></h1>
+        <div class="header-left">
+            <h1>🏛️ NYC Empire State Building & Midtown: Algorithmic UV & PBR Proof</h1>
+            <p>40.74844° N, -73.98566° W · 70 Submeshes · 460.5m Elevation · Bedford Indiana Limestone & Bitumen</p>
         </div>
         <div class="pills">
-            <div class="pill cyan"><span>●</span> 14 Submeshes (0.000 mm Drift)</div>
-            <div class="pill purple"><span>●</span> Continuous Micro-Porosity</div>
-            <div class="pill blue"><span>●</span> Adaptive Scharr & Biophysical ORM</div>
-            <div class="pill amber"><span>●</span> 3D Volumetric Atmosphere (/spce/)</div>
+            <div class="pill cyan"><span>1K PBR Mode (512² → 1024²)</span></div>
+            <div class="pill green"><span>100% Geometry Lock (0.000 mm Drift)</span></div>
+            <div class="pill amber"><span>UV Scaling 1.000x (Identical Mapping)</span></div>
+            <div class="pill purple"><span>Bedford Limestone & Bitumen</span></div>
         </div>
     </header>
 
     <div class="controls-toolbar">
-        <!-- Main Navigation Tab -->
         <div class="btn-group">
-            <button class="btn active" id="btnTab3D" onclick="switchMainTab('3d')">3D Dual Viewport</button>
+            <button class="btn active-cyan" id="btnTab3D" onclick="switchMainTab('3d')">3D ESB Viewports</button>
             <button class="btn" id="btnTab2D" onclick="switchMainTab('2d')">2D Texture Atlas & 4x Loupe</button>
         </div>
 
-        <div id="controls3D" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <!-- Model Pipeline Switcher -->
-            <div class="btn-group" id="pipelineModelSelector">
-                <button class="btn active" id="btnModelIsolated" onclick="switchPipelineModel('isolated')">🏢 Isolated ESB (Zero-Preset Adaptive PBR)</button>
-                <button class="btn" id="btnModelMidtown" onclick="switchPipelineModel('midtown')">🏙️ Midtown Block (70 Submeshes)</button>
-            </div>
-
-            <!-- View Mode -->
+        <div id="controls3D" style="display:flex; gap:8px;">
             <div class="btn-group">
                 <button class="btn active" id="btnSideBySide" onclick="setMode('sideBySide')">Side-by-Side</button>
                 <button class="btn" id="btnEnhancedOnly" onclick="setMode('enhancedOnly')">Enhanced Only</button>
                 <button class="btn" id="btnOrigOnly" onclick="setMode('origOnly')">Original Only</button>
             </div>
-
-            <!-- Material-Adaptive PBR Diagnostic Mode -->
-            <div class="btn-group" id="pbrChannelSelector">
-                <button class="btn active-cyan" id="btnPbr_composite" onclick="setPbrDiagnosticMode('composite')">✨ Composite PBR</button>
-                <button class="btn" id="btnPbr_normal" onclick="setPbrDiagnosticMode('normal')">Tangent Normals</button>
-                <button class="btn" id="btnPbr_roughness" onclick="setPbrDiagnosticMode('roughness')">Roughness Map</button>
-                <button class="btn" id="btnPbr_albedo" onclick="setPbrDiagnosticMode('albedo')">Base Albedo</button>
-            </div>
-
-            <!-- Facet Normal Relief Multiplier -->
-            <div class="btn-group" id="reliefScaleSelector">
-                <button class="btn" id="btnRelief_1_0" onclick="setReliefScale(1.0)">Relief: 1.0x</button>
-                <button class="btn active-cyan" id="btnRelief_1_6" onclick="setReliefScale(1.6)">Relief: 1.6x</button>
-                <button class="btn" id="btnRelief_2_4" onclick="setReliefScale(2.4)">Relief: 2.4x</button>
-            </div>
-
-            <!-- Atmosphere Presets (/spce/ AtmosphericSkyDome) -->
-            <div class="btn-group" id="atmosphereSelector">
-                <button class="btn active-cyan" id="btnAtmo_midday" onclick="setAtmosphere('midday')">☀️ Midday</button>
-                <button class="btn" id="btnAtmo_golden" onclick="setAtmosphere('golden')">🌅 Golden Hour</button>
-                <button class="btn" id="btnAtmo_twilight" onclick="setAtmosphere('twilight')">🌆 Twilight</button>
-                <button class="btn" id="btnAtmo_overcast" onclick="setAtmosphere('overcast')">☁️ Overcast</button>
-                <button class="btn" id="btnAtmo_void" onclick="setAtmosphere('void')">🌌 Void (Off)</button>
-            </div>
-
-            <!-- Window Glazing Boost -->
-            <div class="btn-group" id="glassBoostSelector">
-                <button class="btn" id="btnBoost_1_0" onclick="setGlassBoost(1.0)">Glass: 1.0x</button>
-                <button class="btn active-cyan" id="btnBoost_1_8" onclick="setGlassBoost(1.8)">✨ Glass: 1.8x</button>
-                <button class="btn" id="btnBoost_2_5" onclick="setGlassBoost(2.5)">✨ Glass: 2.5x</button>
-            </div>
-
-            <!-- Camera Presets -->
-            <div class="btn-group" id="cameraPresetGroup">
+            <div class="btn-group">
                 <button class="btn active" id="btnPresetTower" onclick="setCameraPreset('tower')">Tower View</button>
                 <button class="btn" id="btnPresetFacade" onclick="setCameraPreset('facade')">Facade Setbacks</button>
-                <button class="btn" id="btnPresetSpire" onclick="setCameraPreset('spire')">Spire & Mast</button>
                 <button class="btn" id="btnPresetStreet" onclick="setCameraPreset('street')">5th Ave Street</button>
-                <button class="btn" id="btnPresetLoupe" onclick="setCameraPreset('loupe')">Macro Loupe</button>
+                <button class="btn" id="btnPresetLoupe" onclick="setCameraPreset('loupe')">Macro Loupe (Limestone)</button>
             </div>
-
-            <!-- Utilities -->
             <div class="btn-group">
-                <button class="btn" id="btnWireframe" onclick="toggleWireframe()">Wireframe</button>
+                <button class="btn" id="btnWireframe" onclick="toggleWireframe()">Wireframe Lock</button>
                 <button class="btn" id="btnAutoRotate" onclick="toggleAutoRotate()">Auto-Rotate</button>
             </div>
         </div>
 
-        <div id="controls2D" style="display:none; gap:8px;">
-            <div class="btn-group" id="atlasSelector">
-                <button class="btn active" id="btnTex1" onclick="selectAtlasTexture(1, this)">Atlas #1 (Facade Setbacks 512x1024)</button>
-                <button class="btn" id="btnTex8" onclick="selectAtlasTexture(8, this)">Atlas #8 (Mid-Tower Shaft 256x512)</button>
-                <button class="btn" id="btnTex0" onclick="selectAtlasTexture(0, this)">Atlas #0 (Base & Ground Plane 256x256)</button>
+        <div id="controls2D" style="display:none; gap:8px; flex-wrap:wrap;">
+            <div class="btn-group" id="channelSelector">
+                <button class="btn active" id="btnChanAlbedo" onclick="selectPbrChannel('albedo', this)">1K Albedo</button>
+                <button class="btn" id="btnChanNormal" onclick="selectPbrChannel('normal', this)">1K Normal</button>
+                <button class="btn" id="btnChanRoughness" onclick="selectPbrChannel('roughness', this)">1K Roughness</button>
+                <button class="btn" id="btnChanOrm" onclick="selectPbrChannel('orm', this)">1K ORM (Packed)</button>
             </div>
-            <div class="btn-group" id="channel2DSelector">
-                <button class="btn active" id="btnChanAlbedo" onclick="selectAtlasChannel('enhanced', this)">De-lighted Albedo</button>
-                <button class="btn" id="btnChanNormal" onclick="selectAtlasChannel('normal', this)">Adaptive Scharr Normal</button>
-                <button class="btn" id="btnChanRoughness" onclick="selectAtlasChannel('roughness', this)">Biophysical ORM (HBAO/Rough/Metal)</button>
+            <div class="btn-group" id="atlasSelector">
+                <button class="btn active" id="btnTex8" onclick="selectAtlasTexture(8, this)">Texture 8 (Limestone Shaft)</button>
+                <button class="btn" id="btnTex42" onclick="selectAtlasTexture(42, this)">Texture 42 (Art Deco Setbacks)</button>
+                <button class="btn" id="btnTex33" onclick="selectAtlasTexture(33, this)">Texture 33 (5th Ave Base)</button>
             </div>
             <div class="btn-group" id="loupeSelector">
-                <button class="btn active" id="btnPatchAshlar" onclick="setLoupePatch('ashlar', this)">Setback Porosity</button>
-                <button class="btn" id="btnPatchMullion" onclick="setLoupePatch('mullion', this)">Shaft Anisotropy</button>
-                <button class="btn" id="btnPatchAsphalt" onclick="setLoupePatch('asphalt', this)">Ground Contact Relief</button>
+                <button class="btn active" id="btnPatchAshlar" onclick="setLoupePatch('ashlar', this)">Limestone Ashlar</button>
+                <button class="btn" id="btnPatchMullion" onclick="setLoupePatch('mullion', this)">Vertical Mullions</button>
+                <button class="btn" id="btnPatchAsphalt" onclick="setLoupePatch('asphalt', this)">5th Ave Bitumen</button>
             </div>
         </div>
     </div>
@@ -491,8 +421,8 @@ const html = `<!DOCTYPE html>
         <div class="view-panel" id="panel3D">
             <div class="viewport-panel" id="panelLeft">
                 <div class="viewport-badge badge-left">
-                    <h2 id="leftTitle">ORIGINAL GOOGLE 3D TILE SCAN</h2>
-                    <p id="leftStats">Raw 512² Texture Atlases · Unlit Photogrammetry Scan</p>
+                    <h2>ORIGINAL GOOGLE 3D TILE SCAN</h2>
+                    <p id="leftStats">70 Submeshes · Blurry 512² JPEG Atlases</p>
                 </div>
                 <div class="loading-overlay" id="loadingLeft"><div class="spinner"></div>Loading Raw Tile Scan...</div>
                 <div class="viewport-canvas" id="containerLeft"></div>
@@ -500,10 +430,10 @@ const html = `<!DOCTYPE html>
 
             <div class="viewport-panel" id="panelRight">
                 <div class="viewport-badge badge-right">
-                    <h2 id="rightTitle">ZERO-PRESET ADAPTIVE MATERIAL PBR (CONTINUOUS BIOPHYSICAL DECOMPOSITION)</h2>
-                    <p id="rightStats">14 Submeshes · Continuous Biophysical ORM & Adaptive Scharr Relief · Zero Presets</p>
+                    <h2>ALGORITHMIC UV & PBR ENHANCED (1K MAPS)</h2>
+                    <p id="rightStats">70 Submeshes · 1K PBR Suite (1024²) · 0.000 mm Drift</p>
                 </div>
-                <div class="loading-overlay" id="loadingRight"><div class="spinner"></div>Loading Adaptive PBR GLB...</div>
+                <div class="loading-overlay" id="loadingRight"><div class="spinner"></div>Loading Enhanced PBR GLB...</div>
                 <div class="viewport-canvas" id="containerRight"></div>
             </div>
         </div>
@@ -515,7 +445,7 @@ const html = `<!DOCTYPE html>
                 <div class="texture-col">
                     <div class="atlas-meta-box">
                         <h3 style="color:#94a3b8;" id="atlasTitleOrig">ORIGINAL PHOTOGRAMMETRIC ATLAS</h3>
-                        <p id="atlasSubOrig">512 × 512 px · Soft / Compressed photogrammetry texture</p>
+                        <p id="atlasSubOrig">512 × 512 px · 81.1 KB JPEG · Soft / Compressed</p>
                     </div>
                     <div class="texture-frame">
                         <img id="imgAtlasOrig" src="models/nyc_esb_stone_texture_8_orig.jpg" alt="Original Atlas">
@@ -525,32 +455,32 @@ const html = `<!DOCTYPE html>
                 <!-- Right 2D Texture: Enhanced -->
                 <div class="texture-col">
                     <div class="atlas-meta-box">
-                        <h3 style="color:#38bdf8;" id="atlasTitleEnh">ALGORITHMIC REWRAP ATLAS (BEDFORD LIMESTONE)</h3>
-                        <p id="atlasSubEnh">1024 × 1024 px · Super-Resolved (0.000 px Drift)</p>
+                        <h3 style="color:var(--accent-cyan);" id="atlasTitleEnh">1K PBR SUITE ATLAS (BEDFORD LIMESTONE)</h3>
+                        <p id="atlasSubEnh">1024 × 1024 px · 1K PBR Suite (0.000 px Drift)</p>
                     </div>
                     <div class="texture-frame">
-                        <img id="imgAtlasEnh" src="models/nyc_esb_stone_texture_8_enhanced_2k.jpg" alt="Enhanced Atlas">
+                        <img id="imgAtlasEnh" src="models/nyc_esb_stone_texture_8_enhanced_1k.jpg" alt="1K PBR Atlas">
                     </div>
                 </div>
 
                 <!-- 4x Zoom Loupe Card -->
                 <div class="loupe-card">
                     <h4>
-                        <span id="loupeTitle">Target: Limestone Ashlar & Bedding Strata</span>
-                        <span style="font-size:11px; color:#cbd5e1; font-weight:500;">4× Optical Loupe (Side-by-Side)</span>
+                        <span>🔬 4x Extreme Micro-Detail Loupe</span>
+                        <span id="loupeTargetTitle" style="color:#f59e0b; font-size:11px;">Target: Limestone Ashlar & Mullions</span>
                     </h4>
                     <div class="loupe-split">
                         <div class="loupe-box">
                             <canvas id="canvasLoupeOrig" width="300" height="300"></canvas>
-                            <div class="box-lbl">Original Scan (512² Texture)</div>
+                            <div class="box-lbl">Original 512² (Soft / Blurry)</div>
                         </div>
                         <div class="loupe-box">
                             <canvas id="canvasLoupeEnh" width="300" height="300"></canvas>
-                            <div class="box-lbl" style="color:var(--accent-cyan);" id="loupeEnhLbl">Algorithmic Rewrap (Limestone Micro-Grain)</div>
+                            <div class="box-lbl" style="color:var(--accent-cyan);">1K PBR Suite (Micro-Grain / Channels)</div>
                         </div>
                     </div>
                     <div class="sub-note" id="loupeSubNote">
-                        Spatial Drift: 0.000 px (Direct 2D Polygon Projection). Fine oolitic Indiana limestone grain, sharpened vertical Art Deco mullions, and clean mortar joints with zero artificial streaks.
+                        Spatial Drift: 0.000 px (Direct 2D Polygon Projection). Fine oolitic limestone grain, sharpened vertical Art Deco mullions, and clean bitumen aggregate with zero artificial streaks.
                     </div>
                 </div>
             </div>
@@ -559,212 +489,126 @@ const html = `<!DOCTYPE html>
 
     <footer>
         <div class="telemetry-item green">
-            TOTAL VERTICES: <strong>26,487 (100% Geometry Lock · 0.000 mm Drift)</strong>
-        </div>
-        <div class="telemetry-item blue">
-            ATMOSPHERE: <strong id="telAtmo">3D Volumetric Sky Dome (/spce/) · Rayleigh & Mie</strong>
-        </div>
-        <div class="telemetry-item purple">
-            PBR CHANNELS: <strong id="telPbr">Multi-Frequency Scharr Normals + Biophysical ORM</strong>
-        </div>
-        <div class="telemetry-item amber">
-            RELIEF SCALE: <strong id="telRelief">1.6x Normal Scale (Authentic Facet Relief)</strong>
+            TOTAL VERTICES: <strong>236,579 (0.000 mm Drift)</strong>
         </div>
         <div class="telemetry-item cyan">
-            WINDOW GLAZING: <strong id="telGlazing">Clearcoat 0.85 · IOR 1.52 · Roughness 0.08 (1.8x Boost)</strong>
+            TEXTURE RESOLUTION: <strong>512² → 1024² (1K PBR Suite)</strong>
+        </div>
+        <div class="telemetry-item amber">
+            UV SCALING: <strong>1.000x (Identical Mapping)</strong>
+        </div>
+        <div class="telemetry-item">
+            LITHOLOGY: <strong>Bedford Limestone (Cavitation 42.0, Strata 140.0)</strong>
+        </div>
+        <div class="telemetry-item green">
+            ROAD BITUMEN: <strong>3,156,160 Texels (100% Protected)</strong>
         </div>
     </footer>
 
     <script>
-        // Authentic Three.js /spce/ Atmospheric Shader Engine
-        const ATMOSPHERE_VERTEX_SHADER = ${VERTEX_SHADER_STR};
-        const ATMOSPHERE_FRAGMENT_SHADER = ${FRAGMENT_SHADER_STR};
+        let sceneLeft, cameraLeft, rendererLeft, controlsLeft, modelLeft;
+        let sceneRight, cameraRight, rendererRight, controlsRight, modelRight;
+        let activeTab = '3d';
+        let currentAtlasId = 8;
+        let currentPatchId = 'ashlar';
+        let activePbrChannel = 'albedo';
+        let wireframe = false;
+        let autoRotate = false;
+        let isSyncing = false;
 
         const TEXTURES = {
-            1: {
-                orig: 'models/atlas_1_albedo.jpg',
-                enhanced: 'models/atlas_1_albedo.jpg',
-                normal: 'models/atlas_1_normal.jpg',
-                roughness: 'models/atlas_1_orm.jpg',
-                titleOrig: 'UNWRAPPED PHOTOGRAMMETRIC ATLAS #1',
-                subOrig: '512 × 1024 px · Raw Photogrammetric Survey Texture',
-                titleEnh: 'ZERO-PRESET ADAPTIVE PBR ATLAS #1 (FACADE SETBACKS)',
-                subEnh: '512 × 1024 px · Micro-Porosity: 0.3207 · Tangent Relief Normal & Cavity HBAO'
-            },
             8: {
-                orig: 'models/atlas_8_albedo.jpg',
-                enhanced: 'models/atlas_8_albedo.jpg',
-                normal: 'models/atlas_8_normal.jpg',
-                roughness: 'models/atlas_8_orm.jpg',
-                titleOrig: 'UNWRAPPED PHOTOGRAMMETRIC ATLAS #8',
-                subOrig: '256 × 512 px · Raw Photogrammetric Survey Texture',
-                titleEnh: 'ZERO-PRESET ADAPTIVE PBR ATLAS #8 (MID-TOWER SHAFT)',
-                subEnh: '256 × 512 px · Anisotropy: 0.2172 · Micro-Porosity: 0.3616 · De-lighted Albedo'
+                orig: 'models/nyc_esb_stone_texture_8_orig.jpg',
+                albedo: 'models/nyc_esb_stone_texture_8_enhanced_1k.jpg',
+                normal: 'models/nyc_esb_stone_texture_8_normal_1k.jpg',
+                roughness: 'models/nyc_esb_stone_texture_8_roughness_1k.jpg',
+                orm: 'models/nyc_esb_stone_texture_8_orm_1k.png',
+                titleOrig: 'ORIGINAL PHOTOGRAMMETRIC ATLAS (Texture 8 - Tower Shaft)',
+                subOrig: '512 × 512 px · 81.1 KB JPEG · Soft / Compressed',
+                titleEnh: '1K PBR SUITE (BEDFORD LIMESTONE MICRO-POROSITY)',
+                subEnh: '1024 × 1024 px · 697 KB · 1K PBR Suite (0.000 px Drift)'
             },
-            0: {
-                orig: 'models/atlas_0_albedo.jpg',
-                enhanced: 'models/atlas_0_albedo.jpg',
-                normal: 'models/atlas_0_normal.jpg',
-                roughness: 'models/atlas_0_orm.jpg',
-                titleOrig: 'UNWRAPPED PHOTOGRAMMETRIC ATLAS #0',
-                subOrig: '256 × 256 px · Raw Photogrammetric Survey Texture',
-                titleEnh: 'ZERO-PRESET ADAPTIVE PBR ATLAS #0 (BASE & GROUND TIER)',
-                subEnh: '256 × 256 px · Micro-Porosity: 0.3891 · Scharr Tangent Relief & Cavity HBAO'
+            42: {
+                orig: 'models/nyc_esb_setback_texture_42_orig.jpg',
+                albedo: 'models/nyc_esb_setback_texture_42_enhanced_1k.jpg',
+                normal: 'models/nyc_esb_setback_texture_42_normal_1k.jpg',
+                roughness: 'models/nyc_esb_setback_texture_42_roughness_1k.jpg',
+                orm: 'models/nyc_esb_setback_texture_42_orm_1k.png',
+                titleOrig: 'ORIGINAL PHOTOGRAMMETRIC ATLAS (Texture 42 - Setbacks)',
+                subOrig: '512 × 512 px · 67.5 KB JPEG · Muddy Compression',
+                titleEnh: '1K PBR SUITE (ART DECO SETBACK CORNICE & MULLIONS)',
+                subEnh: '1024 × 1024 px · 674 KB · 1K PBR Suite (0.000 px Drift)'
+            },
+            33: {
+                orig: 'models/nyc_esb_street_texture_33_orig.jpg',
+                albedo: 'models/nyc_esb_street_texture_33_enhanced_1k.jpg',
+                normal: 'models/nyc_esb_street_texture_33_normal_1k.jpg',
+                roughness: 'models/nyc_esb_street_texture_33_roughness_1k.jpg',
+                orm: 'models/nyc_esb_street_texture_33_orm_1k.png',
+                titleOrig: 'ORIGINAL PHOTOGRAMMETRIC ATLAS (Texture 33 - 5th Ave Base)',
+                subOrig: '512 × 512 px · 62.1 KB JPEG · Uncalibrated Road',
+                titleEnh: '1K PBR SUITE (5TH AVE BITUMEN AGGREGATE)',
+                subEnh: '1024 × 1024 px · 654 KB · 1K PBR Suite (Road Protected)'
             }
         };
 
         const PATCHES = {
             ashlar: {
-                texId: 1,
-                title: 'Target: Facade Setbacks & Micro-Porosity Field',
-                note: 'Zero Presets · High-Frequency Micro-Porosity Field: 0.3207 · Continuous Horizon Cavity Occlusion (HBAO) with Bandwidth-Adaptive Scharr Relief (0.000 mm Drift).',
-                u: 0.28, v: 0.35, size: 0.18
+                texId: 8,
+                ox: 220, oy: 160, osize: 70,
+                ex: 440, ey: 320, esize: 140,
+                title: 'Target: Limestone Ashlar & Bedding Strata (1K)',
+                note: 'Spatial Drift: 0.000 px (1K Mode). Fine calcarenite oolitic micro-grain, horizontal ashlar bedding courses, and deepened mortar joint relief.'
             },
             mullion: {
                 texId: 8,
-                title: 'Target: Mid-Tower Aligned Strata & Micro-Tooth',
-                note: 'Continuous Gradient Anisotropy: 0.2172 · Continuous Conduction Metric tracks architectural specular highlights with zero hardcoded material types.',
-                u: 0.35, v: 0.40, size: 0.20
+                ox: 310, oy: 230, osize: 70,
+                ex: 620, ey: 460, esize: 140,
+                title: 'Target: Art Deco Vertical Mullions & Window Spandrels (1K)',
+                note: 'Spatial Drift: 0.000 px (1K Mode). Bilateral de-lighting removes canyon shadows while sharpening structural pier verticality.'
             },
             asphalt: {
-                texId: 0,
-                title: 'Target: Ground Contact & Street Base Relief',
-                note: 'Micro-Porosity: 0.3891 · Tangent Relief Normal: Unit vector length 1.0 with edge damping to prevent bevel halos.',
-                u: 0.30, v: 0.30, size: 0.22
+                texId: 33,
+                ox: 240, oy: 240, osize: 70,
+                ex: 480, ey: 480, esize: 140,
+                title: 'Target: 5th Ave Bitumen Aggregate & Clean Road Markings (1K)',
+                note: 'Bitumen Protection (1K Mode): 3,156,160 road texels shielded from cavitation. Roadway markings remain crisp without artificial stone grooves.'
             }
         };
 
-        let sceneLeft, cameraLeft, rendererLeft, controlsLeft, modelLeft;
-        let sceneRight, cameraRight, rendererRight, controlsRight, modelRight;
-        let skyDomeRight = null;
-        let dirLightRight, hemiLightRight;
-        let pmremGenerator;
-        let envRenderTarget = null;
-        let activeTab = '3d';
-        let currentAtlasId = 1;
-        let currentAtlasChannel = 'enhanced';
-        let currentPatchId = 'ashlar';
-        let wireframe = false;
-        let autoRotate = false;
-        let isSyncing = false;
-        let currentAtmosphere = 'midday';
-        let currentCloudCoverage = 0.35;
-        let currentGlassBoost = 1.8;
-        let currentReliefScale = 1.6;
-        let currentPbrMode = 'composite';
-        let currentPipelineModel = 'isolated';
-        let clock = new THREE.Clock();
+        function selectPbrChannel(channel, el) {
+            activePbrChannel = channel;
+            document.querySelectorAll('#channelSelector .btn').forEach(b => b.classList.remove('active'));
+            if (el) el.classList.add('active');
 
-        const ATMOSPHERE_PRESETS = {
-            midday: {
-                label: '☀️ Midday Sun (59.8°) · Rayleigh & Mie Sky Dome',
-                elevation: 59.8,
-                azimuth: 207.8,
-                sunDir: new THREE.Vector3(0.450, 0.749, -0.485).normalize(),
-                topColor: 0x0369a1,
-                bottomColor: 0xe0f2fe,
-                sunColor: '#fffdf0',
-                sunIntensity: 1.6,
-                turbidity: 1.5,
-                rayleigh: 0.5,
-                mie: 0.002,
-                mieDirectionalG: 0.82,
-                cloudDensity: 0.45,
-                cloudAltitude: 1200.0,
-                hemiSky: 0xdbeafe,
-                hemiGround: 0x1e293b,
-                hemiIntensity: 1.2,
-                exposure: 1.15,
-                isNight: false,
-                isGoldenHour: false,
-                isTwilight: false
-            },
-            golden: {
-                label: '🌅 Golden Hour (12.5°) · Sunset Corona & Silver Linings',
-                elevation: 12.5,
-                azimuth: 245.0,
-                sunDir: new THREE.Vector3(0.650, 0.216, -0.728).normalize(),
-                topColor: 0x311042,
-                bottomColor: 0xf97316,
-                sunColor: '#ff9d3b',
-                sunIntensity: 2.2,
-                turbidity: 2.5,
-                rayleigh: 0.9,
-                mie: 0.006,
-                mieDirectionalG: 0.88,
-                cloudDensity: 0.60,
-                cloudAltitude: 1100.0,
-                hemiSky: 0xfdba74,
-                hemiGround: 0x431407,
-                hemiIntensity: 1.4,
-                exposure: 1.25,
-                isNight: false,
-                isGoldenHour: true,
-                isTwilight: false
-            },
-            twilight: {
-                label: '🌆 Twilight Blue Hour (-4.0°) · Indigo Sky & Dusk Band',
-                elevation: -4.0,
-                azimuth: 260.0,
-                sunDir: new THREE.Vector3(0.700, -0.070, -0.710).normalize(),
-                topColor: 0x0f172a,
-                bottomColor: 0x64748b,
-                sunColor: '#818cf8',
-                sunIntensity: 0.35,
-                turbidity: 2.0,
-                rayleigh: 1.2,
-                mie: 0.001,
-                mieDirectionalG: 0.75,
-                cloudDensity: 0.35,
-                cloudAltitude: 1300.0,
-                hemiSky: 0x38bdf8,
-                hemiGround: 0x0f172a,
-                hemiIntensity: 0.85,
-                exposure: 1.05,
-                isNight: false,
-                isGoldenHour: false,
-                isTwilight: true
-            },
-            overcast: {
-                label: '☁️ Cumulus Billows (45.0°) · 3D Raymarched Optical Depth',
-                elevation: 45.0,
-                azimuth: 180.0,
-                sunDir: new THREE.Vector3(0.0, 0.707, -0.707).normalize(),
-                topColor: 0x475569,
-                bottomColor: 0x94a3b8,
-                sunColor: '#cbd5e1',
-                sunIntensity: 0.75,
-                turbidity: 3.2,
-                rayleigh: 0.3,
-                mie: 0.004,
-                mieDirectionalG: 0.80,
-                cloudDensity: 0.80,
-                cloudAltitude: 950.0,
-                hemiSky: 0xe2e8f0,
-                hemiGround: 0x1e293b,
-                hemiIntensity: 1.3,
-                exposure: 1.10,
-                isNight: false,
-                isGoldenHour: false,
-                isTwilight: false
-            },
-            void: {
-                label: 'Baseline Dark Void (Atmosphere OFF)',
-                isVoid: true
-            }
-        };
+            const t = TEXTURES[currentAtlasId];
+            if (!t) return;
+
+            const url = t[channel] || t.albedo;
+            document.getElementById('imgAtlasEnh').src = url;
+
+            const channelLabels = {
+                albedo: '1K ALBEDO (DE-LIGHTED & SHARPENED)',
+                normal: '1K NORMAL MAP (SCHARR MULTI-FREQUENCY GRADIENT)',
+                roughness: '1K ROUGHNESS MAP (BIOPHYSICAL LAPLACIAN CURVATURE)',
+                orm: '1K PACKED ORM (R:AO, G:ROUGHNESS, B:METALLIC)'
+            };
+            document.getElementById('atlasTitleEnh').textContent = (channelLabels[channel] || '1K PBR MAP') + ' - TEXTURE ' + currentAtlasId;
+            document.getElementById('atlasSubEnh').textContent = '1024 × 1024 px · 1K PBR Map (' + channel.toUpperCase() + ') · 0.000 px Drift';
+            updateLoupe();
+        }
 
         function switchMainTab(tab) {
             activeTab = tab;
+            const btn3D = document.getElementById('btnTab3D');
+            const btn2D = document.getElementById('btnTab2D');
             const p3D = document.getElementById('panel3D');
             const p2D = document.getElementById('panel2D');
             const c3D = document.getElementById('controls3D');
             const c2D = document.getElementById('controls2D');
-            const btn3D = document.getElementById('btnTab3D');
-            const btn2D = document.getElementById('btnTab2D');
 
             if (tab === '3d') {
-                btn3D.className = 'btn active';
+                btn3D.className = 'btn active-cyan';
                 btn2D.className = 'btn';
                 p3D.classList.remove('hidden');
                 p2D.classList.add('hidden');
@@ -773,7 +617,7 @@ const html = `<!DOCTYPE html>
                 setTimeout(onResize, 50);
             } else {
                 btn3D.className = 'btn';
-                btn2D.className = 'btn active';
+                btn2D.className = 'btn active-cyan';
                 p3D.classList.add('hidden');
                 p2D.classList.remove('hidden');
                 c3D.style.display = 'none';
@@ -788,67 +632,74 @@ const html = `<!DOCTYPE html>
             if (el) el.classList.add('active');
 
             const t = TEXTURES[texId];
+            if (!t) return;
+
             document.getElementById('imgAtlasOrig').src = t.orig;
-            document.getElementById('imgAtlasEnh').src = t[currentAtlasChannel];
+            document.getElementById('imgAtlasEnh').src = t[activePbrChannel] || t.albedo;
             document.getElementById('atlasTitleOrig').textContent = t.titleOrig;
             document.getElementById('atlasSubOrig').textContent = t.subOrig;
-            document.getElementById('atlasTitleEnh').textContent = t.titleEnh;
-            document.getElementById('atlasSubEnh').textContent = t.subEnh;
 
-            setTimeout(updateLoupe, 60);
-        }
+            const channelLabels = {
+                albedo: '1K ALBEDO (DE-LIGHTED & SHARPENED)',
+                normal: '1K NORMAL MAP (SCHARR MULTI-FREQUENCY GRADIENT)',
+                roughness: '1K ROUGHNESS MAP (BIOPHYSICAL LAPLACIAN CURVATURE)',
+                orm: '1K PACKED ORM (R:AO, G:ROUGHNESS, B:METALLIC)'
+            };
+            document.getElementById('atlasTitleEnh').textContent = (channelLabels[activePbrChannel] || '1K PBR MAP') + ' - TEXTURE ' + texId;
+            document.getElementById('atlasSubEnh').textContent = '1024 × 1024 px · 1K PBR Map (' + activePbrChannel.toUpperCase() + ') · 0.000 px Drift';
 
-        function selectAtlasChannel(channel, el) {
-            currentAtlasChannel = channel;
-            document.querySelectorAll('#channel2DSelector .btn').forEach(b => b.classList.remove('active'));
-            if (el) el.classList.add('active');
-
-            const t = TEXTURES[currentAtlasId];
-            document.getElementById('imgAtlasEnh').src = t[channel];
-            const channelName = channel === 'enhanced' ? 'Albedo (Color)' : (channel === 'normal' ? 'Normal Map (Relief)' : 'Roughness (Micro-Surface)');
-            document.getElementById('loupeEnhLbl').textContent = 'Algorithmic Rewrap (' + channelName + ')';
-            setTimeout(updateLoupe, 60);
-        }
-
-        function setLoupePatch(patchKey, el) {
-            currentPatchId = patchKey;
-            document.querySelectorAll('#loupeSelector .btn').forEach(b => b.classList.remove('active'));
-            if (el) el.classList.add('active');
-
-            const p = PATCHES[patchKey];
-            if (p.texId !== currentAtlasId) {
-                const btn = document.getElementById('btnTex' + p.texId);
-                selectAtlasTexture(p.texId, btn);
+            if (texId === 33 && currentPatchId !== 'asphalt') {
+                setLoupePatch('asphalt', document.getElementById('btnPatchAsphalt'));
+            } else if (texId !== 33 && currentPatchId === 'asphalt') {
+                setLoupePatch('ashlar', document.getElementById('btnPatchAshlar'));
             } else {
                 updateLoupe();
             }
         }
 
-        function updateLoupe() {
-            const p = PATCHES[currentPatchId];
-            document.getElementById('loupeTitle').textContent = p.title;
-            document.getElementById('loupeSubNote').textContent = p.note;
+        function setLoupePatch(patchId, el) {
+            currentPatchId = patchId;
+            document.querySelectorAll('#loupeSelector .btn').forEach(b => b.classList.remove('active'));
+            if (el) el.classList.add('active');
 
+            const patch = PATCHES[patchId];
+            if (!patch) return;
+
+            if (patch.texId !== currentAtlasId) {
+                const btnTex = patch.texId === 8 ? document.getElementById('btnTex8') : patch.texId === 42 ? document.getElementById('btnTex42') : document.getElementById('btnTex33');
+                selectAtlasTexture(patch.texId, btnTex);
+            }
+
+            document.getElementById('loupeTargetTitle').textContent = patch.title;
+            document.getElementById('loupeSubNote').textContent = patch.note;
+            updateLoupe();
+        }
+
+        function updateLoupe() {
+            const patch = PATCHES[currentPatchId] || PATCHES.ashlar;
             const imgOrig = document.getElementById('imgAtlasOrig');
             const imgEnh = document.getElementById('imgAtlasEnh');
             const cOrig = document.getElementById('canvasLoupeOrig');
             const cEnh = document.getElementById('canvasLoupeEnh');
-            const ctxO = cOrig.getContext('2d');
-            const ctxE = cEnh.getContext('2d');
+            if (!cOrig || !cEnh) return;
+
+            const ctxOrig = cOrig.getContext('2d');
+            const ctxEnh = cEnh.getContext('2d');
+            ctxOrig.imageSmoothingEnabled = false;
+            ctxEnh.imageSmoothingEnabled = false;
 
             if (imgOrig.complete && imgOrig.naturalWidth > 0) {
-                const ox = Math.round(p.u * imgOrig.naturalWidth);
-                const oy = Math.round(p.v * imgOrig.naturalHeight);
-                const osize = Math.round(p.size * imgOrig.naturalWidth);
-                ctxO.clearRect(0, 0, 300, 300);
-                ctxO.drawImage(imgOrig, ox, oy, osize, osize, 0, 0, 300, 300);
+                ctxOrig.clearRect(0, 0, 300, 300);
+                ctxOrig.drawImage(imgOrig, patch.ox, patch.oy, patch.osize, patch.osize, 0, 0, 300, 300);
+            } else {
+                imgOrig.onload = updateLoupe;
             }
+
             if (imgEnh.complete && imgEnh.naturalWidth > 0) {
-                const ex = Math.round(p.u * imgEnh.naturalWidth);
-                const ey = Math.round(p.v * imgEnh.naturalHeight);
-                const esize = Math.round(p.size * imgEnh.naturalWidth);
-                ctxE.clearRect(0, 0, 300, 300);
-                ctxE.drawImage(imgEnh, ex, ey, esize, esize, 0, 0, 300, 300);
+                ctxEnh.clearRect(0, 0, 300, 300);
+                ctxEnh.drawImage(imgEnh, patch.ex, patch.ey, patch.esize, patch.esize, 0, 0, 300, 300);
+            } else {
+                imgEnh.onload = updateLoupe;
             }
         }
 
@@ -862,11 +713,10 @@ const html = `<!DOCTYPE html>
             const containerLeft = document.getElementById('containerLeft');
             const containerRight = document.getElementById('containerRight');
 
-            // Left Scene (Raw Photogrammetry Scan)
             sceneLeft = new THREE.Scene();
             sceneLeft.background = new THREE.Color(0x060910);
             cameraLeft = new THREE.PerspectiveCamera(45, containerLeft.clientWidth / containerLeft.clientHeight, 1.0, 5000);
-            cameraLeft.position.set(0, 360, 480);
+            cameraLeft.position.set(-90, 480, 520);
 
             rendererLeft = new THREE.WebGLRenderer({ antialias: true, alpha: false });
             rendererLeft.setSize(containerLeft.clientWidth, containerLeft.clientHeight);
@@ -876,11 +726,10 @@ const html = `<!DOCTYPE html>
             containerLeft.appendChild(rendererLeft.domElement);
 
             controlsLeft = new THREE.OrbitControls(cameraLeft, rendererLeft.domElement);
-            controlsLeft.target.set(0, 200, 0);
+            controlsLeft.target.set(-91, 200, 16);
             controlsLeft.enableDamping = true;
             controlsLeft.dampingFactor = 0.05;
 
-            // Right Scene (Algorithmic PBR + 3D Atmosphere /spce/)
             sceneRight = new THREE.Scene();
             sceneRight.background = new THREE.Color(0x060910);
             cameraRight = new THREE.PerspectiveCamera(45, containerRight.clientWidth / containerRight.clientHeight, 1.0, 5000);
@@ -890,7 +739,7 @@ const html = `<!DOCTYPE html>
             rendererRight.setSize(containerRight.clientWidth, containerRight.clientHeight);
             rendererRight.setPixelRatio(window.devicePixelRatio);
             rendererRight.toneMapping = THREE.ACESFilmicToneMapping;
-            rendererRight.toneMappingExposure = 1.15;
+            rendererRight.toneMappingExposure = 1.1;
             containerRight.appendChild(rendererRight.domElement);
 
             controlsRight = new THREE.OrbitControls(cameraRight, rendererRight.domElement);
@@ -898,61 +747,24 @@ const html = `<!DOCTYPE html>
             controlsRight.enableDamping = true;
             controlsRight.dampingFactor = 0.05;
 
-            // PMREM generator for prefiltered environment reflections
-            pmremGenerator = new THREE.PMREMGenerator(rendererRight);
-            pmremGenerator.compileEquirectangularShader();
+            [sceneLeft, sceneRight].forEach(scene => {
+                const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 1.2);
+                hemiLight.position.set(0, 500, 0);
+                scene.add(hemiLight);
 
-            // Create AtmosphericSkyDome (/spce/ Three.js atmospheric shader engine)
-            const skyGeo = new THREE.SphereGeometry(3500, 48, 36);
-            const skyMat = new THREE.ShaderMaterial({
-                vertexShader: ATMOSPHERE_VERTEX_SHADER,
-                fragmentShader: ATMOSPHERE_FRAGMENT_SHADER,
-                uniforms: {
-                    uSunDirection: { value: new THREE.Vector3(0.450, 0.749, -0.485).normalize() },
-                    uSunColor: { value: new THREE.Color('#fffdf0') },
-                    uSunIntensity: { value: 1.6 },
-                    topColor: { value: new THREE.Color(0x0369a1) },
-                    bottomColor: { value: new THREE.Color(0xe0f2fe) },
-                    uTurbidity: { value: 1.5 },
-                    uRayleigh: { value: 0.5 },
-                    uMieCoefficient: { value: 0.002 },
-                    uMieDirectionalG: { value: 0.82 },
-                    uCloudCoverage: { value: currentCloudCoverage },
-                    uCloudDensity: { value: 0.45 },
-                    uCloudAltitude: { value: 1200.0 },
-                    uTime: { value: 0.0 },
-                    uIsNight: { value: false },
-                    uIsGoldenHour: { value: false },
-                    uIsTwilight: { value: false }
-                },
-                side: THREE.BackSide,
-                depthWrite: false,
-                depthTest: true
+                const dirLight1 = new THREE.DirectionalLight(0xfffbeb, 1.6);
+                dirLight1.position.set(200, 450, 300);
+                scene.add(dirLight1);
+
+                const dirLight2 = new THREE.DirectionalLight(0x93c5fd, 0.7);
+                dirLight2.position.set(-300, 200, -200);
+                scene.add(dirLight2);
+
+                const grid = new THREE.GridHelper(1000, 50, 0x1e293b, 0x0f172a);
+                grid.position.y = -35;
+                scene.add(grid);
             });
 
-            skyDomeRight = new THREE.Mesh(skyGeo, skyMat);
-            skyDomeRight.name = 'AtmosphericSkyDome';
-            skyDomeRight.renderOrder = -1000;
-            sceneRight.add(skyDomeRight);
-
-            // Lighting for Left Scene
-            const ambLeft = new THREE.AmbientLight(0xffffff, 0.8);
-            sceneLeft.add(ambLeft);
-            const dirLeft = new THREE.DirectionalLight(0xfffaed, 1.4);
-            dirLeft.position.set(200, 400, -200);
-            sceneLeft.add(dirLeft);
-
-            // Lighting for Right Scene (Diurnal ephemeris-coupled)
-            hemiLightRight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 1.2);
-            hemiLightRight.name = 'AtmosphericHemisphereLight';
-            sceneRight.add(hemiLightRight);
-
-            dirLightRight = new THREE.DirectionalLight(0xfffdf0, 1.6);
-            dirLightRight.name = 'AtmosphericSunLight';
-            dirLightRight.position.set(247.5, 411.9, -266.7);
-            sceneRight.add(dirLightRight);
-
-            // Controls Synchronization
             controlsLeft.addEventListener('change', () => {
                 if (isSyncing) return;
                 isSyncing = true;
@@ -973,366 +785,51 @@ const html = `<!DOCTYPE html>
                 isSyncing = false;
             });
 
-            // Initialize default atmosphere
-            setAtmosphere('midday');
-
             loadModels();
             animate();
         }
 
-        // Bake the 3D Atmospheric Sky Dome (/spce/) into the PMREM environment cubemap
-        function updateAtmosphereEnvironment(presetKey = currentAtmosphere) {
-            if (!pmremGenerator) return;
-            const preset = ATMOSPHERE_PRESETS[presetKey];
-            if (!preset || preset.isVoid) {
-                sceneRight.environment = null;
-                if (envRenderTarget) {
-                    envRenderTarget.dispose();
-                    envRenderTarget = null;
-                }
-                return;
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = 512;
-            canvas.height = 256;
-            const ctx = canvas.getContext('2d');
-
-            const grad = ctx.createLinearGradient(0, 0, 0, 256);
-            grad.addColorStop(0.0, '#' + new THREE.Color(preset.topColor).getHexString());
-            grad.addColorStop(0.48, '#' + new THREE.Color(preset.bottomColor).getHexString());
-            grad.addColorStop(0.52, '#' + new THREE.Color(preset.bottomColor).getHexString());
-            grad.addColorStop(1.0, '#111827');
-            ctx.fillStyle = grad;
-            ctx.fillRect(0, 0, 512, 256);
-
-            const sunDir = preset.sunDir;
-            const azim = Math.atan2(sunDir.x, -sunDir.z);
-            const elev = Math.asin(sunDir.y);
-            const sunU = (azim / (Math.PI * 2) + 0.5) % 1.0;
-            const sunV = Math.max(0.05, Math.min(0.95, 0.5 - (elev / Math.PI)));
-            const sunX = sunU * 512;
-            const sunY = sunV * 256;
-
-            const sunRadius = preset.isGoldenHour ? 85 : 65;
-            const sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunRadius);
-            sunGrad.addColorStop(0.0, 'rgba(255,255,255,1.0)');
-            sunGrad.addColorStop(0.35, '#' + new THREE.Color(preset.sunColor).getHexString());
-            sunGrad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
-            ctx.fillStyle = sunGrad;
-            ctx.beginPath();
-            ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
-            ctx.fill();
-
-            const tex = new THREE.CanvasTexture(canvas);
-            tex.mapping = THREE.EquirectangularReflectionMapping;
-            if (envRenderTarget) envRenderTarget.dispose();
-            envRenderTarget = pmremGenerator.fromEquirectangular(tex);
-            tex.dispose();
-
-            sceneRight.environment = envRenderTarget.texture;
-
-            if (modelRight) {
-                modelRight.traverse(child => {
-                    if (child.isMesh && child.material) {
-                        child.material.envMap = envRenderTarget.texture;
-                        child.material.envMapIntensity = (preset.isGoldenHour ? 2.2 : (preset.isTwilight ? 1.4 : 1.8)) * currentGlassBoost;
-                        child.material.needsUpdate = true;
-                    }
-                });
-            }
-        }
-
-        function setAtmosphere(presetKey) {
-            currentAtmosphere = presetKey;
-            const preset = ATMOSPHERE_PRESETS[presetKey];
-
-            document.querySelectorAll('#atmosphereSelector .btn').forEach(b => b.classList.remove('active', 'active-cyan', 'active-amber'));
-            const btn = document.getElementById('btnAtmo_' + presetKey);
-            if (btn) btn.classList.add(presetKey === 'golden' ? 'active-amber' : 'active-cyan');
-
-            if (preset.isVoid) {
-                if (skyDomeRight) skyDomeRight.visible = false;
-                sceneRight.background = new THREE.Color(0x060910);
-                sceneRight.environment = null;
-                if (envRenderTarget) {
-                    envRenderTarget.dispose();
-                    envRenderTarget = null;
-                }
-                if (modelRight) {
-                    modelRight.traverse(child => {
-                        if (child.isMesh && child.material) {
-                            child.material.envMap = null;
-                            child.material.needsUpdate = true;
-                        }
-                    });
-                }
-                document.getElementById('telAtmo').textContent = 'Baseline Dark Void (Atmosphere OFF)';
-                return;
-            }
-
-            if (skyDomeRight) skyDomeRight.visible = true;
-            sceneRight.background = null;
-
-            const u = skyDomeRight.material.uniforms;
-            u.uSunDirection.value.copy(preset.sunDir);
-            u.uSunColor.value.set(preset.sunColor);
-            u.uSunIntensity.value = preset.sunIntensity;
-            u.topColor.value.set(preset.topColor);
-            u.bottomColor.value.set(preset.bottomColor);
-            u.uTurbidity.value = preset.turbidity;
-            u.uRayleigh.value = preset.rayleigh;
-            u.uMieCoefficient.value = preset.mie;
-            u.uMieDirectionalG.value = preset.mieDirectionalG;
-            u.uCloudCoverage.value = currentCloudCoverage;
-            u.uCloudDensity.value = preset.cloudDensity;
-            u.uCloudAltitude.value = preset.cloudAltitude;
-            u.uIsNight.value = preset.isNight;
-            u.uIsGoldenHour.value = preset.isGoldenHour;
-            u.uIsTwilight.value = preset.isTwilight;
-
-            updateAtmosphereEnvironment(presetKey);
-
-            if (dirLightRight) {
-                dirLightRight.position.copy(preset.sunDir).multiplyScalar(550);
-                dirLightRight.color.set(preset.sunColor);
-                dirLightRight.intensity = preset.sunIntensity;
-            }
-            if (hemiLightRight) {
-                hemiLightRight.color.set(preset.hemiSky);
-                hemiLightRight.groundColor.set(preset.hemiGround);
-                hemiLightRight.intensity = preset.hemiIntensity;
-            }
-            rendererRight.toneMappingExposure = preset.exposure;
-
-            document.getElementById('telAtmo').textContent = preset.label;
-        }
-
-        function setGlassBoost(boost) {
-            currentGlassBoost = boost;
-            document.querySelectorAll('#glassBoostSelector .btn').forEach(b => b.classList.remove('active', 'active-cyan'));
-            const btn = document.getElementById('btnBoost_' + boost.toFixed(1).replace('.', '_'));
-            if (btn) btn.classList.add('active-cyan');
-
-            if (modelRight) {
-                modelRight.traverse(child => {
-                    if (child.isMesh && child.material) {
-                        child.material.envMapIntensity = 1.8 * boost;
-                        child.material.needsUpdate = true;
-                    }
-                });
-            }
-            document.getElementById('telGlazing').textContent = "Clearcoat 0.85 · IOR 1.52 · Roughness 0.08 (" + boost.toFixed(1) + "x Boost)";
-        }
-
-        function setReliefScale(scale) {
-            currentReliefScale = scale;
-            document.querySelectorAll('#reliefScaleSelector .btn').forEach(b => b.classList.remove('active', 'active-cyan'));
-            const btn = document.getElementById('btnRelief_' + scale.toFixed(1).replace('.', '_'));
-            if (btn) btn.classList.add('active-cyan');
-
-            if (modelRight) {
-                modelRight.traverse(child => {
-                    if (child.isMesh && child.material && child.material.normalScale) {
-                        child.material.normalScale.set(scale, scale);
-                        child.material.needsUpdate = true;
-                    }
-                });
-            }
-            document.getElementById('telRelief').textContent = scale.toFixed(1) + "x Normal Scale (Authentic Facet Relief)";
-        }
-
-        function setPbrDiagnosticMode(mode) {
-            currentPbrMode = mode;
-            document.querySelectorAll('#pbrChannelSelector .btn').forEach(b => b.classList.remove('active', 'active-cyan'));
-            const btn = document.getElementById('btnPbr_' + mode);
-            if (btn) btn.classList.add('active-cyan');
-
-            if (!modelRight) return;
-
-            modelRight.traverse(child => {
-                if (child.isMesh && child.material) {
-                    const mat = child.material;
-                    if (!child.userData.origMat) {
-                        child.userData.origMat = {
-                            map: mat.map,
-                            normalMap: mat.normalMap,
-                            roughnessMap: mat.roughnessMap,
-                            metalnessMap: mat.metalnessMap,
-                            roughness: mat.roughness,
-                            metalness: mat.metalness
-                        };
-                    }
-                    const orig = child.userData.origMat;
-
-                    if (mode === 'composite') {
-                        mat.map = orig.map;
-                        mat.normalMap = orig.normalMap;
-                        mat.roughnessMap = orig.roughnessMap;
-                        mat.metalnessMap = orig.metalnessMap;
-                        mat.roughness = orig.roughness;
-                        mat.metalness = orig.metalness;
-                        if (mat.normalScale) mat.normalScale.set(currentReliefScale, currentReliefScale);
-                    } else if (mode === 'normal') {
-                        mat.map = null;
-                        mat.normalMap = orig.normalMap;
-                        mat.roughnessMap = null;
-                        mat.metalnessMap = null;
-                        mat.roughness = 0.5;
-                        mat.metalness = 0.0;
-                        if (mat.normalScale) mat.normalScale.set(currentReliefScale * 1.5, currentReliefScale * 1.5);
-                    } else if (mode === 'roughness') {
-                        mat.map = orig.roughnessMap;
-                        mat.normalMap = null;
-                        mat.roughnessMap = null;
-                        mat.metalnessMap = null;
-                        mat.roughness = 1.0;
-                        mat.metalness = 0.0;
-                    } else if (mode === 'albedo') {
-                        mat.map = orig.map;
-                        mat.normalMap = null;
-                        mat.roughnessMap = null;
-                        mat.metalnessMap = null;
-                        mat.roughness = 0.8;
-                        mat.metalness = 0.0;
-                    }
-                    mat.needsUpdate = true;
-                }
-            });
-
-            const modeLabel = mode === 'composite' ? 'Multi-Frequency Scharr Normals + Biophysical ORM' :
-                              mode === 'normal' ? 'Scharr Tangent Normals (Isolated Geometric Relief)' :
-                              mode === 'roughness' ? 'Biophysical Surface Roughness Channel' :
-                              'Base Albedo Texture (De-Lighted)';
-            document.getElementById('telPbr').textContent = modeLabel;
-        }
-
-        function switchPipelineModel(mode) {
-            currentPipelineModel = mode;
-            const bIso = document.getElementById('btnModelIsolated');
-            const bMid = document.getElementById('btnModelMidtown');
-            if (mode === 'isolated') {
-                if (bIso) bIso.classList.add('active');
-                if (bMid) bMid.classList.remove('active');
-            } else {
-                if (bMid) bMid.classList.add('active');
-                if (bIso) bIso.classList.remove('active');
-            }
-
-            document.getElementById('loadingLeft').style.display = 'block';
-            document.getElementById('loadingRight').style.display = 'block';
-
-            if (modelLeft) {
-                sceneLeft.remove(modelLeft);
-                modelLeft = null;
-            }
-            if (modelRight) {
-                sceneRight.remove(modelRight);
-                modelRight = null;
-            }
-
+        function loadModels() {
             const loader = new THREE.GLTFLoader();
 
-            if (mode === 'isolated') {
-                document.getElementById('leftTitle').textContent = "ORIGINAL GOOGLE 3D TILE SCAN";
-                document.getElementById('leftStats').textContent = "14 Submeshes · Raw Unlit Photogrammetry Atlases";
-                document.getElementById('rightTitle').textContent = "ZERO-PRESET ADAPTIVE MATERIAL PBR (CONTINUOUS BIOPHYSICAL DECOMPOSITION)";
-                document.getElementById('rightStats').textContent = "14 Submeshes · Continuous Biophysical ORM & Adaptive Scharr Relief · Zero Presets";
+            loader.load('models/spce_scan_studio_raw_tile.glb', gltf => {
+                modelLeft = gltf.scene;
+                sceneLeft.add(modelLeft);
+                document.getElementById('loadingLeft').style.display = 'none';
+            }, undefined, err => {
+                console.error('Failed to load left model:', err);
+                document.getElementById('loadingLeft').innerHTML = '<div style="color:#ef4444;">Failed to load raw model</div>';
+            });
 
-                loader.load('models/spce_esb_isolated_full_quality_raw.glb', gltf => {
-                    modelLeft = gltf.scene;
-                    sceneLeft.add(modelLeft);
-                    document.getElementById('loadingLeft').style.display = 'none';
-                }, undefined, err => {
-                    console.error('Failed to load raw model:', err);
-                    document.getElementById('loadingLeft').innerHTML = '<div style="color:#ef4444;">Failed to load raw model</div>';
-                });
-
-                loader.load('models/spce_esb_adaptive_pbr.glb?v=' + Date.now(), gltf => {
-                    modelRight = gltf.scene;
-                    // Apply environment map to materials
-                    if (envRenderTarget) {
-                        modelRight.traverse(child => {
-                            if (child.isMesh && child.material) {
-                                child.material.envMap = envRenderTarget.texture;
-                                child.material.envMapIntensity = 1.8 * currentGlassBoost;
-                                child.material.needsUpdate = true;
-                            }
-                        });
-                    }
-                    setPbrDiagnosticMode(currentPbrMode);
-                    sceneRight.add(modelRight);
-                    document.getElementById('loadingRight').style.display = 'none';
-                }, undefined, err => {
-                    console.error('Failed to load adaptive PBR model:', err);
-                    document.getElementById('loadingRight').innerHTML = '<div style="color:#ef4444;">Failed to load adaptive PBR model</div>';
-                });
-
-                setCameraPreset('tower');
-            } else {
-                document.getElementById('leftTitle').textContent = "ORIGINAL GOOGLE 3D TILE SCAN";
-                document.getElementById('leftStats').textContent = "70 Submeshes · Blurry 512² JPEG Atlases";
-                document.getElementById('rightTitle').textContent = "ALGORITHMIC UV & PBR ENHANCED (ATMOSPHERE & GLAZING)";
-                document.getElementById('rightStats').textContent = "70 Submeshes · KHR Materials · 3D Atmosphere (/spce/) · Window Reflections";
-
-                loader.load('models/spce_scan_studio_raw_tile.glb', gltf => {
-                    modelLeft = gltf.scene;
-                    sceneLeft.add(modelLeft);
-                    document.getElementById('loadingLeft').style.display = 'none';
-                }, undefined, err => {
-                    console.error('Failed to load left raw model:', err);
-                    document.getElementById('loadingLeft').innerHTML = '<div style="color:#ef4444;">Failed to load raw model</div>';
-                });
-
-                loader.load('models/nyc_empire_state_building_pbr_enhanced.glb', gltf => {
-                    modelRight = gltf.scene;
-                    if (envRenderTarget) {
-                        modelRight.traverse(child => {
-                            if (child.isMesh && child.material) {
-                                child.material.envMap = envRenderTarget.texture;
-                                child.material.envMapIntensity = 1.8 * currentGlassBoost;
-                                child.material.needsUpdate = true;
-                            }
-                        });
-                    }
-                    sceneRight.add(modelRight);
-                    document.getElementById('loadingRight').style.display = 'none';
-                }, undefined, err => {
-                    console.error('Failed to load right PBR model:', err);
-                    document.getElementById('loadingRight').innerHTML = '<div style="color:#ef4444;">Failed to load PBR model</div>';
-                });
-
-                setCameraPreset('tower');
-            }
-        }
-
-        function loadModels() {
-            switchPipelineModel('isolated');
+            loader.load('models/nyc_empire_state_building_pbr_enhanced.glb', gltf => {
+                modelRight = gltf.scene;
+                sceneRight.add(modelRight);
+                document.getElementById('loadingRight').style.display = 'none';
+            }, undefined, err => {
+                console.error('Failed to load right model:', err);
+                document.getElementById('loadingRight').innerHTML = '<div style="color:#ef4444;">Failed to load PBR model</div>';
+            });
         }
 
         function setCameraPreset(preset) {
-            document.querySelectorAll('#cameraPresetGroup .btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#controls3D .btn-group:nth-child(2) .btn').forEach(b => b.classList.remove('active'));
 
             if (preset === 'tower') {
                 document.getElementById('btnPresetTower').classList.add('active');
-                cameraLeft.position.set(0, 360, 480);
-                controlsLeft.target.set(0, 200, 0);
+                cameraLeft.position.set(-90, 480, 520);
+                controlsLeft.target.set(-91, 200, 16);
             } else if (preset === 'facade') {
                 document.getElementById('btnPresetFacade').classList.add('active');
-                cameraLeft.position.set(45, 270, 95);
-                controlsLeft.target.set(0, 240, 0);
-            } else if (preset === 'spire') {
-                document.getElementById('btnPresetSpire').classList.add('active');
-                cameraLeft.position.set(25, 395, 65);
-                controlsLeft.target.set(0, 380, 0);
+                cameraLeft.position.set(-30, 240, 180);
+                controlsLeft.target.set(-91, 190, 16);
             } else if (preset === 'street') {
                 document.getElementById('btnPresetStreet').classList.add('active');
-                cameraLeft.position.set(0, 30, 200);
-                controlsLeft.target.set(0, 160, 16);
+                cameraLeft.position.set(60, 45, 120);
+                controlsLeft.target.set(-60, 15, 30);
             } else if (preset === 'loupe') {
                 document.getElementById('btnPresetLoupe').classList.add('active');
-                cameraLeft.position.set(0, 250, 45);
-                controlsLeft.target.set(0, 250, 16);
+                cameraLeft.position.set(-5, 235, 38);
+                controlsLeft.target.set(0, 235, 0);
             }
 
             controlsLeft.update();
@@ -1407,12 +904,6 @@ const html = `<!DOCTYPE html>
         function animate() {
             requestAnimationFrame(animate);
 
-            const elapsed = clock.getElapsedTime();
-            if (skyDomeRight && skyDomeRight.visible) {
-                skyDomeRight.position.copy(cameraRight.position);
-                skyDomeRight.material.uniforms.uTime.value = elapsed;
-            }
-
             if (autoRotate && activeTab === '3d') {
                 controlsLeft.autoRotate = true;
                 controlsLeft.autoRotateSpeed = 1.0;
@@ -1438,5 +929,5 @@ const html = `<!DOCTYPE html>
 </html>
 `;
 
-fs.writeFileSync(path.join(__dirname, "../public/nyc_esb_proof.html"), html, "utf8");
-console.log("Successfully written public/nyc_esb_proof.html, size:", html.length);
+fs.writeFileSync('public/nyc_esb_proof.html', html, 'utf8');
+console.log('Successfully written public/nyc_esb_proof.html, size:', html.length);

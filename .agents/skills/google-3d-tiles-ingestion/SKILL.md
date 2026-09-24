@@ -72,13 +72,22 @@ The system provides two distinct, separate APIs to prevent mode confusion and cr
 
 ---
 
-## 4. Ingestion Quality Standards
+## 4. Ingestion Quality Standards & Zero-Building-Clipping Invariant
 
-All 3D tile captures adhere to strict photogrammetric standards:
+All 3D tile captures adhere to strict photogrammetric standards and architectural integrity rules:
 - **Leaf LOD Geometric Error**: `errorTarget <= 0.5` (guarantees leaf octree geometry rather than coarse city blocks).
 - **4K SSE Budget**: Screen-Space Error calculated against a $3840 \times 2160$ virtual viewport.
 - **Asynchronous Settle**: Execution waits until `stats.downloading === 0 && stats.parsing === 0`.
 - **Multi-Waypoint Pre-Warming**: Pre-warms camera waypoints `[0, 18, 36, 54, 71]` to load the entire flight corridor before collision detection or export.
+- **Atomic Building Integrity (Zero Building Clipping)**:
+  - Buildings, skyscrapers, and architectural entities are indivisible atomic units. Extraction boundaries must never slice through building envelopes or bisect vertical walls.
+  - Slicing through facades or rooms to expose open, non-manifold hollow "dollhouse" shells or roofless walls is strictly forbidden.
+- **Unbounded Vertical Skyward Extent ($Y_{\max} = +\infty$)**:
+  - Vertical extraction volumes must NEVER cap the skyward dimension. $Y_{\max}$ remains unbounded ($+\infty$) or $\ge 2,500\text{m}$, guaranteeing that architectural crowns, spires, and penthouses are 100% preserved. Ground datum cuts only apply below lowest foundation level ($Y \le Y_{\text{ground}}$).
+- **Multi-Tier Zenith Frustum Encompassment**:
+  - Headless tile streaming employs multi-tier high-altitude zenith cameras ($\ge 1,800\text{m} - 2,500\text{m}$, FOV 75°, far plane $\ge 25,000\text{m}$) and upward-inclined horizon cameras covering the full vertical envelope of metropolitan skylines to eliminate camera near-plane and frustum culling on skyscrapers.
+- **Boundary Dilation to Street Corridors**:
+  - Extraction boundaries snap to natural clearings (street canyons, plazas, or waterways). If a boundary intersects a structure, it dilates to encompass the complete connected building.
 
 ---
 
