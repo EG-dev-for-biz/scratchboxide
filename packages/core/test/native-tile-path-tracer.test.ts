@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+import { inflateSync } from 'zlib';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 import { resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
@@ -65,6 +66,29 @@ function readPngSize(pngPath: string): { width: number; height: number } {
     const buf = fs.readFileSync(pngPath);
     expect(buf.subarray(1, 4).toString('ascii')).toBe('PNG');
     return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+// Decodes an 8-bit grayscale, non-interlaced PNG whose scanlines all use filter type 0.
+function readGrayPng(pngPath: string): { width: number; height: number; pixels: Uint8Array } {
+    const buf = fs.readFileSync(pngPath);
+    const { width, height } = readPngSize(pngPath);
+    expect(buf[24]).toBe(8);
+    expect(buf[25]).toBe(0);
+    const idat: Buffer[] = [];
+    for (let offset = 8; offset < buf.length;) {
+        const length = buf.readUInt32BE(offset);
+        if (buf.subarray(offset + 4, offset + 8).toString('ascii') === 'IDAT') {
+            idat.push(buf.subarray(offset + 8, offset + 8 + length));
+        }
+        offset += 12 + length;
+    }
+    const raw = inflateSync(Buffer.concat(idat));
+    const pixels = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+        expect(raw[y * (width + 1)]).toBe(0);
+        pixels.set(raw.subarray(y * (width + 1) + 1, (y + 1) * (width + 1)), y * width);
+    }
+    return { width, height, pixels };
 }
 
 function psnr(a: Buffer, b: Buffer): number {
@@ -433,6 +457,26 @@ int main() {
         const service = new NativeTilePathTracerService();
         await expect(service.render({ glbPath: ARCH_GLB, outputDir: path.join(workDir, 'no_sun') } as any))
             .rejects.toThrow(/sun/i);
+    });
+
+    it('keeps contrast in the depth pass when the ground plane reaches the horizon', async () => {
+        const service = new NativeTilePathTracerService();
+        const result = await service.render({
+            glbPath: ARCH_GLB,
+            outputDir: path.join(workDir, 'depth_horizon'),
+            width: 96,
+            height: 64,
+            samplesPerPixel: 2,
+            maxBounces: 0,
+            camera: { auto: { pitchDeg: 4, headingDeg: 20 } },
+            sun: { elevationDeg: 40, azimuthDeg: 200 }
+        });
+        const { width, height, pixels } = readGrayPng(result.depthPngPath);
+        const covered = Array.from(pixels).filter(v => v > 0).sort((a, b) => a - b);
+        expect(covered.length).toBeGreaterThan(width * height * 0.2);
+        const p10 = covered[Math.floor(covered.length * 0.1)];
+        const p90 = covered[Math.floor(covered.length * 0.9)];
+        expect(p90 - p10).toBeGreaterThanOrEqual(40);
     });
 
     it('renders a tile end-to-end in relit and baked modes with the sun from the native ephemeris', async () => {

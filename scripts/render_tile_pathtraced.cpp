@@ -85,14 +85,18 @@ texture::ImageBuffer depthImage(const render::RenderOutput& out) {
         nearest = std::min(nearest, out.guides.depth[i]);
         farthest = std::max(farthest, out.guides.depth[i]);
     }
-    float range = std::max(farthest - nearest, 1e-3f);
+    // Inverse depth keeps nearby structure readable when the ground plane runs out to the horizon.
+    const float invNear = 1.0f / std::max(nearest, 1e-3f);
+    const float invFar = 1.0f / std::max(farthest, nearest + 1e-3f);
+    const float invRange = std::max(invNear - invFar, 1e-9f);
     texture::ImageBuffer image(out.width, out.height, 1);
     for (int y = 0; y < out.height; ++y) {
         for (int x = 0; x < out.width; ++x) {
             size_t i = static_cast<size_t>(y) * out.width + x;
             if (!out.guides.geometryMask[i]) continue;
-            float value = std::clamp(1.0f - (out.guides.depth[i] - nearest) / range, 0.0f, 1.0f);
-            image.data[i] = static_cast<uint8_t>(value * 255.0f + 0.5f);
+            float depth = std::max(out.guides.depth[i], 1e-3f);
+            float value = std::clamp((1.0f / depth - invFar) / invRange, 0.0f, 1.0f);
+            image.data[i] = static_cast<uint8_t>(1.0f + value * 254.0f + 0.5f);
         }
     }
     return image;
