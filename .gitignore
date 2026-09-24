@@ -26,6 +26,8 @@ service-account.json
 .scratchbox/
 dist-electron/
 models/
+# Source code, not model files.
+!packages/core/src/node/models/
 build/
 *.ckpt
 *.safetensors
