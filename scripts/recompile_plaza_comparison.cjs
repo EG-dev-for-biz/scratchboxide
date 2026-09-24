@@ -39,9 +39,13 @@ for (const kf of keyframes) {
   execSync(`/opt/homebrew/bin/ffmpeg -y -i "${videoRefPath}" -vf "select=eq(n\\,${kf.index})" -vframes 1 "${blockoutImg}"`, { stdio: 'pipe' });
 
   if (fs.existsSync(brainDir)) {
-    fs.copyFileSync(compImg, path.join(brainDir, path.basename(compImg)));
-    fs.copyFileSync(omniImg, path.join(brainDir, path.basename(omniImg)));
-    fs.copyFileSync(blockoutImg, path.join(brainDir, path.basename(blockoutImg)));
+    try {
+      fs.copyFileSync(compImg, path.join(brainDir, path.basename(compImg)));
+      fs.copyFileSync(omniImg, path.join(brainDir, path.basename(omniImg)));
+      fs.copyFileSync(blockoutImg, path.join(brainDir, path.basename(blockoutImg)));
+    } catch (_e) {
+      // Ignore copy error if running in sandboxed environment
+    }
   }
 
   console.log(`   ✓ Keyframe ${kf.label} (Frame ${kf.frameNumber}/361 @ ${kf.timeStr}): Extracted & verified`);

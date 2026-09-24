@@ -561,6 +561,26 @@ export {
 export {
     CharacterImageMorphEstimator
 } from './node/spatial/CharacterImageMorphEstimator';
+export {
+    AdaptiveMatchmoveCalibrationService,
+    type AdaptiveMatchmoveContext,
+    type SpatialAnchorCorrespondence,
+    type LensIntrinsicsProfile,
+    type KeyframeCalibrationState,
+    type TrajectoryFrameState,
+    type SequenceMetrologyReport,
+    type OptimizationOptions as AdaptiveOptimizationOptions,
+    type PoseAnchorExtractionOptions,
+    AdaptiveKeyframeDensityOptimizer,
+    type MotionAdaptiveConfig,
+    type KeyframeSelectionResult,
+    type TrajectoryInputPoint,
+    type SelectedKeyframeAnchor
+} from './node/spatial/AdaptiveMatchmoveCalibrationService';
+export {
+    ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
+    adaptiveMatchmoveHandlers
+} from './node/gemini/tools/adaptive-matchmove-tools';
 
 // Gemini Multimodal Scene Depth Services
 export {

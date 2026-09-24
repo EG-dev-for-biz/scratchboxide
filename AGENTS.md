@@ -343,14 +343,31 @@ When executing prompt-driven mesh deformation, organic sculpting, or parametric 
      - **Non-Linear Deformers**: Taper, Twist, Bend, Bulge, Squash, Shear with smooth cubic Hermite and polynomial transitions.
      - **Free-Form Deformation**: Trivariate Bernstein polynomial tensor lattices (`Lattice3D`).
      - **Multi-Brush Digital Sculpting**: Clay, Crease, Smooth, Flatten, and Inflate with spatial acceleration.
-     - **Topology & Subdivision**: Loop subdivision polygonization and manifold degenerate cleanup (`MeshTopologyCleaner`).
+   - **Topology & Subdivision**: Loop subdivision polygonization and manifold degenerate cleanup (`MeshTopologyCleaner`).
 2. **Canonical Codebase APIs, Operators & Agent Tools**:
    - **Standalone Functions**: `reshapeMesh(options)` and `parsePromptToMeshOperations(prompt, bounds)` in `@scratchbox/core` and `@scratchbox/core/node`.
    - **Core Service**: `NativeMeshReshaperService` (aliased as `MeshReshapingService`) in `@scratchbox/core` and `@scratchbox/core/node`.
    - **Canvas Direct-Dispatch Operator**: `sb_reshape_mesh` in `packages/core/src/browser/generative-canvas/services/operators/mesh-edit-operators.ts` for real-time in-memory Three.js deformation.
+    - **In-App Gemini Agent Tools**:
+      - `mesh_reshape_via_prompt({ prompt, inputGlbPath, benchmark, outputGlbPath })`: Natural-language-driven mesh reshaping.
+      - `mesh_apply_deformers({ operations, inputGlbPath, benchmark, outputGlbPath })`: Explicit parametric deformation pipeline.
+
+## Adaptive Keyframe Calibration & 6-DOF Matchmove Directive
+
+### Rule: Sub-Pixel Sequence Calibration & C2 Hermite Trajectory Synthesis
+When solving camera matchmoves, optical resection, and live-action plate alignment with 3D geospatial tiles or geometry:
+1. **Adaptive Domain Calibration Engine**:
+   - Resect camera poses via `AdaptiveMatchmoveCalibrationService` using Levenberg-Marquardt bundle adjustment and robust Huber loss outlier rejection against 3D-to-2D spatial anchor correspondences.
+   - Enforce rigorous metrology thresholds: Sequence Mean Reprojection RMS $< 0.05\text{ px}$, Sobel Edge Normalized Cross Correlation (NCC) $\ge 98.0\%$, and physical drone flight safety limits (velocity $< 15\text{ m/s}$, acceleration $< 10\text{ m/s}^2$).
+   - Dynamically model Brown-Conrady radial lens distortion and optical focal breathing ($k_1, k_2$).
+   - Synthesize smooth, non-uniform $C^2$ Hermite cubic spline trajectories with gimbal-free facade-normal slerp to eliminate roll jitter.
+2. **Canonical Codebase APIs & In-App Gemini Agent Tools**:
+   - **Core Service**: `AdaptiveMatchmoveCalibrationService` in `@scratchbox/core` and `@scratchbox/core/node`.
    - **In-App Gemini Agent Tools**:
-     - `mesh_reshape_via_prompt({ prompt, inputGlbPath, benchmark, outputGlbPath })`: Natural-language-driven mesh reshaping.
-     - `mesh_apply_deformers({ operations, inputGlbPath, benchmark, outputGlbPath })`: Explicit parametric deformation pipeline.
+     - `adaptive_matchmove_calibrate_sequence({ sequencePath, landmark, context, milestones, outputCameraPath, outputReportPath, ... })`: End-to-end multi-milestone bundle adjustment, spline synthesis, and metrology certification.
+     - `adaptive_matchmove_resect_keyframe({ anchors, cameraPosition, targetPosition, lens, ... })`: Single keyframe 6-DOF pose and lens breathing solver.
+     - `adaptive_matchmove_synthesize_trajectory({ milestones, fps, totalFrames, durationSec, facadeNormal, ... })`: Continuous $C^2$ spline generator with full velocity/acceleration telemetry.
+     - `adaptive_matchmove_verify_metrology({ report, reportPath, maxAllowedRmsPx, minAllowedCorrelationPercent, ... })`: Automated metrology audit and pass/fail gate.
 
 ## Code-First Live Preview & In-Situ Commenting Directive
 
@@ -411,8 +428,9 @@ When leveraging Scratchbox's unique superpowers to solve user tasks:
      - **Optical Resection & Alignment**: `geobox_resect_image_location`, `geobox_resect_camera_pose`, `geobox_harmonize_location_lighting`, `geobox_optimize_edge_alignment`, `optics_configure_lens_distortion`.
      - **WebXR Geospatial Anchor Bridge**: `webxr_geospatial_align_coordinates`, `webxr_geospatial_calibrate`, `webxr_geospatial_project_vectors`.
      - **Atmospheric Scattering & Ephemeris**: `atmosphere_calculate_solar_position`, `atmosphere_get_diurnal_profile`, `atmosphere_configure_scene`, `atmosphere_estimate_from_image`, `atmosphere_harmonize_location_3d`.
-     - **Native C++ Mesh Reshaping**: `mesh_reshape_via_prompt`, `mesh_apply_deformers`.
-     - **AI Beautify & VFX Prompting**: `build_beautify_prompt`.
+      - **Native C++ Mesh Reshaping**: `mesh_reshape_via_prompt`, `mesh_apply_deformers`.
+      - **Adaptive Keyframe Calibration & 6-DOF Matchmove**: `adaptive_matchmove_calibrate_sequence`, `adaptive_matchmove_resect_keyframe`, `adaptive_matchmove_synthesize_trajectory`, `adaptive_matchmove_verify_metrology`.
+      - **AI Beautify & VFX Prompting**: `build_beautify_prompt`.
      - **ComfyUI Autonomous Fallback & Cloud Run L4**: `comfyui_get_status`, `comfyui_research_pipeline`, `comfyui_cloudrun_status`, `comfyui_cloudrun_sync_upstream`, `comfyui_inject_dynamic_code`, `comfyui_execute_pipeline`.
      - **Canvas Primitives & Codebase Lenses**: `mount_canvas_primitive`, `lens_project`, `lens_unproject`, `lens_list_bindings`, `lens_sync`, `browser_navigate`, `browser_snapshot`, `browser_extract_content`, `browser_click`, `browser_type`, `browser_evaluate`.
      - **Workspace & Subagents**: `workspace_read_file`, `workspace_view_file`, `workspace_write_file`, `workspace_apply_diff`, `workspace_list_directory`, `workspace_search`, `workspace_grep_search`, `workspace_find_by_name`, `workspace_run_command`, `workspace_get_diagnostics`, `workspace_find_symbols`, `workspace_semantic_search`, `invoke_subagent`.

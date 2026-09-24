@@ -538,6 +538,8 @@ export class MediaPipePoseService {
                 resolve(null);
             });
 
+            child.stdin.on('error', () => {});
+
             try {
                 child.stdin.write(imageBuffer);
                 child.stdin.end();

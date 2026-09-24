@@ -21,32 +21,42 @@ function lerp(a, b, t) {
 }
 
 // 25 Calibrated Dense Milestones across 15.041667 seconds (361 frames @ 24fps)
+// Grounded in optical vanishing point geometry and facade-normal orthogonality:
+// Frames 1-106 maintain upward pitch (+21.4° down to +15.0°) and squared facade heading.
+// Pitch transition down occurs at canopy approach (Frame 121-166) landing at nadir (Frame 181-361).
 const MILESTONES = [
-  { frame: 1, time: 0.00, pos: [57.0, 82.0, 4.0], target: [35.0, 70.0, 4.0], pitch: -30.0, fov: 46.0, tiltFraction: 0.0 },
-  { frame: 15, time: 0.60, pos: [55.5, 78.2, 5.1], target: [35.0, 65.5, 5.0], pitch: -31.0, fov: 46.0, tiltFraction: 0.02 },
-  { frame: 30, time: 1.20, pos: [54.0, 74.5, 6.2], target: [35.0, 61.2, 6.0], pitch: -32.0, fov: 46.0, tiltFraction: 0.04 },
-  { frame: 46, time: 1.88, pos: [52.4, 70.3, 7.5], target: [35.0, 56.5, 7.2], pitch: -33.5, fov: 46.0, tiltFraction: 0.07 },
-  { frame: 61, time: 2.50, pos: [50.8, 64.8, 9.0], target: [35.0, 50.0, 9.0], pitch: -35.2, fov: 46.0, tiltFraction: 0.10 },
-  { frame: 76, time: 3.13, pos: [49.2, 58.5, 10.4], target: [35.0, 41.5, 10.4], pitch: -37.0, fov: 46.0, tiltFraction: 0.14 },
-  { frame: 91, time: 3.76, pos: [47.8, 51.5, 12.0], target: [35.0, 33.2, 12.2], pitch: -41.0, fov: 46.0, tiltFraction: 0.20 },
-  { frame: 106, time: 4.38, pos: [46.2, 44.2, 13.8], target: [35.0, 25.0, 14.5], pitch: -46.5, fov: 46.0, tiltFraction: 0.28 },
-  { frame: 121, time: 5.01, pos: [44.8, 37.0, 16.2], target: [35.0, 17.5, 16.8], pitch: -53.0, fov: 46.0, tiltFraction: 0.38 },
-  { frame: 136, time: 5.64, pos: [43.8, 30.5, 18.2], target: [35.0, 10.8, 19.2], pitch: -61.0, fov: 46.0, tiltFraction: 0.50 },
-  { frame: 151, time: 6.26, pos: [43.2, 27.2, 19.8], target: [35.0, 6.8, 20.4], pitch: -68.5, fov: 46.0, tiltFraction: 0.62 },
-  { frame: 166, time: 6.89, pos: [42.8, 24.2, 21.0], target: [35.0, 4.0, 21.5], pitch: -74.0, fov: 46.0, tiltFraction: 0.72 },
-  { frame: 181, time: 7.52, pos: [42.7, 21.6, 22.0], target: [35.0, 1.8, 22.4], pitch: -80.0, fov: 46.0, tiltFraction: 0.81 },
-  { frame: 196, time: 8.14, pos: [42.6, 19.2, 22.8], target: [35.0, 0.4, 23.2], pitch: -85.0, fov: 46.0, tiltFraction: 0.88 },
-  { frame: 211, time: 8.77, pos: [42.6, 17.5, 23.2], target: [38.5, 0.2, 23.4], pitch: -87.5, fov: 46.0, tiltFraction: 0.93 },
-  { frame: 226, time: 9.40, pos: [42.6, 16.0, 23.4], target: [40.5, 0.1, 23.5], pitch: -88.8, fov: 46.0, tiltFraction: 0.96 },
-  { frame: 241, time: 10.02, pos: [42.6, 14.8, 23.5], target: [41.8, 0.0, 23.5], pitch: -89.5, fov: 46.0, tiltFraction: 0.98 },
-  { frame: 256, time: 10.65, pos: [42.6, 13.8, 23.5], target: [42.4, 0.0, 23.5], pitch: -89.8, fov: 46.0, tiltFraction: 0.99 },
-  { frame: 271, time: 11.28, pos: [42.6, 13.0, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 286, time: 11.90, pos: [42.6, 12.3, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 301, time: 12.53, pos: [42.6, 11.8, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 316, time: 13.16, pos: [42.6, 11.3, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 331, time: 13.78, pos: [42.6, 10.9, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 346, time: 14.41, pos: [42.6, 10.6, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 },
-  { frame: 361, time: 15.00, pos: [42.6, 10.5, 23.5], target: [42.6, 0.0, 23.5], pitch: -90.0, fov: 46.0, tiltFraction: 1.0 }
+  // Phase 1: Mansard Roof & Turret Apex
+  { frame: 1,   time: 0.00, pos: [46.5, 67.0, 0.4],  target: [32.0, 72.8, 3.4],     pitch: 21.4, fov: 52.0, tiltFraction: 0.00 },
+  { frame: 15,  time: 0.60, pos: [47.0, 63.5, 3.0],  target: [33.0, 69.324, -4.761], pitch: 20.0, fov: 50.0, tiltFraction: 0.00 },
+  { frame: 30,  time: 1.20, pos: [47.4, 59.5, 6.0],  target: [33.0, 65.178, -1.982], pitch: 19.0, fov: 48.0, tiltFraction: 0.00 },
+  { frame: 46,  time: 1.88, pos: [47.5, 54.5, 9.0],  target: [33.0, 59.883, 0.963],  pitch: 18.0, fov: 46.0, tiltFraction: 0.00 },
+  { frame: 61,  time: 2.50, pos: [47.2, 49.5, 11.5], target: [33.0, 54.619, 3.629],  pitch: 17.5, fov: 46.0, tiltFraction: 0.00 },
+
+  // Phase 2: Facade Descent & Bay Windows (KF 6-8, Frames 76-106)
+  { frame: 76,  time: 3.13, pos: [46.8, 44.5, 13.8], target: [33.0, 49.323, 6.151],  pitch: 17.0, fov: 46.0, tiltFraction: 0.00 },
+  { frame: 91,  time: 3.76, pos: [46.2, 40.0, 15.5], target: [33.0, 44.471, 8.183],  pitch: 16.5, fov: 46.0, tiltFraction: 0.00 },
+  { frame: 106, time: 4.38, pos: [45.5, 34.5, 17.5], target: [33.0, 38.332, 10.571], pitch: 15.0, fov: 46.0, tiltFraction: 0.00 },
+
+  // Phase 3: Canopy Inflection (KF 9-12, Frames 121-166)
+  { frame: 121, time: 5.01, pos: [44.8, 28.0, 19.5], target: [33.0, 28.825, 12.959], pitch: 3.5,   fov: 46.0, tiltFraction: 0.15 },
+  { frame: 136, time: 5.64, pos: [43.8, 22.5, 21.2], target: [36.0, 10.0, 21.8],    pitch: -55.0, fov: 46.0, tiltFraction: 0.45 },
+  { frame: 151, time: 6.26, pos: [43.2, 18.5, 22.2], target: [38.5, 4.0, 22.8],     pitch: -70.0, fov: 46.0, tiltFraction: 0.70 },
+  { frame: 166, time: 6.89, pos: [42.8, 16.0, 22.8], target: [41.0, 1.5, 23.2],     pitch: -82.0, fov: 46.0, tiltFraction: 0.85 },
+
+  // Phase 4: Nadir Landing (KF 13-25, Frames 181-361)
+  { frame: 181, time: 7.52, pos: [42.6, 14.5, 23.5], target: [42.6, 0.0, 23.5],     pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 196, time: 8.14, pos: [42.6, 13.8, 23.5], target: [42.6, 0.0, 23.5],     pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 211, time: 8.77, pos: [42.6, 13.2, 23.5], target: [42.6, 0.0, 23.5],     pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 226, time: 9.40, pos: [42.6, 12.7, 23.5], target: [42.6, 0.0, 23.5],     pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 241, time: 10.02, pos: [42.6, 12.2, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 256, time: 10.65, pos: [42.6, 11.8, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 271, time: 11.28, pos: [42.6, 11.4, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 286, time: 11.90, pos: [42.6, 11.1, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 301, time: 12.53, pos: [42.6, 10.9, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 316, time: 13.16, pos: [42.6, 10.7, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 331, time: 13.78, pos: [42.6, 10.6, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 346, time: 14.41, pos: [42.6, 10.5, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 },
+  { frame: 361, time: 15.00, pos: [42.6, 10.5, 23.5], target: [42.6, 0.0, 23.5],    pitch: -90.0, fov: 46.0, tiltFraction: 1.00 }
 ];
 
 function generateTrajectory(totalFrames = 361, fps = 24) {

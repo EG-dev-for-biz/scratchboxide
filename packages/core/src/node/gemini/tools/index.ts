@@ -18,6 +18,7 @@ export * from './vfx-video-tools';
 export * from './mesh-shaping-tools';
 export * from './nano-banana-tools';
 export * from './algorithmic-uv-tools';
+export * from './adaptive-matchmove-tools';
 export * from './botanical-tree-tools';
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -58,6 +59,10 @@ import {
     aiBeautifyHandlers
 } from './vfx-video-tools';
 import {
+    ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
+    adaptiveMatchmoveHandlers
+} from './adaptive-matchmove-tools';
+import {
     BOTANICAL_TREE_TOOL_DECLARATIONS,
     botanicalTreeHandlers
 } from './botanical-tree-tools';
@@ -69,6 +74,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
+    ...ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
     ...VFX_VIDEO_TOOL_DECLARATIONS,
     ...NANO_BANANA_TOOL_DECLARATIONS,
     ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
@@ -92,6 +98,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...google3DTilesHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
+    ...adaptiveMatchmoveHandlers,
     ...vfxVideoHandlers,
     ...nanoBananaHandlers,
     ...algorithmicUvHandlers,

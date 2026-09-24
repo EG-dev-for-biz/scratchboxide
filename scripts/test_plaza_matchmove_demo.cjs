@@ -224,7 +224,8 @@ async function main() {
   });
   console.log('DIAGNOSTIC PROBE RESULT:', JSON.stringify(probe.result?.value));
 
-  const artifactDir = '/Users/eligreen/.gemini/antigravity/brain/302f27b2-ea15-4504-9423-02fca3dc2393';
+  const artifactDir = process.env.ARTIFACT_DIR || '/Users/eligreen/.gemini/antigravity/brain/9cd6845c-841b-493a-8c62-35af56cd0f4d';
+  if (!fs.existsSync(artifactDir)) fs.mkdirSync(artifactDir, { recursive: true });
 
   // 1. Capture Initial Landing State (Keyframe 1 - Roofline & 3D Spline)
   console.log('\n--- CAPTURING STAGE 1: DEMO LANDING & 3D TRAJECTORY VIEW ---');

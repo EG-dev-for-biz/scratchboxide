@@ -148,6 +148,24 @@ export {
     type PerformerKinematicsFrame,
     type PerformerTelemetry
 } from './browser/generative-canvas/services/ConcertStagePerformerService';
+
+// Adaptive Domain Architecture 6-DOF Matchmove & Universal Keyframe Calibration
+export type {
+    AdaptiveMatchmoveCalibrationService,
+    AdaptiveMatchmoveContext,
+    SpatialAnchorCorrespondence,
+    LensIntrinsicsProfile,
+    KeyframeCalibrationState,
+    TrajectoryFrameState,
+    SequenceMetrologyReport,
+    OptimizationOptions,
+    PoseAnchorExtractionOptions,
+    AdaptiveKeyframeDensityOptimizer,
+    MotionAdaptiveConfig,
+    KeyframeSelectionResult,
+    TrajectoryInputPoint,
+    SelectedKeyframeAnchor
+} from './node/spatial/AdaptiveMatchmoveCalibrationService';
 export type {
     TextureCompressionService,
     TextureMapType,

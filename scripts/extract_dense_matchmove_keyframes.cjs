@@ -48,16 +48,16 @@ for (const item of DENSE_SCHEDULE) {
   const outOmni = path.join(imagesDir, `dense_plaza_omni_kf${padKf}_f${item.frame}.png`);
   const outComp = path.join(imagesDir, `dense_plaza_comparison_kf${padKf}_f${item.frame}.png`);
 
-  if (!fs.existsSync(outBlockout) && fs.existsSync(blockoutVideo)) {
-    execSync(`ffmpeg -ss ${item.time} -i "${blockoutVideo}" -vframes 1 -q:v 2 "${outBlockout}" -y 2>/dev/null`);
+  if (fs.existsSync(blockoutVideo)) {
+    execSync(`ffmpeg -y -ss ${item.time} -i "${blockoutVideo}" -vframes 1 -q:v 2 "${outBlockout}" 2>/dev/null`);
     console.log(`Extracted blockout kf ${padKf} at ${item.time}s`);
   }
   if (!fs.existsSync(outOmni) && fs.existsSync(omniVideo)) {
-    execSync(`ffmpeg -ss ${item.time} -i "${omniVideo}" -vframes 1 -q:v 2 "${outOmni}" -y 2>/dev/null`);
+    execSync(`ffmpeg -y -ss ${item.time} -i "${omniVideo}" -vframes 1 -q:v 2 "${outOmni}" 2>/dev/null`);
     console.log(`Extracted omni kf ${padKf} at ${item.time}s`);
   }
-  if (!fs.existsSync(outComp) && fs.existsSync(compVideo)) {
-    execSync(`ffmpeg -ss ${item.time} -i "${compVideo}" -vframes 1 -q:v 2 "${outComp}" -y 2>/dev/null`);
+  if (fs.existsSync(compVideo)) {
+    execSync(`ffmpeg -y -ss ${item.time} -i "${compVideo}" -vframes 1 -q:v 2 "${outComp}" 2>/dev/null`);
     console.log(`Extracted comparison kf ${padKf} at ${item.time}s`);
   }
 }
