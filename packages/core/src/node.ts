@@ -98,6 +98,18 @@ export {
     MeshReshapingResult
 } from './node/3d-engine/native-mesh-reshaper-service';
 export {
+    NativeTilePathTracerService,
+    TileShadingMode,
+    TileViewLook,
+    TileSunSpec,
+    TileCameraSpec,
+    TileAutoCameraSpec,
+    TileAtmosphereSpec,
+    TilePathTraceRequest,
+    TilePathTraceStats,
+    TilePathTraceResult
+} from './node/3d-engine/native-tile-path-tracer-service';
+export {
     ColmapReconstructionService,
     ColmapCameraModel,
     ColmapGlbOptions,

@@ -70,6 +70,12 @@
 #include "scratchbox_colmap.hpp"
 #include "scratchbox_spz.hpp"
 #include "scratchbox_gaussian_opt.hpp"
+#include "scratchbox_jpeg.hpp"
+#include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_sky.hpp"
+#include "scratchbox_view_transform.hpp"
+#include "scratchbox_denoise.hpp"
+#include "scratchbox_pathtracer.hpp"
 
 namespace sb = scratchbox;
 namespace gopt = scratchbox::gaussian_opt;
