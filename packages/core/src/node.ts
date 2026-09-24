@@ -581,3 +581,26 @@ export {
     type GlbCompressionOptions
 } from './node/texture-compression-service';
 
+// SB-Archi Monumental Architecture Inversion Service
+export {
+    SbArchiService,
+    type SbArchiInversionOptions,
+    type SbArchiTelemetry,
+    type SbArchiInversionResult,
+    type ArchConstantineOptions,
+    type ArchConstantineResult,
+    type TectonicAnalysisReport
+} from './node/3d-engine/sb-archi-service';
+
+// SB-Archi Universal Architectural Bridge Service
+export {
+    UniversalArchiBridgeService,
+    type SupportedArchiTypology,
+    type ArchiTypologyAdapter,
+    ARCHI_TYPOLOGY_ADAPTERS,
+    type SpatialArchiEntity,
+    type ArchiSynthesisBridgeOptions,
+    type ArchiSynthesisBridgeResult,
+    generateProceduralArchiGlb
+} from './node/spatial/UniversalArchiBridgeService';
+

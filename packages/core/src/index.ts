@@ -151,4 +151,28 @@ export type {
     GlbCompressionOptions
 } from './node/texture-compression-service';
 
+export { SbArchiService } from './node/3d-engine/sb-archi-service';
+export type {
+    RomanOrderType,
+    ArchiSectionMode,
+    ArchiPbrMode,
+    SbArchiParams,
+    SbArchiInversionOptions,
+    SbArchiTelemetry,
+    SbArchiInversionResult,
+    ClassicalOrder,
+    TectonicStructureClass,
+    TectonicAnalysisReport
+} from './common/spatial/sb-archi-protocol';
+
+export type {
+    UniversalArchiBridgeService,
+    SupportedArchiTypology,
+    ArchiTypologyAdapter,
+    SpatialArchiEntity,
+    ArchiSynthesisBridgeOptions,
+    ArchiSynthesisBridgeResult
+} from './node/spatial/UniversalArchiBridgeService';
+
+
 

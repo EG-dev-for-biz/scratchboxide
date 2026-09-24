@@ -63,3 +63,5 @@ export * from './common/tracking/PointTrackingModel';
 
 
 
+// SB-Archi Parametric Architecture & Inversion Protocols
+export * from './common/spatial/sb-archi-protocol';

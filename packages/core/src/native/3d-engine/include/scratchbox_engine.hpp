@@ -80,6 +80,10 @@
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_atmosphere.hpp"
 #include "scratchbox_lens_shader.hpp"
+#include "scratchbox_sb_archi.hpp"
+#include "scratchbox_sb_archi_optimizer.hpp"
+#include "scratchbox_tectonics.hpp"
+#include "scratchbox_tectonic_analyzer.hpp"
 
 namespace sb = scratchbox;
 namespace gopt = scratchbox::gaussian_opt;
@@ -126,6 +130,10 @@ namespace qrm = scratchbox::remesh;
 namespace rep = scratchbox::reprojector;
 namespace clm = scratchbox::colmap;
 namespace spz = scratchbox::spz;
+namespace archi = scratchbox::sb_archi;
+namespace sb_archi = scratchbox::sb_archi;
+namespace tct = scratchbox::tectonics;
+namespace tectonics = scratchbox::tectonics;
 
 using namespace scratchbox;
 
