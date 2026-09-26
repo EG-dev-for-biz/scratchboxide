@@ -732,20 +732,39 @@ class GeoBoxPrecisionPipeline:
         if self.api_key:
             try:
                 if hint_query:
-                    url = (
-                        f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?"
-                        f"input={requests.utils.quote(hint_query)}&inputtype=textquery&"
-                        f"fields=formatted_address,name,geometry,place_id,types&key={self.api_key}"
-                    )
+                    # 1. Direct Places Text Search with proximity biasing from Stage 1
+                    url_text = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(hint_query)}&key={self.api_key}"
+                    if lat and lng:
+                        url_text += f"&location={lat},{lng}&radius=35000"
+                    resp = requests.get(url_text, timeout=8).json()
+                    candidates = resp.get("results")
+
+                    # 2. If no direct candidates, try normalizing common abbreviations (e.g. esb -> Empire State Building, 5thave -> 5th Ave)
+                    if not candidates:
+                        norm_hint = re.sub(r"(\d+)(ave|st|nd|rd|th|avenue|street)", r"\1 \2", hint_query, flags=re.I)
+                        norm_hint = re.sub(r"\besb\b", "Empire State Building", norm_hint, flags=re.I)
+                        norm_hint = re.sub(r"\bgap\b", "Grand Army Plaza", norm_hint, flags=re.I)
+                        norm_hint = re.sub(r"\bwtc\b", "World Trade Center", norm_hint, flags=re.I)
+                        if abs(lat - 40.7) < 1.5:
+                            norm_hint += " New York"
+                        url_norm = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(norm_hint)}&key={self.api_key}"
+                        resp2 = requests.get(url_norm, timeout=8).json()
+                        candidates = resp2.get("results")
+
+                    # 3. If still no candidates, try Geocoding API
+                    if not candidates:
+                        url_geo = f"https://maps.googleapis.com/maps/api/geocode/json?address={requests.utils.quote(hint_query)}&key={self.api_key}"
+                        resp3 = requests.get(url_geo, timeout=8).json()
+                        candidates = resp3.get("results")
                 else:
                     url = (
                         f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
                         f"location={lat},{lng}&rankby=prominence&radius=30000&"
                         f"type=tourist_attraction|point_of_interest|lodging&key={self.api_key}"
                     )
+                    resp = requests.get(url, timeout=10).json()
+                    candidates = resp.get("candidates") or resp.get("results")
 
-                resp = requests.get(url, timeout=10).json()
-                candidates = resp.get("candidates") or resp.get("results")
                 if candidates:
                     best = candidates[0]
                     landmark_name = best.get("name", landmark_name)
@@ -755,6 +774,14 @@ class GeoBoxPrecisionPipeline:
                     resolved_lng = geom.get("lng", resolved_lng)
                     place_id = best.get("place_id", "")
                     types = best.get("types", types)
+
+                    # Extract neighborhood & city from address components if available
+                    for comp in best.get("address_components", []):
+                        ctypes = comp.get("types", [])
+                        if "neighborhood" in ctypes or "sublocality" in ctypes:
+                            neighborhood = comp.get("long_name", neighborhood)
+                        elif "locality" in ctypes or "postal_town" in ctypes:
+                            city = comp.get("long_name", city)
             except Exception as e:
                 print(f"⚠️ [Stage 2] Google Places API warning: {e}")
 
