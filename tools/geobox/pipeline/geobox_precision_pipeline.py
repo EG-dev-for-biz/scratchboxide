@@ -758,19 +758,27 @@ class GeoBoxPrecisionPipeline:
             except Exception as e:
                 print(f"⚠️ [Stage 2] Google Places API warning: {e}")
 
-        # When hint is omitted or generic, check if the coarse neural cluster (within 35 km) matches known landmarks
+        # When hint is omitted or generic, find the closest iconic landmark within the coarse neural cluster (<= 35 km)
         if not hint_query:
+            closest_k = None
+            closest_dist = 35.0
             for k, v in LANDMARK_METROLOGY.items():
                 if "vantage_points" in v and len(v["vantage_points"]) > 0:
                     vp = v["vantage_points"][0]
-                    if haversine_distance(lat, lng, vp["lat"], vp["lng"]) < 35.0:
-                        resolved_lat = vp["lat"]
-                        resolved_lng = vp["lng"]
-                        landmark_name = v.get("landmark_name", k.replace("_", " ").title())
-                        formatted_address = v.get("formatted_address", "")
-                        neighborhood = v.get("neighborhood", "")
-                        city = v.get("city_state_country") or v.get("borough_city", "")
-                        break
+                    d = haversine_distance(lat, lng, vp["lat"], vp["lng"])
+                    if d < closest_dist:
+                        closest_dist = d
+                        closest_k = k
+
+            if closest_k:
+                v = LANDMARK_METROLOGY[closest_k]
+                vp = v["vantage_points"][0]
+                resolved_lat = vp["lat"]
+                resolved_lng = vp["lng"]
+                landmark_name = v.get("landmark_name", closest_k.replace("_", " ").title())
+                formatted_address = v.get("formatted_address", "")
+                neighborhood = v.get("neighborhood", "")
+                city = v.get("city_state_country") or v.get("borough_city", "")
 
         # Retrieve rich metadata from LANDMARK_METROLOGY if available
         matched_metro = None
