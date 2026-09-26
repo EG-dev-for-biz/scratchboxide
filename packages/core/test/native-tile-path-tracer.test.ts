@@ -16,6 +16,7 @@ import { inflateSync } from 'zlib';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 import { resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
+import { decodePng } from '../src/node/texture-processing';
 
 const REPO_ROOT = process.cwd();
 const TILE_GLB = path.resolve(REPO_ROOT, 'public/models/nyc_grand_army_plaza_raw.glb');
@@ -512,5 +513,36 @@ int main() {
             expect(result.stats.sun.direction[2]).toBeGreaterThan(0);
             expect(Math.abs(result.stats.sun.direction[0])).toBeLessThan(0.1);
         }
+    });
+
+    it('renders a geometry-only clay blockout with one uniform albedo in place of the captured textures', async () => {
+        const service = new NativeTilePathTracerService();
+        const common = {
+            glbPath: ARCH_GLB, width: 96, height: 64, samplesPerPixel: 4, maxBounces: 1, groundPlane: false,
+            shadingMode: 'relit' as const, sun: { elevationDeg: 50, azimuthDeg: 200 }
+        };
+        const textured = await service.render({ ...common, outputDir: path.join(workDir, 'clay_off') });
+        const clay = await service.render({ ...common, outputDir: path.join(workDir, 'clay_on'), clay: { albedo: [0.716, 0.672, 0.61] } });
+
+        // Fraction of geometry pixels whose albedo is within 4 levels of the most common albedo colour.
+        const dominantShare = (pngPath: string) => {
+            const { width, height, rgba } = decodePng(fs.readFileSync(pngPath));
+            const counts = new Map<number, number>();
+            const colours: number[][] = [];
+            for (let i = 0; i < width * height; i++) {
+                const c = [rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]];
+                if (Math.max(...c) <= 8) continue;
+                colours.push(c);
+                const key = (c[0] << 16) | (c[1] << 8) | c[2];
+                counts.set(key, (counts.get(key) ?? 0) + 1);
+            }
+            const mode = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+            const m = [(mode >> 16) & 255, (mode >> 8) & 255, mode & 255];
+            return colours.filter(c => c.every((v, k) => Math.abs(v - m[k]) <= 4)).length / colours.length;
+        };
+        expect(clay.stats.nanSamples).toBe(0);
+        expect(clay.stats.geometryCoverage).toBeCloseTo(textured.stats.geometryCoverage, 2);
+        expect(dominantShare(clay.albedoPngPath)).toBeGreaterThan(0.9);
+        expect(dominantShare(textured.albedoPngPath)).toBeLessThan(0.5);
     });
 });

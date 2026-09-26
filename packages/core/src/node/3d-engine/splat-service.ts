@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as fs from 'fs';
+import { decodeSpz } from '../../common/splat-spz-codec';
 import * as path from 'path';
 import * as zlib from 'zlib';
 import { exec } from 'child_process';
@@ -265,124 +266,22 @@ export class SplatService {
      */
     static parseSpzBuffer(buffer: Buffer | ArrayBuffer): BakedGaussian[] {
         let raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-        if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
-            raw = zlib.gunzipSync(raw);
-        }
-        if (raw.length < 16) throw new Error('SPZ buffer too small for header');
-
-        const magic = raw.readUInt32LE(0);
+        if (raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b) raw = zlib.gunzipSync(raw);
+        const d = decodeSpz(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength));
+        const shPer = d.sh ? d.sh.length / Math.max(1, d.count) : 0;
         const splats: BakedGaussian[] = [];
-
-        if (magic === 0x5053474e) {
-            const version = raw.readUInt32LE(4);
-            const n = raw.readUInt32LE(8);
-            const shDegree = raw.readUInt8(12);
-            const fractionalBits = raw.readUInt8(13);
-            const body = raw.length - 16;
-            const shDim = shDegree === 1 ? 3 : shDegree === 2 ? 8 : shDegree === 3 ? 15 : 0;
-            const rotBytes = version >= 3 ? 4 : 3;
-            const nianticBytes = n * (9 + 1 + 3 + 3 + rotBytes) + n * shDim * 3;
-
-            if (body === n * 22 && body !== nianticBytes) {
-                return SplatService.parseInterimPlanarSpz(raw, n, fractionalBits);
-            }
-            if (body < nianticBytes) throw new Error(`SPZ body too small: ${body} < ${nianticBytes}`);
-            if (version >= 3) throw new Error('SPZ v3 (smallest-three rotations) is not supported by this reader yet');
-
-            const posScale = 1 / (1 << fractionalBits);
-            const posOff = 16;
-            const alphaOff = posOff + 9 * n;
-            const colorOff = alphaOff + n;
-            const scaleOff = colorOff + 3 * n;
-            const rotOff = scaleOff + 3 * n;
-            const shOff = rotOff + 3 * n;
-            const cs = SplatService.SPZ_COLOR_SCALE, c0 = SplatService.SPZ_SH_C0;
-            const shCoeffsPerSplat = shDim * 3;
-
-            for (let i = 0; i < n; i++) {
-                const position: [number, number, number] = [0, 0, 0];
-                for (let k = 0; k < 3; k++) {
-                    const b = posOff + (i * 3 + k) * 3;
-                    let v = raw[b] | (raw[b + 1] << 8) | (raw[b + 2] << 16);
-                    if (v & 0x800000) v |= 0xff000000;
-                    position[k] = v * posScale;
-                }
-                const scale: [number, number, number] = [
-                    Math.exp(raw[scaleOff + i * 3] / 16 - 10),
-                    Math.exp(raw[scaleOff + i * 3 + 1] / 16 - 10),
-                    Math.exp(raw[scaleOff + i * 3 + 2] / 16 - 10)
-                ];
-                const qx = raw[rotOff + i * 3] / 127.5 - 1;
-                const qy = raw[rotOff + i * 3 + 1] / 127.5 - 1;
-                const qz = raw[rotOff + i * 3 + 2] / 127.5 - 1;
-                const qw = Math.sqrt(Math.max(0, 1 - (qx * qx + qy * qy + qz * qz)));
-                const colorRgb: [number, number, number] = [0, 0, 0];
-                for (let k = 0; k < 3; k++) {
-                    const shDc = (raw[colorOff + i * 3 + k] / 255 - 0.5) / cs;
-                    colorRgb[k] = Math.min(255, Math.max(0, Math.round((shDc * c0 + 0.5) * 255)));
-                }
-                const splatObj: BakedGaussian = { position, scale, quaternion: [qx, qy, qz, qw], colorRgb, opacity: raw[alphaOff + i] / 255 };
-                if (shDegree > 0 && shCoeffsPerSplat > 0) {
-                    const shArr: number[] = [];
-                    for (let c = 0; c < shCoeffsPerSplat; c++) {
-                        shArr.push((raw[shOff + i * shCoeffsPerSplat + c] - 127.5) / 127.5);
-                    }
-                    splatObj.sh = shArr;
-                }
-                splats.push(splatObj);
-            }
-            return splats;
+        for (let i = 0; i < d.count; i++) {
+            const splat: BakedGaussian = {
+                position: [d.positions[i * 3], d.positions[i * 3 + 1], d.positions[i * 3 + 2]],
+                scale: [d.scales[i * 3], d.scales[i * 3 + 1], d.scales[i * 3 + 2]],
+                quaternion: [d.quats[i * 4], d.quats[i * 4 + 1], d.quats[i * 4 + 2], d.quats[i * 4 + 3]],
+                colorRgb: [Math.round(d.colors[i * 3] * 255), Math.round(d.colors[i * 3 + 1] * 255), Math.round(d.colors[i * 3 + 2] * 255)],
+                opacity: d.opacities[i]
+            };
+            if (d.sh && shPer > 0) splat.sh = Array.from(d.sh.subarray(i * shPer, (i + 1) * shPer));
+            splats.push(splat);
         }
-
-        if (magic === 0x315a5053) {
-            // Legacy SPZ1: interleaved 22-byte records, fractionalBits at byte 12
-            const numPoints = raw.readUInt32LE(8);
-            const fractionalBits = raw.readUInt8(12);
-            const posScale = 1.0 / (1 << fractionalBits);
-            const count = Math.min(numPoints, Math.floor((raw.length - 16) / 22));
-            let offset = 16;
-            for (let i = 0; i < count; i++) {
-                const ix = raw.readInt32LE(offset), iy = raw.readInt32LE(offset + 4), iz = raw.readInt32LE(offset + 8);
-                offset += 12;
-                const sx = Math.exp(((raw.readInt8(offset++) + 128) / 255.0) * 12.0 - 8.0);
-                const sy = Math.exp(((raw.readInt8(offset++) + 128) / 255.0) * 12.0 - 8.0);
-                const sz = Math.exp(((raw.readInt8(offset++) + 128) / 255.0) * 12.0 - 8.0);
-                const qx = raw.readInt8(offset++) / 127.0, qy = raw.readInt8(offset++) / 127.0, qz = raw.readInt8(offset++) / 127.0;
-                const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
-                const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
-                const r = raw.readUInt8(offset++), g = raw.readUInt8(offset++), b = raw.readUInt8(offset++);
-                const opacity = raw.readUInt8(offset++) / 255.0;
-                splats.push({ position: [ix * posScale, iy * posScale, iz * posScale], scale: [sx, sy, sz], quaternion: [qx, qy, qz, qw], colorRgb: [r, g, b], opacity });
-            }
-            return splats;
-        }
-
-        throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x5053474e or 0x315a5053)`);
-    }
-
-    private static parseInterimPlanarSpz(raw: Buffer, n: number, fractionalBits: number): BakedGaussian[] {
-        const posScale = 1.0 / (1 << fractionalBits);
-        const px = 16, py = px + n * 4, pz = py + n * 4;
-        const sx = pz + n * 4, sy = sx + n, sz = sy + n;
-        const qx = sz + n, qy = qx + n, qz = qy + n;
-        const r = qz + n, g = r + n, b = g + n, a = b + n;
-        const out: BakedGaussian[] = [];
-        for (let i = 0; i < n; i++) {
-            const fx = raw.readInt8(qx + i) / 127, fy = raw.readInt8(qy + i) / 127, fz = raw.readInt8(qz + i) / 127;
-            const w2 = 1 - (fx * fx + fy * fy + fz * fz);
-            out.push({
-                position: [raw.readInt32LE(px + i * 4) * posScale, raw.readInt32LE(py + i * 4) * posScale, raw.readInt32LE(pz + i * 4) * posScale],
-                scale: [
-                    Math.exp(((raw.readInt8(sx + i) + 128) / 255) * 12 - 8),
-                    Math.exp(((raw.readInt8(sy + i) + 128) / 255) * 12 - 8),
-                    Math.exp(((raw.readInt8(sz + i) + 128) / 255) * 12 - 8)
-                ],
-                quaternion: [fx, fy, fz, w2 > 0 ? Math.sqrt(w2) : 0],
-                colorRgb: [raw.readUInt8(r + i), raw.readUInt8(g + i), raw.readUInt8(b + i)],
-                opacity: raw.readUInt8(a + i) / 255
-            });
-        }
-        return out;
+        return splats;
     }
 
     /**

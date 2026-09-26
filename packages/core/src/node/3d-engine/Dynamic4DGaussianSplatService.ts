@@ -12,6 +12,8 @@ import * as path from 'path';
 import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { Decomposed4DSplatScene, DynamicGaussianTrajectory } from '../../common/tracking/tapir-tracking-protocol';
 import { SplatService } from './splat-service';
+import { decodeGaussianPly } from '../../common/gaussian-ply-codec';
+import { Vec3, computeBoneRotations, mat3ToQuat, quatMultiply, skinPoint } from '../../common/humanoid-skinning';
 
 export interface HumanoidMotionFrame {
     frame_index: number;
@@ -33,6 +35,11 @@ export interface HumanoidMotionData {
     kintree_parents: number[];
     canonical_joints: Array<[number, number, number]>;
     frames: HumanoidMotionFrame[];
+    /** 'mediapipe_pose_track' for video-tracked motion, 'synthetic_idle' for the procedural sway fallback. */
+    motion_source?: string;
+    source_video?: string;
+    /** Rotation from the tracking camera's frame to the gravity-aligned avatar world (row-major 3x3). */
+    camera_to_world?: [[number, number, number], [number, number, number], [number, number, number]];
 }
 
 export interface SkinWeightedGaussian extends BakedGaussian {
@@ -145,10 +152,21 @@ export class Dynamic4DGaussianSplatService {
             const framePath = path.join(subDir, 'canonical_frame.jpg');
 
             const catEntry = catalogList.find((d: any) => d.id === entry);
-            let numFrames = 121;
+            let numFrames = 0;
             let fps = 25.0;
             let numJoints = 22;
             let geoAnchor: { latitude: number; longitude: number; altitude: number } | undefined;
+
+            if (fs.existsSync(motionPath)) {
+                try {
+                    const m = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
+                    numFrames = Array.isArray(m.frames) ? m.frames.length : (m.num_frames || 0);
+                    fps = m.fps || fps;
+                    numJoints = m.num_joints || numJoints;
+                } catch {
+                    // Leave defaults for unreadable motion
+                }
+            }
 
             if (fs.existsSync(geoPath)) {
                 try {
@@ -171,7 +189,7 @@ export class Dynamic4DGaussianSplatService {
                 numFrames,
                 fps,
                 numJoints,
-                numSplats: 35000,
+                numSplats: this.readPlyVertexCount(plyPath),
                 hasMotion: fs.existsSync(motionPath),
                 hasCameras: fs.existsSync(camerasPath),
                 hasGeoManifest: fs.existsSync(geoPath),
@@ -214,12 +232,23 @@ export class Dynamic4DGaussianSplatService {
         }
 
         const motion: HumanoidMotionData = JSON.parse(fs.readFileSync(motionPath, 'utf-8'));
-        const plyText = fs.readFileSync(plyPath, 'utf-8');
-        const rawGaussians = this.parsePly(plyText);
+        const { gaussians: decoded } = decodeGaussianPly(fs.readFileSync(plyPath, 'utf-8'));
 
         const canonicalJoints = motion.canonical_joints || [];
         const parents = motion.kintree_parents || [];
-        const skinGaussians = this.bindBoneWeights(rawGaussians, canonicalJoints, parents);
+        const hasExactWeights = decoded.length > 0 && decoded.every(g => g.boneIndices && g.boneWeights);
+        const skinGaussians: SkinWeightedGaussian[] = hasExactWeights
+            ? decoded.map(g => ({
+                position: g.position,
+                scale: g.scale,
+                colorRgb: g.colorRgb,
+                opacity: g.opacity,
+                quaternion: g.quaternion,
+                normal: g.normal,
+                boneIndices: g.boneIndices!,
+                boneWeights: g.boneWeights!
+            }))
+            : this.bindBoneWeights(decoded, canonicalJoints, parents);
 
         const avatars = this.listAvatars();
         const details = avatars.find(a => a.id === avatarId) || {
@@ -242,78 +271,29 @@ export class Dynamic4DGaussianSplatService {
     }
 
     /**
-     * Parses standard ASCII PLY file containing 3D Gaussian Splats.
+     * Parses an ASCII 3DGS PLY (SH or legacy RGB colour, either quaternion order) into Gaussians.
      */
     public parsePly(plyText: string, maxGaussians?: number): BakedGaussian[] {
-        const lines = plyText.split(/\r?\n/);
-        let inHeader = true;
-        const splats: BakedGaussian[] = [];
+        return decodeGaussianPly(plyText, { maxGaussians }).gaussians.map(g => ({
+            position: g.position,
+            scale: g.scale,
+            colorRgb: g.colorRgb,
+            opacity: g.opacity,
+            quaternion: g.quaternion
+        }));
+    }
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            if (inHeader) {
-                if (line === 'end_header') {
-                    inHeader = false;
-                }
-                continue;
-            }
-
-            if (maxGaussians && splats.length >= maxGaussians) break;
-
-            const parts = line.split(/\s+/);
-            if (parts.length < 17) continue;
-
-            const x = parseFloat(parts[0]);
-            const y = parseFloat(parts[1]);
-            const z = parseFloat(parts[2]);
-
-            // Normal nx, ny, nz
-            // const nx = parseFloat(parts[3]);
-            // const ny = parseFloat(parts[4]);
-            // const nz = parseFloat(parts[5]);
-
-            // Color SH DC or RGB
-            const r = Math.min(1.0, Math.max(0.0, parseFloat(parts[6])));
-            const g = Math.min(1.0, Math.max(0.0, parseFloat(parts[7])));
-            const b = Math.min(1.0, Math.max(0.0, parseFloat(parts[8])));
-
-            // Opacity logit
-            const opLogit = parseFloat(parts[9]);
-            const opacity = 1.0 / (1.0 + Math.exp(-Math.min(20.0, Math.max(-20.0, opLogit))));
-
-            // Log scale
-            const sx = Math.exp(parseFloat(parts[10]));
-            const sy = Math.exp(parseFloat(parts[11]));
-            const sz = Math.exp(parseFloat(parts[12]));
-
-            // Quaternion (rot_0, rot_1, rot_2, rot_3)
-            let qx = parseFloat(parts[13]);
-            let qy = parseFloat(parts[14]);
-            let qz = parseFloat(parts[15]);
-            let qw = parseFloat(parts[16]);
-
-            const qLen = Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
-            if (qLen > 1e-6) {
-                qx /= qLen;
-                qy /= qLen;
-                qz /= qLen;
-                qw /= qLen;
-            } else {
-                qx = 0; qy = 0; qz = 0; qw = 1;
-            }
-
-            splats.push({
-                position: [x, y, z],
-                scale: [sx, sy, sz],
-                colorRgb: [r, g, b],
-                opacity,
-                quaternion: [qx, qy, qz, qw]
-            });
+    private readPlyVertexCount(plyPath: string): number {
+        try {
+            const fd = fs.openSync(plyPath, 'r');
+            const buf = Buffer.alloc(2048);
+            fs.readSync(fd, buf, 0, buf.length, 0);
+            fs.closeSync(fd);
+            const m = /element vertex (\d+)/.exec(buf.toString('latin1'));
+            return m ? parseInt(m[1], 10) : 0;
+        } catch {
+            return 0;
         }
-
-        return splats;
     }
 
     /**
@@ -396,6 +376,7 @@ export class Dynamic4DGaussianSplatService {
 
     /**
      * Evaluates deformed Gaussians for a specific frame index using skeletal Linear Blend Skinning (LBS).
+     * Motion joint positions are absolute world coordinates; splat orientations follow their primary bone.
      */
     public animateFrame(avatarId: string, frameIndex: number): DeformedGaussianFrame {
         const { gaussians, motion } = this.loadAvatar(avatarId);
@@ -407,21 +388,13 @@ export class Dynamic4DGaussianSplatService {
         const clampedFrame = Math.max(0, Math.min(frameIndex, totalFrames - 1));
         const frame = motion.frames[clampedFrame];
 
-        const canonicalJoints = motion.canonical_joints;
-        const posedJoints = frame.joint_positions_3d;
-        const rootTrans = frame.root_translation;
-        const rootRot = frame.root_rotation_quat;
+        const canonicalJoints = motion.canonical_joints as Vec3[];
+        const posedJoints = frame.joint_positions_3d as Vec3[];
+        const rootTrans = frame.root_translation || [0, 0, 0];
+        const rootRot = frame.root_rotation_quat || [0, 0, 0, 1];
 
-        const numJoints = Math.min(canonicalJoints.length, posedJoints.length);
-        const jointDeltas: Array<[number, number, number]> = [];
-
-        for (let j = 0; j < numJoints; j++) {
-            jointDeltas.push([
-                posedJoints[j][0] - canonicalJoints[j][0] + rootTrans[0],
-                posedJoints[j][1] - canonicalJoints[j][1] + rootTrans[1],
-                posedJoints[j][2] - canonicalJoints[j][2] + rootTrans[2]
-            ]);
-        }
+        const rotations = computeBoneRotations(canonicalJoints, posedJoints);
+        const boneQuats = rotations.map(r => mat3ToQuat(r));
 
         const deformedSplats: BakedGaussian[] = [];
         let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -430,22 +403,7 @@ export class Dynamic4DGaussianSplatService {
 
         for (let i = 0; i < gaussians.length; i++) {
             const g = gaussians[i];
-            let dx = 0, dy = 0, dz = 0;
-
-            for (let k = 0; k < 4; k++) {
-                const w = g.boneWeights[k];
-                if (w <= 1e-5) continue;
-                const bIdx = g.boneIndices[k];
-                if (bIdx < jointDeltas.length) {
-                    dx += jointDeltas[bIdx][0] * w;
-                    dy += jointDeltas[bIdx][1] * w;
-                    dz += jointDeltas[bIdx][2] * w;
-                }
-            }
-
-            const posX = g.position[0] + dx;
-            const posY = g.position[1] + dy;
-            const posZ = g.position[2] + dz;
+            const [posX, posY, posZ] = skinPoint(g.position, g.boneIndices, g.boneWeights, canonicalJoints, posedJoints, rotations);
 
             minX = Math.min(minX, posX);
             minY = Math.min(minY, posY);
@@ -458,12 +416,13 @@ export class Dynamic4DGaussianSplatService {
             sumY += posY;
             sumZ += posZ;
 
+            const primary = g.boneIndices[0] < boneQuats.length ? g.boneIndices[0] : 0;
             deformedSplats.push({
                 position: [posX, posY, posZ],
                 scale: g.scale,
                 colorRgb: g.colorRgb,
                 opacity: g.opacity,
-                quaternion: g.quaternion
+                quaternion: quatMultiply(boneQuats[primary], g.quaternion || [0, 0, 0, 1])
             });
         }
 

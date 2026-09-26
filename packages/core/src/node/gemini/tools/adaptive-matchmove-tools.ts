@@ -24,6 +24,13 @@ import {
     type KeyframeSelectionResult,
     type TrajectoryInputPoint
 } from '../../spatial/AdaptiveMatchmoveCalibrationService';
+import {
+    ContinuousSplineMatchmoveService,
+    type SplineKnot,
+    type PersistentTrack3D2D,
+    type SplineAnchorConstraint,
+    type ContinuousSplineSolveOptions
+} from '../../spatial/ContinuousSplineMatchmoveService';
 
 function asString(val: unknown): string | undefined {
     return typeof val === 'string' && val.trim().length > 0 ? val.trim() : undefined;
@@ -359,6 +366,101 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 }
             }
         }
+    },
+    {
+        name: 'continuous_spline_matchmove_optimize',
+        description: 'Optimize continuous-time SE(3) Catmull-Rom spline camera trajectory knots against persistent multi-frame 2D tracks (TAPIR / optical flow), 3D anchor locks, and kinematic acceleration penalties via Levenberg-Marquardt.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                knots: {
+                    type: 'ARRAY',
+                    description: 'Array of SplineKnot objects with timeSec, position, target, up, fovYDeg, and optional k1.'
+                },
+                knotsPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to load knots or camera path from.'
+                },
+                tracks: {
+                    type: 'ARRAY',
+                    description: 'Array of PersistentTrack3D2D with worldPoint3D and frame observations.'
+                },
+                tracksPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to load persistent tracks from.'
+                },
+                anchors: {
+                    type: 'ARRAY',
+                    description: 'Array of SplineAnchorConstraint with timeSec, position, target, up, and weight.'
+                },
+                width: {
+                    type: 'NUMBER',
+                    description: 'Image viewport width in pixels (default: 1920).'
+                },
+                height: {
+                    type: 'NUMBER',
+                    description: 'Image viewport height in pixels (default: 1080).'
+                },
+                maxIterations: {
+                    type: 'NUMBER',
+                    description: 'Maximum Levenberg-Marquardt optimizer iterations (default: 25).'
+                },
+                tolerancePx: {
+                    type: 'NUMBER',
+                    description: 'Target RMS reprojection residual in pixels (default: 0.05).'
+                },
+                kinematicSmoothnessWeight: {
+                    type: 'NUMBER',
+                    description: 'Kinematic acceleration penalty weight (default: 1.0).'
+                },
+                huberLossThresholdPx: {
+                    type: 'NUMBER',
+                    description: 'Huber loss outlier rejection threshold in pixels (default: 4.0).'
+                },
+                enforceMonotonicDescent: {
+                    type: 'BOOLEAN',
+                    description: 'Enforce strictly non-increasing Y coordinate (downward descent).'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the optimized trajectory JSON.'
+                }
+            }
+        }
+    },
+    {
+        name: 'continuous_spline_synthesize_trajectory',
+        description: 'Synthesize a dense per-frame 6-DOF camera trajectory table from continuous spline knots, complete with numerical velocity (m/s), acceleration (m/s^2), jerk (m/s^3), and unit quaternions.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                knots: {
+                    type: 'ARRAY',
+                    description: 'Array of SplineKnot objects.'
+                },
+                knotsPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to load knots from.'
+                },
+                fps: {
+                    type: 'NUMBER',
+                    description: 'Framerate in frames per second (default: 24).'
+                },
+                durationSec: {
+                    type: 'NUMBER',
+                    description: 'Total flight duration in seconds (default: 10.0).'
+                },
+                exportSolveTrack: {
+                    type: 'BOOLEAN',
+                    description: 'When true, formats output as a canonical CameraSolveTrack.'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the dense trajectory JSON.'
+                }
+            },
+            required: ['knots']
+        }
     }
 ];
 
@@ -376,16 +478,9 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
         const sequencePath = asString(args.sequencePath);
         const landmark = asString(args.landmark);
 
-        // Auto-load from sequence path or landmark defaults if milestones not supplied
+        // Load milestones from the caller's sequence file when they are not passed inline
         if (!milestones || milestones.length === 0) {
-            let candidateFile = sequencePath;
-            if (!candidateFile && landmark && landmark.toLowerCase().includes('plaza')) {
-                const defaultPlazaReport = path.resolve(ctx.workspaceRoot || process.cwd(), 'public/models/plaza_hotel_adaptive_metrology_report.json');
-                if (fs.existsSync(defaultPlazaReport)) {
-                    candidateFile = defaultPlazaReport;
-                }
-            }
-
+            const candidateFile = sequencePath;
             if (candidateFile) {
                 const absPath = path.isAbsolute(candidateFile) ? candidateFile : path.resolve(ctx.workspaceRoot || process.cwd(), candidateFile);
                 if (fs.existsSync(absPath)) {
@@ -417,10 +512,10 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
                                     scale: 1.0
                                 },
                                 anchors: m.anchors ?? [],
-                                reprojectionRmsPx: m.reprojectionRmsPx ?? m.rmsPx ?? 0.015,
-                                maxResidualPx: m.maxResidualPx ?? 0.03,
-                                edgeCorrelationPercent: m.edgeCorrelationPercent ?? m.sobelNcc ?? 99.98,
-                                converged: m.converged ?? true
+                                reprojectionRmsPx: m.reprojectionRmsPx ?? m.rmsPx ?? Number.NaN,
+                                maxResidualPx: m.maxResidualPx ?? Number.NaN,
+                                edgeCorrelationPercent: m.edgeCorrelationPercent ?? m.sobelNcc ?? Number.NaN,
+                                converged: m.converged ?? false
                             }));
                         }
                         if (!context && parsed.sequenceId) {
@@ -909,5 +1004,120 @@ export const adaptiveMatchmoveHandlers: Record<string, ToolHandler> = {
             status: 'completed',
             summaryResult: `Optimized keyframe density (${result.mode}): selected ${result.totalKeyframes} keyframes from ${result.totalFrames} frames (${result.compressionRatio}x compression, max drift = ${result.maxInterpolationDrift}m, motion contrast = ${result.motionContrastRatio}x). Frame 1 and Frame ${result.totalFrames} pinned.`
         };
+    },
+
+    continuous_spline_matchmove_optimize: async (args, ctx) => {
+        const service = new ContinuousSplineMatchmoveService();
+        let knots: SplineKnot[] = Array.isArray(args.knots) ? (args.knots as SplineKnot[]) : [];
+        if (knots.length === 0 && args.knotsPath) {
+            const p = path.isAbsolute(args.knotsPath as string) ? (args.knotsPath as string) : path.resolve(ctx.workspaceRoot || process.cwd(), args.knotsPath as string);
+            if (fs.existsSync(p)) {
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+                    knots = Array.isArray(parsed) ? parsed : (parsed.knots || parsed.frames || []);
+                } catch {
+                    // Ignore parse error and proceed
+                }
+            }
+        }
+
+        let tracks: PersistentTrack3D2D[] = Array.isArray(args.tracks) ? (args.tracks as PersistentTrack3D2D[]) : [];
+        if (tracks.length === 0 && args.tracksPath) {
+            const p = path.isAbsolute(args.tracksPath as string) ? (args.tracksPath as string) : path.resolve(ctx.workspaceRoot || process.cwd(), args.tracksPath as string);
+            if (fs.existsSync(p)) {
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+                    tracks = Array.isArray(parsed) ? parsed : (parsed.tracks || []);
+                } catch {
+                    // Ignore parse error and proceed
+                }
+            }
+        }
+
+        const anchors: SplineAnchorConstraint[] = Array.isArray(args.anchors) ? (args.anchors as SplineAnchorConstraint[]) : [];
+        const width = asNumber(args.width, 1920)!;
+        const height = asNumber(args.height, 1080)!;
+
+        const solveOptions: ContinuousSplineSolveOptions = {
+            maxIterations: asNumber(args.maxIterations, 25),
+            tolerancePx: asNumber(args.tolerancePx, 0.05),
+            kinematicSmoothnessWeight: asNumber(args.kinematicSmoothnessWeight, 1.0),
+            huberLossThresholdPx: asNumber(args.huberLossThresholdPx, 4.0),
+            enforceMonotonicDescent: asBoolean(args.enforceMonotonicDescent, false)
+        };
+
+        const result = service.optimizeSplineTrajectory(knots, tracks, anchors, width, height, solveOptions);
+
+        const outputPath = asString(args.outputPath);
+        if (outputPath) {
+            const absOut = path.isAbsolute(outputPath) ? outputPath : path.resolve(ctx.workspaceRoot || process.cwd(), outputPath);
+            fs.mkdirSync(path.dirname(absOut), { recursive: true });
+            fs.writeFileSync(absOut, JSON.stringify(result, null, 2), 'utf8');
+        }
+
+        return {
+            resultPayload: {
+                success: result.success,
+                initialRmsPx: result.initialRmsPx,
+                finalRmsPx: result.finalRmsPx,
+                iterations: result.iterations,
+                optimizedKnots: result.optimizedKnots,
+                outputPath
+            } as ToolResultPayload,
+            status: 'completed',
+            summaryResult: `Optimized continuous spline trajectory (${result.optimizedKnots.length} knots): RMS error improved from ${result.initialRmsPx.toFixed(2)}px to ${result.finalRmsPx.toFixed(2)}px in ${result.iterations} LM iterations.`
+        };
+    },
+
+    continuous_spline_synthesize_trajectory: async (args, ctx) => {
+        const service = new ContinuousSplineMatchmoveService();
+        let knots: SplineKnot[] = Array.isArray(args.knots) ? (args.knots as SplineKnot[]) : [];
+        if (knots.length === 0 && args.knotsPath) {
+            const p = path.isAbsolute(args.knotsPath as string) ? (args.knotsPath as string) : path.resolve(ctx.workspaceRoot || process.cwd(), args.knotsPath as string);
+            if (fs.existsSync(p)) {
+                try {
+                    const parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+                    knots = Array.isArray(parsed) ? parsed : (parsed.knots || parsed.frames || []);
+                } catch {
+                    // Ignore parse error and proceed
+                }
+            }
+        }
+
+        const fps = asNumber(args.fps, 24)!;
+        const durationSec = asNumber(args.durationSec, 10.0)!;
+        const exportSolveTrack = asBoolean(args.exportSolveTrack, false);
+
+        const denseTrajectory = service.synthesizeDenseTrajectory(knots, fps, durationSec);
+        const solveTrack = exportSolveTrack
+            ? service.toCameraSolveTrack(knots, fps, durationSec)
+            : undefined;
+
+        const outputPath = asString(args.outputPath);
+        if (outputPath) {
+            const absOut = path.isAbsolute(outputPath) ? outputPath : path.resolve(ctx.workspaceRoot || process.cwd(), outputPath);
+            fs.mkdirSync(path.dirname(absOut), { recursive: true });
+            const dataToSave = exportSolveTrack ? solveTrack : { totalFrames: denseTrajectory.length, fps, durationSec, frames: denseTrajectory };
+            fs.writeFileSync(absOut, JSON.stringify(dataToSave, null, 2), 'utf8');
+        }
+
+        return {
+            resultPayload: {
+                success: true,
+                totalFrames: denseTrajectory.length,
+                fps,
+                durationSec,
+                denseTrajectory,
+                solveTrack,
+                outputPath
+            } as ToolResultPayload,
+            status: 'completed',
+            summaryResult: `Synthesized continuous spline camera trajectory: ${denseTrajectory.length} frames @ ${fps}fps (${durationSec.toFixed(2)}s) with full velocity, acceleration, and jerk telemetry.`
+        };
     }
 };
+
+// Aliases for standard prefixing
+adaptiveMatchmoveHandlers.adaptive_matchmove_continuous_spline = adaptiveMatchmoveHandlers.continuous_spline_matchmove_optimize;
+adaptiveMatchmoveHandlers.adaptive_matchmove_continuous_spline_synthesize = adaptiveMatchmoveHandlers.continuous_spline_synthesize_trajectory;
+

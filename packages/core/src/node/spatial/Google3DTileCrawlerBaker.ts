@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane.js';
 import { TextureAtlasPacker, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker.js';
+import { GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler.js';
 
 /**
  * Headless Node.js 3D Tile Crawler, Leaf GLB Buffer Merger, and CESIUM_RTC Stripper.
@@ -678,32 +679,30 @@ export class Google3DTileCrawlerBaker {
       return merged;
     }
 
-    // 2. Attempt live Google 3D Tile crawl if API key is present
+    // 2. Live crawl of the real leaf tiles; there is no synthetic substitute
     const apiKey = request.apiKey || process.env.GOOGLE_MAPS_API_KEY;
-    if (apiKey) {
-      try {
-        const rootUrl = `https://tile.googleapis.com/v1/3dtiles/root.json?key=${encodeURIComponent(apiKey)}`;
-        const rootRes = await fetch(rootUrl);
-        if (rootRes.ok) {
-          const rootJson: any = await rootRes.json();
-          // Connected to Google 3D Tiles service
-        }
-      } catch (err) {
-        // Fallback gracefully to synthetic tile
-      }
+    if (!apiKey) {
+      throw new Error('crawlAndBake needs a Google Maps API key (request.apiKey or GOOGLE_MAPS_API_KEY) or explicit mockTiles.');
     }
+    const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir: path.join(cacheDir, 'leaves') });
+    const anchor = { lat: request.origin.lat, lng: request.origin.lng, heightGuessM: request.origin.alt ?? 0 };
+    const { leaves, session } = await crawler.collectLeafTiles(anchor, radius);
+    if (request.maxTiles && leaves.length > request.maxTiles) leaves.length = request.maxTiles;
+    const buffers = await crawler.downloadLeaves(leaves, session);
+    const parsed = buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b));
+    const district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor);
 
-    // 3. Fallback to high-fidelity synthetic geodetic tile
-    const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(request.origin, radius);
-    const merged = Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], request.origin, request.packerOptions);
-
-    try {
-      fs.mkdirSync(cacheDir, { recursive: true });
-      fs.writeFileSync(cachePath, merged.glbBuffer);
-    } catch (err) {
-      // Non-fatal
-    }
-
-    return merged;
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(cachePath, district.glb);
+    return {
+      vertexCount: district.vertexCount,
+      indexCount: district.triangleCount * 3,
+      positions: new Float32Array(0),
+      normals: new Float32Array(0),
+      uvs: new Float32Array(0),
+      indices: new Uint32Array(0),
+      atlas: { width: 0, height: 0, rects: new Map(), rectList: [], fillRate: 0 },
+      glbBuffer: district.glb
+    };
   }
 }

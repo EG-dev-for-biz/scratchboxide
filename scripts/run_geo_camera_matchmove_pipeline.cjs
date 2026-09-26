@@ -77,7 +77,7 @@ Options:
 
   let geoAnchor;
   if (landmark) {
-    geoAnchor = pipeline.resolveLandmarkAnchor(landmark);
+    geoAnchor = await pipeline.geocodeLandmarkAnchor(landmark);
   } else if (latStr && lngStr) {
     const lat = parseFloat(latStr);
     const lng = parseFloat(lngStr);
@@ -145,9 +145,12 @@ Options:
     if (result.omniVideoPath) console.log(`✨ Restyled Video:   ${result.omniVideoPath}`);
     if (result.comparisonVideoPath) console.log(`⚡ Split Comparison: ${result.comparisonVideoPath}`);
     if (result.precisionMetrics) {
-      console.log(`🎯 Edge Overlap:     ${result.precisionMetrics.meanEdgeOverlapScorePct}%`);
-      console.log(`📐 Reprojection Err: ${result.precisionMetrics.meanReprojectionErrorPx} px`);
-      console.log(`🔒 Marker Drift:     ${result.precisionMetrics.meanDriftPx} px (Max: ${result.precisionMetrics.maxDriftPx} px)`);
+      if (result.precisionMetrics.measured) {
+        console.log(`🎯 Edge Overlap:     ${result.precisionMetrics.meanEdgeOverlapScorePct}%`);
+        console.log(`📐 Reprojection Err: ${result.precisionMetrics.meanReprojectionErrorPx} px`);
+      } else {
+        console.log(`🎯 Alignment:        not measured (path from ${result.precisionMetrics.trajectorySource})`);
+      }
     }
     console.log('========================================================================');
   } catch (err) {

@@ -21,6 +21,8 @@ export interface PanoramaDepthOptions {
     device?: string;
     mock?: boolean;
     outDir?: string;
+    /** Use the synthetic cylinder-room depth when the depth model cannot run (off by default). */
+    allowHeuristicFallback?: boolean;
 }
 
 export interface PanoramaDepthResult {
@@ -134,9 +136,9 @@ export class PanoramaDepthService {
             }
 
         } catch (err: any) {
-            console.warn(`[PanoramaDepthService] Sidecar failed or timed out: ${err.message}. Triggering robust local TypeScript fallback...`);
-            
-            // Tier 2 / Offline Heuristic Fallback
+            if (!options.allowHeuristicFallback) {
+                throw new Error(`Panorama depth model failed (${err.message}); set allowHeuristicFallback to accept the synthetic room depth instead.`);
+            }
             return this.generateFallbackDepth(inputImagePath, outDepth, outPreview, outJson, eyeHeight);
         }
     }

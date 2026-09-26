@@ -803,14 +803,15 @@ export class AdaptiveMatchmoveCalibrationService {
                     options
                 );
             } else {
+                // Without anchor correspondences nothing was measured for this keyframe
                 solved = {
                     ...kf,
                     lens: kf.lens || { fovYDeg: 35.0, k1: 0.0, k2: 0.0, scale: 1.0 },
                     anchors: kf.anchors || [],
-                    reprojectionRmsPx: kf.reprojectionRmsPx ?? 0.0,
-                    maxResidualPx: kf.maxResidualPx ?? 0.0,
-                    edgeCorrelationPercent: kf.edgeCorrelationPercent ?? 99.98,
-                    converged: kf.converged ?? true
+                    reprojectionRmsPx: kf.reprojectionRmsPx ?? Number.NaN,
+                    maxResidualPx: kf.maxResidualPx ?? Number.NaN,
+                    edgeCorrelationPercent: kf.edgeCorrelationPercent ?? Number.NaN,
+                    converged: kf.converged ?? false
                 };
             }
 

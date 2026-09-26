@@ -14,7 +14,7 @@ import { promisify } from 'util';
 import { SurveySynthesisEngine, cameraBasis } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH } from './SurveyStationRenderService';
-import { BeautifyStationService, createDefaultStationImageGenerator, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
+import { BeautifyStationService, createDefaultStationImageGenerator, hasStationImageCredentials, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
@@ -133,9 +133,22 @@ export class SurveySplatPipelineService {
     private bakerPath = path.resolve(process.cwd(), 'build/station_to_splats');
 
     constructor(private deps?: { generator?: StationImageGenerator }) {
-        if (!this.deps?.generator) {
+        if (!this.deps?.generator && hasStationImageCredentials()) {
             this.deps = { ...this.deps, generator: createDefaultStationImageGenerator() };
         }
+    }
+
+    /** QC for a station whose plate was reused from disk: nothing was re-measured. */
+    static cachedPlateQc(): BeautifyStationResult['qc'] {
+        return {
+            passed: false,
+            overlapPercent: Number.NaN,
+            residualPx: Number.NaN,
+            deltaYawDeg: Number.NaN,
+            deltaPitchDeg: Number.NaN,
+            deltaPositionM: Number.NaN,
+            reason: 'cached plate reused; QC not re-run'
+        };
     }
 
     async ensureBaker(): Promise<string> {
@@ -195,7 +208,7 @@ export class SurveySplatPipelineService {
                         const rep: SurveySplatStationReport = {
                             stationId: st.id, accepted: true, attempts: 1, usedReference: false, splatCount, splatPath,
                             imagePath: beautifiedPath, blockoutPath,
-                            qc: { passed: true, overlapPercent: 95, residualPx: 1.0, deltaYawDeg: 0, deltaPitchDeg: 0, deltaPositionM: 0 },
+                            qc: SurveySplatPipelineService.cachedPlateQc(),
                             prompt: `Photorealistic view of station ${st.id}`,
                             positionLocalENU: posENU,
                             forwardVector: fwdVec,
@@ -222,7 +235,7 @@ export class SurveySplatPipelineService {
                         blockout,
                         imagePng,
                         image: { width: dec.width, height: dec.height, rgba: dec.rgba },
-                        qc: { passed: true, overlapPercent: 95, residualPx: 1.0, deltaYawDeg: 0, deltaPitchDeg: 0, deltaPositionM: 0 },
+                        qc: SurveySplatPipelineService.cachedPlateQc(),
                         accepted: true,
                         attempts: 1,
                         generator: this.deps?.generator?.name || 'cached-beautified-plates'

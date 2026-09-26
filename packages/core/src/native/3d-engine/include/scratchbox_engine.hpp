@@ -78,6 +78,7 @@
 #include "scratchbox_view_transform.hpp"
 #include "scratchbox_denoise.hpp"
 #include "scratchbox_pathtracer.hpp"
+#include "scratchbox_visual_hull.hpp"
 #include "scratchbox_atmosphere.hpp"
 #include "scratchbox_lens_shader.hpp"
 #include "scratchbox_smpl_tree.hpp"
@@ -90,6 +91,7 @@
 #include "scratchbox_tectonic_analyzer.hpp"
 
 namespace sb = scratchbox;
+namespace vhull = scratchbox::visual_hull;
 namespace gopt = scratchbox::gaussian_opt;
 namespace geo = scratchbox::geometry;
 namespace shp = scratchbox::shaper;

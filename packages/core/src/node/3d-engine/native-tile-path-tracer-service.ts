@@ -25,6 +25,8 @@ export type TileSunSpec =
 export interface TileCameraSpec {
     position: [number, number, number];
     target: [number, number, number];
+    /** Screen-up hint; needed when looking straight down and to reproduce camera roll. Defaults to +Y. */
+    up?: [number, number, number];
     verticalFovDeg?: number;
     apertureRadius?: number;
     focusDistance?: number;
@@ -70,6 +72,8 @@ export interface TilePathTraceRequest {
     clampIndirect?: number;
     seed?: number;
     timeoutMs?: number;
+    /** Geometry-only blockout: one matte material (linear RGB albedo) replaces every captured texture. */
+    clay?: boolean | { albedo?: [number, number, number]; roughness?: number; metallic?: number };
 }
 
 export interface TilePathTraceStats {
@@ -112,6 +116,8 @@ export interface TilePathTraceResult {
     albedoPngPath: string;
     normalPngPath: string;
     depthPngPath: string;
+    /** float32 distance along each pixel-centre ray, row-major, 0 where there is no geometry. */
+    depthF32Path: string;
     statsJsonPath: string;
     stats: TilePathTraceStats;
     compileMs: number;
@@ -165,6 +171,7 @@ export class NativeTilePathTracerService {
             albedoPngPath: out('albedo.png'),
             normalPngPath: out('normal.png'),
             depthPngPath: out('depth.png'),
+            depthF32Path: out('depth.f32'),
             statsJsonPath,
             stats,
             compileMs,
@@ -199,6 +206,12 @@ export class NativeTilePathTracerService {
         };
         if (request.atmosphere) {
             config.atmosphere = request.atmosphere;
+        }
+        if (request.clay) {
+            const clay = request.clay === true ? {} : request.clay;
+            config.clayAlbedo = clay.albedo ?? [0.716, 0.672, 0.61];
+            config.clayRoughness = clay.roughness ?? 0.82;
+            config.clayMetallic = clay.metallic ?? 0.02;
         }
         if (request.camera) {
             config.camera = request.camera;

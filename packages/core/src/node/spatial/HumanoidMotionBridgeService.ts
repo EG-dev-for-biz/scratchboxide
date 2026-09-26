@@ -18,6 +18,21 @@ import {
     HumanoidMotionFrame
 } from '../3d-engine/Dynamic4DGaussianSplatService';
 import { VideoMotionTrackResult, VideoMotionPoseFrame } from '../video/MediaPipeVideoDirectorService';
+import { PerformerPoseTrack, PoseLandmarkTuple } from './PerformerPoseTrackService';
+import { Mat3, Vec3, applyMat3, retargetSegmentDirections, rotationBetween } from '../../common/humanoid-skinning';
+
+export interface PoseTrackRetargetOptions {
+    clipId?: string;
+    targetHeightMeters?: number;
+    /** Temporal 1-2-1 smoothing passes applied to tracked landmarks (default 1). */
+    smoothingPasses?: number;
+    maxFrames?: number;
+    /** Hero camera focal length in pixels; defaults to the pipeline's 47 degree horizontal FOV. */
+    focalLengthPx?: number;
+}
+
+/** Matches the default hero intrinsics in VideoTo4DPerformerPipelineService. */
+const DEFAULT_HORIZONTAL_FOV_RAD = 0.8202546810829819;
 
 export interface RetargetOptions {
     groundAltitudeMeters?: number; // Target floor altitude (default: 0.0)
@@ -96,6 +111,203 @@ export class HumanoidMotionBridgeService {
             canonical_joints: canonical,
             frames: smoothedFrames
         };
+    }
+
+    /**
+     * Converts a MediaPipe PoseLandmarker video track into avatar motion: segment directions come
+     * from metric world landmarks, bone lengths from the avatar skeleton, lateral root travel from
+     * the hip centre's image drift, and the lowest foot is pinned to the canonical floor each frame.
+     * The tracking camera's tilt is removed (see camera_to_world) so the avatar stands upright.
+     */
+    public retargetPoseTrack(
+        track: PerformerPoseTrack,
+        canonicalJoints: Array<[number, number, number]>,
+        options: PoseTrackRetargetOptions = {}
+    ): HumanoidMotionData {
+        const firstValid = track.frames.findIndex(f => f.world && f.world.length >= 33);
+        if (firstValid < 0) {
+            throw new Error(`Pose track ${track.source} contains no tracked frames`);
+        }
+        const limit = Math.min(track.frames.length, options.maxFrames ?? track.frames.length);
+
+        let lastWorld = track.frames[firstValid].world!;
+        let lastImage = track.frames[firstValid].image;
+        const worlds: PoseLandmarkTuple[][] = [];
+        const images: Array<PoseLandmarkTuple[] | null> = [];
+        for (let f = 0; f < limit; f++) {
+            const fr = track.frames[f];
+            if (fr.world && fr.world.length >= 33) lastWorld = fr.world;
+            if (fr.image && fr.image.length >= 33) lastImage = fr.image;
+            worlds.push(lastWorld);
+            images.push(lastImage);
+        }
+
+        const worldJoints = worlds.map(w => this.convertLandmarksToSMPLX22(w.map(([x, y, z, v]) => ({ x, y, z, visibility: v }))));
+        const focalLengthPx = options.focalLengthPx ?? track.width / (2 * Math.tan(DEFAULT_HORIZONTAL_FOV_RAD / 2));
+        const cameraJoints = this.liftLimbsFromImage(worldJoints, worlds, images, canonicalJoints as Vec3[], track.width, track.height, focalLengthPx);
+
+        // World landmarks live in the camera frame, so a tilted camera makes an upright performer
+        // lean. The clip-average ankle->shoulder axis estimates gravity; rotate it onto +Y.
+        const up: Vec3 = [0, 0, 0];
+        for (const j of cameraJoints) {
+            for (let a = 0; a < 3; a++) up[a] += (j[16][a] + j[17][a]) * 0.5 - (j[7][a] + j[8][a]) * 0.5;
+        }
+        const cameraToWorld: Mat3 = rotationBetween(up, [0, 1, 0]);
+        const sourceJoints = cameraJoints.map(js => js.map(p => applyMat3(cameraToWorld, p as Vec3)));
+        const passes = options.smoothingPasses ?? 1;
+        let smoothed = sourceJoints as Vec3[][];
+        for (let p = 0; p < passes; p++) {
+            smoothed = smoothed.map((_, f) => {
+                const a = smoothed[Math.max(0, f - 1)];
+                const b = smoothed[f];
+                const c = smoothed[Math.min(smoothed.length - 1, f + 1)];
+                return b.map((jb, j) => [
+                    (a[j][0] + 2 * jb[0] + c[j][0]) * 0.25,
+                    (a[j][1] + 2 * jb[1] + c[j][1]) * 0.25,
+                    (a[j][2] + 2 * jb[2] + c[j][2]) * 0.25
+                ] as Vec3);
+            });
+        }
+
+        // Metres per normalized-image unit, from the performer's apparent height in the first tracked frame.
+        const targetHeight = options.targetHeightMeters ?? (Math.max(...canonicalJoints.map(j => j[1])) + 0.12);
+        const hipCenterX = (img: PoseLandmarkTuple[] | null) => (img ? (img[23][0] + img[24][0]) * 0.5 : 0.5);
+        const img0 = images[0];
+        let metresPerImageX = 0;
+        if (img0 && track.width > 0 && track.height > 0) {
+            const eyeY = Math.min(img0[2][1], img0[5][1]);
+            const footY = Math.max(img0[29][1], img0[30][1], img0[31][1], img0[32][1]);
+            const heightPx = Math.max(1, (footY - eyeY) * track.height / 0.935);
+            metresPerImageX = (track.width / heightPx) * targetHeight;
+        }
+        const hipX0 = hipCenterX(img0);
+
+        const canonical = canonicalJoints as Vec3[];
+        const floorY = Math.min(canonical[10][1], canonical[11][1]);
+        const fps = track.fps || 25;
+        const frames: HumanoidMotionFrame[] = smoothed.map((src, f) => {
+            const rootX = canonical[0][0] + (hipCenterX(images[f]) - hipX0) * metresPerImageX;
+            const joints = retargetSegmentDirections(canonical, src, [rootX, canonical[0][1], canonical[0][2]]);
+            const lift = floorY - Math.min(joints[10][1], joints[11][1]);
+            for (const j of joints) j[1] += lift;
+            const pelvis = joints[0];
+            return {
+                frame_index: f,
+                timestamp: f / fps,
+                root_translation: [pelvis[0] - canonical[0][0], pelvis[1] - canonical[0][1], pelvis[2] - canonical[0][2]],
+                root_rotation_quat: [0, 0, 0, 1],
+                joint_positions_3d: joints as Array<[number, number, number]>,
+                confidence: worlds[f].reduce((s, l) => s + l[3], 0) / worlds[f].length
+            };
+        });
+
+        return {
+            clip_id: options.clipId,
+            body_model: 'smplx_22',
+            fps,
+            num_frames: frames.length,
+            num_joints: 22,
+            joints_name: this.getSMPLX22JointNames(),
+            kintree_parents: this.getSMPLX22Parents(),
+            canonical_joints: canonicalJoints,
+            frames,
+            motion_source: 'mediapipe_pose_track',
+            source_video: track.source,
+            camera_to_world: cameraToWorld
+        };
+    }
+
+    /**
+     * MediaPipe world depth is weak for frontal limbs (straight legs come back bent 30-50 degrees) and its
+     * bone lengths are asymmetric, while 2D image landmarks are accurate. Limbs are re-lifted under full
+     * perspective: each limb joint is the intersection of its image ray with a sphere around its parent;
+     * world landmarks only choose the near or far intersection.
+     * Output is in the camera frame (x right, y up, z towards the camera).
+     */
+    private liftLimbsFromImage(
+        worldJoints: Vec3[][],
+        worlds: PoseLandmarkTuple[][],
+        images: Array<PoseLandmarkTuple[] | null>,
+        canonical: Vec3[],
+        width: number,
+        height: number,
+        focalLengthPx: number
+    ): Vec3[][] {
+        const LIMBS: Array<[number, number]> = [[16, 18], [18, 20], [17, 19], [19, 21], [1, 4], [4, 7], [2, 5], [5, 8]];
+        const parents = this.getSMPLX22Parents();
+        const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        const mid = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+        const median = (v: number[]) => {
+            const s = v.filter(Number.isFinite).sort((x, y) => x - y);
+            return s.length ? s[Math.floor(s.length / 2)] : NaN;
+        };
+        if (!(width > 0 && height > 0 && focalLengthPx > 0)) return worldJoints;
+        const cx = width / 2;
+        const cy = height / 2;
+
+        const pixelJoints = images.map(img => img
+            ? this.convertLandmarksToSMPLX22(img.map(([x, y, , v]) => ({ x: x * width, y: -y * height, z: 0, visibility: v })))
+            : null);
+        const visibility = worlds.map(w => this.convertLandmarksToSMPLX22(w.map(([, , , v]) => ({ x: v, y: 0, z: 0, visibility: v }))));
+        const ray = (px: Vec3): Vec3 => {
+            const d: Vec3 = [(px[0] - cx) / focalLengthPx, -(px[1] - cy) / focalLengthPx, -1];
+            const l = Math.hypot(d[0], d[1], d[2]);
+            return [d[0] / l, d[1] / l, d[2] / l];
+        };
+
+        // Depth from the torso's pixel length against the avatar torso, median-filtered over +-12 frames
+        // (performers stay mostly upright; single-frame torso foreshortening would otherwise dominate).
+        const torsoLen = dist(mid(canonical[16], canonical[17]), mid(canonical[1], canonical[2]));
+        const rawDepth = pixelJoints.map(px => {
+            if (!px) return NaN;
+            const l = dist(mid(px[16], px[17]), mid(px[1], px[2]));
+            return l > 2 ? (focalLengthPx * torsoLen) / l : NaN;
+        });
+        const depth = rawDepth.map((_, f) => median(rawDepth.slice(Math.max(0, f - 12), f + 13)));
+
+        // Performer limb lengths: median apparent length at that depth. Straight-in-image limbs lift straight;
+        // an underestimate only flattens a limb towards the image plane.
+        const boneLen = new Map<number, number>();
+        for (const [p, c] of LIMBS) {
+            const apparent = median(pixelJoints.map((px, f) =>
+                px && visibility[f][p][0] >= 0.5 && visibility[f][c][0] >= 0.5 ? (dist(px[p], px[c]) * depth[f]) / focalLengthPx : NaN));
+            boneLen.set(c, Number.isFinite(apparent) ? apparent : dist(canonical[p], canonical[c]));
+        }
+
+        return worldJoints.map((joints, f) => {
+            const px = pixelJoints[f];
+            const d0 = depth[f];
+            if (!px || !Number.isFinite(d0)) return joints;
+            const r0 = ray(px[0]);
+            const pelvis: Vec3 = [r0[0] * d0 / -r0[2], r0[1] * d0 / -r0[2], -d0];
+            const out = joints.map(j => [j[0] - joints[0][0] + pelvis[0], j[1] - joints[0][1] + pelvis[1], j[2] - joints[0][2] + pelvis[2]] as Vec3);
+
+            for (const [p, c] of LIMBS) {
+                if (visibility[f][p][0] < 0.5 || visibility[f][c][0] < 0.5) continue;
+                const L = boneLen.get(c)!;
+                const r = ray(px[c]);
+                const P = out[p];
+                const rp = r[0] * P[0] + r[1] * P[1] + r[2] * P[2];
+                const disc = rp * rp - (P[0] * P[0] + P[1] * P[1] + P[2] * P[2] - L * L);
+                let t = rp;
+                if (disc > 0) {
+                    // Perspective makes the two intersections asymmetric; take the one whose depth offset
+                    // best matches the world landmarks rather than just its sign.
+                    const root = Math.sqrt(disc);
+                    const expectedDz = joints[c][2] - joints[p][2];
+                    const dzOf = (tt: number) => r[2] * tt - P[2];
+                    t = Math.abs(dzOf(rp - root) - expectedDz) <= Math.abs(dzOf(rp + root) - expectedDz) ? rp - root : rp + root;
+                }
+                const target: Vec3 = [r[0] * t, r[1] * t, r[2] * t];
+                const delta: Vec3 = [target[0] - out[c][0], target[1] - out[c][1], target[2] - out[c][2]];
+                for (let j = c; j < out.length; j++) {
+                    let a = j;
+                    while (a > c) a = parents[a];
+                    if (a === c) out[j] = [out[j][0] + delta[0], out[j][1] + delta[1], out[j][2] + delta[2]];
+                }
+            }
+            return out;
+        });
     }
 
     /**

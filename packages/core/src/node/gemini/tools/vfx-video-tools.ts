@@ -8,6 +8,13 @@
  ********************************************************************************/
 
 import { buildBeautifyPrompt } from '../../../browser/generative-canvas/services/location-beautify-service';
+import {
+    buildNeutralPerformerPrompt,
+    buildFrameMotivatedPerformerVideoPrompt,
+    generate4DAnyoneCameraRig,
+    type MultiViewCameraPosition
+} from '../../../browser/generative-canvas/services/video/omniVideoPromptService';
+import { ComfyUiPipelineAgent } from '../../agent/comfyui-pipeline-agent';
 import { HeadlessVideoEditorService } from '../../video/HeadlessVideoEditorService';
 import { HeadlessVideoCompositorService } from '../../video/HeadlessVideoCompositorService';
 import { MediaPipeVideoDirectorService } from '../../video/MediaPipeVideoDirectorService';
@@ -83,6 +90,144 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['locationName']
         }
+    },
+    {
+        name: 'build_neutral_performer_prompt',
+        description: 'Construct the exact prompt and negative prompt for image and video creation tools (Google Omni 1.1 / Veo, Imagen 3, Nano Banana 2) strictly adhering to the Prompt Neutrality Contract: zero environmental context (#808080 neutral studio backdrop), zero directional/theatrical lighting (flat shadowless high-CRI illumination), uncropped head-to-toe vertical framing (9:16), and canonical symmetrical A-frame pose (A-pose).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                subject: {
+                    type: 'STRING',
+                    description: 'Description of the performer or subject (e.g. "A female vocalist", "A humanoid dancer")'
+                },
+                wardrobe: {
+                    type: 'STRING',
+                    description: 'Detailed clothing and footwear description (e.g. "oversized white linen tunic, wide-leg palazzo trousers, chunky white sneakers")'
+                },
+                aspectRatio: {
+                    type: 'STRING',
+                    description: 'Canvas aspect ratio (default "9:16" for uncropped head-to-toe vertical portrait, or "1:1", "16:9")'
+                },
+                kind: {
+                    type: 'STRING',
+                    description: 'Media target kind: "image" (default, still portrait) or "video" (motion calibration plate)'
+                },
+                isAFramePose: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to enforce the canonical symmetrical A-frame pose (default true)'
+                },
+                videoMotion: {
+                    type: 'STRING',
+                    description: 'Optional subtle motion instructions if kind is "video" (defaults to stationary resting calibration with subtle breathing)'
+                },
+                extraNegativePrompt: {
+                    type: 'STRING',
+                    description: 'Optional additional negative prompt clauses to append to the standard negative prompt'
+                }
+            }
+        }
+    },
+    {
+        name: 'build_frame_motivated_performer_prompt',
+        description: 'Construct the exact frame-motivated prompt for video creation tools (Google Omni 1.1, Wan2.2-TI2V-5B, SVD) strictly conditioning motion on a reference hero frame (<FIRST_FRAME> syntax), respecting casual natural poses without forcing an A-pose unless specified, camera perspective (front 0°, left 45°, right 45°, rear 180°, or orbit 360°), and neutral shadowless studio lighting.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                referenceFrameRef: {
+                    type: 'STRING',
+                    description: 'Reference hero frame media tag or identifier (e.g. "<IMAGE_REF_0>", "performer_frame_00.png")'
+                },
+                subject: {
+                    type: 'STRING',
+                    description: 'Subject description (e.g. "A female vocalist", "A humanoid dancer")'
+                },
+                wardrobe: {
+                    type: 'STRING',
+                    description: 'Clothing and footwear description (e.g. "oversized white linen tunic, wide-leg trousers, white sneakers")'
+                },
+                cameraPosition: {
+                    type: 'STRING',
+                    description: 'Capture camera position: "front" (0°), "left_45" (45°), "right_45" (-45°), "rear_180" (180°), or "orbit_360"'
+                },
+                heroPoseType: {
+                    type: 'STRING',
+                    description: 'Hero frame pose: "casual" (natural organic pose from video, never forced into A-pose), "a-pose" (symmetrical A-frame), or "as-input"'
+                },
+                heroPoseDescription: {
+                    type: 'STRING',
+                    description: 'Optional description of hero frame pose (e.g. "arms resting along flanks, relaxed natural standing posture")'
+                },
+                isAFramePose: {
+                    type: 'BOOLEAN',
+                    description: 'Set to false if the reference frame is in a casual stance and should NOT be forced into an A-pose'
+                },
+                cameraRigPreset: {
+                    type: 'STRING',
+                    description: '4DAnyone camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
+                },
+                actionPrompt: {
+                    type: 'STRING',
+                    description: 'Subtle motion action description originating smoothly from the initial pose (e.g. "maintains natural casual posture while subtly breathing")'
+                },
+                durationSeconds: {
+                    type: 'NUMBER',
+                    description: 'Duration in seconds (default 4.0)'
+                },
+                videoDiffusionModel: {
+                    type: 'STRING',
+                    description: 'Target video diffusion model architecture: "Wan2.2-TI2V-5B" (default 4DAnyone backbone), "SVD", or "Veo2"'
+                },
+                extraNegativePrompt: {
+                    type: 'STRING',
+                    description: 'Additional negative prompt clauses'
+                }
+            },
+            required: ['referenceFrameRef']
+        }
+    },
+    {
+        name: 'generate_4danyone_multiview_video',
+        description: 'Orchestrate multi-view video capture using the 4DAnyone Wan2.2-TI2V-5B video diffusion backbone with Reference Context Packing (RCP), Target Context Routing (TCR), 4DAnyone camera capture rigs (6-view, 24-view dense, 48-view multi-pitch), and 3D skeleton conditioning across camera positions.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                referenceFramePath: {
+                    type: 'STRING',
+                    description: 'Path or image reference to the hero frame'
+                },
+                cameraPositions: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'List of camera positions to capture: ["front", "left_45", "right_45", "rear_180"]'
+                },
+                cameraRigPreset: {
+                    type: 'STRING',
+                    description: '4DAnyone camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
+                },
+                heroPoseType: {
+                    type: 'STRING',
+                    description: 'Hero frame pose: "casual" or "a-pose"'
+                },
+                prompt: {
+                    type: 'STRING',
+                    description: 'Performer action and character prompt motivated by the reference frame'
+                },
+                skeletonGuidanceFile: {
+                    type: 'STRING',
+                    description: 'Optional path to SMPL-X or MediaPipe 3D skeleton motion JSON'
+                },
+                steps: {
+                    type: 'NUMBER',
+                    description: 'Diffusion sampling steps (default 25)'
+                },
+                cfg: {
+                    type: 'NUMBER',
+                    description: 'Classifier-free guidance scale (default 6.0)'
+                }
+            },
+            required: ['referenceFramePath']
+        }
     }
 ];
 
@@ -120,6 +265,123 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
                 aspectRatio
             },
             summaryResult: `Constructed AI Beautify prompt for ${locationName} with non-negotiable 3D framing rules.`
+        };
+    },
+
+    build_neutral_performer_prompt: (args, _ctx) => {
+        const subject = asString(args.subject) || undefined;
+        const wardrobe = asString(args.wardrobe) || undefined;
+        const aspectRatio = asString(args.aspectRatio) || '9:16';
+        const kind = (asString(args.kind).toLowerCase() === 'video') ? 'video' : 'image';
+        const isAFramePose = args.isAFramePose !== undefined ? asBoolean(args.isAFramePose) : true;
+        const videoMotion = asString(args.videoMotion) || undefined;
+        const extraNegativePrompt = asString(args.extraNegativePrompt) || undefined;
+
+        const result = buildNeutralPerformerPrompt({
+            subject,
+            wardrobe,
+            aspectRatio,
+            kind,
+            isAFramePose,
+            videoMotion,
+            extraNegativePrompt
+        });
+
+        return {
+            resultPayload: {
+                success: true,
+                prompt: result.prompt,
+                negativePrompt: result.negativePrompt,
+                aspectRatio: result.aspectRatio,
+                kind: result.kind,
+                isAFramePose: result.isAFramePose
+            },
+            summaryResult: `Constructed neutral ${result.kind} prompt from head to toe in ${result.isAFramePose ? 'A-frame' : 'neutral'} pose with zero context and flat shadowless lighting.`
+        };
+    },
+
+    build_frame_motivated_performer_prompt: (args, _ctx) => {
+        const referenceFrameRef = asString(args.referenceFrameRef) || asString(args.referenceFramePath);
+        if (!referenceFrameRef) throw new Error('build_frame_motivated_performer_prompt: "referenceFrameRef" or "referenceFramePath" is required.');
+
+        const subject = asString(args.subject) || asString(args.characterDescription) || undefined;
+        const wardrobe = asString(args.wardrobe) || undefined;
+        const cameraPosition = (asString(args.cameraPosition) || 'front') as MultiViewCameraPosition;
+        const videoMotion = asString(args.actionPrompt) || asString(args.videoMotion) || undefined;
+        const videoModelBackbone = asString(args.videoDiffusionModel) || asString(args.videoModelBackbone) || 'Wan2.2-TI2V-5B';
+        const extraNegativePrompt = asString(args.extraNegativePrompt) || undefined;
+        const heroPoseType = (asString(args.heroPoseType) as 'casual' | 'a-pose' | 'as-input') || undefined;
+        const heroPoseDescription = asString(args.heroPoseDescription) || undefined;
+        const isAFramePose = typeof args.isAFramePose === 'boolean' ? args.isAFramePose : undefined;
+        const cameraRigPreset = (asString(args.cameraRigPreset) as any) || undefined;
+
+        const result = buildFrameMotivatedPerformerVideoPrompt({
+            referenceFrameRef,
+            subject,
+            wardrobe,
+            cameraPosition,
+            videoMotion,
+            videoModelBackbone,
+            extraNegativePrompt,
+            heroPoseType,
+            heroPoseDescription,
+            isAFramePose,
+            cameraRigPreset
+        });
+
+        return {
+            resultPayload: {
+                success: true,
+                prompt: result.prompt,
+                negativePrompt: result.negativePrompt,
+                referenceFrameRef: result.referenceFrameRef,
+                cameraPosition: result.cameraPosition,
+                videoModelBackbone: result.videoModelBackbone,
+                aspectRatio: result.aspectRatio,
+                isAFramePose: result.isAFramePose,
+                heroPoseType: result.heroPoseType,
+                cameraRig: result.cameraRig,
+                firstFrameSyntax: result.firstFrameSyntax
+            },
+            summaryResult: `Constructed frame-motivated video prompt conditioned on ${result.referenceFrameRef} (${result.cameraPosition} viewpoint, pose: ${result.heroPoseType}) for ${result.videoModelBackbone}.`
+        };
+    },
+
+    generate_4danyone_multiview_video: async (args, _ctx) => {
+        const referenceFramePath = asString(args.referenceFramePath);
+        if (!referenceFramePath) throw new Error('generate_4danyone_multiview_video: "referenceFramePath" is required.');
+
+        const cameraPositions = Array.isArray(args.cameraPositions)
+            ? (args.cameraPositions as string[]).map(s => String(s))
+            : ['front', 'left_45', 'right_45', 'rear_180'];
+        const cameraRigPreset = asString(args.cameraRigPreset) || '6-view-orbit';
+        const heroPoseType = asString(args.heroPoseType) || 'casual';
+        const cameraRig = generate4DAnyoneCameraRig(cameraRigPreset as any);
+        const prompt = asString(args.prompt) || `Performer in ${heroPoseType === 'a-pose' ? 'symmetrical A-pose' : 'natural casual posture'} maintaining subtle motion on neutral grey background`;
+
+        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution: true });
+        const goal = `4DAnyone multi-view video diffusion using Wan2.2-TI2V-5B backbone for capture positions ${cameraPositions.join(', ')} with rig preset ${cameraRigPreset} motivated by reference frame ${referenceFramePath} in ${heroPoseType} stance`;
+        const blueprint = await comfyAgent.researchPipeline(goal);
+        const execution = await comfyAgent.executeAndHeal(goal);
+
+        return {
+            resultPayload: {
+                success: execution.success,
+                blueprintId: blueprint.id,
+                category: blueprint.category,
+                videoDiffusionModel: 'Wan2.2-TI2V-5B',
+                referenceFramePath,
+                cameraPositions,
+                cameraRigPreset,
+                heroPoseType,
+                cameraRig,
+                totalCameras: cameraRig.totalCameras,
+                generatedViews: cameraRig.cameras,
+                assets: execution.assets,
+                executionDurationMs: execution.executionDurationMs,
+                diagnostics: execution.diagnostics
+            },
+            summaryResult: `Dispatched 4DAnyone Wan2.2-TI2V-5B multi-view video generation across ${cameraPositions.length} capture positions (${cameraPositions.join(', ')}, rig: ${cameraRigPreset}, pose: ${heroPoseType}).`
         };
     }
 };

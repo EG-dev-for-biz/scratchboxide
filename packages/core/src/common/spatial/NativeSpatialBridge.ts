@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { BakedGaussian } from '../geospatial-4d-protocol';
+import { decodeSpz } from '../splat-spz-codec';
 
 /**
  * Native C++ / WebAssembly Bridge interface for high-performance 3D/4D operations.
@@ -259,60 +260,20 @@ export class NativeSpatialBridge implements INativeSpatialBridge {
    * Decodes an SPZ uncompressed payload into BakedGaussians.
    */
   public static decodeSpzPayload(uncompressed: ArrayBuffer | ArrayBufferView): BakedGaussian[] {
-    const view = ArrayBuffer.isView(uncompressed)
-      ? new DataView(uncompressed.buffer, uncompressed.byteOffset, uncompressed.byteLength)
-      : new DataView(uncompressed);
-    const magic = view.getUint32(0, true);
-    if (magic !== 0x315a5053) {
-      throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x315a5053)`);
-    }
-
-    const numPoints = view.getUint32(8, true);
-    const fractionalBits = view.getUint8(12);
-    const posScale = 1.0 / (1 << fractionalBits);
-
-    const POINT_STRIDE = 22;
-    const headerSize = 16;
-    const availablePoints = Math.floor((view.byteLength - headerSize) / POINT_STRIDE);
-    const count = Math.min(numPoints, availablePoints);
-
+    const bytes = ArrayBuffer.isView(uncompressed)
+      ? new Uint8Array(uncompressed.buffer, uncompressed.byteOffset, uncompressed.byteLength)
+      : new Uint8Array(uncompressed);
+    const d = decodeSpz(bytes);
     const splats: BakedGaussian[] = [];
-    let offset = headerSize;
-
-    for (let i = 0; i < count; i++) {
-      const ix = view.getInt32(offset, true);
-      const iy = view.getInt32(offset + 4, true);
-      const iz = view.getInt32(offset + 8, true);
-      offset += 12;
-
-      const sxQuant = view.getInt8(offset++);
-      const syQuant = view.getInt8(offset++);
-      const szQuant = view.getInt8(offset++);
-
-      const sx = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
-      const sy = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
-      const sz = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
-
-      const qx = view.getInt8(offset++) / 127.0;
-      const qy = view.getInt8(offset++) / 127.0;
-      const qz = view.getInt8(offset++) / 127.0;
-      const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
-      const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
-
-      const r = view.getUint8(offset++);
-      const g = view.getUint8(offset++);
-      const b = view.getUint8(offset++);
-      const opacity = view.getUint8(offset++) / 255.0;
-
+    for (let i = 0; i < d.count; i++) {
       splats.push({
-        position: [ix * posScale, iy * posScale, iz * posScale],
-        scale: [sx, sy, sz],
-        quaternion: [qx, qy, qz, qw],
-        colorRgb: [r, g, b],
-        opacity
+        position: [d.positions[i * 3], d.positions[i * 3 + 1], d.positions[i * 3 + 2]],
+        scale: [d.scales[i * 3], d.scales[i * 3 + 1], d.scales[i * 3 + 2]],
+        quaternion: [d.quats[i * 4], d.quats[i * 4 + 1], d.quats[i * 4 + 2], d.quats[i * 4 + 3]],
+        colorRgb: [Math.round(d.colors[i * 3] * 255), Math.round(d.colors[i * 3 + 1] * 255), Math.round(d.colors[i * 3 + 2] * 255)],
+        opacity: d.opacities[i]
       });
     }
-
     return splats;
   }
 }

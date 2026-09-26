@@ -2082,43 +2082,17 @@ export class Google3DTileBlockoutPipelineService {
     let mergedGlb: Buffer;
     let vertexCount = 0;
     let triangleCount = 0;
-    const prebakedTexturedPath = path.join(process.cwd(), 'public/models/google_tiles_textured_area.glb');
-    const prebakedClayPath = path.join(process.cwd(), 'public/models/google_tiles_clay_area.glb');
-    const preferredPath = isTextured ? prebakedTexturedPath : prebakedClayPath;
-
-    let submeshCount = 1;
-
-    if (fs.existsSync(outputGlbPath)) {
-      mergedGlb = fs.readFileSync(outputGlbPath);
-      const parsedStats = this.parseGlbMeshStatistics(mergedGlb);
-      if (parsedStats) {
-        vertexCount = parsedStats.vertexCount;
-        triangleCount = parsedStats.triangleCount;
-        submeshCount = parsedStats.submeshCount;
-      } else {
-        vertexCount = isTextured ? 768103 : 1024;
-        triangleCount = isTextured ? 521284 : 512;
-      }
-    } else if (fs.existsSync(preferredPath)) {
-      mergedGlb = fs.readFileSync(preferredPath);
-      fs.writeFileSync(outputGlbPath, mergedGlb);
-      const parsedStats = this.parseGlbMeshStatistics(mergedGlb);
-      if (parsedStats) {
-        vertexCount = parsedStats.vertexCount;
-        triangleCount = parsedStats.triangleCount;
-        submeshCount = parsedStats.submeshCount;
-      } else {
-        vertexCount = isTextured ? 4820 : 1024;
-        triangleCount = isTextured ? 7640 : 512;
-      }
-    } else {
+    // Offline mock: reuse what the caller already wrote at the output path, otherwise write an explicitly synthetic tile
+    if (!fs.existsSync(outputGlbPath)) {
       const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
-      const mergedResult = Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt);
-      mergedGlb = mergedResult.glbBuffer;
-      fs.writeFileSync(outputGlbPath, mergedGlb);
-      vertexCount = mergedResult.vertexCount;
-      triangleCount = Math.floor(mergedResult.indexCount / 3);
+      fs.writeFileSync(outputGlbPath, Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt).glbBuffer);
     }
+    mergedGlb = fs.readFileSync(outputGlbPath);
+    const parsedStats = this.parseGlbMeshStatistics(mergedGlb);
+    if (!parsedStats) throw new Error(`Could not read mesh statistics from ${outputGlbPath}`);
+    vertexCount = parsedStats.vertexCount;
+    triangleCount = parsedStats.triangleCount;
+    const submeshCount = parsedStats.submeshCount;
     const meshStats: Google3DTileMeshStats = {
       name: `Google3DTile_${isTextured ? 'textured' : 'clay'}`,
       vertexCount,

@@ -63,21 +63,15 @@ node scripts/run_geo_camera_matchmove_pipeline.cjs \
 
 ---
 
-## Supported Landmark Database
+## Location Resolution
 
-The pipeline includes built-in geodetic anchors and street grid alignments for major architectural landmarks:
+There is no built-in landmark table. `--landmark "<place>"` is geocoded with the Google Geocoding API
+(ground elevation from the Elevation API) via `GeoCameraMatchmovePipelineService.geocodeLandmarkAnchor`,
+which needs `GOOGLE_MAPS_API_KEY`; otherwise pass `--lat/--lng`. A lookup with no result is an error.
+Motion presets use `--heading` (compass degrees of the street grid, e.g. -29 for Manhattan) when given.
 
-| Landmark Name | Latitude | Longitude | Elevation | Heading | Motion Presets |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **The Plaza Hotel** (NYC) | `40.764500` | `-73.974400` | `18.0m` | `-29.0°` | `crane-descent-to-nadir` |
-| **Empire State Building** (NYC) | `40.748817` | `-73.985428` | `15.0m` | `-29.0°` | `canyon-flythrough`, `orbit` |
-| **Flatiron Building** (NYC) | `40.741061` | `-73.989699` | `12.0m` | `-29.0°` | `canyon-flythrough` |
-| **Chrysler Building** (NYC) | `40.751621` | `-73.975502` | `16.0m` | `-29.0°` | `orbital-inspection` |
-| **One World Trade Center** (NYC) | `40.712743` | `-74.013379` | `3.0m` | `-29.0°` | `crane-descent-to-nadir` |
-| **Eiffel Tower** (Paris) | `48.858370` | `2.294481` | `35.0m` | `0.0°` | `orbital-inspection` |
-| **Shibuya Crossing** (Tokyo) | `35.659495` | `139.700554` | `16.0m` | `0.0°` | `crane-descent-to-nadir` |
-| **Burj Khalifa** (Dubai) | `25.197197` | `55.274376` | `11.0m` | `0.0°` | `crane-descent-to-nadir` |
-| **Big Ben / Westminster** (London) | `51.500729` | `-0.124625` | `10.0m` | `0.0°` | `canyon-flythrough` |
+Note: motion presets generate a camera path; they do not track the reference video, and their
+`precisionMetrics.measured` is `false`.
 
 ---
 
@@ -111,8 +105,8 @@ import {
 
 const pipeline = new GeoCameraMatchmovePipelineService();
 
-// 1. Resolve landmark anchor
-const anchor = pipeline.resolveLandmarkAnchor('The Plaza Hotel');
+// 1. Geocode the location (Google Geocoding + Elevation APIs)
+const anchor = await pipeline.geocodeLandmarkAnchor('The Plaza Hotel, New York', { headingDeg: -29 });
 
 // 2. Configure matchmove request
 const request: GeoMatchmoveRequest = {

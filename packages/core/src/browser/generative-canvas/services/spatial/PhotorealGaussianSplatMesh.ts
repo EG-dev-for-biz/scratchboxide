@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { decodeSpz, isGzip } from '../../../../common/splat-spz-codec';
 import { CameraRelativeRTC } from '../../../../common/coordinate/CameraRelativeRTC';
 import { SplatRadixSorter } from './SplatRadixSorter';
 
@@ -797,83 +798,26 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
       }
     }
 
-    const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const magic = view.getUint32(0, true);
-    if (magic !== 0x315a5053) {
-      throw new Error(`Invalid SPZ magic: 0x${magic.toString(16)} (expected 0x315a5053)`);
-    }
-
-    const numPoints = view.getUint32(8, true);
-    const fractionalBits = view.getUint8(12);
-    const posScale = 1.0 / (1 << fractionalBits);
-
-    const POINT_STRIDE = 22;
-    const headerSize = 16;
-    const availablePoints = Math.floor((raw.byteLength - headerSize) / POINT_STRIDE);
-    const count = Math.min(numPoints, availablePoints);
-
-    const positions = new Float32Array(count * 3);
-    const scales = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    const opacities = new Float32Array(count);
-    const quats = new Float32Array(count * 4);
-
-    let offset = headerSize;
+    if (isGzip(raw)) throw new Error('SPZ payload is gzip-compressed and DecompressionStream is unavailable');
+    const d = decodeSpz(raw);
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     let sumX = 0, sumY = 0, sumZ = 0;
-
-    for (let i = 0; i < count; i++) {
-      const ix = view.getInt32(offset, true);
-      const iy = view.getInt32(offset + 4, true);
-      const iz = view.getInt32(offset + 8, true);
-      offset += 12;
-
-      const px = ix * posScale;
-      const py = iy * posScale;
-      const pz = iz * posScale;
-
-      positions[i * 3 + 0] = px;
-      positions[i * 3 + 1] = py;
-      positions[i * 3 + 2] = pz;
-
+    for (let i = 0; i < d.count; i++) {
+      const px = d.positions[i * 3], py = d.positions[i * 3 + 1], pz = d.positions[i * 3 + 2];
       if (px < minX) minX = px; if (px > maxX) maxX = px;
       if (py < minY) minY = py; if (py > maxY) maxY = py;
       if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
       sumX += px; sumY += py; sumZ += pz;
-
-      const sxQuant = view.getInt8(offset++);
-      const syQuant = view.getInt8(offset++);
-      const szQuant = view.getInt8(offset++);
-
-      scales[i * 3 + 0] = Math.exp(((sxQuant + 128) / 255.0) * 12.0 - 8.0);
-      scales[i * 3 + 1] = Math.exp(((syQuant + 128) / 255.0) * 12.0 - 8.0);
-      scales[i * 3 + 2] = Math.exp(((szQuant + 128) / 255.0) * 12.0 - 8.0);
-
-      const qx = view.getInt8(offset++) / 127.0;
-      const qy = view.getInt8(offset++) / 127.0;
-      const qz = view.getInt8(offset++) / 127.0;
-      const qw2 = 1.0 - (qx * qx + qy * qy + qz * qz);
-      const qw = qw2 > 0 ? Math.sqrt(qw2) : 0.0;
-
-      quats[i * 4 + 0] = qx;
-      quats[i * 4 + 1] = qy;
-      quats[i * 4 + 2] = qz;
-      quats[i * 4 + 3] = qw;
-
-      colors[i * 3 + 0] = view.getUint8(offset++) / 255.0;
-      colors[i * 3 + 1] = view.getUint8(offset++) / 255.0;
-      colors[i * 3 + 2] = view.getUint8(offset++) / 255.0;
-      opacities[i] = view.getUint8(offset++) / 255.0;
     }
-
+    const count = d.count;
     return {
       count,
-      positions,
-      scales,
-      colors,
-      opacities,
-      quats,
+      positions: d.positions,
+      scales: d.scales,
+      colors: d.colors,
+      opacities: d.opacities,
+      quats: d.quats,
       bounds: count > 0 ? { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] } : undefined,
       centroid: count > 0 ? [sumX / count, sumY / count, sumZ / count] : undefined
     };

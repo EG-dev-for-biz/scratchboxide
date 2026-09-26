@@ -321,6 +321,14 @@ public:
     /** World-space height of the ground plane (street level measured from the tile's horizontal surfaces). */
     float groundHeight() const { return groundLocalY_ + origin_.y; }
     Vec3 groundAlbedo() const { return groundAlbedo_; }
+
+    // Uniform matte material in place of the captured textures (geometry-only clay blockouts).
+    void setClayMaterial(const Vec3& albedo, float roughness, float metallic) {
+        clay_ = true;
+        clayAlbedo_ = albedo;
+        clayRoughness_ = std::clamp(roughness, 0.02f, 1.0f);
+        clayMetallic_ = std::clamp(metallic, 0.0f, 1.0f);
+    }
     size_t triangleCount() const { return mesh_.indices.size() / 3; }
     size_t bvhNodeCount() const { return bvh_.getNodeCount(); }
 
@@ -534,8 +542,8 @@ private:
         detail::SurfacePoint s;
         s.position = hit.position;
         if (hit.ground) {
-            s.baseColor = groundAlbedo_;
-            s.roughness = 0.9f;
+            s.baseColor = clay_ ? clayAlbedo_ : groundAlbedo_;
+            s.roughness = clay_ ? clayRoughness_ : 0.9f;
         } else {
             const auto& p0 = mesh_.vertices[mesh_.indices[hit.triangle * 3]].position;
             const auto& p1 = mesh_.vertices[mesh_.indices[hit.triangle * 3 + 1]].position;
@@ -544,11 +552,17 @@ private:
             if (ng.lengthSquared() < 0.5f) ng = hit.interpolatedNormal;
             s.geometricNormal = ng;
             s.shadingNormal = hit.interpolatedNormal.lengthSquared() > 0.5f ? hit.interpolatedNormal : ng;
-            const auto& mat = scene_.materials[scene_.triangleMaterial[hit.triangle]];
-            s.baseColor = triangleAlbedo(hit.triangle, hit.u, hit.v);
-            s.metallic = std::clamp(mat.metallicFactor, 0.0f, 1.0f);
-            s.roughness = std::clamp(mat.roughnessFactor, 0.02f, 1.0f);
-            s.emission = mat.emissiveFactor;
+            if (clay_) {
+                s.baseColor = clayAlbedo_;
+                s.metallic = clayMetallic_;
+                s.roughness = clayRoughness_;
+            } else {
+                const auto& mat = scene_.materials[scene_.triangleMaterial[hit.triangle]];
+                s.baseColor = triangleAlbedo(hit.triangle, hit.u, hit.v);
+                s.metallic = std::clamp(mat.metallicFactor, 0.0f, 1.0f);
+                s.roughness = std::clamp(mat.roughnessFactor, 0.02f, 1.0f);
+                s.emission = mat.emissiveFactor;
+            }
         }
         Vec3 wo = -dir;
         if (s.geometricNormal.dot(wo) < 0.0f) s.geometricNormal = -s.geometricNormal;
@@ -693,6 +707,10 @@ private:
     bvh::BvhTree bvh_;
     float groundLocalY_{0.0f};
     Vec3 groundAlbedo_{0.18f, 0.18f, 0.18f};
+    bool clay_{false};
+    Vec3 clayAlbedo_{0.716f, 0.672f, 0.610f};
+    float clayRoughness_{0.82f};
+    float clayMetallic_{0.02f};
 };
 
 } // namespace render

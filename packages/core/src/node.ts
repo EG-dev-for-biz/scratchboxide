@@ -349,8 +349,6 @@ export {
     CameraMotionType,
     GeoMatchmoveRequest,
     GeoMatchmoveResult,
-    LandmarkAnchorInfo,
-    KNOWN_LANDMARK_ANCHORS,
     TrajectoryKeyframeAnchor,
     AdaptiveDenseSamplingConfig,
     VideoMetadata,
@@ -613,7 +611,61 @@ export {
     type CameraIntrinsicsInput,
     type Build4DFromCanonicalOptions
 } from './node/3d-engine/gaussian-splat-4d-service';
-
+// 4DAnyone & Video-to-Performer 4D Projection Pipeline Services
+export {
+    Dynamic4DGaussianSplatService,
+    type HumanoidMotionData,
+    type HumanoidMotionFrame,
+    type SkinWeightedGaussian,
+    type DeformedGaussianFrame,
+    type Avatar4DGSDetails
+} from './node/3d-engine/Dynamic4DGaussianSplatService';
+export {
+    HumanoidMotionBridgeService,
+    type RetargetOptions,
+    type PoseTrackRetargetOptions
+} from './node/spatial/HumanoidMotionBridgeService';
+export {
+    GvhmrBodyService,
+    type GvhmrBody,
+    type GvhmrCanonicalAvatar
+} from './node/spatial/GvhmrBodyService';
+export {
+    PerformerPoseTrackService,
+    type PerformerPoseTrack,
+    type PerformerPoseTrackFrame,
+    type PoseLandmarkTuple
+} from './node/spatial/PerformerPoseTrackService';
+export {
+    SbHumanLoader,
+    type SbHumanHeader,
+    type SbHumanJoint,
+    type SbHumanSkinWeight,
+    type SampledHumanoidSurface
+} from './common/spatial/SbHumanLoader';
+export {
+    VideoTo4DPerformerPipelineService,
+    type VideoTo4DPerformerOptions,
+    type VideoTo4DPerformerResult,
+    type SilhouetteExtractionResult,
+    type CanonicalGaussiansResult,
+    SMPLX_22_JOINTS
+} from './node/spatial/VideoTo4DPerformerPipelineService';
+export {
+    CharacterClothingMorphology,
+    type CharacterClothingMorphologyOptions
+} from './node/spatial/CharacterClothingMorphology';
+export {
+    NerfstudioDatasetService,
+    type NerfstudioFrame,
+    type NerfstudioTransforms,
+    type NerfstudioIntrinsics,
+    type OrbitalCameraRigItem,
+    type CameraObservationInput,
+    type ExportNerfstudioOptions,
+    type ExportNerfstudioResult,
+    NERFSTUDIO_MASK_THRESHOLD
+} from './node/spatial/NerfstudioDatasetService';
 
 // Google Solar API dataLayers & Multi-Class Foliage Segmentation
 export {
@@ -669,6 +721,47 @@ export {
     type GeminiObjectDetectionTelemetry,
     type GeminiDetectionResult
 } from './node/spatial/GeminiMultimodalObjectDetectorService';
+export {
+    StreetViewRestyleService,
+    STREET_VIEW_RESTYLE_MODEL,
+    buildStreetViewRestylePrompt,
+    buildStreetViewLightingDescription,
+    compositeWithinRegions,
+    removedObjectRegions,
+    type StreetViewLighting,
+    type StreetViewRestyleRequest,
+    type StreetViewRestyleResult,
+    type StreetViewShotRequest,
+    type StreetViewShot,
+    type PixelRegion
+} from './node/spatial/StreetViewRestyleService';
+export {
+    OmniVideoService,
+    OMNI_VIDEO_MODEL,
+    buildBlockoutFirstLastPrompt,
+    type OmniMedia,
+    type OmniBlockoutRequest,
+    type OmniVideoResult,
+    type OmniVideoServiceOptions,
+    type OmniVideoTask,
+    type BlockoutPromptOptions
+} from './node/video/OmniVideoService';
+export {
+    ContinuousSplineMatchmoveService,
+    type SplineKnot,
+    type EvaluatedPose,
+    type PersistentTrack3D2D,
+    type SplineAnchorConstraint,
+    type ContinuousSplineSolveOptions,
+    type SplineOptimizationResult,
+    type DenseTrajectoryFrame
+} from './node/spatial/ContinuousSplineMatchmoveService';
+export {
+    MatchmoveApi,
+    createMatchmoveRouter,
+    createMatchmoveNodeHttpHandler,
+    type MatchmoveCapabilitiesResponse
+} from './node/spatial/matchmove-router';
 
 // SB-Archi Monumental Architecture Inversion Service
 export {
@@ -703,4 +796,25 @@ export {
     type ArchiSynthesisBridgeResult,
     generateProceduralArchiGlb
 } from './node/spatial/UniversalArchiBridgeService';
+
+// Universal 3D Object Separation & Visual Alignment Verification Services
+export {
+    Universal3DObjectSeparationService,
+    type UniversalSpatialCategory,
+    type DownstreamGeneratorRouting,
+    type UniversalSeparatedObject,
+    type UniversalSeparatedScene,
+    type UniversalSeparationOptions,
+    type UniversalSeparationAndSceneResult
+} from './node/spatial/Universal3DObjectSeparationService';
+
+export {
+    SpatialVisualAlignmentVerificationService,
+    type AlignmentVerificationRequest,
+    type AlignmentVerificationReport,
+    type EdgeOverlapResult,
+    type MetrologyCertificationParams,
+    type MetrologyCertificate
+} from './node/spatial/SpatialVisualAlignmentVerificationService';
+
 

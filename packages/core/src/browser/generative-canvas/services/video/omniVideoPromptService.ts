@@ -50,7 +50,8 @@ export type OmniStylePresetId =
     | 'historical-colonial'
     | 'cyberpunk-scifi'
     | 'architectural-digest'
-    | 'claymation-miniature';
+    | 'claymation-miniature'
+    | 'neutral-portrait-a-frame';
 
 export interface OmniStylePreset {
     id: OmniStylePresetId;
@@ -113,6 +114,16 @@ export const OMNI_STYLE_PRESETS: Record<OmniStylePresetId, OmniStylePreset> = {
         defaultLighting: 'Warm, cozy desktop studio work-lamp illumination at 3000K, soft circular light falloff, gentle bounce card fill, and a friendly, whimsical atmosphere',
         cameraDetails: 'Extreme macro lens focus, shallow depth of field with creamy miniature tilt-shift background blur, vibrant pastel color palette, and authentic 12fps stop-motion cadence',
         negativePrompt: 'photorealistic human, CGI, digital smoothness, motion blur, cold lighting, sharp metallic surfaces'
+    },
+    'neutral-portrait-a-frame': {
+        id: 'neutral-portrait-a-frame',
+        name: 'Preset 6: Neutral Performer Studio Portrait (Head-to-Toe A-Frame)',
+        description: 'Neutral, flat, shadowless, evenly lit studio portrait of a performer from head to toe in an A-frame pose against a plain backdrop with zero context or dramatic lighting.',
+        headerStyle: 'A neutral, hyper-realistic, full-body studio portrait of',
+        materials: 'Authentic fabric textures, natural skin micro-detail, and realistic footwear without baked environmental shadows or reflections',
+        defaultLighting: 'Completely neutral, flat, diffuse, shadowless studio illumination. Uniform even lighting from all angles with high CRI, zero directional keylights, zero harsh specular hotspots, and zero cast shadows',
+        cameraDetails: 'Full-body eye-level uncropped portrait lens framing from head to toe (9:16), 50mm prime, pristine neutral color balance, tack-sharp edge-to-edge optical focus across entire figure',
+        negativePrompt: 'dramatic lighting, directional sunlight, harsh shadows, stage spotlights, colored gels, rim light, ambient occlusion shadows, contrasty lighting, room, furniture, rug, floorboards, window, wall, stage, concert venue, outdoor, buildings, cropped head, cropped feet, cropped hands, close-up, medium shot, folded arms, crossed legs, dynamic action pose, asymmetrical stance, CGI plastic, cartoon'
     }
 };
 
@@ -705,5 +716,517 @@ export function buildHybridOmniVideoPayload(options: BuildHybridOmniVideoOptions
 export function compileHybridOmniVideoPrompt(options: BuildHybridOmniVideoOptions): string {
     return JSON.stringify(buildHybridOmniVideoPayload(options), null, 2);
 }
+
+// ============================================================================
+// Neutral Performer Studio Prompt Builders (Zero-Context, Zero-Lighting FX, A-Frame)
+// ============================================================================
+
+export interface NeutralPerformerPromptOptions {
+    /**
+     * Subject or performer description (e.g. "A female vocalist", "A humanoid dancer").
+     */
+    subject?: string;
+    /**
+     * Optional detailed clothing/wardrobe description (e.g. "oversized white linen tunic, wide-leg palazzo trousers, chunky white sneakers").
+     */
+    wardrobe?: string;
+    /**
+     * Target aspect ratio. Defaults to "9:16" for full-body vertical portraits.
+     */
+    aspectRatio?: '9:16' | '16:9' | '1:1' | string;
+    /**
+     * Media target kind: 'image' (still portrait) or 'video' (motion calibration clip). Defaults to 'image'.
+     */
+    kind?: 'image' | 'video';
+    /**
+     * Whether to enforce the canonical symmetrical A-frame pose. Defaults to true.
+     */
+    isAFramePose?: boolean;
+    /**
+     * Subtle movement instruction if kind === 'video'. Defaults to stationary calibration with subtle natural breathing.
+     */
+    videoMotion?: string;
+    /**
+     * Optional additional negative prompt clauses.
+     */
+    extraNegativePrompt?: string;
+}
+
+export interface NeutralPerformerPromptResult {
+    prompt: string;
+    negativePrompt: string;
+    aspectRatio: string;
+    kind: 'image' | 'video';
+    isAFramePose: boolean;
+}
+
+/**
+ * Builds a strictly neutral, evenly lit full-body head-to-toe portrait prompt for image or video generation tools.
+ * Enforces:
+ * 1. Zero Context: Plain solid neutral grey studio backdrop (#808080) with zero scenery or furniture.
+ * 2. Zero Lighting FX: Completely flat, neutral, high-CRI, diffuse, shadowless studio illumination with zero directional shadows.
+ * 3. Full-Body Framing: Vertical uncropped portrait framing from head to toe with clean top/bottom margins.
+ * 4. A-Frame Pose (A-pose): Symmetrical upright stance with arms angled outward 35-45 degrees, legs straight and shoulder-width apart, feet flat on the floor.
+ */
+export function buildNeutralPerformerPrompt(options: NeutralPerformerPromptOptions = {}): NeutralPerformerPromptResult {
+    const kind = options.kind || 'image';
+    const aspectRatio = options.aspectRatio || '9:16';
+    const isAFrame = options.isAFramePose !== false;
+
+    const subjectStr = options.subject?.trim() || 'A humanoid performer';
+    const wardrobeStr = options.wardrobe?.trim()
+        ? ` dressed in ${options.wardrobe.trim()}`
+        : '';
+
+    const poseBlock = isAFrame
+        ? 'Standing upright in an exact symmetrical A-frame pose (A-pose): arms angled outward 35 to 45 degrees from the flanks, open palms facing forward with relaxed fingers, legs straight and shoulder-width apart, feet planted flat on the floor pointing directly forward. Clean separation between arms and torso and between legs, zero limb self-occlusion.'
+        : 'Standing upright in a neutral, balanced stance with arms relaxed at sides and feet shoulder-width apart.';
+
+    const framingBlock = 'Full-body head-to-toe vertical framing. The entire figure is fully visible with clear uncropped margins above the top of the head and below the soles of the shoes. Zero cropping of head, limbs, or feet.';
+
+    const lightingBlock = 'Completely flat, neutral, high-CRI, diffuse, shadowless studio illumination. Uniform even lighting from all angles with zero directional keylights, zero harsh specular hotspots, and zero cast shadows on the body or floor.';
+
+    const contextBlock = 'Plain solid neutral grey studio backdrop (#808080), completely blank and devoid of environment, pure seamless cyclorama infinity wall with uniform matte floor.';
+
+    const cameraBlock = 'Eye-level locked camera at chest height, neutral 50mm portrait lens, pristine neutral color balance, tack-sharp edge-to-edge optical focus across the entire figure from head to toe.';
+
+    let promptLines: string[];
+
+    if (kind === 'video') {
+        const motionDetail = options.videoMotion?.trim() || 'The subject remains stationary in the calibrated A-frame pose with only subtle natural resting breathing and micro-movements.';
+        promptLines = [
+            `A full-body studio video portrait of ${subjectStr}${wardrobeStr}.`,
+            'Single continuous shot, no scene cuts. Locked-off stationary camera at eye level.',
+            framingBlock,
+            poseBlock,
+            motionDetail,
+            lightingBlock,
+            contextBlock,
+            cameraBlock,
+            'Sound design: silence, no music, no dialogue.'
+        ];
+    } else {
+        promptLines = [
+            `A full-body, head-to-toe studio portrait of ${subjectStr}${wardrobeStr}.`,
+            framingBlock,
+            poseBlock,
+            lightingBlock,
+            contextBlock,
+            cameraBlock,
+            'High dynamic range, authentic fabric weave and skin micro-detail without baked lighting.'
+        ];
+    }
+
+    const baseNegative = 'dramatic lighting, directional sunlight, harsh shadows, deep cast shadows, stage spotlights, colored gels, rim light, ambient occlusion shadows, contrasty lighting, chiaroscuro, room, interior, exterior, living room, bedroom, furniture, radiator, windows, parquet floor, wood floor, carpet, rug, stage, concert venue, outdoor, outdoor landscape, street, buildings, trees, sky, cropped head, cropped feet, cropped hands, cropped limbs, close-up, medium shot, half-body shot, folded arms, crossed legs, dynamic action pose, asymmetrical stance, motion blur, CGI plastic, cartoon, illustration, low resolution';
+
+    const negativePrompt = options.extraNegativePrompt?.trim()
+        ? `${baseNegative}, ${options.extraNegativePrompt.trim()}`
+        : baseNegative;
+
+    return {
+        prompt: promptLines.join(' '),
+        negativePrompt,
+        aspectRatio,
+        kind,
+        isAFramePose: isAFrame
+    };
+}
+
+export function buildNeutralPerformerImagePrompt(options: Omit<NeutralPerformerPromptOptions, 'kind'> = {}): NeutralPerformerPromptResult {
+    return buildNeutralPerformerPrompt({ ...options, kind: 'image' });
+}
+
+export function buildNeutralPerformerVideoPrompt(options: Omit<NeutralPerformerPromptOptions, 'kind'> = {}): NeutralPerformerPromptResult {
+    return buildNeutralPerformerPrompt({ ...options, kind: 'video' });
+}
+
+export type MultiViewCameraPosition = 'front' | 'left_45' | 'right_45' | 'rear_180' | 'orbit_360';
+
+export type FourDAnyoneCameraRigPreset = '6-view-orbit' | '24-view-dense' | '48-view-multipitch' | '24-view-frontal-arc' | 'custom';
+
+export interface FourDAnyoneCameraRigOptions {
+    preset?: FourDAnyoneCameraRigPreset;
+    viewsPerLayer?: number;
+    layerPitches?: number[];
+    startYaw?: number;
+    yawSpan?: number;
+    orbitRadius?: number;
+    elevationM?: number;
+    fovDeg?: number;
+}
+
+export interface FourDAnyoneCameraEntry {
+    index: number;
+    yaw: number;
+    yawDeg: number;
+    pitch: number;
+    pitchDeg: number;
+    position: [number, number, number];
+    lookAt: [number, number, number];
+    fovDeg: number;
+    label: string;
+    transformMatrixOpencv: number[][];
+    transformMatrixNerfstudio: number[][];
+}
+
+export interface FourDAnyoneCameraRigResult {
+    preset: FourDAnyoneCameraRigPreset;
+    viewsPerLayer: number;
+    layerPitches: number[];
+    startYaw: number;
+    yawSpan: number;
+    orbitRadius: number;
+    elevationM: number;
+    fovDeg: number;
+    radius: number;
+    elevation: number;
+    fov: number;
+    totalCameras: number;
+    cameras: FourDAnyoneCameraEntry[];
+    camerasJson: {
+        camera_angle_x: number;
+        camera_angle_y: number;
+        fl_x: number;
+        fl_y: number;
+        cx: number;
+        cy: number;
+        w: number;
+        h: number;
+        num_views: number;
+        views: Array<{
+            view_id: number;
+            yaw: number;
+            pitch: number;
+            position: [number, number, number];
+        }>;
+    };
+}
+
+/**
+ * Replicates the 4DAnyone (ant-research/4DAnyone) multi-view camera rig configuration.
+ * Supports:
+ * - '6-view-orbit': Standard 6-camera ring (pitch 0°, yaw 0°..360°, 60° step)
+ * - '24-view-dense': Dense 24-camera ring (pitch 0°, yaw 0°..360°, 15° step) for 4DGS
+ * - '48-view-multipitch': 16 views per layer across 3 pitches [-10°, 15°, 35°]
+ * - '24-view-frontal-arc': 12 views per layer across 2 pitches [0°, 30°] from -90° to +90°
+ */
+export function generate4DAnyoneCameraRig(
+    optionsOrPreset: FourDAnyoneCameraRigOptions | FourDAnyoneCameraRigPreset = {}
+): FourDAnyoneCameraRigResult {
+    const options: FourDAnyoneCameraRigOptions = typeof optionsOrPreset === 'string'
+        ? { preset: optionsOrPreset }
+        : optionsOrPreset;
+    const preset = options.preset || '6-view-orbit';
+    let viewsPerLayer = options.viewsPerLayer;
+    let layerPitches = options.layerPitches;
+    let startYaw = options.startYaw;
+    let yawSpan = options.yawSpan;
+
+    switch (preset) {
+        case '24-view-dense':
+            viewsPerLayer = viewsPerLayer ?? 24;
+            layerPitches = layerPitches ?? [0];
+            startYaw = startYaw ?? 0;
+            yawSpan = yawSpan ?? 360;
+            break;
+        case '48-view-multipitch':
+            viewsPerLayer = viewsPerLayer ?? 16;
+            layerPitches = layerPitches ?? [-10, 15, 35];
+            startYaw = startYaw ?? 0;
+            yawSpan = yawSpan ?? 360;
+            break;
+        case '24-view-frontal-arc':
+            viewsPerLayer = viewsPerLayer ?? 12;
+            layerPitches = layerPitches ?? [0, 30];
+            startYaw = startYaw ?? -90;
+            yawSpan = yawSpan ?? 180;
+            break;
+        case '6-view-orbit':
+        default:
+            viewsPerLayer = viewsPerLayer ?? 6;
+            layerPitches = layerPitches ?? [0];
+            startYaw = startYaw ?? 0;
+            yawSpan = yawSpan ?? 360;
+            break;
+    }
+
+    const orbitRadius = options.orbitRadius ?? 2.2;
+    const elevationM = options.elevationM ?? 1.25;
+    const fovDeg = options.fovDeg ?? 50.0;
+
+    const cameras: FourDAnyoneCameraEntry[] = [];
+    let idx = 0;
+
+    for (const pitchDeg of layerPitches) {
+        const pitchRad = (pitchDeg * Math.PI) / 180.0;
+        const cosPitch = Math.cos(pitchRad);
+        const sinPitch = Math.sin(pitchRad);
+
+        const step = viewsPerLayer > 1 && yawSpan < 360
+            ? yawSpan / (viewsPerLayer - 1)
+            : yawSpan / viewsPerLayer;
+
+        for (let i = 0; i < viewsPerLayer; i++) {
+            const yawDeg = startYaw + i * step;
+            const yawRad = (yawDeg * Math.PI) / 180.0;
+
+            const posX = orbitRadius * Math.sin(yawRad) * cosPitch;
+            const posY = elevationM + orbitRadius * sinPitch;
+            const posZ = orbitRadius * Math.cos(yawRad) * cosPitch;
+            const pos: [number, number, number] = [
+                Math.round(posX * 1000) / 1000,
+                Math.round(posY * 1000) / 1000,
+                Math.round(posZ * 1000) / 1000
+            ];
+            const lookAtTarget: [number, number, number] = [0, 1.0, 0];
+
+            // Compute camera-to-world (c2w) rotation frame:
+            // Camera Z (optical viewing axis pointing towards target)
+            const dx = lookAtTarget[0] - posX;
+            const dy = lookAtTarget[1] - posY;
+            const dz = lookAtTarget[2] - posZ;
+            const lenZ = Math.hypot(dx, dy, dz) || 1.0;
+            const zx = dx / lenZ;
+            const zy = dy / lenZ;
+            const zz = dz / lenZ;
+
+            // Camera X (right vector): cross([0, 1, 0], Z)
+            let rx = 1.0 * zz - 0.0 * zy;
+            let ry = 0.0 * zx - 0.0 * zz;
+            let rz = 0.0 * zy - 1.0 * zx;
+            const lenR = Math.hypot(rx, ry, rz) || 1.0;
+            rx /= lenR;
+            ry /= lenR;
+            rz /= lenR;
+
+            // Camera Y (down vector in OpenCV): cross(Z, X)
+            const yx = zy * rz - zz * ry;
+            const yy = zz * rx - zx * rz;
+            const yz = zx * ry - zy * rx;
+
+            // OpenCV c2w matrix (+X Right, +Y Down, +Z Forward)
+            const transformMatrixOpencv: number[][] = [
+                [rx, yx, zx, pos[0]],
+                [ry, yy, zy, pos[1]],
+                [rz, yz, zz, pos[2]],
+                [0, 0, 0, 1]
+            ];
+
+            // Nerfstudio / OpenGL c2w matrix (+X Right, +Y Up, -Z Forward): invert columns 1 & 2
+            const transformMatrixNerfstudio: number[][] = [
+                [rx, -yx, -zx, pos[0]],
+                [ry, -yy, -zy, pos[1]],
+                [rz, -yz, -zz, pos[2]],
+                [0, 0, 0, 1]
+            ];
+
+            const yawRounded = Math.round(yawDeg * 100) / 100;
+            const pitchRounded = Math.round(pitchDeg * 100) / 100;
+
+            cameras.push({
+                index: idx++,
+                yaw: yawRounded,
+                yawDeg: yawRounded,
+                pitch: pitchRounded,
+                pitchDeg: pitchRounded,
+                position: pos,
+                lookAt: lookAtTarget,
+                fovDeg,
+                label: `Cam_${idx - 1}_Yaw${Math.round(yawDeg)}°_Pitch${Math.round(pitchDeg)}°`,
+                transformMatrixOpencv,
+                transformMatrixNerfstudio
+            });
+        }
+    }
+
+    // Focal length calculation for 9:16 portrait (2160x3840)
+    const fovRad = (fovDeg * Math.PI) / 180.0;
+    const fl_x = 2160 / (2 * Math.tan(fovRad / 2));
+    const fl_y = fl_x;
+
+    const camerasJson = {
+        camera_angle_x: fovRad,
+        camera_angle_y: fovRad * (3840 / 2160),
+        fl_x: Math.round(fl_x),
+        fl_y: Math.round(fl_y),
+        cx: 1080,
+        cy: 1920,
+        w: 2160,
+        h: 3840,
+        num_views: cameras.length,
+        views: cameras.map(c => ({
+            view_id: c.index,
+            yaw: c.yawDeg,
+            pitch: c.pitchDeg,
+            position: c.position
+        }))
+    };
+
+    return {
+        preset,
+        viewsPerLayer,
+        layerPitches,
+        startYaw,
+        yawSpan,
+        orbitRadius,
+        elevationM,
+        fovDeg,
+        radius: orbitRadius,
+        elevation: elevationM,
+        fov: fovDeg,
+        totalCameras: cameras.length,
+        cameras,
+        camerasJson
+    };
+}
+
+export interface FrameMotivatedPerformerVideoOptions extends Omit<NeutralPerformerPromptOptions, 'kind'> {
+    /**
+     * Reference frame tag or path (e.g. '<IMAGE_REF_0>' or 'frame_00.png').
+     * The video diffusion model is strictly conditioned on and motivated by this hero frame.
+     */
+    referenceFrameRef?: string;
+    /**
+     * Underlying video diffusion backbone. Defaults to 'Wan2.2-TI2V-5B' (the 4DAnyone video model backbone).
+     */
+    videoModelBackbone?: 'Wan2.2-TI2V-5B' | 'Wan2.1-I2V' | 'Omni1.1' | string;
+    /**
+     * Camera position or multi-view capture angle.
+     * Front (0°), Left Lateral (45°), Right Lateral (45°), Rear (180°), or full continuous orbit (360°).
+     */
+    cameraPosition?: MultiViewCameraPosition;
+    /**
+     * Type of hero pose in the reference frame.
+     * 'casual': Natural organic stance extracted from the casual video (NEVER forced into A-pose).
+     * 'a-pose': Symmetrical A-frame stance (arms 35-45°).
+     * 'as-input': Use the exact pose as supplied in the reference plate.
+     */
+    heroPoseType?: 'casual' | 'a-pose' | 'as-input';
+    /**
+     * Optional natural language description of the hero frame pose (e.g. 'arms resting along flanks, relaxed wrists').
+     */
+    heroPoseDescription?: string;
+    /**
+     * Whether to enforce strict motion continuity starting from the A-frame stance.
+     * When false or when heroPoseType is 'casual', motion starts from the natural casual pose.
+     */
+    enforceAFrameMotionStart?: boolean;
+    /**
+     * 4DAnyone multi-view camera rig preset.
+     */
+    cameraRigPreset?: FourDAnyoneCameraRigPreset;
+    /**
+     * Optional custom camera rig options.
+     */
+    cameraRigOptions?: FourDAnyoneCameraRigOptions;
+}
+
+export interface FrameMotivatedVideoPromptResult extends NeutralPerformerPromptResult {
+    referenceFrameRef: string;
+    videoModelBackbone: string;
+    cameraPosition: MultiViewCameraPosition;
+    firstFrameSyntax: string;
+    heroPoseType: 'casual' | 'a-pose' | 'as-input';
+    cameraRig?: FourDAnyoneCameraRigResult;
+}
+
+/**
+ * Builds a frame-motivated, multi-view consistent video prompt for performer capture.
+ * Follows the 4DAnyone multi-view capture model (Wan2.2-TI2V-5B backbone):
+ * 1. Frame-Motivated Conditioning: Motion begins seamlessly from the provided hero reference frame (<FIRST_FRAME>).
+ * 2. Hero Pose Fidelity: If the hero frame is in a casual or natural posture, conditions strictly on that natural pose without forcing an A-pose.
+ * 3. Multi-View Capture Positions: Front 0°, Left 45°, Right 45°, Rear 180°, or Orbit 360° (or full 4DAnyone camera rig).
+ * 4. Zero Context & Zero Directional Lighting: Plain solid #808080 grey backdrop, flat diffuse shadowless lighting.
+ */
+export function buildFrameMotivatedPerformerVideoPrompt(
+    options: FrameMotivatedPerformerVideoOptions = {}
+): FrameMotivatedVideoPromptResult {
+    const referenceFrameRef = options.referenceFrameRef?.trim() || '<IMAGE_REF_0>';
+    const videoModelBackbone = options.videoModelBackbone || 'Wan2.2-TI2V-5B';
+    const cameraPosition: MultiViewCameraPosition = options.cameraPosition || 'front';
+
+    // Hero pose determination: if heroPoseType is 'casual' or isAFramePose is explicitly false, do NOT enforce A-frame
+    const heroPoseType: 'casual' | 'a-pose' | 'as-input' = options.heroPoseType
+        ? options.heroPoseType
+        : (options.isAFramePose === false ? 'casual' : 'a-pose');
+
+    const isAFrame = heroPoseType === 'a-pose' && options.isAFramePose !== false;
+
+    // Build base neutral performer prompt
+    const baseResult = buildNeutralPerformerPrompt({
+        ...options,
+        kind: 'video',
+        isAFramePose: isAFrame
+    });
+
+    const firstFrameSyntax = `<FIRST_FRAME>${referenceFrameRef}</FIRST_FRAME>`;
+
+    // Camera viewpoint conditioning
+    let cameraViewpointClause: string;
+    switch (cameraPosition) {
+        case 'left_45':
+            cameraViewpointClause = 'Camera capture viewpoint: 45° left lateral oblique perspective angled 45 degrees relative to subject front, locked-off eye-level elevation.';
+            break;
+        case 'right_45':
+            cameraViewpointClause = 'Camera capture viewpoint: 45° right lateral oblique perspective angled 45 degrees relative to subject front, locked-off eye-level elevation.';
+            break;
+        case 'rear_180':
+            cameraViewpointClause = 'Camera capture viewpoint: 180° rear dorsal perspective directly behind subject, locked-off eye-level elevation showing back of head, spine, and rear silhouette.';
+            break;
+        case 'orbit_360':
+            cameraViewpointClause = 'Camera capture trajectory: continuous 360° orbital survey around the subject at constant eye-level radius and elevation.';
+            break;
+        case 'front':
+        default:
+            cameraViewpointClause = 'Camera capture viewpoint: front 0° eye-level perspective portrait, locked-off eye-level elevation.';
+            break;
+    }
+
+    const poseDesc = options.heroPoseDescription || 'casual natural pose';
+    const motivationClause = isAFrame
+        ? `The video motion is strictly motivated by and begins seamlessly from ${firstFrameSyntax}, originating smoothly from the initial symmetrical A-frame pose (A-pose) established in <FIRST_FRAME> with arms angled downward and outward 35-45 degrees, preserving continuous identity, texture, clothing morphology, and limb boundaries with zero abrupt scene cuts.`
+        : `The video motion is strictly motivated by and begins seamlessly from ${firstFrameSyntax}, originating smoothly from the initial ${poseDesc} established in <FIRST_FRAME>, preserving continuous identity, texture, clothing morphology, and limb boundaries with zero abrupt scene cuts.`;
+
+    const modelClause = videoModelBackbone.includes('Wan2.2') || videoModelBackbone.includes('4DAnyone')
+        ? `Synthesized via ${videoModelBackbone} multi-view video diffusion with Reference Context Packing (RCP) and Target Context Routing (TCR) for cross-view consistency.`
+        : `Synthesized via ${videoModelBackbone} multi-view video diffusion with reference context consistency.`;
+
+    const fullPrompt = [
+        firstFrameSyntax,
+        baseResult.prompt,
+        motivationClause,
+        cameraViewpointClause,
+        modelClause
+    ].join(' ');
+
+    const negativePromptParts = [
+        baseResult.negativePrompt,
+        isAFrame ? 'departure from initial A-frame pose in frame 0' : 'departure from initial pose in frame 0',
+        'environmental scenery',
+        'theatrical lighting'
+    ];
+    if (options.extraNegativePrompt) {
+        negativePromptParts.push(options.extraNegativePrompt);
+    }
+    const negativePrompt = Array.from(new Set(negativePromptParts.filter(Boolean))).join(', ');
+
+    const cameraRig = options.cameraRigPreset || options.cameraRigOptions
+        ? generate4DAnyoneCameraRig({ preset: options.cameraRigPreset, ...options.cameraRigOptions })
+        : undefined;
+
+    return {
+        ...baseResult,
+        prompt: fullPrompt,
+        negativePrompt,
+        referenceFrameRef,
+        videoModelBackbone,
+        cameraPosition,
+        firstFrameSyntax,
+        heroPoseType,
+        cameraRig
+    };
+}
+
+
 
 

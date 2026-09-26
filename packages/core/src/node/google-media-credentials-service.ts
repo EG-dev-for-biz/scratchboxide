@@ -7,7 +7,7 @@
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, type GoogleGenAIOptions } from '@google/genai';
 import { SaveCredentialsResponse } from '../common/gemini-protocol';
 import { FileKeyStore, KeyStore } from './key-store';
 
@@ -26,16 +26,29 @@ export class GoogleMediaCredentialsService {
         if (apiKey) {
             return new GoogleGenAI({ apiKey });
         }
+        return this.createVertexClient();
+    }
 
+    /** Vertex AI client from service-account or project credentials; never uses an API key. */
+    async createVertexClient(location: string = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'): Promise<GoogleGenAI> {
+        const auth = await this.getVertexAuth();
+        return new GoogleGenAI({
+            vertexai: true,
+            project: auth.project,
+            location,
+            ...(auth.googleAuthOptions ? { googleAuthOptions: auth.googleAuthOptions } : {})
+        });
+    }
+
+    /**
+     * Project and auth options for Vertex AI: a service-account file, GOOGLE_SERVICE_ACCOUNT_JSON, or
+     * application default credentials with GOOGLE_CLOUD_PROJECT.
+     */
+    async getVertexAuth(): Promise<{ project: string; googleAuthOptions?: GoogleGenAIOptions['googleAuthOptions'] }> {
         const keyFile = this.findServiceAccountPath();
         if (keyFile) {
             const credential = await fs.readJSON(keyFile);
-            return new GoogleGenAI({
-                vertexai: true,
-                project: credential.project_id,
-                location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-                googleAuthOptions: { keyFile }
-            });
+            return { project: credential.project_id, googleAuthOptions: { keyFile } };
         }
 
         if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
@@ -54,15 +67,10 @@ export class GoogleMediaCredentialsService {
                     credential.private_key = credential.private_key.replace(/\\n/g, '\n');
                 }
                 if (credential?.project_id) {
-                    return new GoogleGenAI({
-                        vertexai: true,
+                    return {
                         project: credential.project_id,
-                        location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-                        googleAuthOptions: {
-                            credentials: credential,
-                            projectId: credential.project_id
-                        }
-                    });
+                        googleAuthOptions: { credentials: credential, projectId: credential.project_id }
+                    };
                 }
             } catch {
                 // Ignore parse errors
@@ -71,11 +79,7 @@ export class GoogleMediaCredentialsService {
 
         const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
         if (project) {
-            return new GoogleGenAI({
-                vertexai: true,
-                project,
-                location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
-            });
+            return { project };
         }
         throw Object.assign(new Error('Google media credentials are not configured'), { status: 401 });
     }

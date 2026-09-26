@@ -58,11 +58,13 @@ describe('Urban Pair Harvesting & Ingestion Pipeline', () => {
     expect(totalLen).toBe(merged.glbBuffer.length);
   });
 
-  it('crawls and bakes a region without error', async () => {
+  it('bakes explicitly supplied tiles into a GLB', async () => {
+    const origin = { lat: 35.6762, lng: 139.6503, alt: 20 };
     const crawler = new Google3DTileCrawlerBaker();
     const result = await crawler.crawlAndBake({
-      origin: { lat: 35.6762, lng: 139.6503, alt: 20 },
-      radiusMeters: 80
+      origin,
+      radiusMeters: 80,
+      mockTiles: [Google3DTileCrawlerBaker.createSyntheticGeodeticTile(origin, 80)]
     });
 
     expect(result.vertexCount).toBeGreaterThan(0);
@@ -79,10 +81,12 @@ describe('Urban Pair Harvesting & Ingestion Pipeline', () => {
   });
 
   it('executes multi-scene capture in draft mode pairing 3D tiles with AI Beautify perspective', async () => {
+    const origin = { lat: 40.7128, lng: -74.0060, alt: 10 };
     const crawler = new Google3DTileCrawlerBaker();
     const result = await crawler.crawlAndBake({
-      origin: { lat: 40.7128, lng: -74.0060, alt: 10 },
-      radiusMeters: 60
+      origin,
+      radiusMeters: 60,
+      mockTiles: [Google3DTileCrawlerBaker.createSyntheticGeodeticTile(origin, 60)]
     });
 
     const renderer = new SurveyStationRenderService();
@@ -103,7 +107,7 @@ describe('Urban Pair Harvesting & Ingestion Pipeline', () => {
       formattedAddress: 'Manhattan Test Tower'
     };
     const optics = { focalLengthMm: 28, sensorWidthMm: 36, aspectRatio: 16 / 9 };
-    const generator = createDefaultStationImageGenerator();
+    const generator = createDefaultStationImageGenerator({ allowProceduralGenerator: true });
     const beautifySvc = new BeautifyStationService(renderer, generator);
 
     const stationCount = 4;

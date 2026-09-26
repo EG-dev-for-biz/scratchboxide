@@ -48,11 +48,14 @@ const launchToken = resolveLaunchToken();
 process.env.SCRATCHBOX_LAUNCH_TOKEN = launchToken;
 
 // Packaged or standalone builds load index.html from file://, which Chromium reports as `Origin: null`.
+// When loading standalone renderer via http://127.0.0.1:3001, also allow that origin.
 if (app.isPackaged || process.env.NODE_ENV === 'production' || process.env.SCRATCHBOX_STANDALONE === 'true') {
     const existing = (process.env.SCRATCHBOX_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (!existing.includes('null')) {
-        process.env.SCRATCHBOX_ALLOWED_ORIGINS = [...existing, 'null'].join(',');
+    const needed = ['null', `http://${BACKEND_HOST}:${BACKEND_PORT}`, `http://localhost:${BACKEND_PORT}`];
+    for (const n of needed) {
+        if (!existing.includes(n)) existing.push(n);
     }
+    process.env.SCRATCHBOX_ALLOWED_ORIGINS = existing.join(',');
 }
 
 process.on('unhandledRejection', (reason: unknown) => {
@@ -75,18 +78,27 @@ function attachListenErrorHandler(server: http.Server, label: string, port: numb
     });
 }
 
-function startBackendServer(): void {
-    const serverApp = createStandaloneServer({ port: BACKEND_PORT, toolsPort: TOOLS_PORT });
-    serverInstance = serverApp.listen(BACKEND_PORT, BACKEND_HOST, () => {
-        console.log(`[Electron] Internal Backend Server listening on http://${BACKEND_HOST}:${BACKEND_PORT}`);
+function startBackendServer(): Promise<void> {
+    const rendererDist = resolveRendererDist(__dirname);
+    const serverApp = createStandaloneServer({
+        port: BACKEND_PORT,
+        toolsPort: TOOLS_PORT,
+        staticDir: rendererDist
     });
-    attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT);
 
-    const toolsApp = createToolsServer(serverApp.locals.exportedToolsStore);
-    toolsServerInstance = toolsApp.listen(TOOLS_PORT, BACKEND_HOST, () => {
-        console.log(`[Electron] Exported-tools origin listening on http://${BACKEND_HOST}:${TOOLS_PORT}`);
+    return new Promise((resolve) => {
+        serverInstance = serverApp.listen(BACKEND_PORT, BACKEND_HOST, () => {
+            console.log(`[Electron] Internal Backend Server listening on http://${BACKEND_HOST}:${BACKEND_PORT}`);
+            resolve();
+        });
+        attachListenErrorHandler(serverInstance, 'API', BACKEND_PORT);
+
+        const toolsApp = createToolsServer(serverApp.locals.exportedToolsStore);
+        toolsServerInstance = toolsApp.listen(TOOLS_PORT, BACKEND_HOST, () => {
+            console.log(`[Electron] Exported-tools origin listening on http://${BACKEND_HOST}:${TOOLS_PORT}`);
+        });
+        attachListenErrorHandler(toolsServerInstance, 'Tools', TOOLS_PORT);
     });
-    attachListenErrorHandler(toolsServerInstance, 'Tools', TOOLS_PORT);
 }
 
 function registerIpcHandlers(): void {
@@ -196,12 +208,25 @@ function createWindow(): void {
         }
     });
 
+    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+        const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+        console.log(`[Renderer ${levels[level] || level}] ${message} (${path.basename(sourceId)}:${line})`);
+    });
+
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+        console.error(`[Renderer Failed Load] ${validatedURL}: ${errorDescription} (${errorCode})`);
+    });
+
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+        console.error('[Renderer Process Gone]', details);
+    });
+
     const rendererDist = resolveRendererDist(__dirname);
     if (isDev) {
         mainWindow.loadURL(DEV_RENDERER_URL).catch(() => {
             if (rendererDist) {
-                console.log('[Electron] Dev server not reachable at ' + DEV_RENDERER_URL + ', falling back to standalone dist/index.html');
-                mainWindow?.loadFile(path.join(rendererDist, 'index.html'));
+                console.log('[Electron] Dev server not reachable at ' + DEV_RENDERER_URL + ', falling back to internal server: ' + apiBase);
+                mainWindow?.loadURL(apiBase);
             }
         });
     } else {
@@ -210,7 +235,8 @@ function createWindow(): void {
             app.exit(1);
             return;
         }
-        mainWindow.loadFile(path.join(rendererDist, 'index.html'));
+        console.log('[Electron] Loading standalone renderer from internal server: ' + apiBase);
+        mainWindow.loadURL(apiBase);
     }
 
     mainWindow.once('ready-to-show', () => {
@@ -231,7 +257,7 @@ function createWindow(): void {
 
     // Keep the renderer on the app origin; anything else opens in the system browser.
     mainWindow.webContents.on('will-navigate', (event, url) => {
-        const allowed = url.startsWith(DEV_RENDERER_URL) || url.startsWith('file://');
+        const allowed = url.startsWith(DEV_RENDERER_URL) || url.startsWith('file://') || url.startsWith(apiBase);
         if (!allowed) {
             event.preventDefault();
             try {
@@ -250,9 +276,9 @@ function createWindow(): void {
     });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     registerIpcHandlers();
-    startBackendServer();
+    await startBackendServer();
     createWindow();
 
     if (process.platform === 'darwin' && app.dock) {

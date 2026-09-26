@@ -155,6 +155,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     render::PathTracer tracer(scene, boolOr(config["groundPlane"], true));
+    if (config.has("clayAlbedo")) {
+        // Linear RGB; studio clay #dcd6cd is [0.716, 0.672, 0.610]
+        tracer.setClayMaterial(vec3Or(config["clayAlbedo"], Vec3(0.716f, 0.672f, 0.610f)),
+                               numberOr(config["clayRoughness"], 0.82f), numberOr(config["clayMetallic"], 0.02f));
+    }
 
     render::RenderSettings settings;
     settings.width = static_cast<int>(numberOr(config["width"], 1280));
@@ -192,6 +197,7 @@ int main(int argc, char** argv) {
         camera.position = vec3Or(cameraConfig["position"], camera.position);
         camera.target = vec3Or(cameraConfig["target"], camera.target);
         camera.verticalFovDeg = numberOr(cameraConfig["verticalFovDeg"], camera.verticalFovDeg);
+        camera.up = vec3Or(cameraConfig["up"], camera.up);
         camera.apertureRadius = numberOr(cameraConfig["apertureRadius"], 0.0f);
         camera.focusDistance = numberOr(cameraConfig["focusDistance"], 0.0f);
     } else {
@@ -239,6 +245,19 @@ int main(int argc, char** argv) {
         std::cerr << "failed to write images into " << outputDir << std::endl;
         return 1;
     }
+    {
+        // Metric depth for 2D-to-3D lifting: float32 distance along each pixel-centre ray, 0 where no geometry
+        std::vector<float> rawDepth(out.guides.depth.size(), 0.0f);
+        for (size_t i = 0; i < rawDepth.size(); ++i) {
+            if (out.guides.geometryMask[i]) rawDepth[i] = out.guides.depth[i];
+        }
+        std::ofstream depthFile(dir / "depth.f32", std::ios::binary);
+        depthFile.write(reinterpret_cast<const char*>(rawDepth.data()), static_cast<std::streamsize>(rawDepth.size() * sizeof(float)));
+        if (!depthFile.good()) {
+            std::cerr << "failed to write depth.f32" << std::endl;
+            return 1;
+        }
+    }
 
     double displayLuminance = 0.0;
     for (int y = 0; y < beautyImage.height; ++y) {
@@ -283,7 +302,8 @@ int main(int argc, char** argv) {
           << "  \"sun\": { \"elevationDeg\": " << elevationDeg << ", \"azimuthDeg\": " << azimuthDeg
           << ", \"direction\": " << jsonVec(sunDirection) << ", \"irradiance\": " << jsonVec(sky.sunIrradiance()) << " },\n"
           << "  \"camera\": { \"position\": " << jsonVec(camera.position) << ", \"target\": " << jsonVec(camera.target)
-          << ", \"verticalFovDeg\": " << camera.verticalFovDeg << " },\n"
+          << ", \"up\": " << jsonVec(camera.up) << ", \"verticalFovDeg\": " << camera.verticalFovDeg << " },\n"
+          << "  \"depthRaw\": \"depth.f32: float32 distance along each pixel-centre ray, row-major, 0 = no geometry\",\n"
           << "  \"groundHeight\": " << tracer.groundHeight() << ",\n"
           << "  \"groundAlbedo\": " << jsonVec(tracer.groundAlbedo()) << "\n"
           << "}\n";

@@ -41,7 +41,7 @@ async function runOmniVideoPromptPipelineTests() {
     // --------------------------------------------------------------------------
     console.log('  Testing Omni Style Presets Catalog...');
     const presets = listOmniStylePresets();
-    assert.strictEqual(presets.length, 5, 'Must provide 5 foundational style presets');
+    assert.strictEqual(presets.length, 6, 'Must provide 6 style presets (5 foundational + neutral performer portrait)');
 
     const urbanPreset = getOmniStylePreset('photoreal-urban');
     assert.strictEqual(urbanPreset.id, 'photoreal-urban');
@@ -52,6 +52,13 @@ async function runOmniVideoPromptPipelineTests() {
     assert.ok(!urbanPreset.materials.includes('asphalt crosswalk markings'), 'Must NOT contain hardcoded asphalt crosswalk markings');
     assert.ok(urbanPreset.cameraDetails.includes('35mm anamorphic prime lens'));
     assert.ok(urbanPreset.negativePrompt.includes('CGI look'));
+
+    const neutralPreset = getOmniStylePreset('neutral-portrait-a-frame');
+    assert.strictEqual(neutralPreset.id, 'neutral-portrait-a-frame');
+    assert.ok(neutralPreset.name.includes('Preset 6: Neutral Performer Studio Portrait'));
+    assert.ok(neutralPreset.defaultLighting.includes('flat, diffuse, shadowless studio illumination'));
+    assert.ok(neutralPreset.cameraDetails.includes('Full-body eye-level uncropped portrait lens framing from head to toe'));
+    assert.ok(neutralPreset.negativePrompt.includes('dramatic lighting'));
     console.log('  ✓ Test 1 Passed: Omni style presets verified');
 
     // --------------------------------------------------------------------------

@@ -27,6 +27,8 @@ export async function matchmoveCommand(args: string[]): Promise<void> {
     console.error('  --heading <deg>           Building facade / street grid angle (default: landmark or 0)');
     console.error('  --motion <type>           Camera motion preset (crane-descent-to-nadir, orbital-inspection, canyon-flythrough)');
     console.error('  --render-mode <mode>      Blockout atmosphere mode: textured (default) or clay');
+    console.error('  --interpolation <method>  Interpolation: continuous-spline, hermite-slerp, or catmull-rom');
+    console.error('  --precision               Activate precision 6-DOF solver');
     console.error('  --resolution <4k|1080p>   Resolution: 4k (3840x2160, default) or 1080p (1920x1080)');
     console.error('  --out-dir <dir>           Output directory (default: public/)');
     console.error('  --name <name>             Base identifier for output assets');
@@ -63,7 +65,13 @@ export async function matchmoveCommand(args: string[]): Promise<void> {
 
   let geoAnchor: any;
   if (landmarkArg) {
-    geoAnchor = pipeline.resolveLandmarkAnchor(landmarkArg);
+    try {
+      geoAnchor = await pipeline.geocodeLandmarkAnchor(landmarkArg, { headingDeg: getArg('--heading') ? parseFloat(getArg('--heading')!) : undefined });
+    } catch (err: any) {
+      console.error(`Error: ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
   } else {
     const lat = parseFloat(latStr!);
     const lng = parseFloat(lngStr!);
@@ -88,6 +96,8 @@ export async function matchmoveCommand(args: string[]): Promise<void> {
   const resArg = getArg('--resolution') || '4k';
   const resolution = resArg === '1080p' ? { width: 1920, height: 1080 } : { width: 3840, height: 2160 };
   const dryRun = hasFlag('--dry-run');
+  const precision = hasFlag('--precision');
+  const interpArg = getArg('--interpolation') as 'continuous-spline' | 'hermite-slerp' | 'catmull-rom' | undefined;
   const outDir = getArg('--out-dir') ? path.resolve(process.cwd(), getArg('--out-dir')!) : path.resolve(process.cwd(), 'public');
   const outputName = getArg('--name');
 
@@ -98,6 +108,8 @@ export async function matchmoveCommand(args: string[]): Promise<void> {
     headingDeg,
     renderMode,
     resolution,
+    interpolationMethod: interpArg,
+    precisionOptimization: precision,
     outputDir: outDir,
     outputVideoName: outputName,
     skipBlockoutRender: dryRun

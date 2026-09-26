@@ -124,17 +124,17 @@ export type {
 } from './common/adaptive-material-types';
 
 // 4DAnyone 4D Gaussian Splatting Dynamic Humanoid Avatar Engine
-export {
+export type {
     Dynamic4DGaussianSplatService,
-    type HumanoidMotionData,
-    type HumanoidMotionFrame,
-    type DeformedGaussianFrame,
-    type Avatar4DGSDetails,
-    type SkinWeightedGaussian
+    HumanoidMotionData,
+    HumanoidMotionFrame,
+    DeformedGaussianFrame,
+    Avatar4DGSDetails,
+    SkinWeightedGaussian
 } from './node/3d-engine/Dynamic4DGaussianSplatService';
-export {
+export type {
     HumanoidMotionBridgeService,
-    type RetargetOptions
+    RetargetOptions
 } from './node/spatial/HumanoidMotionBridgeService';
 export {
     ConcertStagePerformerService,
@@ -148,6 +148,20 @@ export {
     type PerformerKinematicsFrame,
     type PerformerTelemetry
 } from './browser/generative-canvas/services/ConcertStagePerformerService';
+export {
+    SbHumanLoader,
+    type SbHumanHeader,
+    type SbHumanJoint,
+    type SbHumanSkinWeight,
+    type SampledHumanoidSurface
+} from './common/spatial/SbHumanLoader';
+export type {
+    VideoTo4DPerformerPipelineService,
+    VideoTo4DPerformerOptions,
+    VideoTo4DPerformerResult,
+    SilhouetteExtractionResult,
+    CanonicalGaussiansResult
+} from './node/spatial/VideoTo4DPerformerPipelineService';
 
 // Adaptive Domain Architecture 6-DOF Matchmove & Universal Keyframe Calibration
 export type {
@@ -166,6 +180,16 @@ export type {
     TrajectoryInputPoint,
     SelectedKeyframeAnchor
 } from './node/spatial/AdaptiveMatchmoveCalibrationService';
+export type {
+    NerfstudioDatasetService,
+    NerfstudioFrame,
+    NerfstudioTransforms,
+    NerfstudioIntrinsics,
+    OrbitalCameraRigItem,
+    CameraObservationInput,
+    ExportNerfstudioOptions,
+    ExportNerfstudioResult
+} from './node/spatial/NerfstudioDatasetService';
 export type {
     TextureCompressionService,
     TextureMapType,
@@ -194,7 +218,7 @@ export type {
     GeminiDetectionResult
 } from './node/spatial/GeminiMultimodalObjectDetectorService';
 
-export { SbArchiService } from './node/3d-engine/sb-archi-service';
+export type { SbArchiService } from './node/3d-engine/sb-archi-service';
 export type {
     RomanOrderType,
     ArchiSectionMode,
@@ -225,6 +249,37 @@ export type {
     ArchiSynthesisBridgeOptions,
     ArchiSynthesisBridgeResult
 } from './node/spatial/UniversalArchiBridgeService';
+
+export type {
+    Universal3DObjectSeparationService,
+    UniversalSpatialCategory,
+    DownstreamGeneratorRouting,
+    UniversalSeparatedObject,
+    UniversalSeparatedScene,
+    UniversalSeparationOptions,
+    UniversalSeparationAndSceneResult
+} from './node/spatial/Universal3DObjectSeparationService';
+
+export type {
+    SpatialVisualAlignmentVerificationService,
+    AlignmentVerificationRequest,
+    AlignmentVerificationReport,
+    EdgeOverlapResult,
+    MetrologyCertificationParams,
+    MetrologyCertificate
+} from './node/spatial/SpatialVisualAlignmentVerificationService';
+
+export {
+    ContinuousSplineMatchmoveService,
+    type SplineKnot,
+    type EvaluatedPose,
+    type PersistentTrack3D2D,
+    type SplineAnchorConstraint,
+    type ContinuousSplineSolveOptions,
+    type SplineOptimizationResult,
+    type DenseTrajectoryFrame
+} from './node/spatial/ContinuousSplineMatchmoveService';
+
 
 
 

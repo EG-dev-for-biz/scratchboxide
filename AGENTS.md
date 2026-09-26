@@ -107,6 +107,90 @@ When extracting, downloading, or ingesting 3D tile submeshes, bounding volumes, 
 6. **Automated Verification & Rejection Gate**:
    - Automated test suites, pipeline validators, and the `visual-critic` skill must audit extracted models for open upper boundary edges, sliced non-manifold facades, and flat horizontal cuts through vertical walls. Any extracted model displaying clipped building geometry must be rejected.
 
+## 3DGS Interoperability & Reconstruction Directive: Nerfstudio Dataset Contract & Visual-Hull Carver
+
+### Rule: Universal Nerfstudio Dataset Interchange Contract
+When exporting, exchanging, or ingesting multi-view camera datasets for 3D Gaussian Splatting (3DGS) across pipelines, agents, or external tools:
+1. **Canonical Nerfstudio Dataset Layout**:
+   - Every multi-view capture (e.g. multi-camera video, drone photogrammetry orbits, or synthetic viewport camera sweeps) must be serializable to the standard Nerfstudio dataset structure:
+     ```
+     <dataset_dir>/
+     ├── transforms.json       # OpenCV/Pinhole camera intrinsics & c2w extrinsics
+     ├── sparse_pcd.ply        # Initial point cloud with positions, normals & RGB
+     ├── images/*.png          # Extracted RGB frames (e.g. 00.png, 01.png...)
+     └── masks/*.png           # Foreground alpha masks (strictly binarized >= 128)
+     ```
+2. **Strict Camera Coordinate Transformation Contract**:
+   - Nerfstudio adheres to OpenGL camera space (+X Right, +Y Up, -Z Viewing Direction), whereas OpenCV, Three.js image unprojections, and standard computer vision pipelines adhere to OpenCV camera space (+X Right, +Y Down, +Z Viewing Direction).
+   - The conversion matrix between OpenCV camera-to-world ($\mathbf{T}_{\text{opencv}}$) and Nerfstudio camera-to-world ($\mathbf{T}_{\text{nerfstudio}}$) is strictly defined as:
+     $$\mathbf{T}_{\text{nerfstudio}} = \mathbf{T}_{\text{opencv}} \cdot \begin{pmatrix} 1 & 0 & 0 & 0 \\ 0 & -1 & 0 & 0 \\ 0 & 0 & -1 & 0 \\ 0 & 0 & 0 & 1 \end{pmatrix}$$
+   - Any agent serializing `transforms.json` must invert columns 1 and 2 (Y and Z axes) of the rotation-translation matrix, and vice-versa upon deserialization.
+3. **Boolean Mask Binarization**:
+   - Nerfstudio casts mask pixel buffers directly to `bool`. Soft boundary predictions from matting networks (BiRefNet) cause edge noise.
+   - All masks serialized for Nerfstudio must cross a hard threshold at $\ge 128$ (`NERFSTUDIO_MASK_THRESHOLD = 128`).
+
+### Rule: Visual-Hull Prior over COLMAP for Moving & Dynamic Subjects
+When initializing 3D Gaussians for performers, humans, or dynamic subjects from multi-view captures:
+1. **Never Depend on Slow/Fragile SfM (COLMAP)**:
+   - COLMAP feature matching is brittle on non-rigid humans, smooth skin, and rapidly deforming clothing.
+2. **Canonical Visual-Hull Voxel Carving**:
+   - Always initialize `sparse_pcd.ply` using volumetric visual-hull carving from the multi-camera silhouette masks via `scratchbox_visual_hull.hpp` or `NerfstudioDatasetService.carveVisualHull()`:
+     - Metric bounding box: $2.5\text{m}$ cube centered on the human root (`halfExtent = 1.25m`).
+     - Resolution: $2\text{cm}$ voxel grid (`voxelSize = 0.02m`).
+     - Ray projection: candidate 3D voxels are projected into all calibrated cameras; voxels falling within foreground masks across $K \ge \text{minViews}$ cameras are retained.
+     - RGB Color Averaging: base Gaussian color is computed as the mean foreground RGB observation: $\mathbf{C}_p = \frac{1}{\sum \mathbf{1}_{\text{fg}}} \sum_k I_k(u_k, v_k)$.
+
+### Rule: Two-Tier 3DGS Execution Roles
+1. **Tier 1 (Interactive In-App Viewport)**:
+   - Always use native Three.js instanced WebGL shaders (`PhotorealGaussianSplatMesh.ts`, `createAnisotropic3DGSSplatMaterial`) and 4-bone partition-of-unity Linear Blend Skinning (LBS) in the browser for real-time 60 FPS playback with zero external Python servers.
+2. **Tier 2 (Cloud Run / ComfyUI Offline Reconstruction)**:
+   - When a user demands dense neural reconstruction ($>1\text{M}$ splats) from raw multi-view video, route the exported Nerfstudio dataset to Cloud Run with NVIDIA L4 GPU running `splatfacto` / `splatfacto-perceptual` with VGG-19 feature loss ($\lambda_{\text{perc}} = 0.4$), random background color regularizer, and depth supervision.
+
+### Rule: Performer & Avatar Video/Image Prompt Neutrality (Head-to-Toe, Flat Studio, A-Frame Pose)
+When directing or constructing prompts for video creation tools (Google Omni 1.1 / Veo) or image creation tools (Imagen 3, Nano Banana 2) for human characters, performers, or avatars:
+1. **Zero Context & Zero Theatrical Lighting**:
+   - Prompts must **NEVER** include environmental context (no rooms, parquet floors, rugs, stages, concert venues, city streets, outdoors, furniture, or architectural sets) or theatrical/directional lighting (no golden hour sun, stage spotlights, colored gels, rim lights, harsh direct sun, deep cast shadows).
+   - Directional illumination and background scenery corrupt 2D silhouette extraction, bake illumination artifacts into albedo textures, and cause hollow cavities and severe distortion in torso, crotch, and feet during backprojection.
+2. **Strict Neutral Studio & Even Illumination Invariant**:
+   - **Backdrop**: Plain solid neutral grey studio backdrop (`#808080`), completely devoid of environment or props.
+   - **Illumination**: Completely flat, neutral, high-CRI, diffuse, shadowless studio illumination. Uniform even lighting from all angles with zero directional keylights, zero harsh specular hotspots, and zero cast shadows on the subject or floor.
+3. **Full-Body Head-to-Toe Vertical Framing (9:16)**:
+   - Always specify vertical uncropped portrait framing (`9:16`).
+   - The entire figure must be visible from the crown of the head down to the soles of the shoes, with clear uncropped top and bottom margins. Never crop at knees, waist, or neck.
+4. **Canonical Symmetrical A-Frame Pose (A-pose)**:
+   - The performer must stand upright in a symmetrical A-frame pose:
+     - Arms angled downward and outward ~35°–45° from the flanks.
+     - Hands open facing forward with relaxed fingers (eliminating torso-arm occlusion).
+     - Legs straight and shoulder-width apart.
+     - Feet planted flat on the floor facing forward (eliminating leg-to-leg fusion).
+   - This provides the ground-truth baseline required for MediaPipe/SMPL shape estimation, 22-bone skeletal rigging, LBS weight assignment, and visual-hull carving.
+5. **Programmatic Builder & Tool**:
+   - Use `buildNeutralPerformerPrompt` (`omniVideoPromptService.ts`) or the agent tool `build_neutral_performer_prompt`.
+
+### Rule: 4DAnyone Video Diffusion Backbone (Wan2.2-TI2V-5B) & Frame-Motivated A-Pose Ingestion
+When conditioning video generation for performer avatars or generating multi-view capture angles for 4D dynamic reconstruction:
+1. **Frame-Motivated Video Conditioning (<FIRST_FRAME>)**:
+   - The video fed into the 4D performer reconstruction pipeline must be explicitly motivated by and anchored to the hero reference frame.
+   - Always condition video prompts using `<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>` syntax (or Frame 0 latents).
+   - The video motion must strictly originate from the initial symmetrical A-frame pose (A-pose: arms angled outward 35°–45°, palms facing forward, legs straight and shoulder-width apart, feet flat on floor).
+   - Motion must preserve identity, hair/skin texture, and clothing morphology seamlessly from Frame 0 with zero abrupt scene cuts or perspective jumps.
+2. **4DAnyone Video Diffusion Backbone (Wan2.2-TI2V-5B)**:
+   - To synthesize the complete set of camera capture positions around the performer from a single casual frame, use the video diffusion architecture established by `4DAnyone` (`ant-research/4DAnyone`, arXiv:2608.20335): **Wan2.2-TI2V-5B** (Text-and-Image to Video 5B DiT backbone).
+   - Enforce **Reference Context Packing (RCP)** for $O(1)$ memory consumption while conditioning on high-resolution reference appearances.
+   - Enforce **Target Context Routing (TCR)** for cross-view multi-angle attention synchronization across capture viewpoints.
+3. **Capture Viewpoint Rig & Photogrammetric Angles**:
+   - Capture viewpoints must systematically cover:
+     - Front: 0° eye-level perspective
+     - Left Oblique: 45° azimuth
+     - Right Oblique: -45° azimuth
+     - Rear Dorsal: 180° azimuth
+     - (Or full continuous 360° orbital ring at radius $2.2\text{m}$, elevation $1.25\text{m}$)
+   - All synthesized multi-view video streams must maintain identical subject timing, A-pose starting frame, and shadowless `#808080` studio environment.
+4. **Programmatic Builder, Tool & Pipeline Invariant**:
+   - Prompt Builder: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`) and Gemini tool `build_frame_motivated_performer_prompt`.
+   - Multi-View Diffusion Runner: `ComfyUiPipelineAgent` Wan2.2 blueprint and Gemini tool `generate_4danyone_multiview_video`.
+   - 4D Pipeline Ingestion: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { referenceFramePath, videoModelBackbone: 'Wan2.2-TI2V-5B', cameraPositions, initialPose: 'a-pose' } })`.
+
 ## Code Quality & Engineering Principles
 
 1. **Precision & Investigation**: Inspect existing files before editing. Never guess symbol names or file paths.

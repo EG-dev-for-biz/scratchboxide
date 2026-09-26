@@ -362,24 +362,41 @@ public:
     }
 
     /**
-     * Parses standard ASCII PLY (e.g. human_4dgs.ply).
+     * Parses ASCII 3DGS PLY (e.g. human_4dgs.ply), mirroring common/gaussian-ply-codec.ts: the
+     * "scratchbox_encoding" comment selects SH-DC vs RGB colour and w-first vs x-first quaternions;
+     * files without it are legacy RGB + w-first, or SH + x-first when they carry a joint_id column.
      */
     bool parsePly(const std::string& plyContent) {
         std::istringstream stream(plyContent);
         std::string line;
         bool inHeader = true;
         size_t vertexCount = 0;
+        bool hasEncodingComment = false;
+        bool shColor = false;
+        bool quatWFirst = true;
+        bool hasJointId = false;
+        constexpr float kShC0 = 0.28209479177387814f;
 
         while (std::getline(stream, line)) {
             if (line.empty() || line[0] == '\r') continue;
 
             if (inHeader) {
-                if (line.rfind("element vertex", 0) == 0) {
+                if (line.rfind("comment scratchbox_encoding", 0) == 0) {
+                    hasEncodingComment = true;
+                    shColor = line.find("color=rgb") == std::string::npos;
+                    quatWFirst = line.find("quat=xyzw") == std::string::npos;
+                } else if (line.rfind("property", 0) == 0 && line.find(" joint_id") != std::string::npos) {
+                    hasJointId = true;
+                } else if (line.rfind("element vertex", 0) == 0) {
                     std::istringstream ss(line);
                     std::string elem, vert;
                     ss >> elem >> vert >> vertexCount;
                 } else if (line == "end_header" || line == "end_header\r") {
                     inHeader = false;
+                    if (!hasEncodingComment && hasJointId) {
+                        shColor = true;
+                        quatWFirst = false;
+                    }
                     restGaussians.reserve(vertexCount > 0 ? vertexCount : 1000);
                 }
                 continue;
@@ -399,6 +416,13 @@ public:
                 scale0 >> scale1 >> scale2 >>
                 rot0 >> rot1 >> rot2 >> rot3) {
 
+                if (shColor) {
+                    g.color = math::Vec3(
+                        std::clamp(0.5f + kShC0 * g.color.x, 0.0f, 1.0f),
+                        std::clamp(0.5f + kShC0 * g.color.y, 0.0f, 1.0f),
+                        std::clamp(0.5f + kShC0 * g.color.z, 0.0f, 1.0f));
+                }
+
                 // Opacity sigmoid
                 g.opacity = 1.0f / (1.0f + std::exp(-std::clamp(opacityLogit, -20.0f, 20.0f)));
 
@@ -406,7 +430,7 @@ public:
                 g.scale = math::Vec3(std::exp(scale0), std::exp(scale1), std::exp(scale2));
 
                 // Rotation quaternion normalization
-                math::Quat q(rot0, rot1, rot2, rot3);
+                math::Quat q = quatWFirst ? math::Quat(rot1, rot2, rot3, rot0) : math::Quat(rot0, rot1, rot2, rot3);
                 g.rotation = q.normalized();
 
                 restGaussians.push_back(g);

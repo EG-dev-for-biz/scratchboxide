@@ -577,23 +577,28 @@ export function createArchitecturalStationGenerator(options?: {
  * Creates the default station image generator: Google Gemini/Nano Banana if credentials exist,
  * or ArchitecturalStationGenerator conforming to LocationObjectLightingService stone albedos.
  */
+export function hasStationImageCredentials(): boolean {
+    return !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+}
+
 export function createDefaultStationImageGenerator(deps: {
     workspaceRoot?: string;
     mediaService?: any;
     assetStore?: any;
+    /** Opt in to the offline procedural painter when no Google credentials are available. */
+    allowProceduralGenerator?: boolean;
 } = {}): StationImageGenerator {
     const root = deps.workspaceRoot || process.cwd();
-    if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
-        try {
-            const { GoogleMediaGenerationService } = require('../google-media-generation-service');
-            const { GoogleMediaCredentialsService } = require('../google-media-credentials-service');
-            const { MediaAssetStore } = require('../media-asset-store');
-            const assetStore = deps.assetStore || new MediaAssetStore();
-            const credentials = new GoogleMediaCredentialsService();
-            const mediaService = deps.mediaService || new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-            return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: root });
-        } catch {}
+    if (hasStationImageCredentials() || deps.mediaService) {
+        const { GoogleMediaGenerationService } = require('../google-media-generation-service');
+        const { GoogleMediaCredentialsService } = require('../google-media-credentials-service');
+        const { MediaAssetStore } = require('../media-asset-store');
+        const assetStore = deps.assetStore || new MediaAssetStore();
+        const credentials = new GoogleMediaCredentialsService();
+        const mediaService = deps.mediaService || new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
+        return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: root });
     }
-    return createArchitecturalStationGenerator();
+    if (deps.allowProceduralGenerator) return createArchitecturalStationGenerator();
+    throw new Error('Station image generation needs GEMINI_API_KEY or GOOGLE_API_KEY; pass allowProceduralGenerator: true to use the offline procedural painter instead.');
 }
 

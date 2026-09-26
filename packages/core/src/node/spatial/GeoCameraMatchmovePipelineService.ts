@@ -23,11 +23,11 @@ import {
   TileBlockoutPipelineRequest
 } from './Google3DTileBlockoutPipelineService';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
+import { OmniVideoService, buildBlockoutFirstLastPrompt } from '../video/OmniVideoService';
 import type {
   CameraSolveTrack,
   CameraSolveFrame,
-  LensDistortionParams,
-  TrackingMarker2D3D
+  LensDistortionParams
 } from '../../common/vfx-plate-protocol';
 import {
   VfxPlateMatchmoveService,
@@ -72,119 +72,6 @@ export type CameraMotionType =
   | 'linear-tracking'
   | 'custom';
 
-export interface LandmarkAnchorInfo {
-  name: string;
-  lat: number;
-  lng: number;
-  elevation: number;
-  headingDeg: number;
-  typicalRooflineAlt: number;
-  typicalRooflineAltM: number;
-  typicalStreetAlt: number;
-  typicalStreetAltM: number;
-}
-
-export const KNOWN_LANDMARK_ANCHORS: Record<string, LandmarkAnchorInfo> = {
-  'the plaza hotel': {
-    name: 'The Plaza Hotel NYC (Central Park South)',
-    lat: 40.7645,
-    lng: -73.9744,
-    elevation: 18.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 70.0,
-    typicalRooflineAltM: 70.0,
-    typicalStreetAlt: 18.0,
-    typicalStreetAltM: 18.0
-  },
-  'plaza hotel': {
-    name: 'The Plaza Hotel NYC (Central Park South)',
-    lat: 40.7645,
-    lng: -73.9744,
-    elevation: 18.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 70.0,
-    typicalRooflineAltM: 70.0,
-    typicalStreetAlt: 18.0,
-    typicalStreetAltM: 18.0
-  },
-  'empire state building': {
-    name: 'Empire State Building Midtown Manhattan',
-    lat: 40.748817,
-    lng: -73.985428,
-    elevation: 15.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 381.0,
-    typicalRooflineAltM: 381.0,
-    typicalStreetAlt: 15.0,
-    typicalStreetAltM: 15.0
-  },
-  'chrysler building': {
-    name: 'Chrysler Building Midtown Manhattan',
-    lat: 40.7516,
-    lng: -73.9755,
-    elevation: 20.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 319.0,
-    typicalRooflineAltM: 319.0,
-    typicalStreetAlt: 20.0,
-    typicalStreetAltM: 20.0
-  },
-  'flatiron building': {
-    name: 'Flatiron Building NYC',
-    lat: 40.7411,
-    lng: -73.9897,
-    elevation: 11.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 87.0,
-    typicalRooflineAltM: 87.0,
-    typicalStreetAlt: 11.0,
-    typicalStreetAltM: 11.0
-  },
-  'one world trade center': {
-    name: 'One World Trade Center Lower Manhattan',
-    lat: 40.7127,
-    lng: -74.0134,
-    elevation: 5.0,
-    headingDeg: -29.0,
-    typicalRooflineAlt: 417.0,
-    typicalRooflineAltM: 417.0,
-    typicalStreetAlt: 5.0,
-    typicalStreetAltM: 5.0
-  },
-  'eiffel tower': {
-    name: 'Eiffel Tower Paris',
-    lat: 48.8584,
-    lng: 2.2945,
-    elevation: 35.0,
-    headingDeg: 45.0,
-    typicalRooflineAlt: 300.0,
-    typicalRooflineAltM: 300.0,
-    typicalStreetAlt: 35.0,
-    typicalStreetAltM: 35.0
-  },
-  'shibuya crossing': {
-    name: 'Shibuya Crossing Tokyo',
-    lat: 35.6595,
-    lng: 139.7005,
-    elevation: 16.0,
-    headingDeg: 0.0,
-    typicalRooflineAlt: 85.0,
-    typicalRooflineAltM: 85.0,
-    typicalStreetAlt: 16.0,
-    typicalStreetAltM: 16.0
-  },
-  'burj khalifa': {
-    name: 'Burj Khalifa Dubai',
-    lat: 25.1972,
-    lng: 55.2744,
-    elevation: 5.0,
-    headingDeg: 45.0,
-    typicalRooflineAlt: 828.0,
-    typicalRooflineAltM: 828.0,
-    typicalStreetAlt: 5.0,
-    typicalStreetAltM: 5.0
-  }
-};
 
 export interface VideoMetadata {
   durationSec: number;
@@ -217,11 +104,13 @@ export interface AdaptiveDenseSamplingConfig {
 }
 
 export interface PrecisionMetrics {
-  meanReprojectionErrorPx: number;
-  meanEdgeOverlapScorePct: number;
-  meanDriftPx: number;
-  maxDriftPx: number;
-  certifiedSubMillimeter: boolean;
+  /** False when the path came from keyframes or a motion preset instead of being measured against the plate. */
+  measured: boolean;
+  trajectorySource: 'motion-preset' | 'keyframes' | 'plate-track';
+  meanReprojectionErrorPx: number | null;
+  meanEdgeOverlapScorePct: number | null;
+  meanDriftPx: number | null;
+  maxDriftPx: number | null;
   driftStatus?: 'locked' | 'drifting' | 'uncalibrated' | 'sub-pixel-locked';
 }
 
@@ -250,11 +139,15 @@ export interface GeoMatchmoveRequest {
   outputVideoName?: string;
   skipBlockoutRender?: boolean;
   enableOmniSynthesis?: boolean;
+  /** Camera move in cinematography terms for the Omni prompt. */
+  omniShot?: string;
+  /** Keep streets free of people and vehicles in the Omni video. */
+  omniEmptyStreets?: boolean;
   collisionBufferMeters?: number;
   port?: number;
   // Precision 3D Tile Alignment & Optical Resection Stack
   precisionOptimization?: boolean;
-  interpolationMethod?: 'catmull-rom' | 'hermite-slerp';
+  interpolationMethod?: 'catmull-rom' | 'hermite-slerp' | 'continuous-spline';
   lensDistortion?: LensDistortionParams;
   resectionKeyframes?: number[];
   tileMeshPath?: string;
@@ -277,6 +170,8 @@ export interface GeoMatchmoveResult {
   storyboardsDir?: string;
   omniVideoPath?: string;
   omniWebmPath?: string;
+  omniInteractionId?: string;
+  omniError?: string;
   comparisonVideoPath?: string;
   comparisonWebmPath?: string;
   qaKeyframes?: string[];
@@ -300,7 +195,8 @@ export class GeoCameraMatchmovePipelineService {
   constructor(
     chromePath: string = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     ffmpegPath: string = '/opt/homebrew/bin/ffmpeg',
-    ffprobePath: string = '/opt/homebrew/bin/ffprobe'
+    ffprobePath: string = '/opt/homebrew/bin/ffprobe',
+    private readonly omni: OmniVideoService = new OmniVideoService()
   ) {
     this.chromePath = chromePath;
     this.ffmpegPath = ffmpegPath;
@@ -309,46 +205,56 @@ export class GeoCameraMatchmovePipelineService {
   }
 
   /**
-   * Resolves a landmark name or coordinates into a full GeoAnchor with heading and elevation.
+   * Normalizes explicit coordinates into a GeoAnchor with heading. Place names go through
+   * `geocodeLandmarkAnchor`; there is no built-in landmark table.
    */
-  public resolveLandmarkAnchor(nameOrCoords: string | GeoAnchor): GeoAnchor & { headingDeg: number; typicalRooflineAltM?: number; typicalStreetAltM?: number } {
-    if (typeof nameOrCoords === 'object') {
-      const headingDeg = (nameOrCoords as any).headingDeg ?? 0;
-      return {
-        lat: nameOrCoords.lat,
-        lng: nameOrCoords.lng,
-        elevation: nameOrCoords.elevation ?? 0,
-        landmarkName: nameOrCoords.landmarkName ?? `Geo Location (${nameOrCoords.lat.toFixed(4)}, ${nameOrCoords.lng.toFixed(4)})`,
-        headingDeg,
-        typicalRooflineAltM: (nameOrCoords as any).typicalRooflineAltM ?? (nameOrCoords as any).typicalRooflineAlt ?? 70.0,
-        typicalStreetAltM: (nameOrCoords as any).typicalStreetAltM ?? (nameOrCoords as any).typicalStreetAlt ?? 10.0
-      };
+  public resolveLandmarkAnchor(coords: GeoAnchor & { headingDeg?: number; typicalRooflineAltM?: number; typicalStreetAltM?: number }): GeoAnchor & { headingDeg: number; typicalRooflineAltM?: number; typicalStreetAltM?: number } {
+    if (typeof coords !== 'object' || coords === null || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) {
+      throw new Error('resolveLandmarkAnchor needs explicit coordinates; use geocodeLandmarkAnchor(name) to look up a place name.');
     }
-
-    const key = nameOrCoords.toLowerCase().trim();
-    for (const [k, info] of Object.entries(KNOWN_LANDMARK_ANCHORS)) {
-      if (key.includes(k) || k.includes(key)) {
-        return {
-          lat: info.lat,
-          lng: info.lng,
-          elevation: info.elevation,
-          landmarkName: info.name,
-          headingDeg: info.headingDeg,
-          typicalRooflineAltM: info.typicalRooflineAltM,
-          typicalStreetAltM: info.typicalStreetAltM
-        };
-      }
-    }
-
     return {
-      lat: 40.7645,
-      lng: -73.9744,
-      elevation: 18.0,
-      landmarkName: nameOrCoords,
-      headingDeg: 0,
-      typicalRooflineAltM: 70.0,
-      typicalStreetAltM: 10.0
+      lat: coords.lat,
+      lng: coords.lng,
+      elevation: coords.elevation ?? 0,
+      landmarkName: coords.landmarkName ?? `Geo Location (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`,
+      headingDeg: coords.headingDeg ?? 0,
+      typicalRooflineAltM: coords.typicalRooflineAltM ?? 70.0,
+      typicalStreetAltM: coords.typicalStreetAltM ?? 10.0
     };
+  }
+
+  /**
+   * Looks up a place name with the Google Geocoding API and its ground elevation with the Elevation API.
+   * Throws when there is no key or no result instead of substituting any preset location.
+   */
+  public async geocodeLandmarkAnchor(
+    query: string,
+    options: { apiKey?: string; fetchImpl?: typeof fetch; headingDeg?: number } = {}
+  ): Promise<GeoAnchor & { headingDeg: number; placeId: string; elevationSource: 'elevation-api' | 'unavailable' }> {
+    const apiKey = options.apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      throw new Error(`Geocoding "${query}" needs a Google Maps API key (GOOGLE_MAPS_API_KEY) or explicit coordinates.`);
+    }
+    const doFetch = options.fetchImpl ?? fetch;
+    const geo: any = await (await doFetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${apiKey}`)).json();
+    if (geo.status !== 'OK' || !geo.results?.length) {
+      throw new Error(`Geocoding found no result for "${query}" (${geo.status}${geo.error_message ? `: ${geo.error_message}` : ''}).`);
+    }
+    const hit = geo.results[0];
+    const lat: number = hit.geometry.location.lat;
+    const lng: number = hit.geometry.location.lng;
+    let elevation = 0;
+    let elevationSource: 'elevation-api' | 'unavailable' = 'unavailable';
+    try {
+      const elev: any = await (await doFetch(`https://maps.googleapis.com/maps/api/elevation/json?locations=${lat},${lng}&key=${apiKey}`)).json();
+      if (elev.status === 'OK' && Number.isFinite(elev.results?.[0]?.elevation)) {
+        elevation = elev.results[0].elevation;
+        elevationSource = 'elevation-api';
+      }
+    } catch {
+      elevationSource = 'unavailable';
+    }
+    return { lat, lng, elevation, elevationSource, landmarkName: hit.formatted_address, placeId: hit.place_id, headingDeg: options.headingDeg ?? 0 };
   }
 
   /**
@@ -883,6 +789,8 @@ export class GeoCameraMatchmovePipelineService {
       proofOutputDir?: string;
       startPitchDeg?: number;
       startAltitudeMeters?: number;
+      /** Where caller-supplied keyframes came from; defaults to 'keyframes' for arrays and 'motion-preset' otherwise. */
+      trajectorySource?: 'motion-preset' | 'keyframes';
     } = {}
   ): {
     pathData: CameraPathData;
@@ -916,24 +824,11 @@ export class GeoCameraMatchmovePipelineService {
     const fps = metadata.fps;
     const durationSec = metadata.durationSec;
 
-    // Load authentic tile mesh if provided or discovered in public/models
+    // Proof renders use only the tile mesh the caller names for this location
     let tileMesh: RenderMesh3D | null = null;
-    const candidateMeshPaths = [
-      options.tileMeshPath,
-      path.resolve(process.cwd(), 'public/models/google_tiles_textured_area.glb'),
-      path.resolve(process.cwd(), 'public/models/plaza_hotel_raw.glb')
-    ].filter(Boolean) as string[];
-
-    for (const meshPath of candidateMeshPaths) {
-      if (fs.existsSync(meshPath)) {
-        try {
-          tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(meshPath);
-          console.log(`[GeoMatchmove Precision] Loaded 3D tile mesh (${tileMesh.vertices.length / 3} vertices) from: ${meshPath}`);
-          break;
-        } catch (e: any) {
-          console.warn(`[GeoMatchmove Precision] Could not load GLB at ${meshPath}: ${e.message}`);
-        }
-      }
+    if (options.tileMeshPath) {
+      if (!fs.existsSync(options.tileMeshPath)) throw new Error(`Tile mesh not found: ${options.tileMeshPath}`);
+      tileMesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(options.tileMeshPath);
     }
 
     // Convert anchors to CameraSolveFrames with pitch & heading
@@ -969,14 +864,7 @@ export class GeoCameraMatchmovePipelineService {
         kHeadingDeg = Math.atan2(dx, -dz) * (180.0 / Math.PI);
       }
 
-      // Convert to unit quaternion
-      let q = GeoCameraMatchmovePipelineService.eulerToQuaternion(kHeadingDeg, pitchDeg, 0.0);
-
-      // Sub-pixel optical edge refinement residual
-      let reprojectionResidual = 0.02;
-      if (tileMesh && (k === 0 || k === keyframes.length - 1 || k % 6 === 0)) {
-        reprojectionResidual = 0.015;
-      }
+      const q = GeoCameraMatchmovePipelineService.eulerToQuaternion(kHeadingDeg, pitchDeg, 0.0);
 
       solveFrames.push({
         frameNumber: frameNum,
@@ -984,8 +872,7 @@ export class GeoCameraMatchmovePipelineService {
         position: [px, py, pz],
         rotationQuaternion: q,
         fovDegrees: anchor.fov || 46.0,
-        focalLengthMm: 41.4,
-        reprojectionErrorPx: reprojectionResidual
+        focalLengthMm: 41.4
       });
     }
 
@@ -998,12 +885,11 @@ export class GeoCameraMatchmovePipelineService {
       fps,
       totalFrames,
       durationSeconds: durationSec,
-      meanReprojectionErrorPx: 0.022,
       sensorWidthMm: 36.0,
       sensorHeightMm: 24.0,
       focalLengthMm: 41.4,
       frames: solveFrames,
-      isSolved: true
+      isSolved: false
     };
 
     // Interpolate continuous 6-DoF trajectory using cubic Hermite position and quaternion Slerp
@@ -1031,93 +917,15 @@ export class GeoCameraMatchmovePipelineService {
       });
     }
 
-    // Evaluate anti-drift tracking metrics across architectural landmarks
-    const trackingMarkers: TrackingMarker2D3D[] = [
-      {
-        id: 'plaza_mansard_turret_apex',
-        name: 'Plaza Mansard Turret Apex',
-        worldPoint3D: [54.0, 78.0, 2.0],
-        platePoint2D: [metadata.width * 0.485, metadata.height * 0.382]
-      },
-      {
-        id: 'plaza_north_balustrade',
-        name: 'North Cornice Balustrade',
-        worldPoint3D: [48.0, 65.0, 6.0],
-        platePoint2D: [metadata.width * 0.365, metadata.height * 0.470]
-      },
-      {
-        id: 'cps_entrance_marquee',
-        name: 'Central Park South Entrance Marquee',
-        worldPoint3D: [44.0, 42.0, 14.0],
-        platePoint2D: [metadata.width * 0.520, metadata.height * 0.620]
-      },
-      {
-        id: 'grand_army_plaza_ground',
-        name: 'Grand Army Plaza Ground Marker',
-        worldPoint3D: [42.6, 10.5, 23.5],
-        platePoint2D: [metadata.width * 0.500, metadata.height * 0.860]
-      }
-    ];
-
-    const projectPoint = (pt: [number, number, number], pos: [number, number, number], quat: [number, number, number, number], fovDeg: number, w: number, h: number): [number, number] | null => {
-      const fovRad = (fovDeg * Math.PI) / 180.0;
-      const tanHalfV = Math.tan(fovRad / 2.0);
-      const tanHalfH = tanHalfV * (w / h);
-      const [qx, qy, qz, qw] = quat;
-      const iqx = -qx, iqy = -qy, iqz = -qz, iqw = qw;
-      const dx = pt[0] - pos[0];
-      const dy = pt[1] - pos[1];
-      const dz = pt[2] - pos[2];
-      const ix = iqw * dx + iqy * dz - iqz * dy;
-      const iy = iqw * dy + iqz * dx - iqx * dz;
-      const iz = iqw * dz + iqx * dy - iqy * dx;
-      const iw = -iqx * dx - iqy * dy - iqz * dz;
-      const cx = ix * iqw + iw * -iqx + iy * -iqz - iz * -iqy;
-      const cy = iy * iqw + iw * -iqy + iz * -iqx - ix * -iqz;
-      const cz = iz * iqw + iw * -iqz + ix * -iqy - iy * -iqx;
-      const zDepth = -cz;
-      if (zDepth <= 0.01) return null;
-      const ndcX = cx / (zDepth * tanHalfH);
-      const ndcY = cy / (zDepth * tanHalfV);
-      return [(ndcX + 1.0) * 0.5 * w, (1.0 - ndcY) * 0.5 * h];
-    };
-
-    let totalDrift = 0;
-    let maxDrift = 0;
-    let evalCount = 0;
-
-    for (const sf of solveFrames) {
-      const p = VfxPlateMatchmoveService.interpolateCameraSolve(solveTrack, sf.timeSeconds);
-      const frameMarkers: TrackingMarker2D3D[] = [];
-      for (const m of trackingMarkers) {
-        const proj = projectPoint(m.worldPoint3D, sf.position, sf.rotationQuaternion, sf.fovDegrees, metadata.width, metadata.height);
-        if (proj) {
-          frameMarkers.push({
-            id: m.id,
-            name: m.name,
-            worldPoint3D: m.worldPoint3D,
-            platePoint2D: proj
-          });
-        }
-      }
-      if (frameMarkers.length > 0) {
-        const res = VfxPlateMatchmoveService.evaluateDrift(frameMarkers, p, { width: metadata.width, height: metadata.height });
-        totalDrift += res.meanDriftPx;
-        if (res.maxDriftPx > maxDrift) maxDrift = res.maxDriftPx;
-        evalCount++;
-      }
-    }
-
-    const meanDriftPx = evalCount > 0 ? Number((totalDrift / evalCount).toFixed(4)) : 0.025;
-    const maxDriftPx = Number(maxDrift.toFixed(4));
-
+    // Keyframes and motion presets are never compared with the plate here, so there is nothing to score
     const precisionMetrics: PrecisionMetrics = {
-      meanReprojectionErrorPx: 0.022,
-      meanEdgeOverlapScorePct: 99.98,
-      meanDriftPx,
-      maxDriftPx,
-      certifiedSubMillimeter: true,
-      driftStatus: 'sub-pixel-locked'
+      measured: false,
+      trajectorySource: options.trajectorySource ?? (Array.isArray(keyframesOrMotion) ? 'keyframes' : 'motion-preset'),
+      meanReprojectionErrorPx: null,
+      meanEdgeOverlapScorePct: null,
+      meanDriftPx: null,
+      maxDriftPx: null,
+      driftStatus: 'uncalibrated'
     };
 
     // Render visual proof artifacts if proofOutputDir is set
@@ -1276,22 +1084,21 @@ export class GeoCameraMatchmovePipelineService {
     let solveTrack: CameraSolveTrack | undefined;
     let proofArtifacts: PrecisionProofArtifacts | undefined;
 
-    if (request.precisionOptimization || request.interpolationMethod === 'hermite-slerp') {
+    if (request.precisionOptimization || request.interpolationMethod === 'hermite-slerp' || request.interpolationMethod === 'continuous-spline') {
       console.log('⚡ Activating Precision 6-DoF Solver (Hermite-Slerp & 3D Tile Edge Alignment)...');
       const precisionResult = this.solvePrecisionTrajectory(metadata, anchor, keyframes, headingDeg, {
         lensDistortion: request.lensDistortion,
         tileMeshPath: request.tileMeshPath,
         resectionKeyframes: request.resectionKeyframes,
         targetOverlapScore: request.targetOverlapScore,
-        proofOutputDir: imagesDir
+        proofOutputDir: imagesDir,
+        trajectorySource: request.customKeyframes && request.customKeyframes.length >= 2 ? 'keyframes' : 'motion-preset'
       });
       pathData = precisionResult.pathData;
       precisionMetrics = precisionResult.precisionMetrics;
       solveTrack = precisionResult.solveTrack;
       proofArtifacts = precisionResult.proofArtifacts;
-      console.log(`   RMS Reprojection Residual: ${precisionMetrics.meanReprojectionErrorPx} px`);
-      console.log(`   Edge Overlap Score: ${precisionMetrics.meanEdgeOverlapScorePct}%`);
-      console.log(`   Mean Marker Drift: ${precisionMetrics.meanDriftPx} px (Status: ${precisionMetrics.driftStatus})`);
+      console.log(`   Alignment: not measured (path from ${precisionMetrics.trajectorySource}, not tracked from the plate)`);
     } else {
       pathData = this.solveCameraTrajectory(metadata, anchor, keyframes, headingDeg, {
         denseKeyframeCount: request.denseKeyframeCount,
@@ -1391,22 +1198,36 @@ export class GeoCameraMatchmovePipelineService {
 
     let omniVideoPath: string | undefined;
     let omniWebmPath: string | undefined;
+    let omniInteractionId: string | undefined;
+    let omniError: string | undefined;
     let comparisonVideoPath: string | undefined;
     let comparisonWebmPath: string | undefined;
     let qaKeyframes: string[] = [];
 
-    // 5. Omni 1.1 Neural Synthesis & Comparison Compilation
+    // 5. Omni video from the blockout, pinned to the source clip's first and last frames
     if (request.enableOmniSynthesis !== false) {
-      console.log(`\n✨ Executing Vertex AI Omni 1.1 Dual-Conditioned Neural Synthesis...`);
+      console.log(`\n✨ Generating the Omni video from the blockout...`);
       omniVideoPath = path.join(videosDir, `${baseName}_omni_restyled.mp4`);
       omniWebmPath = path.join(videosDir, `${baseName}_omni_restyled.webm`);
       comparisonVideoPath = path.join(videosDir, `${baseName}_vs_omni_comparison.mp4`);
       comparisonWebmPath = path.join(videosDir, `${baseName}_vs_omni_comparison.webm`);
 
       try {
-        // Master reference / restyled video to target resolution
-        console.log(`🎬 Mastering neural video to 4K UHD: ${omniVideoPath}`);
-        execSync(`"${this.ffmpegPath}" -y -i "${request.inputVideoPath}" -vf "scale=${request.resolution?.width || 3840}:${request.resolution?.height || 2160}:flags=lanczos" -c:v libx264 -pix_fmt yuv420p -b:v 25M -r ${metadata.fps} "${omniVideoPath}"`, { stdio: 'inherit' });
+        const firstFramePng = path.join(imagesDir, `${baseName}_source_first_frame.png`);
+        const lastFramePng = path.join(imagesDir, `${baseName}_source_last_frame.png`);
+        execSync(`"${this.ffmpegPath}" -y -v error -i "${request.inputVideoPath}" -frames:v 1 "${firstFramePng}"`);
+        execSync(`"${this.ffmpegPath}" -y -v error -sseof -1 -i "${request.inputVideoPath}" -update 1 "${lastFramePng}"`);
+        const omniResult = await this.omni.generate({
+          prompt: buildBlockoutFirstLastPrompt({
+            shot: request.omniShot ?? 'Follow the camera move of the blockout exactly.',
+            emptyStreets: request.omniEmptyStreets
+          }),
+          firstFrame: { data: fs.readFileSync(firstFramePng), mimeType: 'image/png' },
+          lastFrame: { data: fs.readFileSync(lastFramePng), mimeType: 'image/png' },
+          blockoutVideo: { data: fs.readFileSync(blockoutVideoPath), mimeType: 'video/mp4' }
+        });
+        fs.writeFileSync(omniVideoPath, omniResult.video);
+        omniInteractionId = omniResult.interactionId;
         execSync(`"${this.ffmpegPath}" -y -i "${omniVideoPath}" -c:v libvpx-vp9 -threads 8 -cpu-used 4 -b:v 15M "${omniWebmPath}"`, { stdio: 'inherit' });
 
         // Compile Synchronized Split Comparison Video
@@ -1438,7 +1259,13 @@ export class GeoCameraMatchmovePipelineService {
           }
         });
       } catch (err: any) {
-        console.warn(`[GeoMatchmove] Omni/comparison compilation warning: ${err.message}`);
+        omniError = err.message;
+        console.warn(`[GeoMatchmove] Omni step failed: ${omniError}`);
+        const existing = (p?: string) => (p && fs.existsSync(p) ? p : undefined);
+        omniVideoPath = omniInteractionId ? existing(omniVideoPath) : undefined;
+        omniWebmPath = omniInteractionId ? existing(omniWebmPath) : undefined;
+        comparisonVideoPath = omniInteractionId ? existing(comparisonVideoPath) : undefined;
+        comparisonWebmPath = omniInteractionId ? existing(comparisonWebmPath) : undefined;
       }
     }
 
@@ -1447,11 +1274,15 @@ export class GeoCameraMatchmovePipelineService {
       `📍 Location: ${anchor.landmarkName} (${anchor.lat}, ${anchor.lng})`,
       `🎥 Trajectory: ${metadata.totalFrames} frames @ ${metadata.fps}fps (${metadata.durationSec.toFixed(2)}s)`,
       `📐 3D Blockout Video: ${blockoutVideoPath}`,
-      omniVideoPath ? `✨ Omni 1.1 Video: ${omniVideoPath}` : '',
+      omniVideoPath ? `✨ Omni Video: ${omniVideoPath} (interaction ${omniInteractionId})` : '',
+      omniError ? `⚠️ Omni step failed: ${omniError}` : '',
       comparisonVideoPath ? `⚡ Split Comparison: ${comparisonVideoPath}` : '',
       `📸 QA Keyframes: ${qaKeyframes.length} captured`,
-      precisionMetrics ? `🎯 Reprojection Error: ${precisionMetrics.meanReprojectionErrorPx} px (Edge Overlap: ${precisionMetrics.meanEdgeOverlapScorePct}%)` : '',
-      precisionMetrics ? `🔒 Sub-Pixel Drift: ${precisionMetrics.meanDriftPx} px (Max: ${precisionMetrics.maxDriftPx} px, Status: ${precisionMetrics.driftStatus})` : ''
+      precisionMetrics
+        ? (precisionMetrics.measured
+          ? `🎯 Reprojection Error: ${precisionMetrics.meanReprojectionErrorPx} px (Edge Overlap: ${precisionMetrics.meanEdgeOverlapScorePct}%)`
+          : `🎯 Alignment: not measured (path from ${precisionMetrics.trajectorySource})`)
+        : ''
     ].filter(Boolean).join('\n');
 
     console.log('\n' + summary);
@@ -1472,6 +1303,8 @@ export class GeoCameraMatchmovePipelineService {
       storyboardsDir,
       omniVideoPath,
       omniWebmPath,
+      omniInteractionId,
+      omniError,
       comparisonVideoPath,
       comparisonWebmPath,
       qaKeyframes,

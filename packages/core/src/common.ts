@@ -33,6 +33,21 @@ export * from './common/geospatial-4d-protocol';
 // ComfyUI Pipeline & Agent Protocol
 export * from './common/comfyui-protocol';
 
+// 4DAnyone Gaussian PLY codec & 22-joint humanoid skinning (shared by Node pipeline and browser viewer)
+export {
+    decodeGaussianPly,
+    encodeGaussianPly,
+    SCRATCHBOX_PLY_ENCODING_COMMENT,
+    type DecodedGaussianRecord,
+    type GaussianPlyEncoding
+} from './common/gaussian-ply-codec';
+export {
+    computeBoneRotations,
+    skinPoint,
+    retargetSegmentDirections,
+    SMPLX22_PARENTS
+} from './common/humanoid-skinning';
+
 // Universal COLMAP Vector Reference Types (Zero Presets)
 export * from './common/spatial/colmap-vector-reference-types';
 export { SurveySynthesisEngine, stationFromLookAt, stationToPinhole, horizontalFovDegrees, yawPitchFromForward, cameraBasis } from './common/spatial/SurveySynthesisEngine';

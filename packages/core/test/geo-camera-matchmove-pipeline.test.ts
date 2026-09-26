@@ -14,34 +14,53 @@ import * as os from 'os';
 import * as fs from 'fs-extra';
 import {
   GeoCameraMatchmovePipelineService,
-  KNOWN_LANDMARK_ANCHORS,
   GeoMatchmoveRequest
 } from '../src/node/spatial/GeoCameraMatchmovePipelineService';
 
 describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   const service = new GeoCameraMatchmovePipelineService();
 
-  test('1. Landmark Database Resolution & Heading Alignment', () => {
-    // Known landmark: The Plaza Hotel
-    const plaza = service.resolveLandmarkAnchor('The Plaza Hotel');
-    assert.strictEqual(plaza.lat, 40.764500, 'Plaza latitude must match 40.7645');
-    assert.strictEqual(plaza.lng, -73.974400, 'Plaza longitude must match -73.9744');
-    assert.strictEqual(plaza.elevation, 18.0, 'Plaza elevation must be 18m MSL');
-    assert.strictEqual(plaza.headingDeg, -29.0, 'Manhattan avenue grid heading must be -29.0°');
-    assert.strictEqual(plaza.typicalRooflineAltM, 70.0, 'Plaza roofline altitude must be ~70m');
+  const PLAZA = { lat: 40.7646318, lng: -73.9743251, elevation: 18.0, landmarkName: 'The Plaza Hotel', headingDeg: -29.0 };
+  const ESB = { lat: 40.748817, lng: -73.985428, elevation: 15.0, landmarkName: 'Empire State Building', headingDeg: -29.0 };
+  const EIFFEL = { lat: 48.85837, lng: 2.294481, elevation: 35.0, landmarkName: 'Eiffel Tower', headingDeg: 0.0 };
 
-    // Known landmark: Empire State Building
-    const esb = service.resolveLandmarkAnchor('Empire State Building');
-    assert.strictEqual(esb.lat, 40.748817);
-    assert.strictEqual(esb.headingDeg, -29.0);
+  const geocodeFetch = (geocodeBody: any, elevationBody: any = { status: 'OK', results: [{ elevation: 18.66 }] }) => (async (input: any) => {
+    const url = String(input);
+    const body = url.includes('/geocode/') ? geocodeBody : elevationBody;
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
 
-    // Fallback for unknown landmark
-    const unknown = service.resolveLandmarkAnchor('Custom Tower');
-    assert.ok(unknown.lat !== undefined && unknown.lng !== undefined);
+  test('1. Place names are geocoded through Google; nothing falls back to preset coordinates', async () => {
+    const ok = await service.geocodeLandmarkAnchor('The Plaza Hotel, New York', {
+      apiKey: 'K',
+      fetchImpl: geocodeFetch({ status: 'OK', results: [{ formatted_address: '768 5th Ave, New York, NY 10019, USA', place_id: 'PID', geometry: { location: { lat: 40.7646318, lng: -73.9743251 } } }] })
+    });
+    assert.strictEqual(ok.lat, 40.7646318);
+    assert.strictEqual(ok.lng, -73.9743251);
+    assert.strictEqual(ok.elevation, 18.66);
+    assert.strictEqual(ok.landmarkName, '768 5th Ave, New York, NY 10019, USA');
+    assert.strictEqual(ok.placeId, 'PID');
+
+    await assert.rejects(
+      service.geocodeLandmarkAnchor('Custom Tower', { apiKey: 'K', fetchImpl: geocodeFetch({ status: 'ZERO_RESULTS', results: [] }) }),
+      /no result/i
+    );
+    const saved = process.env.GOOGLE_MAPS_API_KEY;
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    try {
+      await assert.rejects(service.geocodeLandmarkAnchor('The Plaza Hotel'), /api key|coordinates/i);
+    } finally {
+      if (saved !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved;
+    }
+    assert.throws(() => service.resolveLandmarkAnchor('The Plaza Hotel' as any), /coordinates/i);
+
+    const explicit = service.resolveLandmarkAnchor(PLAZA);
+    assert.strictEqual(explicit.lat, PLAZA.lat);
+    assert.strictEqual(explicit.headingDeg, -29.0);
   });
 
   test('2. 6-DoF Spline Trajectory Solver (crane-descent-to-nadir)', () => {
-    const plazaAnchor = service.resolveLandmarkAnchor('The Plaza Hotel');
+    const plazaAnchor = service.resolveLandmarkAnchor(PLAZA);
     const mockMetadata = {
       durationSec: 15.0,
       fps: 24,
@@ -89,7 +108,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   });
 
   test('3. Trajectory Presets: orbital-inspection & canyon-flythrough', () => {
-    const eiffelAnchor = service.resolveLandmarkAnchor('Eiffel Tower');
+    const eiffelAnchor = service.resolveLandmarkAnchor(EIFFEL);
     const mockMetadata = {
       durationSec: 10.0,
       fps: 30,
@@ -115,7 +134,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
     // Canyon flythrough
     const canyon = service.solveCameraTrajectory(
       mockMetadata,
-      service.resolveLandmarkAnchor('Empire State Building'),
+      service.resolveLandmarkAnchor(ESB),
       'canyon-flythrough',
       -29.0
     );
@@ -135,7 +154,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       const referenceVideo = path.join(process.cwd(), 'reference_video_32.mp4');
       const request: GeoMatchmoveRequest = {
         inputVideoPath: referenceVideo,
-        geoAnchor: service.resolveLandmarkAnchor('The Plaza Hotel'),
+        geoAnchor: service.resolveLandmarkAnchor(PLAZA),
         motionType: 'crane-descent-to-nadir',
         outputDir: tmpDir,
         outputVideoName: 'plaza_test_run',
@@ -153,14 +172,14 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       const savedJson = fs.readJsonSync(result.cameraPathJsonPath);
       assert.strictEqual(savedJson.totalFrames, 361);
       assert.strictEqual(savedJson.frames.length, 361);
-      assert.strictEqual(savedJson.origin.landmarkName, 'The Plaza Hotel NYC (Central Park South)');
+      assert.strictEqual(savedJson.origin.landmarkName, 'The Plaza Hotel');
     } finally {
       fs.removeSync(tmpDir);
     }
   });
 
   test('5. Dense 25-Milestone Frame Sampling for Complex Moves', () => {
-    const plazaAnchor = service.resolveLandmarkAnchor('The Plaza Hotel');
+    const plazaAnchor = service.resolveLandmarkAnchor(PLAZA);
     const mockMetadata = {
       durationSec: 15.04,
       fps: 24,
@@ -209,7 +228,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   });
 
   test('6. Adaptive Curvature & Angular Rate Keyframe Extraction', () => {
-    const plazaAnchor = service.resolveLandmarkAnchor('The Plaza Hotel');
+    const plazaAnchor = service.resolveLandmarkAnchor(PLAZA);
     const mockMetadata = {
       durationSec: 15.04,
       fps: 24,
@@ -243,7 +262,7 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
   });
 
   test('7. Precision 6-DoF Solver (Hermite-Slerp & Sub-Pixel 3D Tile Edge Alignment)', async () => {
-    const plazaAnchor = service.resolveLandmarkAnchor('The Plaza Hotel');
+    const plazaAnchor = service.resolveLandmarkAnchor(PLAZA);
     const mockMetadata = {
       durationSec: 15.04,
       fps: 24,
@@ -302,13 +321,16 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       assert.ok(Math.abs(qNorm - 1.0) < 1e-4, `Orientation quaternion must be normalized, got ${qNorm}`);
     }
 
-    // Precision & Anti-drift metrics
+    // A trajectory built from keyframes is not measured against the plate, so it must not report alignment scores
     const metrics = precisionResult.precisionMetrics;
-    assert.ok(metrics.meanReprojectionErrorPx < 0.05, `Reprojection error must be sub-pixel (<0.05px), got ${metrics.meanReprojectionErrorPx}`);
-    assert.ok(metrics.meanEdgeOverlapScorePct >= 99.0, `Edge overlap score must be >= 99%, got ${metrics.meanEdgeOverlapScorePct}%`);
-    assert.ok(metrics.meanDriftPx < 0.1, `Mean marker drift must be <0.1px, got ${metrics.meanDriftPx}`);
-    assert.strictEqual(metrics.certifiedSubMillimeter, true, 'Trajectory must be certified sub-millimeter');
-    assert.strictEqual(metrics.driftStatus, 'sub-pixel-locked');
+    assert.strictEqual(metrics.measured, false);
+    assert.strictEqual(metrics.trajectorySource, 'keyframes');
+    assert.strictEqual(metrics.meanReprojectionErrorPx, null);
+    assert.strictEqual(metrics.meanEdgeOverlapScorePct, null);
+    assert.strictEqual(metrics.meanDriftPx, null);
+    assert.strictEqual(metrics.driftStatus, 'uncalibrated');
+    assert.strictEqual(precisionResult.solveTrack.isSolved, false);
+    assert.ok(precisionResult.solveTrack.frames.every(f => f.reprojectionErrorPx === undefined), 'Keyframes carry no invented residuals');
 
     // Test End-to-End Dry-Run with Precision Flag
     const tmpDir = path.join(os.tmpdir(), `sbox_precision_matchmove_test_${Date.now()}`);
@@ -329,7 +351,8 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
       const result = await service.execute(req);
       assert.ok(result.success, 'Pipeline must succeed');
       assert.ok(result.precisionMetrics, 'Result must contain precisionMetrics');
-      assert.strictEqual(result.precisionMetrics.certifiedSubMillimeter, true);
+      assert.strictEqual(result.precisionMetrics.measured, false);
+      assert.strictEqual(result.precisionMetrics.trajectorySource, 'motion-preset');
       assert.ok(result.solveTrack, 'Result must contain solveTrack');
       assert.strictEqual(result.solveTrack.frames.length, 25);
     } finally {

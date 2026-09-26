@@ -218,18 +218,28 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         expect(outcome.resultPayload.kinematicsSafe).toBe(true);
     });
 
-    it('auto-resolves landmark defaults when milestone data is omitted', async () => {
-        const plazaReportPath = path.resolve(__dirname, '../../../public/models/plaza_hotel_adaptive_metrology_report.json');
-        if (fs.existsSync(plazaReportPath)) {
-            const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({
-                landmark: 'The Plaza Hotel'
-            }, mockContext);
+    it('does not substitute a saved report when only a landmark name is given', async () => {
+        const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({
+            landmark: 'The Plaza Hotel'
+        }, mockContext);
 
-            expect(outcome.status).toBe('completed');
-            expect(outcome.resultPayload.success).toBe(true);
-            expect(outcome.resultPayload.keyframeCount).toBe(25);
-            expect(Number(outcome.resultPayload.meanRmsResidualPx)).toBeLessThan(0.05);
-        }
+        expect(outcome.status).toBe('failed');
+        expect(outcome.resultPayload.success).toBe(false);
+    });
+
+    it('leaves residuals unmeasured instead of inventing them when a sequence file omits them', async () => {
+        const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'adaptive-seq-'));
+        const seqPath = path.join(dir, 'seq.json');
+        fs.writeFileSync(seqPath, JSON.stringify({
+            sequenceId: 'bare', fps: 24, totalFrames: 49, durationSec: 2,
+            milestones: [
+                { frame: 1, time: 0, position: [0, 10, 50], target: [0, 10, 0] },
+                { frame: 49, time: 2, position: [10, 10, 50], target: [0, 10, 0] }
+            ]
+        }));
+        const outcome = await adaptiveMatchmoveHandlers.adaptive_matchmove_calibrate_sequence({ sequencePath: seqPath }, mockContext);
+        const reported = Number(outcome.resultPayload?.meanRmsResidualPx);
+        expect(Number.isFinite(reported) && reported < 0.05).toBe(false);
     });
 
     it('synthesizes continuous C2 Hermite trajectory with valid kinematics telemetry', async () => {
@@ -325,6 +335,64 @@ describe('Adaptive Matchmove Agent Tools Suite', () => {
         const resolution2 = TaskCapabilityResolver.resolveTaskCapability(prompt2);
         expect(resolution2.recommendedResolutionRoute).toBe('tier1-native');
         expect(resolution2.tier1Assessment.primaryNativeEngine).toBe('adaptive-matchmove-calibration');
+    });
+
+    it('executes continuous_spline_matchmove_optimize tool handler', async () => {
+        const knots = [
+            { timeSec: 0.0, position: [46.0, 65.0, 5.0], target: [32.0, 68.0, 6.0], up: [0, 1, 0], fovYDeg: 46.0 },
+            { timeSec: 2.0, position: [45.0, 42.0, 13.0], target: [35.0, 42.0, 15.0], up: [0, 1, 0], fovYDeg: 46.0 },
+            { timeSec: 4.0, position: [42.6, 15.0, 22.0], target: [42.6, 0.0, 22.0], up: [-0.87, 0, -0.48], fovYDeg: 46.0 }
+        ];
+
+        const tracks = [
+            {
+                trackId: 'track_1',
+                worldPoint3D: [32.0, 68.0, 5.0] as [number, number, number],
+                observations: [
+                    { frameNumber: 0, timeSec: 0.0, pixel2D: [640, 360] as [number, number], confidence: 1.0 },
+                    { frameNumber: 48, timeSec: 2.0, pixel2D: [600, 380] as [number, number], confidence: 1.0 }
+                ]
+            }
+        ];
+
+        const anchors = [
+            { timeSec: 0.0, position: [46.0, 65.0, 5.0] as [number, number, number], weight: 100.0 }
+        ];
+
+        const outcome = await adaptiveMatchmoveHandlers.continuous_spline_matchmove_optimize({
+            knots,
+            tracks,
+            anchors,
+            maxIterations: 10,
+            kinematicSmoothnessWeight: 1.0,
+            enforceMonotonicDescent: true
+        }, mockContext);
+
+        expect(outcome.status).toBe('completed');
+        expect(outcome.resultPayload.success).toBe(true);
+        expect(outcome.resultPayload.optimizedKnots).toHaveLength(3);
+        expect(outcome.resultPayload.initialRmsPx).toBeGreaterThanOrEqual(0);
+        expect(outcome.resultPayload.finalRmsPx).toBeDefined();
+    });
+
+    it('executes continuous_spline_synthesize_trajectory tool handler', async () => {
+        const knots = [
+            { timeSec: 0.0, position: [46.0, 65.0, 5.0], target: [32.0, 68.0, 6.0], up: [0, 1, 0], fovYDeg: 46.0 },
+            { timeSec: 2.0, position: [42.6, 15.0, 22.0], target: [42.6, 0.0, 22.0], up: [0, 1, 0], fovYDeg: 46.0 }
+        ];
+
+        const outcome = await adaptiveMatchmoveHandlers.continuous_spline_synthesize_trajectory({
+            knots,
+            fps: 24,
+            durationSec: 2.0,
+            exportSolveTrack: true
+        }, mockContext);
+
+        expect(outcome.status).toBe('completed');
+        expect(outcome.resultPayload.totalFrames).toBe(49); // 2s * 24fps + 1
+        expect(outcome.resultPayload.denseTrajectory).toHaveLength(49);
+        expect(outcome.resultPayload.solveTrack).toBeDefined();
+        expect((outcome.resultPayload.solveTrack as any).isSolved).toBe(true);
     });
 
 });
