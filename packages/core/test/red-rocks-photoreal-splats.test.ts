@@ -176,4 +176,33 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(mixStat.size).toBeGreaterThan(500 * 1024);
     expect(droneStat.size).toBeGreaterThan(500 * 1024);
   });
+
+  it('7. Synthesizes Red Rocks venue through Location3DGaussianSplatService facade', async () => {
+    const { Location3DGaussianSplatService } = await import('../src/node/spatial/Location3DGaussianSplatService');
+    const service = new Location3DGaussianSplatService();
+
+    const result = await service.generate({
+      location: 'Red Rocks Amphitheatre',
+      lat: 39.66555,
+      lng: -105.20525,
+      elevation: 1932.0,
+      headingDeg: 285.0,
+      cameraCount: 12,
+      width: 960,
+      bakeStride: 2,
+      outDir: path.join(PUBLIC_DIR, 'tilesets/red_rocks'),
+      forceRebake: false // reuse cached stations for instant verification
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.locationName).toContain('Red Rocks');
+    expect(result.geoAnchor.lat).toBeCloseTo(39.66555, 3);
+    expect(result.geoAnchor.lng).toBeCloseTo(-105.20525, 3);
+    expect(result.splatPath).toBeDefined();
+    expect(result.splatCount).toBeGreaterThan(500000);
+    expect(result.scene3DData).toBeDefined();
+    expect(result.scene3DData.sceneType).toBe('gaussian_splat');
+    expect(result.scene3DData.splatUrl).toContain('red_rocks/fused.splat');
+    expect(result.scene3DData.splatTilesetUrl).toContain('red_rocks/tileset.json');
+  });
 });
