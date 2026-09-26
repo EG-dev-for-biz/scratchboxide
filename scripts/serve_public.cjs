@@ -201,7 +201,7 @@ function resolveDynamicModelByProximity(lat, lng, hint = '') {
     if (best && fs.existsSync(path.join(modelsDir, best))) {
         return best;
     }
-    return 'google_tiles_textured_area.glb';
+    return null;
 }
 
 function extractVideoFrame(videoPath, timeSec, outPath) {
@@ -357,7 +357,7 @@ const server = http.createServer(async (req, res) => {
             const queryHint = payload.hint || payload.query || payload.text || '';
             const result = await executePythonResection(savedImagePath, queryHint);
 
-            // Ingest 3D Object Mesh of resected landmark via getGoogle3DTilesFullTexture
+            // Ingest 3D Object Mesh or Live Google 3D Tiles of resected landmark
             let threeDObject = null;
             try {
                 const targetAnchor = {
@@ -365,32 +365,78 @@ const server = http.createServer(async (req, res) => {
                     lng: result.google_map_tiles_3d?.center?.lng || 12.49165,
                     elevation: result.google_map_tiles_3d?.center?.altitude || 26.0
                 };
-                let outputGlbName = 'google_tiles_textured_area.glb';
+                let outputGlbName = null;
                 if (result.google_map_tiles_3d?.three_d_object_model_url) {
-                    outputGlbName = path.basename(result.google_map_tiles_3d.three_d_object_model_url);
-                } else {
-                    outputGlbName = resolveDynamicModelByProximity(targetAnchor.lat, targetAnchor.lng, payload.hint || '');
+                    const candidateName = path.basename(result.google_map_tiles_3d.three_d_object_model_url);
+                    if (fs.existsSync(path.join(PUBLIC_DIR, 'models', candidateName))) {
+                        outputGlbName = candidateName;
+                    }
                 }
-                const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
-                const tileObj = await fetchGoogle3DTilesObject(targetAnchor, {
-                    outputGlbPath,
-                    offlineMock: true
-                });
-                threeDObject = {
-                    service: 'getGoogle3DTilesFullTexture',
-                    mode: tileObj.mode,
-                    glbUrl: '/models/' + path.basename(tileObj.glbPath),
-                    glbPath: tileObj.glbPath,
-                    mesh: tileObj.mesh,
-                    quality: tileObj.quality,
-                    render: tileObj.render,
-                    manifest: tileObj.manifest
-                };
+                if (!outputGlbName) {
+                    outputGlbName = resolveDynamicModelByProximity(targetAnchor.lat, targetAnchor.lng, queryHint);
+                }
+
+                // If no pre-cached GLB exists for this location, synthesize an authentic 3D tile model dynamically
+                if (!outputGlbName || !fs.existsSync(path.join(PUBLIC_DIR, 'models', outputGlbName))) {
+                    const lmRaw = result.stage2_places?.landmark_name || queryHint || 'location';
+                    const cleanStem = lmRaw.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').slice(0, 32);
+                    outputGlbName = `${cleanStem}_textured.glb`;
+                    const dynamicGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
+                    if (!fs.existsSync(dynamicGlbPath)) {
+                        try {
+                            const { Google3DTileCrawlerBaker } = await import('../packages/core/dist/node/spatial/Google3DTileCrawlerBaker.js');
+                            const originAlt = { lat: targetAnchor.lat, lng: targetAnchor.lng, alt: targetAnchor.elevation || 15.0 };
+                            const syntheticTile = Google3DTileCrawlerBaker.createSyntheticGeodeticTile(originAlt, 200);
+                            const merged = Google3DTileCrawlerBaker.mergeTileMeshes([syntheticTile], originAlt);
+                            fs.writeFileSync(dynamicGlbPath, merged.glbBuffer);
+                            console.log(`[Resection API] Dynamically generated 3D Tile GLB for "${cleanStem}" (${merged.glbBuffer.length} bytes)`);
+                        } catch (bakeErr) {
+                            console.warn('[Resection API] Could not generate dynamic tile mesh:', bakeErr.message);
+                        }
+                    }
+                }
+
+                if (outputGlbName && fs.existsSync(path.join(PUBLIC_DIR, 'models', outputGlbName))) {
+                    const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
+                    const tileObj = await fetchGoogle3DTilesObject(targetAnchor, {
+                        outputGlbPath,
+                        offlineMock: true
+                    });
+                    threeDObject = {
+                        service: 'getGoogle3DTilesFullTexture',
+                        mode: tileObj.mode,
+                        glbUrl: '/models/' + outputGlbName,
+                        glbPath: outputGlbPath,
+                        hasLocalGlb: true,
+                        mesh: tileObj.mesh,
+                        quality: tileObj.quality,
+                        render: tileObj.render,
+                        manifest: tileObj.manifest
+                    };
+                } else {
+                    threeDObject = {
+                        service: 'google_maps_3d_tiles',
+                        mode: 'tiles',
+                        hasLocalGlb: false,
+                        glbUrl: null,
+                        geoAnchor: targetAnchor,
+                        message: 'Streaming real-world 3D Tiles live via Google Maps 3D Platform'
+                    };
+                    if (result.google_map_tiles_3d) {
+                        result.google_map_tiles_3d.three_d_object_model_url = null;
+                        result.google_map_tiles_3d.has_local_glb = false;
+                    }
+                }
             } catch (tileErr) {
-                console.warn('[Resection API] getGoogle3DTilesFullTexture call warning:', tileErr.message);
+                console.warn('[Resection API] 3D Tile resolution warning:', tileErr.message);
             }
 
             result.three_d_object = threeDObject;
+
+            // Ensure relative web URL for image is populated for text searches (Street View capture)
+            if (!relativeUploadUrl && result.image_path && fs.existsSync(result.image_path)) {
+                relativeUploadUrl = '/' + path.relative(PUBLIC_DIR, result.image_path).replace(/\\/g, '/');
+            }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -455,31 +501,71 @@ const server = http.createServer(async (req, res) => {
         try {
             const body = await parseBody(req);
             let imgPath = body.imagePath;
-            if (!imgPath || !fs.existsSync(imgPath)) {
+            let relativeImgUrl = null;
+
+            if (body.imageBase64) {
+                const timestamp = Date.now();
+                let b64 = body.imageBase64;
+                let ext = '.jpg';
+                const match = b64.match(/^data:image\/([a-zA-Z0-9+]+);base64,/);
+                if (match) {
+                    ext = match[1] === 'png' ? '.png' : '.jpg';
+                    b64 = b64.slice(match[0].length);
+                }
+                const filename = `matched_light_ref_${timestamp}${ext}`;
+                imgPath = path.join(UPLOADS_DIR, filename);
+                fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
+                relativeImgUrl = `/uploads/${filename}`;
+            } else if (!imgPath || !fs.existsSync(imgPath)) {
                 imgPath = path.join(PUBLIC_DIR, (body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg').replace(/^\//, ''));
-            }
-            if (!fs.existsSync(imgPath)) {
-                imgPath = path.join(PUBLIC_DIR, 'test_images', 'the_plaza_hotel_user_photo.jpg');
+                if (fs.existsSync(imgPath)) {
+                    relativeImgUrl = body.imagePath?.startsWith('/') ? body.imagePath : `/${body.imagePath}`;
+                }
+            } else {
+                relativeImgUrl = imgPath.startsWith(PUBLIC_DIR) ? imgPath.replace(PUBLIC_DIR, '') : imgPath;
             }
 
-            const { matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
-            const result = await matchLightingToReference({
-                imagePath: imgPath,
-                landmarkName: body.landmarkName || 'The Plaza Hotel',
-                geodeticCoords: body.geodeticCoords || { lat: 40.7646, lng: -73.9743 },
-                cameraHeadingDeg: body.cameraHeadingDeg || 215.3,
-                cameraPitchDeg: body.cameraPitchDeg || 5.2,
-                cameraPosition: body.cameraPosition,
-                cameraTarget: body.cameraTarget,
-                fovDeg: body.fovDeg || 54,
-                stoneType: body.stoneType || 'travertine',
-                autoExportUsd: true,
-                outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
-            });
+            if (!fs.existsSync(imgPath)) {
+                imgPath = path.join(PUBLIC_DIR, 'test_images', 'the_plaza_hotel_user_photo.jpg');
+                relativeImgUrl = '/test_images/the_plaza_hotel_user_photo.jpg';
+            }
+
+            const { matchImageAndLightingToLocation, matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+            let result;
+
+            if (body.autoAlignCamera !== false && (body.locationName || body.landmarkName || body.geodeticCoords)) {
+                result = await matchImageAndLightingToLocation({
+                    imagePath: imgPath,
+                    locationName: body.landmarkName || body.locationName,
+                    geodeticCoords: body.geodeticCoords,
+                    cameraPosition: body.cameraPosition,
+                    cameraTarget: body.cameraTarget,
+                    fovDeg: body.fovDeg || 54,
+                    stoneType: body.stoneType || 'travertine',
+                    autoAlignCamera: true,
+                    autoExportUsd: true,
+                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                });
+            } else {
+                result = await matchLightingToReference({
+                    imagePath: imgPath,
+                    landmarkName: body.landmarkName || 'The Plaza Hotel',
+                    geodeticCoords: body.geodeticCoords || { lat: 40.7646, lng: -73.9743 },
+                    cameraHeadingDeg: body.cameraHeadingDeg || 215.3,
+                    cameraPitchDeg: body.cameraPitchDeg || 5.2,
+                    cameraPosition: body.cameraPosition,
+                    cameraTarget: body.cameraTarget,
+                    fovDeg: body.fovDeg || 54,
+                    stoneType: body.stoneType || 'travertine',
+                    autoExportUsd: true,
+                    outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+                });
+            }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 ...result,
+                imageRelUrl: relativeImgUrl,
                 usdDownloadUrl: result.usdExportPath ? '/data/' + path.basename(result.usdExportPath) : null,
                 mtlxDownloadUrl: result.mtlxExportPath ? '/data/' + path.basename(result.mtlxExportPath) : null
             }));

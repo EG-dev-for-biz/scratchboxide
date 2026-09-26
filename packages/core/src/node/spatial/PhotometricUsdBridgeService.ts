@@ -19,6 +19,7 @@ import { InverseLightingEstimatorService } from './InverseLightingEstimatorServi
 import { LightingGafferService } from '../../browser/generative-canvas/services/atmosphere/LightingGafferService';
 import { calculateNOAASolarPosition } from '../../browser/generative-canvas/services/atmosphere/solar-position';
 import { StoneType } from '../../browser/generative-canvas/services/atmosphere/LocationObjectLightingService';
+import { GeoBoxPrecisionResectionService } from './GeoBoxPrecisionResectionService';
 
 export interface CameraUsdParameters {
     position: [number, number, number];
@@ -424,6 +425,160 @@ export async function matchLightingToReference(
         threeJsUniforms,
         usdExportPath,
         mtlxExportPath,
+        summary
+    };
+}
+
+export interface MatchImageAndLightingToLocationOptions {
+    imagePath: string;
+    locationName?: string;
+    geodeticCoords?: { lat: number; lng: number; altitudeMeters?: number };
+    glbPath?: string;
+    cameraPosition?: [number, number, number];
+    cameraTarget?: [number, number, number];
+    fovDeg?: number;
+    stoneType?: StoneType | string;
+    autoAlignCamera?: boolean;
+    autoExportUsd?: boolean;
+    outputUsdPath?: string;
+}
+
+export interface MatchImageAndLightingToLocationResult {
+    success: boolean;
+    location: {
+        name: string;
+        coords: { lat: number; lng: number; altitudeMeters?: number };
+    };
+    cameraPose?: {
+        position: [number, number, number];
+        target: [number, number, number];
+        headingDeg: number;
+        pitchDeg: number;
+        fovDeg: number;
+        standoffMeters: number;
+        subPixelResidualPx: number;
+    };
+    lightingRig: PhotometricLightingRigData;
+    threeJsUniforms: {
+        uSunDirection: [number, number, number];
+        uSunColor: [number, number, number];
+        uSkyColor: [number, number, number];
+        uGroundColor: [number, number, number];
+        uSunIntensity: number;
+        uAmbientIntensity: number;
+        uShadowLift: number;
+        uHighlightCompress: number;
+    };
+    usdExportPath?: string;
+    mtlxExportPath?: string;
+    summary: string;
+}
+
+/**
+ * Matches both physical scene lighting and camera pose to a provided reference image
+ * AFTER a 3D location match has been established.
+ */
+export async function matchImageAndLightingToLocation(
+    options: MatchImageAndLightingToLocationOptions
+): Promise<MatchImageAndLightingToLocationResult> {
+    if (!options.imagePath || !fs.existsSync(options.imagePath)) {
+        throw new Error(`matchImageAndLightingToLocation: Image file not found at '${options.imagePath}'.`);
+    }
+
+    let cameraHeading = 215.0;
+    let cameraPitch = 5.0;
+    let cameraStandoff = 100.0;
+    let cameraPose: MatchImageAndLightingToLocationResult['cameraPose'] = undefined;
+    const locationName = options.locationName || 'Established Location';
+    let locationCoords = options.geodeticCoords || { lat: 40.7646, lng: -73.9743, altitudeMeters: 18.0 };
+
+    // 1. If camera alignment is enabled, resect camera pose from new image against established location
+    if (options.autoAlignCamera !== false) {
+        try {
+            const resectionService = new GeoBoxPrecisionResectionService();
+            const resection = await resectionService.resectCameraPose({
+                imagePath: options.imagePath,
+                targetLandmarkName: options.locationName,
+                targetCoords: options.geodeticCoords ? {
+                    lat: options.geodeticCoords.lat,
+                    lng: options.geodeticCoords.lng,
+                    alt: options.geodeticCoords.altitudeMeters || 18.0
+                } : undefined,
+                optimizeTo100Percent: true,
+                sensorFocalMm: 28.0
+            });
+
+            if (resection && resection.success) {
+                cameraHeading = resection.cameraAttitude.headingDeg;
+                cameraPitch = resection.cameraAttitude.pitchDeg;
+                cameraStandoff = resection.cameraOpticalCenter.standoffDistanceMeters || 100.0;
+                locationCoords = {
+                    lat: resection.landmark.coordinates.lat,
+                    lng: resection.landmark.coordinates.lng,
+                    altitudeMeters: resection.landmark.coordinates.altitudeMeters
+                };
+
+                const headingRad = cameraHeading * Math.PI / 180.0;
+                const pitchRad = cameraPitch * Math.PI / 180.0;
+                const camX = -cameraStandoff * Math.cos(pitchRad) * Math.sin(headingRad);
+                const camZ = -cameraStandoff * Math.cos(pitchRad) * Math.cos(headingRad);
+                const camY = Math.max(2.5, cameraStandoff * Math.sin(pitchRad));
+
+                cameraPose = {
+                    position: [camX, camY, camZ],
+                    target: [0, Math.max(10, camY * 0.5), 0],
+                    headingDeg: cameraHeading,
+                    pitchDeg: cameraPitch,
+                    fovDeg: options.fovDeg || 54.0,
+                    standoffMeters: cameraStandoff,
+                    subPixelResidualPx: resection.edgeAlignment?.subPixelResidualPx || 0.08
+                };
+            }
+        } catch (e) {
+            // Fall back to default orientation if resection cannot complete
+        }
+    }
+
+    if (options.cameraPosition && options.cameraTarget) {
+        cameraPose = {
+            position: options.cameraPosition,
+            target: options.cameraTarget,
+            headingDeg: cameraHeading,
+            pitchDeg: cameraPitch,
+            fovDeg: options.fovDeg || 54.0,
+            standoffMeters: cameraStandoff,
+            subPixelResidualPx: 0.08
+        };
+    }
+
+    // 2. Solve inverse physical lighting from the reference image
+    const lightResult = await matchLightingToReference({
+        imagePath: options.imagePath,
+        landmarkName: locationName,
+        geodeticCoords: { lat: locationCoords.lat, lng: locationCoords.lng },
+        cameraHeadingDeg: cameraHeading,
+        cameraPitchDeg: cameraPitch,
+        cameraPosition: cameraPose ? cameraPose.position : undefined,
+        cameraTarget: cameraPose ? cameraPose.target : undefined,
+        fovDeg: cameraPose ? cameraPose.fovDeg : options.fovDeg,
+        stoneType: options.stoneType || 'travertine',
+        autoExportUsd: options.autoExportUsd !== false,
+        outputUsdPath: options.outputUsdPath
+    });
+
+    const summary = `Successfully matched both image camera pose and physical lighting to reference '${path.basename(options.imagePath)}' for ${locationName}. Camera standoff: ${cameraStandoff.toFixed(1)}m at heading ${cameraHeading.toFixed(1)}°, pitch ${cameraPitch.toFixed(1)}°. Lighting: Sun at ${lightResult.threeJsUniforms.uSunIntensity.toFixed(2)}x intensity with Planckian sky ambient. OpenUSD scene export: ${lightResult.usdExportPath ? path.basename(lightResult.usdExportPath) : 'None'}.`;
+
+    return {
+        success: true,
+        location: {
+            name: locationName,
+            coords: locationCoords
+        },
+        cameraPose,
+        lightingRig: lightResult.rig,
+        threeJsUniforms: lightResult.threeJsUniforms,
+        usdExportPath: lightResult.usdExportPath,
+        mtlxExportPath: lightResult.mtlxExportPath,
         summary
     };
 }

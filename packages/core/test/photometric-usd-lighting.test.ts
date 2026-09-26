@@ -14,6 +14,7 @@ import {
     PhotometricUsdBridgeService,
     type UsdExportOptions,
     matchLightingToReference,
+    matchImageAndLightingToLocation,
     type MatchLightingReferenceOptions
 } from '../src/node/spatial/PhotometricUsdBridgeService';
 import {
@@ -217,6 +218,52 @@ describe('Photometric OpenUSD Bridge & Reference Lighting Matching Suite', () =>
             expect(res.resultPayload.success).toBe(true);
             expect(res.resultPayload.rig).toBeDefined();
             expect(res.summaryResult).toContain('Matched physical scene lighting to reference');
+        });
+    });
+
+    // -------------------------------------------------------------------------
+    // Unit 5: Match Image and Lighting to Existing Matched Location
+    // -------------------------------------------------------------------------
+    describe('5. Match Image and Lighting to Established Location', () => {
+        it('should inversely light scene and align camera from image after location match is made', async () => {
+            const testImgPath = path.join(process.cwd(), 'public/test_images/the_plaza_hotel_user_photo.jpg');
+            const result = await matchImageAndLightingToLocation({
+                imagePath: testImgPath,
+                locationName: 'The Plaza Hotel',
+                geodeticCoords: { lat: 40.7646, lng: -73.9743, altitudeMeters: 18.0 },
+                autoAlignCamera: true,
+                autoExportUsd: true
+            });
+
+            expect(result.success).toBe(true);
+            expect(result.location.name).toContain('The Plaza');
+            expect(result.lightingRig).toBeDefined();
+            expect(result.threeJsUniforms).toBeDefined();
+            expect(result.cameraPose).toBeDefined();
+            expect(result.cameraPose?.standoffMeters).toBeGreaterThan(10);
+            expect(result.usdExportPath).toBeDefined();
+            expect(fs.existsSync(result.usdExportPath!)).toBe(true);
+
+            // Clean up
+            try {
+                if (result.usdExportPath) fs.unlinkSync(result.usdExportPath);
+                if (result.mtlxExportPath) fs.unlinkSync(result.mtlxExportPath);
+            } catch (e) {}
+        });
+
+        it('should execute lighting_match_image_to_location tool handler', async () => {
+            const testImgPath = path.join(process.cwd(), 'public/test_images/the_plaza_hotel_user_photo.jpg');
+            const handler = lightingHandlers.lighting_match_image_to_location;
+            const res = await handler({
+                imagePath: testImgPath,
+                locationName: 'The Plaza Hotel',
+                geodeticCoords: { lat: 40.7646, lng: -73.9743 }
+            }, {} as any);
+
+            expect(res.resultPayload).toBeDefined();
+            expect(res.resultPayload.success).toBe(true);
+            expect(res.resultPayload.lightingRig).toBeDefined();
+            expect(res.summaryResult).toContain('Successfully matched both image camera pose and physical lighting');
         });
     });
 });

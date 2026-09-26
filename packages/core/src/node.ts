@@ -180,6 +180,12 @@ export {
     type NativeMaterialClassifyOptions
 } from './node/3d-engine/native-tile-lighting-service';
 export {
+    NativeSkyService,
+    type AtmosphereParameters,
+    type PhysicalSkyOptions,
+    type PhysicalSkyResult
+} from './node/3d-engine/native-sky-service';
+export {
     SplatService,
     SplatConversionOptions,
     SplatPipelineResult,
@@ -385,6 +391,13 @@ export type { StationImageGenerator, BeautifyStationOptions, BeautifyStationResu
 export { ColosseumObjectSeparationService, type GeocodedPlaceEntity, type GeminiVisionBoundingBox, type SeparatedSceneObject, type ColosseumSeparationResult } from './node/spatial/ColosseumObjectSeparationService';
 export { SurveySplatPipelineService } from './node/spatial/SurveySplatPipelineService';
 export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplatStationReport } from './node/spatial/SurveySplatPipelineService';
+export {
+    Location3DGaussianSplatService,
+    Location3DGSService,
+    generateLocation3DGS,
+    type Location3DGSRequest,
+    type Location3DGSResult
+} from './node/spatial/Location3DGaussianSplatService';
 export { Splat3DTilesService } from './node/spatial/Splat3DTilesService';
 export type { Splat3DTilesOptions, Splat3DTilesResult } from './node/spatial/Splat3DTilesService';
 export { NeuralMicroDepthDisplacementService } from './node/spatial/NeuralMicroDepthDisplacementService';
@@ -456,11 +469,14 @@ export {
 export {
     PhotometricUsdBridgeService,
     matchLightingToReference,
+    matchImageAndLightingToLocation,
     type UsdExportOptions,
     type UsdExportResult,
     type MaterialXExportOptions,
     type MatchLightingReferenceOptions,
     type MatchLightingReferenceResult,
+    type MatchImageAndLightingToLocationOptions,
+    type MatchImageAndLightingToLocationResult,
     type CameraUsdParameters
 } from './node/spatial/PhotometricUsdBridgeService';
 

@@ -27,6 +27,9 @@ import math
 import json
 import time
 import subprocess
+import urllib.request
+import urllib.parse
+import ssl
 
 try:
     import requests
@@ -749,12 +752,18 @@ class GeoBoxPrecisionPipeline:
         if self.api_key:
             try:
                 if hint_query:
-                    # 1. Direct Places Text Search with proximity biasing from Stage 1
+                    # 1. Direct Places Text Search (try proximity-biased first, then global fallback)
                     url_text = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={requests.utils.quote(hint_query)}&key={self.api_key}"
-                    if lat and lng:
-                        url_text += f"&location={lat},{lng}&radius=35000"
-                    resp = requests.get(url_text, timeout=8).json()
-                    candidates = resp.get("results")
+                    if lat and lng and abs(lat) > 0.01:
+                        try:
+                            url_biased = url_text + f"&location={lat},{lng}&radius=35000"
+                            resp_b = requests.get(url_biased, timeout=8).json()
+                            candidates = resp_b.get("results")
+                        except Exception:
+                            candidates = None
+                    if not candidates:
+                        resp = requests.get(url_text, timeout=8).json()
+                        candidates = resp.get("results")
 
                     # 2. If no direct candidates, try normalizing common abbreviations (e.g. esb -> Empire State Building, 5thave -> 5th Ave)
                     if not candidates:
@@ -1169,6 +1178,11 @@ class GeoBoxPrecisionPipeline:
 
         # Determine authentic 3D Tiles preview/frame asset and optimal framing for landmark
         preview_img = "/videos/frames_textured/frame_0000.jpg"
+        if query_image_path and os.path.exists(query_image_path):
+            if "public/" in query_image_path:
+                preview_img = "/" + query_image_path.split("public/")[1].replace("\\", "/")
+            else:
+                preview_img = "/uploads/" + os.path.basename(query_image_path)
         lm_str = (str(vantage_name) + " " + str(stage2_res.get("landmark_name", ""))).lower()
         is_colosseum = "colosseum" in lm_str or "rome" in lm_str or (41.88 < target_lat < 41.90 and 12.48 < target_lng < 12.51)
         if is_colosseum:
@@ -1220,7 +1234,7 @@ class GeoBoxPrecisionPipeline:
             center_target_lng = round(target_lng, 8)
 
         # Dynamically resolve best high-quality 3D model by geodetic proximity & semantics
-        matched_model_url = "/models/google_tiles_textured_area.glb"
+        matched_model_url = None
         models_dir = os.path.join(REPO_ROOT, "public/models")
         GEO_MODELS = [
             {"file": "nyc_empire_state_building_pbr_enhanced.glb", "lat": 40.74844, "lng": -73.98566, "keys": ["empire", "esb", "350 5th", "34th st"]},
@@ -1244,8 +1258,10 @@ class GeoBoxPrecisionPipeline:
 
         if best_geo_file and os.path.exists(os.path.join(models_dir, best_geo_file)):
             matched_model_url = f"/models/{best_geo_file}"
-        elif is_colosseum:
+        elif is_colosseum and os.path.exists(os.path.join(models_dir, "colosseum_rome_textured.glb")):
             matched_model_url = "/models/colosseum_rome_textured.glb"
+        else:
+            matched_model_url = None
 
         # 7. Construct Google Photorealistic 3D Map Tiles Camera Payload
         # Maps camera-position="${lat},${lng},${altitude}" and center / heading / tilt / fov
@@ -1485,6 +1501,17 @@ class GeoBoxPrecisionPipeline:
         video_meta = None
         effective_query_image = image_path
 
+        # Infer semantic filename prior if user did not provide an explicit text hint
+        import re
+        if not landmark_hint and effective_query_image:
+            base_stem = os.path.splitext(os.path.basename(effective_query_image))[0]
+            cleaned_stem = re.sub(r"[_\-]+", " ", base_stem).strip()
+            if not re.match(r"^[\d\s._-]+$", cleaned_stem) and not re.match(r"^(img|dsc|pxl|dji|photo|screenshot|media|image)[\d\s._-]*$", cleaned_stem, re.I):
+                cleaned_stem = re.sub(r"\b(user photo|sample photo|user|photo|test|image|aligned|3dtiles)\b", "", cleaned_stem, flags=re.I).strip()
+                if len(cleaned_stem) >= 3:
+                    landmark_hint = cleaned_stem
+                    print(f"  Stage 0 (Semantic Filename Prior) ➔ Inferred landmark prior: \"{landmark_hint}\"")
+
         if is_video and effective_query_image:
             print(f"\n🎬 [GeoBox Video Ingestion] Input is video file: {os.path.basename(effective_query_image)}")
             first_frame_path, extracted_keyframes, video_meta = extract_video_first_frame(effective_query_image)
@@ -1536,21 +1563,25 @@ class GeoBoxPrecisionPipeline:
         # If text-only query without input photo, download real Street View reference image if available
         if (not effective_query_image or not os.path.exists(effective_query_image)) and self.api_key and s2.get("lat") and s2.get("lng"):
             try:
+                import ssl
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
                 uploads_dir = os.path.join(REPO_ROOT, "public/uploads")
                 os.makedirs(uploads_dir, exist_ok=True)
                 ts = int(time.time() * 1000)
                 sv_filename = f"sv_text_query_{ts}.jpg"
                 sv_dest = os.path.join(uploads_dir, sv_filename)
                 sv_url = f"https://maps.googleapis.com/maps/api/streetview?size=1024x768&location={s2['lat']},{s2['lng']}&fov=65&pitch=10&key={self.api_key}"
-                req = urllib.request.Request(sv_url, headers={'User-Agent': 'GeoBox/1.0'})
-                with urllib.request.urlopen(req, timeout=6) as resp:
+                req = urllib.request.Request(sv_url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'})
+                with urllib.request.urlopen(req, context=ctx, timeout=6) as resp:
                     with open(sv_dest, "wb") as f_out:
                         f_out.write(resp.read())
                 if os.path.exists(sv_dest) and os.path.getsize(sv_dest) > 1000:
                     effective_query_image = sv_dest
-                    print(f"  Stage 3 (Street View Reference)  ➔ Downloaded authentic real-world vantage photo: {sv_filename}")
+                    print(f"  Stage 3 (Street View Reference)  ➔ Downloaded authentic real-world vantage photo: {sv_filename} ({os.path.getsize(sv_dest)} bytes)")
             except Exception as e:
-                pass
+                print(f"  Stage 3 (Street View Reference)  ➔ Warning: Street View download notice: {e}")
 
         # 4. Stage 4: DepthBox Metric & Intrinsics
         s4 = self.run_stage4_depth_and_intrinsics(effective_query_image, landmark_name=s2["landmark_name"], exif_metadata=exif_info)

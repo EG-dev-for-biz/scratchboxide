@@ -12,7 +12,8 @@ import { InverseLightingEstimatorService } from '../../spatial/InverseLightingEs
 import { ClosedLoopLightingOptimizerService } from '../../spatial/ClosedLoopLightingOptimizerService';
 import {
     PhotometricUsdBridgeService,
-    matchLightingToReference
+    matchLightingToReference,
+    matchImageAndLightingToLocation
 } from '../../spatial/PhotometricUsdBridgeService';
 import type { ToolDeclaration, ToolHandler } from './types';
 
@@ -194,6 +195,45 @@ export const LIGHTING_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['imagePath']
         }
+    },
+    {
+        name: 'lighting_match_image_to_location',
+        description: 'Matches both physical scene lighting (sun angle, Kelvin temperature, sky ambient) and 6-DOF camera pose from a provided image AFTER a 3D location match has been established.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: {
+                    type: 'STRING',
+                    description: 'Path of the provided reference photograph or plate.'
+                },
+                locationName: {
+                    type: 'STRING',
+                    description: 'Name of the matched location or landmark.'
+                },
+                geodeticCoords: {
+                    type: 'OBJECT',
+                    properties: {
+                        lat: { type: 'NUMBER' },
+                        lng: { type: 'NUMBER' },
+                        alt: { type: 'NUMBER' }
+                    },
+                    description: 'Optional geodetic coordinates of the matched location.'
+                },
+                autoAlignCamera: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to resect and align camera pose to the image (default: true).'
+                },
+                stoneType: {
+                    type: 'STRING',
+                    description: 'Material stone type (travertine, limestone, sandstone, granite, etc.).'
+                },
+                autoExportUsd: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to export matched scene to OpenUSD (.usda) and MaterialX (.mtlx).'
+                }
+            },
+            required: ['imagePath']
+        }
     }
 ];
 
@@ -330,6 +370,35 @@ export const lightingHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: result.success,
                 rig: result.rig,
+                threeJsUniforms: result.threeJsUniforms,
+                usdExportPath: result.usdExportPath,
+                mtlxExportPath: result.mtlxExportPath,
+                summary: result.summary
+            },
+            summaryResult: result.summary
+        };
+    },
+
+    lighting_match_image_to_location: async (args, _ctx) => {
+        const imagePath = asString(args.imagePath);
+        if (!imagePath) throw new Error('lighting_match_image_to_location: imagePath is required.');
+
+        const result = await matchImageAndLightingToLocation({
+            imagePath,
+            locationName: asString(args.locationName) || undefined,
+            geodeticCoords: args.geodeticCoords as any,
+            autoAlignCamera: args.autoAlignCamera !== false,
+            stoneType: asString(args.stoneType) || 'travertine',
+            autoExportUsd: args.autoExportUsd !== false,
+            outputUsdPath: asString(args.outputUsdPath) || undefined
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                location: result.location,
+                cameraPose: result.cameraPose,
+                lightingRig: result.lightingRig,
                 threeJsUniforms: result.threeJsUniforms,
                 usdExportPath: result.usdExportPath,
                 mtlxExportPath: result.mtlxExportPath,
