@@ -698,9 +698,17 @@ class GeoBoxPrecisionPipeline:
         lat = stage1_res["lat"]
         lng = stage1_res["lng"]
 
-        # Ignore hint_query if it's just a raw filename (e.g. image.jpg)
-        if hint_query and (hint_query.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".mkv")) or os.path.exists(hint_query)):
-            hint_query = None
+        # Ignore hint_query if it's just a raw filename (e.g. image.jpg) or purely numbers/camera hashes
+        import re
+        if hint_query:
+            hq_strip = hint_query.strip()
+            if (
+                hq_strip.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".mkv"))
+                or os.path.exists(hq_strip)
+                or re.match(r"^[\d\s._-]+$", hq_strip)
+                or re.match(r"^(img|dsc|pxl|dji|photo|screenshot|media|image)[\d\s._-]*$", hq_strip, re.I)
+            ):
+                hint_query = None
 
         cand_name = ""
         if stage1_res.get("candidates") and len(stage1_res["candidates"]) > 0:
@@ -732,8 +740,8 @@ class GeoBoxPrecisionPipeline:
                 else:
                     url = (
                         f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
-                        f"location={lat},{lng}&rankby=prominence&radius=10000&"
-                        f"type=tourist_attraction|point_of_interest&key={self.api_key}"
+                        f"location={lat},{lng}&rankby=prominence&radius=30000&"
+                        f"type=tourist_attraction|point_of_interest|lodging&key={self.api_key}"
                     )
 
                 resp = requests.get(url, timeout=10).json()
@@ -749,6 +757,20 @@ class GeoBoxPrecisionPipeline:
                     types = best.get("types", types)
             except Exception as e:
                 print(f"⚠️ [Stage 2] Google Places API warning: {e}")
+
+        # When hint is omitted or generic, check if the coarse neural cluster (within 35 km) matches known landmarks
+        if not hint_query:
+            for k, v in LANDMARK_METROLOGY.items():
+                if "vantage_points" in v and len(v["vantage_points"]) > 0:
+                    vp = v["vantage_points"][0]
+                    if haversine_distance(lat, lng, vp["lat"], vp["lng"]) < 35.0:
+                        resolved_lat = vp["lat"]
+                        resolved_lng = vp["lng"]
+                        landmark_name = v.get("landmark_name", k.replace("_", " ").title())
+                        formatted_address = v.get("formatted_address", "")
+                        neighborhood = v.get("neighborhood", "")
+                        city = v.get("city_state_country") or v.get("borough_city", "")
+                        break
 
         # Retrieve rich metadata from LANDMARK_METROLOGY if available
         matched_metro = None
