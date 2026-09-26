@@ -15,6 +15,8 @@ import {
     computeDiurnalLightingProfile,
     getSunVectorFromAngles
 } from '../atmosphere';
+import { LightingGafferService } from '../atmosphere/LightingGafferService';
+
 
 export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
     {
@@ -251,6 +253,68 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     center: [center.x, center.y, center.z],
                     size: [size.x, size.y, size.z]
                 }
+            };
+        }
+    },
+    {
+        name: 'sb_configure_gaffer_rig',
+        category: 'lighting_camera',
+        description: 'Configures a photographic/cinematic lighting rig (Rembrandt, Butterfly, Split, Loop, Noir, etc.) using stop ratios, CCT Kelvin, and beam modifiers.',
+        execute: (ctx, params: {
+            style?: 'rembrandt' | 'butterfly' | 'split' | 'loop' | 'three_point' | 'high_key' | 'noir';
+            keyToFillRatio?: number;
+            keyKelvin?: number;
+            fillKelvin?: number;
+            rimKelvin?: number;
+            goboCookie?: 'venetian_blinds' | 'window_mullions' | 'tree_canopy';
+            penumbraSoftness?: number;
+            targetObjectId?: string;
+            subjectPosition?: [number, number, number];
+            distanceScale?: number;
+        }) => {
+            const scene = ctx.getSceneData();
+            if (!scene.environment) scene.environment = {};
+
+            let subPos: [number, number, number] = params.subjectPosition || [0, 1.0, 0];
+            if (params.targetObjectId) {
+                const found = ctx.findObject(params.targetObjectId);
+                if (found && found.object.position) {
+                    subPos = [found.object.position[0], found.object.position[1], found.object.position[2]];
+                }
+            }
+
+            const style = params.style || 'rembrandt';
+            const rig = LightingGafferService.buildGafferRig(style, {
+                keyToFillRatio: params.keyToFillRatio,
+                keyKelvin: params.keyKelvin,
+                fillKelvin: params.fillKelvin,
+                rimKelvin: params.rimKelvin,
+                subjectPosition: subPos,
+                goboCookie: params.goboCookie,
+                penumbraSoftness: params.penumbraSoftness,
+                distanceScale: params.distanceScale
+            });
+
+            (scene.environment as any).photometricRig = rig;
+            (scene.environment as any).lightingPreset = `gaffer_${style}`;
+
+            return {
+                success: true,
+                rigId: rig.rigId,
+                style: rig.style,
+                keyToFillRatio: rig.keyToFillRatio,
+                keyToFillStops: rig.keyToFillStops,
+                lightCount: rig.lights.length,
+                lights: rig.lights.map(l => ({
+                    id: l.id,
+                    role: l.role,
+                    type: l.type,
+                    cctKelvin: l.cctKelvin,
+                    position: l.position,
+                    stopsDelta: l.exposureStopsDelta,
+                    castShadow: l.castShadow,
+                    goboCookie: l.goboCookieTexture
+                }))
             };
         }
     }

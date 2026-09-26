@@ -20,6 +20,8 @@ export * from './nano-banana-tools';
 export * from './algorithmic-uv-tools';
 export * from './adaptive-matchmove-tools';
 export * from './botanical-tree-tools';
+export * from './lighting-tools';
+
 
 import type { ToolDeclaration, ToolHandler } from './types';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
@@ -66,6 +68,10 @@ import {
     BOTANICAL_TREE_TOOL_DECLARATIONS,
     botanicalTreeHandlers
 } from './botanical-tree-tools';
+import {
+    LIGHTING_TOOL_DECLARATIONS,
+    lightingHandlers
+} from './lighting-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -79,6 +85,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...NANO_BANANA_TOOL_DECLARATIONS,
     ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
     ...ATMOSPHERE_TOOL_DECLARATIONS,
+    ...LIGHTING_TOOL_DECLARATIONS,
     ...MESH_SHAPING_TOOL_DECLARATIONS,
     ...WEBXR_GEOSPATIAL_TOOL_DECLARATIONS,
     ...GEOBOX_PRECISION_TOOL_DECLARATIONS,
@@ -103,6 +110,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...nanoBananaHandlers,
     ...algorithmicUvHandlers,
     ...atmosphereHandlers,
+    ...lightingHandlers,
     ...meshShapingHandlers,
     ...webxrGeospatialHandlers,
     ...geoboxPrecisionHandlers,
@@ -116,5 +124,6 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...browserHandlers,
     ...botanicalTreeHandlers
 };
+
 
 

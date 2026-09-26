@@ -399,7 +399,7 @@ export function buildToolDeclarations(
         request.mode === 'plan' ||
         request.mode === 'ask' ||
         !!request.agent ||
-        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|comfy|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
+        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*match|grade\s*match|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|comfy|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
     );
 
     const isComfyUiNeeded = request.enableComfyUiTools !== false && (

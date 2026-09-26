@@ -290,6 +290,17 @@ export {
     type LocalCielabOptions
 } from './node/image/ImageColorTransferService';
 
+// Professional Autonomous Color Grading & Matching Engine (ProColorGradeMatchingService)
+export {
+    ProColorGradeMatchingService,
+    type PrimaryColorWheels,
+    type PrimaryWheelChannel,
+    type ColorGradeMatchOptions,
+    type ColorGradeMatchResult,
+    type ColoristScopesData,
+    type SecondaryIsolationOptions
+} from './node/image/ProColorGradeMatchingService';
+
 // Google 360 Panorama Pipeline Service (Seam Healing & Inpainting)
 export {
     Google360PanoramaPipelineService,
@@ -432,6 +443,28 @@ export {
     type LineSegment2D,
     type CameraTiltClassification
 } from './node/spatial/VanishingPointHorizonEstimator';
+export {
+    InverseLightingEstimatorService,
+    type InverseLightingOptions,
+    type InverseLightingResult
+} from './node/spatial/InverseLightingEstimatorService';
+export {
+    ClosedLoopLightingOptimizerService,
+    type ClosedLoopOptimizationOptions,
+    type ClosedLoopLightingOptimizationResult
+} from './node/spatial/ClosedLoopLightingOptimizerService';
+export {
+    PhotometricUsdBridgeService,
+    matchLightingToReference,
+    type UsdExportOptions,
+    type UsdExportResult,
+    type MaterialXExportOptions,
+    type MatchLightingReferenceOptions,
+    type MatchLightingReferenceResult,
+    type CameraUsdParameters
+} from './node/spatial/PhotometricUsdBridgeService';
+
+
 export {
     LandmarkBearingGatedMatcher,
     type ViewingQuadrantBounds,

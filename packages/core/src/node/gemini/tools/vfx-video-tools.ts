@@ -654,6 +654,48 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
+        name: 'pro_color_match_imagery',
+        description: 'Autonomous Hollywood-grade color grading and matching between source and reference imagery. Analytically solves 3-way Primary Color Wheels (Lift, Gamma, Gain, Offset), Bradford chromatic white balance, vectorscope skin tone protection (~130 deg), standard 3D LUT (.cube) generation, and optical scopes telemetry (Waveform, RGB Parade, Vectorscope, and CIEDE2000 Delta E).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                sourceImagePath: {
+                    type: 'STRING',
+                    description: 'Path or data URI of the source image to be graded'
+                },
+                referenceImagePath: {
+                    type: 'STRING',
+                    description: 'Path or data URI of the reference image containing target color mood and lighting'
+                },
+                outputPath: {
+                    type: 'STRING',
+                    description: 'Optional path to write the color-matched image'
+                },
+                outputLutPath: {
+                    type: 'STRING',
+                    description: 'Optional path to export an industry-standard 3D LUT (.cube) file'
+                },
+                generate3DLut: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to synthesize a 3D LUT (.cube) (default true)'
+                },
+                lutSize: {
+                    type: 'NUMBER',
+                    description: '3D LUT grid size (17, 33, or 65, default 17)'
+                },
+                preserveSkinTones: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to protect natural human skin tones along the vectorscope I-axis (default true)'
+                },
+                contrastCurve: {
+                    type: 'STRING',
+                    description: 'Contrast curve profile: "natural", "cinematic", "high-contrast", "muted"'
+                }
+            },
+            required: ['sourceImagePath', 'referenceImagePath']
+        }
+    },
+    {
         name: 'vfx_ffmpeg_chromakey',
         description: 'Execute green or blue screen chroma keying with despill color suppression and optional background plate compositing.',
         parameters: {
@@ -1058,6 +1100,40 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
             summaryResult: dryRun
                 ? `Planned 3D LUT grade for ${outputPath} (dry run).`
                 : `Applied 3D LUT grade to ${outputPath} (${result.outputSizeBytes || 0} bytes).`
+        };
+    },
+
+    pro_color_match_imagery: async (args, _ctx) => {
+        const sourceImagePath = asString(args.sourceImagePath);
+        const referenceImagePath = asString(args.referenceImagePath);
+        if (!sourceImagePath || !referenceImagePath) {
+            throw new Error('pro_color_match_imagery: "sourceImagePath" and "referenceImagePath" are required.');
+        }
+
+        const outputPath = asString(args.outputPath) || undefined;
+        const outputLutPath = asString(args.outputLutPath) || undefined;
+        const generate3DLut = args.generate3DLut !== undefined ? asBoolean(args.generate3DLut) : true;
+        const lutSize = asNumber(args.lutSize) || 17;
+        const preserveSkinTones = args.preserveSkinTones !== undefined ? asBoolean(args.preserveSkinTones) : true;
+        const contrastCurve = (args.contrastCurve as 'natural' | 'cinematic' | 'high-contrast' | 'muted') || undefined;
+
+        const { ProColorGradeMatchingService } = await import('../../image/ProColorGradeMatchingService');
+        const result = await ProColorGradeMatchingService.matchImages(
+            sourceImagePath,
+            referenceImagePath,
+            {
+                outputPath,
+                outputLutPath,
+                generate3DLut,
+                lutSize,
+                preserveSkinTones,
+                contrastCurve
+            }
+        );
+
+        return {
+            resultPayload: result,
+            summaryResult: `Hollywood-grade color match complete in ${result.telemetry.executionTimeMs}ms. Perceptual Delta E reduced by ${result.telemetry.deltaEReductionPercent}% (initial: ${result.telemetry.initialDeltaE00} -> final: ${result.telemetry.finalDeltaE00}). Lift=[${result.wheels.lift.r.toFixed(3)}, ${result.wheels.lift.g.toFixed(3)}, ${result.wheels.lift.b.toFixed(3)}], Gain=[${result.wheels.gain.r.toFixed(3)}, ${result.wheels.gain.g.toFixed(3)}, ${result.wheels.gain.b.toFixed(3)}].${result.lutPath ? ` Generated 3D LUT: ${result.lutPath}` : ''}`
         };
     },
 

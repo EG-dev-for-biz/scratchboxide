@@ -412,23 +412,26 @@ export class TaskCapabilityResolver {
                     serviceOrTool: 'GeoBoxPrecisionResectionService / SpatialPoseEstimatorService (spatial_solve_pnp / geobox_resect_image_location)',
                     details: 'Invoke spatial_solve_pnp, spatial_match_features_2d_3d, or geobox_resect_image_location to resect photo vantage point and lock camera pose.'
                 };
-            } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting.*3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)/i.test(lower)) {
+            } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting.*3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)|gaffer|rembrandt|butterfly|film\s*noir|cinematic\s*light|photographic\s*light|key-?to-?fill|inverse\s*light/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
+                nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & sb_configure_gaffer_rig)');
+                nativeCapabilities.push('Inverse Photometric Image Estimator (InverseLightingEstimatorService)');
+                nativeCapabilities.push('Closed-Loop Photometric Matchmove Optimizer (ClosedLoopLightingOptimizerService)');
                 nativeCapabilities.push('Atmosphere Service (AtmosphereService & AtmosphereImageEstimationService)');
                 nativeCapabilities.push('Location 3D Object Lighting & Photogrammetric De-lighting (LocationObjectLightingService & harmonizeLocationObjectAtmosphere)');
                 nativeCapabilities.push('Architectural Portal Window Backlighting (2,850K incandescent ambulatory fixtures)');
-                nativeCapabilities.push('Inverse Photometric & Ephemeris Image Matching (AtmosphereImageEstimationService.estimateFromImage)');
                 nativeCapabilities.push('Atmospheric Rayleigh & Mie Scattering Dome (AtmosphericSkyDome)');
                 nativeCapabilities.push('Diurnal Solar Ephemeris & Planckian Kelvin Radiometry (1,000K - 40,000K)');
                 nativeCapabilities.push('Aerial Perspective Koschmieder Extinction & Volumetric God Rays');
-                nativeCapabilities.push('geobox_harmonize_location_lighting & atmosphere_* Gemini Agent Tools');
-                rationale = 'Native AtmosphereService, LocationObjectLightingService, and AtmosphereImageEstimationService estimate, de-light, and synthesize physically grounded atmospheric scattering, Planckian kelvin lighting, solar vectors, and architectural portal illumination directly matching input photographs and real-world 3D objects.';
+                nativeCapabilities.push('Agent Tools (lighting_estimate_from_photo, lighting_configure_gaffer_rig, lighting_optimize_closed_loop, geobox_harmonize_location_lighting)');
+                rationale = 'Native LightingGafferService, InverseLightingEstimatorService, and ClosedLoopLightingOptimizerService provide photographic gaffer reasoning (Rembrandt, Split, Butterfly), beam modifiers, inverse photo estimation, and closed-loop lighting alignment directly in Tier 1.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
-                    serviceOrTool: 'LocationObjectLightingService & geobox_harmonize_location_lighting tool',
-                    details: 'Call geobox_harmonize_location_lighting or LocationObjectLightingService.harmonizeLocationObjectAtmosphere, then apply delight shader uniforms and scene lights.'
+                    serviceOrTool: 'LocationObjectLightingService & geobox_harmonize_location_lighting / LightingGafferService / lighting_* tools',
+                    details: 'Invoke lighting_estimate_from_photo or lighting_configure_gaffer_rig, or run lighting_optimize_closed_loop to achieve >=95% photometric correlation.'
                 };
+
             } else if (/360\s*panorama|4k\s*panorama|monumental\s*panorama|equirectangular|seam\s*heal|nadir\s*inpaint|zenith|polar\s*pinch|panorama_heal_seam|panorama_reproject_zenith|panorama_generate_4k/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
@@ -495,6 +498,20 @@ export class TaskCapabilityResolver {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'recolor3DTilesGlb or google_3d_tiles_recolor_glb tool',
                     details: 'Call recolor3DTilesGlb / google_3d_tiles_recolor_glb to re-grade the 3D tile GLB texture atlas and synthesize PBR maps.'
+                };
+            } else if (/color\s*match|grade\s*match|match\s*color|colorist|lift.*gamma.*gain|primary\s*wheels|3d\s*lut.*match/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'code-first';
+                nativeCapabilities.push('Hollywood-Grade Color Matching & Grading Engine (ProColorGradeMatchingService)');
+                nativeCapabilities.push('Three-Way Primary Color Wheels Inversion (Lift, Gamma, Gain, Offset)');
+                nativeCapabilities.push('Bradford Chromatic Adaptation (CAT02) & Vectorscope Skin Tone Line Protection');
+                nativeCapabilities.push('Industry-Standard 3D LUT (.cube) Synthesis & Optical Scopes Metrology (Waveform, RGB Parade, Vectorscope, CIEDE2000)');
+                nativeCapabilities.push('pro_color_match_imagery Agent Tool');
+                rationale = 'Native ProColorGradeMatchingService analytically matches color grading between imagery using three-way primary color wheels, Bradford white balance, vectorscope skin tone protection, and generates industry-standard 3D LUTs (.cube) with full CIEDE2000 metrology.';
+                suggestedNativeAction = {
+                    primitiveType: 'live-code-sandbox',
+                    serviceOrTool: 'ProColorGradeMatchingService & pro_color_match_imagery tool',
+                    details: 'Invoke pro_color_match_imagery or ProColorGradeMatchingService.matchImages to match grading and export 3D LUTs.'
                 };
             } else if (/color\s*transfer|extract.*(?:and\s+)?apply.*color|palette\s*(?:transfer|override)|nano\s*banana.*color/i.test(lower)) {
                 canSolveNatively = true;

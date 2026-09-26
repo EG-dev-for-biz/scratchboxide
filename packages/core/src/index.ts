@@ -34,7 +34,17 @@ export * from './browser';
 export * from './common';
 
 
-// Atmosphere & Location 3D Object Lighting
+// Professional Autonomous Color Grading & Matching Engine (ProColorGradeMatchingService)
+export {
+    ProColorGradeMatchingService,
+    type PrimaryColorWheels,
+    type PrimaryWheelChannel,
+    type ColorGradeMatchOptions,
+    type ColorGradeMatchResult,
+    type ColoristScopesData,
+    type SecondaryIsolationOptions
+} from './node/image/ProColorGradeMatchingService';
+
 export {
     LocationObjectLightingService,
     harmonizeLocationObjectAtmosphere
