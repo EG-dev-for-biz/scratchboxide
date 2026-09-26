@@ -458,19 +458,24 @@ export function createArchitecturalStationGenerator(options?: {
             const isEsb = args.prompt.includes('Empire State');
             const isColosseum = args.prompt.includes('Colosseum') || args.prompt.includes('Rome');
             const isGap = args.prompt.includes('Grand Army') || args.prompt.includes('Plaza');
+            const isRedRocks = args.prompt.includes('Red Rocks') || args.prompt.includes('Amphitheatre') || args.prompt.includes('Morrison') || args.prompt.includes('Sandstone');
 
             // Atmospheric sky gradient (zenith to horizon)
-            const skyZenith: [number, number, number] = isColosseum ? [65, 130, 210] : [55, 115, 195];
-            const skyHorizon: [number, number, number] = isColosseum ? [200, 220, 240] : [185, 210, 235];
+            const skyZenith: [number, number, number] = isRedRocks ? [28, 38, 75] : isColosseum ? [65, 130, 210] : [55, 115, 195];
+            const skyHorizon: [number, number, number] = isRedRocks ? [215, 120, 60] : isColosseum ? [200, 220, 240] : [185, 210, 235];
 
             // Material albedos
-            const stoneAlbedo: [number, number, number] = options?.stoneAlbedo ?? (isColosseum
+            const stoneAlbedo: [number, number, number] = options?.stoneAlbedo ?? (isRedRocks
+                ? [184, 82, 52]   // Colorado Fountain Formation Red Sandstone (#b85234)
+                : isColosseum
                 ? [223, 213, 196] // Roman Travertine (#dfd5c4)
                 : isEsb
                 ? [215, 208, 195] // Indiana Limestone (#d7d0c3)
                 : [225, 222, 215]); // Beaux-Arts White Granite/Marble
 
-            const groundAlbedo: [number, number, number] = options?.groundAlbedo ?? (isColosseum
+            const groundAlbedo: [number, number, number] = options?.groundAlbedo ?? (isRedRocks
+                ? [56, 48, 44]   // Red Rocks acoustic bowl & stage deck slate/paving
+                : isColosseum
                 ? [175, 165, 148] // Roman gravel & stone
                 : isEsb
                 ? [52, 54, 58]   // Manhattan asphalt street
@@ -555,10 +560,23 @@ export function createArchitecturalStationGenerator(options?: {
                         if (y > height * 0.88) {
                             baseR = groundAlbedo[0]; baseG = groundAlbedo[1]; baseB = groundAlbedo[2];
                         }
+                    } else if (isRedRocks) {
+                        // Deep crevice ambient occlusion in sandstone canyon clefts
+                        if (lightFactor < 0.55) {
+                            baseR = Math.round(baseR * 0.45 + 24);
+                            baseG = Math.round(baseG * 0.35 + 12);
+                            baseB = Math.round(baseB * 0.35 + 10);
+                        }
+                        // Acoustic amphitheatre seating & stage apron
+                        if (y > height * 0.86) {
+                            baseR = groundAlbedo[0]; baseG = groundAlbedo[1]; baseB = groundAlbedo[2];
+                        }
                     }
 
-                    // Subtle micro-surface travertine grain and pore noise
-                    const grain = ((x * 13 + y * 37) % 19) / 19.0 - 0.5;
+                    // Subtle micro-surface stone grain and sedimentary strata noise
+                    const grain = isRedRocks
+                        ? (((x * 7 + y * 23) % 17) / 17.0 - 0.5) + Math.sin(y * 0.08 + x * 0.02) * 0.12
+                        : (((x * 13 + y * 37) % 19) / 19.0 - 0.5);
                     const grainFactor = 1.0 + grain * 0.08;
 
                     out[idx] = Math.min(255, Math.max(0, Math.round(baseR * lightFactor * grainFactor)));

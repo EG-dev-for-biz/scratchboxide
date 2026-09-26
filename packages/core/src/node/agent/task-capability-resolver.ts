@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import type { ComfyPipelineCategory } from '../../common/comfyui-protocol';
+import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 
 export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general';
 
@@ -18,6 +19,7 @@ export type PrimaryNativeEngine =
     | 'adaptive-matchmove-calibration'
     | 'google-models'
     | 'workspace-coding'
+    | 'code-first'
     | 'skills'
     | 'none';
 
@@ -68,6 +70,9 @@ export interface CapabilityResolutionResult {
     recommendedResolutionRoute: 'tier1-native' | 'tier2-comfyui';
     /** Convenience alias for recommendedResolutionRoute matching TwoTierExecutionResult */
     tier?: 'tier1-native' | 'tier2-comfyui';
+    canSolveNatively?: boolean;
+    nativeCapabilities?: string[];
+    suggestedNativeAction?: Tier1Assessment['suggestedNativeAction'];
     /** Convenience alias for tier1Assessment.rationale */
     rationale?: string;
     /** Convenience alias for recommended native tool */
@@ -109,7 +114,7 @@ export class TaskCapabilityResolver {
 
         // 3D & XR
         if (
-            /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas/i.test(lower)
+            /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field/i.test(lower)
         ) {
             return '3d';
         }
@@ -182,10 +187,34 @@ export class TaskCapabilityResolver {
 
         const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral.*(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist).*(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image).*(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
 
+        const hasSplatKeyword = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(lower);
+        const isLocationSplat = hasSplatKeyword && (
+            !!detectRealWorldLocationIntent(goal)?.isRealWorld ||
+            /(?:location|landmark|beautif|nano\s*banana|restyle|survey|colosseum|empire|plaza|pantheon|rome|manhattan|esb|eiffel|sydney|taj\s*mahal|central\s*park|times\s*square|acropolis|notre\s*dame|big\s*ben|paris|london|tokyo)/i.test(lower) ||
+            /(?:of|for|at|around|in)\s+[a-z0-9]/i.test(lower)
+        );
+
         if (isWan4DAnyoneDiffusionExecution) {
             canSolveNatively = false;
             primaryNativeEngine = 'none';
             rationale = 'Multi-view 360-degree video capture using the 4DAnyone / Wan2.2-TI2V-5B video diffusion backbone requires heavy multi-camera video generation with Reference Context Packing (RCP) and Target Context Routing (TCR), requiring GPU ComfyUI / Cloud Run acceleration.';
+        } else if (isLocationSplat) {
+            canSolveNatively = true;
+            primaryNativeEngine = 'cpp-3d-engine';
+            nativeCapabilities.push('Closed-Loop Survey-to-Splat Reconstruction Pipeline (SurveySplatPipelineService)');
+            nativeCapabilities.push('Google 3D Tiles Grounded Mesh Ingestion & Camera Station Synthesis (SurveySynthesisEngine)');
+            nativeCapabilities.push('AI Beautify Location Pipeline & Nano Banana Multi-View Restyling (BeautifyStationService)');
+            nativeCapabilities.push('Native C++20 Depth-to-Gaussian Unprojection & Spatial Voxel-Hash Fusion (station_to_splats.cpp)');
+            nativeCapabilities.push('OGC 3D Tiles 1.1 Packaging (KHR_gaussian_splatting & Niantic SPZ v2)');
+            nativeCapabilities.push('PhotorealGaussianSplatMesh Interactive Viewport Rendering (2D EWA Screen-Space Covariance)');
+            nativeCapabilities.push('Location 3D Gaussian Splatting Service (Location3DGaussianSplatService / Location3DGSService)');
+            nativeCapabilities.push('In-App Agent Tools: location_generate_3dgs, survey_beautify_to_splats, splat_to_3dtiles, panorama_to_3dgs');
+            rationale = 'Native Closed-Loop Survey-to-Splat Reconstruction Pipeline automatically assumes and executes our Nano Banana multi-view restyling pipeline without requiring the user to invoke or mention Nano Banana explicitly: renders pose-exact blockouts from Google 3D Tiles, restyles camera viewpoints using Nano Banana / Gemini image models with sub-pixel edge QC and chained forward-warp consistency, unprojects them onto metric depth using C++20 station_to_splats, and streams photorealistic Gaussian splats directly into the 3D viewport.';
+            suggestedNativeAction = {
+                primitiveType: '3d-scene',
+                serviceOrTool: 'location_generate_3dgs or Location3DGaussianSplatService',
+                details: 'Invoke location_generate_3dgs or generateLocation3DGS to autonomously synthesize a high-fidelity 3D Gaussian Splatting scene of the location and mount it into the 3D viewport.'
+            };
         } else if (isFrameMotivatedPerformerPrompt) {
             canSolveNatively = true;
             primaryNativeEngine = 'google-models';
@@ -650,6 +679,9 @@ export class TaskCapabilityResolver {
         return {
             taskGoal: goal,
             taskDomain: domain,
+            canSolveNatively,
+            nativeCapabilities,
+            suggestedNativeAction,
             tier1Assessment: {
                 canSolveNatively,
                 primaryNativeEngine,

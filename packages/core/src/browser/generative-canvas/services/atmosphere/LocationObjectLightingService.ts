@@ -427,8 +427,10 @@ export class LocationObjectLightingService {
     ): void {
         const u = {
             uDelightEnabled: { value: config?.uDelightEnabled !== false ? 1.0 : 0.0 },
-            uRealDelightEnabled: { value: config?.uRealDelightEnabled ? 1.0 : 0.0 },
+            // Default to physical C++ de-lighting model (TextureDeLighter / Cycles Diffuse Split)
+            uRealDelightEnabled: { value: config?.uRealDelightEnabled !== false ? 1.0 : 0.0 },
             uMeshShading: { value: config?.uMeshShading ?? 1.0 },
+            // Legacy heuristic GLSL fallbacks (deprecated in favor of C++20 NativeTileLightingService)
             uShadowLift: { value: config?.uShadowLift ?? 0.60 },
             uHighlightCompress: { value: config?.uHighlightCompress ?? 0.45 },
             uStoneAlbedoTint: {

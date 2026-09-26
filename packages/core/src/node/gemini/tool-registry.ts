@@ -100,6 +100,8 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         mcpName: 'Scratchbox Workspace',
         humanTitle: name => {
             if (name === 'mount_canvas_primitive') return 'Mount Canvas Primitive';
+            if (name === 'location_generate_3dgs') return 'Location 3DGS: Synthesize Radiance Field';
+            if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR Synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Atmospheric Simulation: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
@@ -114,6 +116,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         },
         cardTitle: (name, _status) => {
             if (name === 'mount_canvas_primitive') return 'Canvas: Mount Primitive';
+            if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Atmosphere: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
@@ -128,6 +131,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         },
         stepTitle: name => {
             if (name === 'mount_canvas_primitive') return 'Mount canvas primitive on stage';
+            if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('atmosphere_')) return `Simulate atmospheric lighting: ${name.replace('atmosphere_', '').replace(/_/g, ' ')}`;
@@ -208,6 +212,7 @@ export function inferToolGroup(name: string): ToolGroup {
         name === 'mount_canvas_primitive' ||
         name.startsWith('workspace_') ||
         name.startsWith('google_3d_tiles_') ||
+        name.startsWith('location_') ||
         name === 'splat_to_3dtiles' ||
         name.startsWith('survey_') ||
         name.startsWith('utdra_') ||

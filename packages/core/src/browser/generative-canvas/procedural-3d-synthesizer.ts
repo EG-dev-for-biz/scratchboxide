@@ -10,7 +10,8 @@
 import {
     CanvasArtifact,
     MarkdownDocumentData,
-    Scene3DData
+    Scene3DData,
+    Media4DObject
 } from './canvas-types';
 import {
     classifyDomain,
@@ -104,6 +105,7 @@ export type Procedural3DTheme =
     | 'nature_atmosphere'
     | 'glass_shatter'
     | 'geospatial'
+    | 'gaussian_splat'
     | 'general';
 
 /**
@@ -115,6 +117,11 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
 
     // Check prompt first for direct user intent, then fall back to surrounding context
     for (const text of [promptLower, combined]) {
+        // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields
+        if (/\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)\b/i.test(text)) {
+            return 'gaussian_splat';
+        }
+
         // -0.96. High-Speed Ballistics, Voronoi Glass Fracture & Supersonic Impact
         if (/\b(?:bullet|bully\s*going\s*through|plate\s*of\s*glass|glass\s*shatter|shatter(?:ed|ing)?|fracture|glass\s*shards?|high\s*speed\s*impact|projectile|ballistics?|penetrat(?:e|ion)|shattering\s*glass)\b/i.test(text)) {
             return 'glass_shatter';
@@ -2010,8 +2017,123 @@ function _synthesizeRawContextual3DSceneInner(
     // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
+    const isSplatRequested = theme === 'gaussian_splat' || /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(prompt);
     const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
     if (realWorldLoc && realWorldLoc.isRealWorld) {
+        if (isSplatRequested) {
+            const locName = realWorldLoc.landmarkName || realWorldLoc.query;
+            const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const locKey = locName.toLowerCase();
+
+            // Calibrated location splat URLs
+            let splatUrl = `/models/${sanitizedName}_splat.splat`;
+            let splatTilesetUrl = `/tilesets/${sanitizedName}/tileset.json`;
+
+            if (locKey.includes('colosseum') || locKey.includes('rome')) {
+                splatUrl = '/models/colosseum_splat.splat';
+                splatTilesetUrl = '/tilesets/colosseum/tileset.json';
+            } else if (locKey.includes('empire state') || locKey.includes('esb') || locKey.includes('manhattan')) {
+                splatUrl = '/models/esb_calibrated_3dgs_400k.splat';
+                splatTilesetUrl = '/tilesets/esb/tileset.json';
+            } else if (locKey.includes('grand army') || locKey.includes('plaza')) {
+                splatUrl = '/models/gap_splat.splat';
+                splatTilesetUrl = '/tilesets/gap/tileset.json';
+            } else if (locKey.includes('pantheon')) {
+                splatUrl = '/models/pantheon_atrium_360.spz';
+                splatTilesetUrl = '/tilesets/pantheon/tileset.json';
+            }
+
+            const splatMediaObject: Media4DObject = {
+                id: `${sanitizedName}-3dgs`,
+                content: {
+                    type: 'gaussian-splat',
+                    durableUri: splatUrl,
+                    mimeType: splatUrl.endsWith('.spz') ? 'application/x-spz' : 'application/octet-stream',
+                    metadata: {
+                        dims: { width: 120, height: 120, depth: 120 }
+                    }
+                },
+                space: {
+                    spatial3d: { x: 0, y: 0, z: 0 },
+                    geoAnchor: {
+                        lat: realWorldLoc.lat,
+                        lng: realWorldLoc.lng,
+                        alt: realWorldLoc.elevation || 0,
+                        heading: 0,
+                        pitch: 0
+                    }
+                },
+                lineage: {
+                    version: 1,
+                    generation: {
+                        model: 'nano-banana-survey-3dgs',
+                        prompt: prompt,
+                        params: { pipeline: 'SurveySplatPipelineService', restyleModel: 'nano-banana-2' }
+                    },
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            const sceneTitle = `${locName} — 3D Gaussian Splat`;
+            return {
+                title: sceneTitle,
+                subtitle: `Photorealistic 3DGS radiance field at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
+                worldBranch: `splat-world/${sanitizedName}`,
+                sceneType: 'gaussian_splat',
+                renderMode: 'pbr',
+                cameraMode: 'orbit',
+                animation: 'orbit',
+                splatUrl,
+                splatTilesetUrl,
+                splatOptions: {
+                    splatScale: 1.0,
+                    contactShadow: true,
+                    enableSoftZ: true
+                },
+                timeline: {
+                    currentTimeMs: 0,
+                    durationMs: 20000,
+                    isPlaying: true,
+                    speed: 1.0,
+                    playbackSpeed: 1.0,
+                    isLooping: true
+                },
+                camera: {
+                    position: [0, 20, 45],
+                    target: [0, 2, 0],
+                    fov: 45
+                },
+                environment: {
+                    skybox: 'golden_hour',
+                    lighting: 'golden_hour',
+                    ground: false
+                },
+                geoAnchor: {
+                    lat: realWorldLoc.lat,
+                    lng: realWorldLoc.lng,
+                    elevation: realWorldLoc.elevation,
+                    active: true,
+                    landmarkName: locName
+                },
+                customMeshes: [],
+                objects: [splatMediaObject],
+                features: {
+                    ...baseFeatures,
+                    ...(hasAtmosphere ? {
+                        atmosphericScattering: buildHeadlessAtmosphere({
+                            sunElevation: 28,
+                            sunAzimuth: 145,
+                            latitude: realWorldLoc.lat,
+                            longitude: realWorldLoc.lng,
+                            aerialPerspectiveEnabled: true,
+                            inscatteringIntensity: 1.0,
+                            aerialPerspectiveRange: 250.0
+                        })
+                    } : {})
+                }
+            };
+        }
+
         // Extract clay preset preference if specified
         let clayPreset: ClayPresetId = 'warm-clay';
         if (/alabaster|white\s*clay|plaster/i.test(prompt)) clayPreset = 'alabaster';

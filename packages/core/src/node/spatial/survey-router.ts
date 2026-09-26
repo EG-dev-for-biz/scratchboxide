@@ -14,6 +14,8 @@ import type { ColmapCameraPose, GeodeticAnchor, SurveyPatternConfig } from '../.
 import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
+import { Google3DTileService } from '../../browser/generative-canvas/services/Google3DTileService';
+import { extractLocationAndEraFromContext } from '../../browser/generative-canvas/services/location-beautify-service';
 
 /**
  * Framework-agnostic handlers for the Survey Synthesis API, mounted by the desktop server at
@@ -218,22 +220,74 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
         };
     }
 
-    const glb = args?.glbPath || 'public/models/survey_box_ground.glb';
-    const anchor = args?.anchor || { lat: 0, lng: 0, elevationMeters: 0, headingDeg: 0, formattedAddress: 'Survey Target' };
+    // Dynamic resolution for any real-world location (e.g. Sydney Opera House, Eiffel Tower, Taj Mahal, Pantheon, or coordinates)
+    const rawLoc = args?.location || args?.activeModel || '';
+    const resolvedGeo = Google3DTileService.getInstance().resolveLocationSync(
+        args?.anchor
+            ? args.anchor
+            : (args?.lat !== undefined && args?.lng !== undefined
+                ? { lat: args.lat, lng: args.lng, elevation: args.elevationMeters }
+                : (rawLoc || 'Survey Target'))
+    );
+
+    const anchor: GeodeticAnchor = args?.anchor || {
+        lat: resolvedGeo.lat,
+        lng: resolvedGeo.lng,
+        elevationMeters: resolvedGeo.elevation,
+        headingDeg: args?.headingDeg || 0,
+        formattedAddress: resolvedGeo.formattedAddress || resolvedGeo.landmarkName || rawLoc || 'Survey Target'
+    };
+
+    const locName = rawLoc || resolvedGeo.landmarkName || 'Survey Target';
+    const sanitizedName = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+    const cand1 = path.resolve(workspaceRoot, `public/models/${sanitizedName}_grounded.glb`);
+    const cand2 = path.resolve(workspaceRoot, `public/models/${sanitizedName}_clay.glb`);
+    const cand3 = path.resolve(workspaceRoot, `public/models/${sanitizedName}.glb`);
+    const defaultBox = path.resolve(workspaceRoot, 'public/models/survey_box_ground.glb');
+
+    const glb = args?.glbPath || (fs.existsSync(cand1)
+        ? `public/models/${sanitizedName}_grounded.glb`
+        : (fs.existsSync(cand2)
+            ? `public/models/${sanitizedName}_clay.glb`
+            : (fs.existsSync(cand3)
+                ? `public/models/${sanitizedName}.glb`
+                : (fs.existsSync(defaultBox) ? 'public/models/survey_box_ground.glb' : `public/models/${sanitizedName}_clay.glb`))));
+
+    const extractedEra = extractLocationAndEraFromContext(locName);
+    const radius = args?.cropRadius ?? 75.0;
+
     const stations = args?.stations && args.stations.length ? args.stations : engine.synthesize(anchor, {
         type: 'orbital-multi-tier',
-        cameraCount: args?.cameraCount || 12,
-        targetRadiusMeters: 25,
-        altitudeTiersMeters: [2, 10, 20]
+        cameraCount: args?.cameraCount || 16,
+        targetRadiusMeters: radius,
+        altitudeTiersMeters: [
+            anchor.elevationMeters + 4.0,
+            anchor.elevationMeters + 20.0,
+            anchor.elevationMeters + 45.0
+        ],
+        lookAtOffsetLocalENU: [0, 15, 0]
     });
+
     return {
         glbPath: glb,
-        outDir: args?.outDir || `public/tilesets/survey_${Date.now()}`,
+        outDir: args?.outDir || `public/tilesets/${sanitizedName}`,
         anchor,
         stations,
-        beautify: { locationName: args?.locationName || 'Survey Target', ...(args?.beautify || {}) },
-        sigmaScale: args?.sigmaScale ?? 1.0,
-        voxelSizeMeters: args?.voxelSizeMeters ?? 0.2
+        beautify: {
+            locationName: locName,
+            architecturalStyle: extractedEra.eraContext || `${locName} architectural structure under clear natural illumination`,
+            stylePreset: extractedEra.stylePreset,
+            moodPromptContext: 'Authentic daylight with natural sun illumination.',
+            ...(args?.beautify || {})
+        },
+        cropRadius: radius,
+        cropBox: args?.cropBox || { min: [-radius, -0.5, -radius], max: [radius, 55.0, radius] },
+        sigmaScale: args?.sigmaScale ?? 0.6,
+        voxelSizeMeters: args?.voxelSizeMeters ?? 0.08,
+        erodeSilhouettePx: args?.erodeSilhouettePx ?? 2,
+        dropInconsistent: args?.dropInconsistent ?? true,
+        colorConsistencyThresh: args?.colorConsistencyThresh ?? 40.0
     };
 }
 

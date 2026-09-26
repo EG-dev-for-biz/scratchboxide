@@ -87,6 +87,9 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 ...p,
                 worldBranch: p.worldBranch || contextual3D.worldBranch,
                 sceneType: p.sceneType || contextual3D.sceneType,
+                splatUrl: p.splatUrl || contextual3D.splatUrl,
+                splatTilesetUrl: p.splatTilesetUrl || contextual3D.splatTilesetUrl,
+                splatOptions: p.splatOptions || contextual3D.splatOptions,
                 customMeshes: (p.customMeshes && Array.isArray(p.customMeshes) && p.customMeshes.length > 0)
                     ? p.customMeshes
                     : contextual3D.customMeshes,

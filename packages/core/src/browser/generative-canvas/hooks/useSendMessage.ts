@@ -905,11 +905,12 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                     depsRef.current.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
                 }
             }
-            const is3DDirective = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
+            const isSplatDirective = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(promptText);
+            const is3DDirective = isSplatDirective || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
             if (is3DDirective && !isVideoTimelinePrompt) {
                 const currentArt = backend.generatedArtifact;
                 const sceneData = currentArt?.data as Scene3DData | undefined;
-                const isMissing3DMeshes = !currentArt || currentArt.type !== '3d-scene' || !sceneData?.customMeshes?.length;
+                const isMissing3DMeshes = !currentArt || currentArt.type !== '3d-scene' || (!sceneData?.customMeshes?.length && !sceneData?.splatUrl && !sceneData?.objects?.some(o => o.content?.type === 'gaussian-splat'));
                 if (isMissing3DMeshes) {
                     const fb = synthesize3DFallback(promptText, lowerPromptText, depsRef.current.activeArtifact, ctx.updatedMessages, undefined);
                     if (fb.artifact) {
@@ -920,6 +921,9 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                                 data: {
                                     ...fbData,
                                     ...sceneData,
+                                    splatUrl: sceneData?.splatUrl || fbData.splatUrl,
+                                    splatTilesetUrl: sceneData?.splatTilesetUrl || fbData.splatTilesetUrl,
+                                    splatOptions: sceneData?.splatOptions || fbData.splatOptions,
                                     customMeshes: fbData.customMeshes,
                                     environment: sceneData?.environment || fbData.environment,
                                     camera: sceneData?.camera || fbData.camera,

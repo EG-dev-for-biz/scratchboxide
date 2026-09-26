@@ -695,6 +695,7 @@ export const executeDynamicThreeScript = (
 
 import { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import { NativeSpatialBridge } from '../../../common/spatial/NativeSpatialBridge';
+import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussianSplatMesh';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -1940,6 +1941,7 @@ int main(int argc, char** argv) {
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
     const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
+    const activeSplatMeshesRef = React.useRef<Map<string, PhotorealGaussianSplatMesh>>(new Map());
 
     // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
     const cameraModeRef = useLatest(cameraMode);
@@ -2032,12 +2034,17 @@ int main(int argc, char** argv) {
     const shadersFingerprint = React.useMemo(() => JSON.stringify(sceneData.shaders ?? null), [sceneData.shaders]);
     const shadersRef = useLatest(sceneData.shaders);
     const externalObjectsFingerprint = React.useMemo(() => {
-        return JSON.stringify(sceneData.objects?.map(o => ({
+        const objs = (sceneData.objects?.map(o => ({
             id: o.id,
             uri: o.content?.durableUri,
+            type: o.content?.type,
             space: o.space?.spatial3d
         })) || []);
-    }, [sceneData.objects]);
+        if (sceneData.splatUrl) {
+            objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined });
+        }
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2252,6 +2259,11 @@ int main(int argc, char** argv) {
                 if (splatViewerRef.current && typeof splatViewerRef.current.updateCamera === 'function') {
                     splatViewerRef.current.updateCamera(camera);
                 }
+                activeSplatMeshesRef.current.forEach(splatMesh => {
+                    if (typeof splatMesh.updateDepthSort === 'function') {
+                        splatMesh.updateDepthSort(camera);
+                    }
+                });
 
                 if (aerialPerspectiveRef.current && skyDomeModuleRef.current) {
                     aerialPerspectiveRef.current.render(
@@ -2296,6 +2308,9 @@ int main(int argc, char** argv) {
                 scene.remove(transformGizmoGroupRef.current);
                 transformGizmoGroupRef.current = null;
             }
+            activeSplatMeshesRef.current.forEach(splatMesh => splatMesh.dispose());
+            activeSplatMeshesRef.current.clear();
+            externalObjectsMapRef.current.clear();
             stack.dispose();
             stackRef.current = null;
             threeSceneRef.current = null;
@@ -2588,14 +2603,27 @@ int main(int argc, char** argv) {
         }
     }, [sceneData.cppGenerator?.glbBase64]);
 
-    // ---- 5c. External Model Objects Ingestion (sceneData.objects[].content.durableUri) ----
+    // ---- 5c. External Model & Gaussian Splat Objects Ingestion (sceneData.objects[].content.durableUri, sceneData.splatUrl) ----
     React.useEffect(() => {
         const stack = stackRef.current;
         if (!stack) return;
         const scene = stack.scene;
         if (!scene) return;
 
-        const objects = sceneData.objects || [];
+        const rawObjects = sceneData.objects || [];
+        const objects = [...rawObjects];
+        if (sceneData.splatUrl && !objects.some(o => o.content?.durableUri === sceneData.splatUrl)) {
+            objects.push({
+                id: 'primary-location-splat',
+                content: {
+                    type: 'gaussian-splat',
+                    durableUri: sceneData.splatUrl,
+                    mimeType: sceneData.splatUrl.endsWith('.spz') ? 'application/x-spz' : 'application/octet-stream'
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } }
+            });
+        }
+
         const currentMap = externalObjectsMapRef.current;
         const activeIds = new Set<string>();
 
@@ -2603,7 +2631,10 @@ int main(int argc, char** argv) {
 
         objects.forEach(obj => {
             const uri = obj.content?.durableUri;
-            if (!uri || !uri.match(/\.(glb|gltf)($|\?)/i)) return;
+            if (!uri) return;
+            const isSplat = obj.content?.type === 'gaussian-splat' || !!uri.match(/\.(splat|spz)($|\?)/i);
+            const isGltf = !!uri.match(/\.(glb|gltf)($|\?)/i);
+            if (!isSplat && !isGltf) return;
             activeIds.add(obj.id);
 
             const existing = currentMap.get(obj.id);
@@ -2615,6 +2646,34 @@ int main(int argc, char** argv) {
                     if (s.yaw !== undefined) existing.rotation.y = (s.yaw * Math.PI) / 180;
                     if (s.roll !== undefined) existing.rotation.z = (s.roll * Math.PI) / 180;
                 }
+                return;
+            }
+
+            if (isSplat) {
+                PhotorealGaussianSplatMesh.fromUrl(uri, {
+                    splatScale: sceneData.splatOptions?.splatScale ?? 1.0,
+                    contactShadow: sceneData.splatOptions?.contactShadow ?? true,
+                    enableRTC: sceneData.splatOptions?.enableRTC ?? true
+                }).then(splatMesh => {
+                    if (!stackRef.current?.scene) {
+                        splatMesh.dispose();
+                        return;
+                    }
+                    splatMesh.name = `external-splat-${obj.id}`;
+                    const s = obj.space?.spatial3d;
+                    if (s) {
+                        splatMesh.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
+                        if (s.pitch !== undefined) splatMesh.rotation.x = (s.pitch * Math.PI) / 180;
+                        if (s.yaw !== undefined) splatMesh.rotation.y = (s.yaw * Math.PI) / 180;
+                        if (s.roll !== undefined) splatMesh.rotation.z = (s.roll * Math.PI) / 180;
+                    }
+                    stackRef.current.scene.add(splatMesh);
+                    currentMap.set(obj.id, splatMesh);
+                    activeSplatMeshesRef.current.set(obj.id, splatMesh);
+                    refreshEntities();
+                }).catch(err => {
+                    console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
+                });
                 return;
             }
 
@@ -2666,14 +2725,19 @@ int main(int argc, char** argv) {
         for (const [id, obj3d] of currentMap.entries()) {
             if (!activeIds.has(id)) {
                 scene.remove(obj3d);
-                obj3d.traverse((child) => {
-                    if ((child as any).geometry) (child as any).geometry.dispose();
-                    if ((child as any).material) {
-                        const m = (child as any).material;
-                        if (Array.isArray(m)) m.forEach(mat => mat.dispose());
-                        else m.dispose();
-                    }
-                });
+                activeSplatMeshesRef.current.delete(id);
+                if (typeof (obj3d as any).dispose === 'function') {
+                    (obj3d as any).dispose();
+                } else {
+                    obj3d.traverse((child) => {
+                        if ((child as any).geometry) (child as any).geometry.dispose();
+                        if ((child as any).material) {
+                            const m = (child as any).material;
+                            if (Array.isArray(m)) m.forEach(mat => mat.dispose());
+                            else m.dispose();
+                        }
+                    });
+                }
                 currentMap.delete(id);
             }
         }

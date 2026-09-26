@@ -116,8 +116,11 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         /\b(?:cybertrucks?|cyber\s*trucks?|sports\s*cars?|race\s*cars?|hypercars?|supercars?|roadsters?|formula\s*1)\b/i.test(text)
     );
 
+    const isSplatCreationRequest = /\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)\b/i.test(text);
+
     const hasExplicit3DDirective = (
         isVehicleCreationRequest ||
+        isSplatCreationRequest ||
         /\b3d\s+(?:scene|plane|world|model|car|vehicle|automobile|truck|mesh|object|environment|simulation|terrain|city|building|character|robot|avatar|room|asset|preview)\b/i.test(text) ||
         /\b(?:build|make|create|generate|render|simulate|draw|show)\s+(?:me\s+)?(?:a\s+)?(?:3d\b|\w+\s+in\s+3d\b)/i.test(text) ||
         /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\s+\w+/i.test(text) ||
@@ -273,7 +276,7 @@ export function synthesizeVideoTimelineFallback(text: string, activeArtifact: Ca
 
 export function synthesize3DFallback(text: string, lower: string, activeArtifact: CanvasArtifact | undefined, messages: ChatMessage[], docContentExtract: string | undefined): FallbackResult {
     const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
-    const isTopicChange = /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model/i.test(text);
+    const isTopicChange = /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field/i.test(text);
     const isNewSceneDirective = /\b(?:build|make|create|generate|render|new|fresh|switch\s+to|start)\b/i.test(text);
     const isFreshSceneRequest = !isExisting3D || isNewSceneDirective || isTopicChange;
 

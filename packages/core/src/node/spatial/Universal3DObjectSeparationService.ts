@@ -488,22 +488,18 @@ export class Universal3DObjectSeparationService {
         },
         space: {
           spatial3d: {
-            position: obb.center,
-            rotation: [0, obb.yawDeg, 0],
-            scale: [1, 1, 1],
-            boundingBox: {
-              min: obj.boundingBox.min,
-              max: obj.boundingBox.max
-            }
+            x: obb.center[0],
+            y: obb.center[1],
+            z: obb.center[2],
+            yaw: obb.yawDeg
           },
           boundingBox: {
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1
+            min: obj.boundingBox.min,
+            max: obj.boundingBox.max
           }
         },
         lineage: {
+          version: 1,
           origin: 'generated',
           generation: {
             prompt: obj.trellisPrompt,
@@ -516,6 +512,7 @@ export class Universal3DObjectSeparationService {
     });
 
     const populatedScene: Scene3DData = {
+      title: (options as any).title || 'Separated 3D Architecture Scene',
       sceneType: 'city',
       camera: {
         position: [

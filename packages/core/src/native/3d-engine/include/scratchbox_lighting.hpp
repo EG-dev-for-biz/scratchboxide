@@ -1834,7 +1834,7 @@ public:
              + std::to_string(frame.sunColorLinearRgb.y) + ", " + std::to_string(frame.sunColorLinearRgb.z) + ")\n";
         usda += "                float inputs:colorTemperature = " + std::to_string(frame.kelvin) + "\n";
         usda += "                bool inputs:enableColorTemperature = 1\n";
-        usda += "                float inputs:intensity = " + std::to_string(frame.directLux) + "\n";
+        usda += "                float inputs:intensity = " + std::to_string(frame.sunIlluminanceLux) + "\n";
         usda += "                bool inputs:normalize = 1\n";
         usda += "                float inputs:exposure = 0\n";
         usda += "                double3 xformOp:translate = (" + std::to_string(frame.sunDirectionThreeJS.x * 100.0f) + ", "

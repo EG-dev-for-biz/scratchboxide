@@ -1043,7 +1043,7 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                     groundDatumY: params.groundDatumY
                 });
                 if (threeScene) {
-                    targetMesh.parent?.remove(targetMesh);
+                    (targetMesh as any)?.parent?.remove(targetMesh);
                     threeScene.add(result.group);
                 }
             } else {

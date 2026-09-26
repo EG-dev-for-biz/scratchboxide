@@ -272,6 +272,8 @@ int main(int argc, char** argv) {
             fileStream.write(rgbBuf);
             await new Promise((resolve) => fileStream.end(resolve));
 
+            const toCppFloat = (n: number) => Number.isInteger(n) ? n.toFixed(1) + 'f' : n + 'f';
+
             const cppCode = `
 #include <iostream>
 #include <fstream>
@@ -310,15 +312,15 @@ int main(int argc, char** argv) {
     bvh::BvhTree bvh;
     bvh.build(mesh);
 
-    math::Vec3 sunDir(${sunDirection[0]}f, ${sunDirection[1]}f, ${sunDirection[2]}f);
+    math::Vec3 sunDir(${toCppFloat(sunDirection[0])}, ${toCppFloat(sunDirection[1])}, ${toCppFloat(sunDirection[2])});
 
     delight::DeLighterOptions opt;
-    opt.epsilonClamp = ${options.epsilonClamp ?? 0.10}f;
-    opt.directSunWeight = ${options.directSunWeight ?? 0.75}f;
-    opt.skyDomeWeight = ${options.skyDomeWeight ?? 0.20}f;
-    opt.groundBounceWeight = ${options.groundBounceWeight ?? 0.05}f;
+    opt.epsilonClamp = ${toCppFloat(options.epsilonClamp ?? 0.10)};
+    opt.directSunWeight = ${toCppFloat(options.directSunWeight ?? 0.75)};
+    opt.skyDomeWeight = ${toCppFloat(options.skyDomeWeight ?? 0.20)};
+    opt.groundBounceWeight = ${toCppFloat(options.groundBounceWeight ?? 0.05)};
     opt.rtaoSamplesPerVertex = ${options.rtaoSamplesPerVertex ?? 16};
-    opt.rtaoMaxDistance = ${options.rtaoMaxDistance ?? 2.5}f;
+    opt.rtaoMaxDistance = ${toCppFloat(options.rtaoMaxDistance ?? 2.5)};
 
     // 1. Render mesh shading into UV space
     auto shading = delight::TileShadingRenderer::renderShadingMap(mesh, bvh, sunDir, texW, texH, opt);

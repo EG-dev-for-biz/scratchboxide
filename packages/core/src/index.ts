@@ -290,6 +290,16 @@ export {
     type DenseTrajectoryFrame
 } from './node/spatial/ContinuousSplineMatchmoveService';
 
+// Location 3D Gaussian Splatting (3DGS) Canonical Service
+export {
+    Location3DGaussianSplatService,
+    Location3DGSService,
+    generateLocation3DGS,
+    type Location3DGSRequest,
+    type Location3DGSResult
+} from './node/spatial/Location3DGaussianSplatService';
+
+
 
 
 

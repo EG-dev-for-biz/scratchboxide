@@ -628,7 +628,7 @@ export interface SculptableMeshBuffer {
 }
 
 export interface ContentDimension {
-    type: 'image' | 'video' | 'audio' | '3d-scene' | '3d-model' | 'map-3d' | 'wasm-shader';
+    type: 'image' | 'video' | 'audio' | '3d-scene' | '3d-model' | 'map-3d' | 'wasm-shader' | 'gaussian-splat';
     durableUri: string;
     mimeType: string;
     metadata?: {
@@ -717,7 +717,17 @@ export interface Scene3DData {
     title: string;
     subtitle?: string;
     worldBranch?: string;
-    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom';
+    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom' | 'gaussian_splat';
+    splatUrl?: string;
+    splatTilesetUrl?: string;
+    splatOptions?: {
+        splatScale?: number;
+        maxSplats?: number;
+        enableRTC?: boolean;
+        enableSoftZ?: boolean;
+        contactShadow?: boolean;
+        cropBox?: { min: [number, number, number]; max: [number, number, number] };
+    };
     parentCommitId?: string;
     objects?: Media4DObject[];
     renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr';

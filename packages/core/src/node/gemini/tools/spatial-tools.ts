@@ -1249,6 +1249,25 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['glbPath', 'stationsJsonPath', 'locationName']
         }
+    },
+    {
+        name: 'location_generate_3dgs',
+        description: 'Generate a photorealistic 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tileset for any real-world location or landmark. Automatically orchestrates Google 3D Tiles blockout ingestion, multi-tier survey camera synthesis, Nano Banana multi-view restyling with closed-loop Sobel edge QC, and native C++20 metric depth unprojection and octree voxel fusion.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                location: { type: 'STRING', description: 'Location name or landmark (e.g. "Rome Colosseum", "Empire State Building", "Grand Army Plaza", "Eiffel Tower").' },
+                lat: { type: 'NUMBER', description: 'Geodetic latitude in degrees (optional if named landmark).' },
+                lng: { type: 'NUMBER', description: 'Geodetic longitude in degrees (optional if named landmark).' },
+                elevation: { type: 'NUMBER', description: 'Elevation in meters above sea level.' },
+                stylePreset: { type: 'STRING', description: 'Era or visual style preset (e.g. "cinematic-film", "oil-painting").' },
+                mood: { type: 'STRING', description: 'Diurnal lighting mood ("dawn", "golden-hour", "midday", "dusk", "night").' },
+                cameraCount: { type: 'NUMBER', description: 'Number of survey camera stations (default: 6-12).' },
+                outDir: { type: 'STRING', description: 'Output directory for splat and tileset files.' },
+                forceRebake: { type: 'BOOLEAN', description: 'Force re-baking even if cached splats exist.' }
+            },
+            required: ['location']
+        }
     }
 ];
 
@@ -1784,6 +1803,42 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 durationMs: result.metrics.durationMs
             } as unknown as ToolResultPayload,
             summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) with NOAA solar de-lighting and PBR maps -> ${result.outGlbPath}`
+        };
+    },
+
+    location_generate_3dgs: async (args, ctx) => {
+        const { Location3DGaussianSplatService } = await import('../../spatial/Location3DGaussianSplatService');
+        const service = new Location3DGaussianSplatService({ workspaceRoot: ctx?.workspaceRoot || process.cwd() });
+        const res = await service.generate({
+            location: asString(args.location),
+            lat: typeof args.lat === 'number' ? args.lat : undefined,
+            lng: typeof args.lng === 'number' ? args.lng : undefined,
+            elevation: typeof args.elevation === 'number' ? args.elevation : undefined,
+            stylePreset: asString(args.stylePreset) || undefined,
+            mood: asString(args.mood) as any,
+            cameraCount: typeof args.cameraCount === 'number' ? args.cameraCount : undefined,
+            width: typeof args.width === 'number' ? args.width : undefined,
+            bakeStride: typeof args.bakeStride === 'number' ? args.bakeStride : undefined,
+            outDir: asString(args.outDir) || undefined,
+            forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined
+        });
+
+        return {
+            resultPayload: {
+                success: res.success,
+                locationName: res.locationName,
+                geoAnchor: res.geoAnchor,
+                splatUrl: res.splatUrl,
+                splatPath: res.splatPath,
+                tilesetUrl: res.tilesetUrl,
+                tilesetPath: res.tilesetPath,
+                splatCount: res.splatCount,
+                stationCount: res.stationCount,
+                cropBox: res.cropBox,
+                scene3DData: res.scene3DData,
+                durationMs: res.durationMs
+            } as unknown as ToolResultPayload,
+            summaryResult: `Generated photorealistic 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats across ${res.stationCount} stations in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}`
         };
     },
 
@@ -4046,4 +4101,9 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         };
     }
 };
+
+// Aliases for unified spatial tool access
+export const SPATIAL_TOOL_DECLARATIONS = PANORAMA_TOOL_DECLARATIONS;
+export const spatialHandlers = panoramaHandlers;
+
 

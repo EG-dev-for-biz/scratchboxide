@@ -166,6 +166,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`SurveyStationRenderService`** (`packages/core/src/node/spatial/SurveyStationRenderService.ts`): Headless multi-station blockout rendering with solar ephemeris grounding.
 - **`BeautifyStationService`** (`packages/core/src/node/spatial/BeautifyStationService.ts`): Warps AI-beautified images back into geometric spatial alignment.
 - **`SurveySplatPipelineService`** (`packages/core/src/node/spatial/SurveySplatPipelineService.ts`): Bakes beautified station photographs into dense 3D Gaussian Splats.
+- **`Location3DGaussianSplatService`** (`packages/core/src/node/spatial/Location3DGaussianSplatService.ts`): Unified end-to-end facade service and standalone functional API (`generateLocation3DGS`) synthesizing location 3DGS radiance fields with implicit Nano Banana multi-station restyling, C++20 metric depth unprojection, OGC 3D Tiles packaging, and direct Three.js 3D viewport mounting.
 
 ### WebXR Metric Geospatial Bridge
 - **`WebXRGeospatialAnchorBridge`** (`packages/core/src/browser/generative-canvas/services/xr/WebXRGeospatialAnchorBridge.ts`):
@@ -239,7 +240,10 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `panorama_extract_zenith`: Extracts rectilinear top-down patch.
 - `panorama_generate_perspectives`: Extracts multiple rectilinear cameras.
 - `panorama_audit_quality`: Evaluates seams, resolution, and dynamic range.
+- `location_generate_3dgs`: End-to-end location 3D Gaussian Splatting (3DGS) radiance field and OGC 3D Tiles synthesis with implicit Nano Banana restyling.
 - `panorama_to_3dgs`: Projects equirectangular panorama into spherical Gaussian splats.
+- `splat_to_3dtiles`: Converts Gaussian splat cloud (.splat or .spz) into OGC 3D Tiles 1.1 tileset.
+- `survey_beautify_to_splats`: Runs full survey synthesis to beautified splat tileset.
 
 ### 5. Universal Tile Decomposition & Rectification (`spatial-tools.ts`)
 - `utdra_probe_tile`: Non-destructive domain probe (relief, planarity, verticality).

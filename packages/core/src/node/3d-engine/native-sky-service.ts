@@ -1,0 +1,275 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { NativeCppCompilerService } from './native-compiler-service';
+
+const execAsync = promisify(exec);
+
+export interface AtmosphereParameters {
+    observerAltitudeMeters?: number;
+    airDensity?: number;
+    dustDensity?: number;
+    ozoneDensity?: number;
+    sunAngularDiameterDeg?: number;
+    sunIntensity?: number;
+}
+
+export interface PhysicalSkyOptions {
+    sunDirection: [number, number, number];
+    params?: AtmosphereParameters;
+    width?: number;
+    height?: number;
+    azimuthResolution?: number;
+    elevationResolution?: number;
+}
+
+export interface PhysicalSkyResult {
+    success: boolean;
+    width: number;
+    height: number;
+    rgbFloats: Float32Array;
+    sunIrradiance: [number, number, number];
+    skyIrradianceHorizontal: [number, number, number];
+    hazeExtinction: [number, number, number];
+    sunDirection: [number, number, number];
+    compilationTimeMs?: number;
+    executionTimeMs?: number;
+    error?: string;
+}
+
+/**
+ * Service orchestrating native C++20 physical atmospheric single-scattering
+ * (Rayleigh/Mie/Ozone) sky generation from scratchbox_sky.hpp.
+ *
+ * Replaces client-side Three.js GLSL heuristic sky shaders with physically-grounded
+ * precomputed equirectangular radiance environments.
+ */
+export class NativeSkyService {
+    private compiler: NativeCppCompilerService;
+
+    constructor(customIncludePath?: string) {
+        this.compiler = new NativeCppCompilerService(customIncludePath);
+    }
+
+    /**
+     * Generates a physical equirectangular sky map (Float32Array RGB) and radiometric
+     * atmospheric values using the native C++20 scratchbox_sky.hpp PhysicalSky engine.
+     */
+    public async generatePhysicalSkyEquirectangular(
+        options: PhysicalSkyOptions
+    ): Promise<PhysicalSkyResult> {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_sky_'));
+        const sourceFile = path.join(tmpDir, 'sky_runner.cpp');
+        const binaryPath = path.join(tmpDir, 'sky_runner');
+        const outBinPath = path.join(tmpDir, 'sky_output.bin');
+
+        const width = options.width || 256;
+        const height = options.height || 128;
+        const azimRes = options.azimuthResolution || Math.min(width, 128);
+        const elevRes = options.elevationResolution || Math.min(height, 64);
+
+        const sunX = options.sunDirection[0];
+        const sunY = options.sunDirection[1];
+        const sunZ = options.sunDirection[2];
+
+        const toCppFloat = (n: number) => Number.isInteger(n) ? n.toFixed(1) + 'f' : n + 'f';
+
+        const obsAlt = options.params?.observerAltitudeMeters ?? 0.0;
+        const airDen = options.params?.airDensity ?? 1.0;
+        const dustDen = options.params?.dustDensity ?? 1.0;
+        const ozoneDen = options.params?.ozoneDensity ?? 1.0;
+        const sunAng = options.params?.sunAngularDiameterDeg ?? 0.545;
+        const sunInt = options.params?.sunIntensity ?? 1.0;
+
+        try {
+            const cppSource = `
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include "scratchbox_sky.hpp"
+
+using namespace scratchbox;
+
+int main(int argc, char** argv) {
+    if (argc < 2) return 1;
+    const char* outPath = argv[1];
+
+    math::Vec3 sunDir(${toCppFloat(sunX)}, ${toCppFloat(sunY)}, ${toCppFloat(sunZ)});
+    sky::AtmosphereParams params;
+    params.observerAltitudeMeters = ${toCppFloat(obsAlt)};
+    params.airDensity = ${toCppFloat(airDen)};
+    params.dustDensity = ${toCppFloat(dustDen)};
+    params.ozoneDensity = ${toCppFloat(ozoneDen)};
+    params.sunAngularDiameterDeg = ${toCppFloat(sunAng)};
+    params.sunIntensity = ${toCppFloat(sunInt)};
+
+    sky::PhysicalSky sky(sunDir, params, ${azimRes}, ${elevRes});
+
+    int width = ${width};
+    int height = ${height};
+    std::vector<float> rgbData(static_cast<size_t>(width) * height * 3, 0.0f);
+
+    const float kPi = 3.14159265358979323846f;
+    const float kTwoPi = 6.28318530717958647692f;
+
+    for (int y = 0; y < height; ++y) {
+        float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+        float elevation = (0.5f - v) * kPi; // +pi/2 (zenith) to -pi/2 (nadir)
+        float cosElev = std::cos(elevation);
+        float sinElev = std::sin(elevation);
+
+        for (int x = 0; x < width; ++x) {
+            float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
+            float azimuth = u * kTwoPi; // 0 to 2*pi
+
+            math::Vec3 dir(
+                cosElev * std::sin(azimuth),
+                sinElev,
+                cosElev * std::cos(azimuth)
+            );
+            dir = dir.normalized();
+
+            math::Vec3 color(0.0f, 0.0f, 0.0f);
+            if (dir.y >= 0.0f) {
+                math::Vec3 skyRad = sky.skyRadiance(dir);
+                math::Vec3 sunRad = sky.sunDiscRadiance(dir);
+                color = skyRad + sunRad;
+            } else {
+                // Below horizon: diffuse ground bounce blending with horizon haze
+                math::Vec3 horizon = sky.horizonRadiance(dir);
+                math::Vec3 ground = sky.skyIrradianceHorizontal() * 0.15f;
+                float blend = std::clamp(1.0f + dir.y * 3.0f, 0.0f, 1.0f);
+                color = horizon * blend + ground * (1.0f - blend);
+            }
+
+            size_t idx = (static_cast<size_t>(y) * width + x) * 3;
+            rgbData[idx + 0] = std::max(0.0f, color.x);
+            rgbData[idx + 1] = std::max(0.0f, color.y);
+            rgbData[idx + 2] = std::max(0.0f, color.z);
+        }
+    }
+
+    std::ofstream out(outPath, std::ios::binary);
+    if (!out) return 2;
+
+    math::Vec3 sIrr = sky.sunIrradiance();
+    math::Vec3 hIrr = sky.skyIrradianceHorizontal();
+    math::Vec3 haze = sky.hazeExtinction();
+    math::Vec3 sDir = sky.sunDirection();
+
+    // Write header: 4 bytes width, 4 bytes height, then 12 floats (sIrr, hIrr, haze, sDir)
+    uint32_t w = width, h = height;
+    out.write(reinterpret_cast<const char*>(&w), sizeof(uint32_t));
+    out.write(reinterpret_cast<const char*>(&h), sizeof(uint32_t));
+
+    float headerMetrics[12] = {
+        sIrr.x, sIrr.y, sIrr.z,
+        hIrr.x, hIrr.y, hIrr.z,
+        haze.x, haze.y, haze.z,
+        sDir.x, sDir.y, sDir.z
+    };
+    out.write(reinterpret_cast<const char*>(headerMetrics), sizeof(headerMetrics));
+
+    // Write raw float pixel data
+    out.write(reinterpret_cast<const char*>(rgbData.data()), rgbData.size() * sizeof(float));
+    out.close();
+
+    std::cout << "SUCCESS" << std::endl;
+    return 0;
+}
+`;
+            fs.writeFileSync(sourceFile, cppSource, 'utf8');
+
+            const compileStart = Date.now();
+            const compileCmd = `${process.env.CXX || 'clang++'} -std=c++20 -O3 -I "${this.compiler.getSdkIncludePath()}" "${sourceFile}" -o "${binaryPath}"`;
+            await execAsync(compileCmd, { cwd: tmpDir });
+            const compilationTimeMs = Date.now() - compileStart;
+
+            const execStart = Date.now();
+            await execAsync(`"${binaryPath}" "${outBinPath}"`, { cwd: tmpDir });
+            const executionTimeMs = Date.now() - execStart;
+
+            if (!fs.existsSync(outBinPath)) {
+                throw new Error('Native C++ sky runner failed to create output binary file');
+            }
+
+            const binBuffer = fs.readFileSync(outBinPath);
+            let offset = 0;
+            const resW = binBuffer.readUInt32LE(offset); offset += 4;
+            const resH = binBuffer.readUInt32LE(offset); offset += 4;
+
+            const sunIrradiance: [number, number, number] = [
+                binBuffer.readFloatLE(offset),
+                binBuffer.readFloatLE(offset + 4),
+                binBuffer.readFloatLE(offset + 8)
+            ];
+            offset += 12;
+
+            const skyIrradianceHorizontal: [number, number, number] = [
+                binBuffer.readFloatLE(offset),
+                binBuffer.readFloatLE(offset + 4),
+                binBuffer.readFloatLE(offset + 8)
+            ];
+            offset += 12;
+
+            const hazeExtinction: [number, number, number] = [
+                binBuffer.readFloatLE(offset),
+                binBuffer.readFloatLE(offset + 4),
+                binBuffer.readFloatLE(offset + 8)
+            ];
+            offset += 12;
+
+            const sunDirection: [number, number, number] = [
+                binBuffer.readFloatLE(offset),
+                binBuffer.readFloatLE(offset + 4),
+                binBuffer.readFloatLE(offset + 8)
+            ];
+            offset += 12;
+
+            const floatCount = resW * resH * 3;
+            const rgbFloats = new Float32Array(
+                binBuffer.buffer.slice(binBuffer.byteOffset + offset, binBuffer.byteOffset + offset + floatCount * 4)
+            );
+
+            return {
+                success: true,
+                width: resW,
+                height: resH,
+                rgbFloats,
+                sunIrradiance,
+                skyIrradianceHorizontal,
+                hazeExtinction,
+                sunDirection,
+                compilationTimeMs,
+                executionTimeMs
+            };
+        } catch (err: any) {
+            return {
+                success: false,
+                width,
+                height,
+                rgbFloats: new Float32Array(0),
+                sunIrradiance: [0, 0, 0],
+                skyIrradianceHorizontal: [0, 0, 0],
+                hazeExtinction: [0, 0, 0],
+                sunDirection: options.sunDirection,
+                error: err?.message || String(err)
+            };
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    }
+}

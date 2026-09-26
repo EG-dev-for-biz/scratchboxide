@@ -74,6 +74,9 @@ const GLOBAL_LANDMARK_REGISTRY: Record<string, { lat: number; lng: number; eleva
   'the plaza hotel': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
   'plaza hotel': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
   'the plaza': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
+  'grand army plaza nyc': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
+  'grand army plaza new york': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
+  'grand army plaza': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
   'central park nyc': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
   'central park new york': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
   'central park': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
@@ -339,10 +342,10 @@ export function detectRealWorldLocationIntent(
     return undefined;
   }
 
-  // Check generic map tile / real world scene / 3D model keywords followed by a location name
+  // Check generic map tile / real world scene / 3D model / 3DGS keywords followed by a location name
   const naturalPatterns = [
-    /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)?\s*(?:a|the)?\s*(?:3d\s*(?:scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)?\s*(?:of|for|at|around|in)\s+)(.+)/i,
-    /(?:3d\s*(?:map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i
+    /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)?\s*(?:a|the)?\s*(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)?\s*(?:of|for|at|around|in)\s+)(.+)/i,
+    /(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i
   ];
 
   for (const pattern of naturalPatterns) {
@@ -352,7 +355,7 @@ export function detectRealWorldLocationIntent(
 
       // Clean target string (remove trailing stylistic instructions, punctuation, etc.)
       target = target
-        .replace(/\b(?:in\s+clay|with\s+shadows?|in\s+3d|photorealistic|in\s+daylight|at\s+sunset|in\s+golden\s+hour(?:\s+light)?|at\s+night|in\s+pbr|with\s+trees|with\s+clouds|with\s+lighting|in\s+low\s+poly|in\s+high\s+poly)\b/gi, '')
+        .replace(/\b(?:in\s+clay|with\s+shadows?|in\s+3d|photorealistic|in\s+daylight|at\s+sunset|in\s+golden\s+hour(?:\s+light)?|at\s+night|in\s+pbr|with\s+trees|with\s+clouds|with\s+lighting|in\s+low\s+poly|in\s+high\s+poly|as\s+a\s+(?:3d\s+)?splat|as\s+a\s+gaussian\s+splat|with\s+splats?|as\s+3dgs|with\s+nano\s*banana|using\s+nano\s*banana|via\s+nano\s*banana|from\s+nano\s*banana)\b/gi, '')
         .replace(/[.,!?;:]+$/, '')
         .trim();
 

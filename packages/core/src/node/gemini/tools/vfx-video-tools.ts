@@ -1132,7 +1132,7 @@ export const ffmpegHandlers: Record<string, ToolHandler> = {
         );
 
         return {
-            resultPayload: result,
+            resultPayload: result as unknown as import('./types').ToolResultPayload,
             summaryResult: `Hollywood-grade color match complete in ${result.telemetry.executionTimeMs}ms. Perceptual Delta E reduced by ${result.telemetry.deltaEReductionPercent}% (initial: ${result.telemetry.initialDeltaE00} -> final: ${result.telemetry.finalDeltaE00}). Lift=[${result.wheels.lift.r.toFixed(3)}, ${result.wheels.lift.g.toFixed(3)}, ${result.wheels.lift.b.toFixed(3)}], Gain=[${result.wheels.gain.r.toFixed(3)}, ${result.wheels.gain.g.toFixed(3)}, ${result.wheels.gain.b.toFixed(3)}].${result.lutPath ? ` Generated 3D LUT: ${result.lutPath}` : ''}`
         };
     },

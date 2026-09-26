@@ -106,6 +106,7 @@ export interface GeminiGenerateRequest {
     enableLspDiagnostics?: boolean;
     enableDiffMemory?: boolean;
     enableWorkspaceTools?: boolean;
+    enableComfyUiTools?: boolean;
     maxTurns?: number;
     workspaceRoot?: string;
     targetFiles?: string[];
