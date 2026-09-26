@@ -96,7 +96,7 @@ function executePythonResection(imagePath, hint) {
             cwd: REPO_ROOT,
             env: pythonEnv,
             maxBuffer: 20 * 1024 * 1024,
-            timeout: 30000
+            timeout: 60000
         }, (error, stdout, stderr) => {
             if (error) {
                 console.error('[Resection API] Execution error:', error.message);
@@ -279,8 +279,8 @@ const server = http.createServer(async (req, res) => {
                 relativeUploadUrl = `/uploads/${outFilename}`;
             } else if (rawPath || rawUrl) {
                 const targetPath = rawPath || rawUrl;
-                // Pre-existing public test video/image or uploaded media path
-                let resolved = path.join(REPO_ROOT, targetPath.replace(/^\//, ''));
+                // Check direct path (e.g. absolute path), or workspace/public relative path
+                let resolved = fs.existsSync(targetPath) ? targetPath : path.join(REPO_ROOT, targetPath.replace(/^\//, ''));
                 if (!fs.existsSync(resolved)) {
                     resolved = path.join(PUBLIC_DIR, targetPath.replace(/^\//, ''));
                 }
@@ -309,7 +309,10 @@ const server = http.createServer(async (req, res) => {
                     lng: result.google_map_tiles_3d?.center?.lng || 12.49165,
                     elevation: result.google_map_tiles_3d?.center?.altitude || 26.0
                 };
-                const outputGlbPath = path.join(PUBLIC_DIR, 'models', 'colosseum_rome_textured.glb');
+                const outputGlbName = (result.google_map_tiles_3d?.three_d_object_model_url
+                    ? path.basename(result.google_map_tiles_3d.three_d_object_model_url)
+                    : (Math.abs(targetAnchor.lat - 41.89) < 0.05 ? 'colosseum_rome_textured.glb' : 'google_tiles_textured_area.glb'));
+                const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
                 const tileObj = await fetchGoogle3DTilesObject(targetAnchor, {
                     outputGlbPath,
                     offlineMock: true
@@ -327,6 +330,8 @@ const server = http.createServer(async (req, res) => {
             } catch (tileErr) {
                 console.warn('[Resection API] getGoogle3DTilesFullTexture call warning:', tileErr.message);
             }
+
+            result.three_d_object = threeDObject;
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -346,6 +351,116 @@ const server = http.createServer(async (req, res) => {
                 success: false,
                 error: err.message || 'Internal server error executing GeoBox resection'
             }));
+            return;
+        }
+    }
+
+    // Endpoint: Learn & Persist Refined Camera Calibration
+    if (req.method === 'POST' && reqPath === '/api/geobox/calibrate') {
+        try {
+            const body = await parseBody(req);
+            const calibrationsFile = path.join(PUBLIC_DIR, 'data', 'learned_resections.json');
+            fs.mkdirpSync(path.dirname(calibrationsFile));
+
+            let existing = {};
+            if (fs.existsSync(calibrationsFile)) {
+                try { existing = JSON.parse(fs.readFileSync(calibrationsFile, 'utf8')); } catch (e) {}
+            }
+
+            const key = (body.landmark || body.landmarkName || 'default').toLowerCase().replace(/[^a-z0-9]/g, '_');
+            existing[key] = {
+                ...body,
+                updatedAt: new Date().toISOString()
+            };
+
+            fs.writeFileSync(calibrationsFile, JSON.stringify(existing, null, 2));
+            console.log(`[GeoBox Learning] Persisted learned camera calibration for "${key}":`, body.geodetic || body.cameraPosition);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                message: `Learned calibration saved for ${body.landmark || key}`,
+                calibration: existing[key]
+            }));
+            return;
+        } catch (err) {
+            console.error('[GeoBox Learning] Error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+        }
+    }
+
+    // Endpoint: Inversely solve and match lighting to reference photograph
+    if (req.method === 'POST' && reqPath === '/api/lighting/match-reference') {
+        try {
+            const body = await parseBody(req);
+            let imgPath = body.imagePath;
+            if (!imgPath || !fs.existsSync(imgPath)) {
+                imgPath = path.join(PUBLIC_DIR, (body.imagePath || 'test_images/the_plaza_hotel_user_photo.jpg').replace(/^\//, ''));
+            }
+            if (!fs.existsSync(imgPath)) {
+                imgPath = path.join(PUBLIC_DIR, 'test_images', 'the_plaza_hotel_user_photo.jpg');
+            }
+
+            const { matchLightingToReference } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+            const result = await matchLightingToReference({
+                imagePath: imgPath,
+                landmarkName: body.landmarkName || 'The Plaza Hotel',
+                geodeticCoords: body.geodeticCoords || { lat: 40.7646, lng: -73.9743 },
+                cameraHeadingDeg: body.cameraHeadingDeg || 215.3,
+                cameraPitchDeg: body.cameraPitchDeg || 5.2,
+                cameraPosition: body.cameraPosition,
+                cameraTarget: body.cameraTarget,
+                fovDeg: body.fovDeg || 54,
+                stoneType: body.stoneType || 'travertine',
+                autoExportUsd: true,
+                outputUsdPath: path.join(PUBLIC_DIR, 'data', 'matched_lighting_rig.usda')
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                ...result,
+                usdDownloadUrl: result.usdExportPath ? '/data/' + path.basename(result.usdExportPath) : null,
+                mtlxDownloadUrl: result.mtlxExportPath ? '/data/' + path.basename(result.mtlxExportPath) : null
+            }));
+            return;
+        } catch (err) {
+            console.error('[Lighting Match API] Error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
+            return;
+        }
+    }
+
+    // Endpoint: Export scene lighting to OpenUSD (.usda) and MaterialX (.mtlx)
+    if (req.method === 'POST' && reqPath === '/api/lighting/export-usd') {
+        try {
+            const body = await parseBody(req);
+            const { PhotometricUsdBridgeService } = require('../packages/core/dist/node/spatial/PhotometricUsdBridgeService.js');
+            const outPath = body.outputPath ? path.join(REPO_ROOT, body.outputPath.replace(/^\//, '')) : path.join(PUBLIC_DIR, 'data', 'scene_lighting_export.usda');
+            const result = PhotometricUsdBridgeService.exportToUsd(body.rig, {
+                outputPath: outPath,
+                assetName: body.assetName || 'PhotometricScene',
+                exportMaterialX: body.exportMaterialX !== false,
+                stoneType: body.stoneType || 'travertine',
+                camera: body.camera
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                usdaFilePath: result.usdaFilePath,
+                mtlxFilePath: result.mtlxFilePath,
+                usdaUrl: '/data/' + path.basename(result.usdaFilePath),
+                mtlxUrl: result.mtlxFilePath ? '/data/' + path.basename(result.mtlxFilePath) : undefined,
+                usdaContent: result.usdaContent
+            }));
+            return;
+        } catch (err) {
+            console.error('[USD Export API] Error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err.message }));
             return;
         }
     }

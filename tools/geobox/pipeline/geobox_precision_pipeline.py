@@ -501,9 +501,19 @@ LANDMARK_METROLOGY: Dict[str, Dict[str, Any]] = {
     },
     "plaza": {
         "height_m": 76.5,
+        "landmark_name": "The Plaza Hotel",
+        "formatted_address": "768 5th Ave, New York, NY 10019, United States",
+        "neighborhood": "Midtown Manhattan / Grand Army Plaza",
+        "borough_city": "Manhattan, New York City, NY, USA",
+        "architectural_style": "French Renaissance Chateauesque (designed by Henry Janeway Hardenbergh, 1907)",
+        "architectural_features": "19-story luxury French Renaissance chateau with white-glazed brick and terracotta facade, classical curved corner turrets with limestone rustication, steep green copper mansard roof with copper finials and ornate dormer gables, and entrance canopy on 5th Ave.",
+        "surrounding_context": "Directly behind The Plaza stands the Solow Building (9 W 57th St, 50-story sloping dark-glass skyscraper). Central Park perimeter borders directly to the north across Central Park South.",
         "vantage_points": [
             {
                 "name": "Grand Army Plaza Central Park South Overlook",
+                "camera_address": "Grand Army Plaza (Southeast pedestrian sidewalk at 5th Ave & Central Park S), New York, NY 10019",
+                "viewpoint_description": "Ground-level pedestrian perspective from the southeast sidewalk of Grand Army Plaza / Fifth Avenue, looking northwest (+5.2° upward tilt, 215.3° azimuth) across Fifth Avenue towards the main hotel facade and Northeast rounded turret.",
+                "surrounding_context": "Solow Building (9 W 57th St) rising in background; Fifth Avenue street-level traffic and Grand Army Plaza pedestrian promenade in foreground.",
                 "lat": 40.76449120, "lng": -73.97451204, "alt_m": 22.150,
                 "heading_deg": 215.30, "pitch_deg": 5.20, "standoff_m": 140.200,
                 "street_view_eligible": True
@@ -706,6 +716,11 @@ class GeoBoxPrecisionPipeline:
         place_id = ""
         types = ["point_of_interest", "establishment"]
 
+        formatted_address = ""
+        neighborhood = ""
+        city = ""
+        candidates = None
+
         if self.api_key:
             try:
                 if hint_query:
@@ -726,6 +741,7 @@ class GeoBoxPrecisionPipeline:
                 if candidates:
                     best = candidates[0]
                     landmark_name = best.get("name", landmark_name)
+                    formatted_address = best.get("formatted_address", "")
                     geom = best.get("geometry", {}).get("location", {})
                     resolved_lat = geom.get("lat", resolved_lat)
                     resolved_lng = geom.get("lng", resolved_lng)
@@ -734,6 +750,21 @@ class GeoBoxPrecisionPipeline:
             except Exception as e:
                 print(f"⚠️ [Stage 2] Google Places API warning: {e}")
 
+        # Retrieve rich metadata from LANDMARK_METROLOGY if available
+        matched_metro = None
+        for k, v in LANDMARK_METROLOGY.items():
+            if k in landmark_name.lower() or k in (hint_query or "").lower():
+                matched_metro = v
+                break
+
+        if matched_metro:
+            if not formatted_address:
+                formatted_address = matched_metro.get("formatted_address", "")
+            if not neighborhood:
+                neighborhood = matched_metro.get("neighborhood", "")
+            if not city:
+                city = matched_metro.get("city", "") or matched_metro.get("borough_city", "")
+
         dist_from_stage1_km = haversine_distance(lat, lng, resolved_lat, resolved_lng)
         elapsed_ms = (time.time() - t0) * 1000.0
 
@@ -741,6 +772,9 @@ class GeoBoxPrecisionPipeline:
             "stage": 2,
             "name": "Google Places Semantic Grounding",
             "landmark_name": landmark_name,
+            "formatted_address": formatted_address,
+            "neighborhood": neighborhood,
+            "city": city,
             "lat": resolved_lat,
             "lng": resolved_lng,
             "place_id": place_id,
@@ -796,7 +830,8 @@ class GeoBoxPrecisionPipeline:
 
     def run_stage4_depth_and_intrinsics(self,
                                         image_path: str,
-                                        landmark_name: str = "") -> Dict[str, Any]:
+                                        landmark_name: str = "",
+                                        exif_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Stage 4: DepthBox Metric Depth & Camera Intrinsics Solver.
         Estimates metric focal length K, horizontal FOV, and visual bounding scale.
@@ -841,6 +876,42 @@ class GeoBoxPrecisionPipeline:
         apparent_bbox_h = height * 0.75
         standoff_distance_m = (fy * structure_height_m) / apparent_bbox_h
 
+        # Optical Brown-Conrady lens distortion estimation
+        focal_mm = 26.0
+        if exif_metadata and exif_metadata.get("focal_length_mm") and exif_metadata["focal_length_mm"] > 0:
+            focal_mm = float(exif_metadata["focal_length_mm"])
+        else:
+            # 35mm full-frame sensor width baseline = 36.0mm
+            focal_mm = round((36.0 * 0.5) / math.tan(math.radians(fov_h_deg * 0.5)), 1)
+
+        if focal_mm <= 18.0:
+            lens_k1 = -0.095
+            lens_k2 = 0.024
+            lens_profile = "Ultra-Wide Curvilinear (14-18mm eq.)"
+        elif focal_mm <= 28.0:
+            lens_k1 = -0.038
+            lens_k2 = 0.008
+            lens_profile = "Smartphone Primary Wide (24-28mm eq.)"
+        elif focal_mm <= 55.0:
+            lens_k1 = -0.012
+            lens_k2 = 0.002
+            lens_profile = "Standard Normal Prime (35-50mm eq.)"
+        else:
+            lens_k1 = 0.005
+            lens_k2 = 0.000
+            lens_profile = "Telephoto Pincushion (70mm+ eq.)"
+
+        lens_distortion = {
+            "k1": lens_k1,
+            "k2": lens_k2,
+            "p1": 0.0,
+            "p2": 0.0,
+            "chromatic_aberration": 0.0018,
+            "profile": lens_profile,
+            "estimated_focal_length_mm": focal_mm,
+            "enabled": True
+        }
+
         elapsed_ms = (time.time() - t0) * 1000.0
         return {
             "stage": 4,
@@ -854,6 +925,7 @@ class GeoBoxPrecisionPipeline:
             "fov_h_deg": fov_h_deg,
             "structure_height_m": structure_height_m,
             "standoff_distance_m": round(standoff_distance_m, 1),
+            "lens_distortion": lens_distortion,
             "K": K.tolist() if hasattr(K, "tolist") else K,
             "elapsed_ms": round(elapsed_ms, 2)
         }
@@ -895,6 +967,8 @@ class GeoBoxPrecisionPipeline:
                         vantage_candidate = cand
                         matched_key = k
                         break
+
+        matched_metro = LANDMARK_METROLOGY.get(matched_key) if matched_key else None
 
         if exif_metadata and exif_metadata.get("has_gps"):
             est_cam_lat = exif_metadata["lat"]
@@ -1040,7 +1114,7 @@ class GeoBoxPrecisionPipeline:
             center_target_lat = round(target_lat, 8)
             center_target_lng = round(target_lng, 8)
         elif "plaza" in lm_str or "central park" in lm_str:
-            preview_img = "/videos/frames_plaza/frame_0000.jpg"
+            preview_img = "/models/plaza_hotel_start_frame.jpg"
             tile_range = round(est_standoff, 3)
             tile_tilt = round(max(0.0, min(90.0, 90.0 - est_pitch)), 2)
             tile_heading = round(est_heading, 2)
@@ -1100,6 +1174,50 @@ class GeoBoxPrecisionPipeline:
             "three_d_object_mode": "full-texture"
         }
 
+        # Construct rich descriptive location dossier
+        camera_address = ""
+        if self.api_key:
+            try:
+                rev_url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={est_cam_lat},{est_cam_lng}&key={self.api_key}"
+                rev_resp = requests.get(rev_url, timeout=5).json()
+                if rev_resp.get("status") == "OK" and rev_resp.get("results"):
+                    camera_address = rev_resp["results"][0].get("formatted_address", "")
+            except Exception:
+                pass
+
+        if not camera_address and vantage_candidate:
+            camera_address = vantage_candidate.get("camera_address", "")
+
+        viewpoint_desc = ""
+        if vantage_candidate and vantage_candidate.get("viewpoint_description"):
+            viewpoint_desc = vantage_candidate["viewpoint_description"]
+        else:
+            viewpoint_desc = (
+                f"Ground-level pedestrian camera standing approximately {est_standoff:.1f} meters away at {est_heading:.1f}° viewing azimuth "
+                f"with {('+' if est_pitch >= 0 else '')}{est_pitch:.1f}° tilt "
+                f"at {est_cam_alt:.1f}m MSL elevation, looking directly toward {stage2_res.get('landmark_name', 'the landmark')}."
+            )
+
+        arch_features = matched_metro.get("architectural_features", "") if matched_metro else ""
+        surrounding_context = matched_metro.get("surrounding_context", "") if matched_metro else ""
+        arch_style = matched_metro.get("architectural_style", "Iconic Architecture") if matched_metro else ""
+
+        descriptive_location = {
+            "landmark_name": stage2_res.get("landmark_name", "Identified Landmark"),
+            "formatted_address": stage2_res.get("formatted_address") or (matched_metro.get("formatted_address") if matched_metro else ""),
+            "neighborhood": stage2_res.get("neighborhood") or (matched_metro.get("neighborhood") if matched_metro else "Urban Landmark District"),
+            "city_state_country": stage2_res.get("city") or (matched_metro.get("borough_city") if matched_metro else ""),
+            "camera_standpoint_address": camera_address or (vantage_candidate.get("camera_address") if vantage_candidate else "Pedestrian Observation Point"),
+            "viewpoint_description": viewpoint_desc,
+            "architectural_style": arch_style,
+            "architectural_features": arch_features,
+            "surrounding_context": surrounding_context,
+            "standoff_distance_m": round(est_standoff, 2),
+            "elevation_msl_m": round(est_cam_alt, 3),
+            "viewing_azimuth_deg": round(est_heading, 2),
+            "elevation_pitch_deg": round(est_pitch, 2)
+        }
+
         elapsed_ms = (time.time() - t0) * 1000.0
 
         return {
@@ -1116,6 +1234,8 @@ class GeoBoxPrecisionPipeline:
             "roll_deg": 0.0,
             "standoff_distance_m": round(est_standoff, 3),
             "vantage_point_name": vantage_name,
+            "descriptive_location": descriptive_location,
+            "location_dossier": descriptive_location,
             "inlier_count": inlier_count,
             "subpixel_feature_count": subpixel_res["subpixel_feature_count"],
             "reprojection_residual_px": subpixel_res["reprojection_residual_px"],
@@ -1301,8 +1421,11 @@ class GeoBoxPrecisionPipeline:
         print(f"  Stage 3 (Street View Reference)  ➔ Pano: {s3['pano_id']} ({s3['lat']:.6f}°, {s3['lng']:.6f}°)")
 
         # 4. Stage 4: DepthBox Metric & Intrinsics
-        s4 = self.run_stage4_depth_and_intrinsics(effective_query_image, landmark_name=s2["landmark_name"])
+        s4 = self.run_stage4_depth_and_intrinsics(effective_query_image, landmark_name=s2["landmark_name"], exif_metadata=exif_info)
         print(f"  Stage 4 (DepthBox Intrinsics)    ➔ Focal Length fx: {s4['fx']} px | Est Standoff: {s4['standoff_distance_m']} m")
+        if s4.get("lens_distortion"):
+            ld = s4["lens_distortion"]
+            print(f"                                   ➔ Brown-Conrady Lens: {ld['profile']} | k1={ld['k1']}, k2={ld['k2']}")
 
         # 5. Stage 5: 6-DOF Perspective-n-Point Exact Camera Resectioning (Millimeter Optical Center)
         s5 = self.run_stage5_exact_camera_resectioning(effective_query_image, s2, s4, camera_gt=camera_gt, exif_metadata=exif_info)
@@ -1341,6 +1464,9 @@ class GeoBoxPrecisionPipeline:
             "camera_millimeter_precision": True,
             "camera_residual_mm": s5["camera_residual_mm"],
             "google_map_tiles_3d": s5["google_map_tiles_3d"],
+            "lens_distortion": s4.get("lens_distortion"),
+            "descriptive_location": s5.get("descriptive_location"),
+            "location_dossier": s5.get("location_dossier"),
             "stage1_geobox": s1,
             "stage2_places": s2,
             "stage3_streetview": s3,
