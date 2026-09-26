@@ -75,12 +75,15 @@ function downloadImage(url, destPath) {
 function executePythonResection(imagePath, hint) {
     return new Promise((resolve, reject) => {
         const scriptPath = path.join(REPO_ROOT, 'tools', 'geobox', 'pipeline', 'geobox_precision_pipeline.py');
-        const args = [scriptPath, '--image', imagePath, '--json'];
+        const args = [scriptPath, '--json'];
+        if (imagePath) {
+            args.push('--image', imagePath);
+        }
         if (hint && typeof hint === 'string' && hint.trim().length > 0) {
             args.push('--hint', hint.trim());
         }
 
-        console.log(`[Resection API] Spawning GeoBox pipeline for: ${imagePath} (hint: "${hint || ''}")`);
+        console.log(`[Resection API] Spawning GeoBox pipeline for: ${imagePath || 'text-only query'} (hint: "${hint || ''}")`);
         const pythonBin = process.env.PYTHON_BIN || (fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3') ? '/Library/Developer/CommandLineTools/usr/bin/python3' : 'python3');
         const defaultPaths = [
             process.env.PYTHONPATH,
@@ -151,6 +154,54 @@ function getFfmpegBin() {
     if (fs.existsSync('/opt/homebrew/bin/ffmpeg')) return '/opt/homebrew/bin/ffmpeg';
     if (fs.existsSync('/usr/local/bin/ffmpeg')) return '/usr/local/bin/ffmpeg';
     return 'ffmpeg';
+}
+
+function haversineDistanceKm(lat1, lon1, lat2, lon2) {
+    const R = 6371.0;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function resolveDynamicModelByProximity(lat, lng, hint = '') {
+    const modelsDir = path.join(PUBLIC_DIR, 'models');
+    const q = (hint || '').toLowerCase();
+
+    // Known geodetic centroids of pre-captured high-quality models in public/models
+    const GEO_MODELS = [
+        { file: 'nyc_empire_state_building_pbr_enhanced.glb', lat: 40.74844, lng: -73.98566, keys: ['empire', 'esb', '350 5th', '34th st', '34th street'] },
+        { file: 'google_tiles_textured_area.glb', lat: 40.76449, lng: -73.97444, keys: ['plaza', 'central park south', 'grand army plaza'] },
+        { file: 'colosseum_rome_textured.glb', lat: 41.89021, lng: 12.49223, keys: ['colosseum', 'colosseo', 'rome', 'flavian'] },
+        { file: 'washington_square_arch_nyc_universal_pbr.glb', lat: 40.73082, lng: -73.99733, keys: ['washington square', 'arch'] },
+        { file: 'red_rocks_amphitheatre.glb', lat: 39.6654, lng: -105.2057, keys: ['red rocks', 'amphitheatre'] },
+        { file: 'eiffel_tower_textured.glb', lat: 48.85837, lng: 2.29448, keys: ['eiffel', 'paris'] },
+        { file: 'sydney_opera_house_textured.glb', lat: -33.85678, lng: 151.2153, keys: ['sydney', 'opera'] }
+    ];
+
+    let best = null;
+    let minDist = 3.0; // within 3 km
+    for (const m of GEO_MODELS) {
+        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+            const d = haversineDistanceKm(lat, lng, m.lat, m.lng);
+            if (d < minDist) {
+                minDist = d;
+                best = m.file;
+            }
+        }
+        if (q && m.keys.some(k => q.includes(k))) {
+            if (!best || minDist > 10.0) {
+                best = m.file;
+            }
+        }
+    }
+
+    if (best && fs.existsSync(path.join(modelsDir, best))) {
+        return best;
+    }
+    return 'google_tiles_textured_area.glb';
 }
 
 function extractVideoFrame(videoPath, timeSec, outPath) {
@@ -292,14 +343,19 @@ const server = http.createServer(async (req, res) => {
                     res.end(JSON.stringify({ success: false, error: `Media file not found: ${targetPath}` }));
                     return;
                 }
+            } else if (payload.hint || payload.query || payload.text) {
+                // Text-only search mode: No input image/video provided
+                savedImagePath = null;
+                relativeUploadUrl = null;
             } else {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Must provide imageBase64/videoBase64, imageUrl/videoUrl, or imagePath/videoPath' }));
+                res.end(JSON.stringify({ success: false, error: 'Must provide a search query (text), a photograph (image), or both.' }));
                 return;
             }
 
-            // Execute Python 7-Stage Precision Pipeline (handles both videos and images)
-            const result = await executePythonResection(savedImagePath, payload.hint);
+            // Execute Python 7-Stage Precision Pipeline (handles text-only, photo-only, or both)
+            const queryHint = payload.hint || payload.query || payload.text || '';
+            const result = await executePythonResection(savedImagePath, queryHint);
 
             // Ingest 3D Object Mesh of resected landmark via getGoogle3DTilesFullTexture
             let threeDObject = null;
@@ -309,9 +365,12 @@ const server = http.createServer(async (req, res) => {
                     lng: result.google_map_tiles_3d?.center?.lng || 12.49165,
                     elevation: result.google_map_tiles_3d?.center?.altitude || 26.0
                 };
-                const outputGlbName = (result.google_map_tiles_3d?.three_d_object_model_url
-                    ? path.basename(result.google_map_tiles_3d.three_d_object_model_url)
-                    : (Math.abs(targetAnchor.lat - 41.89) < 0.05 ? 'colosseum_rome_textured.glb' : 'google_tiles_textured_area.glb'));
+                let outputGlbName = 'google_tiles_textured_area.glb';
+                if (result.google_map_tiles_3d?.three_d_object_model_url) {
+                    outputGlbName = path.basename(result.google_map_tiles_3d.three_d_object_model_url);
+                } else {
+                    outputGlbName = resolveDynamicModelByProximity(targetAnchor.lat, targetAnchor.lng, payload.hint || '');
+                }
                 const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
                 const tileObj = await fetchGoogle3DTilesObject(targetAnchor, {
                     outputGlbPath,
@@ -506,9 +565,11 @@ const server = http.createServer(async (req, res) => {
                 };
             }
 
-            const outputGlbName = (typeof target === 'object' && target.lat && Math.abs(target.lat - 41.89) < 0.05)
-                ? 'colosseum_rome_textured.glb'
-                : 'google_tiles_textured_area.glb';
+            const outputGlbName = resolveDynamicModelByProximity(
+                typeof target === 'object' ? target.lat : null,
+                typeof target === 'object' ? target.lng : null,
+                queryParam
+            );
             const outputGlbPath = path.join(PUBLIC_DIR, 'models', outputGlbName);
 
             const tileObj = await fetchGoogle3DTilesObject(target, {

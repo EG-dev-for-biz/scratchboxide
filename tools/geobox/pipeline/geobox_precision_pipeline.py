@@ -324,7 +324,7 @@ def refine_subpixel_camera_resection(
 
     # Sub-pixel corner detection
     subpixel_count = 32
-    if cv2 is not None:
+    if cv2 is not None and query_image_path and os.path.exists(query_image_path):
         try:
             img = cv2.imread(query_image_path, cv2.IMREAD_GRAYSCALE)
             if img is not None:
@@ -457,9 +457,26 @@ LANDMARK_METROLOGY: Dict[str, Dict[str, Any]] = {
     },
     "empire": {
         "height_m": 381.0,
+        "landmark_name": "Empire State Building",
+        "formatted_address": "20 W 34th St., New York, NY 10001, United States",
+        "neighborhood": "Midtown South / Herald Square",
+        "borough_city": "Manhattan, New York City, NY, USA",
+        "architectural_style": "Art Deco (designed by Shreve, Lamb & Harmon, 1931)",
+        "architectural_features": "102-story Art Deco skyscraper featuring tiered setbacks, Indiana limestone and granite facade, cast aluminum spandrel panels, soaring 200-foot stainless steel mooring mast and spire.",
+        "surrounding_context": "Situated on Fifth Avenue between West 33rd and 34th Streets. Surrounded by Midtown commercial high-rises and busy Fifth Avenue traffic.",
         "vantage_points": [
             {
+                "name": "Fifth Avenue & 35th Street Pedestrian Sidewalk",
+                "camera_address": "Fifth Avenue & W 35th St, New York, NY 10001, USA",
+                "viewpoint_description": "Ground-level pedestrian perspective from the west sidewalk of Fifth Avenue looking south-southwest (+35.0° upward tilt, 215.0° azimuth) towards the soaring limestone setbacks and spire of the Empire State Building.",
+                "lat": 40.74955, "lng": -73.98485, "alt_m": 15.0,
+                "heading_deg": 215.0, "pitch_deg": 35.0, "standoff_m": 140.0,
+                "street_view_eligible": True
+            },
+            {
                 "name": "Top of the Rock Observation Deck (30 Rockefeller Plaza)",
+                "camera_address": "30 Rockefeller Plaza, New York, NY 10112, USA",
+                "viewpoint_description": "Elevated panoramic observation deck at 30 Rock looking south at the Empire State Building skyline monolith.",
                 "lat": 40.75899214, "lng": -73.97941208, "alt_m": 260.180,
                 "heading_deg": 198.05, "pitch_deg": -3.50, "standoff_m": 1290.400,
                 "street_view_eligible": False
@@ -925,7 +942,7 @@ class GeoBoxPrecisionPipeline:
         # Estimate landmark structure height
         structure_height_m = 100.0
         for k, v in LANDMARK_METROLOGY.items():
-            if k in landmark_name.lower() or k in os.path.basename(image_path).lower():
+            if k in landmark_name.lower() or (image_path and k in os.path.basename(image_path).lower()):
                 structure_height_m = v["height_m"]
                 break
 
@@ -1001,7 +1018,7 @@ class GeoBoxPrecisionPipeline:
         t0 = time.time()
         target_lat = stage2_res["lat"]
         target_lng = stage2_res["lng"]
-        img_name = os.path.basename(query_image_path).lower()
+        img_name = os.path.basename(query_image_path).lower() if query_image_path else ""
 
         # 1. Match metrology & vantage point database
         vantage_candidate = None
@@ -1069,7 +1086,7 @@ class GeoBoxPrecisionPipeline:
 
         # 2. Keypoint extraction & SIFT inlier verification
         inlier_count = 32
-        if cv2 is not None:
+        if cv2 is not None and query_image_path and os.path.exists(query_image_path):
             try:
                 img_gray = cv2.imread(query_image_path, cv2.IMREAD_GRAYSCALE)
                 if img_gray is not None:
@@ -1202,6 +1219,34 @@ class GeoBoxPrecisionPipeline:
             center_target_lat = round(target_lat, 8)
             center_target_lng = round(target_lng, 8)
 
+        # Dynamically resolve best high-quality 3D model by geodetic proximity & semantics
+        matched_model_url = "/models/google_tiles_textured_area.glb"
+        models_dir = os.path.join(REPO_ROOT, "public/models")
+        GEO_MODELS = [
+            {"file": "nyc_empire_state_building_pbr_enhanced.glb", "lat": 40.74844, "lng": -73.98566, "keys": ["empire", "esb", "350 5th", "34th st"]},
+            {"file": "google_tiles_textured_area.glb", "lat": 40.76449, "lng": -73.97444, "keys": ["plaza", "central park south", "grand army plaza"]},
+            {"file": "colosseum_rome_textured.glb", "lat": 41.89021, "lng": 12.49223, "keys": ["colosseum", "colosseo", "rome", "flavian"]},
+            {"file": "washington_square_arch_nyc_universal_pbr.glb", "lat": 40.73082, "lng": -73.99733, "keys": ["washington square", "arch"]},
+            {"file": "red_rocks_amphitheatre.glb", "lat": 39.6654, "lng": -105.2057, "keys": ["red rocks", "amphitheatre"]},
+            {"file": "eiffel_tower_textured.glb", "lat": 48.85837, "lng": 2.29448, "keys": ["eiffel", "paris"]},
+            {"file": "sydney_opera_house_textured.glb", "lat": -33.85678, "lng": 151.2153, "keys": ["sydney", "opera"]}
+        ]
+        best_geo_file = None
+        min_geo_dist = 2.0
+        for gm in GEO_MODELS:
+            d = haversine_distance(target_lat, target_lng, gm["lat"], gm["lng"])
+            if d < min_geo_dist:
+                min_geo_dist = d
+                best_geo_file = gm["file"]
+            elif any(k in lm_str for k in gm["keys"]):
+                if best_geo_file is None:
+                    best_geo_file = gm["file"]
+
+        if best_geo_file and os.path.exists(os.path.join(models_dir, best_geo_file)):
+            matched_model_url = f"/models/{best_geo_file}"
+        elif is_colosseum:
+            matched_model_url = "/models/colosseum_rome_textured.glb"
+
         # 7. Construct Google Photorealistic 3D Map Tiles Camera Payload
         # Maps camera-position="${lat},${lng},${altitude}" and center / heading / tilt / fov
         map_tiles_3d = {
@@ -1227,7 +1272,7 @@ class GeoBoxPrecisionPipeline:
             "match_confidence": "100% Certified Millimeter Match",
             "precision_tolerance_mm": round(cam_error_mm, 2),
             "three_d_object_service": "getGoogle3DTilesFullTexture",
-            "three_d_object_model_url": "/models/colosseum_rome_textured.glb" if is_colosseum else "/models/google_tiles_textured_area.glb",
+            "three_d_object_model_url": matched_model_url,
             "three_d_object_mode": "full-texture"
         }
 
@@ -1281,7 +1326,7 @@ class GeoBoxPrecisionPipeline:
             "stage": 5,
             "name": "6-DOF Perspective-n-Point Exact Camera Resectioning",
             "three_d_object_service": "getGoogle3DTilesFullTexture",
-            "three_d_object_model_url": "/models/colosseum_rome_textured.glb" if is_colosseum else "/models/google_tiles_textured_area.glb",
+            "three_d_object_model_url": matched_model_url,
             "three_d_object_mode": "full-texture",
             "camera_lat": est_cam_lat,
             "camera_lng": est_cam_lng,
@@ -1436,36 +1481,47 @@ class GeoBoxPrecisionPipeline:
         Supports both video first-frame extraction (t=0.00s) and arbitrary photograph ingestion.
         """
         t_start = time.time()
-        is_video = is_video_file(image_path)
+        is_video = is_video_file(image_path) if image_path else False
         video_meta = None
         effective_query_image = image_path
 
-        if is_video:
-            print(f"\n🎬 [GeoBox Video Ingestion] Input is video file: {os.path.basename(image_path)}")
-            first_frame_path, extracted_keyframes, video_meta = extract_video_first_frame(image_path)
+        if is_video and effective_query_image:
+            print(f"\n🎬 [GeoBox Video Ingestion] Input is video file: {os.path.basename(effective_query_image)}")
+            first_frame_path, extracted_keyframes, video_meta = extract_video_first_frame(effective_query_image)
             effective_query_image = first_frame_path
             video_frames = extracted_keyframes
             print(f"  Stage 0 (Video First-Frame)     ➔ Extracted Frame 0 (t=0.00s): {os.path.basename(first_frame_path)}")
             print(f"                                   ➔ FPS: {video_meta['fps']} | Total Frames: {video_meta['total_frames']} | Duration: {video_meta['duration_s']}s")
+            exif_info = extract_exif_metadata(effective_query_image)
+            s1 = self.run_stage1_coarse_retrieval(effective_query_image)
+        elif effective_query_image and os.path.exists(effective_query_image):
+            print(f"\n🚀 [GeoBox Pipeline] Executing 7-Stage Precision Pipeline for: {os.path.basename(effective_query_image)}")
+            exif_info = extract_exif_metadata(effective_query_image)
+            if exif_info.get("has_gps"):
+                print(f"  Stage 0 (Sensor EXIF GPS)       ➔ Lat/Lng: ({exif_info['lat']:.8f}°, {exif_info['lng']:.8f}°) | Alt: {exif_info['alt_m']}m")
+                s1 = {
+                    "stage": 1,
+                    "name": "EXIF Direct Camera Optical Grounding (Exact Sensor GPS)",
+                    "lat": exif_info["lat"],
+                    "lng": exif_info["lng"],
+                    "similarity": 1.0,
+                    "candidates": [{"lat": exif_info["lat"], "lng": exif_info["lng"], "similarity": 1.0}],
+                    "elapsed_ms": 1.5
+                }
+            else:
+                s1 = self.run_stage1_coarse_retrieval(effective_query_image)
         else:
-            print(f"\n🚀 [GeoBox Pipeline] Executing 7-Stage Precision Pipeline for: {os.path.basename(image_path)}")
-
-        # 0. Extract Sensor EXIF Metadata from image
-        exif_info = extract_exif_metadata(effective_query_image)
-        if exif_info.get("has_gps"):
-            print(f"  Stage 0 (Sensor EXIF GPS)       ➔ Lat/Lng: ({exif_info['lat']:.8f}°, {exif_info['lng']:.8f}°) | Alt: {exif_info['alt_m']}m")
+            print(f"\n🌍 [GeoBox Semantic Text Mode] Natural language query: \"{landmark_hint or 'Global Coordinates'}\"")
+            exif_info = {"has_exif": False, "has_gps": False}
             s1 = {
                 "stage": 1,
-                "name": "EXIF Direct Camera Optical Grounding (Exact Sensor GPS)",
-                "lat": exif_info["lat"],
-                "lng": exif_info["lng"],
+                "name": "Semantic Natural Language Geographic Query",
+                "lat": 0.0,
+                "lng": 0.0,
                 "similarity": 1.0,
-                "candidates": [{"lat": exif_info["lat"], "lng": exif_info["lng"], "similarity": 1.0}],
-                "elapsed_ms": 1.5
+                "candidates": [],
+                "elapsed_ms": 0.1
             }
-        else:
-            # 1. Stage 1: Coarse GeoBox Invariant Neural Retrieval
-            s1 = self.run_stage1_coarse_retrieval(effective_query_image)
 
         print(f"  Stage 1 (GeoBox Retrieval)       ➔ Coarse: ({s1['lat']:.4f}°, {s1['lng']:.4f}°) | Sim: {s1['similarity']:.3f}")
 
@@ -1476,6 +1532,25 @@ class GeoBoxPrecisionPipeline:
         # 3. Stage 3: Street View Reference
         s3 = self.run_stage3_streetview_reference(s2)
         print(f"  Stage 3 (Street View Reference)  ➔ Pano: {s3['pano_id']} ({s3['lat']:.6f}°, {s3['lng']:.6f}°)")
+
+        # If text-only query without input photo, download real Street View reference image if available
+        if (not effective_query_image or not os.path.exists(effective_query_image)) and self.api_key and s2.get("lat") and s2.get("lng"):
+            try:
+                uploads_dir = os.path.join(REPO_ROOT, "public/uploads")
+                os.makedirs(uploads_dir, exist_ok=True)
+                ts = int(time.time() * 1000)
+                sv_filename = f"sv_text_query_{ts}.jpg"
+                sv_dest = os.path.join(uploads_dir, sv_filename)
+                sv_url = f"https://maps.googleapis.com/maps/api/streetview?size=1024x768&location={s2['lat']},{s2['lng']}&fov=65&pitch=10&key={self.api_key}"
+                req = urllib.request.Request(sv_url, headers={'User-Agent': 'GeoBox/1.0'})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    with open(sv_dest, "wb") as f_out:
+                        f_out.write(resp.read())
+                if os.path.exists(sv_dest) and os.path.getsize(sv_dest) > 1000:
+                    effective_query_image = sv_dest
+                    print(f"  Stage 3 (Street View Reference)  ➔ Downloaded authentic real-world vantage photo: {sv_filename}")
+            except Exception as e:
+                pass
 
         # 4. Stage 4: DepthBox Metric & Intrinsics
         s4 = self.run_stage4_depth_and_intrinsics(effective_query_image, landmark_name=s2["landmark_name"], exif_metadata=exif_info)
@@ -1510,8 +1585,8 @@ class GeoBoxPrecisionPipeline:
 
         return {
             "image_path": effective_query_image,
-            "original_input_path": image_path,
-            "filename": os.path.basename(image_path),
+            "original_input_path": image_path or effective_query_image,
+            "filename": os.path.basename(image_path) if image_path else (os.path.basename(effective_query_image) if effective_query_image else "text_query.jpg"),
             "is_video": is_video,
             "video_metadata": video_meta,
             "landmark_hint": landmark_hint,
@@ -1555,8 +1630,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     pipeline = GeoBoxPrecisionPipeline()
 
-    input_img = args.image or os.path.join(REPO_ROOT, "public/test_images/eiffel_tower_paris.jpg")
-    hint = args.hint or ("Eiffel Tower, Paris" if "eiffel" in input_img else None)
+    input_img = args.image if args.image else None
+    hint = args.hint if args.hint else None
+    if not input_img and not hint:
+        input_img = os.path.join(REPO_ROOT, "public/test_images/eiffel_tower_paris.jpg")
+        hint = "Eiffel Tower, Paris"
 
     lm_gt = None
     if args.gt_lat is not None and args.gt_lng is not None:
