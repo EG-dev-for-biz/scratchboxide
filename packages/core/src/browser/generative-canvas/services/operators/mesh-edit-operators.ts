@@ -22,6 +22,10 @@ import {
     generateGeospatialCpp3DSource
 } from '../Google3DTileService';
 import type { ClayPresetId } from '../TileClayProcessor';
+import {
+    ArchieBuildingRefiner,
+    type ArchieBuildingPalette
+} from '../spatial/ArchieBuildingRefiner';
 
 export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
     {
@@ -988,6 +992,82 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 stats: result.stats,
                 vertexCount: result.stats.vertexCount,
                 buildingCount: result.stats.buildingCount
+            };
+        }
+    },
+    {
+        name: 'sb_refine_building_structure',
+        category: 'mesh_edit',
+        description: 'Refines authentic scanned building geometry with bilateral planar facade normal smoothing, watertight grounding plinths, and architectural PBR materials.',
+        execute: (ctx, params: {
+            targetMeshId?: string;
+            palette?: ArchieBuildingPalette;
+            plinthDepth?: number;
+            plinthPadding?: number;
+            maxFacadeNormalY?: number;
+            groundDatumY?: number;
+        }) => {
+            const threeScene = ctx.getThreeScene();
+            let targetMesh: THREE.Mesh | null = null;
+
+            if (params.targetMeshId && threeScene) {
+                threeScene.traverse(node => {
+                    if ((node as any).id === params.targetMeshId || node.name === params.targetMeshId) {
+                        if ((node as THREE.Mesh).isMesh) {
+                            targetMesh = node as THREE.Mesh;
+                        }
+                    }
+                });
+            }
+
+            if (!targetMesh && threeScene) {
+                // Find first mesh with building in name or first mesh
+                threeScene.traverse(node => {
+                    if (!targetMesh && (node as THREE.Mesh).isMesh) {
+                        if (node.name.toLowerCase().includes('building') || node.name.toLowerCase().includes('palazzo') || node.name.toLowerCase().includes('facade')) {
+                            targetMesh = node as THREE.Mesh;
+                        }
+                    }
+                });
+            }
+
+            const refiner = new ArchieBuildingRefiner();
+            let result;
+
+            if (targetMesh) {
+                result = refiner.refineBuilding(targetMesh, {
+                    palette: params.palette || 'roman_ochre',
+                    plinthDepth: params.plinthDepth ?? 2.5,
+                    plinthPadding: params.plinthPadding ?? 0.3,
+                    maxFacadeNormalY: params.maxFacadeNormalY ?? 0.38,
+                    groundDatumY: params.groundDatumY
+                });
+                if (threeScene) {
+                    targetMesh.parent?.remove(targetMesh);
+                    threeScene.add(result.group);
+                }
+            } else {
+                // Fallback: create architectural demo volume
+                const fallbackGeom = new THREE.BoxGeometry(15, 24, 15);
+                fallbackGeom.translate(0, 12, 0);
+                result = refiner.refineBuilding(fallbackGeom, {
+                    palette: params.palette || 'roman_ochre',
+                    plinthDepth: params.plinthDepth ?? 2.5,
+                    plinthPadding: params.plinthPadding ?? 0.3
+                });
+                if (threeScene) {
+                    threeScene.add(result.group);
+                }
+            }
+
+            ctx.recordState(`Archie: Refine Building Structure (${params.palette || 'roman_ochre'})`);
+
+            return {
+                success: true,
+                palette: params.palette || 'roman_ochre',
+                metrics: result.metrics,
+                refinedMeshName: result.refinedMesh.name,
+                plinthMeshName: result.plinthMesh.name
             };
         }
     }

@@ -226,5 +226,29 @@ export {
     type ClothSheenEvaluation
 } from './browser/generative-canvas/services/headless-realism-service';
 
+// Universal Archie Building Structure Refinement & SB-Terrain Ground Engine
+export {
+    ArchieBuildingRefiner,
+    smoothFacadeNormals,
+    generateWatertightPlinth,
+    ARCHIE_BUILDING_PALETTES,
+    type ArchieBuildingPalette,
+    type ArchieBuildingRefineOptions,
+    type ArchieRefinedBuildingResult
+} from './browser/generative-canvas/services/spatial/ArchieBuildingRefiner';
+
+export {
+    SbTerrainGroundEngine,
+    classifyTerrainSurfaceType,
+    createProceduralRockStrataTexture,
+    createProceduralGrassTexture,
+    createProceduralCobblestoneTexture,
+    type TerrainSurfaceType,
+    type TerrainLayerMode,
+    type TerrainClassificationMetrics,
+    type SbTerrainOptions,
+    type SbTerrainClassificationResult
+} from './browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
+
 
 

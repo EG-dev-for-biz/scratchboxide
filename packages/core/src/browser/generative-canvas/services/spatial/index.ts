@@ -15,3 +15,5 @@ export * from './PhotorealGaussianSplatMesh';
 export * from './SplatRadixSorter';
 export * from './SpatialSplatCalibrationGizmo';
 export * from './SpatialGenerativeRuntime';
+export * from './ArchieBuildingRefiner';
+export * from './SbTerrainGroundEngine';

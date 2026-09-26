@@ -16,6 +16,10 @@ import {
     getSunVectorFromAngles,
     createVolumetricGodRays
 } from '../atmosphere';
+import {
+    SbTerrainGroundEngine,
+    type TerrainLayerMode
+} from '../spatial/SbTerrainGroundEngine';
 
 export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
     {
@@ -571,6 +575,87 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             return {
                 success: true,
                 godRays: scene.features.godRays
+            };
+        }
+    },
+    {
+        name: 'sb_classify_terrain_materials',
+        category: 'materials_pbr',
+        description: 'Dynamically classifies terrain submeshes across three geological/urban systems (Volcanic Tufa Rocks, Mediterranean Grass/Turf, Basalt Cobblestone) backed by procedural canvas bump maps.',
+        execute: (ctx, params: {
+            targetMeshId?: string;
+            layer?: TerrainLayerMode;
+            rockSlopeThresholdDeg?: number;
+            pavementMaxSlopeDeg?: number;
+        }) => {
+            const threeScene = ctx.getThreeScene();
+            const meshesToProcess: THREE.Mesh[] = [];
+
+            if (params.targetMeshId && threeScene) {
+                threeScene.traverse(node => {
+                    if ((node as any).id === params.targetMeshId || node.name === params.targetMeshId) {
+                        if ((node as THREE.Mesh).isMesh) {
+                            meshesToProcess.push(node as THREE.Mesh);
+                        }
+                    }
+                });
+            }
+
+            if (meshesToProcess.length === 0 && threeScene) {
+                threeScene.traverse(node => {
+                    if ((node as THREE.Mesh).isMesh) {
+                        const name = node.name.toLowerCase();
+                        if (name.includes('terrain') || name.includes('ground') || name.includes('surface') || name.includes('plaza') || name.includes('rock')) {
+                            meshesToProcess.push(node as THREE.Mesh);
+                        }
+                    }
+                });
+            }
+
+            const engine = new SbTerrainGroundEngine();
+            let result;
+
+            if (meshesToProcess.length > 0) {
+                result = engine.classifyAndRenderTerrain(meshesToProcess, {
+                    rockSlopeThresholdDeg: params.rockSlopeThresholdDeg,
+                    pavementMaxSlopeDeg: params.pavementMaxSlopeDeg,
+                    initialLayer: params.layer || 'all'
+                });
+                if (threeScene) {
+                    for (const m of meshesToProcess) {
+                        m.parent?.remove(m);
+                    }
+                    threeScene.add(result.terrainGroup);
+                }
+            } else {
+                // Synthesize demo terrain chunks
+                const demoGroup = new THREE.Group();
+                const pGeom = new THREE.PlaneGeometry(30, 30, 4, 4);
+                pGeom.rotateX(-Math.PI / 2);
+                demoGroup.add(new THREE.Mesh(pGeom));
+
+                const gGeom = new THREE.PlaneGeometry(30, 30, 4, 4);
+                gGeom.rotateX(-Math.PI / 2 + Math.PI / 8);
+                demoGroup.add(new THREE.Mesh(gGeom));
+
+                const rGeom = new THREE.PlaneGeometry(30, 30, 4, 4);
+                rGeom.rotateX(-Math.PI / 2 + Math.PI / 3);
+                demoGroup.add(new THREE.Mesh(rGeom));
+
+                result = engine.classifyAndRenderTerrain(demoGroup, {
+                    initialLayer: params.layer || 'all'
+                });
+                if (threeScene) {
+                    threeScene.add(result.terrainGroup);
+                }
+            }
+
+            ctx.recordState(`SB-Terrain: Classify Materials (Layer: ${params.layer || 'all'})`);
+
+            return {
+                success: true,
+                layer: params.layer || 'all',
+                metrics: result.metrics
             };
         }
     },

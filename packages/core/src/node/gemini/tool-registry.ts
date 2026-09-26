@@ -55,6 +55,16 @@ import {
     geoboxPrecisionHandlers,
     OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS,
     opticsLensDistortionHandlers,
+    BOTANICAL_TREE_TOOL_DECLARATIONS,
+    botanicalTreeHandlers,
+    POSE_DEPTH_TOOL_DECLARATIONS,
+    poseDepthHandlers,
+    PHYSICAL_CAMERA_TOOL_DECLARATIONS,
+    physicalCameraHandlers,
+    TAPIR_4DGS_TOOL_DECLARATIONS,
+    tapir4dgsHandlers,
+    AVATAR_4DGS_TOOL_DECLARATIONS,
+    avatar4dgsHandlers,
     COMFYUI_TOOL_DECLARATIONS,
     comfyuiHandlers,
     LENS_TOOL_DECLARATIONS,
@@ -96,7 +106,10 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('mesh_')) return `Native Mesh Reshaping: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `VFX & Video Engine: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('adaptive_matchmove_')) return `Adaptive Matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('continuous_spline_')) return `Continuous Spline Matchmove: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `SB-Veggie Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('archie_')) return `Archie Architecture: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
@@ -107,7 +120,10 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('mesh_')) return `Mesh: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `VFX: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('adaptive_matchmove_')) return `Matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('continuous_spline_')) return `Spline Matchmove: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('archie_')) return `Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('sb_terrain_')) return `SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Workspace: ${name}`;
         },
         stepTitle: name => {
@@ -118,7 +134,10 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('mesh_')) return `Reshape 3D mesh via native C++20 engine: ${name.replace('mesh_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('vfx_')) return `Execute video & VFX operation: ${name.replace('vfx_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('adaptive_matchmove_')) return `Calibrate and resect camera matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('continuous_spline_')) return `Optimize continuous spline camera trajectory: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `Synthesize 1:1 metric botanical tree: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('archie_')) return `Refine building structure with Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('sb_terrain_')) return `Classify terrain materials with SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Invoke ${name}`;
         },
         durationMs: { completed: 25, failed: 25 },
@@ -180,22 +199,43 @@ const PREFIXED_GROUPS: Array<Exclude<ToolGroup, 'mcp'>> = ['workspace', 'lens', 
 
 export function inferToolGroup(name: string): ToolGroup {
     if (typeof name !== 'string') return 'workspace';
+    if (name.startsWith('comfyui_') || name === 'resolve_task_capability') return 'comfyui';
+    if (name.startsWith('lens_')) return 'lens';
+    if (name.startsWith('browser_')) return 'browser';
     if (
         name === 'invoke_subagent' ||
         name === 'send_message' ||
         name === 'mount_canvas_primitive' ||
+        name.startsWith('workspace_') ||
         name.startsWith('google_3d_tiles_') ||
+        name === 'splat_to_3dtiles' ||
+        name.startsWith('survey_') ||
         name.startsWith('utdra_') ||
         name.startsWith('atmosphere_') ||
         name.startsWith('mesh_') ||
         name.startsWith('webxr_geospatial_') ||
         name.startsWith('geobox_') ||
+        name.startsWith('spatial_') ||
+        name.startsWith('optics_') ||
         name.startsWith('panorama_') ||
         name.startsWith('nano_banana_') ||
         name.startsWith('algorithmic_uv_') ||
+        name === 'uv_analyze_texel_density' ||
         name.startsWith('vfx_') ||
+        name.startsWith('build_') ||
+        name.startsWith('generate_') ||
         name.startsWith('adaptive_matchmove_') ||
+        name.startsWith('continuous_spline_') ||
         name.startsWith('botanical_') ||
+        name.startsWith('archie_') ||
+        name.startsWith('sb_terrain_') ||
+        name.startsWith('mediapipe_') ||
+        name === 'gemini_estimate_scene_depth' ||
+        name === 'configure_physical_camera' ||
+        name === 'camera_track_focus_target' ||
+        name.startsWith('tapir_') ||
+        name.startsWith('avatar_') ||
+        name.startsWith('performer_') ||
         name === 'pbr_material_decompose' ||
         name === 'atlas_maxrects_pack' ||
         name === 'build_beautify_prompt'
@@ -359,13 +399,22 @@ export function buildToolDeclarations(
         request.mode === 'plan' ||
         request.mode === 'ask' ||
         !!request.agent ||
-        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice/i.test(request.prompt))
+        !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|comfy|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
+    );
+
+    const isComfyUiNeeded = request.enableComfyUiTools !== false && (
+        request.enableComfyUiTools === true ||
+        request.mode === 'agent' ||
+        request.mode === 'plan' ||
+        !!request.agent ||
+        !!(request.prompt && /comfy|neural|diffusion|trellis|triposr|marigold|lora|checkpoint|cloudrun|workflow|pipeline/i.test(request.prompt))
     );
 
     const groups: ToolGroup[] = [];
     if (isWorkspaceNeeded) groups.push('workspace');
     if (isLensNeeded) groups.push('lens');
     if (isBrowserNeeded) groups.push('browser');
+    if (isComfyUiNeeded) groups.push('comfyui');
 
     const allFunctionDeclarations: ToolDeclaration[] = [
         ...(groups.length > 0 ? registry.declarations(groups) : []),
@@ -443,6 +492,21 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of OPTICS_LENS_DISTORTION_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, opticsLensDistortionHandlers[decl.name], 'workspace');
+    }
+    for (const decl of BOTANICAL_TREE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, botanicalTreeHandlers[decl.name], 'workspace');
+    }
+    for (const decl of POSE_DEPTH_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, poseDepthHandlers[decl.name], 'workspace');
+    }
+    for (const decl of PHYSICAL_CAMERA_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, physicalCameraHandlers[decl.name], 'workspace');
+    }
+    for (const decl of TAPIR_4DGS_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, tapir4dgsHandlers[decl.name], 'workspace');
+    }
+    for (const decl of AVATAR_4DGS_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, avatar4dgsHandlers[decl.name], 'workspace');
     }
     for (const decl of COMFYUI_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, comfyuiHandlers[decl.name], 'comfyui');
