@@ -335,11 +335,12 @@ export async function matchLightingToReference(
 
     if (options.geodeticCoords && options.timestampIso) {
         try {
-            const solar = calculateNOAASolarPosition({
-                latitude: options.geodeticCoords.lat,
-                longitude: options.geodeticCoords.lng,
-                isoDate: options.timestampIso
-            });
+            const date = new Date(options.timestampIso);
+            const solar = calculateNOAASolarPosition(
+                date,
+                options.geodeticCoords.lat,
+                options.geodeticCoords.lng
+            );
             if (solar && solar.elevationDeg > 0) {
                 keyAzimuth = solar.azimuthDeg;
                 keyElevation = solar.elevationDeg;
@@ -384,7 +385,7 @@ export async function matchLightingToReference(
     const groundRgb = planckianKelvinToRgb(3200);
 
     const threeJsUniforms = {
-        uSunDirection: key ? key.direction! : [-0.3, -0.7, -0.6],
+        uSunDirection: (key?.direction ? [key.direction[0], key.direction[1], key.direction[2]] : [-0.3, -0.7, -0.6]) as [number, number, number],
         uSunColor: [sunRgb.r, sunRgb.g, sunRgb.b] as [number, number, number],
         uSkyColor: [skyRgb.r, skyRgb.g, skyRgb.b] as [number, number, number],
         uGroundColor: [groundRgb.r * 0.4, groundRgb.g * 0.35, groundRgb.b * 0.3] as [number, number, number],
