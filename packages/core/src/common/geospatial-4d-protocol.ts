@@ -120,7 +120,7 @@ export type RepresentationType =
   | 'mesh-sculptable'          // Dynamically deformable 3D sculpted mesh
   | 'vector-geojson'           // Procedural vector GIS contours/parcels
   | 'point-cloud'              // LiDAR point clouds or voxel grids
-  | 'occupancy-4d'             // 4D spatiotemporal semantic occupancy tensor (S4D/OccSora)
+  | 'occupancy-4d'             // 4D spatiotemporal semantic occupancy tensor (S4D World Model)
   | 'map-3d-tile'              // Google Photorealistic 3D Tile set
   | 'map-3d';                  // 3D Map Tile mesh
 

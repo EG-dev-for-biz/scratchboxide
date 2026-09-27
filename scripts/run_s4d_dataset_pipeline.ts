@@ -15,7 +15,7 @@ import {
   Synthetic4DDataGenerator,
   SyntheticBuildingSpec
 } from '../packages/core/src/node/spatial/Synthetic4DDataGenerator';
-import { OccSoraBridge } from '../packages/core/src/node/spatial/OccSoraBridge';
+import { S4DWorldModelBridge } from '../packages/core/src/node/spatial/S4DWorldModelBridge';
 
 interface DistrictProfile {
   name: string;

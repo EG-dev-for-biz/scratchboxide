@@ -14,17 +14,21 @@ import {
   GeospatialSemanticClass,
   OccupancyGrid4D
 } from '../src/common/geospatial-4d-protocol';
-import { OccSoraBridge, S4DTrajectoryPrompt } from '../src/node/spatial/OccSoraBridge';
+import { S4DWorldModelBridge, OccSoraBridge, S4DTrajectoryPrompt } from '../src/node/spatial/S4DWorldModelBridge';
 import { Synthetic4DDataGenerator } from '../src/node/spatial/Synthetic4DDataGenerator';
 import { TemporalSimulationSolver } from '../src/node/spatial/TemporalSimulationSolver';
 
-describe('OccSoraBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
+describe('S4DWorldModelBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
   // San Francisco Financial District
   const originSF: LatLngAlt = {
     lat: 37.7937,
     lng: -122.3965,
     alt: 10.0
   };
+
+  it('should maintain backward-compatible alias OccSoraBridge === S4DWorldModelBridge', () => {
+    expect(OccSoraBridge).toBe(S4DWorldModelBridge);
+  });
 
   it('should serialize Catmull-Rom spline telemetry into 6-DOF S4D trajectory prompts', () => {
     const baseEntity: Entity4D = {
@@ -70,7 +74,7 @@ describe('OccSoraBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
     expect(simulatedEntity.behavior.telemetryStream).toBeDefined();
     expect(simulatedEntity.behavior.telemetryStream!.length).toBeGreaterThanOrEqual(16);
 
-    const prompt = OccSoraBridge.serializeTrajectoryPrompt(simulatedEntity, originSF);
+    const prompt = S4DWorldModelBridge.serializeTrajectoryPrompt(simulatedEntity, originSF);
 
     expect(prompt.entityId).toBe('drone_surveyor_01');
     expect(prompt.waypoints.length).toBe(simulatedEntity.behavior.telemetryStream!.length);
@@ -83,7 +87,7 @@ describe('OccSoraBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
     expect(wpMid.pitchDeg).toBeDefined();
 
     // Verify continuity check
-    const validation = OccSoraBridge.validateTrajectoryContinuity(prompt);
+    const validation = S4DWorldModelBridge.validateTrajectoryContinuity(prompt);
     expect(validation.valid).toBe(true);
     expect(validation.totalDistanceMeters).toBeGreaterThan(50);
     expect(validation.warnings.length).toBe(0);
@@ -137,11 +141,11 @@ describe('OccSoraBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
     testVoxels.fill(GeospatialSemanticClass.BUILDING_FACADE, 10000, 15000);
     testVoxels.fill(GeospatialSemanticClass.DYNAMIC_AIR_AGENT, 15000, totalVoxels);
 
-    const rle = OccSoraBridge.rleEncode(testVoxels);
+    const rle = S4DWorldModelBridge.rleEncode(testVoxels);
     expect(typeof rle).toBe('string');
     expect(rle.length).toBeLessThan(testVoxels.length); // High compression ratio
 
-    const decoded = OccSoraBridge.rleDecode(rle, totalVoxels);
+    const decoded = S4DWorldModelBridge.rleDecode(rle, totalVoxels);
     expect(decoded.length).toBe(totalVoxels);
 
     // Verify byte-for-byte exact equality
@@ -182,7 +186,7 @@ describe('OccSoraBridge & Scratchbox-4D (S4D) World Model Architecture', () => {
       denseTensorUri: 'scratchbox://models/s4d_rollout_01.h5'
     };
 
-    const entity = OccSoraBridge.createOccupancyEntity(
+    const entity = S4DWorldModelBridge.createOccupancyEntity(
       'simulated_world_chunk_01',
       'SF Financial District 4D Rollout',
       dummyPrompt,

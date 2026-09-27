@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { exec, spawn } from 'node:child_process';
-import { OccSoraBridge } from '../packages/core/src/node/spatial/OccSoraBridge.js';
+import { S4DWorldModelBridge } from '../packages/core/src/node/spatial/S4DWorldModelBridge.js';
 import { GeospatialSemanticClass } from '../packages/core/src/common/geospatial-4d-protocol.js';
 
 const PORT = 8089;
@@ -22,7 +22,7 @@ const promptRaw = JSON.parse(fs.readFileSync('data/test_sample_prompt.json', 'ut
 const rleBase64 = fs.readFileSync('data/test_sample_tensor.rle', 'utf8');
 
 const expectedVoxels = 16 * 64 * 64 * 32;
-const decompressed = OccSoraBridge.rleDecode(rleBase64, expectedVoxels);
+const decompressed = S4DWorldModelBridge.rleDecode(rleBase64, expectedVoxels);
 const frameStride = 64 * 64 * 32;
 
 // Subsample 8 frames for smooth time progression

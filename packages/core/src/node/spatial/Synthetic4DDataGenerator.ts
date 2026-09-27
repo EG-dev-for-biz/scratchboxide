@@ -15,7 +15,7 @@ import {
   OccupancyGrid4DMetadata
 } from '../../common/geospatial-4d-protocol';
 import { TemporalSimulationSolver } from './TemporalSimulationSolver';
-import { OccSoraBridge, S4DTrajectoryPrompt } from './OccSoraBridge';
+import { S4DWorldModelBridge, OccSoraBridge, S4DTrajectoryPrompt } from './S4DWorldModelBridge';
 
 export interface SyntheticBuildingSpec {
   centerENU: [number, number]; // [x, y] in meters
@@ -91,7 +91,7 @@ export class Synthetic4DDataGenerator {
       timeStepMs
     );
 
-    const prompt = OccSoraBridge.serializeTrajectoryPrompt(simulatedEntity, config.origin);
+    const prompt = S4DWorldModelBridge.serializeTrajectoryPrompt(simulatedEntity, config.origin);
 
     // 2. Allocate 4D voxel grid tensor: [T, X, Y, Z]
     const totalVoxelsPerTimeStep = dimX * dimY * dimZ;
@@ -193,7 +193,7 @@ export class Synthetic4DDataGenerator {
     }
 
     // 6. Run-length encode the dense voxel grid
-    const sparseRle = OccSoraBridge.rleEncode(grid);
+    const sparseRle = S4DWorldModelBridge.rleEncode(grid);
 
     const metadata: OccupancyGrid4DMetadata = {
       dimensions,

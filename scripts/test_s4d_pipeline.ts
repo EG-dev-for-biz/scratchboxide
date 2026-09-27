@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OccSoraBridge } from '../packages/core/src/node/spatial/OccSoraBridge.js';
+import { S4DWorldModelBridge } from '../packages/core/src/node/spatial/S4DWorldModelBridge.js';
 import { GeospatialSemanticClass } from '../packages/core/src/common/geospatial-4d-protocol.js';
 
 interface TestMetrics {
@@ -25,7 +25,7 @@ export function testS4DSample(promptPath: string, tensorPath: string): { success
 
   // 1. Lossless Decompression Verification
   const expectedVoxels = 16 * 64 * 64 * 32;
-  const decompressed = OccSoraBridge.rleDecode(rleBase64, expectedVoxels);
+  const decompressed = S4DWorldModelBridge.rleDecode(rleBase64, expectedVoxels);
 
   if (decompressed.length !== expectedVoxels) {
     throw new Error(`Decompression error: Expected ${expectedVoxels} voxels, got ${decompressed.length}`);

@@ -209,7 +209,7 @@ export { SpatialAssetVaultService, VaultMetadata } from './node/spatial/SpatialA
 export { HeadlessSpatialAiBridge, SpatialAIConditioningPayload } from './node/spatial/HeadlessSpatialAiBridge';
 export { DeploymentManifestCompiler, DeploymentCompileOptions } from './node/spatial/DeploymentManifestCompiler';
 export { TemporalSimulationSolver } from './node/spatial/TemporalSimulationSolver';
-export { OccSoraBridge, S4DTrajectoryPrompt, S4DTrajectoryWaypoint, S4DInferenceRequest } from './node/spatial/OccSoraBridge';
+export { OccSoraBridge, S4DWorldModelBridge, S4DTrajectoryPrompt, S4DTrajectoryWaypoint, S4DInferenceRequest } from './node/spatial/S4DWorldModelBridge';
 export { Synthetic4DDataGenerator, Synthetic4DGenerationConfig, Synthetic4DDatasetItem } from './node/spatial/Synthetic4DDataGenerator';
 
 // Headless Video Compositor & Editor Services

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OccSoraBridge } from '../packages/core/src/node/spatial/OccSoraBridge.js';
+import { S4DWorldModelBridge } from '../packages/core/src/node/spatial/S4DWorldModelBridge.js';
 import { GeospatialSemanticClass } from '../packages/core/src/common/geospatial-4d-protocol.js';
 
 interface DistrictEvaluation {
@@ -110,7 +110,7 @@ for (const sample of samples) {
   const rleBase64 = fs.readFileSync(sample.tensor, 'utf8');
 
   const expectedVoxels = 16 * 64 * 64 * 32;
-  const decompressed = OccSoraBridge.rleDecode(rleBase64, expectedVoxels);
+  const decompressed = S4DWorldModelBridge.rleDecode(rleBase64, expectedVoxels);
 
   const classCounts: Record<number, number> = {};
   for (let i = 0; i < decompressed.length; i++) {

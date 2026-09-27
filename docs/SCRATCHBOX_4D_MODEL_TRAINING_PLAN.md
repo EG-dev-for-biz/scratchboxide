@@ -7,7 +7,7 @@
 
 The **Scratchbox-4D (S4D) World Model** is a proprietary, geospatial-first foundation model designed to simulate physical reality across space and time. 
 
-Inspired by the mathematical logic of **OccSora** (4D spatiotemporal tokenization + Diffusion Transformer on trajectory prompts), S4D replaces the automotive-only limitations of academic benchmarks (the $200 \times 200 \times 16$ flat road pancake) with a **full 3D volumetric grid ($128 \times 128 \times 64$)** capable of modeling complex urban architecture, aerial drone navigation corridors, steep terrain, and dynamic physical interactions.
+Built on 4D spatiotemporal tokenization and Diffusion Transformers conditioned on 6-DOF trajectory prompts, S4D replaces the automotive-only limitations of academic benchmarks (the $200 \times 200 \times 16$ flat road pancake) with a **full 3D volumetric grid ($128 \times 128 \times 64$)** capable of modeling complex urban architecture, aerial drone navigation corridors, steep terrain, and dynamic physical interactions.
 
 S4D is conditioned on **6-DOF trajectory prompts** ($x, y, z, \text{yaw}, \text{pitch}, \text{roll}, \text{velocity}$) generated directly by Scratchbox's `TemporalSimulationSolver.ts` and outputs a 4D occupancy field $V(x, y, z, t)$ that feeds directly into Scratchbox's native C++20 `MarchingCubes` engine (`scratchbox_geometry.hpp`) to stream real-time `.glb` meshes into Three.js.
 
@@ -161,22 +161,22 @@ Rather than waiting for expensive real-world LiDAR driving logs, Scratchbox synt
 ## 5. Phased Implementation Roadmap
 
 ### Phase 1: Synthetic Data Pipeline & Voxelizer (Weeks 1–2)
-- [ ] Create `packages/occsora-engine/tools/voxelizer.cpp` leveraging `scratchbox_geometry.hpp` to rasterize glTF tiles into $128 \times 128 \times 64$ voxel grids.
+- [ ] Create `packages/s4d-engine/tools/voxelizer.cpp` leveraging `scratchbox_geometry.hpp` to rasterize glTF tiles into $128 \times 128 \times 64$ voxel grids.
 - [ ] Implement synthetic trajectory generator in `packages/core/src/node/spatial/SyntheticTrajectoryGenerator.ts` using Catmull-Rom splines.
 - [ ] Generate initial pilot dataset: 5,000 sequences of SF Financial District and Manhattan.
 
 ### Phase 2: S4D-Tokenizer Training (Week 3)
-- [ ] Implement `packages/occsora-engine/models/tokenizer_3d.py` (3D ResNet VAE with causal temporal downsampling).
+- [ ] Implement `packages/s4d-engine/models/tokenizer_3d.py` (3D ResNet VAE with causal temporal downsampling).
 - [ ] Train on 1x A100 GPU for 100,000 steps with Focal + Cross-Entropy loss.
 - [ ] Validate reconstruction quality (IoU > 0.85 on architectural facades and terrain).
 
 ### Phase 3: S4D-DiT Diffusion Training (Weeks 4–5)
-- [ ] Implement `packages/occsora-engine/models/dit_4d.py` with 6-DOF AdaLN trajectory embedder and FlashAttention-2.
+- [ ] Implement `packages/s4d-engine/models/dit_4d.py` with 6-DOF AdaLN trajectory embedder and FlashAttention-2.
 - [ ] Train on 4x A100 GPUs using distributed `torchrun` with Flow Matching loss.
 - [ ] Evaluate long-horizon temporal consistency over 16 time steps.
 
 ### Phase 4: Scratchbox C++ Runtime Integration (Week 6)
-- [ ] Implement `OccSoraBridge.ts` in `packages/core/src/node/spatial/` to serialize `TemporalSimulationSolver` telemetry into inference payloads.
+- [x] Implement `S4DWorldModelBridge.ts` in `packages/core/src/node/spatial/` to serialize `TemporalSimulationSolver` telemetry into inference payloads.
 - [ ] Connect the output voxel tensor directly to `MarchingCubes::extractIsosurface` in `scratchbox_geometry.hpp`.
 - [ ] Stream `.glb` meshes directly into Three.js canvas under the `TimeDimension4D` timeline.
 
