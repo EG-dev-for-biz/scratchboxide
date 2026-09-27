@@ -36,6 +36,7 @@ export interface StationBlockoutRenderOptions {
     clayColor?: [number, number, number];
     bgColor?: [number, number, number, number];
     lightDir?: [number, number, number];
+    minGroundClearance?: number;
 }
 
 export interface StationBlockoutRender {
@@ -124,7 +125,7 @@ export class SurveyStationRenderService {
 
     renderStationBlockout(station: ColmapCameraPose, options: StationBlockoutRenderOptions = {}): StationBlockoutRender {
         if (!this.mesh) throw new Error('SurveyStationRenderService: call loadMesh() first');
-        const minGroundClearance = 2.0;
+        const minGroundClearance = options.minGroundClearance !== undefined ? options.minGroundClearance : 2.0;
         const localSurfaceY = this.sampleLocalSurfaceHeight(station.positionLocalENU[0], station.positionLocalENU[2], 6.0);
         const groundDatumY = Math.max(
             this.meshBounds ? this.meshBounds.min[1] : 0.0,

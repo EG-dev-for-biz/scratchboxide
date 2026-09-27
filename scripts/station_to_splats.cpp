@@ -818,21 +818,19 @@ int main(int argc, char** argv) {
             }
 
             // Dynamic Splat Scaling by Camera Altitude:
-            // Tier 1 street stations use tighter sigma (0.45) to prevent disc bloat,
-            // Tier 2 facade stations use 0.70, and Tier 3 aerial uses 0.95
-            const float tierSigmaScale = (cameraAltitude <= 10.0f) ? 0.45f : ((cameraAltitude <= 40.0f) ? 0.70f : 0.95f);
+            // High coverage to eliminate moire scanlines and grazing gaps
+            const float tierSigmaScale = (cameraAltitude <= 10.0f) ? 0.65f : ((cameraAltitude <= 40.0f) ? 0.85f : 1.05f);
             const float effectiveSigmaScale = (sigmaScale > 0.0f) ? sigmaScale : tierSigmaScale;
 
-            // Multi-Scale Ground Paver Synthesis for Tier 1 street stations:
-            // Tight ground footprint stride (stride = 1) on surfaces where |n.y| > 0.85
-            const bool isGround = (std::fabs(n.y) > 0.85f);
+            // Multi-Scale Ground Paver Synthesis
+            const bool isGround = (std::fabs(n.y) > 0.80f);
             const float effectiveStride = (cameraAltitude <= 10.0f && isGround) ? 1.0f : static_cast<float>(stride);
             const float spacing = z / fx * effectiveStride;
             float sigma = spacing * effectiveSigmaScale;
-            if (isolated) sigma *= 0.6f;
+            if (isolated) sigma *= 0.75f;
             if (isOrganic) sigma *= 0.5f;
-            // Foreshortening compensation along the steepest direction (cap 2x)
-            const float cosInc = std::max(0.5f, std::fabs(n.dot(toCam)));
+            // Foreshortening compensation along the steepest direction (cap 4.5x to close grazing gaps)
+            const float cosInc = std::max(0.22f, std::fabs(n.dot(toCam)));
             const float elong = 1.0f / cosInc;
 
             // Tangent basis: t1 along the projection of the view-right into the plane, t2 = n x t1
