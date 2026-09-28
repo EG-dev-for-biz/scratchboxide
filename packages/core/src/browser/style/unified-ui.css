@@ -7806,17 +7806,15 @@ body.theia-light .sb-3d-budget-btn {
     flex-wrap: wrap;
 }
 
-/* Document Card Light Theme Overrides */
-body.sb-light .sb-chatgpt-document-card,
-body.theia-light .sb-chatgpt-document-card {
+/* Document Card Scoped Styling */
+body.sb-light .sb-chatgpt-document-card {
     background: #ffffff !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06) !important;
 }
 
-body.sb-light .sb-document-card-header,
-body.theia-light .sb-document-card-header {
-    background: #f9fafb !important;
+body.sb-light .sb-document-card-header {
+    background: #f4f4f5 !important;
     border-bottom: 1px solid rgba(0, 0, 0, 0.08) !important;
     color: #18181b !important;
 }
@@ -12053,6 +12051,9 @@ body.sb-light .sb-doc-toc-item:hover {
 /* ==========================================================================
    Scratchbox Studio Canvas Header & Controls
    ========================================================================== */
+/* ==========================================================================
+   Cursor-Grade Editor Tabs (.sb-canvas-tabs-container & .sb-canvas-tab)
+   ========================================================================== */
 .sb-canvas-tabs-container,
 .sb-antigravity-tabs-container {
     display: flex;
@@ -12063,6 +12064,7 @@ body.sb-light .sb-doc-toc-item:hover {
     height: 35px;
     flex: 1 1 auto;
     min-width: 0;
+    background: #141416;
 }
 .sb-canvas-tabs-container::-webkit-scrollbar,
 .sb-antigravity-tabs-container::-webkit-scrollbar {
@@ -12075,53 +12077,39 @@ body.sb-light .sb-doc-toc-item:hover {
     align-items: center;
     gap: 6px;
     height: 35px;
-    padding: 0 12px;
+    padding: 0 14px;
     border-radius: 0;
     font-size: 12px;
     font-weight: 500;
-    color: #71717a;
-    background: #111113;
+    color: #94a3b8;
+    background: #141416;
     border: none;
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
-    border-bottom: 2px solid transparent;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 2px solid transparent;
+    border-bottom: none;
     cursor: pointer;
-    transition: all 0.1s ease;
+    transition: background 0.1s ease, color 0.1s ease;
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
-    max-width: 160px;
+    max-width: 170px;
     box-sizing: border-box;
 }
 
 .sb-canvas-tab:hover,
 .sb-antigravity-tab:hover {
-    color: #e4e4e7;
-    background: #161619;
+    color: #f1f5f9;
+    background: #1a1a1d;
 }
 
 .sb-canvas-tab.active,
 .sb-antigravity-tab.active {
-    color: #f4f4f5;
-    background: #18181b;
-    border-bottom: 2px solid #3b82f6;
-    font-weight: 600;
+    color: #ffffff !important;
+    background: #1e1e22 !important;
+    border-top: 2px solid #3b82f6 !important;
+    border-bottom: none !important;
+    font-weight: 500;
     box-shadow: none;
-}
-
-body.theia-light .sb-canvas-tab,
-body.theia-light .sb-antigravity-tab {
-    color: #64748b;
-}
-body.theia-light .sb-canvas-tab:hover,
-body.theia-light .sb-antigravity-tab:hover {
-    color: #0f172a;
-    background: rgba(0, 0, 0, 0.04);
-}
-body.theia-light .sb-canvas-tab.active,
-body.theia-light .sb-antigravity-tab.active {
-    color: #0f172a;
-    background: #e2e8f0;
-    border-color: #cbd5e1;
 }
 
 .sb-canvas-tab-icon,
@@ -12129,13 +12117,17 @@ body.theia-light .sb-antigravity-tab.active {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 13px;
     opacity: 0.85;
+}
+
+.sb-canvas-tab.active .sb-canvas-tab-icon {
+    opacity: 1;
 }
 
 .sb-canvas-tab-title,
 .sb-antigravity-tab-title {
-    max-width: 160px !important;
+    max-width: 130px !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
@@ -12148,10 +12140,10 @@ body.theia-light .sb-antigravity-tab.active {
     justify-content: center;
     width: 16px;
     height: 16px;
-    border-radius: 4px;
+    border-radius: 3px;
     border: none;
     background: transparent;
-    color: inherit;
+    color: #94a3b8;
     opacity: 0;
     cursor: pointer;
     font-size: 10px;
@@ -12169,15 +12161,27 @@ body.theia-light .sb-antigravity-tab.active {
 .sb-canvas-tab-close:hover,
 .sb-antigravity-tab-close:hover {
     opacity: 1 !important;
-    background: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff !important;
 }
-body.theia-light .sb-canvas-tab-close:hover,
-body.theia-light .sb-antigravity-tab-close:hover,
-body.sb-light .sb-canvas-tab-close:hover,
-body.sb-light .sb-antigravity-tab-close:hover {
-    opacity: 1;
-    background: rgba(0, 0, 0, 0.08);
-    color: #0f172a;
+
+.sb-canvas-new-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 35px;
+    border-radius: 0;
+    border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: transparent;
+    color: #71717a;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.sb-canvas-new-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e4e4e7;
 }
 
 .sb-canvas-icon-btn,
@@ -12185,12 +12189,12 @@ body.sb-light .sb-antigravity-tab-close:hover {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
     border: 1px solid transparent;
     background: transparent;
-    color: var(--sb-text-secondary, #94a3b8);
+    color: #71717a;
     cursor: pointer;
     transition: all 0.15s ease;
     padding: 0;
@@ -12199,32 +12203,21 @@ body.sb-light .sb-antigravity-tab-close:hover {
 
 .sb-canvas-icon-btn:hover,
 .sb-antigravity-icon-btn:hover {
-    color: var(--sb-text-primary, #ffffff);
+    color: #ffffff;
     background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.08);
 }
 
 .sb-canvas-icon-btn.active,
 .sb-antigravity-icon-btn.active {
-    color: #ffffff;
-    background: rgba(37, 99, 235, 0.2);
-    border-color: rgba(37, 99, 235, 0.4);
+    color: #60a5fa !important;
+    background: rgba(59, 130, 246, 0.15) !important;
+    border-color: rgba(59, 130, 246, 0.3) !important;
 }
 
 .sb-canvas-icon-btn:disabled,
 .sb-antigravity-icon-btn:disabled {
-    opacity: 0.4;
+    opacity: 0.3;
     cursor: not-allowed;
-}
-
-body.theia-light .sb-canvas-icon-btn,
-body.theia-light .sb-antigravity-icon-btn {
-    color: #64748b;
-}
-body.theia-light .sb-canvas-icon-btn:hover,
-body.theia-light .sb-antigravity-icon-btn:hover {
-    color: #0f172a;
-    background: rgba(0, 0, 0, 0.06);
 }
 
 /* Scratchbox Studio Canvas Overflow Menu Popover */

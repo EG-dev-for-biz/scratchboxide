@@ -84,9 +84,8 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
             {/* New Tab Button (+) */}
             <button
                 type="button"
-                className="sb-canvas-icon-btn"
+                className="sb-canvas-new-tab-btn"
                 onClick={handleCreateNewSandboxTab}
-                style={{ width: '24px', height: '24px', borderRadius: '4px', margin: '0 4px', flexShrink: 0 }}
                 title="New Live Sandbox / Artifact Tab (+)"
             >
                 <IconPlus size={12} strokeWidth={2} />
@@ -338,31 +337,13 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
             {activeArtifact?.type === 'live-code-sandbox' && (
                 <div
                     className="sb-segmented-control sb-segmented-control-xs"
-                    style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        background: 'rgba(0, 0, 0, 0.35)',
-                        border: '1px solid rgba(255, 255, 255, 0.1)',
-                        borderRadius: '6px',
-                        padding: '2px',
-                        gap: '2px',
-                        marginRight: '2px'
-                    }}
                     title="Live Sandbox View Mode"
+                    style={{ marginRight: '4px' }}
                 >
                     <button
                         type="button"
-                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'code' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        className={`sb-segment-btn ${(activeSandboxData?.viewMode || 'preview') === 'code' ? 'sb-segment-active' : ''}`}
                         onClick={() => handleSetSandboxViewMode('code')}
-                        style={{
-                            padding: '2px 7px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px'
-                        }}
                         title="Code Editor"
                     >
                         <IconCode size={11} strokeWidth={2} />
@@ -370,17 +351,8 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                     </button>
                     <button
                         type="button"
-                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'split' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        className={`sb-segment-btn ${(activeSandboxData?.viewMode || 'preview') === 'split' ? 'sb-segment-active' : ''}`}
                         onClick={() => handleSetSandboxViewMode('split')}
-                        style={{
-                            padding: '2px 7px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px'
-                        }}
                         title="Split Editor & Live Preview"
                     >
                         <IconSplit size={11} strokeWidth={2} />
@@ -388,17 +360,8 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                     </button>
                     <button
                         type="button"
-                        className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'preview' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                        className={`sb-segment-btn ${(activeSandboxData?.viewMode || 'preview') === 'preview' ? 'sb-segment-active' : ''}`}
                         onClick={() => handleSetSandboxViewMode('preview')}
-                        style={{
-                            padding: '2px 7px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            borderRadius: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px'
-                        }}
                         title="Live Interactive Preview"
                     >
                         <IconSparkles size={11} strokeWidth={2} />
@@ -522,8 +485,11 @@ export const CanvasCardHeader: React.FC<ArtifactStageProps> = props => (
         justifyContent: 'space-between',
         height: '35px',
         padding: '0 8px 0 0',
-        background: '#131316',
+        background: '#141416',
         borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        borderTopLeftRadius: 'inherit',
+        borderTopRightRadius: 'inherit',
+        overflow: 'hidden',
         userSelect: 'none',
         boxSizing: 'border-box'
     }}>
