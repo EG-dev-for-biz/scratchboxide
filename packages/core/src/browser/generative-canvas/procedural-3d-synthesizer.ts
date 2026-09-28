@@ -94,6 +94,7 @@ export type Procedural3DTheme =
     | 'battlefield'
     | 'city'
     | 'solar-system'
+    | 'mars_rover'
     | 'molecular'
     | 'architecture'
     | 'flight'
@@ -177,6 +178,11 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         // 2. City / Metropolis / Cyberpunk / Architecture Skyline / Urban
         if (/city|metropolis|skyline|skyscraper|urban|cyberpunk city|downtown|traffic|street|futuristic city|highway/i.test(text)) {
             return 'city';
+        }
+
+        // 2.5. Mars Rover / Planetary Surface Exploration (checked before general celestial solar-system or generic vehicle)
+        if (/\b(?:mars|martian|rover|curiosity|perseverance|opportunity|sojourner|jezero|lunar\s*rover|moon\s*rover|planetary\s*surface|red\s*planet)\b/i.test(text)) {
+            return 'mars_rover';
         }
 
         // 3. Space / Solar System / Celestial / Orbit / Galaxy / Planets / Asteroid
@@ -1876,6 +1882,22 @@ export function applyCreativeLocationCasting(
     const docTitle = context?.docTitle || activeDoc?.title || '';
     const docContent = context?.docContent || (activeDoc?.sections ? activeDoc.sections.map(s => s.content || '').join(' ') : '');
 
+    // Preserve Martian or extraterrestrial planetary anchors
+    if (scene.sceneType === 'mars_rover' || (scene.worldBranch && scene.worldBranch.includes('mars')) || /\b(?:mars|martian|rover|jezero)\b/i.test(prompt)) {
+        if (!scene.geoAnchor || !scene.geoAnchor.landmarkName?.toLowerCase().includes('mars')) {
+            scene.geoAnchor = {
+                lat: 18.38,
+                lng: 77.58,
+                elevation: -2500,
+                active: true,
+                landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
+                castingRationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars',
+                castingArchetype: 'planetary_surface'
+            };
+        }
+        return scene;
+    }
+
     const castedLoc = castCreativeLocation(prompt, {
         theme: scene.sceneType,
         docTitle,
@@ -2770,6 +2792,110 @@ onFrame((time, delta) => {
             ],
             customScript,
             code: customScript
+        };
+    }
+
+    if (theme === 'mars_rover') {
+        const title = 'Mars Rover Planetary Exploration';
+        const subtitle = 'Martian Jezero crater surface terrain, articulated 6-wheel rocker-bogie rover, mastcam sensor suite, and thin dust haze.';
+
+        const customMeshes = [
+            {
+                id: 'mesh-mars-terrain',
+                name: 'Martian Regolith Surface',
+                type: 'plane' as const,
+                position: [0, -0.1, 0] as [number, number, number],
+                scale: [80, 80, 1] as [number, number, number],
+                material: { color: 0xb5522c, roughness: 0.88, metalness: 0.05 }
+            },
+            {
+                id: 'mesh-rover-chassis',
+                name: 'Mars Rover Core Body',
+                type: 'box' as const,
+                position: [0, 1.2, 0] as [number, number, number],
+                scale: [2.8, 1.1, 2.2] as [number, number, number],
+                material: { color: 0xe2e8f0, roughness: 0.35, metalness: 0.7 }
+            },
+            {
+                id: 'mesh-rover-mast',
+                name: 'Remote Sensing Mast (Mastcam-Z)',
+                type: 'cylinder' as const,
+                position: [0.8, 2.1, 0.6] as [number, number, number],
+                scale: [0.15, 1.4, 0.15] as [number, number, number],
+                material: { color: 0x334155, roughness: 0.4, metalness: 0.8 }
+            },
+            {
+                id: 'mesh-rover-mast-head',
+                name: 'SuperCam & Stereo Sensor Head',
+                type: 'box' as const,
+                position: [0.8, 2.8, 0.6] as [number, number, number],
+                scale: [0.5, 0.3, 0.4] as [number, number, number],
+                material: { color: 0x0f172a, roughness: 0.2, metalness: 0.9 }
+            },
+            {
+                id: 'mesh-rover-rtg',
+                name: 'MMRTG Nuclear Power Generator',
+                type: 'cylinder' as const,
+                position: [-1.4, 1.3, 0] as [number, number, number],
+                scale: [0.5, 1.0, 0.5] as [number, number, number],
+                material: { color: 0x1e293b, roughness: 0.5, metalness: 0.85 }
+            },
+            {
+                id: 'mesh-rover-arm',
+                name: 'Robotic Turret Sample Arm',
+                type: 'cylinder' as const,
+                position: [1.3, 1.0, -0.5] as [number, number, number],
+                scale: [0.15, 1.2, 0.15] as [number, number, number],
+                material: { color: 0x94a3b8, roughness: 0.3, metalness: 0.8 }
+            },
+            { id: 'mesh-wheel-fl', name: 'Front-Left Cleated Wheel', type: 'cylinder' as const, position: [1.4, 0.5, 1.5] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-wheel-fr', name: 'Front-Right Cleated Wheel', type: 'cylinder' as const, position: [1.4, 0.5, -1.5] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-wheel-ml', name: 'Mid-Left Cleated Wheel', type: 'cylinder' as const, position: [0, 0.5, 1.6] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-wheel-mr', name: 'Mid-Right Cleated Wheel', type: 'cylinder' as const, position: [0, 0.5, -1.6] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-wheel-rl', name: 'Rear-Left Cleated Wheel', type: 'cylinder' as const, position: [-1.4, 0.5, 1.5] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-wheel-rr', name: 'Rear-Right Cleated Wheel', type: 'cylinder' as const, position: [-1.4, 0.5, -1.5] as [number, number, number], scale: [0.55, 0.4, 0.55] as [number, number, number], material: { color: 0x1e293b, roughness: 0.6, metalness: 0.5 } },
+            { id: 'mesh-rock-1', name: 'Basaltic Regolith Boulder Alpha', type: 'sphere' as const, position: [4.5, 0.4, 3.2] as [number, number, number], scale: [1.2, 0.8, 1.0] as [number, number, number], material: { color: 0x8a391e, roughness: 0.95, metalness: 0.02 } },
+            { id: 'mesh-rock-2', name: 'Sedimentary Regolith Outcrop', type: 'sphere' as const, position: [-3.8, 0.3, -4.5] as [number, number, number], scale: [0.9, 0.6, 0.8] as [number, number, number], material: { color: 0x782f18, roughness: 0.95, metalness: 0.02 } },
+            { id: 'mesh-rock-3', name: 'Eroded Impact Fragment', type: 'box' as const, position: [2.1, 0.25, -5.0] as [number, number, number], scale: [0.7, 0.5, 0.6] as [number, number, number], material: { color: 0x9c4123, roughness: 0.92, metalness: 0.02 } }
+        ];
+
+        return {
+            title,
+            subtitle,
+            worldBranch: 'planetary/mars-rover',
+            sceneType: 'mars_rover',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 15000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [7, 5, 8],
+                target: [0, 1.2, 0],
+                fov: 45
+            },
+            environment: {
+                skybox: 'mars',
+                lighting: 'golden_hour',
+                lightingKelvin: 4500,
+                ground: true
+            },
+            geoAnchor: {
+                lat: 18.38,
+                lng: 77.58,
+                elevation: -2500,
+                active: true,
+                landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
+                castingRationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars',
+                castingArchetype: 'planetary_surface'
+            },
+            customMeshes
         };
     }
 

@@ -25,6 +25,7 @@ export type LocationCastingArchetype =
   | 'verdant_wilderness'
   | 'arid_desert_wasteland'
   | 'cinematic_metropolitan'
+  | 'planetary_surface'
   | 'explicit_landmark';
 
 export interface CastedLocation {
@@ -545,6 +546,24 @@ export class CreativeLocationCastingService {
           skybox: 'golden_hour',
           lighting: 'daylight',
           clayPreset: 'warm-clay'
+        }
+      };
+    }
+
+    // 1b. Check if the prompt targets an extraterrestrial planetary body (Mars, Moon, Titan)
+    if (/\b(?:mars|martian|rover|jezero|curiosity|perseverance|opportunity|sojourner|moon|lunar\s*surface|planetary\s*surface|red\s*planet)\b/i.test(combined)) {
+      return {
+        isRealWorld: false,
+        landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
+        lat: 18.38,
+        lng: 77.58,
+        elevation: -2500,
+        archetype: 'planetary_surface',
+        rationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars (18.38°N, 77.58°E, altitude -2500m on Martian datum)',
+        suggestedEnvironment: {
+          skybox: 'mars',
+          lighting: 'golden_hour',
+          clayPreset: 'terracotta'
         }
       };
     }

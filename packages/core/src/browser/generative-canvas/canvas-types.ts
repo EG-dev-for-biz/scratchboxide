@@ -717,7 +717,7 @@ export interface Scene3DData {
     title: string;
     subtitle?: string;
     worldBranch?: string;
-    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom' | 'gaussian_splat';
+    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'mars_rover' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom' | 'gaussian_splat';
     splatUrl?: string;
     splatTilesetUrl?: string;
     splatOptions?: {
@@ -1125,7 +1125,8 @@ export type StudioSettingsTab =
     | 'mcp'
     | 'memories'
     | 'shortcuts'
-    | 'about';
+    | 'about'
+    | 'admin';
 export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser' | 'video';
 
 export interface StudioAppearanceConfig {

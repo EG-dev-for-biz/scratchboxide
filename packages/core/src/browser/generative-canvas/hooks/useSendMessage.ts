@@ -368,6 +368,25 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
 
         // Format attached @-context items into groundable prompt context
         let effectivePrompt = text.trim();
+
+        // If text is a clarification response or plan confirmation, carry forward the original user goal
+        const isClarificationOrConfirmation =
+            text.startsWith('[Clarification Selection]') ||
+            text.startsWith('[Execution Plan') ||
+            text.startsWith('Confirmed. Proceed');
+
+        if (isClarificationOrConfirmation) {
+            const priorUserMsg = [...updatedMessages].reverse().find(m =>
+                m.sender === 'user' &&
+                m.text !== text &&
+                !m.text.startsWith('[Clarification Selection]') &&
+                !m.text.startsWith('[Execution Plan') &&
+                !m.text.startsWith('Confirmed. Proceed')
+            );
+            if (priorUserMsg && priorUserMsg.text.trim()) {
+                effectivePrompt = `User Goal: ${priorUserMsg.text.trim()}\n\nConfiguration Choice: ${text.trim()}`;
+            }
+        }
         if (d.attachedContextMentions && d.attachedContextMentions.length > 0) {
             const contextLines: string[] = ['\n\n--- INJECTED CONTEXT REFERENCES (@-Engine) ---'];
             for (const ctxItem of d.attachedContextMentions) {
@@ -666,45 +685,64 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
 function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): FallbackResult {
     const { text, targetPrimitiveType } = ctx;
     const { activeArtifact, layoutMode, messages, attachedDataFile } = d;
-    const c = classifyFallbackPrompt(text, targetPrimitiveType, layoutMode, activeArtifact);
+
+    const isClarificationOrConfirmation =
+        text.startsWith('[Clarification Selection]') ||
+        text.startsWith('[Execution Plan') ||
+        text.startsWith('Confirmed. Proceed');
+
+    let effectiveFallbackText = text;
+    if (isClarificationOrConfirmation) {
+        const priorUserMsg = [...messages].reverse().find(m =>
+            m.sender === 'user' &&
+            !m.text.startsWith('[Clarification Selection]') &&
+            !m.text.startsWith('[Execution Plan') &&
+            !m.text.startsWith('Confirmed. Proceed')
+        );
+        if (priorUserMsg && priorUserMsg.text.trim()) {
+            effectiveFallbackText = priorUserMsg.text.trim();
+        }
+    }
+
+    const c = classifyFallbackPrompt(effectiveFallbackText, targetPrimitiveType, layoutMode, activeArtifact);
 
     if (attachedDataFile && attachedDataFile.rowsCount > 0) {
         return synthesizeDataFileDashboard(attachedDataFile);
     }
     if (d.aiInteractionMode === 'plan') {
-        return synthesizeExecutionPlanFallback(text, activeArtifact);
+        return synthesizeExecutionPlanFallback(effectiveFallbackText, activeArtifact);
     }
-    const isAmbiguousSpatialQuery = /(?:3d\s*(?:plate|model|asset|object|reconstruct|mesh)|make.*3d|build.*3d)/i.test(text) &&
-        !/three\.js|react|kanban|doc|video|nle|spec/i.test(text) &&
-        (text.length < 55 || /(?:from\s+(?:this\s+)?image|supplied\s+image|from\s+photo|image\s+to\s+3d)/i.test(text));
-    if (isAmbiguousSpatialQuery) {
-        return synthesizeQuestionCardFallback(text, activeArtifact);
+    const isAmbiguousSpatialQuery = /(?:3d\s*(?:plate|model|asset|object|reconstruct|mesh)|make.*3d|build.*3d)/i.test(effectiveFallbackText) &&
+        !/three\.js|react|kanban|doc|video|nle|spec/i.test(effectiveFallbackText) &&
+        (effectiveFallbackText.length < 55 || /(?:from\s+(?:this\s+)?image|supplied\s+image|from\s+photo|image\s+to\s+3d)/i.test(effectiveFallbackText));
+    if (isAmbiguousSpatialQuery && !isClarificationOrConfirmation) {
+        return synthesizeQuestionCardFallback(effectiveFallbackText, activeArtifact);
     }
     if (c.isVideoTimelineRequest) {
-        return synthesizeVideoTimelineFallback(text, activeArtifact);
+        return synthesizeVideoTimelineFallback(effectiveFallbackText, activeArtifact);
     }
     if (c.isExplicitMedia) {
-        return synthesizeMediaFallback(text, c.isExplicitVideo);
+        return synthesizeMediaFallback(effectiveFallbackText, c.isExplicitVideo);
     }
     if (c.isDocumentRequest) {
-        return synthesizeDocumentFallback(text, activeArtifact);
+        return synthesizeDocumentFallback(effectiveFallbackText, activeArtifact);
     }
     if (c.is3DRequest) {
-        return synthesize3DFallback(text, c.lower, activeArtifact, messages, c.docContentExtract);
+        return synthesize3DFallback(effectiveFallbackText, c.lower, activeArtifact, messages, c.docContentExtract);
     }
     if (c.isKanbanRequest) {
-        return synthesizeKanbanFallback(text, c.lower, activeArtifact);
+        return synthesizeKanbanFallback(effectiveFallbackText, c.lower, activeArtifact);
     }
     if (c.isGraphRequest) {
-        return synthesizeGraphFallback(text, c.lower, activeArtifact);
+        return synthesizeGraphFallback(effectiveFallbackText, c.lower, activeArtifact);
     }
     if (c.isMetricsRequest) {
         return synthesizeMetricsFallback(activeArtifact);
     }
     if (c.isSandboxRequest) {
-        return synthesizeSandboxFallback(text, activeArtifact);
+        return synthesizeSandboxFallback(effectiveFallbackText, activeArtifact);
     }
-    return synthesizeChatFallback(text, activeArtifact);
+    return synthesizeChatFallback(effectiveFallbackText, activeArtifact);
 }
 
 /** Step 4c — play the simulated agent steps and progressively stream the local response. */
@@ -1012,7 +1050,23 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
         let finalAssistantMsg: ChatMessage;
         let fallbackGen: CanvasArtifact | undefined;
         if (backend.usedBackend) {
-            const promptText = ctx.text || '';
+            let promptText = ctx.text || '';
+            const isClarificationOrConfirmation =
+                promptText.startsWith('[Clarification Selection]') ||
+                promptText.startsWith('[Execution Plan') ||
+                promptText.startsWith('Confirmed. Proceed');
+
+            if (isClarificationOrConfirmation) {
+                const priorUserMsg = [...ctx.updatedMessages].reverse().find(m =>
+                    m.sender === 'user' &&
+                    !m.text.startsWith('[Clarification Selection]') &&
+                    !m.text.startsWith('[Execution Plan') &&
+                    !m.text.startsWith('Confirmed. Proceed')
+                );
+                if (priorUserMsg && priorUserMsg.text.trim()) {
+                    promptText = priorUserMsg.text.trim();
+                }
+            }
             const lowerPromptText = promptText.toLowerCase();
             const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(promptText) ||
                 ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
