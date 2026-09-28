@@ -1,0 +1,22 @@
+---
+description: Always download and ingest 3D map tile objects at highest quality (deepest leaf LOD, errorTarget <= 0.5, 4K SSE)
+alwaysApply: true
+---
+
+# Always Download 3D Map Tiles at Highest Quality
+
+When fetching, downloading, or ingesting real-world 3D map tiles and photogrammetric meshes (Google Photorealistic 3D Tiles, Cesium, or photogrammetric sources):
+
+## 1. Maximum Geometric Quality (Deepest Leaf LOD)
+- **Strict Error Target**: Always configure tile streaming with `errorTarget <= 0.5` (never use coarse intermediate LODs or loose budgets like 2.0-5.0).
+- **4K Screen-Space Error (SSE)**: Compute SSE against high-resolution viewports ($3840 \times 2160$).
+- **Full Settle Invariant**: Always wait for leaf tile streaming to fully settle (`stats.downloading === 0 && stats.parsing === 0`) before mesh extraction or serialization.
+
+## 2. Standardized Binary glTF 2.0 (.glb)
+- Convert isolated submeshes directly into standardized binary `.glb` preserving positions, vertex normals, UVs, and authentic photogrammetric PBR textures.
+- Standardize `.glb` as the canonical input for all spatial analysis, matchmoving, and 3D viewport rendering.
+
+## 3. Dedicated APIs (Zero Presets)
+- `getGoogle3DTilesFullTexture` / `google_3d_tiles_get_full_texture`: Full photogrammetric textures at leaf LOD.
+- `getGoogle3DTilesClay` / `google_3d_tiles_get_clay`: Studio grey clay massing at leaf LOD.
+- Raw high-resolution assets must always be persisted (e.g. `public/models/..._raw.glb`).
