@@ -10428,38 +10428,11 @@ body.theia-light .sb-msg-user-row .sb-chat-bubble-content {
 .sb-msg-assistant-row {
     align-self: flex-start;
     width: 100%;
-    gap: 14px;
+    gap: 0;
 }
 
 .sb-chat-avatar {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-top: 2px;
-}
-
-.sb-avatar-assistant {
-    background: #2f2f2f;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: #ffffff;
-}
-
-body.theia-light .sb-avatar-assistant {
-    background: #f4f4f4;
-    border-color: rgba(0, 0, 0, 0.1);
-    color: #0f172a;
-}
-
-.sb-avatar-user {
-    background: var(--sb-surface-card);
-    border: 1px solid var(--sb-surface-border);
-    color: var(--sb-text-secondary);
-    font-size: 12px;
-    font-weight: 700;
+    display: none !important;
 }
 
 .sb-msg-assistant-row .sb-chat-bubble-content {

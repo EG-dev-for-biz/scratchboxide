@@ -38,11 +38,6 @@ export const StreamingAssistantBubble: React.FC<StreamingAssistantBubbleProps> =
     return (
     <CanvasErrorBoundary compact fallbackTitle="Streaming Assistant Notice">
         <div className="sb-drawer-msg-row sb-msg-assistant-row animate-fadeIn">
-            <div className="sb-chat-avatar sb-avatar-assistant">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                </svg>
-            </div>
             <div className="sb-chat-bubble-content">
                 <div className="sb-bubble-header">
                     <span className="sb-bubble-sender">Scratchbox AI</span>

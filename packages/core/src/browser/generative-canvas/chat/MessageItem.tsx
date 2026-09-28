@@ -51,11 +51,6 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
         const plan = msg.deepWritePlan;
         return (
             <div key={msg.id} className="sb-drawer-msg-row sb-msg-assistant-row animate-fadeIn">
-                <div className="sb-chat-avatar sb-avatar-assistant">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                    </svg>
-                </div>
                 <div className="sb-chat-bubble-content" style={{ borderLeft: '3px solid #3b82f6', paddingLeft: '12px' }}>
                     <div className="sb-bubble-header">
                         <span className="sb-bubble-sender">Scratchbox AI Co-Planner</span>
@@ -119,11 +114,6 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
 
         return (
             <div key={msg.id} className="sb-drawer-msg-row sb-msg-assistant-row animate-fadeIn">
-                <div className="sb-chat-avatar sb-avatar-assistant">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                    </svg>
-                </div>
                 <div className="sb-chat-bubble-content" style={{ borderLeft: `3px solid ${isError ? '#ef4444' : isDone ? '#10b981' : '#3b82f6'}`, paddingLeft: '12px', width: '100%' }}>
                     <div className="sb-bubble-header">
                         <span className="sb-bubble-sender">Scratchbox AI Pipeline</span>
@@ -201,11 +191,6 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
 
         return (
             <div key={msg.id} className="sb-drawer-msg-row sb-msg-assistant-row animate-fadeIn">
-                <div className="sb-chat-avatar sb-avatar-assistant">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                    </svg>
-                </div>
                 <div className="sb-chat-bubble-content" style={{ borderLeft: '3px solid #f59e0b', paddingLeft: '12px' }}>
                     <div className="sb-bubble-header">
                         <span className="sb-bubble-sender">Scratchbox Checkpoint Gate</span>
@@ -250,15 +235,6 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 isUser ? 'sb-msg-user-row' : 'sb-msg-assistant-row'
             }`}
         >
-            <div className={`sb-chat-avatar ${isUser ? 'sb-avatar-user' : 'sb-avatar-assistant'}`}>
-                {isUser ? (
-                    <span>U</span>
-                ) : (
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                    </svg>
-                )}
-            </div>
             <div className="sb-chat-bubble-content">
                 <div className="sb-bubble-header">
                     <span className="sb-bubble-sender">
