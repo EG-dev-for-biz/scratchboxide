@@ -195,48 +195,21 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
             <div className="flex items-center gap-1">
                 <button
                     type="button"
-                    className="sb-btn sb-btn-ghost sb-btn-xs px-2 py-1 flex items-center justify-center"
-                    style={{ height: '28px', color: '#71717a' }}
-                    onClick={() => {
-                        const currentIndex = sessions.findIndex(s => s.id === currentSessionId);
-                        if (currentIndex < sessions.length - 1) {
-                            handleSelectSession(sessions[currentIndex + 1]);
-                        }
-                    }}
-                    title="Previous Chat"
+                    className="sb-btn sb-btn-ghost sb-btn-icon-xs"
+                    onClick={() => setIsSidebarOpen(false)}
+                    title="Collapse Sidebar (⌘B)"
+                    style={{ width: '24px', height: '24px', color: '#71717a' }}
                 >
-                    ←
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <line x1="9" y1="3" x2="9" y2="21" />
+                    </svg>
                 </button>
-                <button
-                    type="button"
-                    className="sb-btn sb-btn-ghost sb-btn-xs px-2 py-1 flex items-center justify-center"
-                    style={{ height: '28px', color: '#71717a' }}
-                    onClick={() => {
-                        const currentIndex = sessions.findIndex(s => s.id === currentSessionId);
-                        if (currentIndex > 0) {
-                            handleSelectSession(sessions[currentIndex - 1]);
-                        }
-                    }}
-                    title="Next Chat"
-                >
-                    →
-                </button>
-            </div>
-        </div>
-
-        {/* Scratchbox Studio Brand Header */}
-        <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid rgba(128,128,128,0.15)', marginBottom: '8px' }}>
-            <div style={{ width: '28px', height: '28px', minWidth: '28px', borderRadius: '8px', background: '#18181b', border: '1px solid rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3px', overflow: 'hidden', boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>
-                <img src="/icons/ScratchboxIDE.png" alt="Scratchbox Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: 'inherit', letterSpacing: '-0.02em', lineHeight: '1.2' }}>Scratchbox IDE</span>
-                <span style={{ fontSize: '11px', opacity: 0.6, fontWeight: 500, lineHeight: '1.2' }}>Generative Studio 2.0</span>
             </div>
         </div>
 
         {/* Primary Scratchbox Studio Navigation Actions */}
-        <div className="sb-sidebar-nav-list">
+        <div className="sb-sidebar-nav-list" style={{ marginTop: '4px' }}>
             <button
                 type="button"
                 className="sb-sidebar-nav-row sb-sidebar-nav-new"

@@ -12056,11 +12056,13 @@ body.sb-light .sb-doc-toc-item:hover {
 .sb-canvas-tabs-container,
 .sb-antigravity-tabs-container {
     display: flex;
-    align-items: center;
-    gap: 4px;
+    align-items: stretch;
+    gap: 0;
     overflow-x: auto;
     scrollbar-width: none;
-    flex-shrink: 0;
+    height: 35px;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 .sb-canvas-tabs-container::-webkit-scrollbar,
 .sb-antigravity-tabs-container::-webkit-scrollbar {
@@ -12072,34 +12074,38 @@ body.sb-light .sb-doc-toc-item:hover {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 28px;
-    padding: 0 10px;
-    border-radius: 7px;
-    font-size: 11.5px;
+    height: 35px;
+    padding: 0 12px;
+    border-radius: 0;
+    font-size: 12px;
     font-weight: 500;
-    color: var(--sb-text-secondary, #94a3b8);
-    background: transparent;
-    border: 1px solid transparent;
+    color: #71717a;
+    background: #111113;
+    border: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 2px solid transparent;
     cursor: pointer;
-    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: all 0.1s ease;
     white-space: nowrap;
     user-select: none;
     flex-shrink: 0;
+    max-width: 160px;
+    box-sizing: border-box;
 }
 
 .sb-canvas-tab:hover,
 .sb-antigravity-tab:hover {
-    color: var(--sb-text-primary, #f8fafc);
-    background: rgba(255, 255, 255, 0.05);
+    color: #e4e4e7;
+    background: #161619;
 }
 
 .sb-canvas-tab.active,
 .sb-antigravity-tab.active {
-    color: var(--sb-text-primary, #f8fafc);
-    background: rgba(255, 255, 255, 0.09);
-    border-color: rgba(255, 255, 255, 0.12);
+    color: #f4f4f5;
+    background: #18181b;
+    border-bottom: 2px solid #3b82f6;
     font-weight: 600;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    box-shadow: none;
 }
 
 body.theia-light .sb-canvas-tab,

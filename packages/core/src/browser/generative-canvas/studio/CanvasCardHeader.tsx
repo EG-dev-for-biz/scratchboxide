@@ -24,12 +24,9 @@ import {
 } from '../canvas-icons';
 import { ArtifactStageProps } from './artifact-stage-props';
 
-/** Artifact tab strip, title and version-history dropdown on the left of the canvas card header. */
+/** Artifact tab strip on the left of the canvas card header (Cursor / VS Code style). */
 export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
-    const { activeArtifact, layoutMode, docReadOnly, canvasArtifactTabs, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, getArtifactIcon, getCanvasHeaderLabel, handleSelectArtifactTab, handleCloseArtifactTab, handleCreateNewSandboxTab, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleSelectVersion } = props;
-    // Canvas version history dropdown (open state + outside-click dismissal)
-    const [isCanvasVersionMenuOpen, setIsCanvasVersionMenuOpen] = React.useState<boolean>(false);
-    const canvasVersionMenuRef = React.useRef<HTMLDivElement>(null);
+    const { activeArtifact, layoutMode, docReadOnly, canvasArtifactTabs, getArtifactIcon, getCanvasHeaderLabel, handleSelectArtifactTab, handleCloseArtifactTab, handleCreateNewSandboxTab } = props;
     const activeTabRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
@@ -38,29 +35,15 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
         }
     }, [activeArtifact?.id]);
 
-    React.useEffect(() => {
-        if (!isCanvasVersionMenuOpen) return;
-        const handleClickOutside = (e: MouseEvent) => {
-            if (canvasVersionMenuRef.current && !canvasVersionMenuRef.current.contains(e.target as Node)) {
-                setIsCanvasVersionMenuOpen(false);
-            }
-        };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [isCanvasVersionMenuOpen]);
-
-    const totalVersions = Math.max(currentArtifactVersionsList.length, activeArtifact?.version || 1);
-    const displayVersion = Math.min(activeArtifact?.version || (currentArtifactVersionIndex + 1), totalVersions);
-
     return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1, minWidth: 0, marginRight: '12px' }}>
+    <div style={{ display: 'flex', alignItems: 'center', height: '100%', overflow: 'hidden', flex: 1, minWidth: 0 }}>
         {canvasArtifactTabs.length === 0 && (
-            <span className="sb-doc-card-title-tag" style={{ fontSize: '12px', fontWeight: 600 }}>{getCanvasHeaderLabel()}</span>
+            <span className="sb-doc-card-title-tag" style={{ fontSize: '12px', fontWeight: 600, padding: '0 12px' }}>{getCanvasHeaderLabel()}</span>
         )}
-        {/* Scratchbox Studio Minimalist Artifact Tab Strip */}
+        {/* Cursor-Grade Editor Tabs */}
         <div 
             className="sb-canvas-tabs-container" 
-            style={{ maxWidth: 'calc(100% - 150px)', flex: '0 1 auto' }}
+            style={{ display: 'flex', alignItems: 'center', height: '100%', flex: '1 1 auto', overflowX: 'auto', scrollbarWidth: 'none' }}
             onWheel={(e) => {
                 if (e.deltaY !== 0) {
                     e.currentTarget.scrollLeft += e.deltaY;
@@ -98,180 +81,19 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
                 );
             })}
 
-            {/* Scratchbox New Tab Button (+) */}
+            {/* New Tab Button (+) */}
             <button
                 type="button"
                 className="sb-canvas-icon-btn"
                 onClick={handleCreateNewSandboxTab}
-                style={{ width: '26px', height: '26px', borderRadius: '6px' }}
+                style={{ width: '24px', height: '24px', borderRadius: '4px', margin: '0 4px', flexShrink: 0 }}
                 title="New Live Sandbox / Artifact Tab (+)"
             >
-                <IconPlus size={13} strokeWidth={2} />
+                <IconPlus size={12} strokeWidth={2} />
             </button>
         </div>
 
-        {layoutMode === 'document' && docReadOnly && <span className="sb-doc-readonly-tag" style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', flexShrink: 0 }}>READ-ONLY</span>}
-
-        {/* Canvas Version History Dropdown & Rollback Button */}
-        {activeArtifact && currentArtifactVersionsList.length > 0 && (
-            <div className="sb-canvas-header-version-ctrls" ref={canvasVersionMenuRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {currentArtifactVersionsList.length > 1 && (
-                    <div className="sb-canvas-ver-stepper-group" style={{ display: 'flex', alignItems: 'center', gap: '2px', background: 'var(--sb-surface-card)', border: '1px solid var(--sb-surface-border)', borderRadius: '6px', padding: '2px 4px' }}>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-ghost sb-btn-icon-xs sb-canvas-ver-step-btn"
-                            onClick={handlePrevArtifactVersion}
-                            disabled={currentArtifactVersionIndex <= 0}
-                            title="Previous version snapshot"
-                            style={{ padding: '2px 4px', fontSize: '10px', opacity: currentArtifactVersionIndex <= 0 ? 0.3 : 1 }}
-                        >
-                            ◀
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-ghost sb-btn-icon-xs sb-canvas-ver-step-btn"
-                            onClick={handleNextArtifactVersion}
-                            disabled={currentArtifactVersionIndex >= currentArtifactVersionsList.length - 1}
-                            title="Next version snapshot"
-                            style={{ padding: '2px 4px', fontSize: '10px', opacity: currentArtifactVersionIndex >= currentArtifactVersionsList.length - 1 ? 0.3 : 1 }}
-                        >
-                            ▶
-                        </button>
-                    </div>
-                )}
-
-                <button
-                    type="button"
-                    className={`sb-btn sb-btn-xs sb-canvas-version-dropdown-btn ${isCanvasVersionMenuOpen ? 'sb-btn-active' : 'sb-btn-secondary'}`}
-                    onClick={() => setIsCanvasVersionMenuOpen(!isCanvasVersionMenuOpen)}
-                    title="Version History — Click to view snapshots"
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '4px 8px',
-                        borderRadius: '6px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        background: isCurrentArtifactLatestVersion ? 'var(--sb-surface-card)' : 'rgba(245, 158, 11, 0.15)',
-                        color: isCurrentArtifactLatestVersion ? 'var(--sb-text-secondary)' : '#f59e0b',
-                        border: isCurrentArtifactLatestVersion ? '1px solid var(--sb-surface-border)' : '1px solid rgba(245, 158, 11, 0.4)'
-                    }}
-                >
-                    <span>{totalVersions > 1 ? `v${displayVersion} of ${totalVersions}` : `v${displayVersion}`}</span>
-                    {!isCurrentArtifactLatestVersion && <span style={{ fontSize: '9px', opacity: 0.8 }}>(Historical)</span>}
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                </button>
-
-                {!isCurrentArtifactLatestVersion && (
-                    <button
-                        type="button"
-                        className="sb-btn sb-btn-xs sb-canvas-restore-btn animate-fadeIn"
-                        onClick={() => handleRollbackArtifactToVersion(activeArtifact)}
-                        title={`Restore v${activeArtifact.version || currentArtifactVersionIndex + 1} as new head version`}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '4px 10px',
-                            borderRadius: '6px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            background: '#f59e0b',
-                            color: '#000000',
-                            border: 'none',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="1 4 1 10 7 10" />
-                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                        </svg>
-                        <span>Restore v{activeArtifact.version || currentArtifactVersionIndex + 1}</span>
-                    </button>
-                )}
-
-                {isCanvasVersionMenuOpen && (
-                    <div
-                        className="sb-canvas-version-history-popover animate-scaleIn"
-                        style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: 0,
-                            marginTop: '6px',
-                            width: '280px',
-                            background: 'var(--sb-surface-elevated, #18181b)',
-                            border: '1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.12))',
-                            borderRadius: '10px',
-                            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
-                            zIndex: 100,
-                            padding: '6px',
-                            backdropFilter: 'blur(20px)'
-                        }}
-                    >
-                        <div style={{ padding: '6px 8px 4px 8px', fontSize: '10px', fontWeight: 700, color: 'var(--sb-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            Version History ({currentArtifactVersionsList.length} Snapshots)
-                        </div>
-                        <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
-                            {currentArtifactVersionsList.map((verSnapshot, vIdx) => {
-                                const isSelected = (verSnapshot.version || 1) === (activeArtifact.version || 1);
-                                const isLatestVer = vIdx === currentArtifactVersionsList.length - 1;
-                                return (
-                                    <div
-                                        key={`${verSnapshot.id}-ver-${verSnapshot.version || vIdx}`}
-                                        className={`sb-ver-menu-item ${isSelected ? 'sb-ver-item-selected' : ''}`}
-                                        onClick={() => {
-                                            handleSelectVersion(verSnapshot);
-                                            setIsCanvasVersionMenuOpen(false);
-                                        }}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            padding: '8px 10px',
-                                            borderRadius: '6px',
-                                            cursor: 'pointer',
-                                            marginBottom: '2px',
-                                            background: isSelected ? 'var(--sb-system-blue-subtle, rgba(37, 99, 235, 0.15))' : 'transparent',
-                                            border: isSelected ? '1px solid var(--sb-system-blue, #2563eb)' : '1px solid transparent',
-                                            transition: 'background 0.15s ease'
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                <span style={{
-                                                    fontSize: '10px',
-                                                    fontWeight: 700,
-                                                    padding: '1px 5px',
-                                                    borderRadius: '4px',
-                                                    background: isLatestVer ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-                                                    color: isLatestVer ? '#10b981' : 'var(--sb-text-secondary)'
-                                                }}>
-                                                    v{verSnapshot.version || vIdx + 1} {isLatestVer ? '• Latest' : ''}
-                                                </span>
-                                                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--sb-text-label)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                    {verSnapshot.title || `Snapshot v${verSnapshot.version || vIdx + 1}`}
-                                                </span>
-                                            </div>
-                                            {verSnapshot.summary && (
-                                                <span style={{ fontSize: '10px', color: 'var(--sb-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                    {verSnapshot.summary}
-                                                </span>
-                                            )}
-                                        </div>
-                                        {isSelected && (
-                                            <span style={{ color: '#2563eb', fontWeight: 700, fontSize: '12px', marginLeft: '6px' }}>✓</span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
-            </div>
-        )}
+        {layoutMode === 'document' && docReadOnly && <span className="sb-doc-readonly-tag" style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', flexShrink: 0, margin: '0 8px' }}>READ-ONLY</span>}
     </div>
     );
 };
@@ -293,12 +115,21 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
         triggerMarkdownExport,
         triggerGoogleDriveSave,
         showToast,
-        handleCreateNewSandboxTab
+        handleCreateNewSandboxTab,
+        currentArtifactVersionsList,
+        currentArtifactVersionIndex,
+        isCurrentArtifactLatestVersion,
+        handleRollbackArtifactToVersion,
+        handleSelectVersion
     } = props;
 
     // Scratchbox Studio overflow menu state & click-outside dismissal
     const [isOverflowOpen, setIsOverflowOpen] = React.useState<boolean>(false);
     const overflowMenuRef = React.useRef<HTMLDivElement>(null);
+
+    // Canvas version history dropdown
+    const [isCanvasVersionMenuOpen, setIsCanvasVersionMenuOpen] = React.useState<boolean>(false);
+    const canvasVersionMenuRef = React.useRef<HTMLDivElement>(null);
 
     React.useEffect(() => {
         if (!isOverflowOpen) return;
@@ -310,6 +141,20 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isOverflowOpen]);
+
+    React.useEffect(() => {
+        if (!isCanvasVersionMenuOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (canvasVersionMenuRef.current && !canvasVersionMenuRef.current.contains(e.target as Node)) {
+                setIsCanvasVersionMenuOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isCanvasVersionMenuOpen]);
+
+    const totalVersions = Math.max(currentArtifactVersionsList.length, activeArtifact?.version || 1);
+    const displayVersion = Math.min(activeArtifact?.version || (currentArtifactVersionIndex + 1), totalVersions);
 
     const handleDoneCommit = async () => {
         setIsOverflowOpen(false);
@@ -357,6 +202,138 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
 
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            {/* Version History Dropdown if multiple snapshots exist */}
+            {activeArtifact && currentArtifactVersionsList.length > 1 && (
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '4px' }} ref={canvasVersionMenuRef}>
+                    <button
+                        type="button"
+                        className="sb-btn sb-btn-xs"
+                        onClick={() => setIsCanvasVersionMenuOpen(!isCanvasVersionMenuOpen)}
+                        title="Version History — Click to view snapshots"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 8px',
+                            borderRadius: '5px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: isCurrentArtifactLatestVersion ? 'rgba(255, 255, 255, 0.05)' : 'rgba(245, 158, 11, 0.15)',
+                            color: isCurrentArtifactLatestVersion ? 'var(--sb-text-secondary)' : '#f59e0b',
+                            border: isCurrentArtifactLatestVersion ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid rgba(245, 158, 11, 0.4)'
+                        }}
+                    >
+                        <span>v{displayVersion} of {totalVersions}</span>
+                        {!isCurrentArtifactLatestVersion && <span style={{ fontSize: '9px', opacity: 0.8 }}>(Historical)</span>}
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                    </button>
+
+                    {!isCurrentArtifactLatestVersion && (
+                        <button
+                            type="button"
+                            className="sb-btn sb-btn-xs sb-canvas-restore-btn animate-fadeIn"
+                            onClick={() => handleRollbackArtifactToVersion(activeArtifact)}
+                            title={`Restore v${activeArtifact.version || currentArtifactVersionIndex + 1} as new head version`}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                padding: '3px 8px',
+                                borderRadius: '5px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                background: '#f59e0b',
+                                color: '#000000',
+                                border: 'none',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            Restore
+                        </button>
+                    )}
+
+                    {isCanvasVersionMenuOpen && (
+                        <div
+                            className="sb-canvas-version-history-popover animate-scaleIn"
+                            style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: 0,
+                                marginTop: '6px',
+                                width: '280px',
+                                background: 'var(--sb-surface-elevated, #18181b)',
+                                border: '1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.12))',
+                                borderRadius: '10px',
+                                boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
+                                zIndex: 100,
+                                padding: '6px',
+                                backdropFilter: 'blur(20px)'
+                            }}
+                        >
+                            <div style={{ padding: '6px 8px 4px 8px', fontSize: '10px', fontWeight: 700, color: 'var(--sb-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Version History ({currentArtifactVersionsList.length} Snapshots)
+                            </div>
+                            <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                                {currentArtifactVersionsList.map((verSnapshot, vIdx) => {
+                                    const isSelected = (verSnapshot.version || 1) === (activeArtifact.version || 1);
+                                    const isLatestVer = vIdx === currentArtifactVersionsList.length - 1;
+                                    return (
+                                        <div
+                                            key={`${verSnapshot.id}-ver-${verSnapshot.version || vIdx}`}
+                                            className={`sb-ver-menu-item ${isSelected ? 'sb-ver-item-selected' : ''}`}
+                                            onClick={() => {
+                                                handleSelectVersion(verSnapshot);
+                                                setIsCanvasVersionMenuOpen(false);
+                                            }}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                padding: '8px 10px',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer',
+                                                marginBottom: '2px',
+                                                background: isSelected ? 'var(--sb-system-blue-subtle, rgba(37, 99, 235, 0.15))' : 'transparent',
+                                                border: isSelected ? '1px solid var(--sb-system-blue, #2563eb)' : '1px solid transparent',
+                                                transition: 'background 0.15s ease'
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    <span style={{
+                                                        fontSize: '10px',
+                                                        fontWeight: 700,
+                                                        padding: '1px 5px',
+                                                        borderRadius: '4px',
+                                                        background: isLatestVer ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                                                        color: isLatestVer ? '#10b981' : 'var(--sb-text-secondary)'
+                                                    }}>
+                                                        v{verSnapshot.version || vIdx + 1} {isLatestVer ? '• Latest' : ''}
+                                                    </span>
+                                                    <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--sb-text-label)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                        {verSnapshot.title || `Snapshot v${verSnapshot.version || vIdx + 1}`}
+                                                    </span>
+                                                </div>
+                                                {verSnapshot.summary && (
+                                                    <span style={{ fontSize: '10px', color: 'var(--sb-text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                        {verSnapshot.summary}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {isSelected && (
+                                                <span style={{ color: '#2563eb', fontWeight: 700, fontSize: '12px', marginLeft: '6px' }}>✓</span>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Minimalist Segmented View Mode Pill: Code | Split | Preview (only on Live Code Sandbox) */}
             {activeArtifact?.type === 'live-code-sandbox' && (
                 <div
@@ -366,10 +343,10 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                         alignItems: 'center',
                         background: 'rgba(0, 0, 0, 0.35)',
                         border: '1px solid rgba(255, 255, 255, 0.1)',
-                        borderRadius: '7px',
+                        borderRadius: '6px',
                         padding: '2px',
                         gap: '2px',
-                        marginRight: '4px'
+                        marginRight: '2px'
                     }}
                     title="Live Sandbox View Mode"
                 >
@@ -378,10 +355,10 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                         className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'code' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
                         onClick={() => handleSetSandboxViewMode('code')}
                         style={{
-                            padding: '3px 8px',
+                            padding: '2px 7px',
                             fontSize: '11px',
                             fontWeight: 600,
-                            borderRadius: '5px',
+                            borderRadius: '4px',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '4px'
@@ -396,10 +373,10 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                         className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'split' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
                         onClick={() => handleSetSandboxViewMode('split')}
                         style={{
-                            padding: '3px 8px',
+                            padding: '2px 7px',
                             fontSize: '11px',
                             fontWeight: 600,
-                            borderRadius: '5px',
+                            borderRadius: '4px',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '4px'
@@ -414,10 +391,10 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                         className={`sb-btn sb-btn-xs ${(activeSandboxData?.viewMode || 'preview') === 'preview' ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
                         onClick={() => handleSetSandboxViewMode('preview')}
                         style={{
-                            padding: '3px 8px',
+                            padding: '2px 7px',
                             fontSize: '11px',
                             fontWeight: 600,
-                            borderRadius: '5px',
+                            borderRadius: '4px',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '4px'
@@ -430,8 +407,7 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                 </div>
             )}
 
-            {/* Scratchbox Studio Minimalist Controls Group */}
-            {/* 1. Toggle Split / Side-by-side View ([|]) */}
+            {/* Split / Maximize Controls */}
             <button
                 type="button"
                 className={`sb-canvas-icon-btn ${documentPaneState === 'split' ? 'active' : ''}`}
@@ -447,7 +423,6 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                 <IconSidebarToggle size={14} strokeWidth={1.8} />
             </button>
 
-            {/* 2. Toggle Maximize / Fullscreen ([ ]) */}
             <button
                 type="button"
                 className={`sb-canvas-icon-btn ${documentPaneState === 'expanded' ? 'active' : ''}`}
@@ -467,7 +442,7 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                 )}
             </button>
 
-            {/* 3. More Actions Overflow Dropdown (⋮) */}
+            {/* More Actions Overflow Dropdown (⋮) */}
             <div style={{ position: 'relative' }} ref={overflowMenuRef}>
                 <button
                     type="button"
@@ -541,15 +516,18 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
 
 /** Header row of the canvas card. */
 export const CanvasCardHeader: React.FC<ArtifactStageProps> = props => (
-        <div className="sb-document-card-header" style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '12px 20px',
-            userSelect: 'none'
-        }}>
+    <div className="sb-document-card-header" style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        height: '35px',
+        padding: '0 8px 0 0',
+        background: '#131316',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        userSelect: 'none',
+        boxSizing: 'border-box'
+    }}>
         <CanvasTabsBar {...props} />
-
         <CanvasHeaderControls {...props} />
     </div>
 );
