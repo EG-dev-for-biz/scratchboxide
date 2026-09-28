@@ -84,7 +84,19 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'red_rocks_performer_demo.html',
             'universal_architecture_terrain_demo.html',
             'forest_3d_viewer.html',
-            'video_to_4d_performer_studio.html'
+            'video_to_4d_performer_studio.html',
+            'adaptive_matchmove_studio.html',
+            'person_matchmove_studio.html',
+            'google_360_panorama_studio.html',
+            'depthbox_image_to_3dgs.html',
+            'asset_demo_studio.html',
+            'camera_choreography_studio.html',
+            'pro_color_grade_match_studio.html',
+            'adaptive_world_styling_visualizer.html',
+            'plaza_matchmove_eloise.html',
+            'video_branching_studio.html',
+            'geobox_precision_report.html',
+            'visual_proof_alignment.html'
         ];
 
         for (const file of requiredFiles) {

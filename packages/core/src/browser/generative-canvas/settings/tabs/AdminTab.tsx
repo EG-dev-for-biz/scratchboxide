@@ -254,6 +254,83 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         description: 'Central verification studio loading binary glTF models (Empire State, Humanoid 10331522), 4K plates, and 361-frame camera paths.',
         tags: ['Asset Compositor', 'glTF Binary', '4K Plates', 'Empire State', 'Camera Path'],
         badge: 'ASSET SUITE'
+    },
+    // 21. Camera Choreography & Trajectory Studio
+    {
+        id: 'camera-choreography-studio',
+        title: 'Camera Choreography & Trajectory Studio',
+        subtitle: 'Multi-Angle Orbital Spline Paths & Keyframe Pacing',
+        category: 'VFX & Matchmove',
+        path: '/camera_choreography_studio.html',
+        description: 'Interactive cinematic camera director designing 6-DOF spline paths, focal breathing, and drone flight kinematics.',
+        tags: ['Camera Choreography', 'Spline Paths', 'Kinematics', 'Flight Pacing', '6-DoF'],
+        badge: 'CHOREOGRAPHY'
+    },
+    // 22. Pro Color Grade Match Studio
+    {
+        id: 'pro-color-grade-match-studio',
+        title: 'Pro Color Grade Match Studio',
+        subtitle: '3D LUT Grading & Planckian Diurnal Kelvin Calibration',
+        category: 'Lighting & Atmosphere',
+        path: '/pro_color_grade_match_studio.html',
+        description: 'Atmospheric color matching suite with 3D LUT cube grading (1000K–40000K), Beer-Lambert aerial extinction, and ACES tonemapping.',
+        tags: ['Color Grading', '3D LUT', 'Planckian Kelvin', 'Beer-Lambert', 'ACES'],
+        badge: 'COLOR GRADE'
+    },
+    // 23. Adaptive World Styling Visualizer
+    {
+        id: 'adaptive-world-styling-visualizer',
+        title: 'Adaptive World Styling Visualizer',
+        subtitle: 'Multi-Biome Procedural Terrain & Material Transitions',
+        category: 'Botany & Nature',
+        path: '/adaptive_world_styling_visualizer.html',
+        description: 'Real-time procedural biome generator blending multi-layer strata, soil moisture gradients, and procedural vegetation.',
+        tags: ['Adaptive World', 'Multi-Biome', 'Terrain Generation', 'Procedural Strata', 'PBR Materials'],
+        badge: 'ADAPTIVE BIOMES'
+    },
+    // 24. The Plaza Hotel · Eloise Shot Matchmove Recreation
+    {
+        id: 'plaza-matchmove-eloise',
+        title: 'The Plaza Hotel · Eloise Shot Matchmove Recreation',
+        subtitle: 'Production Shot Recreation with 3D Mesh & Omni Video Sync',
+        category: 'VFX & Matchmove',
+        path: '/plaza_matchmove_eloise.html',
+        description: 'Dedicated cinematic shot reconstruction matching camera solve, live plate, and neural diffusion output for the iconic Eloise sequence.',
+        tags: ['Eloise Shot', 'Plaza Hotel', 'Shot Recreation', 'Camera Solve', 'Omni Sync'],
+        badge: 'SHOT RECREATION'
+    },
+    // 25. Generative Video Branching & Decision Tree Studio
+    {
+        id: 'video-branching-studio',
+        title: 'Generative Video Branching & Decision Tree Studio',
+        subtitle: 'Non-Linear Storyboard Sequencing & Multi-Route Synthesis',
+        category: 'VFX & Matchmove',
+        path: '/video_branching_studio.html',
+        description: 'Interactive branching narrative studio for connecting conditional video nodes, choice points, and seamless video cross-fades.',
+        tags: ['Video Branching', 'Interactive Narrative', 'Decision Tree', 'Storyboards', 'Cross-Fade'],
+        badge: 'BRANCHING NLE'
+    },
+    // 26. GeoBox Precision 6-DOF Camera Resection Report
+    {
+        id: 'geobox-precision-report',
+        title: 'GeoBox Precision 6-DOF Camera Resection Report',
+        subtitle: 'Sub-Pixel Optical Alignment & Ground-Truth Metrology Audit',
+        category: 'Geospatial & 3D Tiles',
+        path: '/geobox_precision_report.html',
+        description: 'Analytical metrology report auditing 6-DOF resection residuals (<0.05px RMS) and closed-loop edge cross-correlation.',
+        tags: ['Precision Report', 'solvePnP Metrology', 'Sub-Pixel Residuals', 'Edge Alignment', 'Audit'],
+        badge: 'PRECISION AUDIT'
+    },
+    // 27. Visual Proof Alignment & Multimodal Certification
+    {
+        id: 'visual-proof-alignment',
+        title: 'Visual Proof Alignment & Multimodal Certification',
+        subtitle: '100% Sub-Pixel Geometric Lock & Photogrammetric Validation',
+        category: 'Geospatial & 3D Tiles',
+        path: '/visual_proof_alignment.html',
+        description: 'Multimodal certification studio comparing live-action photography with 3D tile massings across iconic international landmarks.',
+        tags: ['Visual Proof', 'Multimodal Match', 'Geometric Lock', 'Sub-Pixel', '3D Tiles'],
+        badge: 'PROOF AUDIT'
     }
 ];
 
