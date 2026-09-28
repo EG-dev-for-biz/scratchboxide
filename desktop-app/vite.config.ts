@@ -17,9 +17,10 @@ export function buildRendererCsp(isDev: boolean, nonce?: string): string {
   const ws = 'ws://127.0.0.1:* ws://localhost:*';
   const scriptSrc = [
     '\'self\'',
+    '\'unsafe-eval\'',
     remote,
     local,
-    isDev ? '\'unsafe-eval\' \'unsafe-inline\'' : (nonce ? `'nonce-${nonce}'` : '')
+    isDev ? '\'unsafe-inline\'' : (nonce ? `'nonce-${nonce}' 'unsafe-inline'` : '\'unsafe-inline\'')
   ].filter(Boolean).join(' ');
   return [
     `default-src 'self' ${remote} ${local} blob: data:`,

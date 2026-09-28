@@ -233,12 +233,38 @@ export function resolveBreadcrumbs(file?: CodeFileTab, workspaceName = 'scratchb
 }
 
 /**
+ * Detects the active Content-Security-Policy nonce from the host document if one was injected.
+ */
+export function getEffectiveCspNonce(): string {
+    if (typeof document !== 'undefined') {
+        const meta = document.querySelector('meta[property="csp-nonce"]');
+        if (meta) {
+            const n = meta.getAttribute('nonce') || meta.getAttribute('content');
+            if (n) return n;
+        }
+        const script = document.querySelector('script[nonce]');
+        if (script) {
+            const n = script.getAttribute('nonce');
+            if (n) return n;
+        }
+        const style = document.querySelector('style[nonce]');
+        if (style) {
+            const n = style.getAttribute('nonce');
+            if (n) return n;
+        }
+    }
+    return '';
+}
+
+/**
  * Builds a secure, live self-contained srcDoc HTML for sandboxed rendering.
  */
-export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
+export function buildSandboxSrcDoc(data: LiveCodeSandboxData, cspNonce?: string): string {
     const files = Array.isArray(data?.files) ? data.files : [];
     const template = data?.template || 'react';
     const dependencies = data?.dependencies || {};
+    const effectiveNonce = cspNonce !== undefined ? cspNonce : getEffectiveCspNonce();
+    const nonceAttr = effectiveNonce ? ` nonce="${effectiveNonce}"` : '';
 
     const entryFile = files.find(f => f.isEntry) || files.find(f => f.name.endsWith('.tsx') || f.name.endsWith('.jsx')) || files[0] || {
         id: 'default',
@@ -305,9 +331,9 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.jsdelivr.net https://esm.sh https://unpkg.com https://cdn.tailwindcss.com; connect-src 'self' http://localhost:* ws://localhost:* https: data: blob:; img-src 'self' http://localhost:* https: data: blob:; font-src 'self' http://localhost:* https: data:; media-src 'self' http://localhost:* https: data: blob:;" />
   <title>Python Sandbox</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-  <style>
+  <script${nonceAttr} src="https://cdn.tailwindcss.com"></script>
+  <script${nonceAttr} src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+  <style${nonceAttr}>
     body { background-color: #09090b; color: #f4f4f5; font-family: ui-monospace, monospace; padding: 1.5rem; margin: 0; }
     #output { white-space: pre-wrap; font-size: 0.875rem; line-height: 1.5; }
   </style>
@@ -324,7 +350,7 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
     <div id="output" class="bg-zinc-950 p-4 rounded-xl border border-zinc-800 min-h-[160px] text-zinc-300">Initializing environment...</div>
   </div>
 
-  <script>
+  <script${nonceAttr}>
     const outputEl = document.getElementById('output');
     const statusEl = document.getElementById('status');
 
@@ -373,12 +399,12 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.jsdelivr.net https://esm.sh https://unpkg.com https://cdn.tailwindcss.com; connect-src 'self' http://localhost:* ws://localhost:* https: data: blob:; img-src 'self' http://localhost:* https: data: blob:; font-src 'self' http://localhost:* https: data:; media-src 'self' http://localhost:* https: data: blob:;" />
   <title>Scratchbox Live UI Sandbox</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script type="importmap">
+  <script${nonceAttr} src="https://cdn.tailwindcss.com"></script>
+  <script${nonceAttr} type="importmap">
     ${importMapJson}
   </script>
-  <script src="https://unpkg.com/@babel/standalone@7.24.4/babel.min.js"></script>
-  <style>
+  <script${nonceAttr} src="https://unpkg.com/@babel/standalone@7.24.4/babel.min.js"></script>
+  <style${nonceAttr}>
     ${combinedCss}
     html, body { height: 100%; margin: 0; padding: 0; background: #09090b; color: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     #root { height: 100%; }
@@ -398,7 +424,7 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
     </div>
   </div>
 
-  <script>
+  <script${nonceAttr}>
     // Console Interceptor Bridge
     (function() {
       const originalLog = console.log;
@@ -620,7 +646,7 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
   </script>
 
   ${template === 'react' ? `
-  <script type="module">
+  <script${nonceAttr} type="module">
     import React from 'react';
     import ReactDOM from 'react-dom/client';
     import * as LucideIcons from 'lucide-react';
@@ -851,12 +877,18 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
       return window.require(specifier);
     }
 
-    try {
-      if (!window.Babel) {
-        throw new Error('Babel Standalone is not loaded yet');
-      }
+    async function __sb_boot__() {
+      try {
+        let attempts = 0;
+        while (!window.Babel && attempts < 80) {
+          await new Promise(r => setTimeout(r, 50));
+          attempts++;
+        }
+        if (!window.Babel) {
+          throw new Error('Babel Standalone compiler is still loading from CDN. Please check network.');
+        }
 
-      for (const f of __sb_files__) {
+        for (const f of __sb_files__) {
         let code = f.content;
         code = code.replace(/import\\s+React(?:\\s*,\\s*\\{([^}]*)\\})?\\s+from\\s+['"]react['"];?/g, function(_, names) {
           return names ? 'const { ' + names + ' } = window.React;' : '';
@@ -990,10 +1022,23 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData): string {
       }
     } catch(err) {
       console.error('[Mount Error]', err);
+      const container = document.getElementById('root');
+      if (container) {
+        container.innerHTML = '<div style="padding: 24px; font-family: monospace; color: #f87171; background: #09090b; min-height: 100vh;">' +
+          '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">' +
+            '<span style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.4); border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: bold; color: #ef4444;">RUNTIME COMPILATION NOTICE</span>' +
+          '</div>' +
+          '<pre style="background: #18181b; padding: 14px; border-radius: 8px; border: 1px solid #27272a; white-space: pre-wrap; font-size: 13px; line-height: 1.5; color: #fca5a5;">' +
+            String((err && (err.stack || err.message)) || err).replace(/[<>&"]/g, '') +
+          '</pre>' +
+        '</div>';
+      }
     }
+  }
+  __sb_boot__();
   </script>
   ` : `
-  <script type="module">
+  <script${nonceAttr} type="module">
     ${jsTsFiles.map(f => `// File: ${f.name}\n${f.content}`).join('\n\n')}
   </script>
   `}
