@@ -430,6 +430,21 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
 
                         <div className="sb-canvas-menu-divider" />
 
+                        {/* Export 3D Scene (.glb) */}
+                        {(layoutMode === '3d' || activeArtifact?.type === '3d-scene') && (
+                            <button
+                                type="button"
+                                className="sb-canvas-menu-item"
+                                onClick={() => {
+                                    setIsOverflowOpen(false);
+                                    window.dispatchEvent(new CustomEvent('sb-export-glb'));
+                                }}
+                            >
+                                <span style={{ fontSize: '13px' }}>📦</span>
+                                <span>Export 3D Scene (.glb)</span>
+                            </button>
+                        )}
+
                         {/* Download Markdown */}
                         <button
                             type="button"
