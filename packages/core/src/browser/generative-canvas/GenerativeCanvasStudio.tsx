@@ -522,16 +522,24 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [messages, isGenerating, liveStreamedText]);
 
 
-    // Global keyboard shortcuts (⌘K spotlight toggle, ⌘O projects, ⌘, settings, Esc LIFO)
+    // Global keyboard shortcuts (⌘K / ⌘P spotlight toggle, ⌘B toggle sidebar, ⌘L / ⌘J focus composer, ⌘O projects, ⌘, settings, Esc LIFO)
     React.useEffect(() => {
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'p')) {
                 e.preventDefault();
                 if (modalManagerRef.current.isModalOpen('spotlight')) {
                     closeModal('spotlight');
                 } else {
                     openModal('spotlight');
                 }
+            }
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+                e.preventDefault();
+                setIsSidebarOpen(prev => !prev);
+            }
+            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'l' || e.key.toLowerCase() === 'j')) {
+                e.preventDefault();
+                inputRef.current?.focus();
             }
             if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'o')) {
                 e.preventDefault();
@@ -1644,6 +1652,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     closeModal('spotlight');
                     const s = sessions.find(sess => sess.id === sessId);
                     if (s) handleSelectSession(s);
+                }}
+                workspaceFiles={workspaceFilesList}
+                onOpenFile={(filePath, fileName) => {
+                    closeModal('spotlight');
+                    handleFileClick(filePath, fileName);
                 }}
             />
 

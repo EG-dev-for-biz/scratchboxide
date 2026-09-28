@@ -29,7 +29,7 @@ export interface SpotlightActionItem {
     id: string;
     title: string;
     subtitle: string;
-    category: 'Actions' | 'Canvases' | 'AI Tools' | 'Recent';
+    category: 'Actions' | 'Canvases' | 'Files' | 'AI Tools' | 'Recent';
     icon: React.ReactNode;
     shortcut?: string;
     onExecute: () => void;
@@ -46,6 +46,8 @@ export interface SpotlightLauncherModalProps {
     onDebugTerminal?: () => void;
     recentSessions?: ChatSession[];
     onSelectSession?: (sessionId: string) => void;
+    workspaceFiles?: Array<string | { path: string; name: string }>;
+    onOpenFile?: (filePath: string, fileName: string) => void;
 }
 
 export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
@@ -58,7 +60,9 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     onOpenMcpHub,
     onDebugTerminal,
     recentSessions = [],
-    onSelectSession
+    onSelectSession,
+    workspaceFiles = [],
+    onOpenFile
 }) => {
     const [searchQuery, setSearchQuery] = React.useState<string>('');
     const [selectedIndex, setSelectedIndex] = React.useState<number>(0);
@@ -167,6 +171,23 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
         }
     ];
 
+    // Add workspace files for quick-open (⌘P / ⌘K)
+    const fileActions: SpotlightActionItem[] = (workspaceFiles || []).map(f => {
+        const filePath = typeof f === 'string' ? f : f.path;
+        const fileName = typeof f === 'string' ? (f.split('/').pop() || f) : f.name;
+        return {
+            id: `file-${filePath}`,
+            title: fileName,
+            subtitle: filePath,
+            category: 'Files' as const,
+            icon: <IconDocument size={14} className="text-cyan-400" />,
+            onExecute: () => {
+                onClose();
+                if (onOpenFile) onOpenFile(filePath, fileName);
+            }
+        };
+    });
+
     // Add recent sessions to action list
     const sessionActions: SpotlightActionItem[] = (recentSessions || []).slice(0, 4).map(s => ({
         id: `sess-${s.id}`,
@@ -180,7 +201,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
         }
     }));
 
-    const allItems = [...defaultActions, ...sessionActions];
+    const allItems = [...defaultActions, ...fileActions, ...sessionActions];
 
     const filteredItems = allItems.filter(item => {
         if (!searchQuery.trim()) return true;
@@ -228,7 +249,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
                         ref={inputRef}
                         type="text"
                         className="sb-spotlight-input"
-                        placeholder="Search actions, create canvases, or prompt AI directly..."
+                        placeholder="Search files, run actions, or prompt AI... (⌘P / ⌘K)"
                         value={searchQuery}
                         onChange={e => {
                             setSearchQuery(e.target.value);
