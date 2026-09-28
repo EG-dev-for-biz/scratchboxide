@@ -90,10 +90,10 @@ describe('Scratchbox IDE 100% Production Readiness Audit', () => {
         const docPath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive.tsx');
         const settingsReducerPath = path.resolve(__dirname, '../src/browser/generative-canvas/settings/settingsReducer.ts');
 
-        it('StudioTopBar contains TopBar Workspace selector, Primitive switchers, and Settings menu options', () => {
+        it('StudioTopBar contains TopBar Workspace selector, Command search pill, and Settings menu options', () => {
             const topBarSrc = fs.readFileSync(topBarPath, 'utf8');
-            expect(topBarSrc).toContain('sb-topbar-mode-switcher');
-            expect(topBarSrc).toContain('handleSwitchMode');
+            expect(topBarSrc).toContain('sb-topbar-command-pill');
+            expect(topBarSrc).toContain('onOpenSpotlight');
             expect(topBarSrc).toContain('openSettingsToTab');
             expect(topBarSrc).toContain('workspaceMenuRef');
             expect(topBarSrc).toContain('New Workspace...');

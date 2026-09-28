@@ -1086,7 +1086,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         onNewWorkspace: () => {
             setIsSidebarOpen(true);
             setShowNewWorkspaceMenu(true);
-        }
+        },
+        onOpenSpotlight: () => openModal('spotlight')
     };
 
     const artifactStageProps: ArtifactStageProps = {

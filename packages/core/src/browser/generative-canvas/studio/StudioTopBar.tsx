@@ -24,6 +24,7 @@ import {
     IconMetrics,
     IconNodeGraph,
     IconPlus,
+    IconSearch,
     IconSettings
 } from '../canvas-icons';
 
@@ -58,11 +59,12 @@ export interface StudioTopBarProps {
     onOpenFolder?: () => void;
     onOpenWorkspace?: () => void;
     onNewWorkspace?: () => void;
+    onOpenSpotlight?: () => void;
 }
 
 /** Minimal top navigation bar: sidebar toggle, version pager, layout controls and the conversation menu. */
 export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
-    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, handleSwitchMode, openSettingsToTab, activeWorkspace, workspaces, onSelectWorkspace, onOpenFolder, onOpenWorkspace, onNewWorkspace } = props;
+    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, handleSwitchMode, openSettingsToTab, activeWorkspace, workspaces, onSelectWorkspace, onOpenFolder, onOpenWorkspace, onNewWorkspace, onOpenSpotlight } = props;
 
     const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = React.useState<boolean>(false);
     const workspaceMenuRef = React.useRef<HTMLDivElement>(null);
@@ -214,108 +216,49 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
             )}
         </div>
 
-        <div className="sb-topbar-center" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Layout / Primitive Mode Switcher */}
-            {handleSwitchMode && (
-                <div className="sb-topbar-mode-switcher" style={{
+        {/* Cursor-Grade Center Command Search Pill */}
+        <div className="sb-topbar-center" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, maxWidth: '440px' }}>
+            <button
+                type="button"
+                className="sb-topbar-command-pill"
+                onClick={onOpenSpotlight}
+                title="Search files, run commands, or prompt AI (⌘P / ⌘K)"
+                style={{
                     display: 'flex',
                     alignItems: 'center',
-                    background: 'var(--sb-surface-card, rgba(255, 255, 255, 0.04))',
-                    border: '1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.08))',
-                    borderRadius: '8px',
-                    padding: '2px',
-                    gap: '2px'
-                }}>
-                    {[
-                        { id: 'document' as const, label: 'Doc', icon: <IconDocument size={12} strokeWidth={1.8} /> },
-                        { id: 'code' as const, label: 'Code', icon: <IconCode size={12} strokeWidth={1.8} /> },
-                        { id: '3d' as const, label: '3D', icon: <Icon3D size={12} strokeWidth={1.8} /> },
-                        { id: 'video' as const, label: 'Video', icon: <IconFilm size={12} strokeWidth={1.8} /> },
-                        { id: 'canvas' as const, label: 'Graph', icon: <IconNodeGraph size={12} strokeWidth={1.8} /> },
-                        { id: 'kanban' as const, label: 'Kanban', icon: <IconKanban size={12} strokeWidth={1.8} /> },
-                        { id: 'dashboard' as const, label: 'Dashboard', icon: <IconMetrics size={12} strokeWidth={1.8} /> }
-                    ].map(mode => {
-                        const isSelected = layoutMode === mode.id || (mode.id === 'canvas' && (layoutMode === 'canvas' || layoutMode === 'automation'));
-                        return (
-                            <button
-                                key={mode.id}
-                                type="button"
-                                className={`sb-btn sb-btn-xs ${isSelected ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
-                                onClick={() => handleSwitchMode(mode.id as StudioLayoutMode)}
-                                style={{
-                                    padding: '3px 8px',
-                                    fontSize: '11px',
-                                    fontWeight: isSelected ? 600 : 500,
-                                    borderRadius: '6px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '4px',
-                                    transition: 'all 0.15s ease'
-                                }}
-                                title={`Switch to ${mode.label} workspace`}
-                            >
-                                {mode.icon}
-                                <span>{mode.label}</span>
-                            </button>
-                        );
-                    })}
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    maxWidth: '380px',
+                    height: '28px',
+                    padding: '0 10px',
+                    borderRadius: '7px',
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    color: 'var(--sb-text-tertiary, #94a3b8)',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    transition: 'all 0.15s ease'
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0, overflow: 'hidden' }}>
+                    <IconSearch size={13} className="text-zinc-500" />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Search files, commands, or prompt...</span>
                 </div>
-            )}
-
-            {/* In-Canvas Version Stepper & Rollback Surface */}
-            {activeArtifact && currentArtifactVersionsList.length > 1 && (
-                <div className="sb-artifact-version-stepper">
-                    <button
-                        type="button"
-                        className="sb-ver-step-btn"
-                        onClick={handlePrevArtifactVersion}
-                        disabled={currentArtifactVersionIndex <= 0}
-                        title="Previous version"
-                    >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="15 18 9 12 15 6" />
-                        </svg>
-                    </button>
-                    <span className="sb-ver-badge">
-                        v{activeArtifact.version || currentArtifactVersionIndex + 1} of {currentArtifactVersionsList.length}
-                    </span>
-                    <button
-                        type="button"
-                        className="sb-ver-step-btn"
-                        onClick={handleNextArtifactVersion}
-                        disabled={currentArtifactVersionIndex >= currentArtifactVersionsList.length - 1}
-                        title="Next version"
-                    >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="9 18 15 12 9 6" />
-                        </svg>
-                    </button>
-                    {!isCurrentArtifactLatestVersion && (
-                        <button
-                            type="button"
-                            className="sb-ver-restore-btn"
-                            onClick={() => handleRollbackArtifactToVersion(activeArtifact)}
-                            title={`Restore v${activeArtifact.version || currentArtifactVersionIndex + 1}`}
-                        >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="1 4 1 10 7 10" />
-                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                            </svg>
-                            <span>Restore v{activeArtifact.version || currentArtifactVersionIndex + 1}</span>
-                        </button>
-                    )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }}>
+                    <kbd style={{ fontSize: '10px', fontFamily: 'inherit', background: 'rgba(255, 255, 255, 0.08)', padding: '1px 5px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'var(--sb-text-secondary)' }}>⌘P</kbd>
                 </div>
-            )}
+            </button>
         </div>
 
-        <div className="sb-topbar-right">
+        <div className="sb-topbar-right" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             {layoutMode !== 'chat' && documentPaneState === 'collapsed' && (
                 <button
                     type="button"
                     className="sb-btn sb-btn-primary sb-btn-xs sb-doc-reopen-btn"
                     onClick={() => setDocumentPaneState('split')}
                     style={{
-                        marginRight: '8px',
+                        marginRight: '4px',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
@@ -332,26 +275,17 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                     <span>Show {getCanvasReopenTabTitle()}</span>
                 </button>
             )}
-            <button
-                type="button"
-                className="sb-btn sb-topbar-action-pill"
-                onClick={() => {
-                    if (typeof window !== 'undefined' && navigator?.clipboard?.writeText) {
-                        navigator.clipboard.writeText(window.location.href);
-                    }
-                    showToast('Link copied to clipboard');
-                }}
-                title="Share conversation"
-            >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="18" cy="5" r="3" />
-                    <circle cx="6" cy="12" r="3" />
-                    <circle cx="18" cy="19" r="3" />
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-                </svg>
-                <span>Share</span>
-            </button>
+
+            {openSettingsToTab && (
+                <button
+                    type="button"
+                    className="sb-btn sb-topbar-icon-action"
+                    onClick={() => openSettingsToTab('general')}
+                    title="Settings (⌘,)"
+                >
+                    <IconSettings size={14} className="text-zinc-400" />
+                </button>
+            )}
 
             {/* Conversation Actions Menu */}
             <div className="relative" ref={conversationMenuRef} style={{ position: 'relative' }}>
@@ -361,10 +295,10 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                     onClick={() => setIsConversationMenuOpen(!isConversationMenuOpen)}
                     title="Conversation actions"
                 >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="1" />
-                        <circle cx="19" cy="12" r="1" />
-                        <circle cx="5" cy="12" r="1" />
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+                        <circle cx="19" cy="12" r="1.5" fill="currentColor" />
+                        <circle cx="5" cy="12" r="1.5" fill="currentColor" />
                     </svg>
                 </button>
 
