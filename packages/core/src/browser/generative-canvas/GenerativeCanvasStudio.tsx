@@ -1228,30 +1228,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             A canvas for AI work. What can I help you design, build, or analyze today?
                                         </h1>
 
-                                        <div className="sb-welcome-mode-strip">
-                                            <button
-                                                type="button"
-                                                className={`sb-btn sb-welcome-mode-btn ${aiInteractionMode === 'agent' ? 'sb-welcome-mode-btn-active' : ''}`}
-                                                onClick={() => setAiInteractionMode('agent')}
-                                            >
-                                                Agent: Full-Stack Builder
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className={`sb-btn sb-welcome-mode-btn ${aiInteractionMode === 'ask' ? 'sb-welcome-mode-btn-active' : ''}`}
-                                                onClick={() => setAiInteractionMode('ask')}
-                                            >
-                                                Ask: Codebase &amp; Docs
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className={`sb-btn sb-welcome-mode-btn ${aiInteractionMode === 'plan' ? 'sb-welcome-mode-btn-active' : ''}`}
-                                                onClick={() => setAiInteractionMode('plan')}
-                                            >
-                                                Plan: Architecture
-                                            </button>
-                                        </div>
-
                                         {/* Clean Quick Creation Starters */}
                                         <div className="sb-starter-prompts-grid" style={{
                                             display: 'flex',
