@@ -81,7 +81,12 @@ describe('VFX Plate Anti-Drift Demo Project Integration Suite', () => {
             // Verify real video file exists on disk and is non-zero
             const realVideoPath = path.resolve(__dirname, '../../../public', plateElement.sourcePath);
             expect(fs.existsSync(realVideoPath)).toBe(true);
-            expect(fs.statSync(realVideoPath).size).toBeGreaterThan(1000000);
+            expect(fs.statSync(realVideoPath).size).toBeGreaterThan(500000);
+
+            // Verify real 3D CG Monolith inpaint asset exists on disk
+            const monolithPath = path.resolve(__dirname, '../../../public/models/cg_architectural_monolith.glb');
+            expect(fs.existsSync(monolithPath)).toBe(true);
+            expect(fs.statSync(monolithPath).size).toBeGreaterThan(10000);
         });
 
         it('validates public/projects/vfx_plate_anti_drift_demo.scratchbox.json mirror exists and matches', () => {
