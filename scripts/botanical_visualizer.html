@@ -474,30 +474,53 @@
                 currentModel = null;
             }
 
-            loader.load(cfg.file, (gltf) => {
-                currentModel = gltf.scene;
+            function tryLoad(urls, index) {
+                if (index >= urls.length) {
+                    console.error("Failed to load GLTF across all candidate paths:", cfg.file);
+                    loaderElem.textContent = "Error loading " + cfg.file;
+                    statusElem.textContent = 'ERROR';
+                    return;
+                }
+                const url = urls[index];
+                loader.load(url, (gltf) => {
+                    currentModel = gltf.scene;
 
-                currentModel.traverse((child) => {
-                    if (child.isMesh) {
-                        child.castShadow = true;
-                        child.receiveShadow = true;
-                    }
+                    currentModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+
+                    scene.add(currentModel);
+
+                    camera.position.set(...cfg.camPos);
+                    controls.target.set(...cfg.targetPos);
+                    controls.update();
+
+                    loaderElem.style.display = 'none';
+                    statusElem.textContent = 'READY';
+                    window.__READY_FOR_SCREENSHOT__ = true;
+                }, undefined, (err) => {
+                    console.warn(`Candidate path [${url}] failed, trying next fallback...`, err);
+                    tryLoad(urls, index + 1);
                 });
+            }
 
-                scene.add(currentModel);
-
-                camera.position.set(...cfg.camPos);
-                controls.target.set(...cfg.targetPos);
-                controls.update();
-
-                loaderElem.style.display = 'none';
-                statusElem.textContent = 'READY';
-                window.__READY_FOR_SCREENSHOT__ = true;
-            }, undefined, (err) => {
-                console.error("Failed to load GLTF:", err);
-                loaderElem.textContent = "Error loading " + cfg.file;
-                statusElem.textContent = 'ERROR';
-            });
+            const cleanRel = (cfg.file || '').replace(/^\//, '');
+            const candidateUrls = [
+                cfg.file,
+                cleanRel,
+                '/' + cleanRel,
+                './' + cleanRel,
+                '../' + cleanRel,
+                'http://127.0.0.1:5173/' + cleanRel,
+                'http://localhost:5173/' + cleanRel,
+                'http://127.0.0.1:3030/' + cleanRel,
+                'http://localhost:3030/' + cleanRel
+            ];
+            const uniqueUrls = [...new Set(candidateUrls)];
+            tryLoad(uniqueUrls, 0);
         };
 
         window.addEventListener('resize', () => {
