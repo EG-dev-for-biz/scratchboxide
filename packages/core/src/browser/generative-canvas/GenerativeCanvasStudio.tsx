@@ -157,7 +157,6 @@ import { StudioProvider, useStableStudioActions } from './state/StudioContext';
 import { Composer, ComposerProps } from './chat/Composer';
 import { MessageList } from './chat/MessageList';
 import { WorkspaceSidebar, WorkspaceSidebarProps } from './studio/WorkspaceSidebar';
-import { StudioTopBar, StudioTopBarProps } from './studio/StudioTopBar';
 import { ArtifactStage, ArtifactStageProps } from './studio/ArtifactStage';
 import { useWorkspaceGraphCoordinator } from './studio/useWorkspaceGraphCoordinator';
 import { useResolvedWorkspaceRoot } from './hooks/useResolvedWorkspaceRoot';
@@ -1208,43 +1207,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         onFileClick: handleFileClick
     };
 
-    const topBarProps: StudioTopBarProps = {
-        activeArtifact,
-        layoutMode,
-        isSidebarOpen,
-        setIsSidebarOpen,
-        documentPaneState,
-        setDocumentPaneState,
-        isConversationMenuOpen,
-        setIsConversationMenuOpen,
-        conversationMenuRef,
-        currentArtifactVersionsList,
-        currentArtifactVersionIndex,
-        isCurrentArtifactLatestVersion,
-        handlePrevArtifactVersion,
-        handleNextArtifactVersion,
-        handleRollbackArtifactToVersion,
-        handleClearCurrentConversation,
-        handleExportConversationMarkdown,
-        handleCreateWorkspaceFile,
-        getCanvasReopenIcon,
-        getCanvasReopenLabel,
-        getCanvasReopenTabTitle,
-        showToast,
-        handleSwitchMode,
-        openSettingsToTab,
-        activeWorkspace,
-        workspaces,
-        onSelectWorkspace: setActiveWorkspace,
-        onOpenFolder,
-        onOpenWorkspace,
-        onNewWorkspace: () => {
-            setIsSidebarOpen(true);
-            setShowNewWorkspaceMenu(true);
-        },
-        onOpenSpotlight: () => openModal('spotlight')
-    };
-
     const artifactStageProps: ArtifactStageProps = {
         activeArtifact,
         setActiveArtifact,
@@ -1358,9 +1320,40 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             <WorkspaceSidebar {...sidebarProps} />
 
             {/* Main Stage Workspace Area */}
-            <main className="sb-chatgpt-main-stage">
-                {/* Top Navigation Bar (Minimalist & Clean) */}
-                <StudioTopBar {...topBarProps} />
+            <main className="sb-chatgpt-main-stage" style={{ position: 'relative' }}>
+                {/* Floating Sidebar Open Button when sidebar is collapsed */}
+                {!isSidebarOpen && (
+                    <button
+                        type="button"
+                        className="sb-topbar-sidebar-open-btn sb-sidebar-floating-toggle animate-fadeIn"
+                        onClick={() => setIsSidebarOpen(true)}
+                        title="Open sidebar (⌘B)"
+                        style={{
+                            position: 'absolute',
+                            top: '10px',
+                            left: '10px',
+                            zIndex: 50,
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '6px',
+                            background: 'rgba(24, 24, 27, 0.85)',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            color: '#a1a1aa',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            backdropFilter: 'blur(8px)',
+                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                            padding: 0
+                        }}
+                    >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <line x1="9" y1="3" x2="9" y2="21" />
+                        </svg>
+                    </button>
+                )}
 
                 {/* Body Content */}
                 <div className="sb-main-surface-container">
