@@ -36,16 +36,23 @@ export const ShortcutsTab: React.FC = () => {
 
             <div className="sb-cursor-group-card">
                 {[
-                    { keys: '⌘K', title: 'Inline Quick Edit', desc: 'Trigger inline AI prompt & code transformation in Sandbox' },
-                    { keys: '⌘Y', title: 'Accept Diff', desc: 'Accept inline code diff and apply changes' },
-                    { keys: '⌘N', title: 'Reject Diff / New Chat', desc: 'Reject inline code diff or start clean session' },
-                    { keys: '⌘,', title: 'Open Settings', desc: 'Launch full Scratchbox settings modal' },
-                    { keys: '⌘O', title: 'Open Folder / Project', desc: 'Open native workspace or directory' },
-                    { keys: '⌘P', title: 'Spotlight Search', desc: 'Open spotlight palette for canvases and commands' },
+                    { keys: '⌘P / ⌘K', title: 'Command Palette & Quick Open', desc: 'Open spotlight palette for files, actions, and canvases' },
+                    { keys: '⌘B', title: 'Toggle Primary Sidebar', desc: 'Show or hide the workspace navigation sidebar' },
+                    { keys: '⌘L / ⌘J', title: 'Focus Composer Input', desc: 'Jump focus directly into the chat & action composer' },
+                    { keys: '⌘S', title: 'Save & Commit Canvas', desc: 'Save and synchronize active canvas artifact or document' },
+                    { keys: '⌘T', title: 'New Live Sandbox Tab', desc: 'Create a fresh runnable interactive sandbox canvas tab' },
+                    { keys: '⌘W', title: 'Close Active Tab', desc: 'Close the current canvas artifact tab' },
+                    { keys: '⌘1 – ⌘9', title: 'Switch Canvas Tabs', desc: 'Directly switch to canvas tab by number index' },
+                    { keys: '⌥⌘← / ⌥⌘→', title: 'Cycle Previous / Next Tab', desc: 'Navigate forward or backward through open canvas tabs' },
+                    { keys: '⌘\\', title: 'Toggle Split View', desc: 'Collapse or restore side-by-side canvas stage' },
+                    { keys: '⌘N', title: 'New Conversation', desc: 'Start a clean AI reasoning chat session' },
+                    { keys: '⌘O', title: 'Open Folder / Workspace', desc: 'Open native workspace or directory' },
+                    { keys: '⌘,', title: 'Open Preferences', desc: 'Launch full Scratchbox settings and configuration modal' },
+                    { keys: '⌘/', title: 'Keyboard Shortcuts', desc: 'Open this keystrokes and navigation reference' },
                     { keys: '@', title: 'Context Mentions', desc: 'Attach files, git status, terminals, docs, or MCP tools' },
                     { keys: '/', title: 'Superpower Skills', desc: 'Attach domain skills & specialized instructions' },
-                    { keys: 'Enter', title: 'Submit Prompt', desc: 'Send message in unified composer capsule' },
-                    { keys: 'Esc', title: 'Dismiss', desc: 'Close modals, popovers, and autocomplete menus' }
+                    { keys: 'Enter / ⌘↵', title: 'Submit Prompt', desc: 'Send message in unified composer capsule (Shift+Enter for newline)' },
+                    { keys: 'Esc', title: 'Dismiss LIFO', desc: 'Close modals, popovers, and autocomplete menus' }
                 ].map((sc, scIdx) => (
                     <div key={scIdx} className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">

@@ -81,9 +81,11 @@ export function useComposerInput(deps: UseComposerInputDeps) {
             }
         }
 
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSendMessage();
+        if (e.key === 'Enter') {
+            if (!e.shiftKey || e.metaKey || e.ctrlKey) {
+                e.preventDefault();
+                handleSendMessage();
+            }
         }
     };
 

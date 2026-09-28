@@ -521,66 +521,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         }
     }, [messages, isGenerating, liveStreamedText]);
 
-
-    // Global keyboard shortcuts (⌘K / ⌘P spotlight toggle, ⌘B toggle sidebar, ⌘L / ⌘J focus composer, ⌘O projects, ⌘, settings, Esc LIFO)
-    React.useEffect(() => {
-        const handleGlobalKeyDown = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'p')) {
-                e.preventDefault();
-                if (modalManagerRef.current.isModalOpen('spotlight')) {
-                    closeModal('spotlight');
-                } else {
-                    openModal('spotlight');
-                }
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
-                e.preventDefault();
-                setIsSidebarOpen(prev => !prev);
-            }
-            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'l' || e.key.toLowerCase() === 'j')) {
-                e.preventDefault();
-                inputRef.current?.focus();
-            }
-            if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'o')) {
-                e.preventDefault();
-                if (onOpenFolder) {
-                    onOpenFolder();
-                } else if (onOpenWorkspace) {
-                    onOpenWorkspace();
-                } else {
-                    openSettingsToTab('workspace');
-                }
-            }
-            if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-                e.preventDefault();
-                openSettingsToTab('general');
-            }
-            if (e.key === 'Escape') {
-                if (isConversationMenuOpen) {
-                    e.preventDefault();
-                    setIsConversationMenuOpen(false);
-                    return;
-                }
-                if (modalManagerRef.current.hasOpenModals()) {
-                    e.preventDefault();
-                    closeTopModal();
-                    return;
-                }
-                if (autocompleteQuery !== undefined || autocompleteType !== undefined) {
-                    e.preventDefault();
-                    setAutocompleteQuery(undefined);
-                    setAutocompleteType(undefined);
-                    return;
-                }
-                if (isSidebarOpen && typeof window !== 'undefined' && window.innerWidth <= 767) {
-                    setIsSidebarOpen(false);
-                }
-            }
-        };
-        window.addEventListener('keydown', handleGlobalKeyDown);
-        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [isSidebarOpen, autocompleteQuery, autocompleteType, openModal, closeModal, closeTopModal, isConversationMenuOpen]);
-
     // Close conversation actions dropdown on outside click
     React.useEffect(() => {
         if (!isConversationMenuOpen) return;
@@ -905,6 +845,221 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
 
     const { handleClearCurrentConversation, handleDeleteSession, handleExportConversationMarkdown, handleNewChat, handleSelectSession, openSettingsToTab } = useSessionHandlers({ activeArtifact, activeSession, activeWorkspace, artifactHistory, currentSessionId, handleSwitchMode, inputRef, layoutMode, messages, openModal, saveCurrentSessionViewState, sessionViewStateCacheRef, sessions, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setInputValue, setIsConversationMenuOpen, setIsSidebarOpen, setLayoutMode, setLiveThinkingText, setMessages, setSessions, setSettingsInitialTab, showToast });
+
+    // Coordinated Global Keyboard Shortcuts (Cursor / VS Code standard)
+    React.useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+            const keyLower = e.key.toLowerCase();
+
+            // 1. ⌘P or ⌘K -> Command Palette / Quick Open Spotlight
+            if (isCmdOrCtrl && (keyLower === 'k' || keyLower === 'p')) {
+                e.preventDefault();
+                if (modalManagerRef.current.isModalOpen('spotlight')) {
+                    closeModal('spotlight');
+                } else {
+                    openModal('spotlight');
+                }
+                return;
+            }
+
+            // 2. ⌘B -> Toggle Primary Navigation Sidebar
+            if (isCmdOrCtrl && keyLower === 'b') {
+                e.preventDefault();
+                setIsSidebarOpen(prev => !prev);
+                return;
+            }
+
+            // 3. ⌘L or ⌘J -> Focus Chat / Action Composer
+            if (isCmdOrCtrl && (keyLower === 'l' || keyLower === 'j')) {
+                e.preventDefault();
+                inputRef.current?.focus();
+                return;
+            }
+
+            // 4. ⌘N -> New Conversation
+            if (isCmdOrCtrl && keyLower === 'n' && !e.shiftKey) {
+                e.preventDefault();
+                handleNewChat();
+                return;
+            }
+
+            // 5. ⌘S -> Save / Commit active artifact
+            if (isCmdOrCtrl && keyLower === 's' && !e.shiftKey) {
+                e.preventDefault();
+                if (activeArtifact) {
+                    if (activeArtifact.type === 'live-code-sandbox' && activeSandboxData && syncSandboxSaveToMarkdown) {
+                        syncSandboxSaveToMarkdown(activeSandboxData);
+                    }
+                    const rootParam = activeWorkspace?.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+                    fetch(`/workspace/sync-artifact${rootParam}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            workspaceRoot: activeWorkspace?.path,
+                            artifact: activeArtifact
+                        })
+                    }).catch(() => {});
+                    showToast(`${activeArtifact.title || getCanvasReopenTabTitle()} saved`, 'check');
+                }
+                return;
+            }
+
+            // 6. ⌘T -> New Live Sandbox Tab
+            if (isCmdOrCtrl && keyLower === 't' && !e.shiftKey) {
+                e.preventDefault();
+                handleCreateNewSandboxTab();
+                return;
+            }
+
+            // 7. ⌘W -> Close Active Canvas Tab
+            if (isCmdOrCtrl && keyLower === 'w' && !e.shiftKey) {
+                if (activeArtifact) {
+                    e.preventDefault();
+                    handleCloseArtifactTab(e as any, activeArtifact.id);
+                    return;
+                }
+            }
+
+            // 8. ⌘1 – ⌘9 -> Switch to Canvas Tab N
+            if (isCmdOrCtrl && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+                const targetIdx = parseInt(e.key, 10) - 1;
+                if (canvasArtifactTabs[targetIdx]) {
+                    e.preventDefault();
+                    handleSelectArtifactTab(canvasArtifactTabs[targetIdx]);
+                    return;
+                }
+            }
+
+            // 9. ⌥⌘← / ⌥⌘→ -> Cycle Previous / Next Tab
+            if ((isCmdOrCtrl && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) ||
+                (e.ctrlKey && (e.key === 'PageUp' || e.key === 'PageDown'))) {
+                if (canvasArtifactTabs.length > 1) {
+                    e.preventDefault();
+                    const currentIdx = canvasArtifactTabs.findIndex(a => a.id === activeArtifact?.id);
+                    const isNext = e.key === 'ArrowRight' || e.key === 'PageDown';
+                    const targetIdx = isNext
+                        ? (currentIdx + 1) % canvasArtifactTabs.length
+                        : (currentIdx - 1 + canvasArtifactTabs.length) % canvasArtifactTabs.length;
+                    handleSelectArtifactTab(canvasArtifactTabs[targetIdx]);
+                    return;
+                }
+            }
+
+            // 10. ⌘\ or ⌘| -> Toggle Split View
+            if (isCmdOrCtrl && (e.key === '\\' || e.key === '|')) {
+                e.preventDefault();
+                setDocumentPaneState(prev => prev === 'split' ? 'collapsed' : 'split');
+                return;
+            }
+
+            // 11. ⌘O -> Open Folder / Workspace
+            if (isCmdOrCtrl && keyLower === 'o') {
+                e.preventDefault();
+                if (onOpenFolder) {
+                    onOpenFolder();
+                } else if (onOpenWorkspace) {
+                    onOpenWorkspace();
+                } else {
+                    openSettingsToTab('workspace');
+                }
+                return;
+            }
+
+            // 12. ⌘, -> Preferences / Settings
+            if (isCmdOrCtrl && e.key === ',') {
+                e.preventDefault();
+                if (onOpenPreferences) {
+                    onOpenPreferences();
+                } else {
+                    openSettingsToTab('general');
+                }
+                return;
+            }
+
+            // 13. ⌘/ or ⌘? -> Keybindings Reference
+            if (isCmdOrCtrl && (e.key === '/' || e.key === '?')) {
+                e.preventDefault();
+                if (onOpenKeyboardShortcuts) {
+                    onOpenKeyboardShortcuts();
+                } else {
+                    openSettingsToTab('shortcuts');
+                }
+                return;
+            }
+
+            // 14. Escape -> Hierarchical LIFO Dismissal
+            if (e.key === 'Escape') {
+                if (isConversationMenuOpen) {
+                    e.preventDefault();
+                    setIsConversationMenuOpen(false);
+                    return;
+                }
+                if (modalManagerRef.current.hasOpenModals()) {
+                    e.preventDefault();
+                    closeTopModal();
+                    return;
+                }
+                if (autocompleteQuery !== undefined || autocompleteType !== undefined) {
+                    e.preventDefault();
+                    setAutocompleteQuery(undefined);
+                    setAutocompleteType(undefined);
+                    return;
+                }
+                if (isSidebarOpen && typeof window !== 'undefined' && window.innerWidth <= 767) {
+                    setIsSidebarOpen(false);
+                    return;
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    }, [
+        isSidebarOpen, autocompleteQuery, autocompleteType, openModal, closeModal, closeTopModal,
+        isConversationMenuOpen, onOpenFolder, onOpenWorkspace, onOpenPreferences, onOpenKeyboardShortcuts,
+        openSettingsToTab, handleNewChat, handleCloseArtifactTab, activeArtifact, canvasArtifactTabs,
+        handleSelectArtifactTab, handleCreateNewSandboxTab, activeSandboxData, syncSandboxSaveToMarkdown,
+        activeWorkspace, showToast
+    ]);
+
+    // Desktop App & Window Interaction Coordination Listeners
+    React.useEffect(() => {
+        const handleOpenPreferencesListener = () => {
+            if (onOpenPreferences) onOpenPreferences();
+            else openSettingsToTab('general');
+        };
+        const handleOpenShortcutsListener = () => {
+            if (onOpenKeyboardShortcuts) onOpenKeyboardShortcuts();
+            else openSettingsToTab('shortcuts');
+        };
+        const handleCreateFileRequestedListener = () => {
+            if (onCreateFile) onCreateFile();
+            else openModal('spotlight');
+        };
+        const handleWorkspaceChangedListener = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.path) {
+                const matched = workspaces.find(w => w.path === detail.path);
+                if (matched) {
+                    setActiveWorkspace(matched);
+                    showToast(`Switched active workspace to "${matched.name}"`);
+                }
+            }
+        };
+
+        window.addEventListener('scratchbox:open-preferences', handleOpenPreferencesListener);
+        window.addEventListener('scratchbox:open-shortcuts', handleOpenShortcutsListener);
+        window.addEventListener('scratchbox:create-file-requested', handleCreateFileRequestedListener);
+        window.addEventListener('scratchbox:workspace-changed', handleWorkspaceChangedListener);
+
+        return () => {
+            window.removeEventListener('scratchbox:open-preferences', handleOpenPreferencesListener);
+            window.removeEventListener('scratchbox:open-shortcuts', handleOpenShortcutsListener);
+            window.removeEventListener('scratchbox:create-file-requested', handleCreateFileRequestedListener);
+            window.removeEventListener('scratchbox:workspace-changed', handleWorkspaceChangedListener);
+        };
+    }, [onOpenPreferences, onOpenKeyboardShortcuts, onCreateFile, openSettingsToTab, openModal, workspaces, setActiveWorkspace, showToast]);
 
 
 
