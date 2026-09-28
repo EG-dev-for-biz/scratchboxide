@@ -12,7 +12,7 @@ import * as path from 'path';
 import {
   SpatialEntityDefinition,
   SpatialCategory
-} from './Colosseum3DMeshSeparatorService.js';
+} from './Colosseum3DMeshSeparatorService';
 
 export type BotanicalSpecies =
   | 'pinus_pinea'              // Italian Stone Pine (Umbrella Pine)

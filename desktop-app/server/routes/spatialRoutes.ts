@@ -236,6 +236,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
         try {
             const { inputImagePath, inputImageBase64, prompt, seamWidth, outputImagePath, mockExecution, model } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
+            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.healPanoramaSeam({
                 inputImagePath,
@@ -243,7 +244,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 prompt,
                 seamWidth,
                 outputImagePath,
-                mockExecution,
+                mockExecution: isMock,
                 model
             });
 
@@ -267,6 +268,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
             const { inputImagePath, inputImageBase64, maskImagePath, maskImageBase64, nadirOnly, nadirRatio, prompt, outputImagePath, mockExecution, model } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
             const maskBuffer = maskImageBase64 ? Buffer.from(maskImageBase64, 'base64') : undefined;
+            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.inpaintPanorama({
                 inputImagePath,
@@ -277,7 +279,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 nadirRatio,
                 prompt,
                 outputImagePath,
-                mockExecution,
+                mockExecution: isMock,
                 model
             });
 
@@ -302,6 +304,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 res.status(400).json({ success: false, error: 'prompt is required to generate 360 panorama' });
                 return;
             }
+            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.generate360Panorama({
                 prompt,
@@ -311,7 +314,7 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
                 healSeam,
                 inpaintNadir,
                 outputImagePath,
-                mockExecution,
+                mockExecution: isMock,
                 model
             });
 
@@ -334,13 +337,14 @@ export function createPanoramaRouter(mediaCredentials: GoogleMediaCredentialsSer
         try {
             const { inputImagePath, inputImageBase64, engine, outputImagePath, mockExecution, seamWidth } = req.body || {};
             const inputBuffer = inputImageBase64 ? Buffer.from(inputImageBase64, 'base64') : undefined;
+            const isMock = mockExecution === true || mockExecution === 'true';
 
             const result = await panoramaService.upscalePanorama16K({
                 inputImagePath,
                 inputImageBuffer: inputBuffer,
                 engine,
                 outputImagePath,
-                mockExecution,
+                mockExecution: isMock,
                 seamWidth
             });
 

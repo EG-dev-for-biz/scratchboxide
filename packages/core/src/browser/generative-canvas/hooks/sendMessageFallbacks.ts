@@ -83,6 +83,8 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
     const hasDocCreationIntent = /(?:create|generate|write|draft|build|make)\s+(?:me\s+)?(?:an?\s+)?(?:new\s+)?(?:[\w-]+\s+){0,3}(?:document|doc|docs|spec|specification|paper|report|proposal|memo|notes|guidelines?|brief)\b/i.test(text);
 
     const isVideoTimelineRequest = targetPrimitiveType === 'video-timeline' ||
+        text.trim().startsWith('/video') ||
+        text.trim().startsWith('/timeline') ||
         (!hasDocCreationIntent && (
             /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|chroma\s*key|green\s*screen|blue\s*screen|despill|video\s+composite|composite\s+clip|light\s*wrap|picture[- ]in[- ]picture|\bpip\b/i.test(text) ||
             ((layoutMode === 'video' || activeArtifact?.type === 'video-timeline') && (lower.includes('clip') || lower.includes('timeline')) && (lower.includes('split') || lower.includes('cut') || lower.includes('delete') || lower.includes('playhead') || lower.includes('ripple') || lower.includes('track') || lower.includes('video') || lower.includes('composite') || lower.includes('key')))
@@ -106,6 +108,7 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         targetPrimitiveType === 'markdown-document' ||
         isExplicitMedia ||
         text.trim().startsWith('/doc') ||
+        text.trim().startsWith('/document') ||
         text.trim().startsWith('/deepwrite') ||
         hasDocCreationIntent ||
         isDocumentEditRequest
@@ -129,6 +132,7 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
     );
 
     const isExplicit3D = !isExplicitMedia && !isVideoTimelineRequest && (targetPrimitiveType === '3d-scene' ||
+        text.trim().startsWith('/3d') ||
         hasExplicit3DDirective ||
         (!isExplicitDoc && (
             /planetary\s+orbit|cyberpunk\s+city|architectural\s+blueprint/i.test(text) ||
@@ -150,21 +154,29 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
     );
 
     const isExplicitKanban = !isVideoTimelineRequest && (targetPrimitiveType === 'kanban-board' ||
+        text.trim().startsWith('/kanban') ||
+        text.trim().startsWith('/board') ||
         /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:kanban|sprint\s+board|task\s+board|backlog\s+board|todo\s+board)\b/i.test(text) ||
         /\b(?:kanban\s+board|sprint\s+tasks?|backlog\s+board|todo\s+board|task\s+board)\b/i.test(text));
 
     const isExplicitGraph = !isVideoTimelineRequest && (targetPrimitiveType === 'node-graph' ||
+        text.trim().startsWith('/graph') ||
+        text.trim().startsWith('/workflow') ||
         /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:node\s+graph|architecture\s+map|workflow\s+pipeline|pipeline\s+graph|system\s+diagram)\b/i.test(text) ||
         /\b(?:node\s+graph|architecture\s+map|workflow\s+pipeline|pipeline\s+graph|workflow\s+canvas)\b/i.test(text));
 
     const isExplicitMetrics = !isVideoTimelineRequest && (targetPrimitiveType === 'metric-dashboard' ||
+        text.trim().startsWith('/dashboard') ||
+        text.trim().startsWith('/metrics') ||
         /(?:create|generate|build|make)\s+(?:a\s+)?(?:new\s+)?(?:metric\s+dashboard|kpi\s+dashboard|telemetry\s+dashboard|analytics\s+dashboard)\b/i.test(text) ||
         /summarize\s+into\s+metrics|summarize\s+into\s+kpi/i.test(text));
 
     const hasAppCreationIntent = !isVideoTimelineRequest && !hasExplicit3DDirective && !isExplicit3D && (
         targetPrimitiveType === 'live-code-sandbox' ||
+        text.trim().startsWith('/code') ||
+        text.trim().startsWith('/sandbox') ||
         isVibeToolRequest(text) ||
-        /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(text) ||
+        /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype|synthesizer|synth|sequencer|instrument|visualizer|canvas|editor|explorer|generator)\b/i.test(text) ||
         /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(text)
     );
 

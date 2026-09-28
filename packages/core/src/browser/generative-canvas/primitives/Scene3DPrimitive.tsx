@@ -3222,6 +3222,35 @@ int main(int argc, char** argv) {
         return badges;
     }, [sceneData.features, sceneData.customScript, sceneData.code, isAirplane]);
 
+    const handleExportGlb = React.useCallback(async () => {
+        if (!threeSceneRef.current) return;
+        try {
+            const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
+            const exporter = new GLTFExporter();
+            exporter.parse(
+                threeSceneRef.current,
+                (gltf) => {
+                    const blob = new Blob([gltf as ArrayBuffer], { type: 'model/gltf-binary' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `${(sceneData?.title || 'scene_3d').toLowerCase().replace(/[^a-z0-9]+/g, '_')}.glb`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+                    if (onPromptAction) onPromptAction('Exported 3D scene to standardized binary GLB.');
+                },
+                (error) => {
+                    console.error('[Scene3D] GLTF Export failed:', error);
+                },
+                { binary: true }
+            );
+        } catch (err) {
+            console.error('[Scene3D] Failed to load GLTFExporter:', err);
+        }
+    }, [sceneData?.title, onPromptAction]);
+
     // ---------------------------------------------------------
     // Render Visual HTML - Ultra-Minimalist Floating Layout (Blender-grade)
     // ---------------------------------------------------------
@@ -3253,16 +3282,27 @@ int main(int argc, char** argv) {
                     )}
                 </div>
 
-                {sceneData.cppGenerator?.sourceCode && (
+                <div className="flex items-center gap-2 pointer-events-auto shrink-0">
                     <button
                         type="button"
-                        onClick={() => setShowCppStudio(!showCppStudio)}
-                        className="sb-btn sb-btn-xs pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
+                        onClick={handleExportGlb}
+                        className="sb-btn sb-btn-xs flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-blue-950/80 hover:bg-blue-900/80 text-blue-200 border border-blue-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
+                        title="Export 3D Scene as standardized binary glTF (.glb)"
                     >
-                        <span>⚡</span>
-                        <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
+                        <span>📦</span>
+                        <span>Export GLB</span>
                     </button>
-                )}
+                    {sceneData.cppGenerator?.sourceCode && (
+                        <button
+                            type="button"
+                            onClick={() => setShowCppStudio(!showCppStudio)}
+                            className="sb-btn sb-btn-xs flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
+                        >
+                            <span>⚡</span>
+                            <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
+                        </button>
+                    )}
+                </div>
 
                 {scriptError && (
                     <div className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/70 backdrop-blur-md border border-amber-500/40 text-[11px] text-amber-200 shadow-lg">

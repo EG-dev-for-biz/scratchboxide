@@ -79,8 +79,12 @@ export class AdaptiveDomainStyleService {
     protectFoliage?: boolean;
     protectAsphalt?: boolean;
   }): Promise<any> {
-    const { AdaptiveStyleDeconstructionService } = await import('../../../../node/spatial/AdaptiveStyleDeconstructionService');
-    const { recolor3DTilesGlb } = await import('../../../../node/spatial/GlbTextureRecolorService');
+    if (typeof window !== 'undefined') {
+      throw new Error('restyleWorld is only supported in Node.js / server runtime.');
+    }
+    const nodeSpatialPath = '../../../../node/spatial/';
+    const { AdaptiveStyleDeconstructionService } = await import(/* @vite-ignore */ `${nodeSpatialPath}AdaptiveStyleDeconstructionService`);
+    const { recolor3DTilesGlb } = await import(/* @vite-ignore */ `${nodeSpatialPath}GlbTextureRecolorService`);
 
     const service = new AdaptiveStyleDeconstructionService();
     const contract = await service.deconstructStyle(request.referenceImage, request.cameraPose, {

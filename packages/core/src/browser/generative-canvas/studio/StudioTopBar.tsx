@@ -8,8 +8,24 @@
  ********************************************************************************/
 
 import * as React from 'react';
-import { CanvasArtifact, StudioLayoutMode, WorkspaceFileType } from '../canvas-types';
-import { IconChat, IconClose, IconDocument, IconSparkles } from '../canvas-icons';
+import { CanvasArtifact, StudioLayoutMode, StudioSettingsTab, WorkspaceFileType } from '../canvas-types';
+import { ProjectItem } from '../ProjectsModal';
+import {
+    Icon3D,
+    IconChat,
+    IconChevronDown,
+    IconClose,
+    IconCode,
+    IconCustomize,
+    IconDocument,
+    IconFilm,
+    IconFolder,
+    IconKanban,
+    IconMetrics,
+    IconNodeGraph,
+    IconPlus,
+    IconSettings
+} from '../canvas-icons';
 
 export interface StudioTopBarProps {
     activeArtifact: CanvasArtifact | undefined;
@@ -34,12 +50,33 @@ export interface StudioTopBarProps {
     getCanvasReopenLabel: () => string;
     getCanvasReopenTabTitle: () => string;
     showToast: (text: string, icon?: string) => void;
-    onOpenDemos?: () => void;
+    handleSwitchMode?: (mode: StudioLayoutMode) => void;
+    openSettingsToTab?: (tab: StudioSettingsTab) => void;
+    activeWorkspace?: ProjectItem;
+    workspaces?: ProjectItem[];
+    onSelectWorkspace?: (ws: ProjectItem) => void;
+    onOpenFolder?: () => void;
+    onOpenWorkspace?: () => void;
+    onNewWorkspace?: () => void;
 }
 
 /** Minimal top navigation bar: sidebar toggle, version pager, layout controls and the conversation menu. */
 export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
-    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, onOpenDemos } = props;
+    const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, currentArtifactVersionsList, currentArtifactVersionIndex, isCurrentArtifactLatestVersion, handlePrevArtifactVersion, handleNextArtifactVersion, handleRollbackArtifactToVersion, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, handleSwitchMode, openSettingsToTab, activeWorkspace, workspaces, onSelectWorkspace, onOpenFolder, onOpenWorkspace, onNewWorkspace } = props;
+
+    const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = React.useState<boolean>(false);
+    const workspaceMenuRef = React.useRef<HTMLDivElement>(null);
+
+    React.useEffect(() => {
+        if (!isWorkspaceMenuOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(e.target as Node)) {
+                setIsWorkspaceMenuOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isWorkspaceMenuOpen]);
     return (
     <header className="sb-chatgpt-topbar">
         <div className="sb-topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -64,9 +101,167 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                     </div>
                 </>
             )}
+
+            {/* TopBar Workspace Selector & Dropdown */}
+            {activeWorkspace && (
+                <div className="relative" ref={workspaceMenuRef} style={{ position: 'relative' }}>
+                    <button
+                        type="button"
+                        className="sb-btn sb-topbar-action-pill"
+                        onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
+                        title="Workspace selector & actions"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px', fontSize: '12px' }}
+                    >
+                        <IconFolder size={13} className="text-zinc-400" />
+                        <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                            {activeWorkspace.name || activeWorkspace.path.split('/').pop()}
+                        </span>
+                        <IconChevronDown size={11} className="text-zinc-500" />
+                    </button>
+
+                    {isWorkspaceMenuOpen && (
+                        <div className="sb-topbar-conversation-menu animate-popover" style={{ minWidth: '220px', left: 0, right: 'auto' }} onClick={e => e.stopPropagation()}>
+                            <div className="sb-dropdown-header">
+                                Workspaces
+                            </div>
+                            {workspaces && workspaces.map(ws => {
+                                const isCurrent = ws.id === activeWorkspace.id;
+                                return (
+                                    <button
+                                        key={ws.id}
+                                        type="button"
+                                        className={`sb-btn sb-dropdown-item ${isCurrent ? 'sb-dropdown-item-active' : ''}`}
+                                        onClick={() => {
+                                            setIsWorkspaceMenuOpen(false);
+                                            if (onSelectWorkspace) onSelectWorkspace(ws);
+                                        }}
+                                    >
+                                        <IconFolder size={13} className={isCurrent ? 'text-blue-400' : 'text-zinc-400'} />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">{ws.name}</span>
+                                        </div>
+                                        {isCurrent && <span style={{ color: '#3b82f6', fontSize: '11px', fontWeight: 700, marginLeft: 'auto' }}>✓</span>}
+                                    </button>
+                                );
+                            })}
+                            <div style={{ height: '1px', background: 'var(--sb-surface-border, rgba(255, 255, 255, 0.08))', margin: '4px 0' }} />
+                            {onNewWorkspace && (
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-dropdown-item"
+                                    onClick={() => {
+                                        setIsWorkspaceMenuOpen(false);
+                                        onNewWorkspace();
+                                    }}
+                                >
+                                    <IconPlus size={13} className="text-emerald-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">New Workspace...</span>
+                                    </div>
+                                </button>
+                            )}
+                            {onOpenFolder && (
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-dropdown-item"
+                                    onClick={() => {
+                                        setIsWorkspaceMenuOpen(false);
+                                        onOpenFolder();
+                                    }}
+                                >
+                                    <IconFolder size={13} className="text-amber-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">Open Folder...</span>
+                                    </div>
+                                </button>
+                            )}
+                            {onOpenWorkspace && (
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-dropdown-item"
+                                    onClick={() => {
+                                        setIsWorkspaceMenuOpen(false);
+                                        onOpenWorkspace();
+                                    }}
+                                >
+                                    <IconFolder size={13} className="text-cyan-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">Open Workspace...</span>
+                                    </div>
+                                </button>
+                            )}
+                            {openSettingsToTab && (
+                                <>
+                                    <div style={{ height: '1px', background: 'var(--sb-surface-border, rgba(255, 255, 255, 0.08))', margin: '4px 0' }} />
+                                    <button
+                                        type="button"
+                                        className="sb-btn sb-dropdown-item"
+                                        onClick={() => {
+                                            setIsWorkspaceMenuOpen(false);
+                                            openSettingsToTab('workspace');
+                                        }}
+                                    >
+                                        <IconSettings size={13} className="text-zinc-400" />
+                                        <div className="sb-dropdown-item-text">
+                                            <span className="sb-dropdown-item-title">Settings</span>
+                                        </div>
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
 
-        <div className="sb-topbar-center" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div className="sb-topbar-center" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {/* Layout / Primitive Mode Switcher */}
+            {handleSwitchMode && (
+                <div className="sb-topbar-mode-switcher" style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    background: 'var(--sb-surface-card, rgba(255, 255, 255, 0.04))',
+                    border: '1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.08))',
+                    borderRadius: '8px',
+                    padding: '2px',
+                    gap: '2px'
+                }}>
+                    {[
+                        { id: 'document' as const, label: 'Doc', icon: <IconDocument size={12} strokeWidth={1.8} /> },
+                        { id: 'code' as const, label: 'Code', icon: <IconCode size={12} strokeWidth={1.8} /> },
+                        { id: '3d' as const, label: '3D', icon: <Icon3D size={12} strokeWidth={1.8} /> },
+                        { id: 'video' as const, label: 'Video', icon: <IconFilm size={12} strokeWidth={1.8} /> },
+                        { id: 'canvas' as const, label: 'Graph', icon: <IconNodeGraph size={12} strokeWidth={1.8} /> },
+                        { id: 'kanban' as const, label: 'Kanban', icon: <IconKanban size={12} strokeWidth={1.8} /> },
+                        { id: 'dashboard' as const, label: 'Dashboard', icon: <IconMetrics size={12} strokeWidth={1.8} /> }
+                    ].map(mode => {
+                        const isSelected = layoutMode === mode.id || (mode.id === 'canvas' && (layoutMode === 'canvas' || layoutMode === 'automation'));
+                        return (
+                            <button
+                                key={mode.id}
+                                type="button"
+                                className={`sb-btn sb-btn-xs ${isSelected ? 'sb-btn-primary' : 'sb-btn-ghost'}`}
+                                onClick={() => handleSwitchMode(mode.id as StudioLayoutMode)}
+                                style={{
+                                    padding: '3px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: isSelected ? 600 : 500,
+                                    borderRadius: '6px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    transition: 'all 0.15s ease'
+                                }}
+                                title={`Switch to ${mode.label} workspace`}
+                            >
+                                {mode.icon}
+                                <span>{mode.label}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
             {/* In-Canvas Version Stepper & Rollback Surface */}
             {activeArtifact && currentArtifactVersionsList.length > 1 && (
                 <div className="sb-artifact-version-stepper">
@@ -135,18 +330,6 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                 >
                     {getCanvasReopenIcon()}
                     <span>Show {getCanvasReopenTabTitle()}</span>
-                </button>
-            )}
-            {onOpenDemos && (
-                <button
-                    type="button"
-                    className="sb-btn sb-demos-launcher-btn"
-                    onClick={onOpenDemos}
-                    title="Preloaded Showcase Demos (3D Engine, VFX NLE, AI Graph, Breakout Sandbox)"
-                    style={{ marginRight: '6px' }}
-                >
-                    <IconSparkles size={13} className="text-amber-400" />
-                    <span>Demos</span>
                 </button>
             )}
             <button
@@ -241,6 +424,38 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                                 <span className="sb-dropdown-item-title">Copy Link</span>
                             </div>
                         </button>
+
+                        {openSettingsToTab && (
+                            <>
+                                <div style={{ height: '1px', background: 'var(--sb-surface-border, rgba(255, 255, 255, 0.08))', margin: '3px 0' }} />
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-dropdown-item"
+                                    onClick={() => {
+                                        setIsConversationMenuOpen(false);
+                                        openSettingsToTab('general');
+                                    }}
+                                >
+                                    <IconSettings size={13} className="text-zinc-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">Settings</span>
+                                    </div>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-dropdown-item"
+                                    onClick={() => {
+                                        setIsConversationMenuOpen(false);
+                                        openSettingsToTab('appearance');
+                                    }}
+                                >
+                                    <IconCustomize size={13} className="text-purple-400" />
+                                    <div className="sb-dropdown-item-text">
+                                        <span className="sb-dropdown-item-title">Preferences</span>
+                                    </div>
+                                </button>
+                            </>
+                        )}
 
                         <div style={{ height: '1px', background: 'var(--sb-surface-border, rgba(255, 255, 255, 0.08))', margin: '3px 0' }} />
 

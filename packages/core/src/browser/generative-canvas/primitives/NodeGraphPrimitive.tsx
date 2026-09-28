@@ -1241,34 +1241,12 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
                         });
                     },
                     onError: (pollErr, failedJob) => {
-                        if (failedJob) {
-                            // The job itself reported failure: surface the service error.
-                            handleUpdateNode(node.id, {
-                                parameters: {
-                                    ...node.parameters,
-                                    isGenerating: false,
-                                    generationError: pollErr.message || 'Media generation failed'
-                                }
-                            });
-                            return;
-                        }
-                        // Transport error while polling: fall back to a placeholder asset.
-                        const mockUrl = node.category?.includes('image')
-                            ? 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1600&q=85'
-                            : node.category?.includes('video')
-                            ? 'https://assets.mixkit.co/videos/preview/mixkit-stars-in-space-background-1611-large.mp4'
-                            : 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
-
                         handleUpdateNode(node.id, {
                             parameters: {
                                 ...node.parameters,
                                 isGenerating: false,
-                                mediaUrl: mockUrl,
-                                imageUrl: mockUrl,
-                                videoUrl: mockUrl,
-                                audioUrl: mockUrl
-                            },
-                            outputData: { url: mockUrl }
+                                generationError: pollErr?.message || (failedJob?.error?.message ?? 'Media generation failed')
+                            }
                         });
                     }
                 });
@@ -1277,25 +1255,13 @@ export const NodeGraphPrimitive: React.FC<NodeGraphPrimitiveProps> = ({
             }
 
         } catch (err: any) {
-            setTimeout(() => {
-                const mockUrl = node.category?.includes('image')
-                    ? 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1600&q=85'
-                    : node.category?.includes('video')
-                    ? 'https://assets.mixkit.co/videos/preview/mixkit-stars-in-space-background-1611-large.mp4'
-                    : 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3';
-
-                handleUpdateNode(node.id, {
-                    parameters: {
-                        ...node.parameters,
-                        isGenerating: false,
-                        mediaUrl: mockUrl,
-                        imageUrl: mockUrl,
-                        videoUrl: mockUrl,
-                        audioUrl: mockUrl
-                    },
-                    outputData: { url: mockUrl }
-                });
-            }, 2500);
+            handleUpdateNode(node.id, {
+                parameters: {
+                    ...node.parameters,
+                    isGenerating: false,
+                    generationError: err?.message || 'Media generation request failed'
+                }
+            });
         }
     };
 

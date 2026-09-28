@@ -189,7 +189,7 @@ export class ImageColorTransferService {
                         outputFormat: request.outputFormat || 'jpg'
                     });
                 },
-                { mockExecution: true }
+                { mockExecution: false }
             );
 
             let outPath = request.outputPath;

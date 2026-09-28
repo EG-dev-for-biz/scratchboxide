@@ -165,7 +165,7 @@ export const comfyuiHandlers: Record<string, ToolHandler> = {
         const goal = asString(args.goal);
         if (!goal) throw new Error('comfyui_research_pipeline: "goal" argument is required.');
         const hostUrl = asString(args.hostUrl) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : true;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
 
         const agent = new ComfyUiPipelineAgent({
             hostUrl,
@@ -190,7 +190,7 @@ export const comfyuiHandlers: Record<string, ToolHandler> = {
 
     comfyui_cloudrun_status: async (args, ctx) => {
         const serviceUrl = asString(args.serviceUrl) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : true;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
         const agent = new ComfyUiPipelineAgent({
             cloudRun: { serviceUrl, mockExecution },
             workspaceRoot: ctx.workspaceRoot
@@ -205,7 +205,7 @@ export const comfyuiHandlers: Record<string, ToolHandler> = {
     comfyui_cloudrun_sync_upstream: async (args, ctx) => {
         const checkOnly = typeof args.checkOnly === 'boolean' ? args.checkOnly : false;
         const serviceUrl = asString(args.serviceUrl) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : true;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
         const agent = new ComfyUiPipelineAgent({
             cloudRun: { serviceUrl, mockExecution },
             workspaceRoot: ctx.workspaceRoot
@@ -234,7 +234,7 @@ export const comfyuiHandlers: Record<string, ToolHandler> = {
         const nodeClasses = Array.isArray(args.nodeClasses) ? (args.nodeClasses as string[]) : [];
         const requirements = Array.isArray(args.requirements) ? (args.requirements as string[]) : [];
         const serviceUrl = asString(args.serviceUrl) || undefined;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : true;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
 
         const agent = new ComfyUiPipelineAgent({
             cloudRun: { serviceUrl, mockExecution },
@@ -262,7 +262,7 @@ export const comfyuiHandlers: Record<string, ToolHandler> = {
         const targetEnvironment = (asString(args.targetEnvironment) as any) || undefined;
         const cloudRunServiceUrl = asString(args.cloudRunServiceUrl) || undefined;
         const autoSyncUpstream = typeof args.autoSyncUpstream === 'boolean' ? args.autoSyncUpstream : false;
-        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : true;
+        const mockExecution = typeof args.mockExecution === 'boolean' ? args.mockExecution : false;
         const maxFixAttempts = asNumber(args.maxFixAttempts);
 
         const agent = new ComfyUiPipelineAgent({

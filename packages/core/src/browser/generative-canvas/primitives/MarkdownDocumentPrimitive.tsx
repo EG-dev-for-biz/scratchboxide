@@ -10,7 +10,10 @@
 import * as React from 'react';
 import { DEFAULT_ACTIVE_USER_NAME,
     CanvasArtifact,
+    GraphEdge,
+    GraphNode,
     KanbanBoardData,
+    KanbanCard,
     MarkdownDocumentData,
     MarkdownSection,
     NodeGraphData,
@@ -39,6 +42,7 @@ import {
     IconEdit,
     IconExternalLink,
     IconImage,
+    IconKanban,
     IconPalette,
     IconPin,
     IconPlus,
@@ -1264,6 +1268,113 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
 
         setExportToast('Markdown exported successfully');
         setTimeout(() => setExportToast(undefined), 3000);
+    };
+
+    const handleMorphDocumentToKanban = () => {
+        if (!onMorphToKanban) return;
+        const allChecklistItems: Array<{ id: string; text: string; done: boolean }> = [];
+        const headings: string[] = [];
+
+        (doc.sections || []).forEach(sec => {
+            if (sec.type === 'checklist' && Array.isArray(sec.checklistItems)) {
+                allChecklistItems.push(...sec.checklistItems);
+            } else if (sec.type === 'heading' && sec.content) {
+                headings.push(sec.content);
+            }
+        });
+
+        const todoCards: KanbanCard[] = [];
+        const inProgressCards: KanbanCard[] = [];
+        const doneCards: KanbanCard[] = [];
+
+        if (allChecklistItems.length > 0) {
+            allChecklistItems.forEach((item, idx) => {
+                const card: KanbanCard = {
+                    id: `card-${idx + 1}`,
+                    title: item.text,
+                    description: `Extracted from document checklist`,
+                    tag: 'Task'
+                };
+                if (item.done) {
+                    doneCards.push(card);
+                } else if (idx % 2 === 0) {
+                    todoCards.push(card);
+                } else {
+                    inProgressCards.push(card);
+                }
+            });
+        } else {
+            headings.slice(0, 6).forEach((h, idx) => {
+                const card: KanbanCard = {
+                    id: `card-h-${idx + 1}`,
+                    title: h,
+                    description: `Milestone extracted from ${doc.title}`,
+                    tag: 'Milestone'
+                };
+                if (idx === 0) doneCards.push(card);
+                else if (idx === 1 || idx === 2) inProgressCards.push(card);
+                else todoCards.push(card);
+            });
+        }
+
+        const kanbanData: KanbanBoardData = {
+            title: `${doc.title} — Sprint Board`,
+            subtitle: `Interactive workflow extracted from "${doc.title}"`,
+            columns: [
+                { id: 'col-todo', title: 'To Do', color: 'blue', cards: todoCards },
+                { id: 'col-inprogress', title: 'In Progress', color: 'amber', cards: inProgressCards },
+                { id: 'col-done', title: 'Completed', color: 'emerald', cards: doneCards }
+            ]
+        };
+
+        onMorphToKanban(kanbanData);
+    };
+
+    const handleMorphDocumentToNodeGraph = () => {
+        if (!onMorphToNodeGraph) return;
+        const headings: string[] = [];
+        (doc.sections || []).forEach(sec => {
+            if (sec.type === 'heading' && sec.content) {
+                headings.push(sec.content);
+            }
+        });
+
+        const nodeLabels = headings.length >= 2 ? headings.slice(0, 5) : [
+            '1. Requirements & Spec',
+            '2. System Architecture',
+            '3. Core Engine Pipeline',
+            '4. Verification Suite',
+            '5. Production Release'
+        ];
+
+        const nodes: GraphNode[] = nodeLabels.map((lbl, idx) => ({
+            id: `node-${idx + 1}`,
+            label: lbl,
+            category: idx === 0 ? 'input' : (idx === nodeLabels.length - 1 ? 'output' : 'process'),
+            x: 100 + idx * 220,
+            y: 150 + (idx % 2 === 1 ? 60 : -20),
+            status: idx === 0 ? 'completed' : (idx === 1 ? 'running' : 'pending'),
+            details: `Workflow stage for ${lbl}`
+        }));
+
+        const edges: GraphEdge[] = [];
+        for (let i = 0; i < nodes.length - 1; i++) {
+            edges.push({
+                id: `edge-${i + 1}-${i + 2}`,
+                source: nodes[i].id,
+                target: nodes[i + 1].id,
+                style: 'animated'
+            });
+        }
+
+        const nodeGraphData: NodeGraphData = {
+            title: `${doc.title} — Architecture Flow`,
+            subtitle: `Automated visual execution DAG mapped from specification`,
+            nodes,
+            edges
+        };
+
+        onMorphToNodeGraph(nodeGraphData);
     };
 
     // Render the interactive block inserter bar
@@ -2960,6 +3071,28 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
                             <IconSparkles size={12} />
                             <span>Auto-Link Notes</span>
                         </button>
+                        {onMorphToKanban && (
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
+                                onClick={handleMorphDocumentToKanban}
+                                title="Morph document tasks & milestones into an interactive Kanban Board"
+                            >
+                                <IconKanban size={12} />
+                                <span>Morph to Kanban</span>
+                            </button>
+                        )}
+                        {onMorphToNodeGraph && (
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
+                                onClick={handleMorphDocumentToNodeGraph}
+                                title="Morph document architecture & flow into a Node Graph pipeline"
+                            >
+                                <IconDiagram size={12} />
+                                <span>Morph to Graph</span>
+                            </button>
+                        )}
                     </div>
                     <button
                         type="button"

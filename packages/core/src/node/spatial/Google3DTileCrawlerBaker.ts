@@ -9,9 +9,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane.js';
-import { TextureAtlasPacker, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker.js';
-import { GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler.js';
+import { LatLngAlt } from '../../common/coordinate/LocalTangentPlane';
+import { TextureAtlasPacker, AtlasResult, AtlasPackerOptions } from './TextureAtlasPacker';
+import { GoogleTileDistrictCrawler } from './GoogleTileDistrictCrawler';
 
 /**
  * Headless Node.js 3D Tile Crawler, Leaf GLB Buffer Merger, and CESIUM_RTC Stripper.

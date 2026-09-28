@@ -34,15 +34,14 @@ export * from './browser';
 export * from './common';
 
 
-// Professional Autonomous Color Grading & Matching Engine (ProColorGradeMatchingService)
-export {
-    ProColorGradeMatchingService,
-    type PrimaryColorWheels,
-    type PrimaryWheelChannel,
-    type ColorGradeMatchOptions,
-    type ColorGradeMatchResult,
-    type ColoristScopesData,
-    type SecondaryIsolationOptions
+// Professional Autonomous Color Grading & Matching Engine (Types)
+export type {
+    PrimaryColorWheels,
+    PrimaryWheelChannel,
+    ColorGradeMatchOptions,
+    ColorGradeMatchResult,
+    ColoristScopesData,
+    SecondaryIsolationOptions
 } from './node/image/ProColorGradeMatchingService';
 
 export {
@@ -279,24 +278,23 @@ export type {
     MetrologyCertificate
 } from './node/spatial/SpatialVisualAlignmentVerificationService';
 
-export {
+export type {
     ContinuousSplineMatchmoveService,
-    type SplineKnot,
-    type EvaluatedPose,
-    type PersistentTrack3D2D,
-    type SplineAnchorConstraint,
-    type ContinuousSplineSolveOptions,
-    type SplineOptimizationResult,
-    type DenseTrajectoryFrame
+    SplineKnot,
+    EvaluatedPose,
+    PersistentTrack3D2D,
+    SplineAnchorConstraint,
+    ContinuousSplineSolveOptions,
+    SplineOptimizationResult,
+    DenseTrajectoryFrame
 } from './node/spatial/ContinuousSplineMatchmoveService';
 
 // Location 3D Gaussian Splatting (3DGS) Canonical Service
-export {
+export type {
     Location3DGaussianSplatService,
     Location3DGSService,
-    generateLocation3DGS,
-    type Location3DGSRequest,
-    type Location3DGSResult
+    Location3DGSRequest,
+    Location3DGSResult
 } from './node/spatial/Location3DGaussianSplatService';
 
 // Adaptive Domain Style Shader API & Schema Contract
@@ -320,10 +318,8 @@ export {
 export type {
     StyleApplyHandle
 } from './browser/generative-canvas/services/spatial/AdaptiveDomainStyleService';
-export {
-    AdaptiveStyleDeconstructionService
-} from './node/spatial/AdaptiveStyleDeconstructionService';
 export type {
+    AdaptiveStyleDeconstructionService,
     DeconstructionOptions
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 

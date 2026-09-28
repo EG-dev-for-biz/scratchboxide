@@ -1234,7 +1234,7 @@ export class SessionViewStateCache {
     }
 }
 
-export type ModalType = 'spotlight' | 'projects' | 'automations' | 'settings' | 'google-drive' | 'demos';
+export type ModalType = 'spotlight' | 'projects' | 'automations' | 'settings' | 'google-drive';
 
 export class ModalStackManager {
     private stack: ModalType[] = [];

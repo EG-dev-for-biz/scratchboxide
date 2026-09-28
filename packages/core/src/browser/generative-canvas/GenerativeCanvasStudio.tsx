@@ -62,8 +62,6 @@ import { stableProjectArtifactId } from '../../common/project-artifact-graph-pro
 import { SettingsModal } from './SettingsModal';
 import { DEFAULT_RECENT_PROJECTS, ProjectItem } from './ProjectsModal';
 import { SpotlightLauncherModal } from './SpotlightLauncherModal';
-import { ShowcaseDemosModal } from './demos/ShowcaseDemosModal';
-import { ShowcaseDemoItem } from './demos/preloadedDemos';
 import { AutomationsModal } from './AutomationsModal';
 export { AutomationsModal };
 import { GoogleDriveConnectModal } from './GoogleDriveConnectModal';
@@ -290,7 +288,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const isSpotlightOpen = modalStack.includes('spotlight');
     const isSettingsOpen = modalStack.includes('settings');
     const isGoogleDriveOpen = modalStack.includes('google-drive');
-    const isDemosOpen = modalStack.includes('demos');
     const [globalToast, setGlobalToast] = React.useState<{ text: string; icon: string } | undefined>(undefined);
 
     const showToast = React.useCallback((text: string, icon: string = '') => {
@@ -782,28 +779,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         showToast('Created new Live Code Preview tab', '⚡');
     }, [showToast]);
 
-    const handleLaunchDemo = React.useCallback((demo: ShowcaseDemoItem) => {
-        closeModal('demos');
-
-        setArtifactHistory(prev => {
-            const exists = prev.some(a => a.id === demo.artifact.id);
-            if (exists) return prev;
-            return [demo.artifact, ...prev];
-        });
-        setActiveArtifact(demo.artifact);
-        setLayoutMode(resolveModeForArtifact(demo.artifact.type));
-
-        const introMsg: ChatMessage = {
-            id: `msg-demo-${Date.now()}`,
-            sender: 'assistant',
-            text: `### 🚀 Showcase Demo Loaded: **${demo.title}**\n\n${demo.introMessage}\n\n* **Category**: ${demo.categoryLabel}\n* **Pipeline / Canvas Type**: \`${demo.artifact.type}\`\n* **Tags**: ${demo.tags.map(t => '`' + t + '`').join(', ')}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            artifacts: [demo.artifact]
-        };
-        setMessages(prev => [...prev, introMsg]);
-        showToast(`Mounted demo: ${demo.title}`, '✨');
-    }, [closeModal, resolveModeForArtifact, setActiveArtifact, setArtifactHistory, setMessages, showToast]);
-
     const activeSandboxData = activeArtifact?.type === 'live-code-sandbox' ? (activeArtifact.data as LiveCodeSandboxData) : null;
 
     const handleSetSandboxViewMode = React.useCallback((mode: 'code' | 'split' | 'preview') => {
@@ -982,7 +957,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setGraphEpoch,
         activeWorkspace,
         persistSessionsImmediately,
-        aiInteractionMode
+        aiInteractionMode,
+        openSettingsToTab
     });
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
@@ -1066,8 +1042,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         newWorkspaceInputName,
         setNewWorkspaceInputName,
         onCreateWorkspaceFile: handleCreateWorkspaceFile,
-        onFileClick: handleFileClick,
-        onOpenDemos: () => openModal('demos')
+        onFileClick: handleFileClick
     };
 
     const topBarProps: StudioTopBarProps = {
@@ -1093,7 +1068,17 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         getCanvasReopenLabel,
         getCanvasReopenTabTitle,
         showToast,
-        onOpenDemos: () => openModal('demos')
+        handleSwitchMode,
+        openSettingsToTab,
+        activeWorkspace,
+        workspaces,
+        onSelectWorkspace: setActiveWorkspace,
+        onOpenFolder,
+        onOpenWorkspace,
+        onNewWorkspace: () => {
+            setIsSidebarOpen(true);
+            setShowNewWorkspaceMenu(true);
+        }
     };
 
     const artifactStageProps: ArtifactStageProps = {
@@ -1617,10 +1602,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     const s = sessions.find(sess => sess.id === sessId);
                     if (s) handleSelectSession(s);
                 }}
-                onOpenDemos={() => {
-                    closeModal('spotlight');
-                    openModal('demos');
-                }}
             />
 
             {/* Global 1-Click "Debug with AI" Terminal Error Toast */}
@@ -1683,13 +1664,6 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     </div>
                 </div>
             )}
-
-            {/* Scratchbox Studio Preloaded Showcase Demos Modal */}
-            <ShowcaseDemosModal
-                isOpen={isDemosOpen}
-                onClose={() => closeModal('demos')}
-                onLaunchDemo={handleLaunchDemo}
-            />
 
             {/* Google Drive & Docs 1-Click Connector Modal */}
             <GoogleDriveConnectModal

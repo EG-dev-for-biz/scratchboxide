@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { CanonicalShapeBetas } from '../character-morph-protocol.js';
+import { CanonicalShapeBetas } from '../character-morph-protocol';
 
 export interface SbHumanHeader {
     magic: number;

@@ -12,8 +12,8 @@ import * as path from 'path';
 import * as http from 'http';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
-import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker.js';
-import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel.js';
+import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
+import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset

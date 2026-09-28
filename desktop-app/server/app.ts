@@ -99,7 +99,12 @@ export const SERVER_SECRET_ALLOWLIST = [
 
 /** Origins allowed to call the API when an Origin header is present. */
 export function resolveAllowedOrigins(): Set<string> {
-    const origins = new Set<string>(['http://127.0.0.1:3000', 'http://localhost:3000']);
+    const origins = new Set<string>([
+        'http://127.0.0.1:3000',
+        'http://localhost:3000',
+        'http://127.0.0.1:3030',
+        'http://localhost:3030'
+    ]);
     for (const entry of (process.env.SCRATCHBOX_ALLOWED_ORIGINS || '').split(',')) {
         const trimmed = entry.trim();
         if (trimmed) origins.add(trimmed);

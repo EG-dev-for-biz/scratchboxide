@@ -10,7 +10,7 @@
 import * as React from 'react';
 import { ChatSession, StudioSettingsTab, WorkspaceFileType, getActiveUserName } from '../canvas-types';
 import { initialsOf } from '../state/studio-defaults';
-import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFilm, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings, IconSparkles } from '../canvas-icons';
+import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFilm, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings } from '../canvas-icons';
 import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
@@ -62,7 +62,6 @@ export interface WorkspaceSidebarProps {
     newWorkspaceInputName: string;
     setNewWorkspaceInputName: React.Dispatch<React.SetStateAction<string>>;
     onFileClick: (filePath: string, fileName: string) => void;
-    onOpenDemos?: () => void;
 }
 
 /**
@@ -71,7 +70,7 @@ export interface WorkspaceSidebarProps {
  */
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
     const activeUserName = getActiveUserName();
-    const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick, onOpenDemos } = props;
+    const { activeWorkspace, setActiveWorkspace, workspaces, sessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
 
     // Scratchbox Studio Sidebar Layout & Navigation State
     const [sidebarSearchQuery, setSidebarSearchQuery] = React.useState<string>('');
@@ -249,24 +248,6 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
                 </span>
                 <span className="sb-nav-label">New Chat</span>
             </button>
-
-            {onOpenDemos && (
-                <button
-                    type="button"
-                    className="sb-sidebar-nav-row sb-sidebar-nav-demos"
-                    onClick={onOpenDemos}
-                    title="Preloaded Showcase Demos (3D Engine, VFX NLE, AI Graph, Breakout Sandbox)"
-                    style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)' }}
-                >
-                    <span className="sb-nav-icon text-amber-400">
-                        <IconSparkles size={14} strokeWidth={1.8} />
-                    </span>
-                    <span className="sb-nav-label" style={{ color: '#fbbf24', fontWeight: 600 }}>Showcase Demos</span>
-                    <span style={{ marginLeft: 'auto', fontSize: '9px', fontWeight: 700, background: '#f59e0b', color: '#000000', padding: '1px 5px', borderRadius: '4px' }}>
-                        LIVE
-                    </span>
-                </button>
-            )}
 
             <button
                 type="button"

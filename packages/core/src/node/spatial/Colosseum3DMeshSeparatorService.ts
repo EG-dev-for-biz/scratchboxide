@@ -13,12 +13,12 @@ import {
   OrientedBoundingBoxSolver,
   OrientedBoundingBox3D,
   DualBoundingBoxResult
-} from './OrientedBoundingBoxSolver.js';
+} from './OrientedBoundingBoxSolver';
 import {
   ColosseumTreeIdentificationEngine,
   BotanicalTreeRecord,
   BotanicalSummary
-} from './ColosseumTreeIdentificationEngine.js';
+} from './ColosseumTreeIdentificationEngine';
 
 export type SpatialCategory =
   | 'monument'

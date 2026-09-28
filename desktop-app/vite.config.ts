@@ -96,7 +96,7 @@ export default defineConfig(({ mode }) => {
       'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey)
     },
     server: {
-      port: 3000,
+      port: parseInt(process.env.SCRATCHBOX_WEB_PORT || '3030', 10),
       host: '127.0.0.1',
       fs: {
         allow: [
@@ -110,6 +110,9 @@ export default defineConfig(({ mode }) => {
         '/video': apiProxy(),
         '/api/video': apiProxy(),
         '/3d': apiProxy(),
+        '/spatial': apiProxy(),
+        '/models': apiProxy(),
+        '/cpp': apiProxy(),
         '/api/browser': apiProxy(),
         '/api/tools': apiProxy()
       }

@@ -14,9 +14,11 @@ import {
     KanbanCard,
     KanbanColumn,
     LiveCodeSandboxData,
-    AccentColor
+    AccentColor,
+    getActiveUserName
 } from '../canvas-types';
 import { morphKanbanCardToSandbox } from '../primitive-transformer-engine';
+import { IconDocument } from '../canvas-icons';
 
 export interface KanbanBoardPrimitiveProps {
     data: KanbanBoardData;
@@ -342,25 +344,30 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
         }
     };
 
-    const handleAddStripeTask = () => {
+    const handleAddNewTask = () => {
         const cols = board.columns || [];
         if (cols.length === 0) return;
+        const taskNum = (cols[0].cards?.length || 0) + 1;
         const newCard: KanbanCard = {
-            id: `card-stripe-${Date.now()}`,
-            title: 'Stripe Webhook & Subscription Sync',
-            description: 'Automate webhook listeners and reconciliation pipes',
-            tag: 'Payments',
-            tagColor: 'indigo',
-            priority: 'urgent',
-            assignee: 'Backend Team',
-            completedSubtasks: 1,
-            totalSubtasks: 3
+            id: `card-task-${Date.now()}`,
+            title: `Milestone Deliverable ${taskNum}`,
+            description: 'Define requirements, implement verified solution, and certify acceptance criteria',
+            tag: 'Sprint',
+            tagColor: 'blue',
+            priority: 'high',
+            assignee: getActiveUserName(),
+            completedSubtasks: 0,
+            totalSubtasks: 2,
+            planSteps: [
+                'Review technical requirements and input schemas',
+                'Implement core logic with automated verification tests'
+            ]
         };
         const newCols = cols.map((col, idx) => idx === 0 ? { ...col, cards: [newCard, ...(col.cards || [])] } : col);
         const newBoard: KanbanBoardData = { ...board, columns: newCols };
         setBoard(newBoard);
         if (onUpdate) onUpdate(newBoard);
-        if (onPromptAction) onPromptAction('Added Stripe Integration Task to Backlog.');
+        if (onPromptAction) onPromptAction('Added new milestone deliverable to Backlog.');
     };
 
     const handleAddQaColumn = () => {
@@ -411,6 +418,53 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
     const lastColCardsCount = board.columns && board.columns.length > 0 ? (board.columns[board.columns.length - 1]?.cards?.length || 0) : 0;
     const progressPercent = totalCardsCount > 0 ? Math.round((lastColCardsCount / totalCardsCount) * 100) : 0;
 
+    const handleExportMarkdown = () => {
+        let md = `# ${board.title}\n`;
+        if (board.subtitle) md += `_${board.subtitle}_\n\n`;
+        md += `> Sprint Progress: ${progressPercent}%\n\n`;
+
+        (board.columns || []).forEach(col => {
+            md += `## ${col.title} (${(col.cards || []).length})\n\n`;
+            if (!col.cards || col.cards.length === 0) {
+                md += `_No tasks in this column._\n\n`;
+                return;
+            }
+            col.cards.forEach((card, idx) => {
+                const priorityTag = card.priority ? ` [${card.priority.toUpperCase()}]` : '';
+                const tagStr = card.tag ? ` #${card.tag}` : '';
+                md += `### ${idx + 1}. ${card.title}${priorityTag}${tagStr}\n`;
+                if (card.description) {
+                    md += `${card.description}\n`;
+                }
+                if (card.planSteps && card.planSteps.length > 0) {
+                    md += `\n**Plan Steps:**\n`;
+                    card.planSteps.forEach(step => {
+                        md += `- [ ] ${step}\n`;
+                    });
+                }
+                md += `\n`;
+            });
+        });
+
+        if (board.drafts && board.drafts.length > 0) {
+            md += `## Suggestions / Backlog (${board.drafts.length})\n\n`;
+            board.drafts.forEach(draft => {
+                md += `- [ ] **${draft.title}**${draft.description ? `: ${draft.description}` : ''}\n`;
+            });
+            md += `\n`;
+        }
+
+        const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', `${board.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.md`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
     return (
         <div className="sb-primitive-kanban">
             {/* Top Kanban Action Bar & Progress Metric */}
@@ -419,10 +473,10 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
                     <button
                         type="button"
                         className="sb-btn sb-btn-secondary sb-btn-xs sb-kanban-action-chip"
-                        onClick={handleAddStripeTask}
-                        title="Add Stripe Webhook task"
+                        onClick={handleAddNewTask}
+                        title="Add new milestone deliverable"
                     >
-                        <span>+ Add Stripe Integration Task</span>
+                        <span>+ Add Milestone Task</span>
                     </button>
                     <button
                         type="button"
@@ -439,6 +493,15 @@ export const KanbanBoardPrimitive: React.FC<KanbanBoardPrimitiveProps> = ({
                         title="Sort tasks by priority"
                     >
                         <span>⚡ Prioritize Core Tasks</span>
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-btn sb-btn-secondary sb-btn-xs sb-kanban-action-chip"
+                        onClick={handleExportMarkdown}
+                        title="Export Kanban board as Markdown (.md)"
+                    >
+                        <IconDocument size={12} />
+                        <span>Export Markdown</span>
                     </button>
                 </div>
 

@@ -491,7 +491,12 @@ export class Universal3DObjectSeparationService {
             x: obb.center[0],
             y: obb.center[1],
             z: obb.center[2],
-            yaw: obb.yawDeg
+            yaw: obb.yawDeg,
+            position: obb.center,
+            boundingBox: {
+              min: obj.boundingBox.min,
+              max: obj.boundingBox.max
+            }
           },
           boundingBox: {
             min: obj.boundingBox.min,

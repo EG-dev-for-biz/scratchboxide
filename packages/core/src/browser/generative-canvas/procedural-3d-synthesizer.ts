@@ -2104,7 +2104,7 @@ function _synthesizeRawContextual3DSceneInner(
                     fov: 45
                 },
                 environment: {
-                    skybox: 'golden_hour',
+                    skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
                     lighting: 'golden_hour',
                     ground: false
                 },
@@ -2186,7 +2186,7 @@ function _synthesizeRawContextual3DSceneInner(
                 fov: 45
             },
             environment: {
-                skybox: 'golden_hour',
+                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
                 lighting: 'golden_hour',
                 ground: false
             },

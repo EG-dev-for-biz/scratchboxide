@@ -57,19 +57,47 @@ export const VideoExportModal: React.FC<VideoExportModalProps> = ({
                 }, 400);
             }, 300);
         } else {
-            // Simulated video render progress
             let currentProg = 20;
             const timer = setInterval(() => {
                 currentProg += 20;
                 setProgress(Math.min(100, currentProg));
                 if (currentProg >= 100) {
                     clearInterval(timer);
+                    const activeClip = data.tracks?.flatMap(t => t.elements)?.find(e => e.url);
+                    if (activeClip?.url && exportFormat !== 'wav') {
+                        const link = document.createElement('a');
+                        link.href = activeClip.url;
+                        link.download = `${(data.title || 'timeline').toLowerCase().replace(/\s+/g, '_')}.${exportFormat}`;
+                        link.target = '_blank';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    } else {
+                        const timelinePayload = JSON.stringify({
+                            title: data.title || 'Timeline Export',
+                            format: exportFormat,
+                            resolution,
+                            fps,
+                            duration: data.duration,
+                            tracks: data.tracks,
+                            exportedAt: new Date().toISOString()
+                        }, null, 2);
+                        const blob = new Blob([timelinePayload], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `${(data.title || 'timeline').toLowerCase().replace(/\s+/g, '_')}_export.json`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(url);
+                    }
                     setTimeout(() => {
                         setIsExporting(false);
                         onClose();
                     }, 400);
                 }
-            }, 200);
+            }, 150);
         }
     };
 

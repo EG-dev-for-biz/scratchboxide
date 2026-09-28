@@ -1,0 +1,123 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { ComfyUiCloudRunService } from '../src/node/cloudrun/comfyui-cloudrun-service';
+import { ComfyUiPipelineAgent } from '../src/node/agent/comfyui-pipeline-agent';
+import { ComfyUiBridgeService } from '../src/node/comfyui/comfyui-bridge-service';
+import { createInitialSettingsState } from '../src/browser/generative-canvas/settings/settingsReducer';
+
+describe('Scratchbox IDE 100% Production Readiness Audit', () => {
+    describe('1. Frontend Demo Buttons Elimination', () => {
+        const topBarPath = path.resolve(__dirname, '../src/browser/generative-canvas/studio/StudioTopBar.tsx');
+        const sidebarPath = path.resolve(__dirname, '../src/browser/generative-canvas/studio/WorkspaceSidebar.tsx');
+        const spotlightPath = path.resolve(__dirname, '../src/browser/generative-canvas/SpotlightLauncherModal.tsx');
+        const studioPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
+
+        it('StudioTopBar must not contain demo launcher button or onOpenDemos handler', () => {
+            const topBarSrc = fs.readFileSync(topBarPath, 'utf8');
+            expect(topBarSrc).not.toContain('sb-demos-launcher-btn');
+            expect(topBarSrc).not.toContain('onOpenDemos');
+            expect(topBarSrc).not.toContain('Preloaded Showcase Demos');
+        });
+
+        it('WorkspaceSidebar must not contain showcase demos button or onOpenDemos handler', () => {
+            const sidebarSrc = fs.readFileSync(sidebarPath, 'utf8');
+            expect(sidebarSrc).not.toContain('sb-sidebar-nav-demos');
+            expect(sidebarSrc).not.toContain('onOpenDemos');
+            expect(sidebarSrc).not.toContain('Showcase Demos');
+        });
+
+        it('SpotlightLauncherModal must not contain Explore Showcase Demos action item', () => {
+            const spotlightSrc = fs.readFileSync(spotlightPath, 'utf8');
+            expect(spotlightSrc).not.toContain('act-open-demos');
+            expect(spotlightSrc).not.toContain('Explore Showcase Demos');
+            expect(spotlightSrc).not.toContain('onOpenDemos');
+        });
+
+        it('GenerativeCanvasStudio must not pass onOpenDemos to UI controls', () => {
+            const studioSrc = fs.readFileSync(studioPath, 'utf8');
+            expect(studioSrc).not.toContain('onOpenDemos:');
+            expect(studioSrc).not.toContain('onOpenDemos={');
+        });
+    });
+
+    describe('2. Strict Production Mode: Mock Mode Defaults Disabled (false)', () => {
+        const aiModelsRoutesPath = path.resolve(__dirname, '../../../desktop-app/server/routes/aiModelsRoutes.ts');
+        const spatialRoutesPath = path.resolve(__dirname, '../../../desktop-app/server/routes/spatialRoutes.ts');
+
+        it('aiModelsRoutes must default mockExecution to false across all endpoints', () => {
+            const src = fs.readFileSync(aiModelsRoutesPath, 'utf8');
+            expect(src).not.toContain('mockExecution ?? true');
+            expect(src).not.toContain('req.query.mockExecution === undefined');
+            expect(src).toContain("const mock = req.query.mockExecution === 'true'");
+            expect(src).toContain("mockExecution === true || mockExecution === 'true'");
+        });
+
+        it('spatialRoutes must default mockExecution to false across all endpoints', () => {
+            const src = fs.readFileSync(spatialRoutesPath, 'utf8');
+            expect(src).toContain("const isMock = mockExecution === true || mockExecution === 'true'");
+        });
+
+        it('ComfyUiCloudRunService constructor must default mockExecution to false', () => {
+            const crService = new ComfyUiCloudRunService();
+            expect(crService.isMockExecution()).toBe(false);
+        });
+
+        it('ComfyUiBridgeService constructor must default mockMode to false', () => {
+            const bridge = new ComfyUiBridgeService();
+            expect(bridge.isMockMode()).toBe(false);
+        });
+
+        it('ComfyUiPipelineAgent must initialize with real live execution by default', () => {
+            const agent = new ComfyUiPipelineAgent();
+            expect(agent.getBridge().isMockMode()).toBe(false);
+            expect(agent.getCloudRunService().isMockExecution()).toBe(false);
+        });
+    });
+
+    describe('3. Exhaustive Menu & Control Hardening', () => {
+        const topBarPath = path.resolve(__dirname, '../src/browser/generative-canvas/studio/StudioTopBar.tsx');
+        const kanbanPath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/KanbanBoardPrimitive.tsx');
+        const docPath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/MarkdownDocumentPrimitive.tsx');
+        const settingsReducerPath = path.resolve(__dirname, '../src/browser/generative-canvas/settings/settingsReducer.ts');
+
+        it('StudioTopBar contains TopBar Workspace selector, Primitive switchers, and Settings menu options', () => {
+            const topBarSrc = fs.readFileSync(topBarPath, 'utf8');
+            expect(topBarSrc).toContain('sb-topbar-mode-switcher');
+            expect(topBarSrc).toContain('handleSwitchMode');
+            expect(topBarSrc).toContain('openSettingsToTab');
+            expect(topBarSrc).toContain('workspaceMenuRef');
+            expect(topBarSrc).toContain('New Workspace...');
+        });
+
+        it('MarkdownDocumentPrimitive provides explicit Morph to Kanban and Morph to Graph toolbar actions', () => {
+            const docSrc = fs.readFileSync(docPath, 'utf8');
+            expect(docSrc).toContain('handleMorphDocumentToKanban');
+            expect(docSrc).toContain('handleMorphDocumentToNodeGraph');
+            expect(docSrc).toContain('Morph to Kanban');
+            expect(docSrc).toContain('Morph to Graph');
+        });
+
+        it('KanbanBoardPrimitive provides explicit Markdown export action', () => {
+            const kanbanSrc = fs.readFileSync(kanbanPath, 'utf8');
+            expect(kanbanSrc).toContain('handleExportMarkdown');
+            expect(kanbanSrc).toContain('Export Markdown');
+        });
+
+        it('settingsReducer handles persistent localStorage sync for all setting tabs', () => {
+            const settingsSrc = fs.readFileSync(settingsReducerPath, 'utf8');
+            expect(settingsSrc).toContain('scratchbox_ide_settings');
+            expect(settingsSrc).toContain('localStorage.setItem');
+            expect(settingsSrc).toContain('localStorage.getItem');
+        });
+    });
+});

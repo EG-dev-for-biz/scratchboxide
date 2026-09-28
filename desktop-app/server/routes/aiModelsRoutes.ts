@@ -311,7 +311,8 @@ export function createComfyRouter(): Router {
                 res.status(400).json({ success: false, error: 'Goal is required.' });
                 return;
             }
-            const agent = new ComfyUiPipelineAgent({ hostUrl, mockExecution: mockExecution ?? true });
+            const isMock = mockExecution === true || mockExecution === 'true';
+            const agent = new ComfyUiPipelineAgent({ hostUrl, mockExecution: isMock });
             const blueprint = await agent.researchPipeline(goal);
             const prompt = agent.authorApiPrompt(blueprint);
             const nodeGraphData = agent.convertToNodeGraphData(blueprint, prompt);
@@ -324,7 +325,7 @@ export function createComfyRouter(): Router {
     router.get('/cloudrun/status', async (req: Request, res: Response) => {
         try {
             const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
-            const mock = req.query.mockExecution === 'true' || req.query.mockExecution === undefined;
+            const mock = req.query.mockExecution === 'true';
             const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
             const status = await crService.getServiceStatus();
             res.json({ success: true, ...status });
@@ -336,7 +337,7 @@ export function createComfyRouter(): Router {
     router.get('/cloudrun/upstream', async (req: Request, res: Response) => {
         try {
             const serviceUrl = typeof req.query.serviceUrl === 'string' ? req.query.serviceUrl : undefined;
-            const mock = req.query.mockExecution === 'true' || req.query.mockExecution === undefined;
+            const mock = req.query.mockExecution === 'true';
             const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mock });
             const info = await crService.getUpstreamVersionInfo();
             res.json({ success: true, ...info });
@@ -348,7 +349,8 @@ export function createComfyRouter(): Router {
     router.post('/cloudrun/sync', async (req: Request, res: Response) => {
         try {
             const { serviceUrl, mockExecution } = req.body || {};
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const isMock = mockExecution === true || mockExecution === 'true';
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
             const syncResult = await crService.syncUpstream();
             res.json({ ...syncResult, success: syncResult.success });
         } catch (err: any) {
@@ -363,7 +365,8 @@ export function createComfyRouter(): Router {
                 res.status(400).json({ success: false, error: 'moduleName and code are required.' });
                 return;
             }
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const isMock = mockExecution === true || mockExecution === 'true';
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
             const injectResult = await crService.injectDynamicCode({
                 moduleName,
                 code,
@@ -383,7 +386,8 @@ export function createComfyRouter(): Router {
                 res.status(400).json({ success: false, error: 'workflow is required.' });
                 return;
             }
-            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: mockExecution ?? true });
+            const isMock = mockExecution === true || mockExecution === 'true';
+            const crService = new ComfyUiCloudRunService({ serviceUrl, mockExecution: isMock });
             const report = await crService.prepareWorkflowDependencies(workflow, dynamicCode);
             res.json({ success: true, report });
         } catch (err: any) {
@@ -398,9 +402,10 @@ export function createComfyRouter(): Router {
                 res.status(400).json({ success: false, error: 'Goal or workflow is required.' });
                 return;
             }
+            const isMock = mockExecution === true || mockExecution === 'true';
             const agent = new ComfyUiPipelineAgent({
                 hostUrl,
-                mockExecution: mockExecution ?? true,
+                mockExecution: isMock,
                 maxFixAttempts,
                 targetEnvironment,
                 cloudRun

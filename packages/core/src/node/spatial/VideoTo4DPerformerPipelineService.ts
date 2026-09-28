@@ -10,29 +10,29 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { BakedGaussian } from '../../common/geospatial-4d-protocol.js';
+import { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import {
     HumanoidMotionData,
     HumanoidMotionFrame,
     SkinWeightedGaussian,
     Dynamic4DGaussianSplatService
-} from '../3d-engine/Dynamic4DGaussianSplatService.js';
-import { SplatService } from '../3d-engine/splat-service.js';
-import { SbHumanLoader } from '../../common/spatial/SbHumanLoader.js';
-import { CharacterSilhouetteSolver } from './CharacterSilhouetteSolver.js';
-import { CharacterAnatomicalRatios } from '../../common/character-morph-protocol.js';
+} from '../3d-engine/Dynamic4DGaussianSplatService';
+import { SplatService } from '../3d-engine/splat-service';
+import { SbHumanLoader } from '../../common/spatial/SbHumanLoader';
+import { CharacterSilhouetteSolver } from './CharacterSilhouetteSolver';
+import { CharacterAnatomicalRatios } from '../../common/character-morph-protocol';
 import {
     MUSIC_VENUE_PRESETS,
     MusicVenuePreset
-} from '../../browser/generative-canvas/services/ConcertStagePerformerService.js';
-import { HeadlessVideoEditorService, resolveBinary } from '../video/HeadlessVideoEditorService.js';
-import { NerfstudioDatasetService } from './NerfstudioDatasetService.js';
-import { MediaPipePoseService } from './MediaPipePoseService.js';
-import { PerformerPoseTrack, PerformerPoseTrackService } from './PerformerPoseTrackService.js';
-import { HumanoidMotionBridgeService } from './HumanoidMotionBridgeService.js';
-import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService.js';
-import { encodeGaussianPly } from '../../common/gaussian-ply-codec.js';
-import { Mat3, Vec3, applyMat3, computeBoneRotations, skinPoint, transposeMat3 } from '../../common/humanoid-skinning.js';
+} from '../../browser/generative-canvas/services/ConcertStagePerformerService';
+import { HeadlessVideoEditorService, resolveBinary } from '../video/HeadlessVideoEditorService';
+import { NerfstudioDatasetService } from './NerfstudioDatasetService';
+import { MediaPipePoseService } from './MediaPipePoseService';
+import { PerformerPoseTrack, PerformerPoseTrackService } from './PerformerPoseTrackService';
+import { HumanoidMotionBridgeService } from './HumanoidMotionBridgeService';
+import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
+import { encodeGaussianPly } from '../../common/gaussian-ply-codec';
+import { Mat3, Vec3, applyMat3, computeBoneRotations, skinPoint, transposeMat3 } from '../../common/humanoid-skinning';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v'];
 

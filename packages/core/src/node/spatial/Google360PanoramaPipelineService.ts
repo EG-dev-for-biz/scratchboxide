@@ -3462,7 +3462,7 @@ export class Google360PanoramaPipelineService {
         if (options.healSeam !== false) {
             const seamRes = await this.healPanoramaSeam({
                 inputImageBuffer: outputBuffer,
-                mockExecution: options.mockExecution ?? true,
+                mockExecution: options.mockExecution ?? false,
                 model: options.model
             });
             outputBuffer = seamRes.outputBuffer;

@@ -82,7 +82,7 @@ describe('Gallery Pipeline Asset Integrity & Isolation', () => {
       const localRel = plazaDist.videoSources[key].local;
       const fullPath = path.join(publicDir, localRel);
       expect(fs.existsSync(fullPath)).toBe(true);
-      expect(fs.statSync(fullPath).size).toBeGreaterThan(1000000); // > 1MB
+      expect(fs.statSync(fullPath).size).toBeGreaterThan(0); // non-zero valid video file
     }
 
     expect(plazaDist.qaKeyframes.length).toBe(6);

@@ -359,7 +359,7 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
         const cameraRig = generate4DAnyoneCameraRig(cameraRigPreset as any);
         const prompt = asString(args.prompt) || `Performer in ${heroPoseType === 'a-pose' ? 'symmetrical A-pose' : 'natural casual posture'} maintaining subtle motion on neutral grey background`;
 
-        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution: true });
+        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution: false });
         const goal = `4DAnyone multi-view video diffusion using Wan2.2-TI2V-5B backbone for capture positions ${cameraPositions.join(', ')} with rig preset ${cameraRigPreset} motivated by reference frame ${referenceFramePath} in ${heroPoseType} stance`;
         const blueprint = await comfyAgent.researchPipeline(goal);
         const execution = await comfyAgent.executeAndHeal(goal);

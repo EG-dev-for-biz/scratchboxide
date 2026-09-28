@@ -500,8 +500,6 @@ export class SurveySynthesisEngine {
         }
         break;
       }
-      case 'street-corridor':
-      case 'nadir-grid':
       case 'continuous-flight': {
         // Continuous 6-DOF Spline Flight Trajectory:
         // Simulates a smooth, cinematic camera/drone flight weaving through the space.

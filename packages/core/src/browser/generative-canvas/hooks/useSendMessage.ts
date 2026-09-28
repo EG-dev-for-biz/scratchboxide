@@ -24,6 +24,7 @@ import {
     Scene3DData,
     SkillItem,
     StudioLayoutMode,
+    StudioSettingsTab,
     TerminalExecutionError,
     TokenBudgetMetrics
 } from '../canvas-types';
@@ -119,6 +120,7 @@ export interface SendMessageDeps {
     activeWorkspace: ProjectItem;
     persistSessionsImmediately: (updatedSessions: ChatSession[]) => void;
     aiInteractionMode?: 'agent' | 'ask' | 'plan';
+    openSettingsToTab?: (tab: StudioSettingsTab) => void;
 }
 
 interface GenerationContext {
@@ -141,16 +143,30 @@ interface BackendStreamResult {
 
 const cleanMessageText = (rawText: string, artifact?: CanvasArtifact): string => cleanMessageTextSmart(rawText, artifact);
 
-/** Step 1 — `/plan`, `/agent` and friends short-circuit the normal send flow. Returns true if handled. */
+/** Step 1 — `/plan`, `/agent`, `/settings`, `/3d`, `/code`, `/video`, etc. handle slash commands. Returns true if handled. */
 async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<boolean> {
-    const { setInputValue, executeDeepWritePipeline, handleStartAgent } = d;
+    const { setInputValue, executeDeepWritePipeline, handleStartAgent, setLayoutMode, showToast, openSettingsToTab } = d;
     const lowerText = text.trim().toLowerCase();
+
+    // 1. Settings slash command
+    if (lowerText === '/settings' || lowerText.startsWith('/settings ')) {
+        setInputValue('');
+        const tabRaw = lowerText.replace(/^\/settings\s*/, '').trim();
+        const validTab = ['general', 'models', 'beta', 'git-prs', 'about', 'appearance', 'skills', 'mcp', 'memories', 'shortcuts'].includes(tabRaw) ? (tabRaw as StudioSettingsTab) : 'general';
+        if (openSettingsToTab) {
+            openSettingsToTab(validTab);
+        } else {
+            showToast(`Opening Settings (${validTab})`, '⚙️');
+        }
+        return true;
+    }
+
+    // 2. Deep planning / spec pipeline
     const isDeepWrite = 
         text.trim().startsWith('/plan') ||
         text.trim().startsWith('/deepwrite') ||
         text.trim().startsWith('/codebase') ||
         text.trim().startsWith('/spec') ||
-        text.trim().startsWith('/3d') ||
         lowerText.includes('deep-write') ||
         lowerText.includes('deep write') ||
         lowerText.includes('intensive planning') ||
@@ -159,11 +175,12 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
     if (isDeepWrite) {
         setInputValue('');
         const cleanPrompt = text.trim()
-            .replace(/^\/(plan|deepwrite|codebase|spec|3d)\s*/i, '');
+            .replace(/^\/(plan|deepwrite|codebase|spec)\s*/i, '');
         await executeDeepWritePipeline(cleanPrompt);
         return true;
     }
 
+    // 3. Autonomous agent command
     if (
         text.trim().startsWith('/agent ') ||
         text.trim().startsWith('agent:') ||
@@ -181,6 +198,76 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
         handleStartAgent(goalText);
         return true;
     }
+
+    // 4. Standalone primitive mode switch commands
+    if (lowerText === '/doc' || lowerText === '/document') {
+        setInputValue('');
+        setLayoutMode('document');
+        showToast('Switched to Markdown Document workspace', '📄');
+        return true;
+    }
+    if (lowerText === '/code' || lowerText === '/sandbox') {
+        setInputValue('');
+        setLayoutMode('code');
+        showToast('Switched to Live Code Sandbox', '⚡');
+        return true;
+    }
+    if (lowerText === '/3d') {
+        setInputValue('');
+        setLayoutMode('3d');
+        showToast('Switched to 3D Scene workspace', '🌌');
+        return true;
+    }
+    if (lowerText === '/video' || lowerText === '/timeline') {
+        setInputValue('');
+        setLayoutMode('video');
+        showToast('Switched to Video Timeline NLE', '🎬');
+        return true;
+    }
+    if (lowerText === '/graph' || lowerText === '/workflow') {
+        setInputValue('');
+        setLayoutMode('canvas');
+        showToast('Switched to Node Graph workflow', '📊');
+        return true;
+    }
+    if (lowerText === '/kanban' || lowerText === '/board') {
+        setInputValue('');
+        setLayoutMode('kanban');
+        showToast('Switched to Kanban Board', '📋');
+        return true;
+    }
+    if (lowerText === '/dashboard' || lowerText === '/metrics') {
+        setInputValue('');
+        setLayoutMode('canvas');
+        showToast('Switched to Metric Dashboard', '📈');
+        return true;
+    }
+    if (lowerText === '/browser') {
+        setInputValue('');
+        setLayoutMode('browser');
+        showToast('Switched to Interactive In-App Browser', '🌐');
+        return true;
+    }
+
+    // If followed by a prompt, pre-switch layout mode so downstream generation routes to the right primitive
+    if (lowerText.startsWith('/3d ')) {
+        setLayoutMode('3d');
+    } else if (lowerText.startsWith('/video ') || lowerText.startsWith('/timeline ')) {
+        setLayoutMode('video');
+    } else if (lowerText.startsWith('/code ') || lowerText.startsWith('/sandbox ')) {
+        setLayoutMode('code');
+    } else if (lowerText.startsWith('/doc ') || lowerText.startsWith('/document ')) {
+        setLayoutMode('document');
+    } else if (lowerText.startsWith('/graph ') || lowerText.startsWith('/workflow ')) {
+        setLayoutMode('canvas');
+    } else if (lowerText.startsWith('/kanban ') || lowerText.startsWith('/board ')) {
+        setLayoutMode('kanban');
+    } else if (lowerText.startsWith('/dashboard ') || lowerText.startsWith('/metrics ')) {
+        setLayoutMode('canvas');
+    } else if (lowerText.startsWith('/browser ')) {
+        setLayoutMode('browser');
+    }
+
     return false;
 }
 

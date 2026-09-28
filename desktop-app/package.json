@@ -6,7 +6,7 @@
   "main": "dist-electron/desktop-app/electron/main.js",
   "scripts": {
     "dev": "node scripts/dev.js",
-    "vite:dev": "vite --port 3000 --host 127.0.0.1",
+    "vite:dev": "vite --port 3030 --host 127.0.0.1",
     "server:dev": "ts-node --transpile-only -P tsconfig.electron.json server/index.ts",
     "build": "tsc && vite build && tsc -p tsconfig.electron.json",
     "build:client": "vite build",

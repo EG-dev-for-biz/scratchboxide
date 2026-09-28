@@ -470,12 +470,25 @@ export class SpatialPoseEstimatorService {
         const p = V.map(row => row[minIdx]);
 
         // 4. Extract 3x3 M and translation vector t_raw
-        const M_raw: number[][] = [
+        let M_raw: number[][] = [
             [p[0], p[1], p[2]],
             [p[4], p[5], p[6]],
             [p[8], p[9], p[10]]
         ];
         let t_raw: Point3D = [p[3], p[7], p[11]];
+
+        // In homogeneous DLT (Ap = 0), p is determined up to an unknown sign.
+        // True camera projection matrix has det(M) = gamma^3 * det(R) with gamma > 0 and det(R) = +1.
+        // If det(M_raw) < 0, SVD picked -p, so flip the entire vector p to preserve orientation.
+        const detM =
+            M_raw[0][0] * (M_raw[1][1] * M_raw[2][2] - M_raw[1][2] * M_raw[2][1]) -
+            M_raw[0][1] * (M_raw[1][0] * M_raw[2][2] - M_raw[1][2] * M_raw[2][0]) +
+            M_raw[0][2] * (M_raw[1][0] * M_raw[2][1] - M_raw[1][1] * M_raw[2][0]);
+
+        if (detM < 0) {
+            M_raw = M_raw.map(row => row.map(val => -val));
+            t_raw = [-t_raw[0], -t_raw[1], -t_raw[2]];
+        }
 
         // Orthonormalize M to obtain rotation matrix R
         let R = orthonormalizeRotation3x3(M_raw);
@@ -554,6 +567,9 @@ export class SpatialPoseEstimatorService {
 
         const meanReprojectionErrorPx = totalErr / n;
         const maxReprojectionErrorPx = maxErr;
+        if (meanReprojectionErrorPx < 0.05) {
+            converged = true;
+        }
         const quaternion = rotationMatrixToQuaternion(R);
         const attitude = rotationMatrixToAttitude(R);
 
@@ -743,6 +759,14 @@ export class SpatialPoseEstimatorService {
 
         let lambda = 1e-3;
         let lastError = this.computeTotalResidualNorm(points3D, points2D, fx, fy, cx, cy, rodriguesToRotationMatrix(w), t);
+        if (lastError < tolerance) {
+            return {
+                R: rodriguesToRotationMatrix(w),
+                t,
+                iterations: 0,
+                converged: true
+            };
+        }
 
         let iter = 0;
         let converged = false;
@@ -848,7 +872,7 @@ export class SpatialPoseEstimatorService {
             );
 
             if (newError < lastError) {
-                if (Math.abs(lastError - newError) < tolerance) {
+                if (newError < tolerance || Math.abs(lastError - newError) < tolerance) {
                     converged = true;
                 }
                 w = w_new;
@@ -857,8 +881,16 @@ export class SpatialPoseEstimatorService {
                 lambda = Math.max(1e-7, lambda * 0.2);
                 if (converged) break;
             } else {
+                if (lastError < tolerance) {
+                    converged = true;
+                    break;
+                }
                 lambda = Math.min(1e5, lambda * 10.0);
             }
+        }
+
+        if (lastError < tolerance) {
+            converged = true;
         }
 
         return {

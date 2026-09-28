@@ -50,7 +50,7 @@ export class ComfyUiCloudRunService {
         this.projectId = config.projectId || process.env.GOOGLE_CLOUD_PROJECT || 'scratchbox-ai-cloud';
         this.region = config.region || process.env.GOOGLE_CLOUD_REGION || 'us-central1';
         this.authToken = config.authToken || process.env.CLOUDRUN_AUTH_TOKEN;
-        this.mockExecution = config.mockExecution ?? (process.env.COMFYUI_MOCK === 'true' || true);
+        this.mockExecution = config.mockExecution ?? (process.env.COMFYUI_MOCK === 'true');
 
         this.mockUpstreamInfo = {
             currentCommit: 'e4a8f9c2d1b7',
