@@ -48,6 +48,16 @@ export interface Location3DGSRequest {
     exposureScale?: number;
     generator?: StationImageGenerator;
     workspaceRoot?: string;
+    surveyPattern?: 'orbital-multi-tier' | 'foveated-multi-tier' | 'amphitheatre-complete' | 'facade-strip' | 'street-promenade' | string;
+    surveyPatternConfig?: any;
+    stoneType?: string;
+    renderProvider?: 'software-clay' | 'pathtracer';
+    /** Render mode for station input: 'textured' (full GLB photogrammetric PBR textures) or 'clay' (studio grey). Default 'clay'. */
+    renderMode?: 'clay' | 'textured' | 'albedo';
+    /** Fast generation using Nano Banana Lite / 1K resolution and empty default style suffix */
+    draft?: boolean;
+    /** Generation fidelity tier */
+    fidelity?: 'draft' | 'production';
     onProgress?: (progress: number, message?: string) => void;
 }
 
@@ -106,6 +116,10 @@ export class Location3DGaussianSplatService {
     /**
      * Executes the complete end-to-end Location 3DGS pipeline.
      */
+    public async synthesize(req: Location3DGSRequest): Promise<Location3DGSResult> {
+        return this.generate(req);
+    }
+
     public async generate(req: Location3DGSRequest): Promise<Location3DGSResult> {
         const t0 = Date.now();
         const root = req.workspaceRoot || this.workspaceRoot;
@@ -206,8 +220,17 @@ export class Location3DGaussianSplatService {
 
         let stations = preset.stations;
 
-        // If custom camera count requested and differs from preset
-        if (req.cameraCount && req.cameraCount !== stations.length) {
+        // If custom survey pattern requested
+        if (req.surveyPattern) {
+            const engine = new SurveySynthesisEngine();
+            const patternCfg = {
+                type: req.surveyPattern as any,
+                cameraCount: req.cameraCount || 12,
+                targetRadiusMeters: req.cropRadius || preset.cropRadius || 60,
+                ...(req.surveyPatternConfig || {})
+            };
+            stations = engine.synthesize(anchor, patternCfg);
+        } else if (req.cameraCount && req.cameraCount !== stations.length) {
             const engine = new SurveySynthesisEngine();
             stations = engine.synthesize(anchor, {
                 type: 'orbital-multi-tier',
@@ -217,7 +240,8 @@ export class Location3DGaussianSplatService {
             });
         }
 
-        const outDir = path.isAbsolute(preset.outDir) ? preset.outDir : path.resolve(root, preset.outDir);
+        const resolvedOutDir = req.outDir || preset.outDir;
+        const outDir = path.isAbsolute(resolvedOutDir) ? resolvedOutDir : path.resolve(root, resolvedOutDir);
         await fs.ensureDir(outDir);
 
         // 2. Resolve image generator (Nano Banana / Google media generation or procedural mock)
@@ -242,15 +266,23 @@ export class Location3DGaussianSplatService {
                     }
                 };
             } else {
-                generator = createDefaultStationImageGenerator({ workspaceRoot: root, allowProceduralGenerator: true });
+                const isDraft = req.draft === true || req.fidelity === 'draft';
+                generator = createDefaultStationImageGenerator({
+                    workspaceRoot: root,
+                    allowProceduralGenerator: true,
+                    fidelity: isDraft ? 'draft' : (req.fidelity || 'production'),
+                    imageSize: isDraft ? '1K' : '2K'
+                });
             }
         }
 
+        const isDraft = req.draft === true || req.fidelity === 'draft';
         const beautifyContext = {
             locationName: req.location || preset.beautify.locationName,
             architecturalStyle: req.architecturalStyle || preset.beautify.architecturalStyle,
             moodPromptContext: req.moodPromptContext || preset.beautify.moodPromptContext || 'Authentic daylight with natural sun shadows.',
-            styleSuffix: req.styleSuffix || preset.beautify.styleSuffix || ''
+            // In draft mode or when explicitly set, styleSuffix defaults to empty string so users can supply custom styles later
+            styleSuffix: req.styleSuffix !== undefined ? req.styleSuffix : (isDraft ? '' : (preset.beautify.styleSuffix || ''))
         };
 
         progressReporter(0.1, `Launching SurveySplatPipelineService for ${beautifyContext.locationName}...`);
@@ -278,7 +310,11 @@ export class Location3DGaussianSplatService {
             use2dgs: req.use2dgs === true || req.surfaceModel === 'planar',
             surfaceModel: req.surfaceModel,
             shDegree: req.shDegree,
-            exposureScale: req.exposureScale
+            exposureScale: req.exposureScale,
+            stoneType: req.stoneType as any,
+            renderProvider: req.renderProvider,
+            renderMode: req.renderMode,
+            draft: isDraft
         }, progressReporter);
 
         const splatUrl = this.toWebUrl(pipelineResult.fusedSplatPath);
@@ -380,7 +416,8 @@ export class Location3DGaussianSplatService {
             stationCount: pipelineResult.stations.length,
             scene3DData,
             cropBox: pipelineResult.cropBox,
-            durationMs: Date.now() - t0
+            durationMs: Date.now() - t0,
+            error: (pipelineResult as any).error
         };
     }
 }

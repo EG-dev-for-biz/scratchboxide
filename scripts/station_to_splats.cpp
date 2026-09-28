@@ -63,7 +63,7 @@ static bool jsonVec3(const std::string& s, const std::string& key, Vec3& out) {
     return true;
 }
 
-static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
+static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, bool adaptiveVoxel, int minVoxelNeighbors, int minViews, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
     auto t0 = std::chrono::high_resolution_clock::now();
     std::ifstream listFile(listPath);
     if (!listFile.is_open()) {
@@ -99,12 +99,16 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
     }
 
     struct VoxelKey {
+        int shell;
+        int normalDir; // +1 upward facing (roof/ground), -1 downward facing (ceiling/soffit), 0 vertical
         int64_t x, y, z;
-        bool operator==(const VoxelKey& o) const { return x == o.x && y == o.y && z == o.z; }
+        bool operator==(const VoxelKey& o) const { return shell == o.shell && normalDir == o.normalDir && x == o.x && y == o.y && z == o.z; }
     };
     struct VoxelKeyHash {
         size_t operator()(const VoxelKey& k) const {
             size_t h = 14695981039346656037ULL;
+            h = (h ^ static_cast<size_t>(k.shell * 2654435761ULL)) * 1099511628211ULL;
+            h = (h ^ static_cast<size_t>((k.normalDir + 2) * 452930477ULL)) * 1099511628211ULL;
             h = (h ^ static_cast<size_t>(k.x * 73856093)) * 1099511628211ULL;
             h = (h ^ static_cast<size_t>(k.y * 19349663)) * 1099511628211ULL;
             h = (h ^ static_cast<size_t>(k.z * 83492791)) * 1099511628211ULL;
@@ -122,7 +126,6 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         float maxColorDelta = 0.0f;
     };
     std::unordered_map<VoxelKey, VoxelEntry, VoxelKeyHash> grid;
-    float invVoxel = 1.0f / std::max(0.001f, voxelSize);
     size_t totalInputSplats = 0;
     size_t normalPruned = 0;
 
@@ -192,7 +195,17 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
             s.color.z = std::clamp(s.color.z * scale.z, 0.0f, 1.0f);
 
             float distH = std::hypot(s.position.x, s.position.z);
-            if (cropRadius > 0.0f && distH > cropRadius) continue;
+            if (cropRadius > 0.0f) {
+                if (distH > cropRadius) continue;
+                // Soft radial distance feathering: gradual alpha falloff on outer 10% of crop volume
+                // Eliminates hard circular boundary cliffs and abrupt cutoffs in any terrain
+                const float featherStart = cropRadius * 0.90f;
+                if (distH > featherStart) {
+                    const float fade = (cropRadius - distH) / (cropRadius - featherStart);
+                    s.opacity *= std::clamp(fade, 0.0f, 1.0f);
+                    if (s.opacity < 0.04f) continue;
+                }
+            }
             if (excludeUnderside && s.position.y < minGroundY) continue;
 
             if (dropFoliage) {
@@ -204,16 +217,31 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
                 const float exg = 2.0f * gVal - rVal - bVal;
                 const bool isDarkGreen = (rVal * 255.0f < 70.0f && gVal * 255.0f > 65.0f && bVal * 255.0f < 60.0f);
                 const bool isOrganic = (gn > 0.38f && gVal > rVal + 0.02f && gVal > bVal + 0.02f) || (exg > 0.08f) || isDarkGreen;
-                // Also drop non-structural dark sludge outside the focal landmark ring
-                const bool isDarkSludge = (distH > 95.0f) && (rVal < 0.28f && gVal < 0.28f && bVal < 0.28f);
-                if (isOrganic || isDarkSludge) continue;
+                if (isOrganic) continue;
             }
 
-            int64_t vx = static_cast<int64_t>(std::floor(s.position.x * invVoxel));
-            int64_t vy = static_cast<int64_t>(std::floor(s.position.y * invVoxel));
-            int64_t vz = static_cast<int64_t>(std::floor(s.position.z * invVoxel));
-            VoxelKey key{vx, vy, vz};
-
+            int shell = 0;
+            float curVoxel = voxelSize;
+            if (adaptiveVoxel) {
+                // Adaptive concentric LOD shells around stage anchor (distH from origin):
+                // Shell 0 (0m - 75m): Core focal zone (stage, seating bowl, soundboard) at base voxel (e.g. 5cm)
+                // Shell 1 (75m - 160m): Mid-range monolithic cliffs & walkways at 2x voxel (10cm)
+                // Shell 2 (160m - 260m): Peripheral ridges & valley roads at 3.5x voxel (17.5cm)
+                // Shell 3 (260m+): Distant macro horizon landscape at 5x voxel (25cm)
+                if (distH < 75.0f) {
+                    shell = 0;
+                    curVoxel = voxelSize;
+                } else if (distH < 160.0f) {
+                    shell = 1;
+                    curVoxel = voxelSize * 2.0f;
+                } else if (distH < 260.0f) {
+                    shell = 2;
+                    curVoxel = voxelSize * 3.5f;
+                } else {
+                    shell = 3;
+                    curVoxel = voxelSize * 5.0f;
+                }
+            }
             // Compute splat normal from quaternion
             const Quat& q = s.rotation;
             const Vec3 sNormal = Vec3(
@@ -222,18 +250,21 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
                 1.0f - 2.0f * (q.x * q.x + q.y * q.y)
             ).normalized();
             const float ny = sNormal.y;
-            const bool isGround = (std::fabs(ny) > 0.85f);
+            const bool isGround = (std::fabs(ny) > 0.65f);
+            const int normalDir = (ny >= 0.20f) ? 1 : ((ny <= -0.20f) ? -1 : 0);
+
+            float curInvVoxel = 1.0f / std::max(0.001f, curVoxel);
+            float curInvVoxelY = isGround ? (1.0f / (curVoxel * 1.6f)) : curInvVoxel;
+            int64_t vx = static_cast<int64_t>(std::floor(s.position.x * curInvVoxel));
+            int64_t vy = static_cast<int64_t>(std::floor(s.position.y * curInvVoxelY));
+            int64_t vz = static_cast<int64_t>(std::floor(s.position.z * curInvVoxel));
+            VoxelKey key{shell, normalDir, vx, vy, vz};
 
             float sa = std::max(s.scale.x, s.scale.y) / std::max(1e-6f, std::min(s.scale.x, s.scale.y));
             float sSigma = std::max(s.scale.x, s.scale.y);
 
             auto it = grid.find(key);
             if (it == grid.end()) {
-                // Prevent macro anchors (altitude >= 50m) from inserting coarse blurry splats into the entire landmark zone
-                const float macroCropH = cropRadius > 0.0f ? cropRadius : 115.0f;
-                if (st.entry.altitude >= 50.0f && s.position.y < 45.0f && distH < macroCropH) {
-                    continue;
-                }
                 grid[key] = {s, wGround, isGround, sNormal, sSigma, 1, 0.0f};
             } else {
                 auto& existing = it->second;
@@ -256,9 +287,10 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
                     continue;
                 }
 
-                // Blend color smoothly across consistent multi-view observations
+                // Blend color and centroid position smoothly across consistent multi-view observations
                 float blendWeight = 1.0f / float(existing.viewCount);
                 existing.splat.color = existing.splat.color * (1.0f - blendWeight) + s.color * blendWeight;
+                existing.splat.position = existing.splat.position * (1.0f - blendWeight) + s.position * blendWeight;
 
                 float ea = std::max(existing.splat.scale.x, existing.splat.scale.y) / std::max(1e-6f, std::min(existing.splat.scale.x, existing.splat.scale.y));
                 if (isGround && existing.isGround) {
@@ -289,10 +321,40 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
     std::vector<GaussianSplat> fused;
     fused.reserve(grid.size());
     Vec3 bMin(1e9f, 1e9f, 1e9f), bMax(-1e9f, -1e9f, -1e9f);
+    size_t floatersPruned = 0;
+
     for (auto& pair : grid) {
+        if (minViews > 1 && pair.second.viewCount < minViews) {
+            continue;
+        }
         if (dropInconsistent && pair.second.viewCount >= 2 && pair.second.maxColorDelta > colorConsistencyThresh) {
             continue;
         }
+
+        // 26-neighborhood statistical density filter: remove isolated floaters in 3x3x3 cell neighborhood
+        if (minVoxelNeighbors > 0) {
+            int neighbors = 0;
+            for (int dx = -1; dx <= 1 && neighbors < minVoxelNeighbors; ++dx) {
+                for (int dy = -1; dy <= 1 && neighbors < minVoxelNeighbors; ++dy) {
+                    for (int dz = -1; dz <= 1 && neighbors < minVoxelNeighbors; ++dz) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+                        if (grid.find(VoxelKey{pair.first.shell, pair.first.normalDir, pair.first.x + dx, pair.first.y + dy, pair.first.z + dz}) != grid.end()) {
+                            neighbors++;
+                        }
+                    }
+                }
+            }
+            // Ground terrain (|n_y| > 0.65) is continuous surface, only prune if totally isolated (neighbors < 1).
+            // Unconfirmed non-ground samples (sky shards, detached needles) require >= 3 neighbors.
+            const int requiredNeighbors = pair.second.isGround
+                ? std::min(minVoxelNeighbors, 1)
+                : ((pair.second.viewCount == 1) ? std::max(minVoxelNeighbors, 3) : minVoxelNeighbors);
+            if (neighbors < requiredNeighbors) {
+                floatersPruned++;
+                continue;
+            }
+        }
+
         const auto& s = pair.second.splat;
         bMin.x = std::min(bMin.x, s.position.x);
         bMin.y = std::min(bMin.y, s.position.y);
@@ -589,6 +651,10 @@ int main(int argc, char** argv) {
     float colorConsistencyThresh = 40.0f;
     bool emitJson = false, dropFoliage = false, excludeUnderside = true, enableHybridMicroDepth = false, enablePhotometricMicroDepth = false;
     bool use2dgsPlanarSurfel = false;
+    bool adaptiveVoxel = false;
+    int minVoxelNeighbors = 0;
+    int minViews = 1;
+    bool dropBoundaryFloaters = false;
     float exposureScale = 1.0f;
     int shDegree = 0;
     for (int i = 1; i < argc; ++i) {
@@ -616,6 +682,10 @@ int main(int argc, char** argv) {
         else if (a == "--erode-silhouette" && i + 1 < argc) erodeSilhouettePx = std::stoi(argv[++i]);
         else if (a == "--drop-inconsistent") dropInconsistent = true;
         else if (a == "--color-consistency-thresh" && i + 1 < argc) colorConsistencyThresh = std::stof(argv[++i]);
+        else if (a == "--adaptive-voxel") adaptiveVoxel = true;
+        else if (a == "--min-voxel-neighbors" && i + 1 < argc) minVoxelNeighbors = std::stoi(argv[++i]);
+        else if (a == "--min-views" && i + 1 < argc) minViews = std::stoi(argv[++i]);
+        else if (a == "--drop-boundary-floaters") dropBoundaryFloaters = true;
         else if (a == "--width" && i + 1 < argc) W = std::stoi(argv[++i]);
         else if (a == "--height" && i + 1 < argc) H = std::stoi(argv[++i]);
         else if (a == "--stride" && i + 1 < argc) stride = std::max(1, std::stoi(argv[++i]));
@@ -637,7 +707,7 @@ int main(int argc, char** argv) {
     }
 
     if (!fuseListPath.empty()) {
-        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, outSplat, outSpz, emitJson);
+        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, adaptiveVoxel, minVoxelNeighbors, minViews, outSplat, outSpz, emitJson);
     }
 
     if (rgbPath.empty() || depthPath.empty() || posePath.empty() || (outSplat.empty() && outSpz.empty()) || W <= 0 || H <= 0) {
@@ -788,15 +858,24 @@ int main(int argc, char** argv) {
             Vec3 n = tx.cross(ty);
             if (n.length() < 1e-9f) n = -fwd;
             n = n.normalized();
-            // Strict Invariant: Exclude the underside of the model and subsurface ground floor
-            // In the ENU tangent plane, +Y is up. A geometric normal pointing downward (n.y < -0.30f)
-            // at the ground level (p.y <= minGroundY + 1.0f) represents the bottom cap / baseplate
-            // of the 3D tiles mesh. Vaults, arch ceilings, and setbacks (p.y > minGroundY + 1.0f) are preserved!
-            if (excludeUnderside && ((n.y < -0.30f && p.y <= minGroundY + 1.0f) || p.y < minGroundY)) continue;
-            // Face the camera
-            Vec3 toCam = (eye - p).normalized();
-            if (n.dot(toCam) < 0.0f) n = -n;
+            // Face the camera: drop back-facing geometry instead of inverting normals
+            // Inverting back-facing facets creates hollow interior splat curtains and boundary needle shards.
+            const Vec3 toCam = (eye - p).normalized();
+            const float dotCam = n.dot(toCam);
+            if (dotCam < 0.08f) continue;
+
+            // Strict Invariant: Exclude the underside of the model, subsurface ground floor, and inverted tile boundary caps
+            // In the ENU tangent plane, +Y is up. A geometric normal pointing downward (n.y < -0.22f)
+            // represents the bottom cap / baseplate / subterranean skirt of the 3D tiles mesh.
+            if (excludeUnderside && (n.y < -0.22f || p.y < minGroundY)) continue;
+
             bool isolated = !(hr || hl) || !(hd || hu);
+            // Drop boundary filaments: needles lacking orthogonal depth continuity
+            const int neighborCount = (hr ? 1 : 0) + (hl ? 1 : 0) + (hd ? 1 : 0) + (hu ? 1 : 0);
+            if (dropBoundaryFloaters && ((!hr && !hl) || (!hd && !hu) || neighborCount <= 1)) {
+                severed++;
+                continue;
+            }
             if (isolated) severed++;
             // Step 4: Strict Grazing-Angle Rejection Filter
             // Extremely grazing samples (far ground seen almost edge-on) smear into stripes and are
@@ -822,16 +901,32 @@ int main(int argc, char** argv) {
             const float tierSigmaScale = (cameraAltitude <= 10.0f) ? 0.65f : ((cameraAltitude <= 40.0f) ? 0.85f : 1.05f);
             const float effectiveSigmaScale = (sigmaScale > 0.0f) ? sigmaScale : tierSigmaScale;
 
-            // Multi-Scale Ground Paver Synthesis
-            const bool isGround = (std::fabs(n.y) > 0.80f);
+            // Multi-Scale Ground Paver Synthesis & Selective Foreshortening
+            // Ground surfaces (raked seating bowl, stone ground, |n.y| > 0.70) allow up to 4.0x elongation
+            // to seamlessly close grazing gaps and bridge raked steps without zebra striping.
+            // Vertical architectural surfaces (|n.y| <= 0.70, columns, walls, roof fascias) are capped to 2.0x (minCos = 0.50)
+            // to strictly eliminate vertical smear curtains and streaking along the ray direction!
+            const bool isGround = (std::fabs(n.y) > 0.70f);
             const float effectiveStride = (cameraAltitude <= 10.0f && isGround) ? 1.0f : static_cast<float>(stride);
             const float spacing = z / fx * effectiveStride;
             float sigma = spacing * effectiveSigmaScale;
             if (isolated) sigma *= 0.75f;
             if (isOrganic) sigma *= 0.5f;
-            // Foreshortening compensation along the steepest direction (cap 4.5x to close grazing gaps)
-            const float cosInc = std::max(0.22f, std::fabs(n.dot(toCam)));
-            const float elong = 1.0f / cosInc;
+
+            // Balanced anisotropic foreshortening:
+            // Cap maximum elongation to 2.2x on ground (minCos = 0.45) and 1.8x on vertical structures (minCos = 0.55).
+            // This prevents giant overlapping elliptical plates that produce criss-crossing diamond slabs and jagged wedge needles.
+            const float minCos = isGround ? 0.45f : 0.55f;
+            const float cosInc = std::max(minCos, std::fabs(dotCam));
+            const float elong = std::min(1.0f / cosInc, 2.2f);
+
+            // Depth Boundary / Silhouette Detection:
+            // If any neighbor is missing across an abrupt depth jump, this sample lies on a boundary edge.
+            // On silhouette edges (e.g. roof canopy rim, window frame, railing, rock cliff top),
+            // strictly prevent anisotropic elongation along the view ray!
+            // This eliminates sawteeth, comb-like spikes, and jagged needle artifacts along silhouettes.
+            const bool isBoundary = (!hr || !hl || !hd || !hu || isolated);
+            const float effectiveElong = isBoundary ? 1.0f : elong;
 
             // Tangent basis: t1 along the projection of the view-right into the plane, t2 = n x t1
             Vec3 t1 = (right - n * right.dot(n));
@@ -841,17 +936,27 @@ int main(int argc, char** argv) {
             // Steepest foreshortening direction lies along the projection of the view ray into the plane
             Vec3 g = (toCam - n * toCam.dot(n));
             float s1 = sigma, s2 = sigma;
-            if (g.length() > 1e-6f) {
+            if (g.length() > 1e-6f && !isBoundary) {
                 g = g.normalized();
                 // Rotate the basis so t1 aligns with g, then elongate along it
                 t1 = g; t2 = n.cross(t1).normalized();
-                s1 = sigma * elong;
+                s1 = sigma * effectiveElong;
             }
 
-            float sz = std::max(0.001f, sigma * 0.12f);
-            if (use2dgsPlanarSurfel) {
-                sz = 0.0001f;
-            }
+            // Mip-Splatting 3D Low-Pass Anti-Aliasing Filter (Yu et al., CVPR 2024):
+            // Regularizes the Gaussian scale with the Nyquist sampling pixel footprint (z / fx).
+            // Convolves the projected covariance with a 3D low-pass dilation kernel:
+            // \Sigma' = \Sigma + \nu * (z / fx)^2 * I
+            // This mathematically bounds the spatial frequency and eliminates the venetian-blind stair aliasing on raked seating bowl steps!
+            const float pixelFootprint = z / fx;
+            const float filterVar = 0.22f * (pixelFootprint * pixelFootprint);
+            s1 = std::sqrt(s1 * s1 + filterVar);
+            s2 = std::sqrt(s2 * s2 + filterVar);
+
+            // SuGaR Surface-Alignment Regularization (Guédon & Lepetit, CVPR 2024):
+            // Lock sz to flat 2D surfels tightly bound to the physical surface.
+            // This eliminates multi-layer translucent cellophane bleeding and void punch-through.
+            float sz = use2dgsPlanarSurfel ? 0.0001f : std::max(0.001f, sigma * 0.12f);
             float rCol = (rgb[ci] / 255.0f) * exposureScale;
             float gCol = (rgb[ci + 1] / 255.0f) * exposureScale;
             float bCol = (rgb[ci + 2] / 255.0f) * exposureScale;

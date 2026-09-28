@@ -20,7 +20,8 @@ import { Splat3DTilesService } from './Splat3DTilesService';
 import { SplatService } from '../3d-engine/splat-service';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import type { BakedGaussian } from '../../common/geospatial-4d-protocol';
-import { decodePng } from '../texture-processing';
+import { decodePng, calibrateStoneAlbedoRgba, type StoneAlbedoPreset } from '../texture-processing';
+import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 
 const execAsync = promisify(exec);
 
@@ -86,6 +87,18 @@ export interface SurveySplatPipelineRequest {
     shDegree?: number;
     /** Multi-station photometric exposure normalization scale */
     exposureScale?: number;
+    /** Minimum camera view count consensus required to retain a voxel (default: 1) */
+    minViews?: number;
+    /** Station render provider: 'software-clay' (default), 'pathtracer', or 'textured-glb' */
+    renderProvider?: 'software-clay' | 'pathtracer' | 'textured-glb';
+    /** Render mode for station input: 'clay' (studio grey) or 'textured' (full GLB photogrammetric PBR textures) */
+    renderMode?: 'clay' | 'textured' | 'albedo';
+    /** Fast draft generation */
+    draft?: boolean;
+    /** Calibrate authentic stone albedo */
+    stoneType?: StoneAlbedoPreset;
+    /** Solar position or ephemeris for path tracing */
+    sun?: TileSunSpec;
 }
 
 export interface SurveySplatStationReport {
@@ -221,7 +234,7 @@ export class SurveySplatPipelineService {
                 }
 
                 let res: BeautifyStationResult;
-                if (await fs.pathExists(beautifiedPath)) {
+                if (!req.forceRebake && (await fs.pathExists(beautifiedPath))) {
                     report(0.05 + 0.7 * (i / stations.length), `Baking from existing beautified image for station ${st.id} (${i + 1}/${stations.length})`);
                     const imagePng = await fs.readFile(beautifiedPath);
                     const dec = decodePng(imagePng);
@@ -245,7 +258,16 @@ export class SurveySplatPipelineService {
                         throw new Error(`Cannot beautify station ${st.id}: no StationImageGenerator was supplied and no cached plate exists on disk at ${beautifiedPath}`);
                     }
                     report(0.05 + 0.7 * (i / stations.length), `Beautifying station ${st.id} (${i + 1}/${stations.length})`);
-                    res = await beautifier.beautify(st, req.beautify, { width, reference: mode === 'chained' ? reference : undefined, maxRerolls: req.maxRerolls });
+                    const stationRenderMode = req.renderMode ?? (req.renderProvider === 'pathtracer' ? 'albedo' : 'clay');
+                    res = await beautifier.beautify(st, req.beautify, {
+                        width,
+                        reference: mode === 'chained' ? reference : undefined,
+                        maxRerolls: req.maxRerolls,
+                        draft: req.draft,
+                        renderMode: stationRenderMode,
+                        glbPath: req.glbPath,
+                        stoneType: req.stoneType
+                    });
                     await fs.outputFile(blockoutPath, res.blockout.png);
                     await fs.outputFile(beautifiedPath, res.imagePng);
                     if (res.warp) await fs.outputFile(`${base}_warp.png`, res.warp.warpedPng);
@@ -276,9 +298,10 @@ export class SurveySplatPipelineService {
             const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
             const normalPruneArg = `--normal-prune-cos ${req.normalPruneCos ?? 0.0}`;
             const consistencyArg = req.dropInconsistent ? `--drop-inconsistent --color-consistency-thresh ${req.colorConsistencyThresh ?? 40.0}` : '';
+            const minViewsArg = (req.minViews && req.minViews > 1) ? `--min-views ${req.minViews}` : '';
             const cropRadiusVal = req.cropRadius ?? (req.cropBox ? Math.max(Math.abs(req.cropBox.max[0]), Math.abs(req.cropBox.max[2])) : 115.0);
             const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
-            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
+            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
             const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
@@ -349,7 +372,16 @@ export class SurveySplatPipelineService {
         // Depth for the ALIGNED pose (QC may have moved the camera slightly): re-render mesh depth there
         const renderer = new SurveyStationRenderService();
         renderer.setMesh((await this.meshFor(req.glbPath)));
-        const aligned = renderer.renderStationBlockout(res.alignedStation, { width, height });
+        const aligned = req.renderProvider === 'pathtracer'
+            ? await renderer.renderStation(res.alignedStation, {
+                renderMode: 'albedo',
+                glbPath: req.glbPath,
+                width,
+                height,
+                sun: req.sun,
+                stoneType: req.stoneType
+            })
+            : renderer.renderStationBlockout(res.alignedStation, { width, height });
         const depth = Buffer.from(aligned.depth.buffer, aligned.depth.byteOffset, aligned.depth.byteLength);
         const { right, up, forward } = cameraBasis(res.alignedStation.forwardVector, res.alignedStation.upVector || [0, 1, 0]);
         const alt = res.alignedStation.cameraAltitude ?? res.alignedStation.positionLocalENU?.[1] ?? res.alignedStation.cameraHeightAboveGround ?? 50.0;

@@ -7,12 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import * as path from 'path';
+import * as fs from 'fs-extra';
 import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
 import type { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
 import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, StationBeautifyMetrics } from '../../common/spatial/colmap-vector-reference-types';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 import { getSolarPosition } from '../../common/coordinate/solarPosition';
+import { NativeTilePathTracerService, type TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
+import { calibrateStoneAlbedoRgba, type StoneAlbedoPreset, decodePng } from '../texture-processing';
 
 /**
  * getSolarPosition() treats the Date's machine-local wall clock as the destination's local solar
@@ -37,6 +41,17 @@ export interface StationBlockoutRenderOptions {
     bgColor?: [number, number, number, number];
     lightDir?: [number, number, number];
     minGroundClearance?: number;
+}
+
+export interface StationRenderOptions extends StationBlockoutRenderOptions {
+    renderMode?: 'clay' | 'pathtraced' | 'albedo';
+    glbPath?: string;
+    sun?: TileSunSpec;
+    isoDate?: string;
+    samplesPerPixel?: number;
+    exposureEv?: number | 'auto';
+    stoneType?: StoneAlbedoPreset;
+    workDir?: string;
 }
 
 export interface StationBlockoutRender {
@@ -73,8 +88,13 @@ export const EMPTY_DEPTH = 1e9;
 export class SurveyStationRenderService {
     private mesh: RenderMesh3D | null = null;
     private meshBounds: { min: [number, number, number]; max: [number, number, number] } | null = null;
+    private glbPath: string | null = null;
+    private pathTracer: NativeTilePathTracerService | null = null;
 
     async loadMesh(glb: string | Buffer): Promise<void> {
+        if (typeof glb === 'string') {
+            this.glbPath = glb;
+        }
         this.mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glb);
         const v = this.mesh.vertices;
         const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -172,6 +192,125 @@ export class SurveyStationRenderService {
             intrinsics,
             cameraPose: pose
         };
+    }
+
+    /**
+     * Unified multi-modal station rendering provider:
+     * - 'clay': Fast software scanline rasterization of untextured mesh.
+     * - 'pathtraced' / 'albedo': Full C++20 BVH path tracer with PBR texture decoding,
+     *   float32 ray-distance unprojection, and optional stone albedo calibration.
+     */
+    async renderStation(station: ColmapCameraPose, options: StationRenderOptions = {}): Promise<StationBlockoutRender> {
+        const mode = options.renderMode || 'clay';
+        if (mode === 'clay') {
+            return this.renderStationBlockout(station, options);
+        }
+
+        const glb = options.glbPath || this.glbPath;
+        if (!glb) {
+            // Fall back to software clay if no GLB file path is available
+            return this.renderStationBlockout(station, options);
+        }
+
+        if (!this.pathTracer) {
+            this.pathTracer = new NativeTilePathTracerService();
+        }
+
+        const width = options.width ?? 1920;
+        const height = options.height ?? Math.round(width / (station.aspectRatio || 16 / 9));
+        const { pose, intrinsics } = SurveyStationRenderService.stationToCameraPose6DOF(station, width, height);
+
+        const workDir = options.workDir || path.resolve(process.cwd(), `build/station_pt_${station.id}_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
+        await fs.ensureDir(workDir);
+
+        const sun: TileSunSpec = options.sun || (station.coordinatesWGS84 ? {
+            latitude: station.coordinatesWGS84.lat,
+            longitude: station.coordinatesWGS84.lng,
+            isoDate: options.isoDate || new Date().toISOString()
+        } : { elevationDeg: 55.0, azimuthDeg: 140.0 });
+
+        const shadingMode = mode === 'albedo' ? 'baked' : 'baked';
+        const exposureEv = options.exposureEv !== undefined ? options.exposureEv : 0.0;
+
+        try {
+            const ptRes = await this.pathTracer.render({
+                glbPath: glb,
+                outputDir: workDir,
+                width,
+                height,
+                samplesPerPixel: options.samplesPerPixel || 4,
+                shadingMode,
+                denoise: false,
+                groundPlane: false,
+                exposureEv,
+                sun,
+                camera: {
+                    position: [pose.x, pose.y, pose.z],
+                    target: [pose.targetX, pose.targetY, pose.targetZ],
+                    verticalFovDeg: intrinsics.verticalFovDegrees,
+                    up: pose.up
+                }
+            });
+
+            // Convert ray-distance depth.f32 to perpendicular camera-Z depth
+            const rawDistBuf = await fs.readFile(ptRes.depthF32Path);
+            const rawDist = new Float32Array(rawDistBuf.buffer, rawDistBuf.byteOffset, rawDistBuf.byteLength / 4);
+
+            const vFovRad = (intrinsics.verticalFovDegrees * Math.PI) / 180.0;
+            const fy = (height / 2.0) / Math.tan(vFovRad / 2.0);
+            const fx = fy;
+            const cx = width / 2.0;
+            const cy = height / 2.0;
+
+            const depth = new Float32Array(width * height);
+            const silhouette = new Uint8Array(width * height);
+
+            for (let y = 0; y < height; y++) {
+                const vOffset = (y + 0.5 - cy) / fy;
+                for (let x = 0; x < width; x++) {
+                    const idx = y * width + x;
+                    const d = rawDist[idx];
+                    if (d > 0.05 && d < 4000.0) {
+                        const uOffset = (x + 0.5 - cx) / fx;
+                        const rayLengthFactor = Math.hypot(1.0, uOffset, vOffset);
+                        depth[idx] = d / rayLengthFactor;
+                        silhouette[idx] = 255;
+                    } else {
+                        depth[idx] = EMPTY_DEPTH;
+                        silhouette[idx] = 0;
+                    }
+                }
+            }
+
+            // Read the image (albedo.png or beauty.png)
+            const targetPngPath = (mode === 'albedo' && ptRes.albedoPngPath) ? ptRes.albedoPngPath : ptRes.beautyPngPath;
+            const imgPngBytes = await fs.readFile(targetPngPath);
+            const decoded = decodePng(imgPngBytes);
+            let finalRgba = decoded.rgba;
+
+            if (options.stoneType) {
+                finalRgba = calibrateStoneAlbedoRgba(finalRgba, width, height, { stoneType: options.stoneType });
+            }
+
+            const finalPng = HeadlessMeshSilhouetteRenderer.encodePng(width, height, finalRgba);
+
+            return {
+                stationId: station.id,
+                width,
+                height,
+                rgba: finalRgba,
+                png: finalPng,
+                depth,
+                depthKind: 'camera-z',
+                silhouette,
+                intrinsics,
+                cameraPose: pose
+            };
+        } finally {
+            if (!options.workDir) {
+                await fs.remove(workDir).catch(() => {});
+            }
+        }
     }
 
     /**

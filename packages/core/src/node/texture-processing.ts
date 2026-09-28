@@ -889,3 +889,120 @@ export function resampleRgba(
     }
     return dst;
 }
+
+// ============================================================================
+// Universal Stone Albedo & Radiometric De-Lighting Calibrator
+// ============================================================================
+
+export type StoneAlbedoPreset =
+    | 'sandstone'
+    | 'travertine'
+    | 'limestone'
+    | 'granite'
+    | 'terracotta'
+    | 'marble'
+    | 'concrete'
+    | 'neutral'
+    | 'asphalt'
+    | 'brick';
+
+export interface StoneAlbedoCalibrationOptions {
+    stoneType?: StoneAlbedoPreset;
+    shadowLift?: number;        // default 0.60 (lifts dark shadows/crevices)
+    highlightCompress?: number; // default 0.45 (tames baked noon solar glare)
+    hazeReduction?: number;     // default 0.50 (attenuates blue Rayleigh atmospheric wash)
+    customTint?: [number, number, number];
+}
+
+const STONE_PROFILES: Record<StoneAlbedoPreset, { rScale: number; gScale: number; bScale: number; rOffset: number; bOffset: number }> = {
+    sandstone: { rScale: 1.24, gScale: 0.98, bScale: 0.72, rOffset: 6, bOffset: -4 },
+    travertine: { rScale: 1.15, gScale: 1.05, bScale: 0.85, rOffset: 6, bOffset: -6 },
+    limestone: { rScale: 1.12, gScale: 1.08, bScale: 0.90, rOffset: 4, bOffset: -4 },
+    marble: { rScale: 1.02, gScale: 1.02, bScale: 0.98, rOffset: 2, bOffset: 0 },
+    granite: { rScale: 1.05, gScale: 1.02, bScale: 0.95, rOffset: 2, bOffset: -2 },
+    terracotta: { rScale: 1.38, gScale: 0.82, bScale: 0.62, rOffset: 12, bOffset: -10 },
+    brick: { rScale: 1.35, gScale: 0.85, bScale: 0.68, rOffset: 10, bOffset: -8 },
+    concrete: { rScale: 1.02, gScale: 1.02, bScale: 0.96, rOffset: 0, bOffset: -2 },
+    neutral: { rScale: 1.00, gScale: 1.00, bScale: 1.00, rOffset: 0, bOffset: 0 },
+    asphalt: { rScale: 0.95, gScale: 0.95, bScale: 0.95, rOffset: 0, bOffset: 0 }
+};
+
+export function calibrateStoneAlbedoRgba(
+    rgba: Buffer,
+    width: number,
+    height: number,
+    options: StoneAlbedoCalibrationOptions = {}
+): Buffer {
+    const profile = options.stoneType ? (STONE_PROFILES[options.stoneType] || STONE_PROFILES.neutral) : STONE_PROFILES.neutral;
+    const shadowLift = options.shadowLift ?? 0.60;
+    const highlightCompress = options.highlightCompress ?? 0.45;
+    const hazeReduction = options.hazeReduction ?? 0.50;
+
+    const out = Buffer.alloc(width * height * 4);
+    const numPixels = width * height;
+
+    for (let i = 0; i < numPixels; i++) {
+        const off = i * 4;
+        const r = rgba[off];
+        const g = rgba[off + 1];
+        const b = rgba[off + 2];
+        const a = rgba[off + 3];
+
+        if (r + g + b > 15) {
+            let rCal: number, gCal: number, bCal: number;
+
+            if (options.customTint) {
+                rCal = r * options.customTint[0];
+                gCal = g * options.customTint[1];
+                bCal = b * options.customTint[2];
+            } else {
+                rCal = r * profile.rScale + profile.rOffset;
+                gCal = g * profile.gScale;
+                // Atmospheric Rayleigh sky haze attenuation
+                const hazeAtten = 1.0 - (0.35 * hazeReduction);
+                bCal = (b * profile.bScale + profile.bOffset) * hazeAtten;
+            }
+
+            // Shadow lift in dark crevices
+            const currentLum = 0.299 * rCal + 0.587 * gCal + 0.114 * bCal;
+            if (currentLum < 65) {
+                const liftFactor = 1.0 + (shadowLift * (1.0 - currentLum / 65) * 0.4);
+                rCal *= liftFactor;
+                gCal *= liftFactor;
+                bCal *= liftFactor;
+            }
+
+            // Highlight compression for noon solar specular glare
+            const postLum = 0.299 * rCal + 0.587 * gCal + 0.114 * bCal;
+            if (postLum > 190) {
+                const knee = 190;
+                const comp = knee + (postLum - knee) * (1.0 - highlightCompress * 0.68);
+                const scale = comp / Math.max(1, postLum);
+                rCal *= scale;
+                gCal *= scale;
+                bCal *= scale;
+            }
+
+            out[off] = Math.max(0, Math.min(255, Math.round(rCal)));
+            out[off + 1] = Math.max(0, Math.min(255, Math.round(gCal)));
+            out[off + 2] = Math.max(0, Math.min(255, Math.round(bCal)));
+            out[off + 3] = a;
+        } else {
+            out[off] = r;
+            out[off + 1] = g;
+            out[off + 2] = b;
+            out[off + 3] = a;
+        }
+    }
+    return out;
+}
+
+export function calibrateStoneAlbedoPng(
+    pngBuffer: Buffer,
+    options: StoneAlbedoCalibrationOptions = {}
+): Buffer {
+    const decoded = decodePng(pngBuffer);
+    const calibrated = calibrateStoneAlbedoRgba(decoded.rgba, decoded.width, decoded.height, options);
+    return encodePng(decoded.width, decoded.height, calibrated);
+}
+
