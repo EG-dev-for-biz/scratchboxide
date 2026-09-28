@@ -151,6 +151,17 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
     const [iframeKey, setIframeKey] = React.useState<number>(0);
     const [hasFrameError, setHasFrameError] = React.useState<boolean>(false);
 
+    // Synchronize internal state if incoming data props change
+    React.useEffect(() => {
+        if (data.url && data.url !== currentUrl) {
+            setInputUrl(data.url);
+            setCurrentUrl(data.url);
+            if (data.title) setPageTitle(data.title);
+            setHasFrameError(false);
+            setIframeKey(k => k + 1);
+        }
+    }, [data.url, data.title]);
+
     // Iframe ref and timeline state
     const iframeRef = React.useRef<HTMLIFrameElement>(null);
     const [timelineSteps, setTimelineSteps] = React.useState<Array<{
@@ -208,6 +219,11 @@ export const InteractiveBrowserPrimitive: React.FC<InteractiveBrowserPrimitivePr
         let trimmed = (target || '').trim();
         if (!trimmed) return 'https://example.com';
         if (trimmed.startsWith('data:') || trimmed.startsWith('about:')) {
+            return trimmed;
+        }
+
+        // Local relative paths or same-origin URLs run directly in the iframe without proxying
+        if (trimmed.startsWith('/') || (typeof window !== 'undefined' && trimmed.startsWith(window.location.origin))) {
             return trimmed;
         }
 

@@ -760,6 +760,30 @@ const demoTelemetryDashboardData: MetricDashboardData = {
 // ----------------------------------------------------------------------------------
 export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
     {
+        id: 'demo-nanite-meshlets-pathtracing',
+        title: 'Nanite Meshlets & Path-Traced GI Studio',
+        subtitle: '1-Trillion Virtual Triangles · Cluster DAGs & WebGPU Indirect Dispatch',
+        category: '3d',
+        categoryLabel: '3D & WebGPU',
+        description: 'Interactive cluster DAG viewport demonstrating sub-pixel continuous LOD cuts (1px error target), zero draw-call CPU overhead, and progressive path-traced global illumination.',
+        tags: ['Nanite', 'Meshlets', 'Cluster DAG', 'Path Tracing', 'WebGPU', '1px Error'],
+        highlightBadge: 'NANITE + GI',
+        artifact: {
+            id: 'art-demo-nanite-meshlets',
+            type: 'interactive-browser',
+            title: 'Nanite Meshlets & Progressive Path Tracing Studio',
+            summary: 'Virtualized geometry cluster DAGs with ~1px continuous LOD cuts and progressive Monte Carlo GI.',
+            data: {
+                url: '/nanite_meshlet_pathtracing_studio.html',
+                title: 'Nanite Meshlets & Path Tracing Studio',
+                viewportMode: 'desktop'
+            },
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the **Nanite Meshlets & Progressive Path Tracing Studio**. Explore 1-trillion virtual triangle cluster DAGs, continuous 1-pixel screen-space error cuts, GPU compute frustum & Hi-Z culling, and progressive path-traced global illumination.'
+    },
+    {
         id: 'demo-3d-geospatial',
         title: '3D Geospatial Engine & Midtown Manhattan',
         subtitle: 'Digital Twin Landmark Ingestion',

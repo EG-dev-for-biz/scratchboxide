@@ -51,6 +51,15 @@ export { NativeCppCompilerService } from './node/3d-engine/native-compiler-servi
 export { PhotorealismEvaluator } from './node/3d-engine/photorealism-evaluator';
 export { PhotorealTileCleanupService, TileCleanupOptions, TileCleanupMetrics, TileCleanupResult } from './node/3d-engine/tile-cleanup-service';
 export {
+    MeshletPipelineService,
+    type MeshletBuildOptions,
+    type MeshletData,
+    type GpuClusterDescriptor,
+    type MeshletDAGResult,
+    type WebGpuIndirectDrawArgs,
+    type LODCutResult
+} from './node/3d-engine/native-meshlet-service';
+export {
     FieldAlignedQuadRemeshService,
     QuadRemeshServiceOptions,
     QuadRemeshMetrics,

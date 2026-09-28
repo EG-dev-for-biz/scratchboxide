@@ -16,6 +16,7 @@
 import * as React from 'react';
 import { ProjectItem } from '../ProjectsModal';
 import { McpServerItem, SkillItem, StudioAppearanceConfig, StudioSettingsTab } from '../canvas-types';
+import { ShowcaseDemoItem } from '../demos/preloadedDemos';
 import { SettingsSetters, SettingsState } from './settingsReducer';
 import { useSettingsHandlers } from './useSettingsHandlers';
 
@@ -45,6 +46,7 @@ export interface SettingsShellValues {
     onOpenPreferences?: () => void;
     onOpenKeyboardShortcuts?: () => void;
     onExecuteCommand?: (commandId: string) => void;
+    onLaunchDemo?: (demo: ShowcaseDemoItem) => void;
     activeTab: StudioSettingsTab;
     setActiveTab: React.Dispatch<React.SetStateAction<StudioSettingsTab>>;
     searchQuery: string;

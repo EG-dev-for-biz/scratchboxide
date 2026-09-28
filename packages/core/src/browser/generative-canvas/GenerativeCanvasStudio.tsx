@@ -60,6 +60,7 @@ import { ProjectArtifactController } from './project-artifact-controller';
 import { UnifiedProjectCoordinator } from './unified-project-coordinator';
 import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
 import { SettingsModal } from './SettingsModal';
+import { ShowcaseDemoItem } from './demos/preloadedDemos';
 import { DEFAULT_RECENT_PROJECTS, ProjectItem } from './ProjectsModal';
 import { SpotlightLauncherModal } from './SpotlightLauncherModal';
 import { AutomationsModal } from './AutomationsModal';
@@ -791,6 +792,27 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setStageLayoutMode('dual-split-horizontal');
         setGraphEpoch(epoch => epoch + 1);
     }, [activeArtifact]);
+
+    const handleLaunchDemo = React.useCallback((demo: ShowcaseDemoItem) => {
+        closeModal('settings');
+
+        setArtifactHistory(prev => [demo.artifact, ...prev.filter(a => a.id !== demo.artifact.id)]);
+        setActiveArtifact(demo.artifact);
+        setLayoutMode(resolveModeForArtifact(demo.artifact.type));
+        if (currentSessionId) {
+            setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, activeArtifact: demo.artifact } : s));
+        }
+
+        const introMsg: ChatMessage = {
+            id: `msg-demo-${Date.now()}`,
+            sender: 'assistant',
+            text: `### 🚀 Admin Showcase Demo Loaded: **${demo.title}**\n\n${demo.introMessage}\n\n* **Category**: ${demo.categoryLabel}\n* **Pipeline / Canvas Type**: \`${demo.artifact.type}\`\n* **Tags**: ${demo.tags.map(t => '`' + t + '`').join(', ')}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            artifacts: [demo.artifact]
+        };
+        setMessages(prev => [...prev, introMsg]);
+        showToast(`Mounted demo: ${demo.title}`, '✨');
+    }, [closeModal, currentSessionId, resolveModeForArtifact, setActiveArtifact, setArtifactHistory, setMessages, setSessions, showToast]);
 
     const handleSelectVersion = (targetVersion: CanvasArtifact) => {
         setActiveArtifact(targetVersion);
@@ -1711,6 +1733,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 onOpenPreferences={onOpenPreferences}
                 onOpenKeyboardShortcuts={onOpenKeyboardShortcuts}
                 onExecuteCommand={onExecuteCommand}
+                onLaunchDemo={handleLaunchDemo}
                 onSelectPromptStarter={(prompt, skill) => {
                     if (skill && !selectedSkillIds.includes(skill.id)) {
                         setSelectedSkillIds(prev => [...prev, skill.id]);

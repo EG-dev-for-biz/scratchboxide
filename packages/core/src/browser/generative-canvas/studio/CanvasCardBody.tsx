@@ -347,6 +347,7 @@ export const BoardGraphSpatialSurfaces: React.FC<ArtifactStageProps> = props => 
             <div className="sb-browser-stage-wrapper w-full h-full flex flex-col items-center justify-start overflow-hidden flex-1 min-h-0">
                 <CanvasErrorBoundary fallbackTitle="Interactive Browser">
                     <InteractiveBrowserPrimitive
+                        key={activeArtifact?.id || 'browser'}
                         data={(activeArtifact?.type === 'interactive-browser' || activeArtifact?.type === 'browser' ? (activeArtifact.data as InteractiveBrowserData) : undefined) || {
                             url: 'https://example.com',
                             title: 'Example Domain',

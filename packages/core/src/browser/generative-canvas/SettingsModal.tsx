@@ -35,6 +35,8 @@ import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
 import { AboutTab } from './settings/tabs/AboutTab';
 import { MemoriesTab } from './settings/tabs/MemoriesTab';
 import { DocsTab } from './settings/tabs/DocsTab';
+import { AdminTab } from './settings/tabs/AdminTab';
+import { ShowcaseDemoItem } from './demos/preloadedDemos';
 
 export interface SettingsModalProps {
     isOpen: boolean;
@@ -58,6 +60,7 @@ export interface SettingsModalProps {
     onOpenPreferences?: () => void;
     onOpenKeyboardShortcuts?: () => void;
     onExecuteCommand?: (commandId: string) => void;
+    onLaunchDemo?: (demo: ShowcaseDemoItem) => void;
 }
 
 const ACTIVE_TAB_IDS = new Set<StudioSettingsTab>([
@@ -80,7 +83,8 @@ const ACTIVE_TAB_IDS = new Set<StudioSettingsTab>([
     'memories',
     'shortcuts',
     'about',
-    'docs'
+    'docs',
+    'admin'
 ]);
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -102,7 +106,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onOpenWorkspace,
     onOpenPreferences,
     onOpenKeyboardShortcuts,
-    onExecuteCommand
+    onExecuteCommand,
+    onLaunchDemo
 }) => {
     // Normalize initial tab (fallback to 'general' if tab is inactive or legacy 'guide')
     const normalizedInitialTab = (initialTab && ACTIVE_TAB_IDS.has(initialTab)) ? initialTab : 'general';
@@ -213,6 +218,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         { id: 'mcp', label: 'MCP Tools' },
         { id: 'memories', label: 'Memories' },
         { id: 'shortcuts', label: 'Shortcuts' },
+        { id: 'admin', label: 'Admin & Demos' },
         { id: 'about', label: 'About' },
         { id: 'docs', label: 'Docs', isExternal: true }
     ];
@@ -244,6 +250,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         onOpenPreferences,
         onOpenKeyboardShortcuts,
         onExecuteCommand,
+        onLaunchDemo,
         activeTab,
         setActiveTab,
         searchQuery,
@@ -380,6 +387,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         {activeTab === 'skills' && <SkillsTab />}
                         {activeTab === 'mcp' && <McpTab />}
                         {activeTab === 'shortcuts' && <ShortcutsTab />}
+                        {activeTab === 'admin' && <AdminTab />}
                         {activeTab === 'about' && <AboutTab />}
                         {activeTab === 'memories' && <MemoriesTab />}
                         {activeTab === 'docs' && <DocsTab />}

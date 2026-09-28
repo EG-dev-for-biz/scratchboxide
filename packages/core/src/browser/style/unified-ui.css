@@ -12787,3 +12787,321 @@ body.theia-light .sb-canvas-split-resizer.dragging .sb-canvas-resizer-knob {
     background: #2563eb;
 }
 
+/* ==========================================================================
+   Admin & Showcase Demos Settings Tab Styles
+   ========================================================================== */
+
+.sb-admin-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+}
+
+.sb-admin-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+body.theia-light .sb-admin-search-bar {
+    background: #f4f4f5;
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+.sb-admin-search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 12.5px;
+    color: #f4f4f5;
+    font-family: inherit;
+}
+
+body.theia-light .sb-admin-search-input {
+    color: #18181b;
+}
+
+.sb-admin-search-input::placeholder {
+    color: #71717a;
+}
+
+.sb-admin-filter-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sb-admin-filter-pill {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #a1a1aa;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    outline: none;
+}
+
+.sb-admin-filter-pill:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.sb-admin-filter-pill.active {
+    background: #2563eb;
+    border-color: #3b82f6;
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(37, 99, 235, 0.4);
+}
+
+.sb-admin-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sb-admin-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px;
+}
+
+.sb-admin-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e4e4e7;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+body.theia-light .sb-admin-section-title {
+    color: #18181b;
+}
+
+.sb-admin-section-subtitle {
+    font-size: 11px;
+    color: #71717a;
+}
+
+.sb-admin-demo-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    gap: 18px;
+    text-align: left;
+    transition: background 0.15s ease;
+}
+
+.sb-admin-demo-row:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.sb-admin-demo-row:last-child {
+    border-bottom: none;
+}
+
+body.theia-light .sb-admin-demo-row {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+body.theia-light .sb-admin-demo-row:hover {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.sb-admin-demo-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+}
+
+.sb-admin-demo-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    text-align: left;
+}
+
+.sb-admin-demo-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #f4f4f5;
+    letter-spacing: -0.01em;
+}
+
+body.theia-light .sb-admin-demo-title {
+    color: #18181b;
+}
+
+.sb-admin-badge-canvas {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.sb-admin-badge-webgl {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.sb-admin-demo-path {
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 1.5px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #d4d4d8;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sb-admin-demo-subtitle {
+    font-size: 12px;
+    color: #a1a1aa;
+    line-height: 1.4;
+    text-align: left;
+}
+
+body.theia-light .sb-admin-demo-subtitle {
+    color: #52525b;
+}
+
+.sb-admin-demo-desc {
+    font-size: 11.5px;
+    color: #71717a;
+    line-height: 1.45;
+    text-align: left;
+}
+
+.sb-admin-tags-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+    text-align: left;
+}
+
+.sb-admin-tag {
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #71717a;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+body.theia-light .sb-admin-tag {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.06);
+    color: #71717a;
+}
+
+.sb-admin-demo-action {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.sb-admin-btn-launch {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    background: #2563eb;
+    color: #ffffff;
+    border: 1px solid rgba(59, 130, 246, 0.6);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: all 0.15s ease;
+    outline: none;
+}
+
+.sb-admin-btn-launch:hover {
+    background: #1d4ed8;
+    border-color: #3b82f6;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+    transform: translateY(-1px);
+}
+
+.sb-admin-btn-launch:active {
+    background: #1e40af;
+    transform: translateY(0);
+}
+
+.sb-admin-btn-studio {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.06);
+    color: #e4e4e7;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    transition: all 0.15s ease;
+    outline: none;
+}
+
+.sb-admin-btn-studio:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+    transform: translateY(-1px);
+}
+
+.sb-admin-btn-studio:active {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateY(0);
+}
+
+body.theia-light .sb-admin-btn-studio {
+    background: #ffffff;
+    border-color: rgba(0, 0, 0, 0.16);
+    color: #18181b;
+}
+
+body.theia-light .sb-admin-btn-studio:hover {
+    background: #f4f4f5;
+    border-color: rgba(0, 0, 0, 0.28);
+}
+

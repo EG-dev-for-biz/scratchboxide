@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <limits>
 #include <cstdint>
+#include <random>
 
 namespace scratchbox {
 namespace halfedge {
