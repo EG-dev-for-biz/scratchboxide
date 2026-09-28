@@ -57,8 +57,11 @@ export interface AtmosphereClassification {
     effectiveAtmosphericScattering?: any;
 }
 
+export const CLAY_GREY_HEX = 0xb0b8c4;
+
 export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassification {
     const worldBranch = (input.worldBranch || '').toLowerCase();
+    const skybox = (input.skybox || '').toLowerCase();
 
     // Atmosphere is an explicit part of the headless build of the scene.
     // There are NO keyword heuristic presets, and scenes do not receive atmosphere by default.
@@ -74,7 +77,7 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
 
     const isSkySkybox = hasAtmosphere;
     const isSunset = hasAtmosphere && (
-        input.skybox === 'sunset' ||
+        skybox === 'sunset' ||
         (typeof atmoConfig === 'object' && (
             (atmoConfig.timeOfDay !== undefined && atmoConfig.timeOfDay >= 18 && atmoConfig.timeOfDay <= 20) ||
             (atmoConfig.sunElevation !== undefined && atmoConfig.sunElevation <= 15)
@@ -86,21 +89,41 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
         ? input.terrainBiomes.biomeType
         : 'alpine';
 
-    let backgroundHex = 0x0a0a0f;
+    // Directed dark / black environments (space, night, cyberpunk, deep space)
+    const isDirectedDarkOrBlack =
+        skybox === 'space' ||
+        skybox === 'space-stars' ||
+        skybox === 'deep_space' ||
+        skybox === 'night' ||
+        skybox === 'void' ||
+        skybox === 'black' ||
+        worldBranch === 'space' ||
+        worldBranch.startsWith('space/') ||
+        worldBranch.startsWith('earth/space') ||
+        worldBranch === 'earth/cyberpunk' ||
+        worldBranch === 'earth/post-apocalypse' ||
+        worldBranch === 'earth/mars-colony-2150';
+
+    let backgroundHex = CLAY_GREY_HEX;
     if (hasAtmosphere) {
         backgroundHex = isSunset ? 0x1e1b4b : 0x0284c7;
-    } else {
-        if (input.backgroundHex !== undefined) {
-            backgroundHex = input.backgroundHex;
-        } else if (input.skybox === 'clear_daylight' || input.skybox === 'daylight' || input.skybox === 'sky') {
-            backgroundHex = 0x1a2333;
-        } else if (worldBranch === 'earth/cyberpunk') {
+    } else if (input.backgroundHex !== undefined) {
+        backgroundHex = input.backgroundHex;
+    } else if (isDirectedDarkOrBlack) {
+        if (worldBranch === 'earth/cyberpunk') {
             backgroundHex = 0x0f0a1c;
         } else if (worldBranch === 'earth/post-apocalypse') {
             backgroundHex = 0x0c120e;
         } else if (worldBranch === 'earth/mars-colony-2150') {
             backgroundHex = 0x2a1a15;
+        } else {
+            backgroundHex = 0x0a0a0f;
         }
+    } else if (skybox === 'clear_daylight' || skybox === 'daylight' || skybox === 'sky') {
+        backgroundHex = 0xc4d4e8;
+    } else {
+        // Unless there is explicit direction on why the viewport should be dark/black, default to studio clay grey
+        backgroundHex = CLAY_GREY_HEX;
     }
 
     const effectiveAtmosphericScattering = hasAtmosphere
@@ -190,12 +213,20 @@ export function syncAtmosphere(
         const defaultDensity = isLargeScale ? 0.0003 : 0.015;
         const fogDensity = (typeof input.fog === 'object' && input.fog.density !== undefined) ? input.fog.density : defaultDensity;
         scene.fog = new THREE.FogExp2(fogColor, fogDensity);
+    } else if (backgroundHex === CLAY_GREY_HEX || backgroundHex === 0xc4d4e8) {
+        // Soft studio depth fog matching clay grey background to geometry seamlessly
+        scene.fog = new THREE.FogExp2(backgroundHex, 0.008);
     } else {
         scene.fog = null;
     }
 
     // Grid: tint + visibility (grid is cleanly visible on non-atmospheric / studio scenes).
-    tintGridHelper(gridHelper, isSkySkybox ? 0x93c5fd : 0x3f3f5a, isSkySkybox ? 0x60a5fa : 0x1f1f2c);
+    const isLightBg = backgroundHex === CLAY_GREY_HEX || backgroundHex === 0xc4d4e8 || backgroundHex > 0x888888;
+    tintGridHelper(
+        gridHelper,
+        isSkySkybox ? 0x93c5fd : (isLightBg ? 0x717985 : 0x3f3f5a),
+        isSkySkybox ? 0x60a5fa : (isLightBg ? 0x949da8 : 0x1f1f2c)
+    );
     gridHelper.visible = !isSkySkybox && !hasBiomes && !input.has3DTiles && !input.hasGeoCoordinates && input.ground !== false;
 
     const owned: THREE.Object3D[] = [];

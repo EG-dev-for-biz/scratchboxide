@@ -116,4 +116,33 @@ describe('Headless Scene Atmosphere Architecture', () => {
         expect(sourceCode).not.toContain("presetItem.label === 'Dawn'");
         expect(sourceCode).not.toContain("title={`${presetItem.label} Lighting & Physical Atmospheric Scattering`}");
     });
+
+    it('defaults 3D scene background to clay grey (0xb0b8c4) unless specifically directed to be dark/black', () => {
+        // Standard studio or unspecified scenes default to clay grey
+        const studioScene = classifyAtmosphere({ skybox: 'studio' });
+        expect(studioScene.backgroundHex).toBe(0xb0b8c4);
+
+        const defaultScene = classifyAtmosphere({});
+        expect(defaultScene.backgroundHex).toBe(0xb0b8c4);
+
+        // Explicit daylight skybox gives soft sky-tinted clay
+        const daylightScene = classifyAtmosphere({ skybox: 'daylight' });
+        expect(daylightScene.backgroundHex).toBe(0xc4d4e8);
+
+        // Directed dark/black scenes preserve dark backgrounds
+        const spaceScene = classifyAtmosphere({ skybox: 'space' });
+        expect(spaceScene.backgroundHex).toBe(0x0a0a0f);
+
+        const cyberpunkScene = classifyAtmosphere({ worldBranch: 'earth/cyberpunk' });
+        expect(cyberpunkScene.backgroundHex).toBe(0x0f0a1c);
+    });
+
+    it('confirms in-viewport C++20 Spatial Engine drawer and buttons are removed from Scene3DPrimitive', () => {
+        const primitiveFilePath = path.resolve(__dirname, '../src/browser/generative-canvas/primitives/Scene3DPrimitive.tsx');
+        const sourceCode = fs.readFileSync(primitiveFilePath, 'utf-8');
+
+        expect(sourceCode).not.toContain('C++ Studio');
+        expect(sourceCode).not.toContain('sb-3d-cpp-studio-panel');
+        expect(sourceCode).not.toContain('handleCompileCpp');
+    });
 });

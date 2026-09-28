@@ -7183,7 +7183,7 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
 }
 
 .sb-scene3d-primitive-container {
-    background-color: #09090b !important;
+    background-color: #b0b8c4 !important;
     position: relative !important;
     width: 100% !important;
     height: 100% !important;
@@ -7207,7 +7207,7 @@ body.theia-light textarea.sb-composer-main-input:focus-visible {
     width: 100% !important;
     height: 100% !important;
     overflow: hidden !important;
-    background: #09090b !important;
+    background: #b0b8c4 !important;
     z-index: 1 !important;
 }
 

@@ -1197,54 +1197,6 @@ int main(int argc, char** argv) {
     const [sceneBudget, setSceneBudget] = React.useState<SceneBudgetTelemetry | null>(null);
     const [showBudgetModal, setShowBudgetModal] = React.useState<boolean>(false);
 
-    // Native C++20 Astra Engine Studio States
-    const [showCppStudio, setShowCppStudio] = React.useState<boolean>(false);
-    const [isCompilingCpp, setIsCompilingCpp] = React.useState<boolean>(false);
-    const [cppCompilationLog, setCppCompilationLog] = React.useState<string | null>(null);
-
-    const handleCompileCpp = React.useCallback(async () => {
-        if (!sceneData.cppGenerator?.sourceCode) return;
-        setIsCompilingCpp(true);
-        setCppCompilationLog('Compiling C++20 via Apple Clang (-std=c++20 -O3)...');
-        try {
-            const compileUrl = typeof window !== 'undefined' && window.location.port === '3000'
-                ? 'http://localhost:3001/3d/compile'
-                : '/3d/compile';
-            const res = await fetch(compileUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sourceCode: sceneData.cppGenerator.sourceCode,
-                    optimization: '-O3',
-                    geoAnchor: sceneData.geoAnchor,
-                    assets: (sceneData.cppGenerator as any)?.assets
-                })
-            });
-            const result = await res.json();
-            if (result.success && result.glbBase64) {
-                const nextCpp = {
-                    ...sceneData.cppGenerator,
-                    glbBase64: result.glbBase64,
-                    lastCompiledTimeMs: Date.now(),
-                    lastExecutionDurationMs: result.executionTimeMs,
-                    vertexCount: result.vertexCount || sceneData.cppGenerator.vertexCount || 1024,
-                    diagnostics: result.diagnostics || []
-                };
-                setSceneData(prev => ({ ...prev, cppGenerator: nextCpp }));
-                if (onUpdate) {
-                    onUpdate({ ...sceneData, cppGenerator: nextCpp });
-                }
-                setCppCompilationLog(`Compiled in ${result.compilationTimeMs}ms, executed in ${result.executionTimeMs}ms. glTF loaded.`);
-            } else {
-                setCppCompilationLog(`Compiler Output:\n${result.compilerOutput || result.stderr || 'Compilation failed'}`);
-            }
-        } catch (err: any) {
-            setCppCompilationLog(`Compilation request error: ${err.message}`);
-        } finally {
-            setIsCompilingCpp(false);
-        }
-    }, [sceneData, onUpdate]);
-
     // ---------------------------------------------------------
     // 3D Sculpting & Interactive Transform Gizmo States
     // ---------------------------------------------------------
@@ -3255,9 +3207,9 @@ int main(int argc, char** argv) {
     // Render Visual HTML - Ultra-Minimalist Floating Layout (Blender-grade)
     // ---------------------------------------------------------
     return (
-        <div className="sb-scene3d-primitive-container relative w-full h-full bg-zinc-950 text-zinc-100 overflow-hidden rounded-[16px] border border-white/10 shadow-2xl backdrop-blur-2xl select-none">
+        <div className="sb-scene3d-primitive-container relative w-full h-full bg-[#b0b8c4] text-zinc-100 overflow-hidden rounded-[16px] border border-white/10 shadow-2xl backdrop-blur-2xl select-none">
             {/* CONTAINERIZED 3D VIEWPORT CANVAS - Full-Bleed 100% */}
-            <div className="sb-3d-viewport-frame absolute inset-0 w-full h-full bg-zinc-950 overflow-hidden">
+            <div className="sb-3d-viewport-frame absolute inset-0 w-full h-full bg-[#b0b8c4] overflow-hidden">
                 {webglError ? (
                     <div className="absolute inset-0 w-full h-full">
                         <canvas ref={fallbackCanvasRef} className="w-full h-full block" />
@@ -3865,19 +3817,6 @@ int main(int argc, char** argv) {
                         <span>Export GLB</span>
                     </button>
 
-                    {/* C++ Studio Toggle */}
-                    {sceneData.cppGenerator?.sourceCode && (
-                        <button
-                            type="button"
-                            onClick={() => setShowCppStudio(!showCppStudio)}
-                            className="sb-btn sb-btn-xs flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-[10px] font-mono shadow-sm transition-all shrink-0"
-                            title="Open C++20 Spatial Engine Studio"
-                        >
-                            <span>⚡</span>
-                            <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
-                        </button>
-                    )}
-
                     {scriptError && (
                         <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/70 border border-amber-500/40 text-[10px] text-amber-200 shrink-0">
                             <span className="text-amber-400">⚠</span>
@@ -4418,79 +4357,6 @@ int main(int argc, char** argv) {
                     {(currentTimeMs / 1000).toFixed(1)}s
                 </span>
             </div>
-
-            {/* Native C++20 3D Engine Studio Drawer */}
-            {showCppStudio && sceneData.cppGenerator?.sourceCode && (
-                <div
-                    className="sb-3d-cpp-studio-panel absolute top-4 right-4 bottom-16 w-96 max-w-[90vw] bg-[#0d0f17]/95 backdrop-blur-2xl border border-purple-500/30 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn"
-                    style={{ zIndex: 9999 }}
-                >
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-purple-950/30">
-                        <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full bg-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.8)]" />
-                            <span className="text-xs font-semibold text-white tracking-wide">C++20 Spatial Engine</span>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => setShowCppStudio(false)}
-                            className="sb-btn sb-btn-xs text-zinc-400 hover:text-white px-2 py-0.5 rounded-lg hover:bg-white/10 transition-colors"
-                        >
-                            ✕
-                        </button>
-                    </div>
-
-                    <div className="p-3 border-b border-white/10 bg-black/20 flex items-center justify-between text-xs font-mono">
-                        <span className="text-zinc-400 truncate">{sceneData.cppGenerator.filename || 'world_generator.cpp'}</span>
-                        <span className="text-purple-300 font-semibold">
-                            {sceneData.cppGenerator.vertexCount ? `${sceneData.cppGenerator.vertexCount.toLocaleString()} verts` : 'Procedural'}
-                        </span>
-                    </div>
-
-                    <div className="flex-1 min-h-0 p-3 overflow-auto font-mono text-[11px] leading-relaxed text-zinc-300 bg-black/40">
-                        <textarea
-                            value={sceneData.cppGenerator.sourceCode}
-                            onChange={(e) => {
-                                const newCode = e.target.value;
-                                setSceneData(prev => ({
-                                    ...prev,
-                                    cppGenerator: prev.cppGenerator ? { ...prev.cppGenerator, sourceCode: newCode } : undefined
-                                }));
-                            }}
-                            className="w-full h-full bg-transparent resize-none border-none outline-none font-mono text-[11px] text-zinc-200 leading-relaxed"
-                            spellCheck={false}
-                        />
-                    </div>
-
-                    {cppCompilationLog && (
-                        <div className="px-3 py-2 bg-black/70 border-t border-white/10 text-[10px] font-mono text-zinc-300 max-h-24 overflow-y-auto whitespace-pre-wrap">
-                            {cppCompilationLog}
-                        </div>
-                    )}
-
-                    <div className="p-3 border-t border-white/10 bg-[#090b10] flex items-center justify-between text-[11px] text-zinc-400">
-                        <button
-                            type="button"
-                            disabled={isCompilingCpp}
-                            onClick={handleCompileCpp}
-                            className="sb-btn sb-btn-xs px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg shadow-sm flex items-center gap-1.5 transition-all disabled:opacity-50"
-                        >
-                            {isCompilingCpp ? (
-                                <>
-                                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    <span>Compiling...</span>
-                                </>
-                            ) : (
-                                <>
-                                    <span>⚡ Compile & Stream GLB</span>
-                                </>
-                            )}
-                        </button>
-                        <span className={sceneData.cppGenerator?.glbBase64 ? "text-emerald-400 font-medium" : "text-amber-400"}>
-                            {sceneData.cppGenerator?.glbBase64 ? "● GLB Active" : "○ Ready to Compile"}
-                        </span>
-                    </div>
-                </div>
-            )}
 
             {/* Real-time Lightweight Scene Budget Telemetry HUD Modal */}
             {showBudgetModal && sceneBudget && (
