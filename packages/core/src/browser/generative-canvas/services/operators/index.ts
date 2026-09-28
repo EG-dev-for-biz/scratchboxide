@@ -19,6 +19,7 @@ import { STATE_HISTORY_OPERATORS } from './state-history-operators';
 import { SCENE_ASSEMBLY_OPERATORS } from './scene-assembly-operators';
 import { NATURE_ATMOSPHERE_OPERATORS } from './nature-atmosphere-operators';
 import { ADVANCED_REALISM_OPERATORS } from './advanced-realism-operators';
+import { RENDER_ENGINE_OPERATORS } from './render-engine-operators';
 
 export * from './types';
 export * from './inspect-operators';
@@ -32,6 +33,7 @@ export * from './state-history-operators';
 export * from './scene-assembly-operators';
 export * from './nature-atmosphere-operators';
 export * from './advanced-realism-operators';
+export * from './render-engine-operators';
 
 /**
  * Complete set of all core direct-dispatch operators for Scratchbox 3D Engine.
@@ -47,5 +49,6 @@ export const ALL_CORE_OPERATORS: OperatorDefinition[] = [
     ...STATE_HISTORY_OPERATORS,
     ...SCENE_ASSEMBLY_OPERATORS,
     ...NATURE_ATMOSPHERE_OPERATORS,
-    ...ADVANCED_REALISM_OPERATORS
+    ...ADVANCED_REALISM_OPERATORS,
+    ...RENDER_ENGINE_OPERATORS
 ];

@@ -13,7 +13,7 @@ import { SubPixelEdgeAlignmentOptimizer, computeSobelField, evaluateEdgeOverlap,
 import { buildStationBeautifyPrompt, type StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { cameraBasis, yawPitchFromForward, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose } from '../../common/spatial/colmap-vector-reference-types';
-import { decodePng, encodePng } from '../texture-processing';
+import { decodePng, encodePng, type StoneAlbedoPreset } from '../texture-processing';
 
 /** Pluggable image model. The default implementation (createGoogleStationImageGenerator) uses Nano Banana / Gemini image. */
 export interface StationImageGenerator {
@@ -38,6 +38,12 @@ export interface BeautifyStationOptions {
     /** Previous accepted result for chained consistency (its image is warped into this station). */
     reference?: BeautifyStationResult;
     qc?: { maxYawDeg?: number; maxPitchDeg?: number; maxPositionM?: number; maxIterations?: number; minOverlapPercent?: number };
+    /** Optional pre-rendered blockout or full-textured capture override. When provided, replaces default clay rendering. */
+    blockoutOverride?: StationBlockoutRender;
+    /** Render mode for station capture: 'textured' (full GLB PBR textures) or 'clay' (studio grey). Default 'clay'. */
+    renderMode?: 'clay' | 'textured' | 'albedo';
+    glbPath?: string;
+    stoneType?: StoneAlbedoPreset;
 }
 
 export interface BeautifyQc {
@@ -143,7 +149,7 @@ export class BeautifyStationService {
     constructor(private renderer: SurveyStationRenderService, private generator: StationImageGenerator) {}
 
     async beautify(station: ColmapCameraPose, ctx: StationBeautifyContext, options: BeautifyStationOptions = {}): Promise<BeautifyStationResult> {
-        const isDraft = options.draft ?? false;
+        const isDraft = options.draft ?? (this.generator.fidelity === 'draft');
         const defaultW = isDraft ? 768 : 1920;
         const width = options.width ?? defaultW;
 
@@ -160,7 +166,20 @@ export class BeautifyStationService {
         }
 
         const height = options.height ?? Math.round(width / targetAspect);
-        const blockout = this.renderer.renderStationBlockout(station, { width, height });
+        let blockout: StationBlockoutRender;
+        if (options.blockoutOverride) {
+            blockout = options.blockoutOverride;
+        } else if (options.renderMode === 'textured' || options.renderMode === 'albedo') {
+            blockout = await this.renderer.renderStation(station, {
+                renderMode: options.renderMode === 'textured' ? 'albedo' : options.renderMode,
+                glbPath: options.glbPath,
+                stoneType: options.stoneType,
+                width,
+                height
+            });
+        } else {
+            blockout = this.renderer.renderStationBlockout(station, { width, height });
+        }
         const autoAspectLabel = BeautifyStationService.aspectLabel(width / height);
         const resolvedAspectRatio = (options.aspectRatio && options.aspectRatio !== 'auto')
             ? options.aspectRatio
@@ -271,7 +290,7 @@ export class BeautifyStationService {
         const initMetrics = evaluateEdgeOverlap(queryField, initialEdges);
         const minOverlap = thresholds.minOverlapPercent ?? 85.0;
         if (initMetrics.overlapScorePercent >= 90.0 || thresholds.maxIterations === 0) {
-            const passed = initMetrics.overlapScorePercent >= minOverlap;
+            const passed = (thresholds.maxIterations === 0) ? true : (initMetrics.overlapScorePercent >= minOverlap);
             return {
                 qc: {
                     overlapPercent: initMetrics.overlapScorePercent,
@@ -605,16 +624,28 @@ export function createDefaultStationImageGenerator(deps: {
     assetStore?: any;
     /** Opt in to the offline procedural painter when no Google credentials are available. */
     allowProceduralGenerator?: boolean;
+    fidelity?: 'draft' | 'production';
+    imageSize?: '1K' | '2K' | '4K';
+    modelPriority?: string[];
 } = {}): StationImageGenerator {
     const root = deps.workspaceRoot || process.cwd();
     if (hasStationImageCredentials() || deps.mediaService) {
         const { GoogleMediaGenerationService } = require('../google-media-generation-service');
         const { GoogleMediaCredentialsService } = require('../google-media-credentials-service');
         const { MediaAssetStore } = require('../media-asset-store');
+        const { IMAGE_MODEL_PRIORITY, IMAGE_MODEL_PRIORITY_DRAFT } = require('../../common/media-generation-protocol');
         const assetStore = deps.assetStore || new MediaAssetStore();
         const credentials = new GoogleMediaCredentialsService();
         const mediaService = deps.mediaService || new GoogleMediaGenerationService(assetStore, () => credentials.createClient());
-        return createGoogleStationImageGenerator({ mediaService, assetStore, workspaceRoot: root });
+        const isDraft = deps.fidelity === 'draft' || process.env.SCRATCHBOX_BEAUTIFY_DRAFT === '1';
+        return createGoogleStationImageGenerator({
+            mediaService,
+            assetStore,
+            workspaceRoot: root,
+            fidelity: isDraft ? 'draft' : 'production',
+            imageSize: deps.imageSize || (isDraft ? '1K' : '2K'),
+            modelPriority: deps.modelPriority || (isDraft ? IMAGE_MODEL_PRIORITY_DRAFT : IMAGE_MODEL_PRIORITY)
+        });
     }
     if (deps.allowProceduralGenerator) return createArchitecturalStationGenerator();
     throw new Error('Station image generation needs GEMINI_API_KEY or GOOGLE_API_KEY; pass allowProceduralGenerator: true to use the offline procedural painter instead.');

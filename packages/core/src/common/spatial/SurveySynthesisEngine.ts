@@ -36,6 +36,20 @@ const norm = (v: V3): V3 => { const l = Math.hypot(v[0], v[1], v[2]) || 1; retur
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
+const catmullRom = (p0: V3, p1: V3, p2: V3, p3: V3, t: number): V3 => {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const f0 = -0.5 * t3 + t2 - 0.5 * t;
+  const f1 = 1.5 * t3 - 2.5 * t2 + 1.0;
+  const f2 = -1.5 * t3 + 2.0 * t2 + 0.5 * t;
+  const f3 = 0.5 * t3 - 0.5 * t2;
+  return [
+    p0[0] * f0 + p1[0] * f1 + p2[0] * f2 + p3[0] * f3,
+    p0[1] * f0 + p1[1] * f1 + p2[1] * f2 + p3[1] * f3,
+    p0[2] * f0 + p1[2] * f1 + p2[2] * f2 + p3[2] * f3
+  ];
+};
+
 export interface StationOptics { focalLengthMm: number; sensorWidthMm: number; aspectRatio?: number }
 
 export interface PinholeIntrinsics {
@@ -335,6 +349,135 @@ export class SurveySynthesisEngine {
         }
         break;
       }
+      case 'district-complete': {
+        // 6-Tier Inside-Out Hierarchical Photogrammetric Survey Pattern:
+        // Tier 1 (Stage Ground & Deck Perimeter): ~15% of stations (standoff 12m-25m, eye-level Y = lookAt[1] + 1.8m..3.2m), looking directly at stage floor/apron/performer
+        // Tier 2 (Overhead Stage Canopy & Roof Crown): ~12% of stations (standoff 16m-30m, elevated Y = lookAt[1] + 16m..22m, tilted downward -35°..-50° onto pavilion roof)
+        // Tier 3 (Under-Canopy Soffit & Backstage Ramps): ~10% of stations (standoff 10m-18m, elevated Y = lookAt[1] + 1.2m..2.0m, tilted upward +30°..+45° under the roof)
+        // Tier 4 (Inner Amphitheatre Basin & Terraced Steps): ~18% of stations (standoff 45m-85m, Y = lookAt[1] + 18m..28m, pitch -18°..-25°), covering seating bowl & soundboard
+        // Tier 5 (Upper Concourse & Monolithic Cliffs): ~20% of stations (standoff 110m-180m, Y = lookAt[1] + 45m..75m), covering Visitor Center, Creation Rock & Ship Rock
+        // Tier 6 (Macro Landscape & Orthogonal Nadir Topographic Matrix): ~25% of stations (standoff 220m-320m + 2D orthogonal nadir grid covering full 450m landscape from Y = 140m..160m)
+        const c1 = Math.max(4, Math.round(count * 0.15));
+        const c2 = Math.max(4, Math.round(count * 0.12));
+        const c3 = Math.max(4, Math.round(count * 0.10));
+        const c4 = Math.max(4, Math.round(count * 0.18));
+        const c5 = Math.max(4, Math.round(count * 0.20));
+        const c6 = count - (c1 + c2 + c3 + c4 + c5);
+
+        let id = 1;
+        // Tier 1: Stage Ground & Deck Perimeter (Standoff ~0.07 * R)
+        const r1 = Math.max(12, Math.min(26, radius * 0.07));
+        const opt1: StationOptics = { focalLengthMm: config.focalLengthMm || 35, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        for (let i = 0; i < c1 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c1;
+          const eyeY1 = Math.max(minGroundClearance, lookAt[1] + 2.2);
+          const eye: V3 = [lookAt[0] + r1 * Math.sin(theta), eyeY1, lookAt[2] + r1 * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + 1.2, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt1, safeAnchor, {
+            name: `DISTRICT_TIER_1_FOCAL_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY1,
+            cameraHeightAboveGround: eyeY1
+          }));
+          id++;
+        }
+
+        // Tier 2: Overhead Stage Canopy & Roof Crown (Standoff ~0.10 * R, downward pitch -35° to -50°)
+        const r2 = Math.max(18, Math.min(35, radius * 0.10));
+        const eyeY2 = Math.max(minGroundClearance, lookAt[1] + 18.5);
+        const opt2: StationOptics = { focalLengthMm: 30, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset2 = Math.PI / c2;
+        for (let i = 0; i < c2 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c2 + offset2;
+          const eye: V3 = [lookAt[0] + r2 * Math.sin(theta), eyeY2, lookAt[2] + r2 * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + 8.5, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt2, safeAnchor, {
+            name: `DISTRICT_TIER_2_ROOF_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY2,
+            cameraHeightAboveGround: eyeY2
+          }));
+          id++;
+        }
+
+        // Tier 3: Under-Canopy Soffit & Backstage Ramps (Standoff ~0.05 * R, upward pitch +35° to +55°)
+        const r3 = Math.max(8, Math.min(18, radius * 0.05));
+        const eyeY3 = Math.max(minGroundClearance, lookAt[1] + 1.4);
+        const opt3: StationOptics = { focalLengthMm: 28, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset3 = (Math.PI * 0.5) / c3;
+        for (let i = 0; i < c3 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c3 + offset3;
+          const eye: V3 = [lookAt[0] + r3 * Math.sin(theta), eyeY3, lookAt[2] + r3 * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + 11.5, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt3, safeAnchor, {
+            name: `DISTRICT_TIER_3_SOFFIT_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY3,
+            cameraHeightAboveGround: eyeY3
+          }));
+          id++;
+        }
+
+        // Tier 4: Inner Amphitheatre Basin & Terraced Steps (Standoff ~0.25 * R, pitch -18° to -25°)
+        const r4 = Math.max(45, radius * 0.25);
+        const eyeY4 = Math.max(minGroundClearance, lookAt[1] + 18.0);
+        const opt4: StationOptics = { focalLengthMm: 28, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset4 = Math.PI / c4;
+        for (let i = 0; i < c4 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c4 + offset4;
+          const eye: V3 = [lookAt[0] + r4 * Math.sin(theta), eyeY4, lookAt[2] + r4 * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + 3.0, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt4, safeAnchor, {
+            name: `DISTRICT_TIER_4_OBLIQUE_BASIN_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY4,
+            cameraHeightAboveGround: eyeY4
+          }));
+          id++;
+        }
+
+        // Tier 5: Upper Concourse & Monolithic Cliffs (Standoff ~0.55 * R)
+        const r5 = Math.max(100, radius * 0.52);
+        const eyeY5 = Math.max(minGroundClearance, lookAt[1] + 55.0);
+        const opt5: StationOptics = { focalLengthMm: 24, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset5 = (Math.PI * 0.35) / c5;
+        for (let i = 0; i < c5 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c5 + offset5;
+          const eye: V3 = [lookAt[0] + r5 * Math.sin(theta), eyeY5, lookAt[2] + r5 * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + 5.0, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt5, safeAnchor, {
+            name: `DISTRICT_TIER_5_PERIMETER_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY5,
+            cameraHeightAboveGround: eyeY5
+          }));
+          id++;
+        }
+
+        // Tier 6: High-Altitude Nadir & Orthogonal Terrain Grid
+        // 2D orthogonal matrix covering [-0.85*R, +0.85*R] x [-0.85*R, +0.85*R]
+        // Looking directly downward (-Y) with perpendicular rays (cos theta ~ 1.0)
+        const gridCols = Math.ceil(Math.sqrt(c6 * (16 / 9)));
+        const gridRows = Math.ceil(c6 / gridCols);
+        const gridAlt = Math.max(minGroundClearance, lookAt[1] + 155.0);
+        const gridSpan = radius * 1.7; // Full diameter span
+        const opt6: StationOptics = { focalLengthMm: 24, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+
+        for (let r = 0; r < gridRows && poses.length < count; r++) {
+          const ty = gridRows > 1 ? (r / (gridRows - 1) - 0.5) : 0;
+          for (let c = 0; c < gridCols && poses.length < count; c++) {
+            const tx = gridCols > 1 ? (c / (gridCols - 1) - 0.5) : 0;
+            const eyeX = lookAt[0] + tx * gridSpan;
+            const eyeZ = lookAt[2] + ty * gridSpan;
+            const eye: V3 = [eyeX, gridAlt, eyeZ];
+            const targetX = eyeX * 0.15 + lookAt[0] * 0.85;
+            const targetZ = eyeZ * 0.15 + lookAt[2] * 0.85;
+            const target: V3 = [targetX, lookAt[1], targetZ];
+            poses.push(stationFromLookAt(id, eye, target, opt6, safeAnchor, {
+              name: `DISTRICT_TIER_6_NADIR_R${r + 1}_C${c + 1}_${String(id).padStart(2, '0')}`,
+              cameraAltitude: gridAlt,
+              cameraHeightAboveGround: gridAlt
+            }));
+            id++;
+          }
+        }
+        break;
+      }
       case 'facade-lawnmower': {
         const h = (anchor.headingDeg || 0) * RAD;
         const n: [number, number] = [Math.sin(h), Math.cos(h)];
@@ -359,6 +502,91 @@ export class SurveySynthesisEngine {
       }
       case 'street-corridor':
       case 'nadir-grid':
+      case 'continuous-flight': {
+        // Continuous 6-DOF Spline Flight Trajectory:
+        // Simulates a smooth, cinematic camera/drone flight weaving through the space.
+        // Provides dense sequential frame overlap (65-80%) eliminating sudden perspective gaps.
+        const defaultWaypoints: Array<{ pos: V3; tgt: V3; focal?: number }> = [
+          // 1. Stage Front Low (VIP Front perspective)
+          { pos: [lookAt[0], lookAt[1] + 2.0, lookAt[2] + 0.08 * radius], tgt: [lookAt[0], lookAt[1] + 1.2, lookAt[2]], focal: 35 },
+          // 2. Stage Right Wing Sweep
+          { pos: [lookAt[0] + 0.09 * radius, lookAt[1] + 2.4, lookAt[2] + 0.03 * radius], tgt: [lookAt[0], lookAt[1] + 1.2, lookAt[2]], focal: 30 },
+          // 3. Under Canopy & Soffit Upward Banking
+          { pos: [lookAt[0] + 0.04 * radius, lookAt[1] + 1.5, lookAt[2] - 0.04 * radius], tgt: [lookAt[0], lookAt[1] + 12.0, lookAt[2]], focal: 28 },
+          // 4. Backstage Ramp / North Exit
+          { pos: [lookAt[0] - 0.06 * radius, lookAt[1] + 3.2, lookAt[2] - 0.08 * radius], tgt: [lookAt[0], lookAt[1] + 4.0, lookAt[2]], focal: 32 },
+          // 5. Creation Rock (North Monolith) Chute Banking
+          { pos: [lookAt[0] - 0.20 * radius, lookAt[1] + 16.0, lookAt[2] - 0.02 * radius], tgt: [lookAt[0] - 0.12 * radius, lookAt[1] + 20.0, lookAt[2] + 0.10 * radius], focal: 28 },
+          // 6. Soundboard / Mix Board Elevation
+          { pos: [lookAt[0], lookAt[1] + 8.5, lookAt[2] + 0.22 * radius], tgt: [lookAt[0], lookAt[1] + 2.2, lookAt[2]], focal: 35 },
+          // 7. Raked Amphitheatre Seating Bowl Ascending Climb
+          { pos: [lookAt[0] + 0.12 * radius, lookAt[1] + 20.0, lookAt[2] + 0.45 * radius], tgt: [lookAt[0], lookAt[1] + 3.0, lookAt[2]], focal: 35 },
+          // 8. Ship Rock (South Monolith) Ridge Banking
+          { pos: [lookAt[0] + 0.28 * radius, lookAt[1] + 35.0, lookAt[2] + 0.35 * radius], tgt: [lookAt[0] + 0.15 * radius, lookAt[1] + 22.0, lookAt[2]], focal: 32 },
+          // 9. Top Concourse Promenade
+          { pos: [lookAt[0], lookAt[1] + 36.0, lookAt[2] + 0.65 * radius], tgt: [lookAt[0], lookAt[1] + 4.0, lookAt[2]], focal: 35 },
+          // 10. Aerial Overview Apex Corkscrew
+          { pos: [lookAt[0] - 0.22 * radius, lookAt[1] + 55.0, lookAt[2] + 0.40 * radius], tgt: [lookAt[0], lookAt[1] + 10.0, lookAt[2]], focal: 28 },
+          // 11. Mid Descent Arc
+          { pos: [lookAt[0] - 0.15 * radius, lookAt[1] + 28.0, lookAt[2] + 0.25 * radius], tgt: [lookAt[0], lookAt[1] + 3.0, lookAt[2]], focal: 32 },
+          // 12. Final Approach toward Stage
+          { pos: [lookAt[0] - 0.05 * radius, lookAt[1] + 8.0, lookAt[2] + 0.14 * radius], tgt: [lookAt[0], lookAt[1] + 1.8, lookAt[2]], focal: 35 }
+        ];
+
+        const waypoints = (config.flightWaypoints && config.flightWaypoints.length >= 4)
+          ? config.flightWaypoints.map(w => ({
+              pos: w.position as V3,
+              tgt: w.target as V3,
+              focal: w.fov ? (36 / (2 * Math.tan((w.fov / 2) * RAD))) : (config.focalLengthMm || 35)
+            }))
+          : defaultWaypoints;
+
+        const numWp = waypoints.length;
+        for (let i = 0; i < count; i++) {
+          const u = i / count;
+          const param = u * numWp;
+          const segIdx = Math.floor(param) % numWp;
+          const localT = param - Math.floor(param);
+
+          const i0 = (segIdx - 1 + numWp) % numWp;
+          const i1 = segIdx % numWp;
+          const i2 = (segIdx + 1) % numWp;
+          const i3 = (segIdx + 2) % numWp;
+
+          const p0 = waypoints[i0].pos;
+          const p1 = waypoints[i1].pos;
+          const p2 = waypoints[i2].pos;
+          const p3 = waypoints[i3].pos;
+
+          const t0 = waypoints[i0].tgt;
+          const t1 = waypoints[i1].tgt;
+          const t2 = waypoints[i2].tgt;
+          const t3 = waypoints[i3].tgt;
+
+          const eyePos = catmullRom(p0, p1, p2, p3, localT);
+          const tgtPos = catmullRom(t0, t1, t2, t3, localT);
+          const f1Focal = waypoints[i1].focal ?? (config.focalLengthMm || 35);
+          const f2Focal = waypoints[i2].focal ?? (config.focalLengthMm || 35);
+          const interpFocal = f1Focal * (1 - localT) + f2Focal * localT;
+
+          eyePos[1] = Math.max(minGroundClearance, eyePos[1]);
+
+          const frameOptics: StationOptics = {
+            focalLengthMm: interpFocal,
+            sensorWidthMm: config.sensorWidthMm || 36,
+            aspectRatio: config.aspectRatio ?? 16 / 9
+          };
+
+          const stationPose = stationFromLookAt(i + 1, eyePos, tgtPos, frameOptics, safeAnchor, {
+            name: `FLIGHT_FRAME_${String(i + 1).padStart(3, '0')}`,
+            imageName: `flight_frame_${String(i + 1).padStart(3, '0')}.jpg`,
+            cameraAltitude: eyePos[1],
+            cameraHeightAboveGround: eyePos[1]
+          });
+          poses.push(stationPose);
+        }
+        break;
+      }
       default: {
         const heading = config.corridorHeadingDeg ?? anchor.headingDeg ?? 0;
         const h = heading * RAD;
@@ -372,7 +600,7 @@ export class SurveySynthesisEngine {
           const eye: V3 = [d * Math.sin(h), y, -d * Math.cos(h)];
           const target: V3 = isNadir ? [eye[0] + 0.001, 0, eye[2]] : [eye[0] + Math.sin(h), y, eye[2] - Math.cos(h)];
           poses.push(stationFromLookAt(i + 1, eye, target, optics, anchor, {
-            name: `${config.type.toUpperCase()}_STATION_${String(i + 1).padStart(2, '0')}`, imageName: `corridor_${String(i + 1).padStart(3, '0')}.jpg`
+            name: `${(config.type as string).toUpperCase()}_STATION_${String(i + 1).padStart(2, '0')}`, imageName: `corridor_${String(i + 1).padStart(3, '0')}.jpg`
           }));
         }
         break;

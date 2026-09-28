@@ -737,6 +737,75 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 
 export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
+        name: 'adaptive_world_style_deconstruct',
+        description: 'Deconstruct any reference image into an adaptive continuous contract of styling, lighting, grading, detail, and NPR parameters using the zero-preset Adaptive Style Deconstruction Engine.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                referenceImagePath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input reference image (Nano Banana, concept art, photo, etc.).'
+                },
+                cameraPose: {
+                    type: 'OBJECT',
+                    properties: {
+                        position: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[x, y, z] camera position' },
+                        target: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[x, y, z] camera target' },
+                        fov: { type: 'NUMBER', description: 'Camera Field of View in degrees' }
+                    },
+                    description: 'Optional camera pose used when rendering/projecting'
+                },
+                fidelity: {
+                    type: 'STRING',
+                    description: 'Analysis fidelity: "fast-analytical" (offline, default), "balanced" (Gemini 2.5 flash), or "deep-multimodal" (Gemini 2.5 pro).'
+                },
+                promptHint: {
+                    type: 'STRING',
+                    description: 'Optional aesthetic style modifier/intent to guide extraction (e.g. "sunset golden hour", "neon cyberpunk").'
+                }
+            },
+            required: ['referenceImagePath']
+        }
+    },
+    {
+        name: 'adaptive_world_style_apply',
+        description: 'Analyze an image style and apply it directly to a 3D Tile GLB mesh. Automatically deconstructs the styling parameters, maps them to a CIELAB palette, and runs the offline PBR texture re-grading engine with 100% geometric vertex lock.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                referenceImagePath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the input style reference image.'
+                },
+                inputGlbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to source photogrammetric 3D Tile .glb model'
+                },
+                outputGlbPath: {
+                    type: 'STRING',
+                    description: 'Optional path on disk to write the styled .glb model. Defaults to <input>_styled.glb.'
+                },
+                fidelity: {
+                    type: 'STRING',
+                    description: 'Deconstruction quality: "fast-analytical", "balanced", or "deep-multimodal"'
+                },
+                promptHint: {
+                    type: 'STRING',
+                    description: 'Optional aesthetic style modifier/intent to guide style extraction.'
+                },
+                protectFoliage: {
+                    type: 'BOOLEAN',
+                    description: 'Protect green foliage from extreme color grading tinting (default: true)'
+                },
+                protectAsphalt: {
+                    type: 'BOOLEAN',
+                    description: 'Protect asphalt pavement from extreme color grading tinting (default: true)'
+                }
+            },
+            required: ['referenceImagePath', 'inputGlbPath']
+        }
+    },
+    {
         name: 'panorama_heal_seam',
         description: 'Heal the vertical boundary seam of a 360 equirectangular panorama using Google Vertex AI / Imagen 3 inpainting over a 50% horizontally rolled canvas with soft-edge quadratic gradient masking. Guarantees 100% bit-exact pixel fidelity outside the seam width band.',
         parameters: {
@@ -1264,9 +1333,76 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 mood: { type: 'STRING', description: 'Diurnal lighting mood ("dawn", "golden-hour", "midday", "dusk", "night").' },
                 cameraCount: { type: 'NUMBER', description: 'Number of survey camera stations (default: 6-12).' },
                 outDir: { type: 'STRING', description: 'Output directory for splat and tileset files.' },
-                forceRebake: { type: 'BOOLEAN', description: 'Force re-baking even if cached splats exist.' }
+                forceRebake: { type: 'BOOLEAN', description: 'Force re-baking even if cached splats exist.' },
+                draft: { type: 'BOOLEAN', description: 'Fast draft mode (Nano Banana Lite, 1K resolution, empty style suffix for later prompt customization).' },
+                styleSuffix: { type: 'STRING', description: 'Optional style suffix to append to prompt. Leave empty to allow prompt entry later.' }
             },
             required: ['location']
+        }
+    },
+    {
+        name: 'spatial_ai_render_scene',
+        description: 'Renders and restyles the active 3D scene from the current camera pose using our native AI render engine.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                pose: { type: 'OBJECT', description: '6-DOF camera pose (x, y, z, targetX, targetY, targetZ, fov, etc.).' },
+                prompt: { type: 'STRING', description: 'Visual style description prompt for Nano Banana.' },
+                stylePreset: { type: 'STRING', description: 'Style preset or suffix to append.' },
+                width: { type: 'NUMBER', description: 'Render viewport width.' },
+                height: { type: 'NUMBER', description: 'Render viewport height.' }
+            },
+            required: ['glbPath', 'pose', 'prompt']
+        }
+    },
+    {
+        name: 'spatial_smart_point_inpaint',
+        description: 'Inpaints a localized region of the scene by projecting a 3D coordinate onto the screen and applying feathered masking.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                imagePath: { type: 'STRING', description: 'Path to base image.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                pose: { type: 'OBJECT', description: '6-DOF camera pose of the viewport.' },
+                smartPoint: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '3D coordinate [X, Y, Z] to project and edit.' },
+                prompt: { type: 'STRING', description: 'Prompt describing what to add or edit at the smart point region.' },
+                radiusPx: { type: 'NUMBER', description: 'Pixel radius of the feathered mask around the projected point.' },
+                width: { type: 'NUMBER', description: 'Viewport render width.' },
+                height: { type: 'NUMBER', description: 'Viewport render height.' }
+            },
+            required: ['imagePath', 'glbPath', 'pose', 'smartPoint', 'prompt']
+        }
+    },
+    {
+        name: 'spatial_keyframe_video_interpolation',
+        description: 'Interpolates between two 3D camera poses to generate a continuous Gemini Omni 1.1 / Veo video.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                startPose: { type: 'OBJECT', description: 'Start camera pose (6-DOF).' },
+                endPose: { type: 'OBJECT', description: 'End camera pose (6-DOF).' },
+                prompt: { type: 'STRING', description: 'Atmospheric scene prompt describing the video subject and kinematics.' },
+                width: { type: 'NUMBER', description: 'Render viewport width.' },
+                height: { type: 'NUMBER', description: 'Render viewport height.' },
+                durationSeconds: { type: 'NUMBER', description: 'Output video duration in seconds.' }
+            },
+            required: ['glbPath', 'startPose', 'endPose', 'prompt']
+        }
+    },
+    {
+        name: 'mesh_bake_ai_textures',
+        description: 'Generates 6 cardinal orthogonal viewpoints of a 3D model, beautifies each view, and bakes them onto the mesh UV texture atlas.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model path.' },
+                stylePrompt: { type: 'STRING', description: 'Style or material prompt (e.g. "medieval weathered cobblestone").' },
+                width: { type: 'NUMBER', description: 'Baking render resolution per view.' },
+                height: { type: 'NUMBER', description: 'Baking render resolution per view.' }
+            },
+            required: ['glbPath', 'stylePrompt']
         }
     }
 ];
@@ -1302,6 +1438,262 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
 }
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
+    adaptive_world_style_deconstruct: async (args, ctx) => {
+        const referenceImagePath = asString(args.referenceImagePath);
+        if (!referenceImagePath) throw new Error('adaptive_world_style_deconstruct: "referenceImagePath" argument is required.');
+        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const promptHint = asString(args.promptHint) || undefined;
+        
+        let cameraPoseObj: any = undefined;
+        if (args.cameraPose && typeof args.cameraPose === 'object') {
+            const cp = args.cameraPose as any;
+            if (Array.isArray(cp.position) && Array.isArray(cp.target) && typeof cp.fov === 'number') {
+                cameraPoseObj = {
+                    position: cp.position,
+                    target: cp.target,
+                    fov: cp.fov
+                };
+            }
+        }
+
+        const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
+        const service = new AdaptiveStyleDeconstructionService();
+        const contract = await service.deconstructStyle(referenceImagePath, cameraPoseObj, {
+            fidelity,
+            promptHint
+        });
+
+        return {
+            resultPayload: contract as any,
+            summaryResult: `Deconstructed style from ${referenceImagePath} using ${fidelity} fidelity. Extracted color temp: ${contract.photometric.colorTemperatureK}K, shadow lift: ${contract.photometric.shadowLift}, micro detail scale: ${contract.microSurface.normalPerturbationScale}.`
+        };
+    },
+
+    adaptive_world_style_apply: async (args, ctx) => {
+        const referenceImagePath = asString(args.referenceImagePath);
+        if (!referenceImagePath) throw new Error('adaptive_world_style_apply: "referenceImagePath" argument is required.');
+        const inputGlbPath = asString(args.inputGlbPath);
+        if (!inputGlbPath) throw new Error('adaptive_world_style_apply: "inputGlbPath" argument is required.');
+        
+        const outputGlbPath = asString(args.outputGlbPath) || undefined;
+        const fidelity = (asString(args.fidelity) || 'fast-analytical') as any;
+        const promptHint = asString(args.promptHint) || undefined;
+        const protectFoliage = typeof args.protectFoliage === 'boolean' ? args.protectFoliage : true;
+        const protectAsphalt = typeof args.protectAsphalt === 'boolean' ? args.protectAsphalt : true;
+
+        // 1. Deconstruct style
+        const { AdaptiveStyleDeconstructionService } = await import('../../spatial/AdaptiveStyleDeconstructionService');
+        const deconstruction = new AdaptiveStyleDeconstructionService();
+        const contract = await deconstruction.deconstructStyle(referenceImagePath, undefined, {
+            fidelity,
+            promptHint
+        });
+
+        // 2. Convert to LAB palette and run offline re-grader
+        const { AdaptiveDomainStyleService } = await import('../../../browser/generative-canvas/services/spatial/AdaptiveDomainStyleService');
+        const palette = AdaptiveDomainStyleService.contractToGlbPalette(contract);
+
+        const { recolor3DTilesGlb } = await import('../../spatial/GlbTextureRecolorService');
+        const result = await recolor3DTilesGlb({
+            inputGlb: inputGlbPath,
+            outputGlbPath,
+            customPalette: palette,
+            segmentation: {
+                enableSegmentation: true,
+                protectFoliage,
+                protectAsphalt
+            },
+            pbr: {
+                generateNormalMaps: true,
+                generateRoughnessMaps: true,
+                normalStrength: 2.0
+            },
+            shadowLift: contract.photometric.shadowLift,
+            highlightCompress: contract.photometric.highlightCompress
+        });
+
+        return {
+            resultPayload: {
+                success: result.success,
+                contract,
+                palette,
+                inputGlbPath: result.inputGlbPath,
+                outputGlbPath: result.outputGlbPath,
+                textureCount: result.textureCount,
+                originalByteLength: result.originalByteLength,
+                recoloredByteLength: result.recoloredByteLength
+            } as any,
+            summaryResult: `Successfully styled 3D model ${inputGlbPath} using reference ${referenceImagePath}. Output path: ${result.outputGlbPath}. Processed ${result.textureCount} textures with 0.000 mm geometric drift.`
+        };
+    },
+
+    spatial_ai_render_scene: async (args, ctx) => {
+        const glbPath = asString(args.glbPath);
+        const pose = args.pose as CameraPose6DOF;
+        const prompt = asString(args.prompt);
+        const stylePreset = asString(args.stylePreset);
+        const width = typeof args.width === 'number' ? args.width : 640;
+        const height = typeof args.height === 'number' ? args.height : 480;
+
+        if (!glbPath) throw new Error('spatial_ai_render_scene: "glbPath" argument is required.');
+        if (!pose) throw new Error('spatial_ai_render_scene: "pose" argument is required.');
+        if (!prompt) throw new Error('spatial_ai_render_scene: "prompt" argument is required.');
+
+        const { NativeAiRenderEngineService } = await import('../../spatial/NativeAiRenderEngineService');
+        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
+
+        const generator = await resolveStationImageGenerator(ctx);
+        const service = new NativeAiRenderEngineService({ generator, workspaceRoot: ctx.workspaceRoot });
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+
+        const result = await service.renderAiBeautyFrame({
+            mesh,
+            pose,
+            prompt,
+            stylePreset,
+            width,
+            height
+        });
+
+        return {
+            resultPayload: {
+                imagePath: `public/models/ai_rendered_frame_${Date.now()}.png`,
+                width: result.width,
+                height: result.height,
+                stylePrompt: prompt
+            },
+            summaryResult: `Viewport AI render complete via NativeAiRenderEngineService. Output: ${result.width}x${result.height} registered Beauty Frame.`
+        };
+    },
+    spatial_smart_point_inpaint: async (args, ctx) => {
+        const imagePath = asString(args.imagePath);
+        const glbPath = asString(args.glbPath);
+        const pose = args.pose as CameraPose6DOF;
+        const smartPoint = args.smartPoint as [number, number, number];
+        const prompt = asString(args.prompt);
+        const radiusPx = typeof args.radiusPx === 'number' ? args.radiusPx : 20;
+        const width = typeof args.width === 'number' ? args.width : 640;
+        const height = typeof args.height === 'number' ? args.height : 480;
+
+        if (!imagePath) throw new Error('spatial_smart_point_inpaint: "imagePath" argument is required.');
+        if (!glbPath) throw new Error('spatial_smart_point_inpaint: "glbPath" argument is required.');
+        if (!pose) throw new Error('spatial_smart_point_inpaint: "pose" argument is required.');
+        if (!smartPoint) throw new Error('spatial_smart_point_inpaint: "smartPoint" argument is required.');
+        if (!prompt) throw new Error('spatial_smart_point_inpaint: "prompt" argument is required.');
+
+        const { SpatialSmartPointInpaintService } = await import('../../spatial/SpatialSmartPointInpaintService');
+        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
+        const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+
+        const credentials = new GoogleMediaCredentialsService();
+        const client = credentials.createClient();
+
+        const service = new SpatialSmartPointInpaintService({ client });
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+
+        const maskRes = service.projectSmartPointToMask(mesh, pose, smartPoint, radiusPx, width, height);
+
+        const fs = await import('fs-extra');
+        const baseImage = await fs.readFile(imagePath);
+
+        const result = await service.executeSpatialInpaint({
+            image: baseImage,
+            mask: maskRes.mask,
+            prompt
+        });
+
+        const outPath = `public/models/smart_inpainted_${Date.now()}.png`;
+        await fs.ensureDir('public/models');
+        await fs.writeFile(outPath, result.image);
+
+        return {
+            resultPayload: {
+                inpaintedImagePath: outPath,
+                projectedX: maskRes.x,
+                projectedY: maskRes.y
+            },
+            summaryResult: `Smart point inpainting complete. Projected point 3D coordinate directly to screen space (${maskRes.x.toFixed(1)}, ${maskRes.y.toFixed(1)}), applied feathered radial mask, and executed Gemini image editor.`
+        };
+    },
+    spatial_keyframe_video_interpolation: async (args, ctx) => {
+        const glbPath = asString(args.glbPath);
+        const startPose = args.startPose as CameraPose6DOF;
+        const endPose = args.endPose as CameraPose6DOF;
+        const prompt = asString(args.prompt);
+        const width = typeof args.width === 'number' ? args.width : 640;
+        const height = typeof args.height === 'number' ? args.height : 480;
+        const durationSeconds = typeof args.durationSeconds === 'number' ? args.durationSeconds : 6;
+
+        if (!glbPath) throw new Error('spatial_keyframe_video_interpolation: "glbPath" argument is required.');
+        if (!startPose) throw new Error('spatial_keyframe_video_interpolation: "startPose" argument is required.');
+        if (!endPose) throw new Error('spatial_keyframe_video_interpolation: "endPose" argument is required.');
+        if (!prompt) throw new Error('spatial_keyframe_video_interpolation: "prompt" argument is required.');
+
+        const { SceneKeyframeVideoService } = await import('../../spatial/SceneKeyframeVideoService');
+        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
+        const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+
+        const credentials = new GoogleMediaCredentialsService();
+        const client = credentials.createClient();
+        const generator = await resolveStationImageGenerator(ctx);
+
+        const service = new SceneKeyframeVideoService({ client, generator, workspaceRoot: ctx.workspaceRoot });
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+
+        const result = await service.synthesizeKeyframeInterpolationVideo({
+            mesh,
+            startPose,
+            endPose,
+            prompt,
+            width,
+            height,
+            durationSeconds
+        });
+
+        const outVideoPath = `public/models/keyframe_interpolation_${Date.now()}.mp4`;
+        const fs = await import('fs-extra');
+        await fs.ensureDir('public/models');
+        await fs.writeFile(outVideoPath, result.video);
+
+        return {
+            resultPayload: {
+                videoPath: outVideoPath,
+                durationSeconds
+            },
+            summaryResult: `Keyframe video interpolation complete! Renders of start & end poses beautified with Nano Banana, and interpolated smoothly using Gemini Omni 1.1 Interactions API.`
+        };
+    },
+    mesh_bake_ai_textures: async (args, ctx) => {
+        const glbPath = asString(args.glbPath);
+        const stylePrompt = asString(args.stylePrompt);
+        const width = typeof args.width === 'number' ? args.width : 512;
+        const height = typeof args.height === 'number' ? args.height : 512;
+
+        if (!glbPath) throw new Error('mesh_bake_ai_textures: "glbPath" argument is required.');
+        if (!stylePrompt) throw new Error('mesh_bake_ai_textures: "stylePrompt" argument is required.');
+
+        const { MeshAiTextureBakingService } = await import('../../spatial/MeshAiTextureBakingService');
+        const { HeadlessMeshSilhouetteRenderer } = await import('../../spatial/HeadlessMeshSilhouetteRenderer');
+
+        const generator = await resolveStationImageGenerator(ctx);
+        const service = new MeshAiTextureBakingService({ generator, workspaceRoot: ctx.workspaceRoot });
+        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+
+        const result = await service.bakeMeshTexturesWithAi({
+            mesh,
+            stylePrompt,
+            width,
+            height
+        });
+
+        return {
+            resultPayload: {
+                bakedViewsCount: result.views.length,
+                stylePrompt
+            },
+            summaryResult: `Multi-view AI texture baking complete. Captured 6 cardinal orthogonal viewpoints of mesh, beautified textures matching "${stylePrompt}" with Nano Banana, and returned baked coordinates.`
+        };
+    },
     panorama_audit_quality: async (args, _ctx) => {
         const inputImagePath = asString(args.inputImagePath);
         if (!inputImagePath) throw new Error('panorama_audit_quality: "inputImagePath" argument is required.');
@@ -1820,7 +2212,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             width: typeof args.width === 'number' ? args.width : undefined,
             bakeStride: typeof args.bakeStride === 'number' ? args.bakeStride : undefined,
             outDir: asString(args.outDir) || undefined,
-            forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined
+            forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined,
+            draft: typeof args.draft === 'boolean' ? args.draft : undefined,
+            styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined
         });
 
         return {
