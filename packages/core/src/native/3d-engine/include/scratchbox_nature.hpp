@@ -1930,9 +1930,861 @@ public:
     }
 };
 
+// ============================================================================
+// 8. General Biomass & Micro-Detail Engine (Nanite-Level Ecosystem Synthesis)
+// ============================================================================
+
+/**
+ * BotanicalOrganGenerator provides general, algorithmic generators for individual
+ * micro-botanical organs (pinecones, needle sprigs, shelf fungi, clover mats, and ground carpets).
+ */
+class BotanicalOrganGenerator {
+public:
+    /**
+     * Generates a Fibonacci Conifer Cone (Pinus / Sequoia) with golden-ratio spiral phyllotaxis.
+     */
+    static geometry::Mesh generateFibonacciPinecone(
+        const Vec3& pos,
+        const Vec3& dirNorm,
+        const Vec3& upRef = Vec3(0, 1, 0),
+        float coneLength = 0.12f,
+        float maxConeRadius = 0.045f,
+        int scaleCount = 18,
+        const Vec4& baseColor = Vec4(0.12f, 0.07f, 0.04f, 1.0f),
+        const Vec4& tipColor = Vec4(0.44f, 0.26f, 0.15f, 1.0f)
+    ) {
+        geometry::Mesh mesh("FibonacciPinecone");
+        Vec3 dir = dirNorm.normalized();
+        Vec3 up = (upRef - dir * upRef.dot(dir)).normalized();
+        if (up.lengthSquared() < 0.01f) {
+            Vec3 alt = std::abs(dir.y) < 0.99f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
+            up = (alt - dir * alt.dot(dir)).normalized();
+        }
+        Vec3 side = dir.cross(up).normalized();
+
+        // 1. Spindle axis cylinder
+        Vec3 tip = pos + dir * coneLength;
+        uint32_t cBase = static_cast<uint32_t>(mesh.vertices.size());
+        for (int s = 0; s < 4; ++s) {
+            float ang = (static_cast<float>(s) / 4.0f) * math::TWO_PI;
+            Vec3 radial = side * std::cos(ang) + up * std::sin(ang);
+            mesh.vertices.push_back(pos + radial * (maxConeRadius * 0.25f));
+            mesh.normals.push_back(radial);
+            mesh.uvs.push_back(Vec2(0, 0));
+            mesh.vertexColors.push_back(baseColor);
+
+            mesh.vertices.push_back(tip + radial * (maxConeRadius * 0.10f));
+            mesh.normals.push_back(radial);
+            mesh.uvs.push_back(Vec2(1, 1));
+            mesh.vertexColors.push_back(baseColor);
+        }
+        for (int s = 0; s < 4; ++s) {
+            int next = (s + 1) % 4;
+            mesh.indices.push_back(cBase + s * 2);
+            mesh.indices.push_back(cBase + s * 2 + 1);
+            mesh.indices.push_back(cBase + next * 2);
+
+            mesh.indices.push_back(cBase + next * 2);
+            mesh.indices.push_back(cBase + s * 2 + 1);
+            mesh.indices.push_back(cBase + next * 2 + 1);
+        }
+
+        // 2. Fibonacci Ovuliferous Scales
+        const float goldenAngle = 137.507764f * math::DEG_TO_RAD;
+        for (int k = 0; k < scaleCount; ++k) {
+            float t = static_cast<float>(k + 1) / (scaleCount + 1);
+            Vec3 sp = pos + dir * (coneLength * t);
+            float r = maxConeRadius * std::sin(t * math::PI);
+            float phi = k * goldenAngle;
+
+            Vec3 rad = (side * std::cos(phi) + up * std::sin(phi)).normalized();
+            Vec3 scaleTangent = dir.cross(rad).normalized();
+
+            Vec3 p0 = sp - dir * 0.008f;
+            Vec3 p1 = sp + rad * r + dir * 0.016f;
+            Vec3 p2 = sp + rad * (r * 0.70f) + scaleTangent * (r * 0.40f) + dir * 0.006f;
+            Vec3 p3 = sp + rad * (r * 0.70f) - scaleTangent * (r * 0.40f) + dir * 0.006f;
+
+            Vec3 sNorm = (rad + dir * 0.4f).normalized();
+
+            uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(p0); mesh.normals.push_back(sNorm); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(baseColor);
+            mesh.vertices.push_back(p2); mesh.normals.push_back(sNorm); mesh.uvs.push_back(Vec2(0.0f, 0.7f)); mesh.vertexColors.push_back(tipColor);
+            mesh.vertices.push_back(p1); mesh.normals.push_back(sNorm); mesh.uvs.push_back(Vec2(0.5f, 1.0f)); mesh.vertexColors.push_back(tipColor);
+            mesh.vertices.push_back(p3); mesh.normals.push_back(sNorm); mesh.uvs.push_back(Vec2(1.0f, 0.7f)); mesh.vertexColors.push_back(tipColor);
+
+            mesh.indices.push_back(bIdx);
+            mesh.indices.push_back(bIdx + 1);
+            mesh.indices.push_back(bIdx + 2);
+
+            mesh.indices.push_back(bIdx);
+            mesh.indices.push_back(bIdx + 2);
+            mesh.indices.push_back(bIdx + 3);
+        }
+
+        return mesh;
+    }
+
+    /**
+     * Generates a Two-Ranked Distichous Conifer Needle Sprig (Sequoia, Taxus, Abies).
+     */
+    static geometry::Mesh generateDistichousConiferSprig(
+        const Vec3& basePos,
+        const Vec3& sprayDir,
+        float sprayLength = 0.65f,
+        int needlePairs = 14,
+        float needleLength = 0.032f,
+        float needleWidth = 0.0045f,
+        const Vec4& woodColor = Vec4(0.32f, 0.20f, 0.14f, 1.0f),
+        const Vec4& needleBase = Vec4(0.22f, 0.48f, 0.12f, 1.0f),
+        const Vec4& needleTip = Vec4(0.52f, 0.82f, 0.20f, 1.0f)
+    ) {
+        geometry::Mesh mesh("DistichousSprig");
+        Vec3 dir = sprayDir.normalized();
+        Vec3 up(0, 1, 0);
+        Vec3 side = dir.cross(up).normalized();
+        if (side.lengthSquared() < 0.01f) {
+            side = Vec3(1, 0, 0);
+        }
+        up = side.cross(dir).normalized();
+
+        // Woody shoot axis
+        Vec3 tip = basePos + dir * sprayLength;
+        uint32_t cBase = static_cast<uint32_t>(mesh.vertices.size());
+        for (int s = 0; s < 4; ++s) {
+            float ang = (static_cast<float>(s) / 4.0f) * math::TWO_PI;
+            Vec3 radial = side * std::cos(ang) + up * std::sin(ang);
+            mesh.vertices.push_back(basePos + radial * 0.008f);
+            mesh.normals.push_back(radial);
+            mesh.uvs.push_back(Vec2(0, 0));
+            mesh.vertexColors.push_back(woodColor);
+
+            mesh.vertices.push_back(tip + radial * 0.0025f);
+            mesh.normals.push_back(radial);
+            mesh.uvs.push_back(Vec2(1, 1));
+            mesh.vertexColors.push_back(woodColor);
+        }
+        for (int s = 0; s < 4; ++s) {
+            int next = (s + 1) % 4;
+            mesh.indices.push_back(cBase + s * 2);
+            mesh.indices.push_back(cBase + s * 2 + 1);
+            mesh.indices.push_back(cBase + next * 2);
+
+            mesh.indices.push_back(cBase + next * 2);
+            mesh.indices.push_back(cBase + s * 2 + 1);
+            mesh.indices.push_back(cBase + next * 2 + 1);
+        }
+
+        // Alternating needle blades
+        for (int i = 0; i < needlePairs; ++i) {
+            float frac = static_cast<float>(i + 1) / (needlePairs + 1);
+            Vec3 node = basePos + dir * (sprayLength * frac);
+            float nLen = needleLength * (1.0f - frac * 0.35f);
+
+            for (int sideSign = -1; sideSign <= 1; sideSign += 2) {
+                float s = static_cast<float>(sideSign);
+                Vec3 nDir = (side * s * 0.92f + dir * 0.38f).normalized();
+
+                Vec3 p0 = node;
+                Vec3 p1 = node + nDir * nLen + dir * (needleWidth * 0.5f);
+                Vec3 p2 = node + nDir * (nLen * 1.15f);
+                Vec3 p3 = node + nDir * nLen - dir * (needleWidth * 0.5f);
+
+                uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(p0); mesh.normals.push_back(up); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(needleBase);
+                mesh.vertices.push_back(p1); mesh.normals.push_back(up); mesh.uvs.push_back(Vec2(0.0f, 0.8f)); mesh.vertexColors.push_back(needleTip);
+                mesh.vertices.push_back(p2); mesh.normals.push_back(up); mesh.uvs.push_back(Vec2(0.5f, 1.0f)); mesh.vertexColors.push_back(needleTip);
+                mesh.vertices.push_back(p3); mesh.normals.push_back(up); mesh.uvs.push_back(Vec2(1.0f, 0.8f)); mesh.vertexColors.push_back(needleTip);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 1);
+                mesh.indices.push_back(bIdx + 2);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 2);
+                mesh.indices.push_back(bIdx + 3);
+            }
+        }
+
+        return mesh;
+    }
+
+    /**
+     * Generates Epiphytic Bracket Shelf Polypores (Ganoderma applanatum).
+     */
+    static geometry::Mesh generateShelfPolypore(
+        const Vec3& attachBase,
+        const Vec3& outwardDir,
+        float maxRadius = 0.24f,
+        int tiers = 3,
+        const Vec4& capColor = Vec4(0.38f, 0.24f, 0.14f, 1.0f),
+        const Vec4& marginColor = Vec4(0.88f, 0.84f, 0.72f, 1.0f),
+        const Vec4& poreColor = Vec4(0.72f, 0.68f, 0.56f, 1.0f)
+    ) {
+        geometry::Mesh mesh("ShelfPolypore");
+        Vec3 outN = outwardDir.normalized();
+        Vec3 up(0, 1, 0);
+        Vec3 side = outN.cross(up).normalized();
+
+        for (int t = 0; t < tiers; ++t) {
+            float tFrac = static_cast<float>(t) / tiers;
+            float radius = maxRadius * (1.0f - tFrac * 0.35f);
+            Vec3 shelfCenter = attachBase + Vec3(0, t * 0.16f, 0);
+
+            const int sectors = 12;
+            uint32_t centerTop = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(shelfCenter); mesh.normals.push_back(up); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(capColor);
+
+            uint32_t centerBot = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(shelfCenter - Vec3(0, 0.025f, 0)); mesh.normals.push_back(-up); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(poreColor);
+
+            for (int s = 0; s <= sectors; ++s) {
+                float theta = -math::HALF_PI + (static_cast<float>(s) / sectors) * math::PI;
+                float cosT = std::cos(theta);
+                float sinT = std::sin(theta);
+
+                Vec3 edgeRadial = outN * cosT + side * sinT;
+                float rDist = radius * (1.0f + 0.08f * std::sin(theta * 5.0f));
+
+                Vec3 pTop = shelfCenter + edgeRadial * rDist;
+                Vec3 pBot = shelfCenter + edgeRadial * (rDist * 0.96f) - Vec3(0, 0.025f, 0);
+                Vec3 rimNorm = (edgeRadial + Vec3(0, 0.25f, 0)).normalized();
+
+                mesh.vertices.push_back(pTop); mesh.normals.push_back(rimNorm); mesh.uvs.push_back(Vec2(0.5f + 0.5f * sinT, cosT)); mesh.vertexColors.push_back(marginColor);
+                mesh.vertices.push_back(pBot); mesh.normals.push_back(-up); mesh.uvs.push_back(Vec2(0.5f + 0.5f * sinT, cosT)); mesh.vertexColors.push_back(poreColor);
+            }
+
+            for (int s = 0; s < sectors; ++s) {
+                uint32_t topA = centerTop + 2 + s * 2;
+                uint32_t topB = centerTop + 2 + (s + 1) * 2;
+                mesh.indices.push_back(centerTop);
+                mesh.indices.push_back(topA);
+                mesh.indices.push_back(topB);
+
+                uint32_t botA = centerTop + 3 + s * 2;
+                uint32_t botB = centerTop + 3 + (s + 1) * 2;
+                mesh.indices.push_back(centerBot);
+                mesh.indices.push_back(botB);
+                mesh.indices.push_back(botA);
+
+                // Rim quad
+                mesh.indices.push_back(topA);
+                mesh.indices.push_back(botA);
+                mesh.indices.push_back(topB);
+
+                mesh.indices.push_back(topB);
+                mesh.indices.push_back(botA);
+                mesh.indices.push_back(botB);
+            }
+        }
+
+        return mesh;
+    }
+
+    /**
+     * Generates Wood Sorrel / Redwood Clover (Oxalis oregana) patches with 3 heart-shaped leaflets per plant.
+     */
+    static geometry::Mesh generateWoodSorrelPatch(
+        const Vec3& center,
+        float patchRadius = 0.95f,
+        int plantCount = 20,
+        const Vec4& baseColor = Vec4(0.32f, 0.68f, 0.16f, 1.0f),
+        const Vec4& tipColor = Vec4(0.48f, 0.82f, 0.22f, 1.0f)
+    ) {
+        geometry::Mesh mesh("WoodSorrelPatch");
+        for (int p = 0; p < plantCount; ++p) {
+            float r = patchRadius * std::sqrt((static_cast<float>(p) + 0.5f) / static_cast<float>(plantCount));
+            float theta = p * 2.39996f;
+            float px = center.x + r * std::cos(theta);
+            float pz = center.z + r * std::sin(theta);
+            float py = center.y + 0.04f + 0.02f * (p % 3);
+
+            Vec3 plantPos(px, py, pz);
+            float plantScale = 0.08f + 0.04f * ((p * 7) % 5);
+
+            for (int lobe = 0; lobe < 3; ++lobe) {
+                float lobeAngle = theta + lobe * (math::TWO_PI / 3.0f);
+                Vec3 lobeDir(std::cos(lobeAngle), 0.10f, std::sin(lobeAngle));
+                Vec3 lobeSide(-lobeDir.z, 0.0f, lobeDir.x);
+                Vec3 lobeUp(0, 1, 0);
+
+                uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+                Vec3 p0 = plantPos;
+                Vec3 p1 = plantPos + lobeDir * plantScale + lobeSide * (plantScale * 0.55f);
+                Vec3 p2 = plantPos + lobeDir * (plantScale * 1.25f);
+                Vec3 p3 = plantPos + lobeDir * plantScale - lobeSide * (plantScale * 0.55f);
+
+                mesh.vertices.push_back(p0); mesh.normals.push_back(lobeUp); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(baseColor);
+                mesh.vertices.push_back(p1); mesh.normals.push_back(lobeUp); mesh.uvs.push_back(Vec2(0.0f, 0.8f)); mesh.vertexColors.push_back(tipColor);
+                mesh.vertices.push_back(p2); mesh.normals.push_back(lobeUp); mesh.uvs.push_back(Vec2(0.5f, 1.0f)); mesh.vertexColors.push_back(tipColor);
+                mesh.vertices.push_back(p3); mesh.normals.push_back(lobeUp); mesh.uvs.push_back(Vec2(1.0f, 0.8f)); mesh.vertexColors.push_back(tipColor);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 1);
+                mesh.indices.push_back(bIdx + 2);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 2);
+                mesh.indices.push_back(bIdx + 3);
+            }
+        }
+        return mesh;
+    }
+
+    /**
+     * Generates a sub-centimeter fallen needle cluster tangential to the ground plane.
+     */
+    static geometry::Mesh generateFallenNeedleCluster(
+        const Vec3& center,
+        const Vec3& groundNormal,
+        int needlesInCluster = 8,
+        float needleLen = 0.038f,
+        float needleWidth = 0.0042f,
+        const Vec4& colA = Vec4(0.26f, 0.15f, 0.09f, 1.0f),
+        const Vec4& colB = Vec4(0.10f, 0.05f, 0.03f, 1.0f)
+    ) {
+        geometry::Mesh mesh("NeedleCluster");
+        Vec3 tangent = std::abs(groundNormal.y) < 0.99f ? groundNormal.cross(Vec3(0, 1, 0)).normalized() : Vec3(1, 0, 0);
+        Vec3 bitangent = groundNormal.cross(tangent).normalized();
+
+        for (int n = 0; n < needlesInCluster; ++n) {
+            float nAngle = n * 0.85f;
+            float nLen = needleLen * (0.85f + 0.30f * (n % 3));
+            Vec3 dir = (tangent * std::cos(nAngle) + bitangent * std::sin(nAngle)).normalized();
+            Vec3 side = groundNormal.cross(dir).normalized();
+
+            Vec3 p0 = center - side * (needleWidth * 0.5f);
+            Vec3 p1 = center + side * (needleWidth * 0.5f);
+            Vec3 p2 = center + dir * nLen + side * (needleWidth * 0.5f);
+            Vec3 p3 = center + dir * nLen - side * (needleWidth * 0.5f);
+
+            Vec4 col = (n % 2 == 0) ? colA : colB;
+            uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.push_back(p0); mesh.normals.push_back(groundNormal); mesh.uvs.push_back(Vec2(0, 0)); mesh.vertexColors.push_back(col);
+            mesh.vertices.push_back(p1); mesh.normals.push_back(groundNormal); mesh.uvs.push_back(Vec2(1, 0)); mesh.vertexColors.push_back(col);
+            mesh.vertices.push_back(p2); mesh.normals.push_back(groundNormal); mesh.uvs.push_back(Vec2(1, 1)); mesh.vertexColors.push_back(col);
+            mesh.vertices.push_back(p3); mesh.normals.push_back(groundNormal); mesh.uvs.push_back(Vec2(0, 1)); mesh.vertexColors.push_back(col);
+
+            mesh.indices.push_back(bIdx);
+            mesh.indices.push_back(bIdx + 1);
+            mesh.indices.push_back(bIdx + 2);
+
+            mesh.indices.push_back(bIdx);
+            mesh.indices.push_back(bIdx + 2);
+            mesh.indices.push_back(bIdx + 3);
+        }
+        return mesh;
+    }
+
+    /**
+     * Generates a decaying ground-pressed winter fern frond.
+     */
+    static geometry::Mesh generateDecayingWinterFrond(
+        const Vec3& rootPos,
+        const Vec3& dirNorm,
+        const Vec3& normalNorm,
+        float length = 1.0f,
+        int steps = 10,
+        const Vec4& colA = Vec4(0.24f, 0.14f, 0.08f, 0.95f),
+        const Vec4& colB = Vec4(0.14f, 0.08f, 0.05f, 0.95f)
+    ) {
+        geometry::Mesh mesh("DecayingWinterFrond");
+        Vec3 dir = dirNorm.normalized();
+        Vec3 norm = normalNorm.normalized();
+        Vec3 side = dir.cross(norm).normalized();
+
+        for (int s = 0; s < steps; ++s) {
+            float u = static_cast<float>(s) / steps;
+            Vec3 spineP = rootPos + dir * (length * u);
+            float pinnuleLen = 0.12f * std::sin(u * math::PI);
+            Vec4 col = math::lerp(colA, colB, u * 0.65f);
+
+            for (int sign = -1; sign <= 1; sign += 2) {
+                float sF = static_cast<float>(sign);
+                Vec3 p0 = spineP;
+                Vec3 p1 = spineP + side * (sF * pinnuleLen) + dir * 0.035f;
+                Vec3 p2 = spineP + side * (sF * pinnuleLen * 1.1f);
+                Vec3 p3 = spineP - dir * 0.025f;
+
+                uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(p0); mesh.normals.push_back(norm); mesh.uvs.push_back(Vec2(0.5f, 0.0f)); mesh.vertexColors.push_back(col);
+                mesh.vertices.push_back(p1); mesh.normals.push_back(norm); mesh.uvs.push_back(Vec2(1.0f, 0.8f)); mesh.vertexColors.push_back(col);
+                mesh.vertices.push_back(p2); mesh.normals.push_back(norm); mesh.uvs.push_back(Vec2(0.5f, 1.0f)); mesh.vertexColors.push_back(col);
+                mesh.vertices.push_back(p3); mesh.normals.push_back(norm); mesh.uvs.push_back(Vec2(0.0f, 0.5f)); mesh.vertexColors.push_back(col);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 1);
+                mesh.indices.push_back(bIdx + 2);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 2);
+                mesh.indices.push_back(bIdx + 3);
+            }
+        }
+        return mesh;
+    }
+
+    /**
+     * Generates 3D Volumetric Velvet Moss Tufts on curved trunks or logs.
+     */
+    static geometry::Mesh generateVolumetricMossTufts(
+        const Vec3& start,
+        const Vec3& end,
+        float logRadius,
+        int tuftCount = 140,
+        const Vec4& colBase = Vec4(0.30f, 0.60f, 0.16f, 1.0f),
+        const Vec4& colTip = Vec4(0.24f, 0.46f, 0.12f, 1.0f)
+    ) {
+        geometry::Mesh mesh("VolumetricMossTufts");
+        Vec3 axis = end - start;
+        float len = axis.length();
+        Vec3 dir = axis.normalized();
+        Vec3 up(0, 1, 0);
+        Vec3 side = dir.cross(up).normalized();
+
+        for (int t = 0; t < tuftCount; ++t) {
+            float u = static_cast<float>(t) / tuftCount;
+            Vec3 corePos = start + dir * (u * len);
+            float crestAngle = std::sin(t * 1.7f) * 0.45f;
+            Vec3 radial = (up * std::cos(crestAngle) + side * std::sin(crestAngle)).normalized();
+            Vec3 tuftRoot = corePos + radial * (logRadius * 0.98f);
+            float tuftHeight = 0.045f + 0.025f * (t % 4);
+
+            for (int b = 0; b < 3; ++b) {
+                float bYaw = b * (math::PI / 3.0f) + (t * 0.8f);
+                Vec3 bDir(std::cos(bYaw), 0, std::sin(bYaw));
+                Vec3 bSide = radial.cross(bDir).normalized();
+
+                Vec3 p0 = tuftRoot - bSide * 0.012f;
+                Vec3 p1 = tuftRoot + bSide * 0.012f;
+                Vec3 p2 = tuftRoot + radial * tuftHeight + bDir * 0.015f + bSide * 0.008f;
+                Vec3 p3 = tuftRoot + radial * tuftHeight + bDir * 0.015f - bSide * 0.008f;
+
+                uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
+                mesh.vertices.push_back(p0); mesh.normals.push_back(radial); mesh.uvs.push_back(Vec2(0, 0)); mesh.vertexColors.push_back(colBase);
+                mesh.vertices.push_back(p1); mesh.normals.push_back(radial); mesh.uvs.push_back(Vec2(1, 0)); mesh.vertexColors.push_back(colBase);
+                mesh.vertices.push_back(p2); mesh.normals.push_back(radial); mesh.uvs.push_back(Vec2(1, 1)); mesh.vertexColors.push_back(colTip);
+                mesh.vertices.push_back(p3); mesh.normals.push_back(radial); mesh.uvs.push_back(Vec2(0, 1)); mesh.vertexColors.push_back(colTip);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 1);
+                mesh.indices.push_back(bIdx + 2);
+
+                mesh.indices.push_back(bIdx);
+                mesh.indices.push_back(bIdx + 2);
+                mesh.indices.push_back(bIdx + 3);
+            }
+        }
+        return mesh;
+    }
+};
+
+/**
+ * NurseLogGenerator builds decaying fallen nurse logs with rot indentations and hollowed splintered ends.
+ */
+class NurseLogGenerator {
+public:
+    static geometry::Mesh generateHollowNurseLog(
+        const Vec3& start,
+        const Vec3& end,
+        float radius = 0.50f,
+        float cavityDepthRatio = 0.55f,
+        int lRings = 40,
+        int sectors = 36,
+        const Vec4& barkColor = Vec4(0.35f, 0.19f, 0.12f, 1.0f),
+        const Vec4& mossColor = Vec4(0.30f, 0.60f, 0.16f, 1.0f),
+        const Vec4& woodRotColor = Vec4(0.42f, 0.28f, 0.18f, 1.0f),
+        const Vec4& furrowColor = Vec4(0.10f, 0.05f, 0.03f, 1.0f)
+    ) {
+        geometry::Mesh mesh("HollowNurseLog");
+        Vec3 axis = end - start;
+        float length = axis.length();
+        Vec3 dir = axis.normalized();
+
+        Vec3 up(0, 1, 0);
+        Vec3 side = dir.cross(up).normalized();
+        up = side.cross(dir).normalized();
+
+        for (int r = 0; r <= lRings; ++r) {
+            float t = static_cast<float>(r) / static_cast<float>(lRings);
+            Vec3 ringCenter = start + dir * (t * length);
+            float currentRadius = radius * (1.08f - 0.16f * t + 0.05f * std::sin(t * 14.0f));
+
+            float cavityFactor = 0.0f;
+            if (t > 0.28f && t < 0.72f) {
+                float cWindow = std::sin((t - 0.28f) / 0.44f * math::PI);
+                cavityFactor = cWindow * cWindow;
+            }
+
+            for (int s = 0; s <= sectors; ++s) {
+                float theta = (static_cast<float>(s) / static_cast<float>(sectors)) * math::TWO_PI;
+                float cosT = std::cos(theta);
+                float sinT = std::sin(theta);
+                Vec3 radial = (side * cosT + up * sinT).normalized();
+
+                float rotIndent = 0.0f;
+                if (sinT > 0.4f && cavityFactor > 0.01f) {
+                    float angleWeight = (sinT - 0.4f) / 0.6f;
+                    rotIndent = angleWeight * cavityFactor * (currentRadius * cavityDepthRatio);
+                }
+
+                float radEff = std::max(currentRadius * 0.35f, currentRadius - rotIndent);
+                Vec3 pos = ringCenter + radial * (radEff + 0.035f * std::cos(14.0f * theta + t * 8.0f));
+
+                Vec3 norm = radial;
+                if (rotIndent > 0.01f) {
+                    norm = (-radial * 0.5f + up * 0.5f).normalized();
+                }
+
+                Vec4 color = barkColor;
+                if (rotIndent > 0.03f) {
+                    color = math::lerp(woodRotColor, furrowColor, 0.65f);
+                } else if (radial.y > 0.06f) {
+                    float mossWeight = std::clamp((radial.y - 0.06f) / 0.75f, 0.0f, 1.0f);
+                    color = math::lerp(barkColor, mossColor, mossWeight * 0.96f);
+                } else if (radial.y < -0.2f) {
+                    color = math::lerp(barkColor, furrowColor, 0.70f);
+                }
+
+                mesh.vertices.push_back(pos);
+                mesh.normals.push_back(norm);
+                mesh.uvs.push_back(Vec2(static_cast<float>(s) / static_cast<float>(sectors) * 2.0f, t * 6.0f));
+                mesh.vertexColors.push_back(color);
+            }
+        }
+
+        for (int r = 0; r < lRings; ++r) {
+            int r0 = r * (sectors + 1);
+            int r1 = (r + 1) * (sectors + 1);
+            for (int s = 0; s < sectors; ++s) {
+                uint32_t i0 = r0 + s;
+                uint32_t i1 = r0 + (s + 1);
+                uint32_t i2 = r1 + s;
+                uint32_t i3 = r1 + (s + 1);
+                mesh.indices.push_back(i0); mesh.indices.push_back(i1); mesh.indices.push_back(i2);
+                mesh.indices.push_back(i1); mesh.indices.push_back(i3); mesh.indices.push_back(i2);
+            }
+        }
+
+        // Hollow Splintered End Caps
+        auto addCap = [&](const Vec3& capCenter, const Vec3& capNormal, bool flip) {
+            uint32_t outerStart = static_cast<uint32_t>(mesh.vertices.size());
+            for (int s = 0; s <= sectors; ++s) {
+                float theta = (static_cast<float>(s) / static_cast<float>(sectors)) * math::TWO_PI;
+                float cosT = std::cos(theta);
+                float sinT = std::sin(theta);
+                Vec3 radial = (side * cosT + up * sinT).normalized();
+                float outerR = radius * (0.90f + 0.15f * std::sin(theta * 9.0f));
+                Vec3 p = capCenter + radial * outerR + capNormal * (0.08f * std::sin(theta * 11.0f));
+                mesh.vertices.push_back(p);
+                mesh.normals.push_back(capNormal);
+                mesh.uvs.push_back(Vec2(0.5f + 0.5f * cosT, 0.5f + 0.5f * sinT));
+                mesh.vertexColors.push_back(woodRotColor);
+            }
+
+            uint32_t innerStart = static_cast<uint32_t>(mesh.vertices.size());
+            for (int s = 0; s <= sectors; ++s) {
+                float theta = (static_cast<float>(s) / static_cast<float>(sectors)) * math::TWO_PI;
+                float cosT = std::cos(theta);
+                float sinT = std::sin(theta);
+                Vec3 radial = (side * cosT + up * sinT).normalized();
+                float innerR = radius * (0.42f + 0.08f * std::cos(theta * 7.0f));
+                Vec3 p = capCenter + radial * innerR - capNormal * 0.35f;
+                mesh.vertices.push_back(p);
+                mesh.normals.push_back(-radial);
+                mesh.uvs.push_back(Vec2(0.5f + 0.25f * cosT, 0.5f + 0.25f * sinT));
+                mesh.vertexColors.push_back(furrowColor);
+            }
+
+            for (int s = 0; s < sectors; ++s) {
+                uint32_t o0 = outerStart + s;
+                uint32_t o1 = outerStart + (s + 1);
+                uint32_t in0 = innerStart + s;
+                uint32_t in1 = innerStart + (s + 1);
+
+                if (flip) {
+                    mesh.indices.push_back(o0); mesh.indices.push_back(o1); mesh.indices.push_back(in0);
+                    mesh.indices.push_back(o1); mesh.indices.push_back(in1); mesh.indices.push_back(in0);
+                } else {
+                    mesh.indices.push_back(o0); mesh.indices.push_back(in0); mesh.indices.push_back(o1);
+                    mesh.indices.push_back(o1); mesh.indices.push_back(in0); mesh.indices.push_back(in1);
+                }
+            }
+        };
+
+        addCap(start, -dir, false);
+        addCap(end, dir, true);
+
+        return mesh;
+    }
+};
+
+/**
+ * Stratified Biomass Scatter Engine
+ * Implements biological distribution rules (Poisson-disk spacing, slope masking,
+ * altitude stratification, mean curvature masks, and multi-scale procedural noise)
+ * across any terrain surface, mirroring advanced Geometry Nodes nature scattering.
+ */
+class BiomassScatterEngine {
+public:
+    /**
+     * Rule-based scattering criteria driving non-uniform biological distribution.
+     */
+    struct ScatterCriteria {
+        // 1. Altitude Masking (Stratification)
+        float minAltitude{-100.0f};
+        float maxAltitude{100.0f};
+
+        // 2. Slope Angle Masking (Normal Dot with Gravity Up [0, 1, 0])
+        float minSlopeDot{0.75f};       // Flat to moderate slope (1.0 = horizontal, 0.0 = sheer vertical)
+        float maxSlopeDot{1.0f};
+
+        // 3. Curvature Masking (Concave hollows vs Convex ridges)
+        // kappa < 0 = concave depression (moisture trap, humus, moss)
+        // kappa > 0 = convex ridge/hummock (dry needles, cones, windswept grass)
+        float minCurvature{-10.0f};
+        float maxCurvature{10.0f};
+
+        // 4. Multi-Scale Procedural Noise Modulation
+        float macroNoiseFrequency{0.08f}; // Macro biome clumping scale (12.5m wavelengths)
+        float mesoNoiseFrequency{0.45f};  // Meso colony dispersal scale (2.2m wavelengths)
+        float noiseThreshold{0.32f};      // Minimum noise probability cutoff
+
+        // 5. Poisson-Disk Anti-Clustering Spacing
+        float minDistance{0.25f};       // Poisson disk radius (meters)
+
+        // 6. Proximity Masking (Nurse Log / Boulder / Stream Proximity)
+        float nurseRadius{2.2f};
+        float nurseWeight{0.0f};        // 0.0 = ignore nurse log, 1.0 = strictly require nurse log
+        bool requireNurseLog{false};
+
+        uint32_t targetCount{100};
+        uint32_t seed{42};
+    };
+
+    /**
+     * Analytically computes Mean Curvature kappa = 0.5 * (H_xx + H_zz) from the heightfield.
+     */
+    static float computeCurvature(
+        float x,
+        float z,
+        const std::function<float(float, float)>& heightFunc,
+        float eps = 0.15f
+    ) {
+        float hC = heightFunc(x, z);
+        float hL = heightFunc(x - eps, z);
+        float hR = heightFunc(x + eps, z);
+        float hD = heightFunc(x, z - eps);
+        float hU = heightFunc(x, z + eps);
+
+        float d2x = (hR - 2.0f * hC + hL) / (eps * eps);
+        float d2z = (hU - 2.0f * hC + hD) / (eps * eps);
+
+        return 0.5f * (d2x + d2z);
+    }
+
+    /**
+     * Evaluates multi-scale procedural noise probability at coordinate (x, z).
+     */
+    static float evaluateMultiScaleNoise(
+        float x,
+        float z,
+        float macroFreq,
+        float mesoFreq,
+        uint32_t seed
+    ) {
+        float seedF = static_cast<float>(seed % 1000) * 1.37f;
+        // Macro noise (large biological groves)
+        float macro = 0.5f + 0.5f * std::sin(x * macroFreq + seedF) * std::cos(z * macroFreq * 1.15f - seedF * 0.7f);
+
+        // Meso noise (local colony clusters)
+        float meso = 0.5f + 0.5f * std::sin(x * mesoFreq * 1.2f - z * mesoFreq * 0.8f + seedF * 2.1f)
+                           * std::cos(x * mesoFreq * 0.7f + z * mesoFreq * 1.3f + seedF * 1.4f);
+
+        // Combined multi-scale density
+        return macro * 0.60f + meso * 0.40f;
+    }
+
+    /**
+     * Distributes candidate sample points across a bounds area meeting biological criteria.
+     */
+    static std::vector<Vec3> samplePoints(
+        const Vec2& boundsMin,
+        const Vec2& boundsMax,
+        const std::function<float(float, float)>& heightFunc,
+        const std::function<Vec3(float, float)>& normalFunc,
+        const std::vector<Vec3>& nursePositions,
+        const ScatterCriteria& criteria
+    ) {
+        std::vector<Vec3> points;
+        points.reserve(criteria.targetCount);
+
+        std::mt19937 rng(criteria.seed);
+        std::uniform_real_distribution<float> distX(boundsMin.x, boundsMax.x);
+        std::uniform_real_distribution<float> distZ(boundsMin.y, boundsMax.y);
+        std::uniform_real_distribution<float> distProb(0.0f, 1.0f);
+
+        int maxAttempts = static_cast<int>(criteria.targetCount) * 45;
+        float minDistSq = criteria.minDistance * criteria.minDistance;
+
+        for (int i = 0; i < maxAttempts && points.size() < criteria.targetCount; ++i) {
+            float x = distX(rng);
+            float z = distZ(rng);
+            float y = heightFunc(x, z);
+
+            // 1. Altitude Filter
+            if (y < criteria.minAltitude || y > criteria.maxAltitude) {
+                continue;
+            }
+
+            // 2. Slope Angle Filter
+            Vec3 norm = normalFunc(x, z);
+            if (norm.y < criteria.minSlopeDot || norm.y > criteria.maxSlopeDot) {
+                continue;
+            }
+
+            // 3. Curvature Filter (Concavity vs Convexity)
+            float curvature = computeCurvature(x, z, heightFunc);
+            if (curvature < criteria.minCurvature || curvature > criteria.maxCurvature) {
+                continue;
+            }
+
+            // 4. Multi-Scale Noise Mask
+            float noiseProb = evaluateMultiScaleNoise(x, z, criteria.macroNoiseFrequency, criteria.mesoNoiseFrequency, criteria.seed);
+            if (noiseProb < criteria.noiseThreshold) {
+                continue;
+            }
+
+            // 5. Nurse Proximity Weighting
+            if (criteria.requireNurseLog && !nursePositions.empty()) {
+                bool nearNurse = false;
+                for (const auto& np : nursePositions) {
+                    float dx = x - np.x;
+                    float dz = z - np.z;
+                    if (dx * dx + dz * dz < criteria.nurseRadius * criteria.nurseRadius) {
+                        nearNurse = true;
+                        break;
+                    }
+                }
+                if (!nearNurse) continue;
+            }
+
+            // 6. Poisson-Disk Distance Test
+            bool tooClose = false;
+            for (const auto& p : points) {
+                float dx = x - p.x;
+                float dz = z - p.z;
+                if (dx * dx + dz * dz < minDistSq) {
+                    tooClose = true;
+                    break;
+                }
+            }
+
+            if (!tooClose) {
+                points.push_back(Vec3(x, y, z));
+            }
+        }
+
+        return points;
+    }
+};
+
+/**
+ * NarrativeClutterPlacer (Macro-to-Micro Ecosystem Storytelling)
+ *
+ * Implements narrative clutter placement:
+ * 1. Root Buttress Crotches: Acute concave angle between trunk flutes where needles,
+ *    cones, and twigs naturally accumulate from wind and gravity shedding.
+ * 2. Nurse Log Crevices: Rotten wood hollows and upper shelf zones collecting velvet moss
+ *    and shelf polypore fungi.
+ * 3. Moisture Depressions: Negative curvature terrain basins hosting Wood Sorrel (Oxalis)
+ *    and decaying winter fronds.
+ * 4. Animal / Pedestrian Corridor: Center clearing maintained with low-lying needle silt
+ *    and clover margins, avoiding impassable debris.
+ */
+class NarrativeClutterPlacer {
+public:
+    enum class PocketType {
+        RootButtressCrotch,
+        NurseLogCavity,
+        MoistureDepression,
+        TrailEdge
+    };
+
+    struct ClutterPocket {
+        Vec3 position;
+        Vec3 surfaceNormal;
+        PocketType type;
+        float radius{0.5f};
+        float moistureRating{0.5f};
+        float gravitySettlingWeight{1.0f};
+    };
+
+    /**
+     * Identifies biological gathering zones around trees and nurse logs.
+     */
+    static std::vector<ClutterPocket> identifyPockets(
+        const std::vector<Vec3>& treeBases,
+        const std::vector<std::pair<Vec3, Vec3>>& nurseLogs,
+        const std::function<float(float, float)>& heightFunc,
+        const std::function<Vec3(float, float)>& normalFunc
+    ) {
+        std::vector<ClutterPocket> pockets;
+
+        // 1. Root Buttress Crotches (Around ancient tree trunks)
+        for (const auto& tb : treeBases) {
+            for (int i = 0; i < 6; ++i) {
+                float angle = static_cast<float>(i) * (math::TWO_PI / 6.0f) + 0.35f;
+                float rDist = 1.45f + 0.35f * (i % 2);
+                float px = tb.x + std::cos(angle) * rDist;
+                float pz = tb.z + std::sin(angle) * rDist;
+                float py = heightFunc(px, pz);
+
+                ClutterPocket cp;
+                cp.position = Vec3(px, py, pz);
+                cp.surfaceNormal = normalFunc(px, pz);
+                cp.type = PocketType::RootButtressCrotch;
+                cp.radius = 0.65f;
+                cp.moistureRating = 0.70f;
+                cp.gravitySettlingWeight = 1.35f;
+                pockets.push_back(cp);
+            }
+        }
+
+        // 2. Nurse Log Cavities & Flanking Accumulation
+        for (const auto& log : nurseLogs) {
+            Vec3 dir = (log.second - log.first).normalized();
+            Vec3 side(-dir.z, 0.0f, dir.x);
+            float len = (log.second - log.first).length();
+
+            for (int k = 1; k <= 4; ++k) {
+                float frac = static_cast<float>(k) / 5.0f;
+                Vec3 pLog = log.first + dir * (len * frac);
+                
+                // Flanking pocket on shaded side
+                Vec3 pPocket = pLog + side * 0.75f;
+                pPocket.y = heightFunc(pPocket.x, pPocket.z);
+
+                ClutterPocket cp;
+                cp.position = pPocket;
+                cp.surfaceNormal = normalFunc(pPocket.x, pPocket.z);
+                cp.type = PocketType::NurseLogCavity;
+                cp.radius = 0.75f;
+                cp.moistureRating = 0.85f;
+                cp.gravitySettlingWeight = 1.50f;
+                pockets.push_back(cp);
+            }
+        }
+
+        return pockets;
+    }
+};
+
 } // namespace nature
 } // namespace scratchbox
 
 #endif // SCRATCHBOX_NATURE_HPP
+
+
 
 

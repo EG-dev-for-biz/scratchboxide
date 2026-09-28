@@ -126,7 +126,9 @@ export type SurveyPatternType =
   | 'amphitheatre-complete'
   | 'facade-lawnmower'
   | 'street-corridor'
-  | 'nadir-grid';
+  | 'nadir-grid'
+  | 'district-complete'
+  | 'continuous-flight';
 
 /**
  * Configuration for procedurally generating photogrammetric survey patterns
@@ -154,6 +156,8 @@ export interface SurveyPatternConfig {
   aspectRatio?: number;
   /** Horizontal aspect ratio (X/Z) for elliptical landmark orbits (e.g. 1.15 - 1.25 for elliptical amphitheatres like the Colosseum). */
   aspectRatioXZ?: number;
+  /** Optional custom 6-DoF flight waypoints for continuous-flight mode. If omitted, procedural inside-out spline is synthesized. */
+  flightWaypoints?: Array<{ position: [number, number, number]; target: [number, number, number]; fov?: number }>;
 }
 
 /**

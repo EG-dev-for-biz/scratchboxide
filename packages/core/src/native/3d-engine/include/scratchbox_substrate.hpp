@@ -238,6 +238,99 @@ public:
     }
 };
 
+/**
+ * Procedural Wear, Inverted Layer Weight Fresnel & Crevice Grime Engine
+ *
+ * Replicates the master Blender shader node pattern:
+ * 1. Geometry Node / Vertex Pointiness (Curvature) + Bevel normal deviation.
+ * 2. Ambient Occlusion (Cavity Crevices).
+ * 3. Inverted Layer Weight Fresnel Mask (1.0 - N.V) accumulating dust and lint in grazing view angles.
+ * 4. Gravity-Aligned Upward Plane Projection (N.Up)^gamma depositing settled dust, needle silt, and pollen.
+ * 5. Mechanical Edge Wear eroding convex corners to reveal lighter, desaturated core substrate.
+ */
+struct WearGrimeParameters {
+    float pointiness{0.0f};          // > 0 = sharp convex edge, < 0 = concave crevice
+    float ambientOcclusion{1.0f};    // 0 = deeply recessed cavity, 1 = open unoccluded space
+    Vec3 worldNormal{0.0f, 1.0f, 0.0f};
+    Vec3 viewDirection{0.0f, 0.0f, 1.0f};
+    Vec3 upAxis{0.0f, 1.0f, 0.0f};
+
+    // Layer parameters
+    float edgeWearStrength{0.75f};
+    float creviceGrimeStrength{0.85f};
+    float dustAccumulationStrength{0.65f};
+    float invertedFresnelStrength{0.45f};
+    float fresnelExponent{2.8f};
+    float upwardGravityPower{3.0f}; // Sharpness of upward plane isolation
+
+    // Physical color paletting
+    Vec3 wornCoreColor{0.48f, 0.32f, 0.22f};      // Lightened, scuffed exposed core
+    Vec3 creviceGrimeColor{0.08f, 0.05f, 0.03f};  // Moist dark humus / mildew crevice sludge
+    Vec3 settledDustColor{0.72f, 0.68f, 0.58f};   // Microscopic spore dust, lint, and needle silt
+};
+
+struct WearGrimeResult {
+    Vec3 finalAlbedo;
+    float finalRoughness;
+    float edgeWearMask;
+    float creviceGrimeMask;
+    float dustMask;
+};
+
+class ProceduralWearAndGrimeShader {
+public:
+    static WearGrimeResult evaluate(
+        const Vec3& baseAlbedo,
+        float baseRoughness,
+        const WearGrimeParameters& p
+    ) {
+        Vec3 N = p.worldNormal.normalized();
+        Vec3 V = p.viewDirection.normalized();
+        Vec3 Up = p.upAxis.normalized();
+
+        // 1. Procedural Edge Wear Mask (Pointiness > 0 and high ambient exposure)
+        float convexFeature = std::max(0.0f, p.pointiness * 2.0f);
+        float edgeWearMask = std::clamp(convexFeature * p.ambientOcclusion * p.edgeWearStrength, 0.0f, 1.0f);
+
+        // 2. Crevice Grime Mask (Pointiness < 0 combined with Cavity Ambient Occlusion)
+        float concaveFeature = std::max(0.0f, -p.pointiness * 2.0f);
+        float aoCavity = std::clamp((1.0f - p.ambientOcclusion) * 1.5f, 0.0f, 1.0f);
+        float creviceGrimeMask = std::clamp((concaveFeature * 0.45f + aoCavity * 0.75f) * p.creviceGrimeStrength, 0.0f, 1.0f);
+
+        // 3. Gravity-driven Upward Horizontal Plane Accumulation (N . Up)^gamma
+        float upDot = std::max(0.0f, N.dot(Up));
+        float horizontalPlateau = std::pow(upDot, p.upwardGravityPower);
+
+        // 4. Inverted Layer Weight Fresnel Mask: (1.0 - |N . V|)^exp
+        float facing = std::clamp(std::abs(N.dot(V)), 0.0f, 1.0f);
+        float invertedFresnel = std::pow(1.0f - facing, p.fresnelExponent) * p.invertedFresnelStrength;
+
+        // Combined dust & lint mask settling on upward horizontal surfaces and grazing crevices
+        float dustMask = std::clamp((horizontalPlateau * 0.75f + invertedFresnel * 0.40f) * p.dustAccumulationStrength, 0.0f, 0.85f);
+        // Do not accumulate dust on high edge wear
+        dustMask *= (1.0f - edgeWearMask * 0.8f);
+
+        // 5. Stratified Compositing
+        // Base -> Grime in Crevices -> Worn Edges -> Settled Dust on Top
+        Vec3 albedo = baseAlbedo;
+        float roughness = baseRoughness;
+
+        // Apply crevice grime (darkens, increases roughness)
+        albedo = math::lerp(albedo, p.creviceGrimeColor, creviceGrimeMask * 0.85f);
+        roughness = math::lerp(roughness, 0.95f, creviceGrimeMask * 0.50f);
+
+        // Apply edge wear (scuffs, lightens, polished contact edges have lower roughness)
+        albedo = math::lerp(albedo, p.wornCoreColor, edgeWearMask);
+        roughness = math::lerp(roughness, 0.38f, edgeWearMask * 0.60f);
+
+        // Apply settled dust & lint (diffuse powdery layer)
+        albedo = math::lerp(albedo, p.settledDustColor, dustMask);
+        roughness = math::lerp(roughness, 0.92f, dustMask * 0.70f);
+
+        return WearGrimeResult{albedo, roughness, edgeWearMask, creviceGrimeMask, dustMask};
+    }
+};
+
 } // namespace substrate
 } // namespace scratchbox
 

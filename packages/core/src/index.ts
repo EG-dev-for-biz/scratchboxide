@@ -299,6 +299,35 @@ export {
     type Location3DGSResult
 } from './node/spatial/Location3DGaussianSplatService';
 
+// Adaptive Domain Style Shader API & Schema Contract
+export {
+    DEFAULT_ADAPTIVE_STYLE_CONTRACT
+} from './common/spatial/adaptive-style-contract';
+export type {
+    AdaptiveColorChannel,
+    AdaptiveLabColor,
+    AdaptiveWorldStyleContract
+} from './common/spatial/adaptive-style-contract';
+export {
+    AdaptiveTileShaderPatcher
+} from './browser/generative-canvas/services/spatial/AdaptiveTileShaderPatcher';
+export {
+    AdaptiveStyleComposer
+} from './browser/generative-canvas/services/spatial/AdaptiveStyleComposer';
+export {
+    AdaptiveDomainStyleService
+} from './browser/generative-canvas/services/spatial/AdaptiveDomainStyleService';
+export type {
+    StyleApplyHandle
+} from './browser/generative-canvas/services/spatial/AdaptiveDomainStyleService';
+export {
+    AdaptiveStyleDeconstructionService
+} from './node/spatial/AdaptiveStyleDeconstructionService';
+export type {
+    DeconstructionOptions
+} from './node/spatial/AdaptiveStyleDeconstructionService';
+
+
 
 
 

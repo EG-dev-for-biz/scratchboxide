@@ -176,8 +176,8 @@ export class NativeCppCompilerService {
         try {
             const { stdout, stderr } = await execAsync(compileCmd, {
                 cwd: outputDir,
-                timeout: 60000,
-                maxBuffer: 10 * 1024 * 1024
+                timeout: 180000,
+                maxBuffer: 16 * 1024 * 1024
             });
 
             // Populate compilation cache for instant replay

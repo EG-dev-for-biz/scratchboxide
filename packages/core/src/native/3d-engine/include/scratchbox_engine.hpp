@@ -89,6 +89,8 @@
 #include "scratchbox_sb_archi_optimizer.hpp"
 #include "scratchbox_tectonics.hpp"
 #include "scratchbox_tectonic_analyzer.hpp"
+#include "scratchbox_plant_builder.hpp"
+#include "scratchbox_infinigen.hpp"
 
 namespace sb = scratchbox;
 namespace vhull = scratchbox::visual_hull;
@@ -143,6 +145,10 @@ namespace archi = scratchbox::sb_archi;
 namespace sb_archi = scratchbox::sb_archi;
 namespace tct = scratchbox::tectonics;
 namespace tectonics = scratchbox::tectonics;
+namespace pln = scratchbox::plant;
+namespace plant = scratchbox::plant;
+namespace inf = scratchbox::infinigen;
+namespace infinigen = scratchbox::infinigen;
 
 using namespace scratchbox;
 
