@@ -440,6 +440,8 @@ export class StreamingEngine {
         let accumulatedGroundingMetadata: GroundingMetadata | undefined;
         let finalUsage: UsageMetadata | undefined;
         let streamMountedArtifact: CanvasArtifact | undefined = undefined;
+        let streamQuestionCard: any = undefined;
+        let streamExecutionPlanCard: any = undefined;
 
         const mergeGrounding = (g: GroundingMetadata): void => {
             accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
@@ -575,6 +577,22 @@ export class StreamingEngine {
                     }
                 }
 
+                if (toolName === 'ask_user_question' || (resultPayload && (resultPayload as any).questionCard)) {
+                    const questionCard = (resultPayload as any).questionCard;
+                    if (questionCard) {
+                        streamQuestionCard = questionCard;
+                        onEvent({ type: 'question_card', questionCard, modelUsed: model });
+                    }
+                }
+
+                if (toolName === 'present_execution_plan' || (resultPayload && (resultPayload as any).executionPlanCard)) {
+                    const executionPlanCard = (resultPayload as any).executionPlanCard;
+                    if (executionPlanCard) {
+                        streamExecutionPlanCard = executionPlanCard;
+                        onEvent({ type: 'execution_plan_card', executionPlanCard, modelUsed: model });
+                    }
+                }
+
                 const callId = toolCall.id || `call-${Date.now()}`;
                 const toolResult = { id: callId, name: toolName, result: resultPayload };
                 onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
@@ -633,6 +651,8 @@ export class StreamingEngine {
             mcpExecutions,
             groundingMetadata: accumulatedGroundingMetadata,
             modelUsed: model,
+            questionCard: streamQuestionCard,
+            executionPlanCard: streamExecutionPlanCard,
             usage: finalUsage
         };
     }

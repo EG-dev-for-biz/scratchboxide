@@ -1155,6 +1155,51 @@ export type ArtifactData =
     | InteractiveBrowserData
     | VideoTimelineData;
 
+export interface InteractiveQuestionOption {
+    id: string;
+    label: string;
+    description?: string;
+    isRecommended?: boolean;
+}
+
+export interface InteractiveQuestionItem {
+    id: string;
+    prompt: string;
+    options: InteractiveQuestionOption[];
+    allowMultiple?: boolean;
+    defaultOptionId?: string;
+}
+
+export interface InteractiveQuestionCardData {
+    title?: string;
+    questions: InteractiveQuestionItem[];
+    submitted?: boolean;
+    selectedOptions?: Record<string, string[]>;
+}
+
+export interface ExecutionPlanStep {
+    id: string;
+    title: string;
+    description?: string;
+    tier?: 'tier1-native' | 'tier2-comfyui';
+    engine?: string;
+}
+
+export interface ExecutionPlanCardData {
+    title: string;
+    goal: string;
+    pipelineTier: 'tier1-native' | 'tier2-comfyui' | 'hybrid';
+    deliverables: {
+        canvasType: PrimitiveType;
+        assetFormat?: string;
+        description: string;
+    }[];
+    steps: ExecutionPlanStep[];
+    estimatedLatency?: string;
+    openQuestions?: string[];
+    confirmed?: boolean;
+}
+
 export interface CanvasArtifact {
     id: string;
     type: PrimitiveType;
@@ -1195,6 +1240,8 @@ export interface ChatMessage {
     deepWriteResumed?: boolean;
     visualAudit?: import('../../common/visual-verification-protocol').VisualAuditResult;
     textureMatrixContent?: import('../../common/media-generation-protocol').TextureMatrixResult;
+    questionCard?: InteractiveQuestionCardData;
+    executionPlanCard?: ExecutionPlanCardData;
 }
 
 export type WorkspaceFileType = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | '3d' | 'browser' | 'video';

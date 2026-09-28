@@ -19,7 +19,9 @@ import {
     PrimitiveType,
     Scene3DData,
     StudioLayoutMode,
-    AgentExecutionStep
+    AgentExecutionStep,
+    InteractiveQuestionCardData,
+    ExecutionPlanCardData
 } from '../canvas-types';
 import { isVibeToolRequest, synthesizeVibeToolSandbox } from '../vibe-tool-synthesizer';
 import { morphArtifact } from '../primitive-transformer-engine';
@@ -55,6 +57,8 @@ export interface FallbackResult {
     artifact?: CanvasArtifact;
     chatResponse?: string;
     toast?: FallbackToast;
+    questionCard?: InteractiveQuestionCardData;
+    executionPlanCard?: ExecutionPlanCardData;
 }
 
 export interface FallbackClassification {
@@ -1445,4 +1449,119 @@ export function buildSimulatedSteps(fallbackGen: CanvasArtifact | undefined): Ag
         }
     ];
     return simulatedSteps;
+}
+
+export function synthesizeQuestionCardFallback(prompt: string, _activeArtifact?: CanvasArtifact): FallbackResult {
+    const isSpatialOrVfx = /3d|mesh|splat|plate|render|video|composite|reconstruct|avatar|camera/i.test(prompt);
+
+    const questionCard: InteractiveQuestionCardData = {
+        title: isSpatialOrVfx ? '3D & Media Asset Representation Choice' : 'Clarification & Configuration Required',
+        questions: [
+            {
+                id: 'pipeline-representation',
+                prompt: isSpatialOrVfx
+                    ? 'Which 3D representation and execution architecture do you want to generate?'
+                    : 'Which deliverable and execution strategy best fits your goal?',
+                allowMultiple: false,
+                options: isSpatialOrVfx ? [
+                    {
+                        id: 'tier1-cpp-mesh',
+                        label: 'Procedural C++20 Astra Mesh (.glb)',
+                        description: 'Watertight manifold geometry, SIMD vector math, Apple Clang -O3, sub-second native compile',
+                        isRecommended: true
+                    },
+                    {
+                        id: 'gaussian-splat-radiance',
+                        label: 'Photorealistic 3D Gaussian Splat (.splat / .spz)',
+                        description: 'Real-time volumetric radiance field with view-dependent reflectance and Three.js playback'
+                    },
+                    {
+                        id: 'live-sandbox-r3f',
+                        label: 'Interactive React Three Fiber Sandbox',
+                        description: 'Full editable WebGL code sandbox with camera orbit, custom lighting, and UI controls'
+                    },
+                    {
+                        id: 'tier2-cloudrun-diffusion',
+                        label: 'Neural Mesh Diffusion (Google Cloud Run L4 GPU)',
+                        description: 'Dense neural reconstruction via Trellis / TripoSR on Cloud Run ComfyUI service'
+                    }
+                ] : [
+                    {
+                        id: 'live-code-sandbox',
+                        label: 'Interactive Live Code Sandbox',
+                        description: 'Runnable React 19 app with live hot-reloading iframe preview',
+                        isRecommended: true
+                    },
+                    {
+                        id: 'system-spec-doc',
+                        label: 'Architectural Specification Document',
+                        description: 'Deep technical Markdown document with comparison tables, interface invariants, and checklists'
+                    },
+                    {
+                        id: 'sprint-kanban-board',
+                        label: 'Delivery Sprint Kanban Board',
+                        description: 'Stage-based execution roadmap with automated milestone tracking'
+                    }
+                ]
+            }
+        ]
+    };
+
+    return {
+        chatResponse: 'To ensure the output matches your exact requirements, please select your preferred pipeline and asset representation below:',
+        questionCard
+    };
+}
+
+export function synthesizeExecutionPlanFallback(prompt: string, _activeArtifact?: CanvasArtifact): FallbackResult {
+    const { subject } = extractPromptEntities(prompt, 'Project Implementation');
+    const isSpatialOrVfx = /3d|mesh|splat|plate|render|video|composite|matchmove|vfx|scene/i.test(prompt);
+
+    const executionPlanCard: ExecutionPlanCardData = {
+        title: `Implementation Plan: ${subject}`,
+        goal: prompt.trim(),
+        pipelineTier: isSpatialOrVfx ? 'hybrid' : 'tier1-native',
+        deliverables: [
+            {
+                canvasType: isSpatialOrVfx ? '3d-scene' : 'live-code-sandbox',
+                assetFormat: isSpatialOrVfx ? '.glb / Three.js' : 'React 19 TSX',
+                description: `Primary interactive ${isSpatialOrVfx ? '3D spatial scene' : 'application sandbox'}`
+            },
+            {
+                canvasType: 'markdown-document',
+                assetFormat: '.md',
+                description: 'Technical architecture specification with interface invariants'
+            }
+        ],
+        steps: [
+            {
+                id: 'step-1',
+                title: 'Inspect requirements and validate input schema',
+                description: 'Index active project context and establish boundary constraints',
+                tier: 'tier1-native',
+                engine: 'Scratchbox Project Coordinator'
+            },
+            {
+                id: 'step-2',
+                title: isSpatialOrVfx ? 'Synthesize procedural 3D geometry & PBR materials' : 'Generate interactive component tree & state machine',
+                description: isSpatialOrVfx ? 'Apply C++20 Astra SIMD math and watertight polygonization' : 'Mount hot-reloading React code sandbox',
+                tier: 'tier1-native',
+                engine: isSpatialOrVfx ? 'C++20 Astra Engine (Apple Clang)' : 'Live Code Sandbox'
+            },
+            {
+                id: 'step-3',
+                title: 'Automated metrology verification & test suite execution',
+                description: 'Run automated typecheck, shader diagnostics, and functional tests',
+                tier: 'tier1-native',
+                engine: 'Vitest / Container Sandbox'
+            }
+        ],
+        estimatedLatency: isSpatialOrVfx ? '~150ms' : '< 100ms',
+        confirmed: false
+    };
+
+    return {
+        chatResponse: `I have prepared a structured execution plan for **"${subject}"**. Please review the proposed deliverables, architecture tier, and step sequence below before we begin:`,
+        executionPlanCard
+    };
 }

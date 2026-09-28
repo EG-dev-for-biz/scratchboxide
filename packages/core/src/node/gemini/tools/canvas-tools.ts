@@ -42,6 +42,95 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['primitiveType', 'title', 'payload']
         }
+    },
+    {
+        name: 'ask_user_question',
+        description: 'Ask the user a structured multiple-choice clarifying question with radio/checkbox choices and an optional recommended path. Use when user intent is ambiguous, when deciding between alternative asset approaches (e.g. 3D blockout vs procedural C++ mesh vs neural Gaussian splat), or when confirming creative preferences.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                title: {
+                    type: 'STRING',
+                    description: 'Headline for the question card (e.g. "Select 3D Asset Format & Pipeline")'
+                },
+                questions: {
+                    type: 'ARRAY',
+                    description: 'Array of questions to present to the user',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            id: { type: 'STRING' },
+                            prompt: { type: 'STRING', description: 'The question text to display' },
+                            allow_multiple: { type: 'BOOLEAN', description: 'Whether multiple options can be chosen' },
+                            options: {
+                                type: 'ARRAY',
+                                items: {
+                                    type: 'OBJECT',
+                                    properties: {
+                                        id: { type: 'STRING' },
+                                        label: { type: 'STRING', description: 'Short display text for this option' },
+                                        description: { type: 'STRING', description: 'Technical trade-off or engine details' },
+                                        isRecommended: { type: 'BOOLEAN', description: 'Whether this is the recommended path' }
+                                    },
+                                    required: ['id', 'label']
+                                }
+                            }
+                        },
+                        required: ['id', 'prompt', 'options']
+                    }
+                }
+            },
+            required: ['questions']
+        }
+    },
+    {
+        name: 'present_execution_plan',
+        description: 'Present a structured execution plan card for user review and explicit confirmation before initiating complex, multi-step, or compute-heavy 3D/VFX/code tasks. Groups plan steps by pipeline tier (Tier 1 Native C++20 vs Tier 2 ComfyUI/Cloud Run), lists deliverables, and offers [Confirm & Execute] and [Adjust Plan] actions.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                title: { type: 'STRING', description: 'Title of the execution plan' },
+                goal: { type: 'STRING', description: 'Core user objective being solved' },
+                pipelineTier: {
+                    type: 'STRING',
+                    enum: ['tier1-native', 'tier2-comfyui', 'hybrid'],
+                    description: 'Execution architecture tier'
+                },
+                deliverables: {
+                    type: 'ARRAY',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            canvasType: { type: 'STRING', description: '3d-scene, video-timeline, live-code-sandbox, etc.' },
+                            assetFormat: { type: 'STRING', description: 'e.g. .glb, .mp4, .otio, React TSX' },
+                            description: { type: 'STRING', description: 'What this deliverable accomplishes' }
+                        },
+                        required: ['canvasType', 'description']
+                    }
+                },
+                steps: {
+                    type: 'ARRAY',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            id: { type: 'STRING' },
+                            title: { type: 'STRING' },
+                            description: { type: 'STRING' },
+                            tier: { type: 'STRING', enum: ['tier1-native', 'tier2-comfyui'] },
+                            engine: { type: 'STRING', description: 'Specific engine, e.g. C++20 Astra, Omni 1.1, Three.js' }
+                        },
+                        required: ['id', 'title']
+                    }
+                },
+                estimatedLatency: { type: 'STRING', description: 'Estimated time (e.g. "Instant (<100ms)" or "~15-30s")' },
+                openQuestions: {
+                    type: 'ARRAY',
+                    items: { type: 'STRING' },
+                    description: 'Optional open questions or assumptions'
+                }
+            },
+            required: ['title', 'goal', 'pipelineTier', 'steps']
+        }
     }
 ];
 
@@ -127,6 +216,63 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 artifact
             },
             summaryResult: `Mounted ${primitiveType} primitive: "${title}".`
+        };
+    },
+
+    ask_user_question(args, _ctx) {
+        const title = asString(args.title) || 'Clarification & Configuration Required';
+        const questionsRaw = Array.isArray(args.questions) ? args.questions : [];
+        const questionCard = {
+            title,
+            questions: questionsRaw.map((q: any) => ({
+                id: asString(q.id) || `q-${Math.random().toString(36).slice(2, 6)}`,
+                prompt: asString(q.prompt),
+                allowMultiple: !!q.allow_multiple || !!q.allowMultiple,
+                defaultOptionId: q.default_option || q.defaultOptionId,
+                options: Array.isArray(q.options) ? q.options.map((opt: any) => ({
+                    id: asString(opt.id),
+                    label: asString(opt.label),
+                    description: asString(opt.description),
+                    isRecommended: !!opt.isRecommended || !!opt.recommended
+                })) : []
+            }))
+        };
+
+        return {
+            resultPayload: {
+                status: 'pending_user_answer',
+                questionCard
+            },
+            summaryResult: `Presented clarifying question card to user: "${questionCard.questions[0]?.prompt || title}".`
+        };
+    },
+
+    present_execution_plan(args, _ctx) {
+        const title = asString(args.title) || 'Proposed Execution Plan';
+        const goal = asString(args.goal) || 'Fulfill user goal';
+        const pipelineTier = (asString(args.pipelineTier) || 'tier1-native') as any;
+        const deliverables = Array.isArray(args.deliverables) ? args.deliverables : [];
+        const steps = Array.isArray(args.steps) ? args.steps : [];
+        const estimatedLatency = asString(args.estimatedLatency) || undefined;
+        const openQuestions = Array.isArray(args.openQuestions) ? args.openQuestions : [];
+
+        const executionPlanCard = {
+            title,
+            goal,
+            pipelineTier,
+            deliverables,
+            steps,
+            estimatedLatency,
+            openQuestions,
+            confirmed: false
+        };
+
+        return {
+            resultPayload: {
+                status: 'plan_presented',
+                executionPlanCard
+            },
+            summaryResult: `Presented execution plan "${title}" (${pipelineTier}) for user review.`
         };
     }
 };

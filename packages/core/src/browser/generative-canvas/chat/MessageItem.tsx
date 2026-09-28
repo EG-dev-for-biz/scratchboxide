@@ -21,6 +21,8 @@ import { resolveModeForArtifact } from '../guardrails-service';
 import { useStudioActions } from '../state/StudioContext';
 import { getPrimitiveIcon, getPrimitiveLabel } from '../studio/canvas-labels';
 import { AudioNarratedCard, CinematicVideoCard, GoogleMapsCard, ImageGeneratedCard, TextureMatrixCard } from './MediaCards';
+import { QuestionCard } from './QuestionCard';
+import { ExecutionPlanCard } from './ExecutionPlanCard';
 
 export interface MessageItemProps {
     message: ChatMessage;
@@ -41,7 +43,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
         handlePreviewCodeInCanvas,
         onExecuteCommand,
         showToast,
-        handleSelectVersion
+        handleSelectVersion,
+        sendMessage
     } = useStudioActions();
 
     const isUser = msg.sender === 'user';
@@ -283,6 +286,44 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                             if (onExecuteCommand) {
                                 onExecuteCommand(cmd);
                                 showToast('Command sent to Scratchbox terminal');
+                            }
+                        }}
+                    />
+                )}
+
+                {/* Structured Interactive Question Clarification Card (Cursor-grade) */}
+                {msg.questionCard && (
+                    <QuestionCard
+                        card={msg.questionCard}
+                        messageId={msg.id}
+                        onSubmit={(answerText, selections) => {
+                            if (msg.questionCard) {
+                                msg.questionCard.submitted = true;
+                                msg.questionCard.selectedOptions = selections;
+                            }
+                            if (sendMessage) {
+                                sendMessage(answerText);
+                            }
+                        }}
+                    />
+                )}
+
+                {/* Structured Execution Confirmation Plan Card (Cursor-grade) */}
+                {msg.executionPlanCard && (
+                    <ExecutionPlanCard
+                        card={msg.executionPlanCard}
+                        messageId={msg.id}
+                        onConfirm={() => {
+                            if (msg.executionPlanCard) {
+                                msg.executionPlanCard.confirmed = true;
+                            }
+                            if (sendMessage) {
+                                sendMessage('Confirmed. Proceed with the proposed execution plan.');
+                            }
+                        }}
+                        onAdjust={() => {
+                            if (sendMessage) {
+                                sendMessage('I would like to adjust the plan: ');
                             }
                         }}
                     />

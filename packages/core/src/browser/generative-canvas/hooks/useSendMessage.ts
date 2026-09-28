@@ -26,7 +26,9 @@ import {
     StudioLayoutMode,
     StudioSettingsTab,
     TerminalExecutionError,
-    TokenBudgetMetrics
+    TokenBudgetMetrics,
+    InteractiveQuestionCardData,
+    ExecutionPlanCardData
 } from '../canvas-types';
 import { AttachedMcpToolContext, AttachedSkillContext } from '../../../common/gemini-protocol';
 import { GeminiClient } from '../gemini-client';
@@ -50,7 +52,9 @@ import {
     synthesizeMediaFallback,
     synthesizeMetricsFallback,
     synthesizeSandboxFallback,
-    synthesizeVideoTimelineFallback
+    synthesizeVideoTimelineFallback,
+    synthesizeQuestionCardFallback,
+    synthesizeExecutionPlanFallback
 } from './sendMessageFallbacks';
 
 type Setter<T> = (value: T | ((prev: T) => T)) => void;
@@ -139,6 +143,8 @@ interface BackendStreamResult {
     finalResponseText: string;
     streamGroundingMetadata: GroundingMetadata | undefined;
     streamExecs: McpExecutionState[];
+    streamQuestionCard?: InteractiveQuestionCardData;
+    streamExecutionPlanCard?: ExecutionPlanCardData;
 }
 
 const cleanMessageText = (rawText: string, artifact?: CanvasArtifact): string => cleanMessageTextSmart(rawText, artifact);
@@ -327,6 +333,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
     let finalResponseText = '';
     let streamGroundingMetadata: GroundingMetadata | undefined;
     const streamExecs: McpExecutionState[] = [];
+    let streamQuestionCard: InteractiveQuestionCardData | undefined;
+    let streamExecutionPlanCard: ExecutionPlanCardData | undefined;
 
     try {
         const attachedSkillsContext: AttachedSkillContext[] = attachedSkillObjects.map(s => ({
@@ -398,6 +406,14 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     return;
                 }
                 if (event.text || event.artifact || event.mcpExecution || event.type === 'delta') {
+                    usedBackend = true;
+                }
+                if (event.questionCard || event.type === 'question_card') {
+                    streamQuestionCard = event.questionCard;
+                    usedBackend = true;
+                }
+                if (event.executionPlanCard || event.type === 'execution_plan_card') {
+                    streamExecutionPlanCard = event.executionPlanCard;
                     usedBackend = true;
                 }
                 if (event.groundingMetadata) {
@@ -597,8 +613,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             setShowTerminalErrorToast(true);
         }
     }
-    const effectiveUsedBackend = usedBackend && (!!generatedArtifact || !!finalResponseText.trim());
-    return { usedBackend: effectiveUsedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs };
+    const effectiveUsedBackend = usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
+    return { usedBackend: effectiveUsedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
 }
 
 /** Step 4a — build the assistant message from a successful backend stream. */
@@ -622,7 +638,9 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             groundingMetadata: streamGroundingMetadata,
             thinkingText: liveThinkingText || undefined,
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
-            steps: liveSteps.length > 0 ? liveSteps : undefined
+            steps: liveSteps.length > 0 ? liveSteps : undefined,
+            questionCard: backend.streamQuestionCard,
+            executionPlanCard: backend.streamExecutionPlanCard
         };
     } else if (usedBackend) {
         finalAssistantMsg = {
@@ -634,7 +652,9 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
             groundingMetadata: streamGroundingMetadata,
             thinkingText: liveThinkingText || undefined,
             thinkingDurationSeconds: liveThinkingText ? backendThinkingDuration : undefined,
-            steps: liveSteps.length > 0 ? liveSteps : undefined
+            steps: liveSteps.length > 0 ? liveSteps : undefined,
+            questionCard: backend.streamQuestionCard,
+            executionPlanCard: backend.streamExecutionPlanCard
         };
     } else {
         throw new Error('finalizeBackendMessage called without a backend response');
@@ -650,6 +670,15 @@ function selectLocalFallback(d: SendMessageDeps, ctx: GenerationContext): Fallba
 
     if (attachedDataFile && attachedDataFile.rowsCount > 0) {
         return synthesizeDataFileDashboard(attachedDataFile);
+    }
+    if (d.aiInteractionMode === 'plan') {
+        return synthesizeExecutionPlanFallback(text, activeArtifact);
+    }
+    const isAmbiguousSpatialQuery = /(?:3d\s*(?:plate|model|asset|object|reconstruct|mesh)|make.*3d|build.*3d)/i.test(text) &&
+        !/three\.js|react|kanban|doc|video|nle|spec/i.test(text) &&
+        (text.length < 55 || /(?:from\s+(?:this\s+)?image|supplied\s+image|from\s+photo|image\s+to\s+3d)/i.test(text));
+    if (isAmbiguousSpatialQuery) {
+        return synthesizeQuestionCardFallback(text, activeArtifact);
     }
     if (c.isVideoTimelineRequest) {
         return synthesizeVideoTimelineFallback(text, activeArtifact);
@@ -831,7 +860,9 @@ async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, f
         artifacts: fallbackGen ? [fallbackGen] : undefined,
         thinkingText: localThinkingText,
         thinkingDurationSeconds: localElapsedSeconds,
-        steps: simulatedSteps
+        steps: simulatedSteps,
+        questionCard: fallbackResult.questionCard,
+        executionPlanCard: fallbackResult.executionPlanCard
     };
     return finalAssistantMsg;
 }

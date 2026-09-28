@@ -513,6 +513,8 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
 You have direct, sandboxed function-calling access to the developer's workspace and terminal.
 Available workspace tools:
 - mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (3D scene, live code sandbox, kanban board, markdown document, or node graph).
+- ask_user_question: Ask the user a structured multiple-choice question with answer options, radio/checkboxes, and an optional recommended path when requirements are ambiguous.
+- present_execution_plan: Present a structured confirmation plan card with pipeline tier (Tier 1 Native vs Tier 2 Cloud Run GPU) and deliverables before executing expensive multi-step tasks.
 - workspace_read_file: Inspect disk contents and slice line ranges.
 - workspace_view_file: Sliced file inspector with 1-indexed line numbers and byte offsets.
 - workspace_write_file: Write or create files with full content.

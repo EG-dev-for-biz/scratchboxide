@@ -135,6 +135,8 @@ export type GeminiStreamEventType =
     | 'plan_ready'
     | 'verification_start'
     | 'verification_result'
+    | 'question_card'
+    | 'execution_plan_card'
     | 'done'
     | 'error';
 
@@ -192,6 +194,8 @@ export interface GeminiStreamEvent {
     error?: string;
     verification?: VerificationOutcome;
     planApprovalRequired?: boolean;
+    questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
+    executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
 }
 
 export interface GeminiGenerateResponse {
@@ -205,6 +209,8 @@ export interface GeminiGenerateResponse {
     mcpExecutions?: McpExecutionState[];
     groundingMetadata?: GroundingMetadata;
     modelUsed: string;
+    questionCard?: import('../browser/generative-canvas/canvas-types').InteractiveQuestionCardData;
+    executionPlanCard?: import('../browser/generative-canvas/canvas-types').ExecutionPlanCardData;
     usage?: {
         promptTokens?: number;
         candidateTokens?: number;
