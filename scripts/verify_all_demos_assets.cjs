@@ -6,6 +6,7 @@ const publicDir = path.join(rootDir, 'public');
 const distDir = path.join(rootDir, 'desktop-app/dist');
 
 const demos = [
+  'nanite_meshlet_pathtracing_studio.html',
   'colosseum_recolor_proof.html',
   'spatial_photoreal_3dgs_demo.html',
   'agent_lighting_proof.html',
@@ -25,11 +26,18 @@ const demos = [
   'person_matchmove_studio.html',
   'google_360_panorama_studio.html',
   'depthbox_image_to_3dgs.html',
-  'asset_demo_studio.html'
+  'asset_demo_studio.html',
+  'camera_choreography_studio.html',
+  'pro_color_grade_match_studio.html',
+  'adaptive_world_styling_visualizer.html',
+  'plaza_matchmove_eloise.html',
+  'video_branching_studio.html',
+  'geobox_precision_report.html',
+  'visual_proof_alignment.html'
 ];
 
 console.log('======================================================================');
-console.log('🔍 VERIFYING ALL 20 SHOWCASE DEMOS & ASSET PACKAGES');
+console.log(`🔍 VERIFYING ALL ${demos.length} SHOWCASE DEMOS & ASSET PACKAGES ACROSS PUBLIC & DIST`);
 console.log('======================================================================\n');
 
 let allPassed = true;
@@ -78,7 +86,6 @@ for (const demoFile of demos) {
     const distOk = fs.existsSync(pDist) && fs.statSync(pDist).size > 0;
 
     if (!pubOk && !distOk) {
-      // Check if it exists in root or models
       const pRoot = path.join(rootDir, assetRel);
       if (!fs.existsSync(pRoot)) {
         missingCount++;
@@ -92,7 +99,7 @@ for (const demoFile of demos) {
     missingList.slice(0, 5).forEach(m => console.warn(`     - ${m}`));
     summary.push({ demo: demoFile, assets: assets.size, missing: missingCount, status: 'WARN_MISSING_ASSETS' });
   } else {
-    console.log(`✅ ${demoFile.padEnd(45)}: Verified (${assets.size} assets bound)`);
+    console.log(`✅ ${demoFile.padEnd(46)}: Verified (${assets.size} assets bound)`);
     summary.push({ demo: demoFile, assets: assets.size, missing: 0, status: 'OK' });
   }
 }
@@ -101,3 +108,7 @@ console.log('\n=================================================================
 const okCount = summary.filter(s => s.status === 'OK').length;
 console.log(`AUDIT COMPLETE: ${okCount}/${demos.length} demos 100% verified with zero missing assets.`);
 console.log('======================================================================');
+
+if (okCount !== demos.length) {
+  process.exit(1);
+}
