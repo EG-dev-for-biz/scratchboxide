@@ -6,14 +6,17 @@ const PORT = 5173;
 const PUBLIC_DIR = path.resolve(__dirname, '../public');
 
 const MIME_TYPES = {
-    '.html': 'text/html',
-    '.js': 'application/javascript',
-    '.css': 'text/css',
-    '.json': 'application/json',
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.cjs': 'application/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
     '.spz': 'application/octet-stream',
     '.splat': 'application/octet-stream',
     '.ply': 'application/octet-stream',
@@ -23,25 +26,148 @@ const MIME_TYPES = {
     '.webm': 'video/webm'
 };
 
+const POPULAR_DEMOS = [
+    { title: 'Nanite Meshlets & Path Tracing Studio', path: '/nanite_meshlet_pathtracing_studio.html', badge: 'NANITE WEBGPU' },
+    { title: 'Rome Colosseum 1K PBR Regrade Proof', path: '/colosseum_recolor_proof.html', badge: 'PBR PIPELINE' },
+    { title: '3D Testing Workbench · 3DGS Hybrid Engine', path: '/spatial_photoreal_3dgs_demo.html', badge: 'MODULAR WORKBENCH' },
+    { title: 'Agent 3D Scene Lighting Intelligence', path: '/agent_lighting_proof.html', badge: 'GAFFER INTEL' },
+    { title: 'Nano Banana 3D Tile 4x Micro-Detail Loupe', path: '/nano_banana_texture_upscale_experiment.html', badge: '0.000MM DRIFT' },
+    { title: 'GeoBox Geolocation Model Evaluation', path: '/geobox_eval_report.html', badge: 'SIGLIP-2 AI' },
+    { title: 'VFX Plate Coordination Anti-Drift Engine', path: '/vfx_plate_anti_drift_demo.html', badge: 'ANTI-DRIFT' },
+    { title: 'COLMAP / GLOMAP 3D Reconstruction Viewer', path: '/colmap_visualizer.html', badge: 'C++20 NATIVE' },
+    { title: 'Botanical & Vegetation Pipeline Visualizer', path: '/botanical_visualizer.html', badge: 'BOTANICAL PBR' },
+    { title: 'The Plaza Hotel 6-DoF Matchmove Studio', path: '/plaza_matchmove_demo.html', badge: 'STUDIO GRADE' },
+    { title: 'GeoBox Multimodal Resection Studio', path: '/geobox_demo.html', badge: 'ANALYTICAL' },
+    { title: 'Multi-District Generative S4D Gallery', path: '/s4d_multi_gallery.html', badge: 'MULTI-SCENE' },
+    { title: 'Red Rocks 4D Gaussian Splatting Performer', path: '/red_rocks_performer_demo.html', badge: 'REAL-TIME 3DGS' },
+    { title: 'Universal Architecture & Terrain (UTDRA)', path: '/universal_architecture_terrain_demo.html', badge: 'UTDRA/ULDRA' },
+    { title: 'Botanical & Forest Procedural 3D Viewer', path: '/forest_3d_viewer.html', badge: 'PHOTOREAL PBR' },
+    { title: 'Video-to-4D Performer Reconstruction Studio', path: '/video_to_4d_performer_studio.html', badge: '4D PIPELINE' },
+    { title: 'Adaptive Matchmove & C² Spline Calibration', path: '/adaptive_matchmove_studio.html', badge: 'SUB-PIXEL RMS' },
+    { title: 'Person Matchmove & Dynamic Skeleton Aligner', path: '/person_matchmove_studio.html', badge: 'KINEMATICS' },
+    { title: 'Google 360 Panorama Studio & Seam Healer', path: '/google_360_panorama_studio.html', badge: '360 PANORAMA' },
+    { title: 'DepthBox Studio // 2D Image(s) -> 3DGS Engine', path: '/depthbox_image_to_3dgs.html', badge: 'IMAGE TO 3DGS' }
+];
+
+function render404Page(reqPath) {
+    const cardsHtml = POPULAR_DEMOS.map(d => `
+        <a href="${d.path}" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:#18181b; border:1px solid rgba(255,255,255,0.08); border-radius:8px; text-decoration:none; color:#f4f4f5; transition:border-color 0.15s, background 0.15s;">
+            <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-size:13px; font-weight:600;">${d.title}</span>
+                <span style="font-size:11px; color:#71717a; font-family:ui-monospace, monospace;">${d.path}</span>
+            </div>
+            <span style="font-size:9.5px; font-weight:700; text-transform:uppercase; padding:2px 8px; border-radius:4px; background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(59,130,246,0.3);">${d.badge}</span>
+        </a>
+    `).join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo Not Found · Scratchbox Studio</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #090d16;
+            color: #f4f4f5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 32px 16px;
+        }
+        .container {
+            max-width: 720px;
+            width: 100%;
+            background: #121215;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 14px;
+            padding: 28px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+        }
+        h1 { font-size: 20px; font-weight: 700; color: #f4f4f5; margin-bottom: 6px; }
+        p { font-size: 13px; color: #a1a1aa; line-height: 1.5; margin-bottom: 20px; }
+        .grid { display: flex; flex-direction: column; gap: 8px; max-height: 480px; overflow-y: auto; padding-right: 4px; }
+        .hub-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #2563eb;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Demo Studio or Asset Not Found</h1>
+        <p>The requested path <code>${reqPath}</code> was not found on this demo server. You can return to the main showcase gallery or launch any of the active studios below:</p>
+        <a href="/" class="hub-btn">← Return to Showcase Demos Hub</a>
+        <div class="grid">
+            ${cardsHtml}
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
 const server = http.createServer((req, res) => {
+    // CORS headers for all responses
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
     let reqPath = decodeURI(req.url.split('?')[0]);
-    if (reqPath === '/') reqPath = '/spatial_photoreal_3dgs_demo.html';
-    const filePath = path.join(PUBLIC_DIR, reqPath);
+
+    // Handle root, dots, or common aliases
+    if (reqPath === '/' || reqPath === '') {
+        reqPath = '/index.html';
+    } else if (reqPath === '/...' || reqPath.startsWith('/...') || reqPath === '/demos' || reqPath === '/gallery' || reqPath === '/studios') {
+        res.writeHead(302, { Location: '/' });
+        res.end();
+        return;
+    }
+
+    let filePath = path.join(PUBLIC_DIR, reqPath);
 
     if (!filePath.startsWith(PUBLIC_DIR)) {
-        res.writeHead(403);
+        res.writeHead(403, { 'Content-Type': 'text/plain' });
         res.end('Forbidden');
         return;
     }
 
-    fs.stat(filePath, (err, stats) => {
+    // Check if direct file exists, or if appending .html matches a clean URL
+    let targetPath = filePath;
+    if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
+        const withHtml = filePath + '.html';
+        if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
+            targetPath = withHtml;
+        }
+    }
+
+    fs.stat(targetPath, (err, stats) => {
         if (err || !stats.isFile()) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not Found: ' + reqPath);
+            res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(render404Page(reqPath));
             return;
         }
 
-        const ext = path.extname(filePath).toLowerCase();
+        const ext = path.extname(targetPath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
         const range = req.headers.range;
@@ -50,23 +176,21 @@ const server = http.createServer((req, res) => {
             const start = parseInt(parts[0], 10);
             const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
             const chunksize = (end - start) + 1;
-            const stream = fs.createReadStream(filePath, { start, end });
+            const stream = fs.createReadStream(targetPath, { start, end });
             res.writeHead(206, {
                 'Content-Range': `bytes ${start}-${end}/${stats.size}`,
                 'Accept-Ranges': 'bytes',
                 'Content-Length': chunksize,
-                'Content-Type': contentType,
-                'Access-Control-Allow-Origin': '*'
+                'Content-Type': contentType
             });
             stream.pipe(res);
         } else {
             res.writeHead(200, {
                 'Content-Type': contentType,
                 'Content-Length': stats.size,
-                'Accept-Ranges': 'bytes',
-                'Access-Control-Allow-Origin': '*'
+                'Accept-Ranges': 'bytes'
             });
-            const stream = fs.createReadStream(filePath);
+            const stream = fs.createReadStream(targetPath);
             stream.pipe(res);
         }
     });
