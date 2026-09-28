@@ -11,6 +11,7 @@ import * as React from 'react';
 import { CanvasArtifact, AgentExecutionStep } from './canvas-types';
 import { classifyCliCommand } from './guardrails-service';
 import { CanvasErrorBoundary } from './CanvasErrorBoundary';
+import { buildArtifactExplanationMarkdown } from './services/artifactExplanationService';
 
 export type CodeTokenType =
     | 'keyword'
@@ -538,8 +539,8 @@ export function cleanMessageTextSmart(rawText: string, artifact?: CanvasArtifact
         }
     }
 
-    if (!cleaned && artifact) {
-        return `I've synthesized the **${artifact.title}** on your visual canvas.`;
+    if ((!cleaned || /^I(?:'ve|\s+have)\s+synthesized\s+the\s+\*\*.*?\*\*\s+on\s+your\s+visual\s+canvas\.?$/i.test(cleaned.trim())) && artifact) {
+        return buildArtifactExplanationMarkdown(artifact);
     }
     return cleaned;
 }

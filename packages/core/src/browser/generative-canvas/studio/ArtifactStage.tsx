@@ -43,13 +43,6 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
         }}>
         <CanvasCardHeader {...props} />
 
-        <RelatedArtifactsRail
-            items={relatedArtifacts}
-            onSelect={handleSelectRelatedArtifact}
-            onOpenBento={handleOpenRelatedInBento}
-            activeArtifactTitle={props.activeArtifact?.title}
-        />
-
         <CanvasCardBody {...props} />
     </div>
 </div>

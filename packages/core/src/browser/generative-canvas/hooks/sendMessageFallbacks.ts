@@ -1385,13 +1385,17 @@ If you ever want to turn our conversation into visual canvas artifacts, you can 
     return { chatResponse };
 }
 
+import { buildArtifactExplanationMarkdown } from '../services/artifactExplanationService';
+export { buildArtifactExplanationMarkdown } from '../services/artifactExplanationService';
+
 export function buildFallbackAssistantText(attachedDataFile: AttachedDataFile | undefined, fallbackGen: CanvasArtifact | undefined): string {
-    const targetAssistantText = attachedDataFile
-        ? `I've analyzed **${attachedDataFile.name}** (${attachedDataFile.rowsCount} rows) and generated an interactive **KPI Metric Dashboard & Data Table** with performance charts on your visual canvas!`
-        : fallbackGen?.summary
-        ? `${fallbackGen.summary}`
-        : `I've generated the **${fallbackGen?.title || 'Canvas'}** on your visual canvas.`;
-    return targetAssistantText;
+    if (attachedDataFile && fallbackGen) {
+        return `I've analyzed **${attachedDataFile.name}** (${attachedDataFile.rowsCount} rows) and generated an interactive **KPI Metric Dashboard & Data Table** with performance charts on your visual canvas!\n\n${buildArtifactExplanationMarkdown(fallbackGen)}`;
+    }
+    if (fallbackGen) {
+        return buildArtifactExplanationMarkdown(fallbackGen);
+    }
+    return `I've generated the canvas artifact on your visual canvas.`;
 }
 
 export function buildSimulatedSteps(fallbackGen: CanvasArtifact | undefined): AgentExecutionStep[] {

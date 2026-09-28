@@ -3256,62 +3256,6 @@ int main(int argc, char** argv) {
     // ---------------------------------------------------------
     return (
         <div className="sb-scene3d-primitive-container relative w-full h-full bg-zinc-950 text-zinc-100 overflow-hidden rounded-[16px] border border-white/10 shadow-2xl backdrop-blur-2xl select-none">
-            {/* Ultra-Minimal Floating Glass Telemetry Badge (Docked bottom-left below vertical toolstrip) */}
-            <div className="sb-3d-minimal-badge-container absolute bottom-4 left-4 z-20 pointer-events-none flex items-center gap-2 animate-fadeIn max-w-[calc(40%-16px)]">
-                <div className="sb-3d-minimal-badge pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-300 shadow-xl overflow-hidden whitespace-nowrap">
-                    <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shadow-[0_0_8px_rgba(96,165,250,0.8)] shrink-0" />
-                    <span className="font-semibold text-white truncate max-w-[130px]">{sceneData.title || '3D Scene'}</span>
-                    <span className="text-zinc-500 shrink-0">·</span>
-                    <span className="text-blue-400 font-mono text-[11px] shrink-0">{worldBranch}</span>
-                    {hasGeoCoordinates && (
-                        <>
-                            <span className="text-zinc-500 shrink-0">·</span>
-                            <span className="text-emerald-400 font-mono text-[11px] shrink-0">
-                                {parseFloat(lat).toFixed(2)}°N, {Math.abs(parseFloat(lng)).toFixed(2)}°W
-                            </span>
-                        </>
-                    )}
-                    {sceneData.cppGenerator?.sourceCode && (
-                        <>
-                            <span className="text-zinc-500 shrink-0">·</span>
-                            <span className="text-purple-300 font-mono text-[10px] bg-purple-950/60 border border-purple-500/30 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
-                                <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-                                C++20
-                            </span>
-                        </>
-                    )}
-                </div>
-
-                <div className="flex items-center gap-2 pointer-events-auto shrink-0">
-                    <button
-                        type="button"
-                        onClick={handleExportGlb}
-                        className="sb-btn sb-btn-xs flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-blue-950/80 hover:bg-blue-900/80 text-blue-200 border border-blue-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
-                        title="Export 3D Scene as standardized binary glTF (.glb)"
-                    >
-                        <span>📦</span>
-                        <span>Export GLB</span>
-                    </button>
-                    {sceneData.cppGenerator?.sourceCode && (
-                        <button
-                            type="button"
-                            onClick={() => setShowCppStudio(!showCppStudio)}
-                            className="sb-btn sb-btn-xs flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-xs font-mono shadow-xl transition-all shrink-0"
-                        >
-                            <span>⚡</span>
-                            <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
-                        </button>
-                    )}
-                </div>
-
-                {scriptError && (
-                    <div className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/70 backdrop-blur-md border border-amber-500/40 text-[11px] text-amber-200 shadow-lg">
-                        <span className="text-amber-400">⚠</span>
-                        <span className="font-mono truncate max-w-xs">{scriptError}</span>
-                    </div>
-                )}
-            </div>
-
             {/* CONTAINERIZED 3D VIEWPORT CANVAS - Full-Bleed 100% */}
             <div className="sb-3d-viewport-frame absolute inset-0 w-full h-full bg-zinc-950 overflow-hidden">
                 {webglError ? (
@@ -3902,6 +3846,47 @@ int main(int argc, char** argv) {
 
                 {/* Top-Right Global Scene & Overlays HUD Bar */}
                 <div className="sb-3d-options-bar pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 text-xs font-medium text-zinc-200 shadow-2xl animate-fadeIn shrink-0 whitespace-nowrap">
+                    {/* Minimal 3D Badge */}
+                    <div className="sb-3d-minimal-badge flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-950/50 border border-blue-500/30 text-[10px] font-mono text-blue-300 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                        <span>3D</span>
+                    </div>
+
+                    <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
+
+                    {/* Export GLB Action */}
+                    <button
+                        type="button"
+                        onClick={handleExportGlb}
+                        className="sb-btn sb-btn-xs flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-950/80 hover:bg-blue-900/80 text-blue-200 border border-blue-500/40 text-[10px] font-mono shadow-sm transition-all shrink-0"
+                        title="Export 3D Scene as standardized binary glTF (.glb)"
+                    >
+                        <span>📦</span>
+                        <span>Export GLB</span>
+                    </button>
+
+                    {/* C++ Studio Toggle */}
+                    {sceneData.cppGenerator?.sourceCode && (
+                        <button
+                            type="button"
+                            onClick={() => setShowCppStudio(!showCppStudio)}
+                            className="sb-btn sb-btn-xs flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-950/80 hover:bg-purple-900/80 text-purple-200 border border-purple-500/40 text-[10px] font-mono shadow-sm transition-all shrink-0"
+                            title="Open C++20 Spatial Engine Studio"
+                        >
+                            <span>⚡</span>
+                            <span>{showCppStudio ? 'Close C++' : 'C++ Studio'}</span>
+                        </button>
+                    )}
+
+                    {scriptError && (
+                        <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/70 border border-amber-500/40 text-[10px] text-amber-200 shrink-0">
+                            <span className="text-amber-400">⚠</span>
+                            <span className="font-mono truncate max-w-[120px]">{scriptError}</span>
+                        </div>
+                    )}
+
+                    <div className="sb-3d-options-divider w-[1px] h-4 bg-white/10 shrink-0" />
+
                     {/* Cinematic Lighting Rigs Selector */}
                     <div className="sb-3d-pill-group-container flex items-center gap-1 shrink-0">
                         <span className="sb-3d-options-label text-zinc-400 text-[11px] font-medium">Rig</span>

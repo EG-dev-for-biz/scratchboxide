@@ -81,13 +81,23 @@ export function extractPromptEntities(prompt: string, fallbackSubject: string = 
     action: string;
     keywords: string[];
 } {
-    // Remove command verbs, determiners and structural keywords from the start cleanly
     let clean = prompt.trim();
+
+    // 1. Remove meta-tags such as [Clarification Selection]: and [Execution Plan Approved]:
+    clean = clean.replace(/^\[(?:Clarification\s+Selection|Execution\s+Plan[^\]]*)\]:?\s*/i, '');
+
+    // 2. Remove question prompts before colon, e.g. "Which 3D representation: Photorealistic Google 3D Tiles"
+    clean = clean.replace(/^(?:Which|What|How|Choose|Select)[^:]*:\s*/i, '');
+
+    // 3. Remove execution confirmation prefixes like "Proceed with Tier 1 ... for "
+    clean = clean.replace(/^Proceed(?:\s+with[^\n:]*?)?\s+for\s+/i, '');
+
+    // 4. Remove command verbs, determiners and structural keywords from the start cleanly
     const leadingPrefixRegex = /^(?:(?:\/|\b)(?:create|generate|build|make|draft|design|synthesize|plan|model|simulate|analyze|track|show|render|code|develop|assemble|an?|the|new|3d|2d|kanban|metrics|graph|dashboard|timeline|scene|sandbox|board|for|about|of|on|to|with)\b[\s:,-]*)+/i;
     clean = clean.replace(leadingPrefixRegex, '').replace(/[?.!]+$/, '').trim();
 
     const words = clean.split(/\s+/).filter(w => !/^(and|the|for|with|about|from|into|your|this|that|an?)$/i.test(w) && w.length > 1);
-    const subject = clean.length > 2 ? (clean.charAt(0).toUpperCase() + clean.slice(1, 48)) : fallbackSubject;
+    const subject = clean.length > 2 ? (clean.charAt(0).toUpperCase() + clean.slice(1, 64)) : fallbackSubject;
     const action = words.find(w => /ing$|tion$|ment$|ance$/i.test(w)) || (words[1] || 'Processing');
 
     return {
@@ -682,7 +692,7 @@ export function synthesizeAdaptive3DScene(
     return {
         title: sceneTitle,
         subtitle: `PBR spatial environment tailored for ${subject}`,
-        worldBranch: `spatial/${subject.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+        worldBranch: `spatial/${subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`,
         sceneType: isSpace ? 'space' : isMicro ? 'molecular' : 'custom',
         renderMode: 'pbr',
         cameraMode: 'orbit',
