@@ -12129,7 +12129,7 @@ body.theia-light .sb-antigravity-tab.active {
 
 .sb-canvas-tab-title,
 .sb-antigravity-tab-title {
-    max-width: 320px !important;
+    max-width: 160px !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
@@ -12146,15 +12146,23 @@ body.theia-light .sb-antigravity-tab.active {
     border: none;
     background: transparent;
     color: inherit;
-    opacity: 0.45;
+    opacity: 0;
     cursor: pointer;
     font-size: 10px;
     margin-left: 4px;
-    transition: opacity 0.1s, background 0.1s, color 0.1s;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
+
+.sb-canvas-tab:hover .sb-canvas-tab-close,
+.sb-canvas-tab.active .sb-canvas-tab-close,
+.sb-antigravity-tab:hover .sb-antigravity-tab-close,
+.sb-antigravity-tab.active .sb-antigravity-tab-close {
+    opacity: 0.6;
+}
+
 .sb-canvas-tab-close:hover,
 .sb-antigravity-tab-close:hover {
-    opacity: 1;
+    opacity: 1 !important;
     background: rgba(255, 255, 255, 0.15);
 }
 body.theia-light .sb-canvas-tab-close:hover,

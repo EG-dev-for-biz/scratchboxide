@@ -1242,6 +1242,49 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                                 Plan: Architecture
                                             </button>
                                         </div>
+
+                                        {/* Clean Quick Creation Starters */}
+                                        <div className="sb-starter-prompts-grid" style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: '8px',
+                                            justifyContent: 'center',
+                                            maxWidth: '680px',
+                                            margin: '20px auto 0 auto'
+                                        }}>
+                                            {[
+                                                { icon: '✨', label: 'Interactive App', prompt: 'Build an interactive audio visualizer app with responsive controls' },
+                                                { icon: '🪐', label: '3D Scene', prompt: 'Build a procedural 3D sci-fi exploration environment with terrain and lighting' },
+                                                { icon: '🎬', label: 'Video NLE', prompt: 'Assemble a multi-track video timeline with color grading and title graphics' },
+                                                { icon: '📄', label: 'System Spec', prompt: 'Draft a technical architecture specification with interface invariants' },
+                                                { icon: '📊', label: 'KPI Dashboard', prompt: 'Dashboard for real-time telemetry metrics and system throughput' }
+                                            ].map(item => (
+                                                <button
+                                                    key={item.label}
+                                                    type="button"
+                                                    className="sb-btn sb-starter-chip"
+                                                    onClick={() => handleSendMessage(item.prompt)}
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '6px',
+                                                        padding: '6px 12px',
+                                                        borderRadius: '8px',
+                                                        background: 'rgba(255, 255, 255, 0.04)',
+                                                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                                                        color: 'var(--sb-text-secondary, #cbd5e1)',
+                                                        fontSize: '12px',
+                                                        fontWeight: 500,
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                    title={item.prompt}
+                                                >
+                                                    <span>{item.icon}</span>
+                                                    <span>{item.label}</span>
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
                                 ) : (
                                     /* Full-Width / Centered Chat Stream View */

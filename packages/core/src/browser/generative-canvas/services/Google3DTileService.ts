@@ -175,7 +175,7 @@ const GLOBAL_LANDMARK_REGISTRY: Record<string, { lat: number; lng: number; eleva
   'chicago': { lat: 41.8781, lng: -87.6298, elevation: 181.0, name: 'Chicago' },
   'hollywood sign': { lat: 34.1341, lng: -118.3215, elevation: 490.0, name: 'Hollywood Sign, Los Angeles' },
   'los angeles': { lat: 34.0522, lng: -118.2437, elevation: 89.0, name: 'Los Angeles' },
-  'la': { lat: 34.0522, lng: -118.2437, elevation: 89.0, name: 'Los Angeles' },
+  'l.a.': { lat: 34.0522, lng: -118.2437, elevation: 89.0, name: 'Los Angeles' },
   'red rocks': { lat: 39.6654, lng: -105.2057, elevation: 1960.0, name: 'Red Rocks Amphitheatre, Colorado' },
   'the white house': { lat: 38.8977, lng: -77.0365, elevation: 16.0, name: 'The White House, Washington DC' },
   'white house': { lat: 38.8977, lng: -77.0365, elevation: 16.0, name: 'The White House, Washington DC' },
@@ -298,8 +298,8 @@ export function detectRealWorldLocationIntent(
 ): RealWorldLocationIntent | undefined {
   const combined = `${prompt} ${context?.docTitle || ''} ${context?.docContent || ''}`.toLowerCase();
 
-  // Exclude purely generic non-geographic prompts unless a specific known landmark is present
-  const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation)\b/i.test(prompt);
+  // Exclude purely generic non-geographic, space, or extraterrestrial prompts unless coordinates are explicitly given
+  const isGenericNonGeo = /\b(?:outer space|solar system|planets?|galaxy|orbit(?:ing)?|molecule|molecular|atoms?|quantum|dna|particle simulation|mars|moon|lunar|asteroid|sci-fi|cyberpunk|spacecraft|rover)\b/i.test(prompt);
 
   // Check direct coordinate string pattern
   const coordMatch = combined.match(/(?:lat|latitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)[,\s]+(?:lng|lon|longitude)?:?\s*([-+]?[0-9]*\.?[0-9]+)/i);
@@ -316,6 +316,10 @@ export function detectRealWorldLocationIntent(
         query: `${lat}, ${lng}`
       };
     }
+  }
+
+  if (isGenericNonGeo) {
+    return undefined;
   }
 
   // Sort entries by key length descending so specific multi-word landmarks match first
@@ -336,10 +340,6 @@ export function detectRealWorldLocationIntent(
         query: item.name
       };
     }
-  }
-
-  if (isGenericNonGeo) {
-    return undefined;
   }
 
   // Check generic map tile / real world scene / 3D model / 3DGS keywords followed by a location name

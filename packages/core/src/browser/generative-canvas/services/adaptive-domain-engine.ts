@@ -81,13 +81,13 @@ export function extractPromptEntities(prompt: string, fallbackSubject: string = 
     action: string;
     keywords: string[];
 } {
-    const clean = prompt
-        .replace(/^(?:[\s\W]|create|generate|build|make|draft|design|synthesize|plan|model|simulate|analyze|track|a|an|the|new|3d|2d|kanban|metrics|graph|dashboard|timeline|scene|sandbox|board|for|about|of|on|to|with)+\b/i, '')
-        .replace(/[?.!]+$/, '')
-        .trim();
+    // Remove command verbs, determiners and structural keywords from the start cleanly
+    let clean = prompt.trim();
+    const leadingPrefixRegex = /^(?:(?:\/|\b)(?:create|generate|build|make|draft|design|synthesize|plan|model|simulate|analyze|track|show|render|code|develop|assemble|an?|the|new|3d|2d|kanban|metrics|graph|dashboard|timeline|scene|sandbox|board|for|about|of|on|to|with)\b[\s:,-]*)+/i;
+    clean = clean.replace(leadingPrefixRegex, '').replace(/[?.!]+$/, '').trim();
 
-    const words = clean.split(/\s+/).filter(w => !/^(and|the|for|with|about|from|into|your|this|that)$/i.test(w) && w.length > 2);
-    const subject = clean.length > 2 ? clean.slice(0, 48) : fallbackSubject;
+    const words = clean.split(/\s+/).filter(w => !/^(and|the|for|with|about|from|into|your|this|that|an?)$/i.test(w) && w.length > 1);
+    const subject = clean.length > 2 ? (clean.charAt(0).toUpperCase() + clean.slice(1, 48)) : fallbackSubject;
     const action = words.find(w => /ing$|tion$|ment$|ance$/i.test(w)) || (words[1] || 'Processing');
 
     return {

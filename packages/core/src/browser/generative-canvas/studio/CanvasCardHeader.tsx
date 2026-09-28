@@ -357,8 +357,8 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
 
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-            {/* Minimalist Segmented View Mode Pill: Code | Split | Preview */}
-            {(layoutMode === 'code' || activeArtifact?.type === 'live-code-sandbox') && (
+            {/* Minimalist Segmented View Mode Pill: Code | Split | Preview (only on Live Code Sandbox) */}
+            {activeArtifact?.type === 'live-code-sandbox' && (
                 <div
                     className="sb-segmented-control sb-segmented-control-xs"
                     style={{

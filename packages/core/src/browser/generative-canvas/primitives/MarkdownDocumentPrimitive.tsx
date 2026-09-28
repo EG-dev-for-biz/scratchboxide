@@ -3017,82 +3017,91 @@ export const MarkdownDocumentPrimitive: React.FC<MarkdownDocumentPrimitiveProps>
             {!readOnly && (
                 <div className="sb-doc-toolbar-actions">
                     <div className="sb-doc-toolbar-actions-left">
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(doc.sections?.length || 0, 'editorial-image')}
-                            title="Insert Clean Editorial Image (Nano Banana)"
-                        >
-                            <IconImage size={12} />
-                            <span>+ Image</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(doc.sections?.length || 0, 'svg-diagram')}
-                            title="Insert Interactive Diagram"
-                        >
-                            <IconDiagram size={12} />
-                            <span>+ Diagram</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(doc.sections?.length || 0, 'video')}
-                            title="Insert Video Walkthrough"
-                        >
-                            <IconVideo size={12} />
-                            <span>+ Video</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(doc.sections?.length || 0, 'location-image')}
-                            title="Insert Location Image / Map"
-                        >
-                            <IconPin size={12} />
-                            <span>+ Map</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={() => handleAddSection(doc.sections?.length || 0, 'citation')}
-                            title="Insert Citations"
-                        >
-                            <IconCitation size={12} />
-                            <span>+ Citation</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                            onClick={handleAutoLinkNotes}
-                            title="Scan document and automatically create [[wikilinks]] for known concepts and headings"
-                        >
-                            <IconSparkles size={12} />
-                            <span>Auto-Link Notes</span>
-                        </button>
-                        {onMorphToKanban && (
+                        {/* Insert media group */}
+                        <div className="sb-doc-btn-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(255, 255, 255, 0.03)', padding: '2px 6px', borderRadius: '7px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                            <span style={{ fontSize: '10px', color: 'var(--sb-text-tertiary, #94a3b8)', fontWeight: 600, padding: '0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Insert</span>
                             <button
                                 type="button"
-                                className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                                onClick={handleMorphDocumentToKanban}
-                                title="Morph document tasks & milestones into an interactive Kanban Board"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={() => handleAddSection(doc.sections?.length || 0, 'editorial-image')}
+                                title="Insert Clean Editorial Image (Nano Banana)"
                             >
-                                <IconKanban size={12} />
-                                <span>Morph to Kanban</span>
+                                <IconImage size={12} />
+                                <span>Image</span>
                             </button>
-                        )}
-                        {onMorphToNodeGraph && (
                             <button
                                 type="button"
-                                className="sb-btn sb-btn-secondary sb-btn-xs sb-doc-action-btn"
-                                onClick={handleMorphDocumentToNodeGraph}
-                                title="Morph document architecture & flow into a Node Graph pipeline"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={() => handleAddSection(doc.sections?.length || 0, 'svg-diagram')}
+                                title="Insert Interactive Diagram"
                             >
                                 <IconDiagram size={12} />
-                                <span>Morph to Graph</span>
+                                <span>Diagram</span>
                             </button>
-                        )}
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={() => handleAddSection(doc.sections?.length || 0, 'video')}
+                                title="Insert Video Walkthrough"
+                            >
+                                <IconVideo size={12} />
+                                <span>Video</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={() => handleAddSection(doc.sections?.length || 0, 'location-image')}
+                                title="Insert Location Image / Map"
+                            >
+                                <IconPin size={12} />
+                                <span>Map</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={() => handleAddSection(doc.sections?.length || 0, 'citation')}
+                                title="Insert Citations"
+                            >
+                                <IconCitation size={12} />
+                                <span>Citation</span>
+                            </button>
+                        </div>
+
+                        {/* Transform & workflow group */}
+                        <div className="sb-doc-btn-group" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(255, 255, 255, 0.03)', padding: '2px 6px', borderRadius: '7px', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                            <span style={{ fontSize: '10px', color: 'var(--sb-text-tertiary, #94a3b8)', fontWeight: 600, padding: '0 4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Transform</span>
+                            <button
+                                type="button"
+                                className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                onClick={handleAutoLinkNotes}
+                                title="Scan document and automatically create [[wikilinks]] for known concepts and headings"
+                            >
+                                <IconSparkles size={12} />
+                                <span>Auto-Link</span>
+                            </button>
+                            {onMorphToKanban && (
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                    onClick={handleMorphDocumentToKanban}
+                                    title="Morph document tasks & milestones into an interactive Kanban Board"
+                                >
+                                    <IconKanban size={12} />
+                                    <span>Morph to Kanban</span>
+                                </button>
+                            )}
+                            {onMorphToNodeGraph && (
+                                <button
+                                    type="button"
+                                    className="sb-btn sb-btn-ghost sb-btn-xs sb-doc-action-btn"
+                                    onClick={handleMorphDocumentToNodeGraph}
+                                    title="Morph document architecture & flow into a Node Graph pipeline"
+                                >
+                                    <IconDiagram size={12} />
+                                    <span>Morph to Graph</span>
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <button
                         type="button"
