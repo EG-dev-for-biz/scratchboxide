@@ -91,6 +91,7 @@
 #include "scratchbox_tectonic_analyzer.hpp"
 #include "scratchbox_plant_builder.hpp"
 #include "scratchbox_infinigen.hpp"
+#include "scratchbox_tile_restructurer.hpp"
 
 namespace sb = scratchbox;
 namespace vhull = scratchbox::visual_hull;

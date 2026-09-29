@@ -161,6 +161,19 @@ export {
     MeshReshapingResult
 } from './node/3d-engine/native-mesh-reshaper-service';
 export {
+    NativeTileRestructurerService,
+    TileRestructurerService,
+    restructureTileMesh,
+    TileStyle,
+    RestructureMaterialMode,
+    TerraformingOp,
+    PrimitiveGraft,
+    TileRestructureConfig,
+    TileRestructureTelemetry,
+    TileRestructureOptions,
+    TileRestructureResult
+} from './node/3d-engine/native-tile-restructurer-service';
+export {
     NativeTilePathTracerService,
     TileShadingMode,
     TileViewLook,

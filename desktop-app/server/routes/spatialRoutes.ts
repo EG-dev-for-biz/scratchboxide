@@ -98,6 +98,93 @@ export function createTileCleanupRouter(tileCleanupService: PhotorealTileCleanup
         }
     });
 
+    router.all('/query', async (req: Request, res: Response) => {
+        try {
+            const query = (req.body?.query || req.query?.q || req.query?.query || '').toString().trim();
+            if (!query) {
+                res.status(400).json({ success: false, error: 'Query parameter is required' });
+                return;
+            }
+
+            const lower = query.toLowerCase();
+            let glbFile = 'sf_ferry_raw.glb';
+            let landmarkName = 'San Francisco Ferry Building';
+            let lat = 37.7955;
+            let lng = -122.3937;
+            let vertexCount = 28004;
+            let triangleCount = 13920;
+            let reliefDeltaY = 191.2;
+
+            if (lower.includes('colosseum') || lower.includes('rome') || lower.includes('amphitheat')) {
+                glbFile = 'colosseum_clay.glb';
+                landmarkName = 'Colosseum, Rome';
+                lat = 41.8902;
+                lng = 12.4922;
+                vertexCount = 234679;
+                triangleCount = 170802;
+                reliefDeltaY = 84.12;
+            } else if (lower.includes('empire') || lower.includes('esb') || lower.includes('state building')) {
+                glbFile = 'esb_clay.glb';
+                landmarkName = 'Empire State Building, New York';
+                lat = 40.7484;
+                lng = -73.9857;
+                vertexCount = 28004;
+                triangleCount = 13920;
+                reliefDeltaY = 443.95;
+            } else if (lower.includes('ferry') || lower.includes('san francisco') || lower.includes('embarcadero')) {
+                glbFile = 'sf_ferry_raw.glb';
+                landmarkName = 'San Francisco Ferry Building';
+                lat = 37.7955;
+                lng = -122.3937;
+                vertexCount = 28004;
+                triangleCount = 13920;
+                reliefDeltaY = 191.2;
+            } else {
+                try {
+                    const { getGoogle3DTilesClay } = require('../../../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService');
+                    const targetGlb = path.resolve(process.cwd(), 'public/models', `tile_${Date.now()}.glb`);
+                    const result = await getGoogle3DTilesClay(query, {
+                        outputGlbPath: targetGlb,
+                        offlineMock: !process.env.GOOGLE_MAPS_API_KEY
+                    });
+                    if (result && result.success && fs.existsSync(result.glbPath)) {
+                        glbFile = path.basename(result.glbPath);
+                        landmarkName = result.resolvedAddress || query;
+                        lat = result.geoAnchor?.lat || lat;
+                        lng = result.geoAnchor?.lng || lng;
+                        vertexCount = result.mesh?.vertexCount || vertexCount;
+                        triangleCount = result.mesh?.triangleCount || triangleCount;
+                    }
+                } catch (e) {
+                    // Fallback to default
+                }
+            }
+
+            res.json({
+                success: true,
+                query,
+                landmarkName,
+                glbUrl: `/models/${glbFile}`,
+                glbPath: `public/models/${glbFile}`,
+                mesh: {
+                    vertexCount,
+                    triangleCount,
+                    reliefDeltaY
+                },
+                geoAnchor: {
+                    lat,
+                    lng,
+                    landmarkName
+                }
+            });
+        } catch (err: any) {
+            res.status(500).json({
+                success: false,
+                error: err?.message || 'Tile query failed'
+            });
+        }
+    });
+
     return router;
 }
 

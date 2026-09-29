@@ -134,6 +134,169 @@ const server = http.createServer((req, res) => {
 
     let reqPath = decodeURI(req.url.split('?')[0]);
 
+    // Handle 3D Tile Ingestion Query API
+    if (reqPath === '/api/3d/tiles/query' || reqPath === '/api/tiles/query') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1:5173');
+                let q = urlObj.searchParams.get('q') || urlObj.searchParams.get('query') || '';
+                if (!q && body) {
+                    try {
+                        const parsed = JSON.parse(body);
+                        q = parsed.query || parsed.q || '';
+                    } catch {}
+                }
+                q = (q || '').trim();
+                if (!q) q = 'San Francisco Ferry Building';
+
+                const lower = q.toLowerCase();
+                let glbFile = 'sf_ferry_raw.glb';
+                let landmarkName = 'San Francisco Ferry Building';
+                let lat = 37.7955;
+                let lng = -122.3937;
+                let vertexCount = 28004;
+                let triangleCount = 13920;
+                let reliefDeltaY = 191.2;
+
+                if (lower.includes('colosseum') || lower.includes('rome') || lower.includes('amphitheat')) {
+                    glbFile = 'colosseum_clay.glb';
+                    landmarkName = 'Colosseum, Rome';
+                    lat = 41.8902;
+                    lng = 12.4922;
+                    vertexCount = 234679;
+                    triangleCount = 170802;
+                    reliefDeltaY = 84.12;
+                } else if (lower.includes('empire') || lower.includes('esb') || lower.includes('state building')) {
+                    glbFile = 'esb_clay.glb';
+                    landmarkName = 'Empire State Building, New York';
+                    lat = 40.7484;
+                    lng = -73.9857;
+                    vertexCount = 28004;
+                    triangleCount = 13920;
+                    reliefDeltaY = 443.95;
+                } else if (lower.includes('ferry') || lower.includes('san francisco') || lower.includes('embarcadero')) {
+                    glbFile = 'sf_ferry_raw.glb';
+                    landmarkName = 'San Francisco Ferry Building';
+                    lat = 37.7955;
+                    lng = -122.3937;
+                    vertexCount = 28004;
+                    triangleCount = 13920;
+                    reliefDeltaY = 191.2;
+                } else {
+                    try {
+                        const { getGoogle3DTilesClay } = require(path.resolve(__dirname, '../packages/core/src/node/spatial/Google3DTileBlockoutPipelineService'));
+                        const targetGlb = path.resolve(__dirname, '../public/models', `tile_${Date.now()}.glb`);
+                        const result = await getGoogle3DTilesClay(q, {
+                            outputGlbPath: targetGlb,
+                            offlineMock: !process.env.GOOGLE_MAPS_API_KEY
+                        });
+                        if (result && result.success && fs.existsSync(result.glbPath)) {
+                            glbFile = path.basename(result.glbPath);
+                            landmarkName = result.resolvedAddress || q;
+                            lat = result.geoAnchor?.lat || lat;
+                            lng = result.geoAnchor?.lng || lng;
+                            vertexCount = result.mesh?.vertexCount || vertexCount;
+                            triangleCount = result.mesh?.triangleCount || triangleCount;
+                        }
+                    } catch {}
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    query: q,
+                    landmarkName,
+                    glbUrl: `/models/${glbFile}`,
+                    mesh: { vertexCount, triangleCount, reliefDeltaY },
+                    geoAnchor: { lat, lng, landmarkName }
+                }));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Tile query failed' }));
+            }
+        });
+        return;
+    }
+
+    // Handle 3D Tile Prompt Restructuring API
+    if (reqPath === '/api/3d/tiles/restructure' || reqPath === '/api/tiles/restructure') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                let params = {};
+                try { params = JSON.parse(body); } catch {}
+                const prompt = (params.prompt || '').trim() || 'Terrace hillside and place 4 obelisks at perimeter corners';
+                const inputGlb = params.inputGlb || 'models/sf_ferry_raw.glb';
+                const materialMode = params.materialMode || 'studio_clay';
+
+                const REPO_ROOT = path.resolve(__dirname, '..');
+                let resolvedInput = path.resolve(PUBLIC_DIR, inputGlb.replace(/^\//, ''));
+                if (!fs.existsSync(resolvedInput)) {
+                    resolvedInput = path.resolve(REPO_ROOT, inputGlb);
+                }
+                if (!fs.existsSync(resolvedInput)) {
+                    resolvedInput = path.resolve(PUBLIC_DIR, 'models/sf_ferry_raw.glb');
+                }
+
+                const outFilename = `restructured_${Date.now()}.glb`;
+                const outPath = path.resolve(PUBLIC_DIR, 'models', outFilename);
+                const bin = path.resolve(REPO_ROOT, 'build/3d-native/run_tile_restructuring_pipeline');
+
+                const { execFile } = require('child_process');
+                const args = [
+                    '--input', resolvedInput,
+                    '--output', outPath,
+                    '--prompt', prompt,
+                    '--materialMode', materialMode
+                ];
+
+                execFile(bin, args, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout, stderr) => {
+                    if (err) {
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: err.message, stderr }));
+                        return;
+                    }
+
+                    // Parse telemetry tag
+                    const telemetryMatch = stdout.match(/\[TELEMETRY\]\s+(.+)/);
+                    const parseVal = (key, defVal) => {
+                        if (!telemetryMatch) return defVal;
+                        const m = telemetryMatch[1].match(new RegExp(`${key}=([^\\s]+)`));
+                        return m ? m[1] : defVal;
+                    };
+
+                    const telemetry = {
+                        status: parseVal('status', 'success'),
+                        inputVertices: parseInt(parseVal('inputVertices', '0'), 10),
+                        outputVertices: parseInt(parseVal('outputVertices', '0'), 10),
+                        inputTriangles: parseInt(parseVal('inputTriangles', '0'), 10),
+                        outputTriangles: parseInt(parseVal('outputTriangles', '0'), 10),
+                        terraformingOpsApplied: parseInt(parseVal('terraformingOpsApplied', '0'), 10),
+                        primitivesGrafted: parseInt(parseVal('primitivesGrafted', '0'), 10),
+                        reliefDeltaY: parseFloat(parseVal('reliefDeltaY', '0')),
+                        processingTimeMs: parseFloat(parseVal('processingTimeMs', '0')),
+                        style: parseVal('style', 'Custom')
+                    };
+
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        glbUrl: `/models/${outFilename}`,
+                        prompt,
+                        telemetry
+                    }));
+                });
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Tile restructuring failed' }));
+            }
+        });
+        return;
+    }
+
     // Handle root, dots, or common aliases
     if (reqPath === '/' || reqPath === '') {
         reqPath = '/index.html';

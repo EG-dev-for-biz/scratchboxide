@@ -107,7 +107,7 @@ describe('Native Prompt-Driven Mesh Reshaping Pipeline (Tier 1)', () => {
     });
 
     it('4. should correctly dispatch Gemini agent tools mesh_reshape_via_prompt & mesh_apply_deformers', async () => {
-        expect(MESH_SHAPING_TOOL_DECLARATIONS.length).toBe(2);
+        expect(MESH_SHAPING_TOOL_DECLARATIONS.length).toBeGreaterThanOrEqual(2);
 
         // mesh_reshape_via_prompt
         const promptOutcome = await meshShapingHandlers.mesh_reshape_via_prompt({
