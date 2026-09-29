@@ -1,0 +1,1 @@
+Hello Scratchbox IDE Master Agent!

@@ -57,6 +57,8 @@ import {
     opticsLensDistortionHandlers,
     BOTANICAL_TREE_TOOL_DECLARATIONS,
     botanicalTreeHandlers,
+    LIGHTING_TOOL_DECLARATIONS,
+    lightingHandlers,
     POSE_DEPTH_TOOL_DECLARATIONS,
     poseDepthHandlers,
     PHYSICAL_CAMERA_TOOL_DECLARATIONS,
@@ -112,6 +114,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('adaptive_matchmove_')) return `Adaptive Matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('continuous_spline_')) return `Continuous Spline Matchmove: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `SB-Veggie Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('lighting_')) return `Photometric Lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Archie Architecture: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Workspace Action: ${name}`;
@@ -129,6 +132,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('adaptive_matchmove_')) return `Matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('continuous_spline_')) return `Spline Matchmove: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `Botanical: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('lighting_')) return `Lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Workspace: ${name}`;
@@ -146,6 +150,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('adaptive_matchmove_')) return `Calibrate and resect camera matchmove: ${name.replace('adaptive_matchmove_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('continuous_spline_')) return `Optimize continuous spline camera trajectory: ${name.replace('continuous_spline_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('botanical_')) return `Synthesize 1:1 metric botanical tree: ${name.replace('botanical_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('lighting_')) return `Compute photometric lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Refine building structure with Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `Classify terrain materials with SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
             return `Invoke ${name}`;
@@ -508,6 +513,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of BOTANICAL_TREE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, botanicalTreeHandlers[decl.name], 'workspace');
+    }
+    for (const decl of LIGHTING_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, lightingHandlers[decl.name], 'workspace');
     }
     for (const decl of POSE_DEPTH_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, poseDepthHandlers[decl.name], 'workspace');
