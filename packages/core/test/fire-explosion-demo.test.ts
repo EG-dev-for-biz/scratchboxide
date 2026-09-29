@@ -121,6 +121,43 @@ export function evaluateGracefulParticleFalloff(age: number, lifetime: number): 
 }
 
 /**
+ * Optical Heat Haze & Thermal Shimmer Refraction
+ * Models air refractive index gradient: dn/dT < 0 produces delicate micro-turbulent mirage displacement
+ */
+export function evaluateHeatShimmerRefraction(
+    screenUv: [number, number],
+    plumeScreenPos: [number, number],
+    time: number,
+    shimmerIntensity: number
+): { offset: [number, number], chromaticDispersion: number } {
+    const dx = screenUv[0] - plumeScreenPos[0];
+    const dy = screenUv[1] - plumeScreenPos[1]; // in screen space, +Y is upward
+
+    // Convective thermal plume envelope: tightly confined to the rising flame column
+    const lateralDist = Math.abs(dx);
+    const lateralFalloff = Math.exp(-lateralDist * lateralDist * 28.0);
+    const verticalPlume = Math.max(0.0, Math.min(1.0, dy + 0.25)) * Math.exp(-Math.max(0.0, dy - 0.7) * 3.2);
+    const thermalEnvelope = lateralFalloff * verticalPlume;
+
+    // High-frequency multi-octave micro-turbulent shimmer ripples
+    const waveU = Math.sin(screenUv[0] * 85.0 + time * 1.5) * 0.45 +
+                  Math.cos(screenUv[1] * 120.0 - time * 2.2) * 0.35 +
+                  Math.sin((screenUv[0] + screenUv[1]) * 160.0 + time * 2.8) * 0.20;
+    const waveV = Math.cos(screenUv[0] * 95.0 - time * 1.8) * 0.50 +
+                  Math.sin(screenUv[1] * 140.0 - time * 2.6) * 0.35 +
+                  Math.cos((screenUv[0] - screenUv[1]) * 175.0 + time * 3.1) * 0.15;
+
+    // Delicate sub-pixel micro-refraction scaling (~1-2 px at 1080p)
+    const offsetScale = thermalEnvelope * shimmerIntensity * 0.0022;
+    const offset: [number, number] = [waveU * offsetScale, waveV * offsetScale];
+
+    // Subtle chromatic dispersion between red and blue wavelengths (1.5% split)
+    const chromaticDispersion = offsetScale * 0.015;
+
+    return { offset, chromaticDispersion };
+}
+
+/**
  * 3D Spatial Audio Telemetry & Doppler Shift Calculation
  */
 export function computeExplosionAudioTelemetry(
@@ -294,7 +331,24 @@ describe('Photorealistic 3D Fire Explosion Demo Suite', () => {
         expect(end.kelvin).toBeCloseTo(550, 0); // Cool smoke
     });
 
-    it('verifies that the standalone fire explosion HTML demo file exists and contains complete WebGL2 shaders and Web Audio synthesis', () => {
+    it('verifies optical heat haze and thermal shimmer refraction physics', () => {
+        const plumePos: [number, number] = [0.5, 0.4]; // Center of screen
+        const time = 1.5;
+        const shimmerIntensity = 1.0;
+
+        // 1. Directly in rising thermal chimney above flame (delicate micro-distortion)
+        const nearPlume = evaluateHeatShimmerRefraction([0.5, 0.55], plumePos, time, shimmerIntensity);
+        const offsetMag = Math.hypot(nearPlume.offset[0], nearPlume.offset[1]);
+        expect(offsetMag).toBeGreaterThan(0.0002);
+        expect(offsetMag).toBeLessThan(0.0035); // Delicate, avoids intense jelly warping
+        expect(nearPlume.chromaticDispersion).toBeLessThan(0.0001); // Subtle spectral fringing
+
+        // 2. Far outside thermal plume (screen corner)
+        const farCorner = evaluateHeatShimmerRefraction([0.05, 0.05], plumePos, time, shimmerIntensity);
+        expect(Math.hypot(farCorner.offset[0], farCorner.offset[1])).toBeLessThan(0.00001);
+    });
+
+    it('verifies that the standalone fire explosion HTML demo file exists and contains complete shaders, physics, and camera flight without audio overhead', () => {
         const demoPath = path.resolve(process.cwd(), 'public/demos/fire-explosion.html');
         expect(fs.existsSync(demoPath)).toBe(true);
 
@@ -317,13 +371,14 @@ describe('Photorealistic 3D Fire Explosion Demo Suite', () => {
         expect(content).toContain('KeyA');
         expect(content).toContain('KeyD');
 
-        // Check Web Audio API procedural sound engine
-        expect(content).toContain('AudioContext');
-        expect(content).toContain('createPanner');
-        expect(content).toContain('createBiquadFilter');
-        expect(content).toContain('doppler');
+        // Verify audio overhead has been eliminated for silent, pure visual rendering
+        expect(content).not.toContain('ProceduralExplosionAudio');
+        expect(content).not.toContain('btn-audio');
 
         // Check Gaussian optical blur & bloom filter
         expect(content).toMatch(/blur|bloom|uBlurAmount/i);
+
+        // Check Optical Heat Haze & Shimmer Refraction
+        expect(content).toMatch(/shimmer|heatHaze|heatShimmer/i);
     });
 });

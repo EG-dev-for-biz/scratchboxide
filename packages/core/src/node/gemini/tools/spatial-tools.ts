@@ -737,6 +737,20 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
 
 export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
+        name: 'synthesize_adaptive_particle_system',
+        description: 'Synthesizes an AdaptiveParticleContract continuous physical specification for any particulate substance (fluids, dust, plasma, steam, sparks, sand, rain, cinders) using zero closed taxonomy presets in accordance with Scratchbox IDE Adaptive Domain Architecture.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: {
+                    type: 'STRING',
+                    description: 'Natural language description of the particle substance, dynamics, medium, or visual style (e.g. "bioluminescent marine plankton in ocean wake", "oxy-acetylene welding sparks ricocheting off steel", "Bagnold desert sandstorm with wind shear").'
+                }
+            },
+            required: ['prompt']
+        }
+    },
+    {
         name: 'adaptive_world_style_deconstruct',
         description: 'Deconstruct any reference image into an adaptive continuous contract of styling, lighting, grading, detail, and NPR parameters using the zero-preset Adaptive Style Deconstruction Engine.',
         parameters: {
@@ -1438,6 +1452,17 @@ async function resolveStationImageGenerator(ctx: { workspaceRoot: string }): Pro
 }
 
 export const panoramaHandlers: Record<string, ToolHandler> = {
+    synthesize_adaptive_particle_system: async (args, _ctx) => {
+        const prompt = asString(args.prompt);
+        if (!prompt) throw new Error('synthesize_adaptive_particle_system: "prompt" argument is required.');
+        const { AdaptiveDomainParticleService } = await import('../../../browser/generative-canvas/services/spatial/AdaptiveDomainParticleService');
+        const contract = AdaptiveDomainParticleService.synthesizeFromPrompt(prompt);
+        return {
+            resultPayload: contract as any,
+            summaryResult: `Synthesized Adaptive Particle Contract for "${contract.subject}": emission=${contract.material.emissionModel}, mass=${contract.kinematics.substanceMass}, restitution=${contract.kinematics.restitution}, gravity=${contract.kinematics.gravity}m/s², wind=[${contract.kinematics.ambientWind.join(', ')}]m/s.`
+        };
+    },
+
     adaptive_world_style_deconstruct: async (args, ctx) => {
         const referenceImagePath = asString(args.referenceImagePath);
         if (!referenceImagePath) throw new Error('adaptive_world_style_deconstruct: "referenceImagePath" argument is required.');

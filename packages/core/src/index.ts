@@ -323,6 +323,44 @@ export type {
     DeconstructionOptions
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 
+// Universal Prompt-Driven Particle & Volumetric Simulation Protocol
+export {
+    DEFAULT_FIRE_SIMULATION_PROFILE,
+    compileSimulationFromPrompt,
+    interpolateSimulationProfiles
+} from './common/prompt-particle-simulation-protocol';
+export type {
+    ParticleSimulationProfile
+} from './common/prompt-particle-simulation-protocol';
+
+// Adaptive Domain Particle Architecture (Zero-Preset & Schema-Guided)
+export {
+    DEFAULT_ADAPTIVE_PARTICLE_CONTRACT,
+    interpolateAdaptiveParticleContracts
+} from './common/spatial/adaptive-particle-contract';
+export type {
+    AdaptiveParticleContract,
+    ParticleEmissionModel
+} from './common/spatial/adaptive-particle-contract';
+export {
+    AdaptiveDomainParticleService
+} from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
+
+// AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) Postprocessing
+export {
+    FidelityFXSuperResolution,
+    createFidelityFXSuperResolution,
+    FSRQualityPreset,
+    FSR_PRESET_SCALES,
+    computeInputDimensionsForPreset,
+    EASU_SHADER,
+    RCAS_SHADER,
+    FSR_QUAD_VERT,
+    type FidelityFXSuperResolutionOptions
+} from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
+
+
+
 
 
 

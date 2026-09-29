@@ -3517,6 +3517,37 @@ int main(int argc, char** argv) {
                     <span>📦</span>
                     <span>Export GLB</span>
                 </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        const isEnabled = !(sceneData.metadata?.postprocessing?.fsr?.enabled ?? false);
+                        const updated: Scene3DData = {
+                            ...sceneData,
+                            metadata: {
+                                ...sceneData.metadata,
+                                postprocessing: {
+                                    ...sceneData.metadata?.postprocessing,
+                                    fsr: {
+                                        enabled: isEnabled,
+                                        preset: sceneData.metadata?.postprocessing?.fsr?.preset || 'quality',
+                                        sharpness: sceneData.metadata?.postprocessing?.fsr?.sharpness ?? 0.85
+                                    }
+                                }
+                            }
+                        };
+                        setSceneData(updated);
+                        onUpdate?.(updated);
+                    }}
+                    className={`sb-btn sb-btn-xs flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-mono shadow-md transition-all shrink-0 ${
+                        sceneData.metadata?.postprocessing?.fsr?.enabled
+                            ? 'bg-rose-950/70 hover:bg-rose-900/80 text-rose-200 border border-rose-500/50 shadow-rose-900/30'
+                            : 'bg-[#121216]/80 hover:bg-zinc-800 text-zinc-300 border border-white/10'
+                    }`}
+                    title="Toggle AMD FidelityFX Super Resolution 1.0 (EASU + RCAS)"
+                >
+                    <span className="text-rose-400 font-bold">⚡</span>
+                    <span>FSR 1.0: {sceneData.metadata?.postprocessing?.fsr?.enabled ? 'ON' : 'OFF'}</span>
+                </button>
                 {scriptError && (
                     <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-950/70 border border-amber-500/40 text-[10px] text-amber-200 shrink-0">
                         <span className="text-amber-400">⚠</span>

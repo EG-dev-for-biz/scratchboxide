@@ -1058,6 +1058,7 @@ export interface Scene3DData {
         success: boolean;
         error?: string;
     }>;
+    metadata?: Record<string, any>;
 }
 
 // ==========================================

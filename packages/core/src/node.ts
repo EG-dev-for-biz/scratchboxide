@@ -916,5 +916,18 @@ export type {
     DeconstructionOptions
 } from './node/spatial/AdaptiveStyleDeconstructionService';
 
+// Adaptive Domain Particle Architecture (Zero-Preset & Schema-Guided)
+export {
+    DEFAULT_ADAPTIVE_PARTICLE_CONTRACT,
+    interpolateAdaptiveParticleContracts
+} from './common/spatial/adaptive-particle-contract';
+export type {
+    AdaptiveParticleContract,
+    ParticleEmissionModel
+} from './common/spatial/adaptive-particle-contract';
+export {
+    AdaptiveDomainParticleService
+} from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
+
 
 
