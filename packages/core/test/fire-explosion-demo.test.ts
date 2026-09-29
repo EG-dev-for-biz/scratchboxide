@@ -55,6 +55,72 @@ export function evaluateBeerLambertTransmittance(density: number, stepSize: numb
 }
 
 /**
+ * Aerodynamic Drag Deceleration (Stokes / Quadratic Resistance)
+ * v(t) = v0 / (1 + k * v0 * t) or exponential deceleration v(t) = v0 * exp(-k * t)
+ * Position x(t) = (v0 / k) * (1 - exp(-k * t))
+ */
+export function evaluateAerodynamicDeceleration(v0: number, k: number, t: number): { position: number, velocity: number } {
+    const velocity = v0 * Math.exp(-k * t);
+    const position = (v0 / k) * (1.0 - Math.exp(-k * t));
+    return { position, velocity };
+}
+
+/**
+ * Non-Spherical Organic Plume Morphological Velocity
+ * Shapes the explosion into an upward convective mushroom column with asymmetrical turbulent lobes
+ */
+export function evaluateNonSphericalPlumeVelocity(
+    unitDir: [number, number, number],
+    upwardBuoyancy: number,
+    lobeStrength: number
+): [number, number, number] {
+    const [dx, dy, dz] = unitDir;
+    const theta = Math.atan2(dz, dx);
+    const phi = Math.acos(Math.max(-1.0, Math.min(1.0, dy)));
+
+    // Asymmetric azimuthal and polar multipole lobes (breaks spherical symmetry!)
+    // sin(phi) is 1.0 at the equator, so azimuthal lobes modulate the horizontal envelope
+    const lobeModulation = 1.0 + lobeStrength * (
+        Math.cos(2.0 * theta) * Math.sin(phi) * 0.45 +
+        Math.sin(3.0 * theta) * Math.sin(phi) * 0.30 +
+        Math.cos(2.0 * phi) * 0.25
+    );
+
+    // Convective upward bias: hot combustion gas expands primarily upward (+Y)
+    const vy = (dy + upwardBuoyancy) * lobeModulation;
+    const vx = dx * lobeModulation;
+    const vz = dz * lobeModulation;
+
+    return [vx, vy, vz];
+}
+
+/**
+ * Graceful Particle Dissipation & Falloff Curve
+ * Soft cubic attack -> prolonged incandescent sustain -> smooth exponential Beer-Lambert dissipation
+ */
+export function evaluateGracefulParticleFalloff(age: number, lifetime: number): { alpha: number, scale: number, kelvin: number } {
+    const t = Math.max(0.0, Math.min(1.0, age / lifetime));
+
+    // Smooth cubic hermite attack (fast 4% rise) and smooth dissipation decay without harsh popping
+    const attack = Math.min(1.0, t / 0.04);
+    const smoothAttack = attack * attack * (3.0 - 2.0 * attack);
+    
+    // Graceful exponential decay in the second half of life with zero boundary termination
+    const decay = t > 0.40 ? Math.exp(-4.2 * (t - 0.40)) * (1.0 - Math.pow(t, 3.0)) : 1.0;
+    const alpha = smoothAttack * decay;
+
+    // Scale expands as gas decompresses, then gracefully erodes as combustion burns out
+    const expansion = Math.sin(Math.PI * Math.pow(t, 0.42));
+    const scale = Math.max(0.02, expansion);
+
+    // Continuous Planckian temperature transition: 5500K -> 2400K -> 1200K -> 550K (soot)
+    const heat = Math.pow(Math.max(0.0, 1.0 - t), 1.4);
+    const kelvin = 550.0 + heat * (5500.0 - 550.0);
+
+    return { alpha, scale, kelvin };
+}
+
+/**
  * 3D Spatial Audio Telemetry & Doppler Shift Calculation
  */
 export function computeExplosionAudioTelemetry(
@@ -166,6 +232,66 @@ describe('Photorealistic 3D Fire Explosion Demo Suite', () => {
         expect(telemetryInside.isInsideCore).toBe(true);
         expect(telemetryInside.lowPassCutoff).toBeLessThan(600); // Heavy resonant muffling inside fire!
         expect(telemetryInside.bassRumbleGain).toBe(1.0); // Maximum sub-bass thump
+    });
+
+    it('verifies non-spherical plume velocity shaping and asymmetrical directional lobes', () => {
+        const upwardBuoyancy = 0.85;
+        const lobeStrength = 0.5;
+
+        // Equator right (+X)
+        const [vxRight, vyRight, vzRight] = evaluateNonSphericalPlumeVelocity([1, 0, 0], upwardBuoyancy, lobeStrength);
+        // Equator front (+Z)
+        const [vxFront, vyFront, vzFront] = evaluateNonSphericalPlumeVelocity([0, 0, 1], upwardBuoyancy, lobeStrength);
+        // Pole upward (+Y)
+        const [vxUp, vyUp, vzUp] = evaluateNonSphericalPlumeVelocity([0, 1, 0], upwardBuoyancy, lobeStrength);
+
+        // Upward expansion must exceed horizontal expansion (non-spherical mushrooming!)
+        expect(vyUp).toBeGreaterThan(Math.abs(vxRight));
+        expect(vyUp).toBeGreaterThan(Math.abs(vzFront));
+
+        // Asymmetry: Right (+X) and Front (+Z) magnitudes must differ due to harmonic lobes
+        const magRight = Math.hypot(vxRight, vzRight);
+        const magFront = Math.hypot(vxFront, vzFront);
+        expect(Math.abs(magRight - magFront)).toBeGreaterThan(0.05); // True asymmetry, not a ball!
+    });
+
+    it('verifies aerodynamic drag deceleration and graceful dissipation falloff', () => {
+        const v0 = 10.0;
+        const k = 1.2;
+
+        const at0s = evaluateAerodynamicDeceleration(v0, k, 0.0);
+        const at1s = evaluateAerodynamicDeceleration(v0, k, 1.0);
+        const at3s = evaluateAerodynamicDeceleration(v0, k, 3.0);
+
+        // Velocity decays exponentially
+        expect(at0s.velocity).toBe(10.0);
+        expect(at1s.velocity).toBeLessThan(4.0);
+        expect(at3s.velocity).toBeLessThan(0.5);
+
+        // Position approaches finite terminal envelope (cushioning)
+        const maxDisplacement = v0 / k; // 8.33
+        expect(at3s.position).toBeLessThan(maxDisplacement);
+        expect(at3s.position).toBeGreaterThan(7.5);
+
+        // Graceful falloff: continuous dissipation without abrupt clipping
+        const early = evaluateGracefulParticleFalloff(0.1, 2.0); // 5% age
+        const mid = evaluateGracefulParticleFalloff(1.0, 2.0);   // 50% age
+        const late = evaluateGracefulParticleFalloff(1.8, 2.0);  // 90% age
+        const end = evaluateGracefulParticleFalloff(2.0, 2.0);   // 100% age
+
+        expect(early.alpha).toBeGreaterThan(0.8);
+        expect(early.kelvin).toBeGreaterThan(4500); // White hot
+
+        expect(mid.alpha).toBeGreaterThan(0.5);
+        expect(mid.kelvin).toBeLessThan(3500); // Orange-gold
+        expect(mid.kelvin).toBeGreaterThan(1800);
+
+        expect(late.alpha).toBeLessThan(0.2); // Gracefully faded
+        expect(late.alpha).toBeGreaterThan(0.01);
+        expect(late.kelvin).toBeLessThan(1200); // Dark crimson embers
+
+        expect(end.alpha).toBeLessThan(0.02); // Smooth zero termination
+        expect(end.kelvin).toBeCloseTo(550, 0); // Cool smoke
     });
 
     it('verifies that the standalone fire explosion HTML demo file exists and contains complete WebGL2 shaders and Web Audio synthesis', () => {
