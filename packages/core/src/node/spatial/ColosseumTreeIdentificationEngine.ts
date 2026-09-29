@@ -1397,4 +1397,81 @@ export class ColosseumTreeIdentificationEngine {
       totalCanopyCoverAreaM2: Number(totalCanopyArea.toFixed(1))
     };
   }
+
+  private static cachedStands: any[] | null = null;
+  private static cachedGroves: BotanicalGroveEntity[] | null = null;
+
+  /**
+   * Retrieves the 97 physically grounded botanical tree stands, tightly bound to real 3D mesh foliage.
+   */
+  public static getPhysicallyGroundedStands(): any[] {
+    if (this.cachedStands) return this.cachedStands;
+    const candidatePaths = [
+      path.join(__dirname, 'assets/physical_trees_dataset.json'),
+      path.join(process.cwd(), 'packages/core/src/node/spatial/assets/physical_trees_dataset.json'),
+      path.join(process.cwd(), 'public/models/trees_dataset.json'),
+      path.join(__dirname, '../../../public/models/trees_dataset.json')
+    ];
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          this.cachedStands = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          return this.cachedStands!;
+        } catch {}
+      }
+    }
+    return [];
+  }
+
+  /**
+   * Retrieves the 26 consolidated botanical park groves across the Roman monument perimeter.
+   */
+  public static getBotanicalGroves(): BotanicalGroveEntity[] {
+    if (this.cachedGroves) return this.cachedGroves;
+    const candidatePaths = [
+      path.join(__dirname, 'assets/physical_groves_dataset.json'),
+      path.join(process.cwd(), 'packages/core/src/node/spatial/assets/physical_groves_dataset.json'),
+      path.join(process.cwd(), 'public/models/groves_dataset.json'),
+      path.join(__dirname, '../../../public/models/groves_dataset.json')
+    ];
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          this.cachedGroves = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          return this.cachedGroves!;
+        } catch {}
+      }
+    }
+    return [];
+  }
+}
+
+export interface BotanicalGroveEntity {
+  id: string;
+  name: string;
+  category: 'foliage_groves';
+  zone: string;
+  zoneName: string;
+  treeCount: number;
+  colorHex: string;
+  canopyHeightMeters: number;
+  groundElevationMeters: number;
+  apexElevationMeters: number;
+  standIds: string[];
+  boundingBox: {
+    min: [number, number, number];
+    max: [number, number, number];
+    dimensions: [number, number, number];
+    centroid: [number, number, number];
+    volumeM3: number;
+  };
+  orientedBoundingBox: {
+    center: [number, number, number];
+    dimensions: [number, number, number];
+    halfExtents: [number, number, number];
+    yawDeg: number;
+    yawRad: number;
+    volumeM3: number;
+    tightnessGainPercent: number;
+  };
 }

@@ -27,12 +27,13 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
+    { title: 'Geographical 3DGS Studio · Real-World Radiance Fields', path: '/geographic_3dgs_studio.html', badge: 'GEOGRAPHIC 3DGS' },
     { title: 'AMD FidelityFX FSR 1.0 Super Resolution Studio', path: '/fsr_upscaling_demo.html', badge: 'EASU + RCAS' },
     { title: 'Volumetric Fire & Particle Simulation Studio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC FLUID' },
     { title: 'Nanite Meshlets & Path Tracing Studio', path: '/nanite_meshlet_pathtracing_studio.html', badge: 'NANITE WEBGPU' },
     { title: 'Scratchbox Spatial Asset Studio', path: '/asset_demo_studio.html', badge: 'ASSET STUDIO' },
     { title: 'Rome Colosseum 1K PBR Regrade Proof', path: '/colosseum_recolor_proof.html', badge: 'PBR PIPELINE' },
-    { title: '3D Testing Workbench · 3DGS Hybrid Engine', path: '/spatial_photoreal_3dgs_demo.html', badge: 'MODULAR WORKBENCH' },
+    { title: 'High Fidelity Engine · Photoreal 3DGS & 1K PBR Studio', path: '/spatial_photoreal_3dgs_demo.html', badge: 'FLAGSHIP 3D' },
     { title: 'Agent 3D Scene Lighting Intelligence', path: '/agent_lighting_proof.html', badge: 'GAFFER INTEL' },
     { title: 'Nano Banana 3D Tile 4x Micro-Detail Loupe', path: '/nano_banana_texture_upscale_experiment.html', badge: '0.000MM DRIFT' },
     { title: 'GeoBox Geolocation Model Evaluation', path: '/geobox_eval_report.html', badge: 'SIGLIP-2 AI' },

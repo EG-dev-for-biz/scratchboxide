@@ -1,0 +1,1607 @@
+[
+  {
+    "id": "fol-grove-01",
+    "name": "Oppian Hill Crest Pines Botanical Grove #1 (8 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "treeCount": 8,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.6,
+    "groundElevationMeters": 37.34,
+    "apexElevationMeters": 58.94,
+    "standIds": [
+      "fol-tree-stand-001",
+      "fol-tree-stand-002",
+      "fol-tree-stand-003",
+      "fol-tree-stand-004",
+      "fol-tree-stand-007",
+      "fol-tree-stand-008",
+      "fol-tree-stand-009",
+      "fol-tree-stand-016"
+    ],
+    "boundingBox": {
+      "min": [
+        90.790283203125,
+        37.34,
+        98.41825612386067
+      ],
+      "max": [
+        157.2269541422526,
+        58.94,
+        179.90919494628906
+      ],
+      "dimensions": [
+        66.44,
+        21.6,
+        81.49
+      ],
+      "centroid": [
+        114.97,
+        48.14,
+        148.74
+      ],
+      "volumeM3": 116946.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        114.97,
+        48.14,
+        148.74
+      ],
+      "dimensions": [
+        66.44,
+        21.6,
+        81.49
+      ],
+      "halfExtents": [
+        33.22,
+        10.8,
+        40.745
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 116946.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-02",
+    "name": "Oppian Hill Crest Pines Botanical Grove #2 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "treeCount": 2,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.41,
+    "groundElevationMeters": 22.22,
+    "apexElevationMeters": 43.63,
+    "standIds": [
+      "fol-tree-stand-005",
+      "fol-tree-stand-006"
+    ],
+    "boundingBox": {
+      "min": [
+        90.12491861979167,
+        22.22,
+        26.23815155029297
+      ],
+      "max": [
+        101.48724365234375,
+        43.63,
+        42.646294911702476
+      ],
+      "dimensions": [
+        11.36,
+        21.41,
+        16.41
+      ],
+      "centroid": [
+        95.51,
+        32.92,
+        29.76
+      ],
+      "volumeM3": 3991.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        95.51,
+        32.92,
+        29.76
+      ],
+      "dimensions": [
+        11.36,
+        21.41,
+        16.41
+      ],
+      "halfExtents": [
+        5.68,
+        10.705,
+        8.205
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3991.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-03",
+    "name": "Oppian Hill Crest Pines Botanical Grove #3 (8 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "treeCount": 8,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 25.35,
+    "groundElevationMeters": 37.07,
+    "apexElevationMeters": 62.42,
+    "standIds": [
+      "fol-tree-stand-010",
+      "fol-tree-stand-011",
+      "fol-tree-stand-012",
+      "fol-tree-stand-013",
+      "fol-tree-stand-015",
+      "fol-tree-stand-017",
+      "fol-tree-stand-018",
+      "fol-tree-stand-019"
+    ],
+    "boundingBox": {
+      "min": [
+        154.74751790364584,
+        37.07,
+        104.36511484781902
+      ],
+      "max": [
+        238.76863606770834,
+        62.42,
+        165.62847900390625
+      ],
+      "dimensions": [
+        84.02,
+        25.35,
+        61.26
+      ],
+      "centroid": [
+        190.45,
+        49.75,
+        136.38
+      ],
+      "volumeM3": 130478.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        190.45,
+        49.75,
+        136.38
+      ],
+      "dimensions": [
+        84.02,
+        25.35,
+        61.26
+      ],
+      "halfExtents": [
+        42.01,
+        12.675,
+        30.63
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 130478.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-04",
+    "name": "Oppian Hill Crest Pines Botanical Grove #4 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "treeCount": 2,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 31.44,
+    "groundElevationMeters": 34.55,
+    "apexElevationMeters": 65.99,
+    "standIds": [
+      "fol-tree-stand-014",
+      "fol-tree-stand-020"
+    ],
+    "boundingBox": {
+      "min": [
+        221.47459920247397,
+        34.55,
+        25.602832794189453
+      ],
+      "max": [
+        239.79660034179688,
+        65.99,
+        94.72286478678386
+      ],
+      "dimensions": [
+        18.32,
+        31.44,
+        69.12
+      ],
+      "centroid": [
+        233.46,
+        50.27,
+        57.12
+      ],
+      "volumeM3": 39811.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        233.46,
+        50.27,
+        57.12
+      ],
+      "dimensions": [
+        18.32,
+        31.44,
+        69.12
+      ],
+      "halfExtents": [
+        9.16,
+        15.72,
+        34.56
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 39811.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-05",
+    "name": "Colle Oppio Embankment Grove Botanical Grove #5 (4 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "treeCount": 4,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 21.46,
+    "groundElevationMeters": 32.39,
+    "apexElevationMeters": 53.85,
+    "standIds": [
+      "fol-tree-stand-021",
+      "fol-tree-stand-023",
+      "fol-tree-stand-024",
+      "fol-tree-stand-026"
+    ],
+    "boundingBox": {
+      "min": [
+        45.11211140950521,
+        32.39,
+        108.0436299641927
+      ],
+      "max": [
+        79.79705810546875,
+        53.85,
+        159.50199381510416
+      ],
+      "dimensions": [
+        34.68,
+        21.46,
+        51.46
+      ],
+      "centroid": [
+        62.86,
+        43.12,
+        135.08
+      ],
+      "volumeM3": 38298.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        62.86,
+        43.12,
+        135.08
+      ],
+      "dimensions": [
+        34.68,
+        21.46,
+        51.46
+      ],
+      "halfExtents": [
+        17.34,
+        10.73,
+        25.73
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 38298.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-06",
+    "name": "Colle Oppio Embankment Grove Botanical Grove #6 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "treeCount": 2,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 42.52,
+    "groundElevationMeters": 23.94,
+    "apexElevationMeters": 66.46,
+    "standIds": [
+      "fol-tree-stand-022",
+      "fol-tree-stand-025"
+    ],
+    "boundingBox": {
+      "min": [
+        45.01751454671224,
+        23.94,
+        80.0471700032552
+      ],
+      "max": [
+        88.2670186360677,
+        66.46,
+        105.68504842122395
+      ],
+      "dimensions": [
+        43.25,
+        42.52,
+        25.64
+      ],
+      "centroid": [
+        66.02,
+        45.2,
+        86.06
+      ],
+      "volumeM3": 47151.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        66.02,
+        45.2,
+        86.06
+      ],
+      "dimensions": [
+        43.25,
+        42.52,
+        25.64
+      ],
+      "halfExtents": [
+        21.625,
+        21.26,
+        12.82
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 47151.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-07",
+    "name": "Via di San Gregorio Cypress Line Botanical Grove #7 (7 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "treeCount": 7,
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 26.58,
+    "groundElevationMeters": 32.21,
+    "apexElevationMeters": 58.79,
+    "standIds": [
+      "fol-tree-stand-027",
+      "fol-tree-stand-028",
+      "fol-tree-stand-029",
+      "fol-tree-stand-030",
+      "fol-tree-stand-031",
+      "fol-tree-stand-032",
+      "fol-tree-stand-034"
+    ],
+    "boundingBox": {
+      "min": [
+        -159.5181884765625,
+        32.21,
+        195.1826629638672
+      ],
+      "max": [
+        -73.81288655598958,
+        58.79,
+        243.65882364908853
+      ],
+      "dimensions": [
+        85.71,
+        26.58,
+        48.48
+      ],
+      "centroid": [
+        -115.21,
+        45.5,
+        219.3
+      ],
+      "volumeM3": 110445.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -115.21,
+        45.5,
+        219.3
+      ],
+      "dimensions": [
+        85.71,
+        26.58,
+        48.48
+      ],
+      "halfExtents": [
+        42.855,
+        13.29,
+        24.24
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 110445.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-08",
+    "name": "Via di San Gregorio Cypress Line Botanical Grove #8 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "treeCount": 1,
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 14,
+    "groundElevationMeters": 44.13,
+    "apexElevationMeters": 58.13,
+    "standIds": [
+      "fol-tree-stand-033"
+    ],
+    "boundingBox": {
+      "min": [
+        -79.80440266927083,
+        44.13,
+        253.09373474121094
+      ],
+      "max": [
+        -72.78018697102864,
+        58.13,
+        267.34827677408856
+      ],
+      "dimensions": [
+        7.02,
+        14,
+        14.25
+      ],
+      "centroid": [
+        -75.89,
+        51.13,
+        262.86
+      ],
+      "volumeM3": 1400.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -75.89,
+        51.13,
+        262.86
+      ],
+      "dimensions": [
+        7.02,
+        14,
+        14.25
+      ],
+      "halfExtents": [
+        3.51,
+        7,
+        7.125
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1400.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-09",
+    "name": "Palatine Clivus Slopes Botanical Grove #9 (5 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "treeCount": 5,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 24.12,
+    "groundElevationMeters": 27.95,
+    "apexElevationMeters": 52.07,
+    "standIds": [
+      "fol-tree-stand-035",
+      "fol-tree-stand-036",
+      "fol-tree-stand-037",
+      "fol-tree-stand-038",
+      "fol-tree-stand-045"
+    ],
+    "boundingBox": {
+      "min": [
+        -217.963134765625,
+        27.95,
+        109.0841064453125
+      ],
+      "max": [
+        -151.64747111002603,
+        52.07,
+        179.7991943359375
+      ],
+      "dimensions": [
+        66.32,
+        24.12,
+        70.72
+      ],
+      "centroid": [
+        -177.31,
+        40.01,
+        139.96
+      ],
+      "volumeM3": 113126.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -177.31,
+        40.01,
+        139.96
+      ],
+      "dimensions": [
+        66.32,
+        24.12,
+        70.72
+      ],
+      "halfExtents": [
+        33.16,
+        12.06,
+        35.36
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 113126.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-10",
+    "name": "Palatine Clivus Slopes Botanical Grove #10 (5 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "treeCount": 5,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 28.91,
+    "groundElevationMeters": 31.14,
+    "apexElevationMeters": 60.05,
+    "standIds": [
+      "fol-tree-stand-039",
+      "fol-tree-stand-041",
+      "fol-tree-stand-042",
+      "fol-tree-stand-043",
+      "fol-tree-stand-044"
+    ],
+    "boundingBox": {
+      "min": [
+        -125.61503601074219,
+        31.14,
+        13.933106740315756
+      ],
+      "max": [
+        -110.06858317057292,
+        60.05,
+        96.66139475504558
+      ],
+      "dimensions": [
+        15.55,
+        28.91,
+        82.73
+      ],
+      "centroid": [
+        -114.52,
+        45.59,
+        50.93
+      ],
+      "volumeM3": 37191.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -114.52,
+        45.59,
+        50.93
+      ],
+      "dimensions": [
+        15.55,
+        28.91,
+        82.73
+      ],
+      "halfExtents": [
+        7.775,
+        14.455,
+        41.365
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 37191.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-11",
+    "name": "Palatine Clivus Slopes Botanical Grove #11 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "treeCount": 2,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.2,
+    "groundElevationMeters": 29.72,
+    "apexElevationMeters": 50.92,
+    "standIds": [
+      "fol-tree-stand-040",
+      "fol-tree-stand-046"
+    ],
+    "boundingBox": {
+      "min": [
+        -235.25206502278647,
+        29.72,
+        45.50128300984701
+      ],
+      "max": [
+        -212.38363647460938,
+        50.92,
+        76.67695871988933
+      ],
+      "dimensions": [
+        22.87,
+        21.2,
+        31.18
+      ],
+      "centroid": [
+        -227.99,
+        40.32,
+        64.35
+      ],
+      "volumeM3": 15117.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -227.99,
+        40.32,
+        64.35
+      ],
+      "dimensions": [
+        22.87,
+        21.2,
+        31.18
+      ],
+      "halfExtents": [
+        11.435,
+        10.6,
+        15.59
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 15117.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-12",
+    "name": "Palatine Clivus Slopes Botanical Grove #12 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "treeCount": 1,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.24,
+    "groundElevationMeters": 31.85,
+    "apexElevationMeters": 54.09,
+    "standIds": [
+      "fol-tree-stand-047"
+    ],
+    "boundingBox": {
+      "min": [
+        -238.1462860107422,
+        31.85,
+        114.41595458984375
+      ],
+      "max": [
+        -227.19684346516928,
+        54.09,
+        135.74673970540366
+      ],
+      "dimensions": [
+        10.95,
+        22.24,
+        21.33
+      ],
+      "centroid": [
+        -232.21,
+        42.97,
+        124.79
+      ],
+      "volumeM3": 5194.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -232.21,
+        42.97,
+        124.79
+      ],
+      "dimensions": [
+        10.95,
+        22.24,
+        21.33
+      ],
+      "halfExtents": [
+        5.475,
+        11.12,
+        10.665
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5194.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-13",
+    "name": "Farnese Terrace Gardens Botanical Grove #13 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "farnese_gardens",
+    "zoneName": "Farnese Terrace Gardens",
+    "treeCount": 1,
+    "colorHex": "#84cc16",
+    "canopyHeightMeters": 8.9,
+    "groundElevationMeters": 33.51,
+    "apexElevationMeters": 42.41,
+    "standIds": [
+      "fol-tree-stand-048"
+    ],
+    "boundingBox": {
+      "min": [
+        -157.63628641764322,
+        33.51,
+        -4.8907623291015625
+      ],
+      "max": [
+        -147.30645751953125,
+        42.41,
+        3.6614354451497397
+      ],
+      "dimensions": [
+        10.33,
+        8.9,
+        8.55
+      ],
+      "centroid": [
+        -152.56,
+        37.96,
+        0.06
+      ],
+      "volumeM3": 786.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -152.56,
+        37.96,
+        0.06
+      ],
+      "dimensions": [
+        10.33,
+        8.9,
+        8.55
+      ],
+      "halfExtents": [
+        5.165,
+        4.45,
+        4.275
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 786.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-14",
+    "name": "Farnese Terrace Gardens Botanical Grove #14 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "farnese_gardens",
+    "zoneName": "Farnese Terrace Gardens",
+    "treeCount": 2,
+    "colorHex": "#84cc16",
+    "canopyHeightMeters": 14.22,
+    "groundElevationMeters": 32.79,
+    "apexElevationMeters": 47.01,
+    "standIds": [
+      "fol-tree-stand-049",
+      "fol-tree-stand-050"
+    ],
+    "boundingBox": {
+      "min": [
+        -231.7374471028646,
+        32.79,
+        -54.93732198079427
+      ],
+      "max": [
+        -198.1266886393229,
+        47.01,
+        -30.11937713623047
+      ],
+      "dimensions": [
+        33.61,
+        14.22,
+        24.82
+      ],
+      "centroid": [
+        -215.96,
+        39.9,
+        -38.56
+      ],
+      "volumeM3": 11862.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -215.96,
+        39.9,
+        -38.56
+      ],
+      "dimensions": [
+        33.61,
+        14.22,
+        24.82
+      ],
+      "halfExtents": [
+        16.805,
+        7.11,
+        12.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 11862.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-15",
+    "name": "Celian Hill North Woodland Botanical Grove #15 (10 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "treeCount": 10,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 30.88,
+    "groundElevationMeters": 44.01,
+    "apexElevationMeters": 74.89,
+    "standIds": [
+      "fol-tree-stand-051",
+      "fol-tree-stand-052",
+      "fol-tree-stand-053",
+      "fol-tree-stand-054",
+      "fol-tree-stand-055",
+      "fol-tree-stand-056",
+      "fol-tree-stand-057",
+      "fol-tree-stand-060",
+      "fol-tree-stand-066",
+      "fol-tree-stand-072"
+    ],
+    "boundingBox": {
+      "min": [
+        -69.8992207845052,
+        44.01,
+        -196.6004384358724
+      ],
+      "max": [
+        23.001073201497395,
+        74.89,
+        -130.8255615234375
+      ],
+      "dimensions": [
+        92.9,
+        30.88,
+        65.77
+      ],
+      "centroid": [
+        -23.46,
+        59.45,
+        -158.59
+      ],
+      "volumeM3": 188677.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -23.46,
+        59.45,
+        -158.59
+      ],
+      "dimensions": [
+        92.9,
+        30.88,
+        65.77
+      ],
+      "halfExtents": [
+        46.45,
+        15.44,
+        32.885
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 188677.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-16",
+    "name": "Celian Hill North Woodland Botanical Grove #16 (6 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "treeCount": 6,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 24.24,
+    "groundElevationMeters": 50.46,
+    "apexElevationMeters": 74.7,
+    "standIds": [
+      "fol-tree-stand-058",
+      "fol-tree-stand-059",
+      "fol-tree-stand-061",
+      "fol-tree-stand-062",
+      "fol-tree-stand-065",
+      "fol-tree-stand-070"
+    ],
+    "boundingBox": {
+      "min": [
+        27.339266459147137,
+        50.46,
+        -201.52396138509116
+      ],
+      "max": [
+        79.81116231282552,
+        74.7,
+        -130.8262481689453
+      ],
+      "dimensions": [
+        52.47,
+        24.24,
+        70.7
+      ],
+      "centroid": [
+        53.01,
+        62.58,
+        -172.16
+      ],
+      "volumeM3": 89921.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        53.01,
+        62.58,
+        -172.16
+      ],
+      "dimensions": [
+        52.47,
+        24.24,
+        70.7
+      ],
+      "halfExtents": [
+        26.235,
+        12.12,
+        35.35
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 89921.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-17",
+    "name": "Celian Hill North Woodland Botanical Grove #17 (7 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "treeCount": 7,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 25.05,
+    "groundElevationMeters": 52.71,
+    "apexElevationMeters": 77.76,
+    "standIds": [
+      "fol-tree-stand-063",
+      "fol-tree-stand-064",
+      "fol-tree-stand-067",
+      "fol-tree-stand-068",
+      "fol-tree-stand-069",
+      "fol-tree-stand-075",
+      "fol-tree-stand-076"
+    ],
+    "boundingBox": {
+      "min": [
+        -37.4647274017334,
+        52.71,
+        -249.51808166503906
+      ],
+      "max": [
+        66.5895487467448,
+        77.76,
+        -197.42096455891928
+      ],
+      "dimensions": [
+        104.05,
+        25.05,
+        52.1
+      ],
+      "centroid": [
+        7.5,
+        65.23,
+        -225.66
+      ],
+      "volumeM3": 135796.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        7.5,
+        65.23,
+        -225.66
+      ],
+      "dimensions": [
+        104.05,
+        25.05,
+        52.1
+      ],
+      "halfExtents": [
+        52.025,
+        12.525,
+        26.05
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 135796.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-18",
+    "name": "Celian Hill North Woodland Botanical Grove #18 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "treeCount": 1,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 18.88,
+    "groundElevationMeters": 56.06,
+    "apexElevationMeters": 74.94,
+    "standIds": [
+      "fol-tree-stand-071"
+    ],
+    "boundingBox": {
+      "min": [
+        68.44894154866536,
+        56.06,
+        -239.87887064615884
+      ],
+      "max": [
+        79.81118774414062,
+        74.94,
+        -224.90587870279947
+      ],
+      "dimensions": [
+        11.36,
+        18.88,
+        14.97
+      ],
+      "centroid": [
+        74.96,
+        65.5,
+        -230.24
+      ],
+      "volumeM3": 3210.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        74.96,
+        65.5,
+        -230.24
+      ],
+      "dimensions": [
+        11.36,
+        18.88,
+        14.97
+      ],
+      "halfExtents": [
+        5.68,
+        9.44,
+        7.485
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3210.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-19",
+    "name": "Celian Hill North Woodland Botanical Grove #19 (2 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "treeCount": 2,
+    "colorHex": "#059669",
+    "canopyHeightMeters": 29.22,
+    "groundElevationMeters": 48.12,
+    "apexElevationMeters": 77.34,
+    "standIds": [
+      "fol-tree-stand-073",
+      "fol-tree-stand-074"
+    ],
+    "boundingBox": {
+      "min": [
+        -69.8985595703125,
+        48.12,
+        -254.44122823079428
+      ],
+      "max": [
+        -47.380879720052086,
+        77.34,
+        -213.82923889160156
+      ],
+      "dimensions": [
+        22.52,
+        29.22,
+        40.61
+      ],
+      "centroid": [
+        -59.52,
+        62.73,
+        -235.55
+      ],
+      "volumeM3": 26722.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -59.52,
+        62.73,
+        -235.55
+      ],
+      "dimensions": [
+        22.52,
+        29.22,
+        40.61
+      ],
+      "halfExtents": [
+        11.26,
+        14.61,
+        20.305
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 26722.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-20",
+    "name": "Villa Celimontana Crest Botanical Grove #20 (4 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "treeCount": 4,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 24.05,
+    "groundElevationMeters": 52.51,
+    "apexElevationMeters": 76.56,
+    "standIds": [
+      "fol-tree-stand-077",
+      "fol-tree-stand-079",
+      "fol-tree-stand-081",
+      "fol-tree-stand-082"
+    ],
+    "boundingBox": {
+      "min": [
+        80.01778157552083,
+        52.51,
+        -234.95685323079428
+      ],
+      "max": [
+        124.78306070963542,
+        76.56,
+        -150.1074676513672
+      ],
+      "dimensions": [
+        44.77,
+        24.05,
+        84.85
+      ],
+      "centroid": [
+        94.61,
+        64.53,
+        -192.66
+      ],
+      "volumeM3": 91359.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        94.61,
+        64.53,
+        -192.66
+      ],
+      "dimensions": [
+        44.77,
+        24.05,
+        84.85
+      ],
+      "halfExtents": [
+        22.385,
+        12.025,
+        42.425
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 91359.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-21",
+    "name": "Villa Celimontana Crest Botanical Grove #21 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "treeCount": 1,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.9,
+    "groundElevationMeters": 57.42,
+    "apexElevationMeters": 76.32,
+    "standIds": [
+      "fol-tree-stand-078"
+    ],
+    "boundingBox": {
+      "min": [
+        171.26627095540366,
+        57.42,
+        -152.5709431966146
+      ],
+      "max": [
+        183.24876403808594,
+        76.32,
+        -150.1093292236328
+      ],
+      "dimensions": [
+        11.98,
+        18.9,
+        2.46
+      ],
+      "centroid": [
+        175.44,
+        66.87,
+        -151.91
+      ],
+      "volumeM3": 557
+    },
+    "orientedBoundingBox": {
+      "center": [
+        175.44,
+        66.87,
+        -151.91
+      ],
+      "dimensions": [
+        11.98,
+        18.9,
+        2.46
+      ],
+      "halfExtents": [
+        5.99,
+        9.45,
+        1.23
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 557,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-22",
+    "name": "Villa Celimontana Crest Botanical Grove #22 (3 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "treeCount": 3,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.98,
+    "groundElevationMeters": 55.77,
+    "apexElevationMeters": 78.75,
+    "standIds": [
+      "fol-tree-stand-080",
+      "fol-tree-stand-084",
+      "fol-tree-stand-085"
+    ],
+    "boundingBox": {
+      "min": [
+        61.011060078938804,
+        55.77,
+        -305.1042073567708
+      ],
+      "max": [
+        114.9303690592448,
+        78.75,
+        -262.03125
+      ],
+      "dimensions": [
+        53.92,
+        22.98,
+        43.07
+      ],
+      "centroid": [
+        83.01,
+        67.26,
+        -285.4
+      ],
+      "volumeM3": 53367.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        83.01,
+        67.26,
+        -285.4
+      ],
+      "dimensions": [
+        53.92,
+        22.98,
+        43.07
+      ],
+      "halfExtents": [
+        26.96,
+        11.49,
+        21.535
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 53367.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-23",
+    "name": "Villa Celimontana Crest Botanical Grove #23 (1 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "treeCount": 1,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.66,
+    "groundElevationMeters": 56.9,
+    "apexElevationMeters": 78.56,
+    "standIds": [
+      "fol-tree-stand-083"
+    ],
+    "boundingBox": {
+      "min": [
+        99.84917704264323,
+        56.9,
+        -305.10475667317706
+      ],
+      "max": [
+        114.9301045735677,
+        78.56,
+        -296.28432210286456
+      ],
+      "dimensions": [
+        15.08,
+        21.66,
+        8.82
+      ],
+      "centroid": [
+        109.97,
+        67.73,
+        -301.95
+      ],
+      "volumeM3": 2880.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        109.97,
+        67.73,
+        -301.95
+      ],
+      "dimensions": [
+        15.08,
+        21.66,
+        8.82
+      ],
+      "halfExtents": [
+        7.54,
+        10.83,
+        4.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2880.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-24",
+    "name": "Baths of Trajan Parklands Botanical Grove #24 (3 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "treeCount": 3,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.95,
+    "groundElevationMeters": 44.05,
+    "apexElevationMeters": 66,
+    "standIds": [
+      "fol-tree-stand-086",
+      "fol-tree-stand-087",
+      "fol-tree-stand-096"
+    ],
+    "boundingBox": {
+      "min": [
+        186.35177612304688,
+        44.05,
+        0.026934305826822918
+      ],
+      "max": [
+        246.20069376627603,
+        66,
+        37.08809153238932
+      ],
+      "dimensions": [
+        59.85,
+        21.95,
+        37.06
+      ],
+      "centroid": [
+        221.68,
+        55.02,
+        13.84
+      ],
+      "volumeM3": 48686
+    },
+    "orientedBoundingBox": {
+      "center": [
+        221.68,
+        55.02,
+        13.84
+      ],
+      "dimensions": [
+        59.85,
+        21.95,
+        37.06
+      ],
+      "halfExtents": [
+        29.925,
+        10.975,
+        18.53
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 48686,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-25",
+    "name": "Baths of Trajan Parklands Botanical Grove #25 (5 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "treeCount": 5,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 29.82,
+    "groundElevationMeters": 37.72,
+    "apexElevationMeters": 67.54,
+    "standIds": [
+      "fol-tree-stand-088",
+      "fol-tree-stand-089",
+      "fol-tree-stand-090",
+      "fol-tree-stand-091",
+      "fol-tree-stand-092"
+    ],
+    "boundingBox": {
+      "min": [
+        245.37684122721353,
+        37.72,
+        79.13409423828125
+      ],
+      "max": [
+        312.72548421223956,
+        67.54,
+        134.51024881998697
+      ],
+      "dimensions": [
+        67.35,
+        29.82,
+        55.38
+      ],
+      "centroid": [
+        281.71,
+        52.63,
+        101.88
+      ],
+      "volumeM3": 111223.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        281.71,
+        52.63,
+        101.88
+      ],
+      "dimensions": [
+        67.35,
+        29.82,
+        55.38
+      ],
+      "halfExtents": [
+        33.675,
+        14.91,
+        27.69
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 111223.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-grove-26",
+    "name": "Baths of Trajan Parklands Botanical Grove #26 (4 Tree Stands)",
+    "category": "foliage_groves",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "treeCount": 4,
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 27.82,
+    "groundElevationMeters": 40.39,
+    "apexElevationMeters": 68.21,
+    "standIds": [
+      "fol-tree-stand-093",
+      "fol-tree-stand-094",
+      "fol-tree-stand-095",
+      "fol-tree-stand-097"
+    ],
+    "boundingBox": {
+      "min": [
+        282.14853922526044,
+        40.39,
+        2.833063761393229
+      ],
+      "max": [
+        310.65760294596356,
+        68.21,
+        63.33947499593099
+      ],
+      "dimensions": [
+        28.51,
+        27.82,
+        60.51
+      ],
+      "centroid": [
+        298.05,
+        54.3,
+        33.11
+      ],
+      "volumeM3": 47993.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        298.05,
+        54.3,
+        33.11
+      ],
+      "dimensions": [
+        28.51,
+        27.82,
+        60.51
+      ],
+      "halfExtents": [
+        14.255,
+        13.91,
+        30.255
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 47993.4,
+      "tightnessGainPercent": 0
+    }
+  }
+]

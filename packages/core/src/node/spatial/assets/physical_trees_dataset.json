@@ -1,0 +1,5531 @@
+[
+  {
+    "id": "fol-tree-stand-001",
+    "name": "Oppian Hill Crest Pines Stand #1 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.06,
+    "crownDiameterMeters": 23.88,
+    "groundElevationMeters": 37.56,
+    "apexElevationMeters": 56.62,
+    "boundingBox": {
+      "min": [
+        102.31587727864583,
+        37.56,
+        109.49395497639973
+      ],
+      "max": [
+        123.34481811523438,
+        56.62,
+        133.37334696451822
+      ],
+      "dimensions": [
+        21.03,
+        19.06,
+        23.88
+      ],
+      "centroid": [
+        113.03,
+        47.09,
+        120.56
+      ],
+      "volumeM3": 9571.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        113.03,
+        47.09,
+        120.56
+      ],
+      "dimensions": [
+        21.03,
+        19.06,
+        23.88
+      ],
+      "halfExtents": [
+        10.515,
+        9.53,
+        11.94
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9571.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-002",
+    "name": "Oppian Hill Crest Pines Stand #2 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 15.88,
+    "crownDiameterMeters": 19.07,
+    "groundElevationMeters": 37.34,
+    "apexElevationMeters": 53.22,
+    "boundingBox": {
+      "min": [
+        105.3112284342448,
+        37.34,
+        98.41825612386067
+      ],
+      "max": [
+        124.37757364908855,
+        53.22,
+        116.96514892578125
+      ],
+      "dimensions": [
+        19.07,
+        15.88,
+        18.55
+      ],
+      "centroid": [
+        115.35,
+        45.28,
+        107.83
+      ],
+      "volumeM3": 5617.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        115.35,
+        45.28,
+        107.83
+      ],
+      "dimensions": [
+        19.07,
+        15.88,
+        18.55
+      ],
+      "halfExtents": [
+        9.535,
+        7.94,
+        9.275
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5617.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-003",
+    "name": "Oppian Hill Crest Pines Stand #3 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.38,
+    "crownDiameterMeters": 18.96,
+    "groundElevationMeters": 37.56,
+    "apexElevationMeters": 58.94,
+    "boundingBox": {
+      "min": [
+        103.34939066569011,
+        37.56,
+        132.4654998779297
+      ],
+      "max": [
+        122.31260172526042,
+        58.94,
+        148.46360778808594
+      ],
+      "dimensions": [
+        18.96,
+        21.38,
+        16
+      ],
+      "centroid": [
+        114.01,
+        48.25,
+        140.55
+      ],
+      "volumeM3": 6485.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        114.01,
+        48.25,
+        140.55
+      ],
+      "dimensions": [
+        18.96,
+        21.38,
+        16
+      ],
+      "halfExtents": [
+        9.48,
+        10.69,
+        8
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6485.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-004",
+    "name": "Oppian Hill Crest Pines Stand #4 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.2,
+    "crownDiameterMeters": 27.05,
+    "groundElevationMeters": 38.62,
+    "apexElevationMeters": 58.82,
+    "boundingBox": {
+      "min": [
+        94.81858317057292,
+        38.62,
+        144.5516357421875
+      ],
+      "max": [
+        112.12049357096355,
+        58.82,
+        171.6024169921875
+      ],
+      "dimensions": [
+        17.3,
+        20.2,
+        27.05
+      ],
+      "centroid": [
+        101.51,
+        48.72,
+        160.64
+      ],
+      "volumeM3": 9452.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        101.51,
+        48.72,
+        160.64
+      ],
+      "dimensions": [
+        17.3,
+        20.2,
+        27.05
+      ],
+      "halfExtents": [
+        8.65,
+        10.1,
+        13.525
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9452.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-005",
+    "name": "Oppian Hill Crest Pines Stand #5 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.41,
+    "crownDiameterMeters": 16.41,
+    "groundElevationMeters": 22.22,
+    "apexElevationMeters": 43.63,
+    "boundingBox": {
+      "min": [
+        90.74483744303386,
+        22.22,
+        26.23815155029297
+      ],
+      "max": [
+        101.48724365234375,
+        43.63,
+        42.646294911702476
+      ],
+      "dimensions": [
+        10.74,
+        21.41,
+        16.41
+      ],
+      "centroid": [
+        97.91,
+        32.93,
+        30.96
+      ],
+      "volumeM3": 3773.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        97.91,
+        32.93,
+        30.96
+      ],
+      "dimensions": [
+        10.74,
+        21.41,
+        16.41
+      ],
+      "halfExtents": [
+        5.37,
+        10.705,
+        8.205
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3773.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-006",
+    "name": "Oppian Hill Crest Pines Stand #6 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 10.12,
+    "crownDiameterMeters": 5.47,
+    "groundElevationMeters": 22.22,
+    "apexElevationMeters": 32.34,
+    "boundingBox": {
+      "min": [
+        90.12491861979167,
+        22.22,
+        26.750985463460285
+      ],
+      "max": [
+        95.59952290852864,
+        32.34,
+        30.340264638264973
+      ],
+      "dimensions": [
+        5.47,
+        10.12,
+        3.59
+      ],
+      "centroid": [
+        93.11,
+        27.28,
+        28.56
+      ],
+      "volumeM3": 198.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        93.11,
+        27.28,
+        28.56
+      ],
+      "dimensions": [
+        5.47,
+        10.12,
+        3.59
+      ],
+      "halfExtents": [
+        2.735,
+        5.06,
+        1.795
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 198.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-007",
+    "name": "Oppian Hill Crest Pines Stand #7 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.78,
+    "crownDiameterMeters": 19.06,
+    "groundElevationMeters": 39.05,
+    "apexElevationMeters": 58.83,
+    "boundingBox": {
+      "min": [
+        90.790283203125,
+        39.05,
+        167.24391174316406
+      ],
+      "max": [
+        109.84829203287761,
+        58.83,
+        179.90919494628906
+      ],
+      "dimensions": [
+        19.06,
+        19.78,
+        12.67
+      ],
+      "centroid": [
+        99.42,
+        48.94,
+        173.61
+      ],
+      "volumeM3": 4776.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        99.42,
+        48.94,
+        173.61
+      ],
+      "dimensions": [
+        19.06,
+        19.78,
+        12.67
+      ],
+      "halfExtents": [
+        9.53,
+        9.89,
+        6.335
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4776.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-008",
+    "name": "Oppian Hill Crest Pines Stand #8 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.79,
+    "crownDiameterMeters": 18.04,
+    "groundElevationMeters": 38.99,
+    "apexElevationMeters": 58.78,
+    "boundingBox": {
+      "min": [
+        105.92309061686198,
+        38.99,
+        162.4751180013021
+      ],
+      "max": [
+        123.96579488118489,
+        58.78,
+        179.90900166829428
+      ],
+      "dimensions": [
+        18.04,
+        19.79,
+        17.43
+      ],
+      "centroid": [
+        112.96,
+        48.89,
+        174.12
+      ],
+      "volumeM3": 6222.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        112.96,
+        48.89,
+        174.12
+      ],
+      "dimensions": [
+        18.04,
+        19.79,
+        17.43
+      ],
+      "halfExtents": [
+        9.02,
+        9.895,
+        8.715
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6222.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-009",
+    "name": "Oppian Hill Crest Pines Stand #9 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.83,
+    "crownDiameterMeters": 10.66,
+    "groundElevationMeters": 38.94,
+    "apexElevationMeters": 58.77,
+    "boundingBox": {
+      "min": [
+        112.06862894694011,
+        38.94,
+        159.44964090983072
+      ],
+      "max": [
+        122.72537740071614,
+        58.77,
+        163.98946634928384
+      ],
+      "dimensions": [
+        10.66,
+        19.83,
+        4.54
+      ],
+      "centroid": [
+        114.7,
+        48.85,
+        160.41
+      ],
+      "volumeM3": 959.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        114.7,
+        48.85,
+        160.41
+      ],
+      "dimensions": [
+        10.66,
+        19.83,
+        4.54
+      ],
+      "halfExtents": [
+        5.33,
+        9.915,
+        2.27
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 959.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-010",
+    "name": "Oppian Hill Crest Pines Stand #10 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.8,
+    "crownDiameterMeters": 24.38,
+    "groundElevationMeters": 38.96,
+    "apexElevationMeters": 61.76,
+    "boundingBox": {
+      "min": [
+        154.74751790364584,
+        38.96,
+        140.66791280110678
+      ],
+      "max": [
+        179.12621561686197,
+        61.76,
+        162.75701395670572
+      ],
+      "dimensions": [
+        24.38,
+        22.8,
+        22.09
+      ],
+      "centroid": [
+        170.85,
+        50.36,
+        151.6
+      ],
+      "volumeM3": 12279
+    },
+    "orientedBoundingBox": {
+      "center": [
+        170.85,
+        50.36,
+        151.6
+      ],
+      "dimensions": [
+        24.38,
+        22.8,
+        22.09
+      ],
+      "halfExtents": [
+        12.19,
+        11.4,
+        11.045
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 12279,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-011",
+    "name": "Oppian Hill Crest Pines Stand #11 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.78,
+    "crownDiameterMeters": 18.87,
+    "groundElevationMeters": 38.73,
+    "apexElevationMeters": 60.51,
+    "boundingBox": {
+      "min": [
+        165.07658894856772,
+        38.73,
+        121.59304809570312
+      ],
+      "max": [
+        183.2564442952474,
+        60.51,
+        140.46290079752603
+      ],
+      "dimensions": [
+        18.18,
+        21.78,
+        18.87
+      ],
+      "centroid": [
+        174.88,
+        49.62,
+        132.41
+      ],
+      "volumeM3": 7471.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        174.88,
+        49.62,
+        132.41
+      ],
+      "dimensions": [
+        18.18,
+        21.78,
+        18.87
+      ],
+      "halfExtents": [
+        9.09,
+        10.89,
+        9.435
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7471.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-012",
+    "name": "Oppian Hill Crest Pines Stand #12 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.8,
+    "crownDiameterMeters": 14.67,
+    "groundElevationMeters": 37.08,
+    "apexElevationMeters": 58.88,
+    "boundingBox": {
+      "min": [
+        173.95947774251303,
+        37.08,
+        111.54315948486328
+      ],
+      "max": [
+        188.6279754638672,
+        58.88,
+        123.64395650227864
+      ],
+      "dimensions": [
+        14.67,
+        21.8,
+        12.1
+      ],
+      "centroid": [
+        179.47,
+        47.98,
+        117.08
+      ],
+      "volumeM3": 3869.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        179.47,
+        47.98,
+        117.08
+      ],
+      "dimensions": [
+        14.67,
+        21.8,
+        12.1
+      ],
+      "halfExtents": [
+        7.335,
+        10.9,
+        6.05
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3869.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-013",
+    "name": "Oppian Hill Crest Pines Stand #13 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 23.63,
+    "crownDiameterMeters": 22.29,
+    "groundElevationMeters": 38.79,
+    "apexElevationMeters": 62.42,
+    "boundingBox": {
+      "min": [
+        188.83582051595053,
+        38.79,
+        140.25829569498697
+      ],
+      "max": [
+        207.42867533365884,
+        62.42,
+        162.5514119466146
+      ],
+      "dimensions": [
+        18.59,
+        23.63,
+        22.29
+      ],
+      "centroid": [
+        198.53,
+        50.6,
+        151.37
+      ],
+      "volumeM3": 9791.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        198.53,
+        50.6,
+        151.37
+      ],
+      "dimensions": [
+        18.59,
+        23.63,
+        22.29
+      ],
+      "halfExtents": [
+        9.295,
+        11.815,
+        11.145
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9791.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-014",
+    "name": "Oppian Hill Crest Pines Stand #14 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 21.54,
+    "groundElevationMeters": 37.26,
+    "apexElevationMeters": 59.26,
+    "boundingBox": {
+      "min": [
+        221.47459920247397,
+        37.26,
+        73.18719228108723
+      ],
+      "max": [
+        239.59149169921875,
+        59.26,
+        94.72286478678386
+      ],
+      "dimensions": [
+        18.12,
+        22,
+        21.54
+      ],
+      "centroid": [
+        231.38,
+        48.26,
+        79.38
+      ],
+      "volumeM3": 9644.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        231.38,
+        48.26,
+        79.38
+      ],
+      "dimensions": [
+        18.12,
+        22,
+        21.54
+      ],
+      "halfExtents": [
+        9.06,
+        11,
+        10.77
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9644.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-015",
+    "name": "Oppian Hill Crest Pines Stand #15 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.95,
+    "crownDiameterMeters": 20.87,
+    "groundElevationMeters": 39.16,
+    "apexElevationMeters": 60.11,
+    "boundingBox": {
+      "min": [
+        165.69751485188803,
+        39.16,
+        153.73088582356772
+      ],
+      "max": [
+        186.56375122070312,
+        60.11,
+        165.62847900390625
+      ],
+      "dimensions": [
+        20.87,
+        20.95,
+        11.9
+      ],
+      "centroid": [
+        177.52,
+        49.64,
+        159.21
+      ],
+      "volumeM3": 5203
+    },
+    "orientedBoundingBox": {
+      "center": [
+        177.52,
+        49.64,
+        159.21
+      ],
+      "dimensions": [
+        20.87,
+        20.95,
+        11.9
+      ],
+      "halfExtents": [
+        10.435,
+        10.475,
+        5.95
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5203,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-016",
+    "name": "Oppian Hill Crest Pines Stand #16 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.7,
+    "crownDiameterMeters": 18.59,
+    "groundElevationMeters": 38.97,
+    "apexElevationMeters": 58.67,
+    "boundingBox": {
+      "min": [
+        138.63395182291666,
+        38.97,
+        144.15546162923178
+      ],
+      "max": [
+        157.2269541422526,
+        58.67,
+        158.24549865722656
+      ],
+      "dimensions": [
+        18.59,
+        19.7,
+        14.09
+      ],
+      "centroid": [
+        148.82,
+        48.82,
+        152.21
+      ],
+      "volumeM3": 5160.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        148.82,
+        48.82,
+        152.21
+      ],
+      "dimensions": [
+        18.59,
+        19.7,
+        14.09
+      ],
+      "halfExtents": [
+        9.295,
+        9.85,
+        7.045
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5160.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-017",
+    "name": "Oppian Hill Crest Pines Stand #17 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 17.48,
+    "crownDiameterMeters": 20.6,
+    "groundElevationMeters": 38.06,
+    "apexElevationMeters": 55.54,
+    "boundingBox": {
+      "min": [
+        218.17121378580728,
+        38.06,
+        136.15370178222656
+      ],
+      "max": [
+        238.76863606770834,
+        55.54,
+        154.55139668782553
+      ],
+      "dimensions": [
+        20.6,
+        17.48,
+        18.4
+      ],
+      "centroid": [
+        227.97,
+        46.8,
+        148.76
+      ],
+      "volumeM3": 6625.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        227.97,
+        46.8,
+        148.76
+      ],
+      "dimensions": [
+        20.6,
+        17.48,
+        18.4
+      ],
+      "halfExtents": [
+        10.3,
+        8.74,
+        9.2
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6625.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-018",
+    "name": "Oppian Hill Crest Pines Stand #18 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.19,
+    "crownDiameterMeters": 17.35,
+    "groundElevationMeters": 37.07,
+    "apexElevationMeters": 57.26,
+    "boundingBox": {
+      "min": [
+        155.36617533365884,
+        37.07,
+        104.36511484781902
+      ],
+      "max": [
+        172.7198028564453,
+        57.26,
+        119.54258728027344
+      ],
+      "dimensions": [
+        17.35,
+        20.19,
+        15.18
+      ],
+      "centroid": [
+        165.29,
+        47.17,
+        111.35
+      ],
+      "volumeM3": 5317.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        165.29,
+        47.17,
+        111.35
+      ],
+      "dimensions": [
+        17.35,
+        20.19,
+        15.18
+      ],
+      "halfExtents": [
+        8.675,
+        10.095,
+        7.59
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5317.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-019",
+    "name": "Oppian Hill Crest Pines Stand #19 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.81,
+    "crownDiameterMeters": 13.78,
+    "groundElevationMeters": 37.83,
+    "apexElevationMeters": 57.64,
+    "boundingBox": {
+      "min": [
+        223.74820963541666,
+        37.83,
+        116.66905721028645
+      ],
+      "max": [
+        237.52791341145834,
+        57.64,
+        122.82192993164062
+      ],
+      "dimensions": [
+        13.78,
+        19.81,
+        6.15
+      ],
+      "centroid": [
+        229.06,
+        47.73,
+        119.27
+      ],
+      "volumeM3": 1678.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        229.06,
+        47.73,
+        119.27
+      ],
+      "dimensions": [
+        13.78,
+        19.81,
+        6.15
+      ],
+      "halfExtents": [
+        6.89,
+        9.905,
+        3.075
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1678.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-020",
+    "name": "Oppian Hill Crest Pines Stand #20 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "oppian_crest",
+    "zoneName": "Oppian Hill Crest Pines",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 18.87,
+    "groundElevationMeters": 43.99,
+    "apexElevationMeters": 65.99,
+    "boundingBox": {
+      "min": [
+        222.0931396484375,
+        43.99,
+        25.602832794189453
+      ],
+      "max": [
+        239.79660034179688,
+        65.99,
+        44.47279485066732
+      ],
+      "dimensions": [
+        17.7,
+        22,
+        18.87
+      ],
+      "centroid": [
+        235.54,
+        54.99,
+        34.86
+      ],
+      "volumeM3": 8376.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        235.54,
+        54.99,
+        34.86
+      ],
+      "dimensions": [
+        17.7,
+        22,
+        18.87
+      ],
+      "halfExtents": [
+        8.85,
+        11,
+        9.435
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 8376.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-021",
+    "name": "Colle Oppio Embankment Grove Stand #21 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 10.94,
+    "crownDiameterMeters": 14.85,
+    "groundElevationMeters": 32.39,
+    "apexElevationMeters": 43.33,
+    "boundingBox": {
+      "min": [
+        45.11211140950521,
+        32.39,
+        146.50093587239584
+      ],
+      "max": [
+        59.9650624593099,
+        43.33,
+        159.50199381510416
+      ],
+      "dimensions": [
+        14.85,
+        10.94,
+        13
+      ],
+      "centroid": [
+        51.97,
+        37.86,
+        152.49
+      ],
+      "volumeM3": 2112
+    },
+    "orientedBoundingBox": {
+      "center": [
+        51.97,
+        37.86,
+        152.49
+      ],
+      "dimensions": [
+        14.85,
+        10.94,
+        13
+      ],
+      "halfExtents": [
+        7.425,
+        5.47,
+        6.5
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2112,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-022",
+    "name": "Colle Oppio Embankment Grove Stand #22 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 14.67,
+    "groundElevationMeters": 44.46,
+    "apexElevationMeters": 66.46,
+    "boundingBox": {
+      "min": [
+        45.01751454671224,
+        44.46,
+        80.35513051350911
+      ],
+      "max": [
+        53.38456726074219,
+        66.46,
+        95.02014923095703
+      ],
+      "dimensions": [
+        8.37,
+        22,
+        14.67
+      ],
+      "centroid": [
+        50.68,
+        55.46,
+        84.17
+      ],
+      "volumeM3": 5220.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        50.68,
+        55.46,
+        84.17
+      ],
+      "dimensions": [
+        8.37,
+        22,
+        14.67
+      ],
+      "halfExtents": [
+        4.185,
+        11,
+        7.335
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5220.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-023",
+    "name": "Colle Oppio Embankment Grove Stand #23 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 21.04,
+    "crownDiameterMeters": 21.56,
+    "groundElevationMeters": 32.81,
+    "apexElevationMeters": 53.85,
+    "boundingBox": {
+      "min": [
+        55.450958251953125,
+        32.81,
+        120.76029205322266
+      ],
+      "max": [
+        77.00863901774089,
+        53.85,
+        141.5783437093099
+      ],
+      "dimensions": [
+        21.56,
+        21.04,
+        20.82
+      ],
+      "centroid": [
+        63.86,
+        43.33,
+        130.89
+      ],
+      "volumeM3": 9444.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        63.86,
+        43.33,
+        130.89
+      ],
+      "dimensions": [
+        21.56,
+        21.04,
+        20.82
+      ],
+      "halfExtents": [
+        10.78,
+        10.52,
+        10.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9444.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-024",
+    "name": "Colle Oppio Embankment Grove Stand #24 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 11.13,
+    "crownDiameterMeters": 6.37,
+    "groundElevationMeters": 32.81,
+    "apexElevationMeters": 43.94,
+    "boundingBox": {
+      "min": [
+        57.930152893066406,
+        32.81,
+        140.86060078938803
+      ],
+      "max": [
+        64.30346171061198,
+        43.94,
+        146.39837137858072
+      ],
+      "dimensions": [
+        6.37,
+        11.13,
+        5.54
+      ],
+      "centroid": [
+        59.62,
+        38.38,
+        143.19
+      ],
+      "volumeM3": 392.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        59.62,
+        38.38,
+        143.19
+      ],
+      "dimensions": [
+        6.37,
+        11.13,
+        5.54
+      ],
+      "halfExtents": [
+        3.185,
+        5.565,
+        2.77
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 392.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-025",
+    "name": "Colle Oppio Embankment Grove Stand #25 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 17.09,
+    "crownDiameterMeters": 25.64,
+    "groundElevationMeters": 32.81,
+    "apexElevationMeters": 49.9,
+    "boundingBox": {
+      "min": [
+        70.19036102294922,
+        32.81,
+        80.0471700032552
+      ],
+      "max": [
+        88.2670186360677,
+        49.9,
+        105.68504842122395
+      ],
+      "dimensions": [
+        18.08,
+        17.09,
+        25.64
+      ],
+      "centroid": [
+        81.35,
+        41.35,
+        87.96
+      ],
+      "volumeM3": 7922.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        81.35,
+        41.35,
+        87.96
+      ],
+      "dimensions": [
+        18.08,
+        17.09,
+        25.64
+      ],
+      "halfExtents": [
+        9.04,
+        8.545,
+        12.82
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7922.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-026",
+    "name": "Colle Oppio Embankment Grove Stand #26 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "colle_oppio_slope",
+    "zoneName": "Colle Oppio Embankment Grove",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 11.6,
+    "crownDiameterMeters": 12.82,
+    "groundElevationMeters": 33.09,
+    "apexElevationMeters": 44.69,
+    "boundingBox": {
+      "min": [
+        71.5335922241211,
+        33.09,
+        108.0436299641927
+      ],
+      "max": [
+        79.79705810546875,
+        44.69,
+        120.86270904541016
+      ],
+      "dimensions": [
+        8.26,
+        11.6,
+        12.82
+      ],
+      "centroid": [
+        76.01,
+        38.89,
+        113.74
+      ],
+      "volumeM3": 1228.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        76.01,
+        38.89,
+        113.74
+      ],
+      "dimensions": [
+        8.26,
+        11.6,
+        12.82
+      ],
+      "halfExtents": [
+        4.13,
+        5.8,
+        6.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1228.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-027",
+    "name": "Via di San Gregorio Cypress Line Stand #27 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 21.52,
+    "crownDiameterMeters": 21.97,
+    "groundElevationMeters": 34.5,
+    "apexElevationMeters": 56.02,
+    "boundingBox": {
+      "min": [
+        -123.15755462646484,
+        34.5,
+        198.56671142578125
+      ],
+      "max": [
+        -101.18650309244792,
+        56.02,
+        213.94967142740884
+      ],
+      "dimensions": [
+        21.97,
+        21.52,
+        15.38
+      ],
+      "centroid": [
+        -113.6,
+        45.26,
+        203.15
+      ],
+      "volumeM3": 7271.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -113.6,
+        45.26,
+        203.15
+      ],
+      "dimensions": [
+        21.97,
+        21.52,
+        15.38
+      ],
+      "halfExtents": [
+        10.985,
+        10.76,
+        7.69
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7271.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-028",
+    "name": "Via di San Gregorio Cypress Line Stand #28 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 12.98,
+    "crownDiameterMeters": 23.24,
+    "groundElevationMeters": 36.55,
+    "apexElevationMeters": 49.53,
+    "boundingBox": {
+      "min": [
+        -97.05466715494792,
+        36.55,
+        195.1826629638672
+      ],
+      "max": [
+        -73.81288655598958,
+        49.53,
+        205.64300028483072
+      ],
+      "dimensions": [
+        23.24,
+        12.98,
+        10.46
+      ],
+      "centroid": [
+        -85.11,
+        43.04,
+        200.44
+      ],
+      "volumeM3": 3155.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -85.11,
+        43.04,
+        200.44
+      ],
+      "dimensions": [
+        23.24,
+        12.98,
+        10.46
+      ],
+      "halfExtents": [
+        11.62,
+        6.49,
+        5.23
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3155.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-029",
+    "name": "Via di San Gregorio Cypress Line Stand #29 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 17.1,
+    "crownDiameterMeters": 21.56,
+    "groundElevationMeters": 41.69,
+    "apexElevationMeters": 58.79,
+    "boundingBox": {
+      "min": [
+        -116.23709360758464,
+        41.69,
+        217.64157104492188
+      ],
+      "max": [
+        -94.67906188964844,
+        58.79,
+        234.63447062174478
+      ],
+      "dimensions": [
+        21.56,
+        17.1,
+        16.99
+      ],
+      "centroid": [
+        -105.36,
+        50.24,
+        227.03
+      ],
+      "volumeM3": 6263.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -105.36,
+        50.24,
+        227.03
+      ],
+      "dimensions": [
+        21.56,
+        17.1,
+        16.99
+      ],
+      "halfExtents": [
+        10.78,
+        8.55,
+        8.495
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6263.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-030",
+    "name": "Via di San Gregorio Cypress Line Stand #30 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 25.51,
+    "groundElevationMeters": 34.73,
+    "apexElevationMeters": 56.73,
+    "boundingBox": {
+      "min": [
+        -155.17972310384116,
+        34.73,
+        207.693603515625
+      ],
+      "max": [
+        -129.6656239827474,
+        56.73,
+        228.8191935221354
+      ],
+      "dimensions": [
+        25.51,
+        22,
+        21.13
+      ],
+      "centroid": [
+        -141.27,
+        45.73,
+        217.04
+      ],
+      "volumeM3": 13216.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -141.27,
+        45.73,
+        217.04
+      ],
+      "dimensions": [
+        25.51,
+        22,
+        21.13
+      ],
+      "halfExtents": [
+        12.755,
+        11,
+        10.565
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 13216.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-031",
+    "name": "Via di San Gregorio Cypress Line Stand #31 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 28.72,
+    "groundElevationMeters": 36.79,
+    "apexElevationMeters": 58.79,
+    "boundingBox": {
+      "min": [
+        -145.77963256835938,
+        36.79,
+        206.4629160563151
+      ],
+      "max": [
+        -117.06342061360677,
+        58.79,
+        226.15335591634116
+      ],
+      "dimensions": [
+        28.72,
+        22,
+        19.69
+      ],
+      "centroid": [
+        -123.28,
+        47.79,
+        217.92
+      ],
+      "volumeM3": 14499.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -123.28,
+        47.79,
+        217.92
+      ],
+      "dimensions": [
+        28.72,
+        22,
+        19.69
+      ],
+      "halfExtents": [
+        14.36,
+        11,
+        9.845
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 14499.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-032",
+    "name": "Via di San Gregorio Cypress Line Stand #32 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 8.34,
+    "crownDiameterMeters": 8.88,
+    "groundElevationMeters": 32.21,
+    "apexElevationMeters": 40.55,
+    "boundingBox": {
+      "min": [
+        -159.5181884765625,
+        32.21,
+        221.22997029622397
+      ],
+      "max": [
+        -150.63469950358072,
+        40.55,
+        228.81891377766928
+      ],
+      "dimensions": [
+        8.88,
+        8.34,
+        7.59
+      ],
+      "centroid": [
+        -154.04,
+        36.38,
+        227.86
+      ],
+      "volumeM3": 562.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -154.04,
+        36.38,
+        227.86
+      ],
+      "dimensions": [
+        8.88,
+        8.34,
+        7.59
+      ],
+      "halfExtents": [
+        4.44,
+        4.17,
+        3.795
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 562.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-033",
+    "name": "Via di San Gregorio Cypress Line Stand #33 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 14,
+    "crownDiameterMeters": 14.25,
+    "groundElevationMeters": 44.13,
+    "apexElevationMeters": 58.13,
+    "boundingBox": {
+      "min": [
+        -79.80440266927083,
+        44.13,
+        253.09373474121094
+      ],
+      "max": [
+        -72.78018697102864,
+        58.13,
+        267.34827677408856
+      ],
+      "dimensions": [
+        7.02,
+        14,
+        14.25
+      ],
+      "centroid": [
+        -75.89,
+        51.13,
+        262.86
+      ],
+      "volumeM3": 1400.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -75.89,
+        51.13,
+        262.86
+      ],
+      "dimensions": [
+        7.02,
+        14,
+        14.25
+      ],
+      "halfExtents": [
+        3.51,
+        7,
+        7.125
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1400.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-034",
+    "name": "Via di San Gregorio Cypress Line Stand #34 (Cupressus)",
+    "category": "foliage_trees",
+    "species": "cupressus_sempervirens",
+    "zone": "san_gregorio_cypress",
+    "zoneName": "Via di San Gregorio Cypress Line",
+    "colorHex": "#34d399",
+    "canopyHeightMeters": 12.78,
+    "crownDiameterMeters": 3.82,
+    "groundElevationMeters": 43.32,
+    "apexElevationMeters": 56.1,
+    "boundingBox": {
+      "min": [
+        -85.17578125,
+        43.32,
+        239.96692403157553
+      ],
+      "max": [
+        -81.35379536946614,
+        56.1,
+        243.65882364908853
+      ],
+      "dimensions": [
+        3.82,
+        12.78,
+        3.69
+      ],
+      "centroid": [
+        -83.8,
+        49.71,
+        241.67
+      ],
+      "volumeM3": 180.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -83.8,
+        49.71,
+        241.67
+      ],
+      "dimensions": [
+        3.82,
+        12.78,
+        3.69
+      ],
+      "halfExtents": [
+        1.91,
+        6.39,
+        1.845
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 180.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-035",
+    "name": "Palatine Clivus Slopes Stand #35 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.48,
+    "crownDiameterMeters": 27.28,
+    "groundElevationMeters": 31.06,
+    "apexElevationMeters": 51.54,
+    "boundingBox": {
+      "min": [
+        -170.053955078125,
+        31.06,
+        152.52034505208334
+      ],
+      "max": [
+        -157.0383504231771,
+        51.54,
+        179.7991943359375
+      ],
+      "dimensions": [
+        13.02,
+        20.48,
+        27.28
+      ],
+      "centroid": [
+        -165.87,
+        41.3,
+        164.96
+      ],
+      "volumeM3": 7274.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -165.87,
+        41.3,
+        164.96
+      ],
+      "dimensions": [
+        13.02,
+        20.48,
+        27.28
+      ],
+      "halfExtents": [
+        6.51,
+        10.24,
+        13.64
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7274.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-036",
+    "name": "Palatine Clivus Slopes Stand #36 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.35,
+    "crownDiameterMeters": 17.59,
+    "groundElevationMeters": 31.06,
+    "apexElevationMeters": 50.41,
+    "boundingBox": {
+      "min": [
+        -168.8140869140625,
+        31.06,
+        141.69609578450522
+      ],
+      "max": [
+        -151.64747111002603,
+        50.41,
+        159.28893025716147
+      ],
+      "dimensions": [
+        17.17,
+        19.35,
+        17.59
+      ],
+      "centroid": [
+        -161.21,
+        40.73,
+        152.04
+      ],
+      "volumeM3": 5844.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -161.21,
+        40.73,
+        152.04
+      ],
+      "dimensions": [
+        17.17,
+        19.35,
+        17.59
+      ],
+      "halfExtents": [
+        8.585,
+        9.675,
+        8.795
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5844.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-037",
+    "name": "Palatine Clivus Slopes Stand #37 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 20.04,
+    "groundElevationMeters": 30.07,
+    "apexElevationMeters": 52.07,
+    "boundingBox": {
+      "min": [
+        -190.89917500813803,
+        30.07,
+        109.0841064453125
+      ],
+      "max": [
+        -170.8600056966146,
+        52.07,
+        126.31299845377605
+      ],
+      "dimensions": [
+        20.04,
+        22,
+        17.23
+      ],
+      "centroid": [
+        -181.8,
+        41.07,
+        119.38
+      ],
+      "volumeM3": 8328.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -181.8,
+        41.07,
+        119.38
+      ],
+      "dimensions": [
+        20.04,
+        22,
+        17.23
+      ],
+      "halfExtents": [
+        10.02,
+        11,
+        8.615
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 8328.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-038",
+    "name": "Palatine Clivus Slopes Stand #38 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 23.09,
+    "crownDiameterMeters": 14.56,
+    "groundElevationMeters": 27.96,
+    "apexElevationMeters": 51.05,
+    "boundingBox": {
+      "min": [
+        -174.78536987304688,
+        27.96,
+        113.3916015625
+      ],
+      "max": [
+        -165.90164184570312,
+        51.05,
+        127.95393371582031
+      ],
+      "dimensions": [
+        8.88,
+        23.09,
+        14.56
+      ],
+      "centroid": [
+        -169.48,
+        39.5,
+        122.79
+      ],
+      "volumeM3": 2985.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -169.48,
+        39.5,
+        122.79
+      ],
+      "dimensions": [
+        8.88,
+        23.09,
+        14.56
+      ],
+      "halfExtents": [
+        4.44,
+        11.545,
+        7.28
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2985.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-039",
+    "name": "Palatine Clivus Slopes Stand #39 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 25.84,
+    "groundElevationMeters": 37.09,
+    "apexElevationMeters": 59.09,
+    "boundingBox": {
+      "min": [
+        -119.21135711669922,
+        37.09,
+        59.039999643961586
+      ],
+      "max": [
+        -110.06887308756511,
+        59.09,
+        84.88308715820312
+      ],
+      "dimensions": [
+        9.14,
+        22,
+        25.84
+      ],
+      "centroid": [
+        -114.27,
+        48.09,
+        72.28
+      ],
+      "volumeM3": 6537.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -114.27,
+        48.09,
+        72.28
+      ],
+      "dimensions": [
+        9.14,
+        22,
+        25.84
+      ],
+      "halfExtents": [
+        4.57,
+        11,
+        12.92
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6537.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-040",
+    "name": "Palatine Clivus Slopes Stand #40 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.75,
+    "crownDiameterMeters": 21.42,
+    "groundElevationMeters": 32.17,
+    "apexElevationMeters": 50.92,
+    "boundingBox": {
+      "min": [
+        -233.80523173014322,
+        32.17,
+        45.50128300984701
+      ],
+      "max": [
+        -212.38363647460938,
+        50.92,
+        57.807699839274086
+      ],
+      "dimensions": [
+        21.42,
+        18.75,
+        12.31
+      ],
+      "centroid": [
+        -225.49,
+        41.54,
+        53.14
+      ],
+      "volumeM3": 4944
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -225.49,
+        41.54,
+        53.14
+      ],
+      "dimensions": [
+        21.42,
+        18.75,
+        12.31
+      ],
+      "halfExtents": [
+        10.71,
+        9.375,
+        6.155
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4944,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-041",
+    "name": "Palatine Clivus Slopes Stand #41 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 24.08,
+    "groundElevationMeters": 35.3,
+    "apexElevationMeters": 57.3,
+    "boundingBox": {
+      "min": [
+        -125.61503601074219,
+        35.3,
+        16.70199457804362
+      ],
+      "max": [
+        -110.27530161539714,
+        57.3,
+        40.785727183024086
+      ],
+      "dimensions": [
+        15.34,
+        22,
+        24.08
+      ],
+      "centroid": [
+        -116.89,
+        46.3,
+        26.85
+      ],
+      "volumeM3": 9663.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -116.89,
+        46.3,
+        26.85
+      ],
+      "dimensions": [
+        15.34,
+        22,
+        24.08
+      ],
+      "halfExtents": [
+        7.67,
+        11,
+        12.04
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9663.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-042",
+    "name": "Palatine Clivus Slopes Stand #42 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 21.11,
+    "groundElevationMeters": 37.13,
+    "apexElevationMeters": 59.13,
+    "boundingBox": {
+      "min": [
+        -124.58227030436198,
+        37.13,
+        39.571058909098305
+      ],
+      "max": [
+        -110.48196919759114,
+        59.13,
+        60.68089294433594
+      ],
+      "dimensions": [
+        14.1,
+        22,
+        21.11
+      ],
+      "centroid": [
+        -116.19,
+        48.13,
+        49.58
+      ],
+      "volumeM3": 8331.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -116.19,
+        48.13,
+        49.58
+      ],
+      "dimensions": [
+        14.1,
+        22,
+        21.11
+      ],
+      "halfExtents": [
+        7.05,
+        11,
+        10.555
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 8331.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-043",
+    "name": "Palatine Clivus Slopes Stand #43 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.19,
+    "crownDiameterMeters": 5.52,
+    "groundElevationMeters": 33.17,
+    "apexElevationMeters": 52.36,
+    "boundingBox": {
+      "min": [
+        -114.87200927734375,
+        33.17,
+        13.933106740315756
+      ],
+      "max": [
+        -110.06858317057292,
+        52.36,
+        19.45506413777669
+      ],
+      "dimensions": [
+        4.8,
+        19.19,
+        5.52
+      ],
+      "centroid": [
+        -112.41,
+        42.76,
+        16.99
+      ],
+      "volumeM3": 508.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -112.41,
+        42.76,
+        16.99
+      ],
+      "dimensions": [
+        4.8,
+        19.19,
+        5.52
+      ],
+      "halfExtents": [
+        2.4,
+        9.595,
+        2.76
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 508.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-044",
+    "name": "Palatine Clivus Slopes Stand #44 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 14.85,
+    "groundElevationMeters": 38.05,
+    "apexElevationMeters": 60.05,
+    "boundingBox": {
+      "min": [
+        -116.7315190633138,
+        38.05,
+        81.80663045247395
+      ],
+      "max": [
+        -110.06927998860677,
+        60.05,
+        96.66139475504558
+      ],
+      "dimensions": [
+        6.66,
+        22,
+        14.85
+      ],
+      "centroid": [
+        -112.84,
+        49.05,
+        88.97
+      ],
+      "volumeM3": 2747.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -112.84,
+        49.05,
+        88.97
+      ],
+      "dimensions": [
+        6.66,
+        22,
+        14.85
+      ],
+      "halfExtents": [
+        3.33,
+        11,
+        7.425
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2747.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-045",
+    "name": "Palatine Clivus Slopes Stand #45 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.78,
+    "crownDiameterMeters": 17.35,
+    "groundElevationMeters": 31.06,
+    "apexElevationMeters": 50.84,
+    "boundingBox": {
+      "min": [
+        -217.963134765625,
+        31.06,
+        132.05540974934897
+      ],
+      "max": [
+        -200.6094767252604,
+        50.84,
+        145.59211222330728
+      ],
+      "dimensions": [
+        17.35,
+        19.78,
+        13.54
+      ],
+      "centroid": [
+        -208.2,
+        40.95,
+        140.63
+      ],
+      "volumeM3": 4646.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -208.2,
+        40.95,
+        140.63
+      ],
+      "dimensions": [
+        17.35,
+        19.78,
+        13.54
+      ],
+      "halfExtents": [
+        8.675,
+        9.89,
+        6.77
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4646.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-046",
+    "name": "Palatine Clivus Slopes Stand #46 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 9.46,
+    "crownDiameterMeters": 8.06,
+    "groundElevationMeters": 29.72,
+    "apexElevationMeters": 39.18,
+    "boundingBox": {
+      "min": [
+        -235.25206502278647,
+        29.72,
+        70.11344146728516
+      ],
+      "max": [
+        -227.19495646158853,
+        39.18,
+        76.67695871988933
+      ],
+      "dimensions": [
+        8.06,
+        9.46,
+        6.56
+      ],
+      "centroid": [
+        -230.49,
+        34.45,
+        75.57
+      ],
+      "volumeM3": 500.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -230.49,
+        34.45,
+        75.57
+      ],
+      "dimensions": [
+        8.06,
+        9.46,
+        6.56
+      ],
+      "halfExtents": [
+        4.03,
+        4.73,
+        3.28
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 500.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-047",
+    "name": "Palatine Clivus Slopes Stand #47 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "palatine_slopes",
+    "zoneName": "Palatine Clivus Slopes",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.24,
+    "crownDiameterMeters": 21.33,
+    "groundElevationMeters": 31.85,
+    "apexElevationMeters": 54.09,
+    "boundingBox": {
+      "min": [
+        -238.1462860107422,
+        31.85,
+        114.41595458984375
+      ],
+      "max": [
+        -227.19684346516928,
+        54.09,
+        135.74673970540366
+      ],
+      "dimensions": [
+        10.95,
+        22.24,
+        21.33
+      ],
+      "centroid": [
+        -232.21,
+        42.97,
+        124.79
+      ],
+      "volumeM3": 5194.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -232.21,
+        42.97,
+        124.79
+      ],
+      "dimensions": [
+        10.95,
+        22.24,
+        21.33
+      ],
+      "halfExtents": [
+        5.475,
+        11.12,
+        10.665
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5194.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-048",
+    "name": "Farnese Terrace Gardens Stand #48 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "olea_europaea",
+    "zone": "farnese_gardens",
+    "zoneName": "Farnese Terrace Gardens",
+    "colorHex": "#84cc16",
+    "canopyHeightMeters": 8.9,
+    "crownDiameterMeters": 10.33,
+    "groundElevationMeters": 33.51,
+    "apexElevationMeters": 42.41,
+    "boundingBox": {
+      "min": [
+        -157.63628641764322,
+        33.51,
+        -4.8907623291015625
+      ],
+      "max": [
+        -147.30645751953125,
+        42.41,
+        3.6614354451497397
+      ],
+      "dimensions": [
+        10.33,
+        8.9,
+        8.55
+      ],
+      "centroid": [
+        -152.56,
+        37.96,
+        0.06
+      ],
+      "volumeM3": 786.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -152.56,
+        37.96,
+        0.06
+      ],
+      "dimensions": [
+        10.33,
+        8.9,
+        8.55
+      ],
+      "halfExtents": [
+        5.165,
+        4.45,
+        4.275
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 786.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-049",
+    "name": "Farnese Terrace Gardens Stand #49 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "olea_europaea",
+    "zone": "farnese_gardens",
+    "zoneName": "Farnese Terrace Gardens",
+    "colorHex": "#84cc16",
+    "canopyHeightMeters": 14.01,
+    "crownDiameterMeters": 20.31,
+    "groundElevationMeters": 33,
+    "apexElevationMeters": 47.01,
+    "boundingBox": {
+      "min": [
+        -231.7374471028646,
+        33,
+        -54.93732198079427
+      ],
+      "max": [
+        -212.58783467610678,
+        47.01,
+        -34.63185373942057
+      ],
+      "dimensions": [
+        19.15,
+        14.01,
+        20.31
+      ],
+      "centroid": [
+        -224.88,
+        40,
+        -42.71
+      ],
+      "volumeM3": 5449
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -224.88,
+        40,
+        -42.71
+      ],
+      "dimensions": [
+        19.15,
+        14.01,
+        20.31
+      ],
+      "halfExtents": [
+        9.575,
+        7.005,
+        10.155
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5449,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-050",
+    "name": "Farnese Terrace Gardens Stand #50 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "olea_europaea",
+    "zone": "farnese_gardens",
+    "zoneName": "Farnese Terrace Gardens",
+    "colorHex": "#84cc16",
+    "canopyHeightMeters": 14.21,
+    "crownDiameterMeters": 17.56,
+    "groundElevationMeters": 32.79,
+    "apexElevationMeters": 47,
+    "boundingBox": {
+      "min": [
+        -215.68660990397134,
+        32.79,
+        -40.78483581542969
+      ],
+      "max": [
+        -198.1266886393229,
+        47,
+        -30.11937713623047
+      ],
+      "dimensions": [
+        17.56,
+        14.21,
+        10.67
+      ],
+      "centroid": [
+        -207.04,
+        39.9,
+        -34.42
+      ],
+      "volumeM3": 2662.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -207.04,
+        39.9,
+        -34.42
+      ],
+      "dimensions": [
+        17.56,
+        14.21,
+        10.67
+      ],
+      "halfExtents": [
+        8.78,
+        7.105,
+        5.335
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2662.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-051",
+    "name": "Celian Hill North Woodland Stand #51 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 17.56,
+    "groundElevationMeters": 49.15,
+    "apexElevationMeters": 71.15,
+    "boundingBox": {
+      "min": [
+        -69.8992207845052,
+        49.15,
+        -162.34729512532553
+      ],
+      "max": [
+        -52.339064280192055,
+        71.15,
+        -147.84754943847656
+      ],
+      "dimensions": [
+        17.56,
+        22,
+        14.5
+      ],
+      "centroid": [
+        -60.66,
+        60.15,
+        -154.59
+      ],
+      "volumeM3": 6910.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -60.66,
+        60.15,
+        -154.59
+      ],
+      "dimensions": [
+        17.56,
+        22,
+        14.5
+      ],
+      "halfExtents": [
+        8.78,
+        11,
+        7.25
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6910.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-052",
+    "name": "Celian Hill North Woodland Stand #52 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 18.48,
+    "crownDiameterMeters": 20.25,
+    "groundElevationMeters": 48.36,
+    "apexElevationMeters": 66.84,
+    "boundingBox": {
+      "min": [
+        -33.95231564839681,
+        48.36,
+        -149.4883778889974
+      ],
+      "max": [
+        -13.706363677978516,
+        66.84,
+        -131.85094706217447
+      ],
+      "dimensions": [
+        20.25,
+        18.48,
+        17.64
+      ],
+      "centroid": [
+        -26.43,
+        57.6,
+        -138.37
+      ],
+      "volumeM3": 6601.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -26.43,
+        57.6,
+        -138.37
+      ],
+      "dimensions": [
+        20.25,
+        18.48,
+        17.64
+      ],
+      "halfExtents": [
+        10.125,
+        9.24,
+        8.82
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6601.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-053",
+    "name": "Celian Hill North Woodland Stand #53 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 23.02,
+    "crownDiameterMeters": 22.66,
+    "groundElevationMeters": 50.04,
+    "apexElevationMeters": 73.06,
+    "boundingBox": {
+      "min": [
+        -11.847042083740234,
+        50.04,
+        -150.10549926757812
+      ],
+      "max": [
+        10.811695098876953,
+        73.06,
+        -130.8255615234375
+      ],
+      "dimensions": [
+        22.66,
+        23.02,
+        19.28
+      ],
+      "centroid": [
+        1.47,
+        61.55,
+        -138.78
+      ],
+      "volumeM3": 10057.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        1.47,
+        61.55,
+        -138.78
+      ],
+      "dimensions": [
+        22.66,
+        23.02,
+        19.28
+      ],
+      "halfExtents": [
+        11.33,
+        11.51,
+        9.64
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 10057.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-054",
+    "name": "Celian Hill North Woodland Stand #54 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 21.17,
+    "crownDiameterMeters": 19.83,
+    "groundElevationMeters": 47.52,
+    "apexElevationMeters": 68.69,
+    "boundingBox": {
+      "min": [
+        -52.752201080322266,
+        47.52,
+        -154.75824991861978
+      ],
+      "max": [
+        -36.22482935587565,
+        68.69,
+        -134.92615254720053
+      ],
+      "dimensions": [
+        16.53,
+        21.17,
+        19.83
+      ],
+      "centroid": [
+        -45.1,
+        58.1,
+        -146.37
+      ],
+      "volumeM3": 6939.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -45.1,
+        58.1,
+        -146.37
+      ],
+      "dimensions": [
+        16.53,
+        21.17,
+        19.83
+      ],
+      "halfExtents": [
+        8.265,
+        10.585,
+        9.915
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6939.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-055",
+    "name": "Celian Hill North Woodland Stand #55 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 21.88,
+    "groundElevationMeters": 50.59,
+    "apexElevationMeters": 72.59,
+    "boundingBox": {
+      "min": [
+        -52.75223922729492,
+        50.59,
+        -164.6029815673828
+      ],
+      "max": [
+        -36.84504000345866,
+        72.59,
+        -142.72176106770834
+      ],
+      "dimensions": [
+        15.91,
+        22,
+        21.88
+      ],
+      "centroid": [
+        -47,
+        61.59,
+        -155.76
+      ],
+      "volumeM3": 8727.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -47,
+        61.59,
+        -155.76
+      ],
+      "dimensions": [
+        15.91,
+        22,
+        21.88
+      ],
+      "halfExtents": [
+        7.955,
+        11,
+        10.94
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 8727.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-056",
+    "name": "Celian Hill North Woodland Stand #56 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 20.24,
+    "groundElevationMeters": 52.89,
+    "apexElevationMeters": 74.89,
+    "boundingBox": {
+      "min": [
+        -30.233675638834637,
+        52.89,
+        -165.62885538736978
+      ],
+      "max": [
+        -9.988716125488281,
+        74.89,
+        -147.2322540283203
+      ],
+      "dimensions": [
+        20.24,
+        22,
+        18.4
+      ],
+      "centroid": [
+        -19.94,
+        63.89,
+        -157.61
+      ],
+      "volumeM3": 9418.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -19.94,
+        63.89,
+        -157.61
+      ],
+      "dimensions": [
+        20.24,
+        22,
+        18.4
+      ],
+      "halfExtents": [
+        10.12,
+        11,
+        9.2
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9418.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-057",
+    "name": "Celian Hill North Woodland Stand #57 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 21.99,
+    "crownDiameterMeters": 21.88,
+    "groundElevationMeters": 51.7,
+    "apexElevationMeters": 73.69,
+    "boundingBox": {
+      "min": [
+        2.7554397583007812,
+        51.7,
+        -160.29661560058594
+      ],
+      "max": [
+        23.001073201497395,
+        73.69,
+        -138.4146270751953
+      ],
+      "dimensions": [
+        20.25,
+        21.99,
+        21.88
+      ],
+      "centroid": [
+        13.53,
+        62.69,
+        -151.73
+      ],
+      "volumeM3": 9743.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        13.53,
+        62.69,
+        -151.73
+      ],
+      "dimensions": [
+        20.25,
+        21.99,
+        21.88
+      ],
+      "halfExtents": [
+        10.125,
+        10.995,
+        10.94
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9743.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-058",
+    "name": "Celian Hill North Woodland Stand #58 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22.19,
+    "crownDiameterMeters": 15.32,
+    "groundElevationMeters": 50.88,
+    "apexElevationMeters": 73.07,
+    "boundingBox": {
+      "min": [
+        29.198079427083332,
+        50.88,
+        -160.29667154947916
+      ],
+      "max": [
+        44.48595682779948,
+        73.07,
+        -144.97848002115884
+      ],
+      "dimensions": [
+        15.29,
+        22.19,
+        15.32
+      ],
+      "centroid": [
+        38.05,
+        61.97,
+        -153.18
+      ],
+      "volumeM3": 5197.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        38.05,
+        61.97,
+        -153.18
+      ],
+      "dimensions": [
+        15.29,
+        22.19,
+        15.32
+      ],
+      "halfExtents": [
+        7.645,
+        11.095,
+        7.66
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5197.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-059",
+    "name": "Celian Hill North Woodland Stand #59 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 20.34,
+    "crownDiameterMeters": 16.41,
+    "groundElevationMeters": 50.46,
+    "apexElevationMeters": 70.8,
+    "boundingBox": {
+      "min": [
+        46.551920572916664,
+        50.46,
+        -147.2350870768229
+      ],
+      "max": [
+        59.360504150390625,
+        70.8,
+        -130.8262481689453
+      ],
+      "dimensions": [
+        12.81,
+        20.34,
+        16.41
+      ],
+      "centroid": [
+        56.18,
+        60.63,
+        -137.11
+      ],
+      "volumeM3": 4275.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        56.18,
+        60.63,
+        -137.11
+      ],
+      "dimensions": [
+        12.81,
+        20.34,
+        16.41
+      ],
+      "halfExtents": [
+        6.405,
+        10.17,
+        8.205
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4275.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-060",
+    "name": "Celian Hill North Woodland Stand #60 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 20.34,
+    "crownDiameterMeters": 19.56,
+    "groundElevationMeters": 50.86,
+    "apexElevationMeters": 71.2,
+    "boundingBox": {
+      "min": [
+        -2.964752197265625,
+        50.86,
+        -182.85814921061197
+      ],
+      "max": [
+        16.59649403889974,
+        71.2,
+        -165.01332092285156
+      ],
+      "dimensions": [
+        19.56,
+        20.34,
+        17.84
+      ],
+      "centroid": [
+        5.9,
+        61.03,
+        -173.12
+      ],
+      "volumeM3": 7097.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        5.9,
+        61.03,
+        -173.12
+      ],
+      "dimensions": [
+        19.56,
+        20.34,
+        17.84
+      ],
+      "halfExtents": [
+        9.78,
+        10.17,
+        8.92
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7097.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-061",
+    "name": "Celian Hill North Woodland Stand #61 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 18.28,
+    "crownDiameterMeters": 25.43,
+    "groundElevationMeters": 51.9,
+    "apexElevationMeters": 70.18,
+    "boundingBox": {
+      "min": [
+        43.86607869466146,
+        51.9,
+        -187.16663106282553
+      ],
+      "max": [
+        64.11130015055339,
+        70.18,
+        -161.73233032226562
+      ],
+      "dimensions": [
+        20.25,
+        18.28,
+        25.43
+      ],
+      "centroid": [
+        57.1,
+        61.04,
+        -170.91
+      ],
+      "volumeM3": 9413.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        57.1,
+        61.04,
+        -170.91
+      ],
+      "dimensions": [
+        20.25,
+        18.28,
+        25.43
+      ],
+      "halfExtents": [
+        10.125,
+        9.14,
+        12.715
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9413.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-062",
+    "name": "Celian Hill North Woodland Stand #62 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 12.71,
+    "crownDiameterMeters": 20.1,
+    "groundElevationMeters": 52.11,
+    "apexElevationMeters": 64.82,
+    "boundingBox": {
+      "min": [
+        27.339266459147137,
+        52.11,
+        -199.06168111165366
+      ],
+      "max": [
+        44.898607889811196,
+        64.82,
+        -178.9621836344401
+      ],
+      "dimensions": [
+        17.56,
+        12.71,
+        20.1
+      ],
+      "centroid": [
+        36.05,
+        58.47,
+        -189.39
+      ],
+      "volumeM3": 4486.1
+    },
+    "orientedBoundingBox": {
+      "center": [
+        36.05,
+        58.47,
+        -189.39
+      ],
+      "dimensions": [
+        17.56,
+        12.71,
+        20.1
+      ],
+      "halfExtents": [
+        8.78,
+        6.355,
+        10.05
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4486.1,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-063",
+    "name": "Celian Hill North Woodland Stand #63 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 28.24,
+    "groundElevationMeters": 55.58,
+    "apexElevationMeters": 77.58,
+    "boundingBox": {
+      "min": [
+        -5.650307973225911,
+        55.58,
+        -237.4164072672526
+      ],
+      "max": [
+        22.586591084798176,
+        77.58,
+        -210.3426259358724
+      ],
+      "dimensions": [
+        28.24,
+        22,
+        27.07
+      ],
+      "centroid": [
+        4.77,
+        66.58,
+        -227.63
+      ],
+      "volumeM3": 18377.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        4.77,
+        66.58,
+        -227.63
+      ],
+      "dimensions": [
+        28.24,
+        22,
+        27.07
+      ],
+      "halfExtents": [
+        14.12,
+        11,
+        13.535
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 18377.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-064",
+    "name": "Celian Hill North Woodland Stand #64 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 17.05,
+    "crownDiameterMeters": 20.72,
+    "groundElevationMeters": 53.55,
+    "apexElevationMeters": 70.6,
+    "boundingBox": {
+      "min": [
+        25.273020426432293,
+        53.55,
+        -225.11045837402344
+      ],
+      "max": [
+        43.86522420247396,
+        70.6,
+        -204.39489237467447
+      ],
+      "dimensions": [
+        18.59,
+        17.05,
+        20.72
+      ],
+      "centroid": [
+        34.7,
+        62.08,
+        -218.67
+      ],
+      "volumeM3": 6567.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        34.7,
+        62.08,
+        -218.67
+      ],
+      "dimensions": [
+        18.59,
+        17.05,
+        20.72
+      ],
+      "halfExtents": [
+        9.295,
+        8.525,
+        10.36
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6567.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-065",
+    "name": "Celian Hill North Woodland Stand #65 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 12.09,
+    "crownDiameterMeters": 20.04,
+    "groundElevationMeters": 53.14,
+    "apexElevationMeters": 65.23,
+    "boundingBox": {
+      "min": [
+        47.17094421386719,
+        53.14,
+        -201.52396138509116
+      ],
+      "max": [
+        67.20989990234375,
+        65.23,
+        -183.06360880533853
+      ],
+      "dimensions": [
+        20.04,
+        12.09,
+        18.46
+      ],
+      "centroid": [
+        56.08,
+        59.19,
+        -191.36
+      ],
+      "volumeM3": 4472.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        56.08,
+        59.19,
+        -191.36
+      ],
+      "dimensions": [
+        20.04,
+        12.09,
+        18.46
+      ],
+      "halfExtents": [
+        10.02,
+        6.045,
+        9.23
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4472.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-066",
+    "name": "Celian Hill North Woodland Stand #66 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 18.49,
+    "crownDiameterMeters": 17.08,
+    "groundElevationMeters": 51.68,
+    "apexElevationMeters": 70.17,
+    "boundingBox": {
+      "min": [
+        -6.063526153564453,
+        51.68,
+        -196.6004384358724
+      ],
+      "max": [
+        11.018507639567057,
+        70.17,
+        -181.6274668375651
+      ],
+      "dimensions": [
+        17.08,
+        18.49,
+        14.97
+      ],
+      "centroid": [
+        -0.13,
+        60.93,
+        -189.14
+      ],
+      "volumeM3": 4727.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -0.13,
+        60.93,
+        -189.14
+      ],
+      "dimensions": [
+        17.08,
+        18.49,
+        14.97
+      ],
+      "halfExtents": [
+        8.54,
+        9.245,
+        7.485
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4727.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-067",
+    "name": "Celian Hill North Woodland Stand #67 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 20.34,
+    "crownDiameterMeters": 15.22,
+    "groundElevationMeters": 52.71,
+    "apexElevationMeters": 73.05,
+    "boundingBox": {
+      "min": [
+        -6.063534418741862,
+        52.71,
+        -211.77801005045572
+      ],
+      "max": [
+        9.158644358317057,
+        73.05,
+        -197.42096455891928
+      ],
+      "dimensions": [
+        15.22,
+        20.34,
+        14.36
+      ],
+      "centroid": [
+        0.53,
+        62.88,
+        -205.14
+      ],
+      "volumeM3": 4445.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        0.53,
+        62.88,
+        -205.14
+      ],
+      "dimensions": [
+        15.22,
+        20.34,
+        14.36
+      ],
+      "halfExtents": [
+        7.61,
+        10.17,
+        7.18
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4445.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-068",
+    "name": "Celian Hill North Woodland Stand #68 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 19.74,
+    "crownDiameterMeters": 28.3,
+    "groundElevationMeters": 55.21,
+    "apexElevationMeters": 74.95,
+    "boundingBox": {
+      "min": [
+        38.28766123453776,
+        55.21,
+        -233.52105204264322
+      ],
+      "max": [
+        66.5895487467448,
+        74.95,
+        -213.21446228027344
+      ],
+      "dimensions": [
+        28.3,
+        19.74,
+        20.31
+      ],
+      "centroid": [
+        56.39,
+        65.08,
+        -226.89
+      ],
+      "volumeM3": 11346
+    },
+    "orientedBoundingBox": {
+      "center": [
+        56.39,
+        65.08,
+        -226.89
+      ],
+      "dimensions": [
+        28.3,
+        19.74,
+        20.31
+      ],
+      "halfExtents": [
+        14.15,
+        9.87,
+        10.155
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 11346,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-069",
+    "name": "Celian Hill North Woodland Stand #69 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22.6,
+    "crownDiameterMeters": 21.95,
+    "groundElevationMeters": 54.16,
+    "apexElevationMeters": 76.76,
+    "boundingBox": {
+      "min": [
+        -9.782071431477865,
+        54.16,
+        -242.13389587402344
+      ],
+      "max": [
+        9.366015116373697,
+        76.76,
+        -220.18746439615884
+      ],
+      "dimensions": [
+        19.15,
+        22.6,
+        21.95
+      ],
+      "centroid": [
+        -0.17,
+        65.46,
+        -231.67
+      ],
+      "volumeM3": 9499.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -0.17,
+        65.46,
+        -231.67
+      ],
+      "dimensions": [
+        19.15,
+        22.6,
+        21.95
+      ],
+      "halfExtents": [
+        9.575,
+        11.3,
+        10.975
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9499.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-070",
+    "name": "Celian Hill North Woodland Stand #70 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 20.54,
+    "crownDiameterMeters": 19.49,
+    "groundElevationMeters": 54.16,
+    "apexElevationMeters": 74.7,
+    "boundingBox": {
+      "min": [
+        68.24263509114583,
+        54.16,
+        -200.29296366373697
+      ],
+      "max": [
+        79.81116231282552,
+        74.7,
+        -180.8076375325521
+      ],
+      "dimensions": [
+        11.57,
+        20.54,
+        19.49
+      ],
+      "centroid": [
+        74.58,
+        64.43,
+        -191.02
+      ],
+      "volumeM3": 4631.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        74.58,
+        64.43,
+        -191.02
+      ],
+      "dimensions": [
+        11.57,
+        20.54,
+        19.49
+      ],
+      "halfExtents": [
+        5.785,
+        10.27,
+        9.745
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4631.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-071",
+    "name": "Celian Hill North Woodland Stand #71 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 18.88,
+    "crownDiameterMeters": 14.97,
+    "groundElevationMeters": 56.06,
+    "apexElevationMeters": 74.94,
+    "boundingBox": {
+      "min": [
+        68.44894154866536,
+        56.06,
+        -239.87887064615884
+      ],
+      "max": [
+        79.81118774414062,
+        74.94,
+        -224.90587870279947
+      ],
+      "dimensions": [
+        11.36,
+        18.88,
+        14.97
+      ],
+      "centroid": [
+        74.96,
+        65.5,
+        -230.24
+      ],
+      "volumeM3": 3210.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        74.96,
+        65.5,
+        -230.24
+      ],
+      "dimensions": [
+        11.36,
+        18.88,
+        14.97
+      ],
+      "halfExtents": [
+        5.68,
+        9.44,
+        7.485
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3210.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-072",
+    "name": "Celian Hill North Woodland Stand #72 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 21.48,
+    "groundElevationMeters": 51.21,
+    "apexElevationMeters": 73.21,
+    "boundingBox": {
+      "min": [
+        -67.00645446777344,
+        51.21,
+        -189.83201599121094
+      ],
+      "max": [
+        -45.521663665771484,
+        73.21,
+        -170.3460235595703
+      ],
+      "dimensions": [
+        21.48,
+        22,
+        19.49
+      ],
+      "centroid": [
+        -56.25,
+        62.21,
+        -180.45
+      ],
+      "volumeM3": 10759.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -56.25,
+        62.21,
+        -180.45
+      ],
+      "dimensions": [
+        21.48,
+        22,
+        19.49
+      ],
+      "halfExtents": [
+        10.74,
+        11,
+        9.745
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 10759.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-073",
+    "name": "Celian Hill North Woodland Stand #73 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 14.16,
+    "crownDiameterMeters": 24.82,
+    "groundElevationMeters": 48.12,
+    "apexElevationMeters": 62.28,
+    "boundingBox": {
+      "min": [
+        -69.8985595703125,
+        48.12,
+        -238.64710998535156
+      ],
+      "max": [
+        -52.33906173706055,
+        62.28,
+        -213.82923889160156
+      ],
+      "dimensions": [
+        17.56,
+        14.16,
+        24.82
+      ],
+      "centroid": [
+        -59.97,
+        55.2,
+        -227.61
+      ],
+      "volumeM3": 6171.5
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -59.97,
+        55.2,
+        -227.61
+      ],
+      "dimensions": [
+        17.56,
+        14.16,
+        24.82
+      ],
+      "halfExtents": [
+        8.78,
+        7.08,
+        12.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6171.5,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-074",
+    "name": "Celian Hill North Woodland Stand #74 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 22.52,
+    "groundElevationMeters": 55.34,
+    "apexElevationMeters": 77.34,
+    "boundingBox": {
+      "min": [
+        -69.89854176839192,
+        55.34,
+        -254.44122823079428
+      ],
+      "max": [
+        -47.380879720052086,
+        77.34,
+        -237.0060068766276
+      ],
+      "dimensions": [
+        22.52,
+        22,
+        17.44
+      ],
+      "centroid": [
+        -59.06,
+        66.34,
+        -243.48
+      ],
+      "volumeM3": 11067.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -59.06,
+        66.34,
+        -243.48
+      ],
+      "dimensions": [
+        22.52,
+        22,
+        17.44
+      ],
+      "halfExtents": [
+        11.26,
+        11,
+        8.72
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 11067.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-075",
+    "name": "Celian Hill North Woodland Stand #75 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 19.89,
+    "crownDiameterMeters": 20.04,
+    "groundElevationMeters": 55.01,
+    "apexElevationMeters": 74.9,
+    "boundingBox": {
+      "min": [
+        -23.210211435953777,
+        55.01,
+        -249.51808166503906
+      ],
+      "max": [
+        -3.1712544759114585,
+        74.9,
+        -235.98120625813803
+      ],
+      "dimensions": [
+        20.04,
+        19.89,
+        13.54
+      ],
+      "centroid": [
+        -12.56,
+        64.96,
+        -241.48
+      ],
+      "volumeM3": 5397
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -12.56,
+        64.96,
+        -241.48
+      ],
+      "dimensions": [
+        20.04,
+        19.89,
+        13.54
+      ],
+      "halfExtents": [
+        10.02,
+        9.945,
+        6.77
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 5397,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-076",
+    "name": "Celian Hill North Woodland Stand #76 (Quercus ilex)",
+    "category": "foliage_trees",
+    "species": "quercus_ilex",
+    "zone": "celian_north",
+    "zoneName": "Celian Hill North Woodland",
+    "colorHex": "#059669",
+    "canopyHeightMeters": 21.37,
+    "crownDiameterMeters": 19.48,
+    "groundElevationMeters": 56.39,
+    "apexElevationMeters": 77.76,
+    "boundingBox": {
+      "min": [
+        -37.4647274017334,
+        56.39,
+        -238.03180440266928
+      ],
+      "max": [
+        -26.102449417114258,
+        77.76,
+        -218.54700215657553
+      ],
+      "dimensions": [
+        11.36,
+        21.37,
+        19.48
+      ],
+      "centroid": [
+        -31.14,
+        67.08,
+        -228.14
+      ],
+      "volumeM3": 4729
+    },
+    "orientedBoundingBox": {
+      "center": [
+        -31.14,
+        67.08,
+        -228.14
+      ],
+      "dimensions": [
+        11.36,
+        21.37,
+        19.48
+      ],
+      "halfExtents": [
+        5.68,
+        10.685,
+        9.74
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4729,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-077",
+    "name": "Villa Celimontana Crest Stand #77 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 6.52,
+    "crownDiameterMeters": 16.05,
+    "groundElevationMeters": 54.13,
+    "apexElevationMeters": 60.65,
+    "boundingBox": {
+      "min": [
+        108.73323567708333,
+        54.13,
+        -157.22227986653647
+      ],
+      "max": [
+        124.78306070963542,
+        60.65,
+        -150.1074676513672
+      ],
+      "dimensions": [
+        16.05,
+        6.52,
+        7.11
+      ],
+      "centroid": [
+        116.55,
+        57.39,
+        -153.06
+      ],
+      "volumeM3": 744
+    },
+    "orientedBoundingBox": {
+      "center": [
+        116.55,
+        57.39,
+        -153.06
+      ],
+      "dimensions": [
+        16.05,
+        6.52,
+        7.11
+      ],
+      "halfExtents": [
+        8.025,
+        3.26,
+        3.555
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 744,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-078",
+    "name": "Villa Celimontana Crest Stand #78 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.9,
+    "crownDiameterMeters": 11.98,
+    "groundElevationMeters": 57.42,
+    "apexElevationMeters": 76.32,
+    "boundingBox": {
+      "min": [
+        171.26627095540366,
+        57.42,
+        -152.5709431966146
+      ],
+      "max": [
+        183.24876403808594,
+        76.32,
+        -150.1093292236328
+      ],
+      "dimensions": [
+        11.98,
+        18.9,
+        2.46
+      ],
+      "centroid": [
+        175.44,
+        66.87,
+        -151.91
+      ],
+      "volumeM3": 557
+    },
+    "orientedBoundingBox": {
+      "center": [
+        175.44,
+        66.87,
+        -151.91
+      ],
+      "dimensions": [
+        11.98,
+        18.9,
+        2.46
+      ],
+      "halfExtents": [
+        5.99,
+        9.45,
+        1.23
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 557,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-079",
+    "name": "Villa Celimontana Crest Stand #79 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.4,
+    "crownDiameterMeters": 18.39,
+    "groundElevationMeters": 52.51,
+    "apexElevationMeters": 74.91,
+    "boundingBox": {
+      "min": [
+        80.01854960123698,
+        52.51,
+        -185.93542989095053
+      ],
+      "max": [
+        98.40391031901042,
+        74.91,
+        -169.1179402669271
+      ],
+      "dimensions": [
+        18.39,
+        22.4,
+        16.82
+      ],
+      "centroid": [
+        86.4,
+        63.71,
+        -177.05
+      ],
+      "volumeM3": 6928.8
+    },
+    "orientedBoundingBox": {
+      "center": [
+        86.4,
+        63.71,
+        -177.05
+      ],
+      "dimensions": [
+        18.39,
+        22.4,
+        16.82
+      ],
+      "halfExtents": [
+        9.195,
+        11.2,
+        8.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6928.8,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-080",
+    "name": "Villa Celimontana Crest Stand #80 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22.98,
+    "crownDiameterMeters": 17.35,
+    "groundElevationMeters": 55.77,
+    "apexElevationMeters": 78.75,
+    "boundingBox": {
+      "min": [
+        61.011060078938804,
+        55.77,
+        -278.02939860026044
+      ],
+      "max": [
+        78.36465708414714,
+        78.75,
+        -262.03125
+      ],
+      "dimensions": [
+        17.35,
+        22.98,
+        16
+      ],
+      "centroid": [
+        66.89,
+        67.26,
+        -270.28
+      ],
+      "volumeM3": 6379.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        66.89,
+        67.26,
+        -270.28
+      ],
+      "dimensions": [
+        17.35,
+        22.98,
+        16
+      ],
+      "halfExtents": [
+        8.675,
+        11.49,
+        8
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6379.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-081",
+    "name": "Villa Celimontana Crest Stand #81 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.51,
+    "crownDiameterMeters": 20.1,
+    "groundElevationMeters": 57.05,
+    "apexElevationMeters": 76.56,
+    "boundingBox": {
+      "min": [
+        82.70367431640625,
+        57.05,
+        -222.03466288248697
+      ],
+      "max": [
+        99.02431233723958,
+        76.56,
+        -201.93397521972656
+      ],
+      "dimensions": [
+        16.32,
+        19.51,
+        20.1
+      ],
+      "centroid": [
+        89.03,
+        66.81,
+        -211.97
+      ],
+      "volumeM3": 6399.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        89.03,
+        66.81,
+        -211.97
+      ],
+      "dimensions": [
+        16.32,
+        19.51,
+        20.1
+      ],
+      "halfExtents": [
+        8.16,
+        9.755,
+        10.05
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6399.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-082",
+    "name": "Villa Celimontana Crest Stand #82 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 10.44,
+    "crownDiameterMeters": 14.97,
+    "groundElevationMeters": 56.86,
+    "apexElevationMeters": 67.3,
+    "boundingBox": {
+      "min": [
+        80.01778157552083,
+        56.86,
+        -234.95685323079428
+      ],
+      "max": [
+        94.89207458496094,
+        67.3,
+        -219.98355611165366
+      ],
+      "dimensions": [
+        14.87,
+        10.44,
+        14.97
+      ],
+      "centroid": [
+        86.47,
+        62.08,
+        -228.57
+      ],
+      "volumeM3": 2324
+    },
+    "orientedBoundingBox": {
+      "center": [
+        86.47,
+        62.08,
+        -228.57
+      ],
+      "dimensions": [
+        14.87,
+        10.44,
+        14.97
+      ],
+      "halfExtents": [
+        7.435,
+        5.22,
+        7.485
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2324,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-083",
+    "name": "Villa Celimontana Crest Stand #83 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.66,
+    "crownDiameterMeters": 15.08,
+    "groundElevationMeters": 56.9,
+    "apexElevationMeters": 78.56,
+    "boundingBox": {
+      "min": [
+        99.84917704264323,
+        56.9,
+        -305.10475667317706
+      ],
+      "max": [
+        114.9301045735677,
+        78.56,
+        -296.28432210286456
+      ],
+      "dimensions": [
+        15.08,
+        21.66,
+        8.82
+      ],
+      "centroid": [
+        109.97,
+        67.73,
+        -301.95
+      ],
+      "volumeM3": 2880.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        109.97,
+        67.73,
+        -301.95
+      ],
+      "dimensions": [
+        15.08,
+        21.66,
+        8.82
+      ],
+      "halfExtents": [
+        7.54,
+        10.83,
+        4.41
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2880.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-084",
+    "name": "Villa Celimontana Crest Stand #84 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 21.79,
+    "crownDiameterMeters": 14.25,
+    "groundElevationMeters": 56.51,
+    "apexElevationMeters": 78.3,
+    "boundingBox": {
+      "min": [
+        100.67587280273438,
+        56.51,
+        -289.3107096354167
+      ],
+      "max": [
+        114.9303690592448,
+        78.3,
+        -275.15802001953125
+      ],
+      "dimensions": [
+        14.25,
+        21.79,
+        14.15
+      ],
+      "centroid": [
+        108.36,
+        67.41,
+        -282.85
+      ],
+      "volumeM3": 4393.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        108.36,
+        67.41,
+        -282.85
+      ],
+      "dimensions": [
+        14.25,
+        21.79,
+        14.15
+      ],
+      "halfExtents": [
+        7.125,
+        10.895,
+        7.075
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4393.7,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-085",
+    "name": "Villa Celimontana Crest Stand #85 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "villa_celimontana",
+    "zoneName": "Villa Celimontana Crest",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.37,
+    "crownDiameterMeters": 15.91,
+    "groundElevationMeters": 58.78,
+    "apexElevationMeters": 78.15,
+    "boundingBox": {
+      "min": [
+        66.5887451171875,
+        58.78,
+        -305.1042073567708
+      ],
+      "max": [
+        82.49599711100261,
+        78.15,
+        -294.4383138020833
+      ],
+      "dimensions": [
+        15.91,
+        19.37,
+        10.67
+      ],
+      "centroid": [
+        73.78,
+        68.46,
+        -303.06
+      ],
+      "volumeM3": 3288.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        73.78,
+        68.46,
+        -303.06
+      ],
+      "dimensions": [
+        15.91,
+        19.37,
+        10.67
+      ],
+      "halfExtents": [
+        7.955,
+        9.685,
+        5.335
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3288.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-086",
+    "name": "Baths of Trajan Parklands Stand #86 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 12.6,
+    "crownDiameterMeters": 20.39,
+    "groundElevationMeters": 47.41,
+    "apexElevationMeters": 60.01,
+    "boundingBox": {
+      "min": [
+        217.54717000325522,
+        47.41,
+        0.026934305826822918
+      ],
+      "max": [
+        237.9360148111979,
+        60.01,
+        13.706621805826822
+      ],
+      "dimensions": [
+        20.39,
+        12.6,
+        13.68
+      ],
+      "centroid": [
+        229.95,
+        53.71,
+        5.17
+      ],
+      "volumeM3": 3514.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        229.95,
+        53.71,
+        5.17
+      ],
+      "dimensions": [
+        20.39,
+        12.6,
+        13.68
+      ],
+      "halfExtents": [
+        10.195,
+        6.3,
+        6.84
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 3514.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-087",
+    "name": "Baths of Trajan Parklands Stand #87 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 10.9,
+    "crownDiameterMeters": 16.14,
+    "groundElevationMeters": 44.05,
+    "apexElevationMeters": 54.95,
+    "boundingBox": {
+      "min": [
+        186.35177612304688,
+        44.05,
+        0.0280609130859375
+      ],
+      "max": [
+        197.3014373779297,
+        54.95,
+        16.169269561767578
+      ],
+      "dimensions": [
+        10.95,
+        10.9,
+        16.14
+      ],
+      "centroid": [
+        192.41,
+        49.5,
+        3.45
+      ],
+      "volumeM3": 1926.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        192.41,
+        49.5,
+        3.45
+      ],
+      "dimensions": [
+        10.95,
+        10.9,
+        16.14
+      ],
+      "halfExtents": [
+        5.475,
+        5.45,
+        8.07
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1926.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-088",
+    "name": "Baths of Trajan Parklands Stand #88 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 18.25,
+    "groundElevationMeters": 45.54,
+    "apexElevationMeters": 67.54,
+    "boundingBox": {
+      "min": [
+        245.37684122721353,
+        45.54,
+        79.13409423828125
+      ],
+      "max": [
+        259.83819580078125,
+        67.54,
+        97.38834889729817
+      ],
+      "dimensions": [
+        14.46,
+        22,
+        18.25
+      ],
+      "centroid": [
+        250.31,
+        56.54,
+        88.55
+      ],
+      "volumeM3": 7869.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        250.31,
+        56.54,
+        88.55
+      ],
+      "dimensions": [
+        14.46,
+        22,
+        18.25
+      ],
+      "halfExtents": [
+        7.23,
+        11,
+        9.125
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 7869.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-089",
+    "name": "Baths of Trajan Parklands Stand #89 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 23.44,
+    "crownDiameterMeters": 20.92,
+    "groundElevationMeters": 39.16,
+    "apexElevationMeters": 62.6,
+    "boundingBox": {
+      "min": [
+        274.09421793619794,
+        39.16,
+        97.59237925211589
+      ],
+      "max": [
+        293.5134684244792,
+        62.6,
+        118.51233927408855
+      ],
+      "dimensions": [
+        19.42,
+        23.44,
+        20.92
+      ],
+      "centroid": [
+        282.98,
+        50.88,
+        108.33
+      ],
+      "volumeM3": 9522.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        282.98,
+        50.88,
+        108.33
+      ],
+      "dimensions": [
+        19.42,
+        23.44,
+        20.92
+      ],
+      "halfExtents": [
+        9.71,
+        11.72,
+        10.46
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 9522.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-090",
+    "name": "Baths of Trajan Parklands Stand #90 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.52,
+    "crownDiameterMeters": 22.93,
+    "groundElevationMeters": 40.41,
+    "apexElevationMeters": 59.93,
+    "boundingBox": {
+      "min": [
+        272.23341878255206,
+        40.41,
+        85.0812505086263
+      ],
+      "max": [
+        295.1656901041667,
+        59.93,
+        94.92539469401042
+      ],
+      "dimensions": [
+        22.93,
+        19.52,
+        9.84
+      ],
+      "centroid": [
+        284.57,
+        50.17,
+        90.67
+      ],
+      "volumeM3": 4404.3
+    },
+    "orientedBoundingBox": {
+      "center": [
+        284.57,
+        50.17,
+        90.67
+      ],
+      "dimensions": [
+        22.93,
+        19.52,
+        9.84
+      ],
+      "halfExtents": [
+        11.465,
+        9.76,
+        4.92
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4404.3,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-091",
+    "name": "Baths of Trajan Parklands Stand #91 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.13,
+    "crownDiameterMeters": 22.31,
+    "groundElevationMeters": 39.15,
+    "apexElevationMeters": 59.28,
+    "boundingBox": {
+      "min": [
+        280.7057393391927,
+        39.15,
+        119.12748463948567
+      ],
+      "max": [
+        303.0171610514323,
+        59.28,
+        134.51024881998697
+      ],
+      "dimensions": [
+        22.31,
+        20.13,
+        15.38
+      ],
+      "centroid": [
+        289.73,
+        49.21,
+        125.67
+      ],
+      "volumeM3": 6907.2
+    },
+    "orientedBoundingBox": {
+      "center": [
+        289.73,
+        49.21,
+        125.67
+      ],
+      "dimensions": [
+        22.31,
+        20.13,
+        15.38
+      ],
+      "halfExtents": [
+        11.155,
+        10.065,
+        7.69
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6907.2,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-092",
+    "name": "Baths of Trajan Parklands Stand #92 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 20.74,
+    "crownDiameterMeters": 21.28,
+    "groundElevationMeters": 40.39,
+    "apexElevationMeters": 61.13,
+    "boundingBox": {
+      "min": [
+        291.4472351074219,
+        40.39,
+        91.02792612711589
+      ],
+      "max": [
+        312.72548421223956,
+        61.13,
+        105.59053802490234
+      ],
+      "dimensions": [
+        21.28,
+        20.74,
+        14.56
+      ],
+      "centroid": [
+        300.98,
+        50.76,
+        96.16
+      ],
+      "volumeM3": 6426
+    },
+    "orientedBoundingBox": {
+      "center": [
+        300.98,
+        50.76,
+        96.16
+      ],
+      "dimensions": [
+        21.28,
+        20.74,
+        14.56
+      ],
+      "halfExtents": [
+        10.64,
+        10.37,
+        7.28
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 6426,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-093",
+    "name": "Baths of Trajan Parklands Stand #93 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 22,
+    "crownDiameterMeters": 22.56,
+    "groundElevationMeters": 43.44,
+    "apexElevationMeters": 65.44,
+    "boundingBox": {
+      "min": [
+        282.14853922526044,
+        43.44,
+        40.777015686035156
+      ],
+      "max": [
+        302.60101318359375,
+        65.44,
+        63.33947499593099
+      ],
+      "dimensions": [
+        20.45,
+        22,
+        22.56
+      ],
+      "centroid": [
+        290.07,
+        54.44,
+        52.2
+      ],
+      "volumeM3": 11556.9
+    },
+    "orientedBoundingBox": {
+      "center": [
+        290.07,
+        54.44,
+        52.2
+      ],
+      "dimensions": [
+        20.45,
+        22,
+        22.56
+      ],
+      "halfExtents": [
+        10.225,
+        11,
+        11.28
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 11556.9,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-094",
+    "name": "Baths of Trajan Parklands Stand #94 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.26,
+    "crownDiameterMeters": 16,
+    "groundElevationMeters": 43.65,
+    "apexElevationMeters": 61.91,
+    "boundingBox": {
+      "min": [
+        295.1634012858073,
+        43.65,
+        43.85356521606445
+      ],
+      "max": [
+        310.65760294596356,
+        61.91,
+        59.85188293457031
+      ],
+      "dimensions": [
+        15.49,
+        18.26,
+        16
+      ],
+      "centroid": [
+        305.01,
+        52.78,
+        48.62
+      ],
+      "volumeM3": 4525.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        305.01,
+        52.78,
+        48.62
+      ],
+      "dimensions": [
+        15.49,
+        18.26,
+        16
+      ],
+      "halfExtents": [
+        7.745,
+        9.13,
+        8
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 4525.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-095",
+    "name": "Baths of Trajan Parklands Stand #95 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.87,
+    "crownDiameterMeters": 8,
+    "groundElevationMeters": 49.34,
+    "apexElevationMeters": 68.21,
+    "boundingBox": {
+      "min": [
+        299.4999491373698,
+        49.34,
+        2.833063761393229
+      ],
+      "max": [
+        306.730712890625,
+        68.21,
+        10.830493927001953
+      ],
+      "dimensions": [
+        7.23,
+        18.87,
+        8
+      ],
+      "centroid": [
+        303.14,
+        58.77,
+        7.23
+      ],
+      "volumeM3": 1091.4
+    },
+    "orientedBoundingBox": {
+      "center": [
+        303.14,
+        58.77,
+        7.23
+      ],
+      "dimensions": [
+        7.23,
+        18.87,
+        8
+      ],
+      "halfExtents": [
+        3.615,
+        9.435,
+        4
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1091.4,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-096",
+    "name": "Baths of Trajan Parklands Stand #96 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 19.7,
+    "crownDiameterMeters": 12.51,
+    "groundElevationMeters": 46.3,
+    "apexElevationMeters": 66,
+    "boundingBox": {
+      "min": [
+        234.83685302734375,
+        46.3,
+        24.576077779134113
+      ],
+      "max": [
+        246.20069376627603,
+        66,
+        37.08809153238932
+      ],
+      "dimensions": [
+        11.36,
+        19.7,
+        12.51
+      ],
+      "centroid": [
+        242.67,
+        56.15,
+        32.89
+      ],
+      "volumeM3": 2799.6
+    },
+    "orientedBoundingBox": {
+      "center": [
+        242.67,
+        56.15,
+        32.89
+      ],
+      "dimensions": [
+        11.36,
+        19.7,
+        12.51
+      ],
+      "halfExtents": [
+        5.68,
+        9.85,
+        6.255
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 2799.6,
+      "tightnessGainPercent": 0
+    }
+  },
+  {
+    "id": "fol-tree-stand-097",
+    "name": "Baths of Trajan Parklands Stand #97 (Pinus pinea)",
+    "category": "foliage_trees",
+    "species": "pinus_pinea",
+    "zone": "trajan_baths_east",
+    "zoneName": "Baths of Trajan Parklands",
+    "colorHex": "#10b981",
+    "canopyHeightMeters": 18.89,
+    "crownDiameterMeters": 9.09,
+    "groundElevationMeters": 48.95,
+    "apexElevationMeters": 67.84,
+    "boundingBox": {
+      "min": [
+        289.9977722167969,
+        48.95,
+        20.676191965738933
+      ],
+      "max": [
+        299.08754475911456,
+        67.84,
+        28.67655309041341
+      ],
+      "dimensions": [
+        9.09,
+        18.89,
+        8
+      ],
+      "centroid": [
+        294,
+        58.4,
+        24.39
+      ],
+      "volumeM3": 1373.7
+    },
+    "orientedBoundingBox": {
+      "center": [
+        294,
+        58.4,
+        24.39
+      ],
+      "dimensions": [
+        9.09,
+        18.89,
+        8
+      ],
+      "halfExtents": [
+        4.545,
+        9.445,
+        4
+      ],
+      "yawDeg": 0,
+      "yawRad": 0,
+      "volumeM3": 1373.7,
+      "tightnessGainPercent": 0
+    }
+  }
+]

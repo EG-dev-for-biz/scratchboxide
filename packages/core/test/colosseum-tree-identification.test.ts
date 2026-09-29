@@ -137,7 +137,38 @@ describe('ColosseumTreeIdentificationEngine (High-Accuracy Botanical 3D Foliage)
     // Save dedicated trees_dataset.json artifact
     const assetsPath = path.resolve(__dirname, '../../../deploy/cloud-run/spatial-separator/assets/trees_dataset.json');
     fs.writeFileSync(assetsPath, JSON.stringify(scene.objects, null, 2), 'utf8');
-    const publicPath = path.resolve(__dirname, '../../../public/models/trees_dataset.json');
-    fs.writeFileSync(publicPath, JSON.stringify(scene.objects, null, 2), 'utf8');
+  });
+
+  it('generates physically grounded tree stands (97 stands) with zero monument collision and ground datum lock', () => {
+    const stands = ColosseumTreeIdentificationEngine.getPhysicallyGroundedStands();
+    expect(stands).toBeDefined();
+    expect(stands.length).toBe(97);
+
+    // Verify all 97 stands have zero collision with Colosseum core and are grounded
+    for (const stand of stands) {
+      const c = stand.boundingBox.centroid;
+      const inColosseumCore = (c[0] * c[0]) / (95 * 95) + (c[2] * c[2]) / (80 * 80) < 1.0;
+      expect(inColosseumCore).toBe(false);
+
+      // Must be grounded at terrain elevation (min Y matches ground elevation)
+      expect(stand.boundingBox.min[1]).toBe(stand.groundElevationMeters);
+      expect(stand.canopyHeightMeters).toBeGreaterThanOrEqual(3.0);
+      expect(stand.canopyHeightMeters).toBeLessThanOrEqual(28.0);
+    }
+  });
+
+  it('aggregates physical stands into consolidated botanical park groves', () => {
+    const groves = ColosseumTreeIdentificationEngine.getBotanicalGroves();
+    expect(groves).toBeDefined();
+    expect(groves.length).toBeGreaterThanOrEqual(24);
+    expect(groves.length).toBeLessThanOrEqual(36);
+
+    for (const grove of groves) {
+      expect(grove.treeCount).toBeGreaterThanOrEqual(1);
+      expect(grove.zoneName).toBeDefined();
+      expect(grove.boundingBox.dimensions[0]).toBeGreaterThan(0);
+      expect(grove.boundingBox.dimensions[1]).toBeGreaterThan(0);
+      expect(grove.boundingBox.dimensions[2]).toBeGreaterThan(0);
+    }
   });
 });
