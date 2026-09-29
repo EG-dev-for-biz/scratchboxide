@@ -1028,6 +1028,8 @@
             if (currentTileSource === 'colosseum') baseInputGlb = 'models/colosseum_clay.glb';
             else if (currentTileSource === 'esb') baseInputGlb = 'models/esb_clay.glb';
             else if (currentTileSource === 'custom' && activeCustomGlbUrl) baseInputGlb = activeCustomGlbUrl;
+            else if (document.getElementById('tile-query-input').value.toLowerCase().includes('colosseum')) baseInputGlb = 'models/colosseum_clay.glb';
+            else if (document.getElementById('tile-query-input').value.toLowerCase().includes('empire')) baseInputGlb = 'models/esb_clay.glb';
 
             try {
                 const res = await fetch('/api/3d/tiles/restructure', {
@@ -1046,6 +1048,9 @@
 
                 activeCustomGlbUrl = data.glbUrl;
                 currentTileSource = 'custom';
+                viewMode = 'restructured';
+                document.getElementById('btn-view-restructured').classList.add('active');
+                document.getElementById('btn-view-original').classList.remove('active');
 
                 // Update badge and telemetry
                 const badge = document.getElementById('style-badge');

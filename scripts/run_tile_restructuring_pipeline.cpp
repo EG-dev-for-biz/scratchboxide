@@ -8,7 +8,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-#include "scratchbox_engine.hpp"
+#include "scratchbox_math.hpp"
+#include "scratchbox_geometry.hpp"
+#include "scratchbox_pbr.hpp"
+#include "scratchbox_tiles.hpp"
 #include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_io.hpp"
 
@@ -338,12 +341,63 @@ int main(int argc, char* argv[]) {
                 if (!streamStdout) std::cout << "  [Restructure] Grafting complete Vitruvian Colosseum reconstruction: " << pathCand << "\n";
                 ScratchboxMesh fullArchi = GlbReader::readGlb(pathCand);
                 if (!fullArchi.vertices.empty()) {
-                    mesh.merge(fullArchi);
+                    // Excises the damaged / ruined photogrammetry inside the Colosseum ellipse
+                    // Footprint: center [-43.42, 62.54], semi-axes a=96m, b=80m, yaw=0.6273 rad (35.94 deg)
+                    const float Xc = -43.42f;
+                    const float Zc = 62.54f;
+                    const float yaw0 = 0.6273f;
+                    const float cosY = std::cos(-yaw0);
+                    const float sinY = std::sin(-yaw0);
+                    const float aRad = 98.0f;
+                    const float bRad = 82.0f;
+
+                    // Filter out existing ruined vertices inside the amphitheater envelope above ground level
+                    std::vector<bool> keepVertex(mesh.vertices.size(), true);
+                    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+                        const auto& v = mesh.vertices[i];
+                        float dx = v.position.x - Xc;
+                        float dz = v.position.z - Zc;
+                        float lx = dx * cosY - dz * sinY;
+                        float lz = dx * sinY + dz * cosY;
+                        float ellipseEq = (lx * lx) / (aRad * aRad) + (lz * lz) / (bRad * bRad);
+                        if (ellipseEq < 1.05f && v.position.y > 15.0f) {
+                            keepVertex[i] = false;
+                        }
+                    }
+
+                    // Rebuild filtered mesh
+                    ScratchboxMesh prunedMesh("colosseum_district_excised");
+                    std::vector<int32_t> remap(mesh.vertices.size(), -1);
+                    for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+                        if (keepVertex[i]) {
+                            remap[i] = static_cast<int32_t>(prunedMesh.vertices.size());
+                            prunedMesh.vertices.push_back(mesh.vertices[i]);
+                        }
+                    }
+                    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+                        uint32_t i0 = mesh.indices[i];
+                        uint32_t i1 = mesh.indices[i + 1];
+                        uint32_t i2 = mesh.indices[i + 2];
+                        if (i0 < remap.size() && i1 < remap.size() && i2 < remap.size()) {
+                            int32_t r0 = remap[i0];
+                            int32_t r1 = remap[i1];
+                            int32_t r2 = remap[i2];
+                            if (r0 >= 0 && r1 >= 0 && r2 >= 0) {
+                                prunedMesh.indices.push_back(static_cast<uint32_t>(r0));
+                                prunedMesh.indices.push_back(static_cast<uint32_t>(r1));
+                                prunedMesh.indices.push_back(static_cast<uint32_t>(r2));
+                            }
+                        }
+                    }
+
+                    prunedMesh.merge(fullArchi);
+                    mesh = prunedMesh;
+
                     config.style = TileStyle::NeoclassicalMonument;
                     config.materialMode = RestructureMaterialMode::StudioClay;
                     config.clayPreset = "Sandstone";
-                    // Clear default obelisks so the pristine amphitheater shines
                     config.primitives.clear();
+                    config.terraforming.clear();
                     break;
                 }
             }

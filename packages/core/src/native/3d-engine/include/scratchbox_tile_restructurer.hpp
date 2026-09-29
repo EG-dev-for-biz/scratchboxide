@@ -169,6 +169,8 @@ public:
 
         float spanX = topo.bounds.max.x - topo.bounds.min.x;
         float spanZ = topo.bounds.max.z - topo.bounds.min.z;
+        float midX = (topo.bounds.min.x + topo.bounds.max.x) * 0.5f;
+        float midZ = (topo.bounds.min.z + topo.bounds.max.z) * 0.5f;
 
         // 1. Detect focal landmark center: centroid of high-relief / prominent architectural vertices
         float highReliefThreshold = topo.bounds.min.y + topo.reliefDeltaY * 0.40f;
