@@ -79,6 +79,10 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
             headingDeg: 0,
             formattedAddress: 'Colosseum, Rome'
         };
+        const colosseumCenterENU: [number, number, number] = [-43.42, 24.0, 62.54];
+        const lookAt = args?.lookAtOffsetLocalENU || colosseumCenterENU;
+
+        const isGeoSurvey = args?.surveyPattern === 'geographic-3dtiles-survey';
         const isCompleteAmphitheatre = args?.surveyPattern === 'amphitheatre-complete' ||
             args?.surveyPreset === 'watertight-112' ||
             args?.surveyPreset === 'interior-pilot-40' ||
@@ -88,13 +92,21 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
             ? args.cameraCount
             : (args?.surveyPreset === 'watertight-112' ? 112 : (args?.surveyPreset === 'interior-pilot-40' ? 40 : 24));
 
-        const stations = isCompleteAmphitheatre
+        const stations = isGeoSurvey
+            ? engine.synthesize(anchor, {
+                type: 'geographic-3dtiles-survey',
+                cameraCount,
+                targetRadiusMeters: 130,
+                focalLengthMm: 35,
+                lookAtOffsetLocalENU: lookAt
+            })
+            : isCompleteAmphitheatre
             ? engine.synthesize(anchor, {
                 type: 'amphitheatre-complete',
                 cameraCount,
                 targetRadiusMeters: 150,
                 aspectRatioXZ: 1.18,
-                lookAtOffsetLocalENU: [0, 20, 0]
+                lookAtOffsetLocalENU: lookAt
             })
             : engine.synthesize(anchor, {
                 type: 'foveated-multi-tier',
@@ -106,11 +118,11 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
                     anchor.elevationMeters + 30.0,
                     anchor.elevationMeters + 75.0
                 ],
-                lookAtOffsetLocalENU: [0, 20, 0],
+                lookAtOffsetLocalENU: lookAt,
                 lookAtTiersOffsetLocalENU: [
-                    [0, 6.0, 0],
-                    [0, 28.0, 0],
-                    [0, 20.0, 0]
+                    [lookAt[0], 6.0 + (lookAt[1] - 20.0), lookAt[2]],
+                    [lookAt[0], 28.0 + (lookAt[1] - 20.0), lookAt[2]],
+                    [lookAt[0], 20.0 + (lookAt[1] - 20.0), lookAt[2]]
                 ]
             });
         const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/colosseum_grounded.glb'))
@@ -126,8 +138,11 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
                 architecturalStyle: 'Ancient Roman travertine limestone amphitheatre with arched arcades, Corinthian columns, and authentic Roman masonry under warm Mediterranean sunlight',
                 ...(args?.beautify || {})
             },
-            cropRadius: args?.cropRadius ?? 115.0,
-            cropBox: args?.cropBox || { min: [-115.0, -0.5, -115.0], max: [115.0, 50.0, 115.0] },
+            cropRadius: args?.cropRadius ?? 140.0,
+            cropBox: args?.cropBox || {
+                min: [lookAt[0] - 115.0, -0.5, lookAt[2] - 115.0],
+                max: [lookAt[0] + 115.0, 55.0, lookAt[2] + 115.0]
+            },
             sigmaScale: args?.sigmaScale ?? 0.5,
             voxelSizeMeters: args?.voxelSizeMeters ?? 0.05,
             erodeSilhouettePx: args?.erodeSilhouettePx ?? 2,

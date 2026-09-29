@@ -128,7 +128,8 @@ export type SurveyPatternType =
   | 'street-corridor'
   | 'nadir-grid'
   | 'district-complete'
-  | 'continuous-flight';
+  | 'continuous-flight'
+  | 'geographic-3dtiles-survey';
 
 /**
  * Configuration for procedurally generating photogrammetric survey patterns

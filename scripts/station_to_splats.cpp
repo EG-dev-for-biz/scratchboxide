@@ -154,6 +154,8 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         for (const auto& s : st.splats) {
             float distH = std::hypot(s.position.x, s.position.z);
             if (cropRadius > 0.0f && distH > cropRadius) continue;
+            float lum = 0.299f * s.color.x + 0.587f * s.color.y + 0.114f * s.color.z;
+            if (lum < 0.05f || lum > 0.98f) continue;
             if (s.position.y > 0.5f && s.position.y < 45.0f) {
                 sumR += s.color.x;
                 sumG += s.color.y;
@@ -170,29 +172,32 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         stations.push_back(std::move(st));
     }
 
+    float targetLuma = 0.45f;
     if (validStations > 0) {
         globalTargetColor = globalTargetColor * (1.0f / float(validStations));
         if (!stations.empty() && stations[0].meanLuma > 0.1f) {
             globalTargetColor = globalTargetColor * 0.35f + stations[0].meanColor * 0.65f;
         }
+        targetLuma = 0.299f * globalTargetColor.x + 0.587f * globalTargetColor.y + 0.114f * globalTargetColor.z;
     } else {
         globalTargetColor = Vec3(0.50f, 0.45f, 0.38f);
+        targetLuma = 0.45f;
     }
 
     for (auto& st : stations) {
-        Vec3 scale(1.0f, 1.0f, 1.0f);
+        float exposureGain = 1.0f;
         if (st.meanLuma > 0.05f) {
-            scale.x = std::clamp(globalTargetColor.x / std::max(0.05f, st.meanColor.x), 0.65f, 1.55f);
-            scale.y = std::clamp(globalTargetColor.y / std::max(0.05f, st.meanColor.y), 0.65f, 1.55f);
-            scale.z = std::clamp(globalTargetColor.z / std::max(0.05f, st.meanColor.z), 0.65f, 1.55f);
+            // Chromaticity-preserving radiometric exposure harmonization:
+            // Adjusts luminance smoothly toward consensus target without distorting authentic r/g/b chromaticity
+            exposureGain = std::clamp(targetLuma / std::max(0.05f, st.meanLuma), 0.70f, 1.40f);
         }
         totalInputSplats += st.splats.size();
         const float wGround = 1.0f / (st.entry.altitude + 1.0f);
 
         for (auto& s : st.splats) {
-            s.color.x = std::clamp(s.color.x * scale.x, 0.0f, 1.0f);
-            s.color.y = std::clamp(s.color.y * scale.y, 0.0f, 1.0f);
-            s.color.z = std::clamp(s.color.z * scale.z, 0.0f, 1.0f);
+            s.color.x = std::clamp(s.color.x * exposureGain, 0.0f, 1.0f);
+            s.color.y = std::clamp(s.color.y * exposureGain, 0.0f, 1.0f);
+            s.color.z = std::clamp(s.color.z * exposureGain, 0.0f, 1.0f);
 
             float distH = std::hypot(s.position.x, s.position.z);
             if (cropRadius > 0.0f) {

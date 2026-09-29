@@ -478,6 +478,94 @@ export class SurveySynthesisEngine {
         }
         break;
       }
+      case 'geographic-3dtiles-survey': {
+        // Tuned 4-Tier Hierarchical Photogrammetric Survey Pattern specifically designed for real-world 3D tiles:
+        // Tier 1 (Pedestrian / Street Level): ~25% of stations (eye-level Y = 1.8m..3.5m above ground, 35mm-50mm lens)
+        // Tier 2 (Mid-Elevation Facades & Columns): ~30% of stations (Y = 15m..35m, standoff ~0.55*R, 35mm lens)
+        // Tier 3 (Crown, Mansard Roof & Attic Oblique): ~25% of stations (Y = 40m..75m, tilted downward -25°..-45°, 28mm lens)
+        // Tier 4 (Topographic Nadir / Orthogonal Ground Grid): ~20% of stations (Y = 75m..160m, steep -60°..-85° downward plunge, 24mm lens)
+        const c1 = Math.max(4, Math.round(count * 0.25));
+        const c2 = Math.max(4, Math.round(count * 0.30));
+        const c3 = Math.max(4, Math.round(count * 0.25));
+        const c4 = Math.max(4, count - (c1 + c2 + c3));
+
+        const arXZ = config.aspectRatioXZ && config.aspectRatioXZ > 0 ? config.aspectRatioXZ : 1.0;
+        const scaleX = Math.sqrt(arXZ);
+        const scaleZ = 1.0 / Math.sqrt(arXZ);
+
+        let id = 1;
+
+        // Tier 1: Pedestrian / Street Level (~0.28 * R)
+        const r1 = Math.max(12, Math.min(38, radius * 0.28));
+        const opt1: StationOptics = { focalLengthMm: config.focalLengthMm || 35, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        for (let i = 0; i < c1 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c1;
+          const eyeY1 = Math.max(1.8, Math.min(3.8, minGroundClearance + 2.2));
+          const eye: V3 = [lookAt[0] + r1 * scaleX * Math.sin(theta), eyeY1, lookAt[2] + r1 * scaleZ * Math.cos(theta)];
+          const target: V3 = [lookAt[0], eyeY1 * 0.6 + lookAt[1] * 0.4, lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt1, safeAnchor, {
+            name: `GEOGRAPHIC_TIER_1_PEDESTRIAN_STREET_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY1,
+            cameraHeightAboveGround: eyeY1
+          }));
+          id++;
+        }
+
+        // Tier 2: Mid-Elevation Facades & Columns (~0.55 * R)
+        const r2 = Math.max(25, Math.min(75, radius * 0.55));
+        const eyeY2 = Math.max(minGroundClearance, lookAt[1] + Math.max(16.0, radius * 0.22));
+        const opt2: StationOptics = { focalLengthMm: 35, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset2 = Math.PI / c2;
+        for (let i = 0; i < c2 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c2 + offset2;
+          const eye: V3 = [lookAt[0] + r2 * scaleX * Math.sin(theta), eyeY2, lookAt[2] + r2 * scaleZ * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + Math.max(6.0, radius * 0.10), lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt2, safeAnchor, {
+            name: `GEOGRAPHIC_TIER_2_MID_FACADE_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY2,
+            cameraHeightAboveGround: eyeY2
+          }));
+          id++;
+        }
+
+        // Tier 3: Crown, Mansard Roof & Attic Oblique (~0.85 * R)
+        const r3 = Math.max(40, radius * 0.85);
+        const eyeY3 = Math.max(minGroundClearance, lookAt[1] + Math.max(38.0, radius * 0.50));
+        const opt3: StationOptics = { focalLengthMm: 28, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset3 = (Math.PI * 0.5) / c3;
+        for (let i = 0; i < c3 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c3 + offset3;
+          const eye: V3 = [lookAt[0] + r3 * scaleX * Math.sin(theta), eyeY3, lookAt[2] + r3 * scaleZ * Math.cos(theta)];
+          const target: V3 = [lookAt[0], lookAt[1] + Math.max(12.0, radius * 0.20), lookAt[2]];
+          poses.push(stationFromLookAt(id, eye, target, opt3, safeAnchor, {
+            name: `GEOGRAPHIC_TIER_3_CROWN_ROOF_OBLIQUE_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY3,
+            cameraHeightAboveGround: eyeY3
+          }));
+          id++;
+        }
+
+        // Tier 4: Topographic Nadir / Orthogonal Ground Grid (Steep plunge: pitch <= -60 deg)
+        const r4 = Math.max(20, radius * 0.40);
+        const eyeY4 = Math.max(minGroundClearance + 50.0, lookAt[1] + Math.max(75.0, radius * 1.10));
+        const opt4: StationOptics = { focalLengthMm: 24, sensorWidthMm: config.sensorWidthMm || 36, aspectRatio: config.aspectRatio ?? 16 / 9 };
+        const offset4 = (Math.PI * 0.25) / c4;
+        for (let i = 0; i < c4 && poses.length < count; i++) {
+          const theta = (2 * Math.PI * i) / c4 + offset4;
+          const eyeX = lookAt[0] + r4 * scaleX * Math.sin(theta);
+          const eyeZ = lookAt[2] + r4 * scaleZ * Math.cos(theta);
+          const eye: V3 = [eyeX, eyeY4, eyeZ];
+          // Look at point close to eye horizontal location so pitch is -65° to -85° downwards
+          const target: V3 = [eyeX * 0.85 + lookAt[0] * 0.15, lookAt[1], eyeZ * 0.85 + lookAt[2] * 0.15];
+          poses.push(stationFromLookAt(id, eye, target, opt4, safeAnchor, {
+            name: `GEOGRAPHIC_TIER_4_TOPOGRAPHIC_NADIR_${String(id).padStart(2, '0')}`,
+            cameraAltitude: eyeY4,
+            cameraHeightAboveGround: eyeY4
+          }));
+          id++;
+        }
+        break;
+      }
       case 'facade-lawnmower': {
         const h = (anchor.headingDeg || 0) * RAD;
         const n: [number, number] = [Math.sin(h), Math.cos(h)];
