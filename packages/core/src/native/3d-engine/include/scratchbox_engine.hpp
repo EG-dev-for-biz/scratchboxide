@@ -25,6 +25,7 @@
 #include "scratchbox_physics.hpp"
 #include "scratchbox_shaper.hpp"
 #include "scratchbox_particles.hpp"
+#include "scratchbox_fire_simulation.hpp"
 #include "scratchbox_pbr.hpp"
 #include "scratchbox_scene_composer.hpp"
 #include "scratchbox_triplanar.hpp"
