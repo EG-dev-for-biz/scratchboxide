@@ -1536,17 +1536,21 @@ export class VideoTo4DPerformerPipelineService {
                 let baseCol: [number, number, number];
                 const isHand = Math.abs(px) > 0.58 && py > pelvisY - 0.1;
                 const isArm = Math.abs(px) > 0.22 && py > pelvisY - 0.1;
+                const hairCol = silhouette.colorSamples?.hairColorRgb || [0.15, 0.12, 0.10];
+                const skinCol = silhouette.colorSamples?.skinToneRgb || [0.82, 0.65, 0.55];
+                const torsoCol = silhouette.colorSamples?.torsoColorRgb || [0.25, 0.28, 0.32];
+                const legsCol = silhouette.colorSamples?.legsColorRgb || [0.18, 0.18, 0.20];
 
                 if (py > neckY) {
-                    baseCol = py > neckY + 0.08 ? silhouette.colorSamples.hairColorRgb : silhouette.colorSamples.skinToneRgb;
+                    baseCol = py > neckY + 0.08 ? hairCol : skinCol;
                 } else if (isHand) {
-                    baseCol = silhouette.colorSamples.skinToneRgb;
+                    baseCol = skinCol;
                 } else if (isArm) {
-                    baseCol = silhouette.colorSamples.torsoColorRgb;
+                    baseCol = torsoCol;
                 } else if (py > pelvisY) {
-                    baseCol = silhouette.colorSamples.torsoColorRgb;
+                    baseCol = torsoCol;
                 } else if (py > ankleY) {
-                    baseCol = silhouette.colorSamples.legsColorRgb;
+                    baseCol = legsCol;
                 } else {
                     baseCol = [0.12, 0.12, 0.12]; // Stage shoes
                 }

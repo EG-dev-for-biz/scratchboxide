@@ -23,8 +23,16 @@ import type {
 const execAsync = promisify(exec);
 
 export class NativeCppCompilerService {
+    private static instance?: NativeCppCompilerService;
     private sdkIncludePath: string;
     private compilerBinary: string = process.env.CXX || 'clang++';
+
+    public static getInstance(customIncludePath?: string): NativeCppCompilerService {
+        if (!NativeCppCompilerService.instance || customIncludePath) {
+            NativeCppCompilerService.instance = new NativeCppCompilerService(customIncludePath);
+        }
+        return NativeCppCompilerService.instance;
+    }
 
     constructor(customIncludePath?: string) {
         if (customIncludePath) {

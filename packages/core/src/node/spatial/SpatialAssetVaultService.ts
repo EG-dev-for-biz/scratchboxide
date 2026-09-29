@@ -232,7 +232,25 @@ export class SpatialAssetVaultService {
       50.0
     );
 
-    // 4. SMPL-X Parametric Humanoid Body Models
+    // 4. SB-Human Parametric Humanoid Body Models (Canonical .sbhuman v2 Standard)
+    this.storeAsset(
+      'body_models/sbhuman',
+      { lat: 0.0, lng: 0.0, alt: 0.0 },
+      {
+        type: 'mesh-glb',
+        durableUri: 'vault://body_models/sbhuman/neutral',
+        metadata: {
+          title: 'SB-Human Parametric Body Model',
+          neutralUri: '/models/sbhuman_neutral.sbhuman',
+          maleUri: '/models/sbhuman_male.sbhuman',
+          femaleUri: '/models/sbhuman_female.sbhuman',
+          numVertices: 10475
+        }
+      },
+      10.0
+    );
+
+    // 5. SMPL-X Compatibility Alias
     this.storeAsset(
       'body_models/smplx',
       { lat: 0.0, lng: 0.0, alt: 0.0 },

@@ -33,7 +33,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(summary.families.geobox).toBeGreaterThanOrEqual(2);
     });
 
-    it('2. should properly resolve SMPL-X parametric humanoid body models', () => {
+    it('2. should properly resolve parametric humanoid body models (.sbhuman or smplx)', () => {
         const neutral = registry.getSmplxModel('neutral');
         const male = registry.getSmplxModel('male');
         const female = registry.getSmplxModel('female');
@@ -43,7 +43,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(female).toBeDefined();
 
         expect(fs.existsSync(neutral!)).toBe(true);
-        expect(fs.statSync(neutral!).size).toBeGreaterThan(50 * 1024 * 1024); // > 50 MB
+        expect(fs.statSync(neutral!).size).toBeGreaterThan(1024 * 1024); // > 1 MB (.sbhuman is ~1.96 MB, legacy npz is ~108 MB)
     });
 
     it('3. should provide 4DAnyone 4DGS humanoid avatar manifests and viewport assets', () => {

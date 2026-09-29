@@ -10,7 +10,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 
-export type TrainedModelFamily = 'smplx' | '4danyone_4dgs' | 'omniroam' | 'geobox' | 'depthbox';
+export type TrainedModelFamily = 'sbhuman' | 'smplx' | '4danyone_4dgs' | 'omniroam' | 'geobox' | 'depthbox';
 
 export interface TrainedModelItem {
     id: string;
@@ -72,19 +72,22 @@ export class TrainedModelRegistryService {
     public discoverAllModels(): TrainedModelItem[] {
         const models: TrainedModelItem[] = [];
 
-        // 1. SMPL-X Body Models
+        // 1. SB-Human Parametric Humanoid Models (Primary Native Standard)
+        models.push(...this.discoverSbHumanModels());
+
+        // 2. SMPL-X Body Models (Compatibility)
         models.push(...this.discoverSmplxModels());
 
-        // 2. 4DAnyone 4DGS Humanoid Models (Demos & Artifacts)
+        // 3. 4DAnyone 4DGS Humanoid Models (Demos & Artifacts)
         models.push(...this.discover4DGSModels());
 
-        // 3. OmniRoam Checkpoints
+        // 4. OmniRoam Checkpoints
         models.push(...this.discoverOmniRoamModels());
 
-        // 4. GeoBox Checkpoints & Coordinate Gallery
+        // 5. GeoBox Checkpoints & Coordinate Gallery
         models.push(...this.discoverGeoBoxModels());
 
-        // 5. Standard Pre-converted Splat/GLB Avatars
+        // 6. Standard Pre-converted Splat/GLB Avatars
         models.push(...this.discoverConvertedAvatars());
 
         return models;
@@ -98,7 +101,48 @@ export class TrainedModelRegistryService {
     }
 
     /**
+     * Discovers SB-Human (.sbhuman) canonical parametric humanoid body models.
+     */
+    public discoverSbHumanModels(): TrainedModelItem[] {
+        const results: TrainedModelItem[] = [];
+        const candidateDirs = [
+            path.join(this.repoRoot, 'public', 'models'),
+            path.join(this.repoRoot, 'packages', 'core', 'assets', 'models')
+        ];
+        const dir = candidateDirs.find(d => fs.existsSync(path.join(d, 'sbhuman_neutral.sbhuman'))) || candidateDirs[0];
+        const genders = [
+            { id: 'sbhuman_neutral', name: 'SB-Human Neutral Body Model', file: 'sbhuman_neutral.sbhuman' },
+            { id: 'sbhuman_male', name: 'SB-Human Male Body Model', file: 'sbhuman_male.sbhuman' },
+            { id: 'sbhuman_female', name: 'SB-Human Female Body Model', file: 'sbhuman_female.sbhuman' }
+        ];
+
+        for (const g of genders) {
+            const p = path.join(dir, g.file);
+            const exists = fs.existsSync(p);
+            const size = exists ? fs.statSync(p).size : 0;
+            results.push({
+                id: g.id,
+                name: g.name,
+                family: 'sbhuman',
+                format: 'sbhuman',
+                filePath: p,
+                webUri: `/models/${g.file}`,
+                sizeBytes: size,
+                status: exists && size > 0 ? 'ready' : 'missing',
+                metadata: {
+                    gender: g.file.replace('sbhuman_', '').replace('.sbhuman', '').toLowerCase(),
+                    numVertices: 10475,
+                    numJoints: 55,
+                    version: 2
+                }
+            });
+        }
+        return results;
+    }
+
+    /**
      * Discovers SMPL-X parametric humanoid body models.
+     * Falls back seamlessly to .sbhuman standard when legacy SMPL-X npz files are not present.
      */
     public discoverSmplxModels(): TrainedModelItem[] {
         const results: TrainedModelItem[] = [];
@@ -109,10 +153,12 @@ export class TrainedModelRegistryService {
             { id: 'smplx_female', name: 'SMPL-X Female Body Model', file: 'SMPLX_FEMALE.npz' }
         ];
 
+        let hasAnyNpz = false;
         for (const g of genders) {
             const p = path.join(smplxDir, g.file);
             const exists = fs.existsSync(p);
             const size = exists ? fs.statSync(p).size : 0;
+            if (exists && size > 0) hasAnyNpz = true;
             results.push({
                 id: g.id,
                 name: g.name,
@@ -125,6 +171,25 @@ export class TrainedModelRegistryService {
                 metadata: { gender: g.file.replace('SMPLX_', '').replace('.npz', '').toLowerCase() }
             });
         }
+
+        // If legacy NPZ files are absent, proxy to the ready .sbhuman models with smplx family tagging
+        if (!hasAnyNpz) {
+            const sbHumans = this.discoverSbHumanModels();
+            if (sbHumans.some(m => m.status === 'ready')) {
+                return sbHumans.map(m => ({
+                    id: m.id.replace('sbhuman_', 'smplx_'),
+                    name: m.name.replace('SB-Human', 'SMPL-X (SB-Human Native)'),
+                    family: 'smplx',
+                    format: 'sbhuman',
+                    filePath: m.filePath,
+                    webUri: m.webUri,
+                    sizeBytes: m.sizeBytes,
+                    status: m.status,
+                    metadata: m.metadata
+                }));
+            }
+        }
+
         return results;
     }
 
@@ -327,12 +392,26 @@ export class TrainedModelRegistryService {
     }
 
     /**
+     * Returns SB-Human (.sbhuman) model file path for the requested gender.
+     */
+    public getSbHumanModel(gender: 'neutral' | 'male' | 'female'): string | undefined {
+        const filename = `sbhuman_${gender}.sbhuman`;
+        const candidatePaths = [
+            path.join(this.repoRoot, 'public', 'models', filename),
+            path.join(this.repoRoot, 'packages', 'core', 'assets', 'models', filename)
+        ];
+        return candidatePaths.find(p => fs.existsSync(p));
+    }
+
+    /**
      * Returns SMPL-X model file path for the requested gender.
+     * Falls back to .sbhuman when SMPL-X npz files are not present.
      */
     public getSmplxModel(gender: 'neutral' | 'male' | 'female'): string | undefined {
         const filename = `SMPLX_${gender.toUpperCase()}.npz`;
         const p = path.join(this.repoRoot, 'models', 'smplx', filename);
-        return fs.existsSync(p) ? p : undefined;
+        if (fs.existsSync(p)) return p;
+        return this.getSbHumanModel(gender);
     }
 
     /**
@@ -357,6 +436,7 @@ export class TrainedModelRegistryService {
     public getCatalogSummary(): ModelCatalogSummary {
         const all = this.discoverAllModels();
         const families: Record<TrainedModelFamily, number> = {
+            sbhuman: 0,
             smplx: 0,
             '4danyone_4dgs': 0,
             omniroam: 0,

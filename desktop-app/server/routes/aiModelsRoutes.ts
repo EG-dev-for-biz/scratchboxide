@@ -110,6 +110,18 @@ export function createModelsRouter(): Router {
         }
     });
 
+    router.get('/sbhuman', (_req: Request, res: Response) => {
+        try {
+            const models = modelRegistry.discoverSbHumanModels();
+            res.json({
+                success: true,
+                models
+            });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || String(err) });
+        }
+    });
+
     router.get('/smplx', (_req: Request, res: Response) => {
         try {
             const models = modelRegistry.discoverSmplxModels();
