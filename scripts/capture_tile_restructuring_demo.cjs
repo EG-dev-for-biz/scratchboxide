@@ -180,46 +180,46 @@ async function main() {
 
         fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
-        // 1. Capture Solarpunk Citadel in Studio Clay mode (Default Landing)
-        console.log('\n[1/6] Capturing SF Ferry Building Restructured (Studio Clay Mode)...');
-        await sleep(1500);
+        // 1. Capture Colosseum Restored Brand-New in Studio Clay mode (Default Landing)
+        console.log('\n[1/6] Capturing Colosseum Restored Brand-New (Studio Clay Mode)...');
+        await sleep(2000);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '120_tile_restructurer_solarpunk_clay.png'));
 
-        // 2. Query Real 3D Tile: Colosseum, Rome in Clay Mode
-        console.log('\n[2/6] Querying Real 3D Tile: Colosseum, Rome in Clay Mode...');
-        await cdp.eval(`window.executeTileQuery('Colosseum, Rome')`);
+        // 2. Select Colosseum in Clay Mode
+        console.log('\n[2/6] Selecting Real 3D Tile: Colosseum, Rome in Clay Mode...');
+        await cdp.eval(`window.onLandmarkSelect('colosseum')`);
         await sleep(2000);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '126_tile_restructurer_query_colosseum_clay.png'));
 
-        // 3. Query Real 3D Tile: Empire State Building, New York in Clay Mode
-        console.log('\n[3/7] Querying Real 3D Tile: Empire State Building, New York in Clay Mode...');
-        await cdp.eval(`window.executeTileQuery('Empire State Building, New York')`);
+        // 3. Select Real 3D Tile: Empire State Building, New York in Clay Mode
+        console.log('\n[3/7] Selecting Real 3D Tile: Empire State Building, New York in Clay Mode...');
+        await cdp.eval(`window.onLandmarkSelect('esb')`);
         await sleep(2000);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '127_tile_restructurer_query_esb_clay.png'));
 
-        // 4. Prompt-Driven Restructuring via Natural Language
+        // 4. Prompt-Driven Restructuring via Natural Language on SF Ferry Building
         console.log('\n[4/7] Executing Prompt-Driven Terraforming & Primitive Grafting via C++20 Astra Pipeline...');
         await cdp.eval(`
-            window.switchTileSource('sf_ferry');
+            window.onLandmarkSelect('sf_ferry');
             document.getElementById('prompt-input').value = 'Terrace the waterfront into 4 stepped tiers, level a wide sun plaza, and place 8 colonnade columns and a central bio-dome in studio clay';
             window.executePrompt();
         `);
-        await sleep(2500);
+        await sleep(3000);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '130_tile_restructurer_prompt_restructured_live.png'));
 
         // 5. Capture Brutalist Fortress
         console.log('\n[5/7] Switching to Brutalist Fortress Preset...');
-        await cdp.eval(`window.switchTileSource('sf_ferry'); window.applyPresetStyle('brutalist');`);
-        await sleep(1500);
+        await cdp.eval(`window.selectPreset('brutalist')`);
+        await sleep(2500);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '121_tile_restructurer_brutalist_citadel.png'));
 
         // 6. Capture Neoclassical Acropolis (Stylized PBR)
         console.log('\n[6/7] Switching to Classical Acropolis Preset in Stylized PBR...');
-        await cdp.eval(`window.applyPresetStyle('neoclassical'); window.setMaterialMode('pbr');`);
-        await sleep(1500);
+        await cdp.eval(`window.selectPreset('acropolis'); window.setMaterialMode('pbr');`);
+        await sleep(2500);
         await cdp.screenshot(path.join(SCREENSHOT_DIR, '122_tile_restructurer_neoclassical_acropolis.png'));
 
-        // 7. Capture Original Raw Hillside Tile Baseline
+        // 7. Capture Original Raw Tile Baseline
         console.log('\n[7/7] Switching to Original Raw Tile Baseline View...');
         await cdp.eval(`window.switchView('original'); window.setMaterialMode('clay');`);
         await sleep(1500);

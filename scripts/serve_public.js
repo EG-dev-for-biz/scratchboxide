@@ -27,8 +27,10 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
-    { title: 'Volumetric Fire Explosion & 3D Spatial Audio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC WEBGL2' },
+    { title: 'AMD FidelityFX FSR 1.0 Super Resolution Studio', path: '/fsr_upscaling_demo.html', badge: 'EASU + RCAS' },
+    { title: 'Volumetric Fire & Particle Simulation Studio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC FLUID' },
     { title: 'Nanite Meshlets & Path Tracing Studio', path: '/nanite_meshlet_pathtracing_studio.html', badge: 'NANITE WEBGPU' },
+    { title: 'Scratchbox Spatial Asset Studio', path: '/asset_demo_studio.html', badge: 'ASSET STUDIO' },
     { title: 'Rome Colosseum 1K PBR Regrade Proof', path: '/colosseum_recolor_proof.html', badge: 'PBR PIPELINE' },
     { title: '3D Testing Workbench · 3DGS Hybrid Engine', path: '/spatial_photoreal_3dgs_demo.html', badge: 'MODULAR WORKBENCH' },
     { title: 'Agent 3D Scene Lighting Intelligence', path: '/agent_lighting_proof.html', badge: 'GAFFER INTEL' },
@@ -45,6 +47,7 @@ const POPULAR_DEMOS = [
     { title: 'Botanical & Forest Procedural 3D Viewer', path: '/forest_3d_viewer.html', badge: 'PHOTOREAL PBR' },
     { title: 'Video-to-4D Performer Reconstruction Studio', path: '/video_to_4d_performer_studio.html', badge: '4D PIPELINE' },
     { title: 'Adaptive Matchmove & C² Spline Calibration', path: '/adaptive_matchmove_studio.html', badge: 'SUB-PIXEL RMS' },
+    { title: '4DAnyone & SMPL-X Avatar Showcase', path: '/model_showcase.html', badge: 'AVATAR SHOWCASE' },
     { title: 'Person Matchmove & Dynamic Skeleton Aligner', path: '/person_matchmove_studio.html', badge: 'KINEMATICS' },
     { title: 'Google 360 Panorama Studio & Seam Healer', path: '/google_360_panorama_studio.html', badge: '360 PANORAMA' },
     { title: 'DepthBox Studio // 2D Image(s) -> 3DGS Engine', path: '/depthbox_image_to_3dgs.html', badge: 'IMAGE TO 3DGS' }
@@ -348,6 +351,33 @@ const server = http.createServer((req, res) => {
                 'Content-Type': contentType
             });
             stream.pipe(res);
+        } else if (ext === '.html') {
+            fs.readFile(targetPath, 'utf8', (readErr, htmlContent) => {
+                if (readErr) {
+                    res.writeHead(500, { 'Content-Type': 'text/plain' });
+                    res.end('Failed to read HTML file');
+                    return;
+                }
+
+                let finalHtml = htmlContent;
+                // Auto-inject FSR viewport & header overlay script for all 3D demos
+                if (!targetPath.endsWith('fsr_upscaling_demo.html') && !targetPath.includes('fire-explosion.html') && !htmlContent.includes('/fsr_viewport_injector.js')) {
+                    const injection = '\n<script src="/fsr_viewport_injector.js"></script>\n';
+                    if (finalHtml.includes('</body>')) {
+                        finalHtml = finalHtml.replace('</body>', `${injection}</body>`);
+                    } else {
+                        finalHtml += injection;
+                    }
+                }
+
+                const buf = Buffer.from(finalHtml, 'utf8');
+                res.writeHead(200, {
+                    'Content-Type': contentType,
+                    'Content-Length': buf.length,
+                    'Accept-Ranges': 'bytes'
+                });
+                res.end(buf);
+            });
         } else {
             res.writeHead(200, {
                 'Content-Type': contentType,

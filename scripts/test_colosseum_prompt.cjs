@@ -109,9 +109,9 @@ async function run() {
         await cdp.send('Page.navigate', { url: 'http://127.0.0.1:5173/tile_restructuring_demo.html' });
         await sleep(2500);
 
-        console.log('1. Querying Colosseum in demo...');
-        await cdp.eval(`window.executeTileQuery('Colosseum, Rome')`);
-        await sleep(2000);
+        console.log('1. Selecting Colosseum in demo...');
+        await cdp.eval(`window.onLandmarkSelect('colosseum')`);
+        await sleep(2500);
 
         console.log('2. Entering prompt "Restructure this tile as the colosseum is brand-new" and executing...');
         await cdp.eval(`
