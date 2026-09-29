@@ -310,6 +310,46 @@ int main(int argc, char* argv[]) {
         config.materialMode = parseMaterialMode(materialModeOverride);
     }
 
+    // 2b. Check if prompt requests landmark reconstruction to brand-new / intact / restored state
+    std::string promptLower = prompt;
+    std::transform(promptLower.begin(), promptLower.end(), promptLower.begin(), ::tolower);
+    bool isBrandNewPrompt = (promptLower.find("brand-new") != std::string::npos ||
+                             promptLower.find("brand new") != std::string::npos ||
+                             promptLower.find("restore") != std::string::npos ||
+                             promptLower.find("reconstruct") != std::string::npos ||
+                             promptLower.find("pristine") != std::string::npos ||
+                             promptLower.find("intact") != std::string::npos ||
+                             promptLower.find("prime") != std::string::npos ||
+                             promptLower.find("rebuild") != std::string::npos);
+
+    bool isColosseumTarget = (inputPath.find("colosseum") != std::string::npos ||
+                              promptLower.find("colosseum") != std::string::npos ||
+                              promptLower.find("amphitheater") != std::string::npos ||
+                              promptLower.find("amphitheatrum") != std::string::npos);
+
+    if (isBrandNewPrompt && isColosseumTarget) {
+        std::vector<std::string> candidateFullColosseums = {
+            "public/models/colosseum_brand_new.glb",
+            "deploy/cloud-run/spatial-separator/assets/colosseum_sb_archi_full.glb",
+            "../public/models/colosseum_brand_new.glb"
+        };
+        for (const auto& pathCand : candidateFullColosseums) {
+            if (fs::exists(pathCand)) {
+                if (!streamStdout) std::cout << "  [Restructure] Grafting complete Vitruvian Colosseum reconstruction: " << pathCand << "\n";
+                ScratchboxMesh fullArchi = GlbReader::readGlb(pathCand);
+                if (!fullArchi.vertices.empty()) {
+                    mesh.merge(fullArchi);
+                    config.style = TileStyle::NeoclassicalMonument;
+                    config.materialMode = RestructureMaterialMode::StudioClay;
+                    config.clayPreset = "Sandstone";
+                    // Clear default obelisks so the pristine amphitheater shines
+                    config.primitives.clear();
+                    break;
+                }
+            }
+        }
+    }
+
     // 3. Execute Tile Restructuring Pipeline (Terraforming + Primitive Grafting + PBR / Clay Styling)
     mesh = TileRestructurePipeline::execute(mesh, config);
 
