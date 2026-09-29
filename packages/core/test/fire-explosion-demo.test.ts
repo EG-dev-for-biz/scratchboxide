@@ -322,5 +322,8 @@ describe('Photorealistic 3D Fire Explosion Demo Suite', () => {
         expect(content).toContain('createPanner');
         expect(content).toContain('createBiquadFilter');
         expect(content).toContain('doppler');
+
+        // Check Gaussian optical blur & bloom filter
+        expect(content).toMatch(/blur|bloom|uBlurAmount/i);
     });
 });
