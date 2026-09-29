@@ -27,6 +27,7 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
+    { title: 'Volumetric Fire Explosion & 3D Spatial Audio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC WEBGL2' },
     { title: 'Nanite Meshlets & Path Tracing Studio', path: '/nanite_meshlet_pathtracing_studio.html', badge: 'NANITE WEBGPU' },
     { title: 'Rome Colosseum 1K PBR Regrade Proof', path: '/colosseum_recolor_proof.html', badge: 'PBR PIPELINE' },
     { title: '3D Testing Workbench · 3DGS Hybrid Engine', path: '/spatial_photoreal_3dgs_demo.html', badge: 'MODULAR WORKBENCH' },

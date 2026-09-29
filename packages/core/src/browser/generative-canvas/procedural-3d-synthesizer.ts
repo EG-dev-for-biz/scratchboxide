@@ -144,7 +144,8 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // -1. 3D Mesh Shaping / Organic Sculpt / Parametric Deformations / Lofts
-        if (/\b(?:mesh\s*shaping|sculpt|sculpting|taper|twist|bend|loft|lathe|ffd|subdivision|organic\s*creature|aerodynamic\s*body|deform|parametric\s*surface)\b/i.test(text)) {
+        const isArchitecturalLoft = /\b(?:industrial|urban|living|studio)?\s*loft\s*(?:apartment|office|space|building|room|interior)\b/i.test(text);
+        if (!isArchitecturalLoft && /\b(?:mesh\s*shaping|sculpt|sculpting|taper|twist|bend|loft|lathe|ffd|subdivision|organic\s*creature|aerodynamic\s*body|deform|parametric\s*surface)\b/i.test(text)) {
             return 'mesh-shaping';
         }
 
@@ -196,7 +197,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // 5. Architecture / Interior Room / Blueprint / House / Building Interior
-        if (/room|interior|blueprint|architectur(e|al)|house|apartment|gallery|hall|pavilion|building floor|office space/i.test(text)) {
+        if (/room|interior|blueprint|architectur(e|al)|house|apartment|gallery|hall|pavilion|building floor|office space|loft/i.test(text)) {
             return 'architecture';
         }
 
@@ -2018,7 +2019,7 @@ function _synthesizeRawContextual3DSceneInner(
     const isSunset = /sunset|golden\s*hour|dusk/i.test(prompt);
     const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?)\b/i.test(prompt);
     const isOutdoorTerrainWithSky = (theme === 'worldbuilder' || theme === 'nature_atmosphere' || theme === 'geospatial') && /\b(?:sky|horizon|sun|sunset|golden\s*hour|clouds?|mountain|valley|plateau|landscape|light)\b/i.test(prompt);
-    const hasAtmosphere = explicitAtmosphereRequested || isOutdoorTerrainWithSky || isSunset || theme === 'geospatial' || !!existingFeatures?.atmosphericScattering;
+    const hasAtmosphere = explicitAtmosphereRequested || isOutdoorTerrainWithSky || isSunset || theme === 'geospatial' || theme === 'nature_atmosphere' || hasGodRays || !!existingFeatures?.atmosphericScattering;
     const hasContrails = /contrail|vapor|vortex/i.test(prompt) || !!existingFeatures?.contrails;
     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder/i.test(prompt) || !!existingFeatures?.controlSurfaces;
 

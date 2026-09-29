@@ -25,7 +25,7 @@ import {
 } from '../canvas-types';
 import { isVibeToolRequest, synthesizeVibeToolSandbox } from '../vibe-tool-synthesizer';
 import { morphArtifact } from '../primitive-transformer-engine';
-import { synthesizeContextual3DScene } from '../procedural-3d-synthesizer';
+import { synthesizeContextual3DScene, detectRealWorldLocationIntent } from '../procedural-3d-synthesizer';
 import {
     extractDocumentTitleFromPrompt,
     synthesizeComprehensiveDocument,
@@ -125,13 +125,32 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
 
     const isSplatCreationRequest = /\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)\b/i.test(text);
 
+    const isSpatialSimulationRequest = (
+        /\b(?:perseverance|curiosity|sojourner)\s+rover\b|\b(?:mars|lunar|moon)\s+rover\b|\brover\s+(?:traversing|analyzing|exploring)\b/i.test(text) ||
+        /\b(?:mesh\s*shaping|sculpt|sculpting|parametric\s*(?:lofts?|lathes?|surfaces?))\b/i.test(text) ||
+        /\b(?:particle\s*simulat(?:ion|e)|sparks?\s*fountain|fluid\s*spray\s*particle|fire\s*vortex|smoke\s*emitter)\b/i.test(text) ||
+        /\b(?:pbr\s*(?:lighting|material|showcase|test)|microfacet\s*pbr|metallic\s*roughness\s*spheres|material\s*showcase)\b/i.test(text) ||
+        /\b(?:atmospheric\s*scattering|rayleigh\s*atmospheric|volumetric\s*god\s*rays?|subsurface\s*scattering|misty\s*coniferous)\b/i.test(text) ||
+        /\b(?:commercial\s*airliner|supersonic\s*jet|airliner\s+on\s+airport|drone\s*flight\s*path)\b/i.test(text) ||
+        /\b(?:battlefield\s+with|militia\s+firing\s+line|fortress\s+battlefield|castle\s+siege|bunker\s*hill\s*fortress)\b/i.test(text) ||
+        /\b(?:digital\s*twin|3d\s*tiles?|photorealistic\s*3d\s*tiles?)\b/i.test(text) ||
+        /\b(?:city\s*skyline|urban\s*street\s*canyon|downtown\s*(?:city\s*)?skyline|cyberpunk\s*metropolis)\b/i.test(text) ||
+        /\b(?:solar\s*system\s*with|ring\s*system\s*with|asteroid\s*belt\s*with)\b/i.test(text) ||
+        /\b(?:dna\s*molecule|molecular\s*(?:physics|structure|model|lattice)|atomic\s*(?:orbitals?|bonds?|lattice)|quantum\s*atomic|crystal\s*lattice)\b/i.test(text) ||
+        /\b(?:apartment\s*interior|interior\s*room|office\s*(?:loft|space)|loft\s*(?:office|space)|gallery\s*hall|architectural\s*interior)\b/i.test(text) ||
+        /\b(?:mountain\s*terrain|desert\s*canyon|volcanic\s*island|sand\s*dunes|alpine\s*mountain)\b/i.test(text) ||
+        /\b(?:space\s*station|orbital\s*(?:station|habitat|defense)|deep\s*space|cyberpunk\s*(?:underground|bunker|city|alleyway)|hacker\s*bunker)\b/i.test(text) ||
+        !!detectRealWorldLocationIntent(text)?.isRealWorld
+    );
+
     const hasExplicit3DDirective = (
         isVehicleCreationRequest ||
         isSplatCreationRequest ||
-        /\b3d\s+(?:scene|plane|world|model|car|vehicle|automobile|truck|mesh|object|environment|simulation|terrain|city|building|character|robot|avatar|room|asset|preview)\b/i.test(text) ||
+        isSpatialSimulationRequest ||
+        /\b3d\s+(?:[\w-]+\s+){0,3}(?:scene|plane|world|model|car|vehicle|automobile|truck|mesh|object|environment|simulation|terrain|landscape|city|building|structure|monument|character|robot|avatar|room|interior|chamber|asset|preview|tiles?)\b/i.test(text) ||
         /\b(?:build|make|create|generate|render|simulate|draw|show)\s+(?:me\s+)?(?:a\s+)?(?:3d\b|\w+\s+in\s+3d\b)/i.test(text) ||
         /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\s+\w+/i.test(text) ||
-        /\b(?:car|vehicle|automobile|truck|sports\s*car|plane|aircraft|spaceship|building|city|terrain|mesh|character|robot|avatar|room|furniture)\s+in\s+3d\b/i.test(text) ||
+        /\b(?:[\w-]+\s+){0,4}in\s+3d\b/i.test(text) ||
         /3d\s+scene|3d\s+plane|3d\s+world|3d\s+model|spatial\s+scene|three\.js\s+scene|r3f\s+scene|\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+scene|3d\s+world|3d\s+model|spatial\s+environment)\b/i.test(text)
     );
 
@@ -348,15 +367,17 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
         objects: [...(current3D.objects || [])]
     };
 
-    if (lower.includes('ambient') || (lower.includes('light') && !lower.includes('flight')) || lower.includes('bright') || lower.includes('illuminate') || lower.includes('daylight') || lower.includes('exposure') || lower.includes('sunlight')) {
+    if (lower.includes('ambient') || (lower.includes('light') && !lower.includes('flight')) || lower.includes('bright') || lower.includes('illuminate') || lower.includes('daylight') || lower.includes('exposure') || lower.includes('sunlight') || lower.includes('sunset') || lower.includes('golden hour') || lower.includes('dusk')) {
         updated3D.renderMode = 'pbr';
         const currentEnv = current3D.environment || {};
+        const isSunset = /sunset|golden\s*hour|dusk/i.test(lower);
         const prevAmbient = currentEnv.ambientIntensity ?? 0.25;
         const targetIntensity = prevAmbient < 0.5 ? 0.85 : Math.min(prevAmbient + 0.35, 1.5);
         updated3D.environment = {
             ...currentEnv,
-            skybox: currentEnv.skybox || 'realistic-sky',
-            lighting: 'daylight',
+            skybox: isSunset ? 'sunset' : (currentEnv.skybox || 'realistic-sky'),
+            lighting: isSunset ? 'sunset' : 'daylight',
+            ...(isSunset ? { timeOfDay: 18.5, sunElevation: 12.0 } : {}),
             ambientIntensity: targetIntensity,
             ground: true
         };
