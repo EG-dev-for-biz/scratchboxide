@@ -221,7 +221,7 @@ public:
         };
 
         // When the tile is a wide metropolitan district (span > 80m), place corners framing the focal landmark
-        if (focalCount > 20 && (spanX > 80.0f || spanZ > 80.0f) && landmarkBounds.isValid()) {
+        if (focalCount > 20 && (spanX > 80.0f || spanZ > 80.0f) && (landmarkBounds.min.x <= landmarkBounds.max.x)) {
             float lmHalfW = (landmarkBounds.max.x - landmarkBounds.min.x) * 0.5f + 18.0f;
             float lmHalfD = (landmarkBounds.max.z - landmarkBounds.min.z) * 0.5f + 18.0f;
             topo.corners.push_back(sampleCorner(focalCenter.x - lmHalfW, focalCenter.z - lmHalfD));
