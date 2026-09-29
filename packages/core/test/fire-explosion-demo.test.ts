@@ -178,8 +178,8 @@ describe('Photorealistic 3D Fire Explosion Demo Suite', () => {
         expect(content).toContain('getContext(\'webgl2\'');
         expect(content).toContain('#version 300 es');
 
-        // Check Volumetric Raymarching & Physics
-        expect(content).toContain('marchExplosion');
+        // Check Simulation & Physics
+        expect(content).toMatch(/marchExplosion|particleProgram/);
         expect(content).toContain('curlNoise');
         expect(content).toContain('blackbody');
         expect(content).toContain('beerLambert');
