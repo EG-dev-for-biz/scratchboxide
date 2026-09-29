@@ -116,5 +116,12 @@ export interface LongRunning3DProgressEvent {
     latestChunk?: Streamed3DChunk;
     totalVertices?: number;
     totalTriangles?: number;
+    visualFidelityScore?: number;
+    visualAudit?: {
+        passed: boolean;
+        overallScore: number;
+        dimensionScores?: Record<string, number>;
+        remediationRecipe?: string[];
+    };
     elapsedTimeMs: number;
 }

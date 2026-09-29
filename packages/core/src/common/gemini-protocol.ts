@@ -149,6 +149,26 @@ export interface VerificationDiagnostic {
     source?: string;
 }
 
+export interface VisualVerificationResult {
+    overallScore: number;
+    passed: boolean;
+    screenshotPath?: string;
+    dimensionAudits: Record<string, { score: number; passed: boolean; notes?: string }>;
+    remediationRecipe?: {
+        suggestedFfmpegFilters?: string[];
+        actionDirectives: string[];
+    };
+}
+
+export interface GeometryVerificationResult {
+    passed: boolean;
+    vertexCount: number;
+    triangleCount: number;
+    isManifold?: boolean;
+    boundingBoxValid?: boolean;
+    warnings: string[];
+}
+
 export interface VerificationOutcome {
     passed: boolean;
     summary?: string;
@@ -156,6 +176,8 @@ export interface VerificationOutcome {
     diagnostics?: VerificationDiagnostic[];
     testOutput?: string;
     durationMs?: number;
+    visualVerification?: VisualVerificationResult;
+    geometryVerification?: GeometryVerificationResult;
     commandResult?: {
         exitCode: number;
         stdout: string;

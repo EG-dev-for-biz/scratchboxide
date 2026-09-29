@@ -209,6 +209,10 @@ export class SubagentPoolService {
      * Executes a Directed Acyclic Graph (DAG) plan of specialized subagent tasks.
      * Independent tasks run concurrently up to maxWorkers capacity.
      */
+    async executePlanDAG(dag: SubagentDAGPlan): Promise<SubagentDAGResult> {
+        return this.executeDAG(dag);
+    }
+
     async executeDAG(dag: SubagentDAGPlan): Promise<SubagentDAGResult> {
         const startTime = Date.now();
         const results: Record<string, any> = {};
