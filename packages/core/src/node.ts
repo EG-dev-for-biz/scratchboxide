@@ -787,6 +787,14 @@ export {
     type DualBoundingBoxResult
 } from './node/spatial/OrientedBoundingBoxSolver';
 export {
+    BoundingBoxComparisonService,
+    type BoundingBoxBenchmarkEntity,
+    type BoundingBoxMetrology,
+    type BoundingBoxComparisonResult,
+    type BenchmarkManifest,
+    type Gemini3DBoxProxy
+} from './node/spatial/BoundingBoxComparisonService';
+export {
     GeminiMultimodalObjectDetectorService,
     type GeminiDetectedObject2D,
     type GeminiObjectDetectionTelemetry,

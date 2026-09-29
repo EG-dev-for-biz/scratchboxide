@@ -5,56 +5,56 @@
     "category": "monument",
     "boundingBox": {
       "min": [
-        -113.99454498291016,
-        18.99931526184082,
-        -152.56507873535156
+        -165.30678691829763,
+        18.25,
+        -55.7843179090463
       ],
       "max": [
-        57.93028259277344,
-        60.982234954833984,
-        152.55224609375
+        78.46678691829761,
+        66.75,
+        180.8643179090463
       ],
       "dimensions": [
-        171.9248275756836,
-        41.982919692993164,
-        305.11732482910156
+        243.77357383659523,
+        48.5,
+        236.6486358180926
       ],
       "centroid": [
-        -28.03213119506836,
-        39.9907751083374,
-        -0.00641632080078125
+        -43.42000000000001,
+        42.5,
+        62.53999999999999
       ],
-      "volumeM3": 2202308.239564023
+      "volumeM3": 2797901.1593011697
     },
     "orientedBoundingBox": {
       "center": [
-        -49.04797048038325,
-        39.9907751083374,
-        12.169313094703067
+        -43.42000000000001,
+        42.5,
+        62.54
       ],
       "dimensions": [
-        350.05684772847565,
-        41.982919692993164,
-        250.9838894130332
+        188.00000000000006,
+        48.5,
+        156.00000000000006
       ],
       "halfExtents": [
-        175.02842386423782,
-        20.991459846496582,
-        125.4919447065166
+        94.00000000000003,
+        24.25,
+        78.00000000000003
       ],
-      "yawDeg": 60.09,
-      "yawRad": 1.0487569216364403,
+      "yawDeg": 35.94,
+      "yawRad": 0.6272999999999997,
       "quaternion": [
         0,
-        0.5006750751617415,
+        0.30853261418573813,
         0,
-        0.8656352979816526
+        0.9512137646100978
       ],
       "rotationMatrix3x3": [
         [
-          0.4986489382235691,
+          0.8096152519674289,
           0,
-          0.8668040357592408
+          0.5869609388892216
         ],
         [
           0,
@@ -62,33 +62,19 @@
           0
         ],
         [
-          -0.8668040357592408,
+          -0.5869609388892216,
           0,
-          0.4986489382235691
+          0.8096152519674289
         ]
       ],
-      "volumeM3": 3688561.772300239,
-      "tightnessGainPercent": 0
+      "volumeM3": 1422408.0000000012,
+      "tightnessGainPercent": 49.2
     },
-    "tightnessGainPercent": 0,
-    "vertexCount": 72562,
-    "triangleCount": 130611,
-    "submeshIndices": [
-      20,
-      21,
-      22,
-      24,
-      30,
-      31,
-      32,
-      33,
-      39,
-      41,
-      42,
-      50,
-      54
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "tightnessGainPercent": 49.2,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#3b82f6",
     "trellisPrompt": "Complete 3D travertine limestone facade of the Roman Colosseum with four-tiered classical arched arcades, intact Corinthian and Ionic pilasters, and radial barrel-vaulted vomitoria.",
     "material": {
@@ -103,56 +89,56 @@
     "category": "monument",
     "boundingBox": {
       "min": [
-        -158.25511169433594,
-        25.388383865356445,
-        -66.42167663574219
+        -152.99143096904646,
+        25.4,
+        -52.50223936969283
       ],
       "max": [
-        -117.3511962890625,
-        46.41020584106445,
-        -32.57915496826172
+        -126.24856903095356,
+        46.4,
+        -38.05776063030717
       ],
       "dimensions": [
-        40.90391540527344,
-        21.021821975708008,
-        33.84252166748047
+        26.7428619380929,
+        21,
+        14.444478739385659
       ],
       "centroid": [
-        -137.80315399169922,
-        35.89929485321045,
-        -49.50041580200195
+        -139.62,
+        35.9,
+        -45.28
       ],
-      "volumeM3": 29100.33248975765
+      "volumeM3": 8112.020714597285
     },
     "orientedBoundingBox": {
       "center": [
-        -137.7020511694122,
-        35.89929485321045,
-        -49.565097770915756
+        -139.62,
+        35.9,
+        -45.28
       ],
       "dimensions": [
-        40.82777820444771,
-        21.021821975708008,
-        32.05182289600098
+        25.700000000000017,
+        21,
+        7.400000000000004
       ],
       "halfExtents": [
-        20.413889102223855,
-        10.510910987854004,
-        16.02591144800049
+        12.850000000000009,
+        10.5,
+        3.700000000000002
       ],
-      "yawDeg": 4.46,
-      "yawRad": 0.07790163345015004,
+      "yawDeg": 16.63,
+      "yawRad": 0.2901999999999997,
       "quaternion": [
         0,
-        0.03894096832891737,
+        0.14459137957848642,
         0,
-        0.9992415128414183
+        0.9894914516819183
       ],
       "rotationMatrix3x3": [
         [
-          0.9969672019712125,
+          0.9581866659031801,
           0,
-          0.0778228642089943
+          0.2861438681596156
         ],
         [
           0,
@@ -160,21 +146,19 @@
           0
         ],
         [
-          -0.0778228642089943,
+          -0.2861438681596156,
           0,
-          0.9969672019712125
+          0.9581866659031801
         ]
       ],
-      "volumeM3": 27509.255381498813,
-      "tightnessGainPercent": 5.5
+      "volumeM3": 3993.7800000000047,
+      "tightnessGainPercent": 50.8
     },
-    "tightnessGainPercent": 5.5,
-    "vertexCount": 304,
-    "triangleCount": 547,
-    "submeshIndices": [
-      60
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "tightnessGainPercent": 50.8,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#8b5cf6",
     "trellisPrompt": "Triumphal arch of Constantine with three arched passageways, Corinthian columns on pedestals, sculpted marble friezes, Dacian prisoner statues, and attic inscription.",
     "material": {
@@ -189,56 +173,56 @@
     "category": "ruin",
     "boundingBox": {
       "min": [
-        -227.67283630371094,
-        23.82505226135254,
-        -0.03171539306640625
+        -108.4,
+        25.25,
+        -28.1
       ],
       "max": [
-        -111.15406799316406,
-        59.17778396606445,
-        152.56729125976562
+        -96.4,
+        29.75,
+        -16.1
       ],
       "dimensions": [
-        116.51876831054688,
-        35.352731704711914,
-        152.59900665283203
+        12,
+        4.5,
+        12
       ],
       "centroid": [
-        -169.4134521484375,
-        41.501418113708496,
-        76.26778793334961
+        -102.4,
+        27.5,
+        -22.1
       ],
-      "volumeM3": 628594.4889069868
+      "volumeM3": 648
     },
     "orientedBoundingBox": {
       "center": [
-        -170.15037284903264,
-        41.501418113708496,
-        76.41811472270363
+        -102.4,
+        27.5,
+        -22.1
       ],
       "dimensions": [
-        190.83604008783303,
-        35.352731704711914,
-        183.8478814624254
+        12,
+        4.5,
+        12
       ],
       "halfExtents": [
-        95.41802004391651,
-        17.676365852355957,
-        91.9239407312127
+        6,
+        2.25,
+        6
       ],
-      "yawDeg": -51.96,
-      "yawRad": -0.9068308826101602,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        -0.43803841537233185,
         0,
-        0.898956254029136
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.6162446933161929,
+          1,
           0,
-          -0.7875547460079403
+          0
         ],
         [
           0,
@@ -246,22 +230,19 @@
           0
         ],
         [
-          0.7875547460079403,
           0,
-          0.6162446933161929
+          0,
+          1
         ]
       ],
-      "volumeM3": 1240343.580593877,
+      "volumeM3": 648,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 5617,
-    "triangleCount": 10110,
-    "submeshIndices": [
-      2,
-      4
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#10b981",
     "trellisPrompt": "Conical Roman brick and concrete foundation core of the Meta Sudans fountain monument with preserved water-conduit base.",
     "material": {
@@ -276,56 +257,56 @@
     "category": "monument",
     "boundingBox": {
       "min": [
-        -342.88861083984375,
-        0.0006051635718904436,
-        -152.57032775878906
+        -343.3,
+        34.6,
+        35.599999999999994
       ],
       "max": [
-        -226.9821319580078,
-        60.5710563659668,
-        152.56533813476562
+        -198.3,
+        52.6,
+        135.6
       ],
       "dimensions": [
-        115.90647888183594,
-        60.570451202394906,
-        305.1356658935547
+        145,
+        18,
+        100
       ],
       "centroid": [
-        -284.9353713989258,
-        30.285830764769344,
-        -0.00249481201171875
+        -270.8,
+        43.6,
+        85.6
       ],
-      "volumeM3": 2142207.2990153353
+      "volumeM3": 261000
     },
     "orientedBoundingBox": {
       "center": [
-        -284.6398312818918,
-        30.285830764769344,
-        0.012020802041031856
+        -270.8,
+        43.6,
+        85.6
       ],
       "dimensions": [
-        307.66048133006603,
-        60.570451202394906,
-        122.25519671209868
+        145,
+        18,
+        100
       ],
       "halfExtents": [
-        153.83024066503302,
-        30.285225601197453,
-        61.12759835604934
+        72.5,
+        9,
+        50
       ],
-      "yawDeg": 88.69,
-      "yawRad": 1.5479540343506109,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        0.6989848689023775,
         0,
-        0.7151364576397473
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.022840306091052136,
+          1,
           0,
-          0.9997391261812588
+          0
         ],
         [
           0,
@@ -333,23 +314,19 @@
           0
         ],
         [
-          -0.9997391261812588,
           0,
-          0.022840306091052136
+          0,
+          1
         ]
       ],
-      "volumeM3": 2278241.993869623,
+      "volumeM3": 261000,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 12351,
-    "triangleCount": 22231,
-    "submeshIndices": [
-      73,
-      75,
-      78
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#ec4899",
     "trellisPrompt": "Elevated travertine terrace podium of the Temple of Venus and Roma with monolithic gray granite column fragments and coffered apses.",
     "material": {
@@ -364,56 +341,56 @@
     "category": "ruin",
     "boundingBox": {
       "min": [
-        -228.90301513671875,
-        32.84450149536133,
-        -305.104248046875
+        25,
+        30,
+        2.5
       ],
       "max": [
-        -111.76924133300781,
-        72.24708557128906,
-        -152.50192260742188
+        65,
+        42,
+        27.5
       ],
       "dimensions": [
-        117.13377380371094,
-        39.402584075927734,
-        152.60232543945312
+        40,
+        12,
+        25
       ],
       "centroid": [
-        -170.33612823486328,
-        52.545793533325195,
-        -228.80308532714844
+        45,
+        36,
+        15
       ],
-      "volumeM3": 704316.7090991614
+      "volumeM3": 12000
     },
     "orientedBoundingBox": {
       "center": [
-        -169.72713206577504,
-        52.545793533325195,
-        -228.9715481085679
+        45,
+        36,
+        15
       ],
       "dimensions": [
-        166.98006421846327,
-        39.402584075927734,
-        134.42330022213085
+        40,
+        12,
+        25
       ],
       "halfExtents": [
-        83.49003210923163,
-        19.701292037963867,
-        67.21165011106542
+        20,
+        6,
+        12.5
       ],
-      "yawDeg": 82.16,
-      "yawRad": 1.4339899313340478,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        0.6571224961480359,
         0,
-        0.7537838052493397
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.13638005011234905,
+          1,
           0,
-          0.9906565913228222
+          0
         ],
         [
           0,
@@ -421,23 +398,19 @@
           0
         ],
         [
-          -0.9906565913228222,
           0,
-          0.13638005011234905
+          0,
+          1
         ]
       ],
-      "volumeM3": 884430.8475573207,
+      "volumeM3": 12000,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 6611,
-    "triangleCount": 11899,
-    "submeshIndices": [
-      70,
-      71,
-      72
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#f59e0b",
     "trellisPrompt": "Exposed Roman opus latericium brick-faced concrete retaining wall ruins on the Velian slope with ancient barrel vault foundations.",
     "material": {
@@ -452,56 +425,56 @@
     "category": "ruin",
     "boundingBox": {
       "min": [
-        -113.99401092529297,
-        22.63463020324707,
-        -0.013885498046875
+        -49,
+        24.4,
+        10
       ],
       "max": [
-        -56.04544448852539,
-        59.187496185302734,
-        76.2849349975586
+        -31,
+        25.6,
+        20
       ],
       "dimensions": [
-        57.94856643676758,
-        36.552865982055664,
-        76.29882049560547
+        18,
+        1.2000000000000028,
+        10
       ],
       "centroid": [
-        -85.01972770690918,
-        40.9110631942749,
-        38.13552474975586
+        -40,
+        25,
+        15
       ],
-      "volumeM3": 161615.10733890504
+      "volumeM3": 216.0000000000005
     },
     "orientedBoundingBox": {
       "center": [
-        -84.70932110906328,
-        40.9110631942749,
-        38.14505107002369
+        -40,
+        25,
+        15
       ],
       "dimensions": [
-        79.66480207890375,
-        36.552865982055664,
-        61.91801922327625
+        18,
+        1.2000000000000028,
+        10
       ],
       "halfExtents": [
-        39.832401039451874,
-        18.276432991027832,
-        30.959009611638123
+        9,
+        0.6000000000000014,
+        5
       ],
-      "yawDeg": 86.47,
-      "yawRad": 1.5091849474463772,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        0.6849918219695984,
         0,
-        0.7285507558398179
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.06157240766954003,
+          1,
           0,
-          0.9981026192800898
+          0
         ],
         [
           0,
@@ -509,22 +482,19 @@
           0
         ],
         [
-          -0.9981026192800898,
           0,
-          0.06157240766954003
+          0,
+          1
         ]
       ],
-      "volumeM3": 180303.83757774098,
+      "volumeM3": 216.0000000000005,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 7644,
-    "triangleCount": 13759,
-    "submeshIndices": [
-      34,
-      39
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#f97316",
     "trellisPrompt": "Cut monolithic travertine curbstones and bollard posts marking the ancient sacred boundary around the amphitheater.",
     "material": {
@@ -539,56 +509,56 @@
     "category": "foliage",
     "boundingBox": {
       "min": [
-        114.25584411621094,
-        56.812923431396484,
-        4.8883819580078125
+        154.5,
+        46.5,
+        154.5
       ],
       "max": [
-        230.15371704101562,
-        71.06751251220703,
-        305.1016845703125
+        165.5,
+        61.5,
+        165.5
       ],
       "dimensions": [
-        115.89787292480469,
-        14.254589080810547,
-        300.2133026123047
+        11,
+        15,
+        11
       ],
       "centroid": [
-        172.20478057861328,
-        63.94021797180176,
-        154.99503326416016
+        160,
+        54,
+        160
       ],
-      "volumeM3": 495975.35840959736
+      "volumeM3": 1815
     },
     "orientedBoundingBox": {
       "center": [
-        176.86099383318313,
-        63.94021797180176,
-        154.12888652156622
+        160,
+        54,
+        160
       ],
       "dimensions": [
-        305.5044253512888,
-        14.254589080810547,
-        127.03176609015432
+        11,
+        15,
+        11
       ],
       "halfExtents": [
-        152.7522126756444,
-        7.127294540405273,
-        63.51588304507716
+        5.5,
+        7.5,
+        5.5
       ],
-      "yawDeg": -83.83,
-      "yawRad": -1.4630253258617585,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        -0.6679960693208528,
         0,
-        0.7441648012180437
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.1075625027437809,
+          1,
           0,
-          -0.9941983242811738
+          0
         ],
         [
           0,
@@ -596,22 +566,19 @@
           0
         ],
         [
-          0.9941983242811738,
           0,
-          0.1075625027437809
+          0,
+          1
         ]
       ],
-      "volumeM3": 553203.0220519773,
+      "volumeM3": 1815,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 2728,
-    "triangleCount": 4910,
-    "submeshIndices": [
-      47,
-      48
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#22c55e",
     "trellisPrompt": "Mediterranean stone pine tree (Pinus pinea) with umbrella-like spreading canopy, rugged fissured reddish-brown bark, and dense needle foliage clusters.",
     "material": {
@@ -626,56 +593,56 @@
     "category": "foliage",
     "boundingBox": {
       "min": [
-        113.6346435546875,
-        37.1175651550293,
-        152.49990844726562
+        105.25,
+        35.25,
+        105.25
       ],
       "max": [
-        230.15774536132812,
-        60.594722747802734,
-        305.10064697265625
+        114.75,
+        48.75,
+        114.75
       ],
       "dimensions": [
-        116.52310180664062,
-        23.477157592773438,
-        152.60073852539062
+        9.5,
+        13.5,
+        9.5
       ],
       "centroid": [
-        171.8961944580078,
-        48.856143951416016,
-        228.80027770996094
+        110,
+        42,
+        110
       ],
-      "volumeM3": 417459.34516332584
+      "volumeM3": 1218.375
     },
     "orientedBoundingBox": {
       "center": [
-        171.8893155116365,
-        48.856143951416016,
-        228.7302796163631
+        110,
+        42,
+        110
       ],
       "dimensions": [
-        164.70983098740433,
-        23.477157592773438,
-        130.64454762861982
+        9.5,
+        13.5,
+        9.5
       ],
       "halfExtents": [
-        82.35491549370217,
-        11.738578796386719,
-        65.32227381430991
+        4.75,
+        6.75,
+        4.75
       ],
-      "yawDeg": 83.47,
-      "yawRad": 1.4568720598809306,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        0.6657033894422264,
         0,
-        0.7462164547134641
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.1136779945702629,
+          1,
           0,
-          0.9935176463206294
+          0
         ],
         [
           0,
@@ -683,22 +650,19 @@
           0
         ],
         [
-          -0.9935176463206294,
           0,
-          0.1136779945702629
+          0,
+          1
         ]
       ],
-      "volumeM3": 505191.838943982,
+      "volumeM3": 1218.375,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 5217,
-    "triangleCount": 9390,
-    "submeshIndices": [
-      49,
-      61
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#14b8a6",
     "trellisPrompt": "Slightly tilted parasol stone pine tree growing on the Oppian park embankment with irregular branching structure.",
     "material": {
@@ -713,56 +677,56 @@
     "category": "foliage",
     "boundingBox": {
       "min": [
-        -113.99586486816406,
-        41.164669036865234,
-        228.78843688964844
+        -156.75,
+        26,
+        -81.75
       ],
       "max": [
-        -55.736228942871094,
-        59.09096145629883,
-        305.08770751953125
+        -153.25,
+        38,
+        -78.25
       ],
       "dimensions": [
-        58.25963592529297,
-        17.926292419433594,
-        76.29927062988281
+        3.5,
+        12,
+        3.5
       ],
       "centroid": [
-        -84.86604690551758,
-        50.12781524658203,
-        266.93807220458984
+        -155,
+        32,
+        -80
       ],
-      "volumeM3": 79685.3765502606
+      "volumeM3": 147
     },
     "orientedBoundingBox": {
       "center": [
-        -84.55607465314706,
-        50.12781524658203,
-        266.9380840867617
+        -155,
+        32,
+        -80
       ],
       "dimensions": [
-        79.48711692378048,
-        17.926292419433594,
-        61.31423854956061
+        3.5,
+        12,
+        3.5
       ],
       "halfExtents": [
-        39.74355846189024,
-        8.963146209716797,
-        30.657119274780307
+        1.75,
+        6,
+        1.75
       ],
-      "yawDeg": 86.7,
-      "yawRad": 1.5132552882563763,
+      "yawDeg": 0,
+      "yawRad": 0,
       "quaternion": [
         0,
-        0.6864731272931828,
         0,
-        0.7271551729200018
+        0,
+        1
       ],
       "rotationMatrix3x3": [
         [
-          0.05750929100863529,
+          1,
           0,
-          0.9983449711636174
+          0
         ],
         [
           0,
@@ -770,21 +734,19 @@
           0
         ],
         [
-          -0.9983449711636174,
           0,
-          0.05750929100863529
+          0,
+          1
         ]
       ],
-      "volumeM3": 87367.22882693283,
+      "volumeM3": 147,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 2864,
-    "triangleCount": 5155,
-    "submeshIndices": [
-      74
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#06b6d4",
     "trellisPrompt": "Slender columnar Mediterranean cypress tree (Cupressus sempervirens) with dense dark emerald-green vertical foliage.",
     "material": {
@@ -799,56 +761,56 @@
     "category": "monument",
     "boundingBox": {
       "min": [
-        -342.8900146484375,
-        56.56514358520508,
-        -152.56982421875
+        -241,
+        31,
+        108
       ],
       "max": [
-        -250.53793334960938,
-        80.89653015136719,
-        133.48965454101562
+        -229,
+        63,
+        122
       ],
       "dimensions": [
-        92.35208129882812,
-        24.33138656616211,
-        286.0594787597656
+        12,
+        32,
+        14
       ],
       "centroid": [
-        -296.71397399902344,
-        68.73083686828613,
-        -9.540084838867188
+        -235,
+        47,
+        115
       ],
-      "volumeM3": 642791.150413989
+      "volumeM3": 5376
     },
     "orientedBoundingBox": {
       "center": [
-        -305.01404726410277,
-        68.73083686828613,
-        -12.085174586243987
+        -235,
+        47,
+        115
       ],
       "dimensions": [
-        294.27099882516944,
-        24.33138656616211,
-        108.78112903460172
+        14,
+        32,
+        12
       ],
       "halfExtents": [
-        147.13549941258472,
-        12.165693283081055,
-        54.39056451730086
+        7,
+        16,
+        6
       ],
-      "yawDeg": -80.3,
-      "yawRad": -1.40142302491805,
+      "yawDeg": 90,
+      "yawRad": 1.5707963267948966,
       "quaternion": [
         0,
-        -0.6447617188696269,
+        0.7071067811865475,
         0,
-        0.7643836248117069
+        0.7071067811865476
       ],
       "rotationMatrix3x3": [
         [
-          0.16856465176056842,
+          6.123233995736766e-17,
           0,
-          -0.9856905996187841
+          1
         ],
         [
           0,
@@ -856,22 +818,19 @@
           0
         ],
         [
-          0.9856905996187841,
+          -1,
           0,
-          0.16856465176056842
+          6.123233995736766e-17
         ]
       ],
-      "volumeM3": 778875.2148090791,
+      "volumeM3": 5376,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 1868,
-    "triangleCount": 3362,
-    "submeshIndices": [
-      76,
-      77
-    ],
-    "gemini3DScaleDiscrepancyPercent": 99.9,
+    "vertexCount": 8,
+    "triangleCount": 14,
+    "submeshIndices": [],
+    "gemini3DScaleDiscrepancyPercent": 0,
     "colorHex": "#a855f7",
     "trellisPrompt": "12th-century Romanesque five-story brick bell tower with marble bifora windows, ceramic decorative roundels, and pyramid spire.",
     "material": {
@@ -886,8 +845,8 @@
     "category": "terrain",
     "boundingBox": {
       "min": [
-        -207.83590698242188,
-        17.44342613220215,
+        -342.8900146484375,
+        0.0006051635718904436,
         -305.1048583984375
       ],
       "max": [
@@ -896,46 +855,46 @@
         305.1048583984375
       ],
       "dimensions": [
-        550.7259216308594,
-        66.67596626281738,
+        685.780029296875,
+        84.11878723144764,
         610.209716796875
       ],
       "centroid": [
-        67.52705383300781,
-        50.78140926361084,
+        0,
+        42.05999877929571,
         0
       ],
-      "volumeM3": 22407012.45129138
+      "volumeM3": 35201158.396503724
     },
     "orientedBoundingBox": {
       "center": [
-        68.32244132996844,
-        50.78140926361084,
-        1.10289197531698
+        -32.64568037433014,
+        42.05999877929571,
+        19.214908539936054
       ],
       "dimensions": [
-        618.8286346874261,
-        66.67596626281738,
-        577.9980718447646
+        758.0950700737665,
+        84.11878723144764,
+        666.8155656992672
       ],
       "halfExtents": [
-        309.41431734371304,
-        33.33798313140869,
-        288.9990359223823
+        379.04753503688323,
+        42.05939361572382,
+        333.4077828496336
       ],
-      "yawDeg": -83.95,
-      "yawRad": -1.4652200410844927,
+      "yawDeg": 59.52,
+      "yawRad": 1.0388627017919514,
       "quaternion": [
         0,
-        -0.6688122818673893,
+        0.496386572935327,
         0,
-        0.7434313227348818
+        0.8681015897978308
       ],
       "rotationMatrix3x3": [
         [
-          0.10538026324667177,
+          0.5072007404190426,
           0,
-          -0.9944319987400155
+          0.8618279462389086
         ],
         [
           0,
@@ -943,57 +902,19 @@
           0
         ],
         [
-          0.9944319987400155,
+          -0.8618279462389086,
           0,
-          0.10538026324667177
+          0.5072007404190426
         ]
       ],
-      "volumeM3": 23848776.806007337,
+      "volumeM3": 42522853.89744869,
       "tightnessGainPercent": 0
     },
     "tightnessGainPercent": 0,
-    "vertexCount": 100507,
-    "triangleCount": 180912,
+    "vertexCount": 234679,
+    "triangleCount": 422422,
     "submeshIndices": [
-      0,
-      1,
-      5,
-      6,
-      7,
-      8,
-      9,
-      10,
-      11,
-      13,
-      15,
-      16,
-      17,
-      18,
-      19,
-      23,
-      25,
-      26,
-      27,
-      28,
-      35,
-      44,
-      45,
-      51,
-      52,
-      53,
-      55,
-      56,
-      57,
-      58,
-      59,
-      62,
-      63,
-      64,
-      65,
-      66,
-      67,
-      68,
-      69
+      0
     ],
     "gemini3DScaleDiscrepancyPercent": 99.9,
     "colorHex": "#64748b",
