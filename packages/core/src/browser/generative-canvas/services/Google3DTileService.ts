@@ -365,7 +365,12 @@ export function detectRealWorldLocationIntent(
       if (stripped.length >= 2 && !blacklist.includes(stripped.toLowerCase())) {
         const resolved = Google3DTileService.getInstance().resolveLocationSync(target);
         const isKnown = resolved.landmarkName && resolved.landmarkName !== target && resolved.landmarkName !== 'San Francisco';
-        const isRecognizedTarget = sortedLandmarks.some(([k]) => target.toLowerCase().includes(k) || k.includes(stripped.toLowerCase()));
+        const isRecognizedTarget = sortedLandmarks.some(([k]) => {
+          if (k.length <= 3) {
+            return new RegExp(`\\b${k}\\b`, 'i').test(target);
+          }
+          return target.toLowerCase().includes(k);
+        });
         const hasCityQualifier = /\b(?:nyc|new york|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|dc|washington)\b/i.test(target);
 
         if (isKnown || isRecognizedTarget || hasCityQualifier) {
@@ -452,7 +457,7 @@ export class Google3DTileService {
     for (const [key, item] of sortedEntries) {
       const escaped = key.replace(/[-[\]/{}()*+?.\\^$|]/g, '\\$&');
       const wordRegex = new RegExp(`\\b${escaped}\\b`, 'i');
-      if (wordRegex.test(cleanQuery) || wordRegex.test(strippedQuery) || cleanQuery.includes(key)) {
+      if (wordRegex.test(cleanQuery) || wordRegex.test(strippedQuery) || (key.length >= 6 && cleanQuery.includes(key))) {
         return {
           lat: item.lat,
           lng: item.lng,

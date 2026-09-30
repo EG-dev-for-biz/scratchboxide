@@ -261,7 +261,7 @@ export const Composer: React.FC<ComposerProps> = ({
         {autocompleteType === 'skill' && (
             <div className="sb-composer-autocomplete-popover animate-popover" style={{ width: '420px', maxHeight: '340px' }}>
                 <div className="sb-autocomplete-header">
-                    <span>Select Superpower (/)</span>
+                    <span>Select Skill (/skill)</span>
                     <span className="sb-autocomplete-hint">Esc to dismiss</span>
                 </div>
 
@@ -282,7 +282,7 @@ export const Composer: React.FC<ComposerProps> = ({
                             </div>
                         ))
                     ) : (
-                        <div className="sb-autocomplete-empty">No matching superpowers</div>
+                        <div className="sb-autocomplete-empty">No matching skills</div>
                     )}
                 </div>
             </div>
@@ -310,13 +310,13 @@ export const Composer: React.FC<ComposerProps> = ({
 
         {/* Authentic Cursor-Grade Composer Main Row */}
         <div className="sb-composer-main-row">
-            {/* Left: '+' Tools / Superpowers / File Attach button and Mode Selector */}
+            {/* Left: '+' Tools / Skills / File Attach button and Mode Selector */}
             <div className="sb-composer-left-actions">
                 <button
                     type="button"
                     className="sb-composer-attach-btn"
                     onClick={() => fileInputRef.current?.click()}
-                    title="Attach CSV / Data file or Superpowers (/ for skills, @ for MCP)"
+                    title="Attach CSV / Data file or Skills (/ for skills, @ for mentions & MCP)"
                 >
                     <IconPlus size={14} strokeWidth={2.2} />
                 </button>

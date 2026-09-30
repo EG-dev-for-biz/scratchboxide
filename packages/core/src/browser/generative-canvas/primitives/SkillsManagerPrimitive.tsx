@@ -235,9 +235,9 @@ export const SkillsManagerPrimitive: React.FC<SkillsManagerPrimitiveProps> = ({
                 <div className="sb-skills-header-main">
                     <div className="sb-skills-title-row">
                         <div>
-                            <h2 className="sb-skills-title">AI Superpowers &amp; Capabilities</h2>
+                            <h2 className="sb-skills-title">AI Skills &amp; Capabilities</h2>
                             <p className="sb-skills-subtitle">
-                                Equip your AI companion with domain superpowers, Apple HIG standards, and specialized workflows.
+                                Equip your AI companion with domain skills, Apple HIG standards, and specialized workflows.
                             </p>
                         </div>
                     </div>
@@ -248,7 +248,7 @@ export const SkillsManagerPrimitive: React.FC<SkillsManagerPrimitiveProps> = ({
                             <span className="sb-chip-count">{activeSkillsCount} Active</span>
                         </div>
                         <div className="sb-skills-chip-total">
-                            <span>{skillsList.length} Total Superpowers</span>
+                            <span>{skillsList.length} Total Skills</span>
                         </div>
                     </div>
                 </div>
@@ -258,7 +258,7 @@ export const SkillsManagerPrimitive: React.FC<SkillsManagerPrimitiveProps> = ({
                         className="sb-btn sb-btn-primary sb-btn-sm"
                         onClick={() => setIsCreateModalOpen(true)}
                     >
-                        <span>+ New Superpower</span>
+                        <span>+ New Skill</span>
                     </button>
                 </div>
             </div>

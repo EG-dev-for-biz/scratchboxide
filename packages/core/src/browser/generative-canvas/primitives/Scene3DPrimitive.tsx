@@ -1628,6 +1628,12 @@ int main(int argc, char** argv) {
 
             if (effectiveWorldBranch) setWorldBranch(effectiveWorldBranch);
             if (data.renderMode) setRenderMode(data.renderMode);
+            if (data.clayPreset) {
+                setMapTileClayPreset(data.clayPreset as any);
+                if (threeSceneRef.current) {
+                    TileClayProcessor.applyClayMaterial(threeSceneRef.current, data.clayPreset as any);
+                }
+            }
             if (data.cameraMode) setCameraMode(data.cameraMode);
             if (data.toolMode) setToolMode(data.toolMode);
             if (data.sculptSettings) setSculptSettings(prev => ({ ...prev, ...data.sculptSettings }));

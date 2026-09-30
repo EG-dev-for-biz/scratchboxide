@@ -42,6 +42,7 @@ import {
     buildSimulatedSteps,
     classifyFallbackPrompt,
     FallbackResult,
+    hasExplicit3DDirective,
     synthesize3DFallback,
     synthesizeChatFallback,
     synthesizeDataFileDashboard,
@@ -452,27 +453,15 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                         }
                     }
 
-                    const is3DPrompt = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
+                    const is3DPrompt = hasExplicit3DDirective(promptText) || d.layoutMode === '3d' || d.activeArtifact?.type === '3d-scene' || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
                     if (is3DPrompt && !isVideoTimelinePrompt) {
                         const sceneData = art.data as Scene3DData;
+                        const isMutation = hasExplicit3DDirective(promptText) || d.layoutMode === '3d' || d.activeArtifact?.type === '3d-scene';
                         const isMissing3DMeshes = art.type !== '3d-scene' || !sceneData?.customMeshes?.length;
-                        if (isMissing3DMeshes) {
+                        if (isMissing3DMeshes || isMutation) {
                             const fallbackResult = synthesize3DFallback(promptText, lowerPromptText, activeArtifact, updatedMessages, undefined);
                             if (fallbackResult.artifact) {
-                                if (art.type === '3d-scene') {
-                                    const fbData = fallbackResult.artifact.data as Scene3DData;
-                                    art.data = {
-                                        ...fbData,
-                                        ...sceneData,
-                                        customMeshes: fbData.customMeshes,
-                                        environment: sceneData?.environment || fbData.environment,
-                                        camera: sceneData?.camera || fbData.camera,
-                                        features: { ...(fbData.features || {}), ...(sceneData?.features || {}) },
-                                        cppGenerator: fbData.cppGenerator || sceneData?.cppGenerator
-                                    };
-                                } else {
-                                    art = fallbackResult.artifact;
-                                }
+                                art = fallbackResult.artifact;
                             }
                         }
                     }
@@ -753,7 +742,7 @@ async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, f
     const isPureChat = !fallbackGen;
     const targetAssistantText = isPureChat
         ? (fallbackResult.chatResponse || 'Here is the analysis and information you requested:')
-        : buildFallbackAssistantText(attachedDataFile, fallbackGen);
+        : (fallbackResult.explanation || buildFallbackAssistantText(attachedDataFile, fallbackGen));
     const simulatedSteps = buildSimulatedSteps(fallbackGen);
     let finalAssistantMsg: ChatMessage;
 
@@ -1078,39 +1067,23 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                 }
             }
             const isSplatDirective = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(promptText);
-            const is3DDirective = isSplatDirective || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
+            const is3DDirective = isSplatDirective || hasExplicit3DDirective(promptText) || depsRef.current.layoutMode === '3d' || depsRef.current.activeArtifact?.type === '3d-scene' || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
             if (is3DDirective && !isVideoTimelinePrompt) {
-                const currentArt = backend.generatedArtifact;
+                const currentArt = backend.generatedArtifact || depsRef.current.activeArtifact;
                 const sceneData = currentArt?.data as Scene3DData | undefined;
+                const isMutationDirective = hasExplicit3DDirective(promptText) || depsRef.current.layoutMode === '3d' || currentArt?.type === '3d-scene';
                 const isMissing3DMeshes = !currentArt || currentArt.type !== '3d-scene' || (!sceneData?.customMeshes?.length && !sceneData?.splatUrl && !sceneData?.objects?.some(o => o.content?.type === 'gaussian-splat'));
-                if (isMissing3DMeshes) {
+                if (isMissing3DMeshes || isMutationDirective) {
                     const fb = synthesize3DFallback(promptText, lowerPromptText, depsRef.current.activeArtifact, ctx.updatedMessages, undefined);
                     if (fb.artifact) {
-                        if (currentArt && currentArt.type === '3d-scene') {
-                            const fbData = fb.artifact.data as Scene3DData;
-                            const mergedArt: CanvasArtifact = {
-                                ...currentArt,
-                                data: {
-                                    ...fbData,
-                                    ...sceneData,
-                                    splatUrl: sceneData?.splatUrl || fbData.splatUrl,
-                                    splatTilesetUrl: sceneData?.splatTilesetUrl || fbData.splatTilesetUrl,
-                                    splatOptions: sceneData?.splatOptions || fbData.splatOptions,
-                                    customMeshes: fbData.customMeshes,
-                                    environment: sceneData?.environment || fbData.environment,
-                                    camera: sceneData?.camera || fbData.camera,
-                                    features: { ...(fbData.features || {}), ...(sceneData?.features || {}) },
-                                    cppGenerator: fbData.cppGenerator || sceneData?.cppGenerator
-                                }
-                            };
-                            backend.generatedArtifact = mergedArt;
-                        } else {
-                            backend.generatedArtifact = fb.artifact;
+                        backend.generatedArtifact = fb.artifact;
+                        if (fb.explanation && (!backend.finalResponseText || backend.finalResponseText.length < 50)) {
+                            backend.finalResponseText = fb.explanation;
                         }
                         const finalArt = backend.generatedArtifact;
                         depsRef.current.setActiveArtifact(finalArt);
                         depsRef.current.setLayoutMode('3d');
-                        depsRef.current.showToast(fb.toast?.text || `Synthesized 3D Scene: ${finalArt.title}`, fb.toast?.icon || '🪐');
+                        depsRef.current.showToast(fb.toast?.text || `Updated 3D Scene: ${finalArt.title}`, fb.toast?.icon || '🪐');
                     }
                 }
             }

@@ -86,7 +86,7 @@ export const CONTEXT_MENTION_METADATA: Record<
         placeholder: 'Search MCP servers...'
     },
     skill: {
-        label: 'Superpower (/skill)',
+        label: 'Skill (/skill)',
         icon: '✨',
         description: 'Attach domain intelligence capability',
         placeholder: 'Search skills...'

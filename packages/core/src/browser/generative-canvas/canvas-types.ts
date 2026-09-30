@@ -634,11 +634,20 @@ export interface ContentDimension {
     metadata?: {
         dims?: { width: number; height: number; depth?: number };
         vertices?: number;
+        vertexCount?: number;
+        triangleCount?: number;
         sampleRate?: number;
         codecs?: string;
         material?: any;
         materials?: any;
         geoJson?: any;
+        style?: string;
+        name?: string;
+        type?: string;
+        aabb?: any;
+        obb?: any;
+        volumeReductionPct?: number;
+        [key: string]: any;
     };
 }
 
@@ -731,6 +740,16 @@ export interface Scene3DData {
     parentCommitId?: string;
     objects?: Media4DObject[];
     renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr';
+    clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
+    restructuringTelemetry?: {
+        vertices?: number;
+        triangles?: number;
+        latency?: string;
+        style?: string;
+        terraformOps?: number;
+        primitivesGrafted?: number;
+        outputGlbPath?: string;
+    };
     cameraMode?: 'orbit' | 'fps';
     toolMode?: ViewportToolMode;
     sculptSettings?: SculptSettings;
@@ -931,6 +950,8 @@ export interface Scene3DData {
         multiLayerWeathering?: boolean;
         cinematic3PointLighting?: boolean;
         studioPedestal?: boolean;
+        showBoundingBoxes?: boolean;
+        objectSeparation?: boolean;
     };
     customMeshes?: Array<{
         id: string;
