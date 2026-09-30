@@ -1,0 +1,1 @@
+/usr/bin/c++  -arch arm64 -bundle -Wl,-headerpad_max_install_names -Wl,@/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/cmake/darwin-ld-cpython.sym -o scratchbox_native.cpython-314-darwin.so CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o  libnanobind-static.a

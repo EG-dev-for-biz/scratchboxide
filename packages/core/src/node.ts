@@ -46,8 +46,14 @@ export { CodebasePatternEngine } from './node/codebase-pattern-engine';
 export { AgentContextCompactor } from './node/agent-context-compactor';
 export { ConversationDiffMemoryService } from './node/conversation-diff-memory-service';
 
-// 3D Native Engine Compiler Service
+// 3D Native Engine Compiler & Python Runner Services
 export { NativeCppCompilerService } from './node/3d-engine/native-compiler-service';
+export {
+    NativePythonRunnerService,
+    type PythonExecutionOptions,
+    type PythonExecutionResult,
+    type PythonExecutionAsset
+} from './node/3d-engine/native-python-runner-service';
 export { PhotorealismEvaluator } from './node/3d-engine/photorealism-evaluator';
 export { PhotorealTileCleanupService, TileCleanupOptions, TileCleanupMetrics, TileCleanupResult } from './node/3d-engine/tile-cleanup-service';
 export {

@@ -1,0 +1,4 @@
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles/scratchbox_native.dir
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles/nanobind-static.dir
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles/edit_cache.dir
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles/rebuild_cache.dir
