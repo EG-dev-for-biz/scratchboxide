@@ -84,6 +84,20 @@ src/worker.py:15: error: Incompatible types in assignment (expression has type "
     assert.ok(pyBatch.diagnostics.some(d => d.filePath === 'src/worker.py' && d.range.startLine === 15));
     console.log('  ✓ Test 2.3 Passed: Python compiler/linter errors parsed correctly');
 
+    const sampleClangOutput = `
+packages/core/src/native/world_generator.cpp:42:15: error: no member named 'generateProceduralMesh' in 'Scratchbox3D::Engine'
+packages/core/src/native/include/scratchbox_engine.hpp:105:5: note: candidate function not viable
+packages/core/src/native/shaders/terrain.frag:18:9: warning: unused variable 'ambientOcclusion'
+`;
+    const clangBatch = diagnosticService.ingestCompilerOutput(sampleClangOutput, 'clang++', 1);
+    assert.strictEqual(clangBatch.diagnostics.length, 3, 'Should parse 3 Clang C++ diagnostics');
+    const clangErr = clangBatch.diagnostics.find(d => d.severity === 'error');
+    assert.ok(clangErr, 'Should find Clang error');
+    assert.strictEqual(clangErr?.range.startLine, 42);
+    assert.strictEqual(clangErr?.range.startColumn, 15);
+    assert.ok(clangErr?.message.includes('generateProceduralMesh'));
+    console.log('  ✓ Test 2.4 Passed: Clang C++20 errors, notes, and warnings parsed with exact file, line, and column coordinates');
+
     // =========================================================================
     // SECTION 3: Self-Healing Prompt Synthesis & Suggested Actions
     // =========================================================================

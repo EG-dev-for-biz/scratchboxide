@@ -8,9 +8,12 @@
  ********************************************************************************/
 
 import { Request, Response, Router } from 'express';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
+import * as util from 'util';
 import * as fs from 'fs-extra';
 import * as path from 'path';
+
+const execFileAsync = util.promisify(execFile);
 import * as os from 'os';
 import {
     assertWorkspaceRoot,
@@ -336,15 +339,25 @@ export function createGitRouter(ctx: RouteContext): Router {
     const resolveWorkspaceRoot = (req: Request): string | undefined =>
         (req.query?.root as string) || (req.query?.workspaceRoot as string) || (req.body?.workspaceRoot as string) || undefined;
 
+    const runGit = (args: string[], cwd: string, options: { maxBuffer?: number } = {}) => {
+        const env = {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL || '/dev/null',
+            GIT_CONFIG_NOSYSTEM: '1'
+        };
+        return execFileAsync('git', args, {
+            cwd,
+            env,
+            maxBuffer: options.maxBuffer || 50 * 1024 * 1024
+        });
+    };
+
     router.get('/branches', async (req: Request, res: Response) => {
         try {
             const workspaceRoot = resolveWorkspaceRoot(req);
             const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
-            exec('git branch -a', { cwd: targetRoot }, (err, stdout, _stderr) => {
-                if (err) {
-                    res.json({ success: true, current: 'main', branches: ['main'] });
-                    return;
-                }
+            try {
+                const { stdout } = await runGit(['branch', '-a'], targetRoot);
                 const lines = stdout.split('\n').map(l => l.trim()).filter(Boolean);
                 let current = 'main';
                 const branches: string[] = [];
@@ -360,7 +373,189 @@ export function createGitRouter(ctx: RouteContext): Router {
                     }
                 }
                 res.json({ success: true, current, branches: branches.length ? branches : ['main'] });
+            } catch {
+                res.json({ success: true, current: 'main', branches: ['main'] });
+            }
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.get('/status', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+
+            let currentBranch = 'main';
+            try {
+                const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], targetRoot);
+                currentBranch = branchOut.trim() || 'main';
+            } catch {
+                // Not a git repository or detached HEAD
+            }
+
+            const { stdout } = await runGit(['status', '--porcelain=v1', '-u'], targetRoot);
+            const lines = stdout.split('\n').filter(Boolean);
+
+            const staged: Array<{ path: string; status: string }> = [];
+            const unstaged: Array<{ path: string; status: string }> = [];
+            const untracked: string[] = [];
+
+            for (const line of lines) {
+                const x = line[0];
+                const y = line[1];
+                const filePath = line.substring(3).trim();
+
+                if (x === '?' && y === '?') {
+                    untracked.push(filePath);
+                } else {
+                    if (x !== ' ' && x !== '?') {
+                        staged.push({ path: filePath, status: x });
+                    }
+                    if (y !== ' ' && y !== '?') {
+                        unstaged.push({ path: filePath, status: y });
+                    }
+                }
+            }
+
+            res.json({
+                success: true,
+                branch: currentBranch,
+                clean: staged.length === 0 && unstaged.length === 0 && untracked.length === 0,
+                staged,
+                unstaged,
+                untracked
             });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.get('/diff', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const cached = req.query.cached === 'true' || req.query.staged === 'true';
+            const file = typeof req.query.file === 'string' ? req.query.file.trim() : undefined;
+            const commit = typeof req.query.commit === 'string' ? req.query.commit.trim() : undefined;
+
+            const gitArgs = ['diff'];
+            if (cached) {
+                gitArgs.push('--cached');
+            }
+            if (commit) {
+                const cleanCommit = commit.replace(/[^a-zA-Z0-9_\-.~^]/g, '');
+                if (cleanCommit) gitArgs.push(cleanCommit);
+            }
+            if (file) {
+                const safeFile = resolveWithinRoot(targetRoot, file);
+                const relFile = path.relative(targetRoot, safeFile);
+                gitArgs.push('--', relFile);
+            }
+
+            const { stdout: diffOutput } = await runGit(gitArgs, targetRoot);
+
+            const changedFiles: string[] = [];
+            let additions = 0;
+            let deletions = 0;
+            const lines = diffOutput.split('\n');
+
+            for (const line of lines) {
+                if (line.startsWith('diff --git a/')) {
+                    const match = line.match(/^diff --git a\/(.*?) b\/(.*?)$/);
+                    if (match) {
+                        changedFiles.push(match[2]);
+                    }
+                } else if (line.startsWith('+') && !line.startsWith('+++')) {
+                    additions++;
+                } else if (line.startsWith('-') && !line.startsWith('---')) {
+                    deletions++;
+                }
+            }
+
+            res.json({
+                success: true,
+                cached,
+                changedFiles,
+                stats: { additions, deletions, totalChanges: additions + deletions },
+                rawDiff: diffOutput
+            });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.post('/stage', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const { files, all } = req.body || {};
+
+            if (all === true) {
+                await runGit(['add', '-A'], targetRoot);
+                res.json({ success: true, stagedAll: true });
+                return;
+            }
+
+            if (!Array.isArray(files) || files.length === 0) {
+                res.status(400).json({ error: 'files must be a non-empty array of file paths or specify all: true' });
+                return;
+            }
+
+            const safeRelPaths = files.map((f: string) => {
+                const safeAbs = resolveWithinRoot(targetRoot, String(f));
+                return path.relative(targetRoot, safeAbs);
+            });
+
+            await runGit(['add', '--', ...safeRelPaths], targetRoot);
+            res.json({ success: true, staged: safeRelPaths });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.post('/unstage', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const { files, all } = req.body || {};
+
+            if (all === true) {
+                await runGit(['reset', 'HEAD'], targetRoot);
+                res.json({ success: true, unstagedAll: true });
+                return;
+            }
+
+            if (!Array.isArray(files) || files.length === 0) {
+                res.status(400).json({ error: 'files must be a non-empty array of file paths or specify all: true' });
+                return;
+            }
+
+            const safeRelPaths = files.map((f: string) => {
+                const safeAbs = resolveWithinRoot(targetRoot, String(f));
+                return path.relative(targetRoot, safeAbs);
+            });
+
+            await runGit(['reset', 'HEAD', '--', ...safeRelPaths], targetRoot);
+            res.json({ success: true, unstaged: safeRelPaths });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    router.post('/commit', async (req: Request, res: Response) => {
+        try {
+            const workspaceRoot = resolveWorkspaceRoot(req);
+            const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
+            const { message } = req.body || {};
+
+            if (!message || typeof message !== 'string' || !message.trim()) {
+                res.status(400).json({ error: 'Commit message is required' });
+                return;
+            }
+
+            const { stdout } = await runGit(['commit', '-m', message.trim()], targetRoot);
+            res.json({ success: true, output: stdout });
         } catch (err: any) {
             sendError(res, err);
         }
@@ -376,13 +571,8 @@ export function createGitRouter(ctx: RouteContext): Router {
                 return;
             }
             const cleanBranch = branch.trim().replace(/[^a-zA-Z0-9_\-\.\/]/g, '');
-            exec(`git checkout "${cleanBranch}"`, { cwd: targetRoot }, (err, stdout, stderr) => {
-                if (err) {
-                    res.status(400).json({ error: stderr || err.message });
-                    return;
-                }
-                res.json({ success: true, branch: cleanBranch, output: stdout });
-            });
+            const { stdout } = await runGit(['checkout', cleanBranch], targetRoot);
+            res.json({ success: true, branch: cleanBranch, output: stdout });
         } catch (err: any) {
             sendError(res, err);
         }
@@ -418,16 +608,11 @@ export function createGitRouter(ctx: RouteContext): Router {
 
             await fs.ensureDir(path.dirname(resolvedDest));
 
-            exec(`git clone ${cleanUrl} "${resolvedDest}"`, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
-                if (err) {
-                    res.status(500).json({ error: stderr || err.message });
-                    return;
-                }
-                res.json({
-                    success: true,
-                    path: resolvedDest,
-                    output: stdout || stderr
-                });
+            const { stdout, stderr } = await runGit(['clone', cleanUrl, resolvedDest], path.dirname(resolvedDest));
+            res.json({
+                success: true,
+                path: resolvedDest,
+                output: stdout || stderr
             });
         } catch (err: any) {
             sendError(res, err);

@@ -228,7 +228,66 @@ export class LspDiagnosticFeedbackService {
                         message: line,
                         timestamp: Date.now()
                     });
+                    continue;
                 }
+            }
+
+            // 7. Clang / GCC / Apple Clang C++20 compiler diagnostics:
+            // "src/world_generator.cpp:42:15: error: no member named 'foo' in 'Scratchbox3D::Scene'"
+            // "engine.hpp:18:9: fatal error: 'scratchbox_engine.hpp' file not found"
+            const clangMatch = line.match(/^([a-zA-Z0-9_\-./\\]+\.(?:cpp|cxx|cc|c|hpp|h|cu|vert|frag|glsl)):(\d+):(\d+):\s*(fatal error|error|warning|note):\s*(.*)$/i);
+            if (clangMatch) {
+                const [, fPath, lNum, cNum, sev, msg] = clangMatch;
+                const severity: DiagnosticSeverity = sev.toLowerCase().includes('error') ? 'error' : (sev.toLowerCase() === 'note' ? 'info' : 'warning');
+                diagnostics.push({
+                    id: `diag-clang-${Date.now()}-${diagnostics.length}`,
+                    filePath: fPath.replace(/\\/g, '/'),
+                    range: {
+                        startLine: parseInt(lNum, 10),
+                        startColumn: parseInt(cNum, 10),
+                        endLine: parseInt(lNum, 10),
+                        endColumn: parseInt(cNum, 10) + 1
+                    },
+                    severity,
+                    code: sev.toUpperCase().replace(/\s+/g, '_'),
+                    source: toolchain || 'clang++',
+                    message: msg.trim(),
+                    timestamp: Date.now()
+                });
+                continue;
+            }
+        }
+
+        // Check for Clang JSON diagnostics: [{"caret": {"file": "...", "line": 10, "column": 5}, "kind": "error", "message": "..."}]
+        if (rawOutput.trim().startsWith('[') || rawOutput.trim().startsWith('{')) {
+            try {
+                const parsed = JSON.parse(rawOutput.trim());
+                const items = Array.isArray(parsed) ? parsed : (parsed.diagnostics || parsed.runs?.[0]?.results || []);
+                for (const item of items) {
+                    if (item.message && (item.caret || item.file || item.kind)) {
+                        const file = (item.caret?.file || item.file || 'unknown').replace(/\\/g, '/');
+                        const line = item.caret?.line || item.line || 1;
+                        const col = item.caret?.column || item.column || 1;
+                        const isErr = item.kind === 'error' || item.kind === 'fatal' || item.level === 'error';
+                        diagnostics.push({
+                            id: `diag-json-${Date.now()}-${diagnostics.length}`,
+                            filePath: file,
+                            range: {
+                                startLine: line,
+                                startColumn: col,
+                                endLine: line,
+                                endColumn: col + 1
+                            },
+                            severity: isErr ? 'error' : 'warning',
+                            code: 'CLANG_JSON_DIAGNOSTIC',
+                            source: toolchain || 'clang++',
+                            message: typeof item.message === 'string' ? item.message : (item.message?.text || ''),
+                            timestamp: Date.now()
+                        });
+                    }
+                }
+            } catch {
+                // Not valid JSON, ignore
             }
         }
 

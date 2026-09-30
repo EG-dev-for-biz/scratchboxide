@@ -367,15 +367,15 @@ export {
     type FidelityFXSuperResolutionOptions
 } from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
 
-// Procedural Structure SfM & COLMAP Dataset Generator
-export {
+// Procedural Structure SfM & COLMAP Dataset Generator (Types for Browser)
+export type {
     ProceduralSfMDatasetService,
-    type Vector3Tuple,
-    type ProceduralPinholeIntrinsics,
-    type ProceduralCameraPose,
-    type ProceduralPoint3D,
-    type ProceduralDatasetOptions,
-    type ProceduralSfMBundle
+    Vector3Tuple,
+    ProceduralPinholeIntrinsics,
+    ProceduralCameraPose,
+    ProceduralPoint3D,
+    ProceduralDatasetOptions,
+    ProceduralSfMBundle
 } from './node/spatial/ProceduralSfMDatasetService';
 
 // Universal 3D Structure Foundation & Multi-Format Adapters (Types for Browser)

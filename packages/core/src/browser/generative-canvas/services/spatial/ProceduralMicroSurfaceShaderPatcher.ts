@@ -188,6 +188,7 @@ export class ProceduralMicroSurfaceShaderPatcher {
     const userData = (material as any).userData || {};
     (material as any).userData = userData;
     userData.sbMicroSurfaceConfig = config;
+    userData.microSurfaceType = config.preset || 'custom';
 
     // Cache key to differentiate program compilations in Three.js
     const prevCacheKey = material.customProgramCacheKey ? material.customProgramCacheKey.bind(material) : null;
@@ -363,19 +364,18 @@ export class ProceduralMicroSurfaceShaderPatcher {
         }
       ` + shader.fragmentShader;
 
-      // 4. Inject Micro-Surface Modifications into Roughness
+      // 4. Inject Micro-Surface Calculations into Color Fragment (Executed first in Three.js pipeline)
       shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <roughnessmap_fragment>',
+        '#include <color_fragment>',
         `
-        #include <roughnessmap_fragment>
+        #include <color_fragment>
 
         vec3 sbNorm = normalize(vSbWorldNorm);
         vec3 sbWeights = sbTriplanarWeights(sbNorm, uSbTriplanarSharpness);
 
-        // --- A. Sobel Mortar Joint Deepening & Roughness ---
+        // --- A. Sobel Mortar Joint Deepening ---
         float sbMortarFactor = 0.0;
         if (uSbMortarEnabled > 0.5) {
-          // Project vertical masonry along dominant lateral axis
           float uCoord = (sbWeights.x > sbWeights.z) ? vSbWorldPos.z : vSbWorldPos.x;
           float vCoord = vSbWorldPos.y;
 
@@ -394,7 +394,7 @@ export class ProceduralMicroSurfaceShaderPatcher {
           float dJoint = min(dBed, dHead);
 
           sbMortarFactor = smoothstep(uSbMortarWidth, 0.0, dJoint);
-          roughnessFactor = mix(roughnessFactor, uSbMortarRoughness, sbMortarFactor * 0.85);
+          diffuseColor.rgb *= (1.0 - sbMortarFactor * uSbMortarDepth);
         }
 
         // --- B. Analytical Cavitation Pores ---
@@ -404,22 +404,41 @@ export class ProceduralMicroSurfaceShaderPatcher {
           if (pNoise < uSbPoreThreshold) {
             float normP = (uSbPoreThreshold - pNoise) / uSbPoreThreshold;
             sbPorePit = normP * normP;
-            roughnessFactor = clamp(roughnessFactor + sbPorePit * uSbPoreRoughnessBoost, 0.04, 1.0);
+            diffuseColor.rgb *= (1.0 - sbPorePit * uSbPoreDepth);
           }
         }
 
         // --- C. Lapis Glaze Crazing Crackle ---
         float sbGlazeCrack = 0.0;
+        vec2 sbGlazeF12 = vec2(0.0);
         if (uSbGlazeEnabled > 0.5) {
-          vec2 f12 = sbVoronoiF1F2(vSbWorldPos * uSbCrackleFreq);
-          float crackMetric = f12.y - f12.x; // boundary distance
+          sbGlazeF12 = sbVoronoiF1F2(vSbWorldPos * uSbCrackleFreq);
+          float crackMetric = sbGlazeF12.y - sbGlazeF12.x; // boundary distance
           sbGlazeCrack = smoothstep(uSbCrackWidth, 0.0, crackMetric);
+          diffuseColor.rgb *= (1.0 - sbGlazeCrack * uSbCrackDarkening);
+        }
+        `
+      );
 
+      // 5. Inject Micro-Surface Modifications into Roughness
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <roughnessmap_fragment>',
+        `
+        #include <roughnessmap_fragment>
+
+        if (uSbMortarEnabled > 0.5 && sbMortarFactor > 0.001) {
+          roughnessFactor = mix(roughnessFactor, uSbMortarRoughness, sbMortarFactor * 0.85);
+        }
+
+        if (uSbPoresEnabled > 0.5 && sbPorePit > 0.001) {
+          roughnessFactor = clamp(roughnessFactor + sbPorePit * uSbPoreRoughnessBoost, 0.04, 1.0);
+        }
+
+        if (uSbGlazeEnabled > 0.5) {
           // Inside glaze cell: vitreous high gloss; on crack edge: high roughness
           roughnessFactor = mix(uSbGlazeRoughness, uSbCrackRoughness, sbGlazeCrack);
         }
 
-        // --- D. Hammered Metal Pits ---
         if (uSbHammerEnabled > 0.5) {
           float hNoise = sbNoise3D(vSbWorldPos * uSbHammerFreq);
           roughnessFactor = clamp(roughnessFactor + (hNoise - 0.5) * 0.15, 0.05, 0.98);
@@ -427,7 +446,7 @@ export class ProceduralMicroSurfaceShaderPatcher {
         `
       );
 
-      // 5. Inject Normal Perturbations into Normal Fragment
+      // 6. Inject Normal Perturbations into Normal Fragment
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <normal_fragment_maps>',
         `
@@ -438,7 +457,6 @@ export class ProceduralMicroSurfaceShaderPatcher {
 
         // Mortar joint normal beveling
         if (uSbMortarEnabled > 0.5 && sbMortarFactor > 0.01) {
-          float eps = 0.02;
           float uCoord = (sbWeights.x > sbWeights.z) ? vSbWorldPos.z : vSbWorldPos.x;
           float vCoord = vSbWorldPos.y;
           float yCourse = vCoord * uSbBrickFreqY;
@@ -473,7 +491,7 @@ export class ProceduralMicroSurfaceShaderPatcher {
           vec2 fX = sbVoronoiF1F2((vSbWorldPos + vec3(eps, 0.0, 0.0)) * uSbCrackleFreq);
           vec2 fY = sbVoronoiF1F2((vSbWorldPos + vec3(0.0, eps, 0.0)) * uSbCrackleFreq);
           vec2 fZ = sbVoronoiF1F2((vSbWorldPos + vec3(0.0, 0.0, eps)) * uSbCrackleFreq);
-          vec3 glazeGrad = vec3(fX.x, fY.x, fZ.x) - vec3(f12.x);
+          vec3 glazeGrad = vec3(fX.x - sbGlazeF12.x, fY.x - sbGlazeF12.x, fZ.x - sbGlazeF12.x);
           sbWorldPerturbation += glazeGrad * uSbGlazeCurvature;
         }
 
@@ -486,29 +504,6 @@ export class ProceduralMicroSurfaceShaderPatcher {
         // Transform world perturbation into view-space normal
         vec3 sbViewPerturbation = (viewMatrix * vec4(sbWorldPerturbation, 0.0)).xyz;
         normal = normalize(normal + sbViewPerturbation);
-        `
-      );
-
-      // 6. Inject Albedo / Diffuse Color Modifications (Joint darkening, cavitation shade, glaze crackle)
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <color_fragment>',
-        `
-        #include <color_fragment>
-
-        // Mortar joint darkening
-        if (uSbMortarEnabled > 0.5 && sbMortarFactor > 0.01) {
-          diffuseColor.rgb *= (1.0 - sbMortarFactor * uSbMortarDepth);
-        }
-
-        // Cavitation pit darkening
-        if (uSbPoresEnabled > 0.5 && sbPorePit > 0.01) {
-          diffuseColor.rgb *= (1.0 - sbPorePit * uSbPoreDepth);
-        }
-
-        // Glaze crack line darkening
-        if (uSbGlazeEnabled > 0.5 && sbGlazeCrack > 0.01) {
-          diffuseColor.rgb *= (1.0 - sbGlazeCrack * uSbCrackDarkening);
-        }
         `
       );
     };

@@ -957,6 +957,15 @@ export {
     type FoundationScenePackageOptions,
     type FoundationScenePackageResult
 } from './node/spatial/FoundationScenePackagerService';
+export {
+    ProceduralSfMDatasetService,
+    type Vector3Tuple,
+    type ProceduralPinholeIntrinsics,
+    type ProceduralCameraPose,
+    type ProceduralPoint3D,
+    type ProceduralDatasetOptions,
+    type ProceduralSfMBundle
+} from './node/spatial/ProceduralSfMDatasetService';
 
 
 

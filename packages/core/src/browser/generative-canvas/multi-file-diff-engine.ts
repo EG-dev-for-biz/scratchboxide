@@ -26,7 +26,8 @@ export type {
 };
 
 /**
- * Calculates a structured line-by-line diff with additions and deletions between two text contents.
+ * Calculates a structured line-by-line diff with additions and deletions between two text contents
+ * using the optimal Myers Diff Algorithm (shortest edit script).
  */
 export function computeLineDiff(
     oldContent: string = '',
@@ -35,87 +36,148 @@ export function computeLineDiff(
     const oldLines = oldContent.split('\n');
     const newLines = newContent.split('\n');
 
+    const N = oldLines.length;
+    const M = newLines.length;
+
+    // Fast-path identical contents
+    if (oldContent === newContent) {
+        return {
+            lines: oldLines.map((content, idx) => ({
+                type: 'context',
+                oldLineNo: idx + 1,
+                newLineNo: idx + 1,
+                content
+            })),
+            additions: 0,
+            deletions: 0
+        };
+    }
+
+    // Fast-path: completely empty old or new
+    if (N === 1 && oldLines[0] === '' && oldContent === '') {
+        return {
+            lines: newLines.map((content, idx) => ({
+                type: 'add',
+                newLineNo: idx + 1,
+                content
+            })),
+            additions: M,
+            deletions: 0
+        };
+    }
+    if (M === 1 && newLines[0] === '' && newContent === '') {
+        return {
+            lines: oldLines.map((content, idx) => ({
+                type: 'del',
+                oldLineNo: idx + 1,
+                content
+            })),
+            additions: 0,
+            deletions: N
+        };
+    }
+
+    // Myers Diff: computes shortest edit script in O(ND)
+    const max = N + M;
+    const vOffset = max;
+    const v = new Int32Array(2 * max + 1);
+    const trace: Int32Array[] = [];
+
+    v[vOffset + 1] = 0;
+
+    let foundD = -1;
+    for (let d = 0; d <= max; d++) {
+        trace.push(new Int32Array(v));
+        for (let k = -d; k <= d; k += 2) {
+            let x: number;
+            if (k === -d || (k !== d && v[vOffset + k - 1] < v[vOffset + k + 1])) {
+                x = v[vOffset + k + 1];
+            } else {
+                x = v[vOffset + k - 1] + 1;
+            }
+            let y = x - k;
+            while (x < N && y < M && oldLines[x] === newLines[y]) {
+                x++;
+                y++;
+            }
+            v[vOffset + k] = x;
+            if (x >= N && y >= M) {
+                foundD = d;
+                break;
+            }
+        }
+        if (foundD !== -1) break;
+    }
+
+    // Backtrack to assemble minimal edit script
+    let x = N;
+    let y = M;
+    type EditOp = { type: 'context' | 'add' | 'del'; x: number; y: number };
+    const script: EditOp[] = [];
+
+    for (let d = (foundD !== -1 ? foundD : trace.length - 1); d > 0; d--) {
+        const vPrev = trace[d];
+        const k = x - y;
+        let prevK: number;
+        if (k === -d || (k !== d && vPrev[vOffset + k - 1] < vPrev[vOffset + k + 1])) {
+            prevK = k + 1;
+        } else {
+            prevK = k - 1;
+        }
+        const prevX = vPrev[vOffset + prevK];
+        const prevY = prevX - prevK;
+
+        while (x > prevX && y > prevY) {
+            script.push({ type: 'context', x: x - 1, y: y - 1 });
+            x--;
+            y--;
+        }
+
+        if (d > 0) {
+            if (x === prevX) {
+                script.push({ type: 'add', x: prevX, y: y - 1 });
+                y--;
+            } else {
+                script.push({ type: 'del', x: x - 1, y: prevY });
+                x--;
+            }
+        }
+    }
+
+    while (x > 0 && y > 0) {
+        script.push({ type: 'context', x: x - 1, y: y - 1 });
+        x--;
+        y--;
+    }
+
+    script.reverse();
+
     const lines: FileDiffLine[] = [];
     let additions = 0;
     let deletions = 0;
 
-    // Fast simple line comparison algorithm
-    let i = 0;
-    let j = 0;
-
-    while (i < oldLines.length || j < newLines.length) {
-        if (i < oldLines.length && j < newLines.length) {
-            if (oldLines[i] === newLines[j]) {
-                lines.push({
-                    type: 'context',
-                    oldLineNo: i + 1,
-                    newLineNo: j + 1,
-                    content: oldLines[i]
-                });
-                i++;
-                j++;
-            } else {
-                // Check ahead for match
-                const nextMatchInNew = newLines.indexOf(oldLines[i], j);
-                const nextMatchInOld = oldLines.indexOf(newLines[j], i);
-
-                if (nextMatchInNew !== -1 && (nextMatchInOld === -1 || nextMatchInNew - j <= nextMatchInOld - i)) {
-                    // Added lines in new
-                    while (j < nextMatchInNew) {
-                        lines.push({
-                            type: 'add',
-                            newLineNo: j + 1,
-                            content: newLines[j]
-                        });
-                        additions++;
-                        j++;
-                    }
-                } else if (nextMatchInOld !== -1) {
-                    // Deleted lines from old
-                    while (i < nextMatchInOld) {
-                        lines.push({
-                            type: 'del',
-                            oldLineNo: i + 1,
-                            content: oldLines[i]
-                        });
-                        deletions++;
-                        i++;
-                    }
-                } else {
-                    // Modified / replaced lines
-                    lines.push({
-                        type: 'del',
-                        oldLineNo: i + 1,
-                        content: oldLines[i]
-                    });
-                    deletions++;
-                    i++;
-
-                    lines.push({
-                        type: 'add',
-                        newLineNo: j + 1,
-                        content: newLines[j]
-                    });
-                    additions++;
-                    j++;
-                }
-            }
-        } else if (i < oldLines.length) {
+    for (const op of script) {
+        if (op.type === 'context') {
             lines.push({
-                type: 'del',
-                oldLineNo: i + 1,
-                content: oldLines[i]
+                type: 'context',
+                oldLineNo: op.x + 1,
+                newLineNo: op.y + 1,
+                content: oldLines[op.x]
             });
-            deletions++;
-            i++;
-        } else if (j < newLines.length) {
+        } else if (op.type === 'add') {
             lines.push({
                 type: 'add',
-                newLineNo: j + 1,
-                content: newLines[j]
+                newLineNo: op.y + 1,
+                content: newLines[op.y]
             });
             additions++;
-            j++;
+        } else if (op.type === 'del') {
+            lines.push({
+                type: 'del',
+                oldLineNo: op.x + 1,
+                content: oldLines[op.x]
+            });
+            deletions++;
         }
     }
 
@@ -189,11 +251,18 @@ export function generateMultiFileDiff(
 export function applyMultiFilePatch(
     currentFiles: CodeFileTab[],
     patch: MultiFilePatch,
-    selectedPaths?: string[]
+    selectedPaths?: string[] | Set<string> | Record<string, boolean>
 ): CodeFileTab[] {
-    const activePaths = selectedPaths
-        ? new Set(selectedPaths)
-        : new Set(patch.files.filter(f => f.isAccepted !== false).map(f => f.path));
+    let activePaths: Set<string>;
+    if (selectedPaths instanceof Set) {
+        activePaths = selectedPaths;
+    } else if (Array.isArray(selectedPaths)) {
+        activePaths = new Set(selectedPaths);
+    } else if (selectedPaths && typeof selectedPaths === 'object') {
+        activePaths = new Set(Object.keys(selectedPaths).filter(k => Boolean((selectedPaths as Record<string, boolean>)[k])));
+    } else {
+        activePaths = new Set(patch.files.filter(f => f.isAccepted !== false).map(f => f.path));
+    }
 
     const updatedFiles: CodeFileTab[] = [...currentFiles];
 

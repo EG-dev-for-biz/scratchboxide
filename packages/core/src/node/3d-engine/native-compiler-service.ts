@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import type {
     CompilationAsset,
@@ -21,6 +21,7 @@ import type {
 } from '../../common/3d-engine-protocol';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class NativeCppCompilerService {
     private static instance?: NativeCppCompilerService;
@@ -72,6 +73,56 @@ export class NativeCppCompilerService {
      */
     setCompilerBinary(binary: string): void {
         this.compilerBinary = binary;
+    }
+
+    /**
+     * Get path to the Scratchbox C++20 Precompiled Header (.pch).
+     */
+    getPchPath(): string {
+        return path.join(this.sdkIncludePath, 'scratchbox_engine.hpp.pch');
+    }
+
+    /**
+     * Precompile scratchbox_engine.hpp into scratchbox_engine.hpp.pch if missing or outdated.
+     */
+    async ensurePrecompiledHeader(forceRebuild = false): Promise<boolean> {
+        const pchPath = this.getPchPath();
+        const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
+
+        if (!fs.existsSync(headerPath)) {
+            return false;
+        }
+
+        if (!forceRebuild && fs.existsSync(pchPath)) {
+            try {
+                const headerStat = fs.statSync(headerPath);
+                const pchStat = fs.statSync(pchPath);
+                if (pchStat.mtimeMs >= headerStat.mtimeMs && pchStat.size > 0) {
+                    return true;
+                }
+            } catch {
+                // fall through to rebuild
+            }
+        }
+
+        try {
+            const pchArgs = [
+                '-std=c++20',
+                '-O3',
+                '-x',
+                'c++-header',
+                headerPath,
+                '-o',
+                pchPath
+            ];
+            await execFileAsync(this.compilerBinary, pchArgs, {
+                cwd: this.sdkIncludePath,
+                timeout: 90000
+            });
+            return fs.existsSync(pchPath);
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -139,7 +190,23 @@ export class NativeCppCompilerService {
         fs.writeFileSync(sourcePath, sourceCode, 'utf8');
 
         const optFlag = options.optimization || '-O3';
-        const extra = (options.extraFlags || []).join(' ');
+        const extraFlags = options.extraFlags || [];
+
+        // Check if precompiled header is available and valid
+        const pchPath = this.getPchPath();
+        let usePch = false;
+        try {
+            const headerPath = path.join(this.sdkIncludePath, 'scratchbox_engine.hpp');
+            if (fs.existsSync(pchPath) && fs.existsSync(headerPath)) {
+                const pchStat = fs.statSync(pchPath);
+                const headerStat = fs.statSync(headerPath);
+                if (pchStat.mtimeMs >= headerStat.mtimeMs && pchStat.size > 0) {
+                    usePch = true;
+                }
+            }
+        } catch {
+            usePch = false;
+        }
 
         // Cursor-grade compilation cache: SHA-256 binary replay with SDK header mtime validation
         const cacheDir = path.join(outputDir, '.cache');
@@ -149,8 +216,9 @@ export class NativeCppCompilerService {
         const hasher = crypto.createHash('sha256')
             .update(sourceCode)
             .update(optFlag)
-            .update(extra)
-            .update(this.sdkIncludePath);
+            .update(extraFlags.join(' '))
+            .update(this.sdkIncludePath)
+            .update(usePch ? `pch:${pchPath}` : 'no-pch');
 
         try {
             if (fs.existsSync(this.sdkIncludePath)) {
@@ -179,13 +247,28 @@ export class NativeCppCompilerService {
             };
         }
 
-        const compileCmd = `${this.compilerBinary} -std=c++20 ${optFlag} -I"${this.sdkIncludePath}" ${extra} -o "${binaryPath}" "${sourcePath}"`;
+        // Construct argument vector for execFile (zero shell expansion)
+        const compileArgs = [
+            '-std=c++20',
+            optFlag,
+            `-I${this.sdkIncludePath}`
+        ];
+
+        if (usePch) {
+            compileArgs.push('-include-pch', pchPath);
+        }
+
+        if (extraFlags.length > 0) {
+            compileArgs.push(...extraFlags);
+        }
+
+        compileArgs.push('-o', binaryPath, sourcePath);
 
         try {
-            const { stdout, stderr } = await execAsync(compileCmd, {
+            const { stdout, stderr } = await execFileAsync(this.compilerBinary, compileArgs, {
                 cwd: outputDir,
                 timeout: 180000,
-                maxBuffer: 16 * 1024 * 1024
+                maxBuffer: 32 * 1024 * 1024
             });
 
             // Populate compilation cache for instant replay
@@ -204,6 +287,42 @@ export class NativeCppCompilerService {
                 compilationTimeMs: Date.now() - startTime
             };
         } catch (err: any) {
+            const initialStderr = err.stderr || '';
+
+            // Automatic fallback if PCH had mismatched target/architecture
+            if (usePch && (initialStderr.includes('precompiled header') || initialStderr.includes('PCH file'))) {
+                try {
+                    const fallbackArgs = compileArgs.filter((arg, idx) => arg !== '-include-pch' && compileArgs[idx - 1] !== '-include-pch');
+                    const { stdout, stderr } = await execFileAsync(this.compilerBinary, fallbackArgs, {
+                        cwd: outputDir,
+                        timeout: 180000,
+                        maxBuffer: 32 * 1024 * 1024
+                    });
+
+                    try {
+                        fs.copyFileSync(binaryPath, cachedBinaryPath);
+                    } catch {
+                        // Non-fatal
+                    }
+
+                    return {
+                        success: true,
+                        binaryPath,
+                        diagnostics: this.parseDiagnostics(stderr),
+                        compilerOutput: stderr || stdout,
+                        compilationTimeMs: Date.now() - startTime
+                    };
+                } catch (fallbackErr: any) {
+                    const combined = (fallbackErr.stderr || '') + '\n' + (fallbackErr.stdout || '') + '\n' + (fallbackErr.message || '');
+                    return {
+                        success: false,
+                        diagnostics: this.parseDiagnostics(combined),
+                        compilerOutput: combined.trim(),
+                        compilationTimeMs: Date.now() - startTime
+                    };
+                }
+            }
+
             const combinedOutput = (err.stderr || '') + '\n' + (err.stdout || '') + '\n' + (err.message || '');
             const diagnostics = this.parseDiagnostics(combinedOutput);
 
@@ -218,6 +337,7 @@ export class NativeCppCompilerService {
 
     /**
      * Execute a compiled 3D generator binary and collect generated glTF / streamed chunks.
+     * Uses execFile (zero shell injection) and disk-level fallback recovery for massive scenes.
      */
     async executeBinary(
         binaryPath: string,
@@ -225,18 +345,15 @@ export class NativeCppCompilerService {
         executionDir?: string
     ): Promise<CppExecutionResult> {
         const startTime = Date.now();
-        const safeArgs = args.map(arg => {
-            if (/^[a-zA-Z0-9_\-./=]+$/.test(arg)) return arg;
-            return `"${arg.replace(/(["\\$`])/g, '\\$1')}"`;
-        }).join(' ');
-        const cmd = `"${binaryPath}" ${safeArgs}`;
         const cwd = executionDir || path.dirname(binaryPath);
+        const binaryArgs = [...args];
+        const possibleGlb = path.join(cwd, `${path.basename(binaryPath, path.extname(binaryPath))}.glb`);
 
         try {
-            const { stdout, stderr } = await execAsync(cmd, {
+            const { stdout, stderr } = await execFileAsync(binaryPath, binaryArgs, {
                 cwd,
-                timeout: 45000,
-                maxBuffer: 50 * 1024 * 1024 // 50MB buffer for heavy mesh streams
+                timeout: 60000,
+                maxBuffer: 100 * 1024 * 1024 // 100MB buffer for heavy mesh streams
             });
 
             const chunks = this.extractStreamedChunks(stdout);
@@ -245,7 +362,6 @@ export class NativeCppCompilerService {
             let glbPath: string | undefined;
             let glbBase64: string | undefined;
 
-            const possibleGlb = path.join(cwd, `${path.basename(binaryPath, path.extname(binaryPath))}.glb`);
             if (fs.existsSync(possibleGlb)) {
                 glbPath = possibleGlb;
                 glbBase64 = fs.readFileSync(possibleGlb).toString('base64');
@@ -264,6 +380,27 @@ export class NativeCppCompilerService {
                 chunks
             };
         } catch (err: any) {
+            // Robust Recovery: If stdout buffer exceeded OR error occurred but binary wrote valid .glb before exiting, recover it!
+            if (fs.existsSync(possibleGlb)) {
+                try {
+                    const glbStat = fs.statSync(possibleGlb);
+                    if (glbStat.size > 0) {
+                        return {
+                            success: true,
+                            exitCode: 0,
+                            stdout: err.stdout || '',
+                            stderr: err.stderr || '',
+                            executionTimeMs: Date.now() - startTime,
+                            glbPath: possibleGlb,
+                            glbBase64: fs.readFileSync(possibleGlb).toString('base64'),
+                            chunks: this.extractStreamedChunks(err.stdout || '')
+                        };
+                    }
+                } catch {
+                    // Fall through to standard error return
+                }
+            }
+
             return {
                 success: false,
                 exitCode: err.code || 1,

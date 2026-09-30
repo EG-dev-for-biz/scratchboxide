@@ -1752,7 +1752,12 @@ export default defineConfig({
                             optimization: '-O3'
                         })
                     })
-                    .then(res => res.json())
+                    .then(res => {
+                        if (!res.ok) {
+                            throw new Error(`Compiler endpoint returned HTTP ${res.status}: ${res.statusText}`);
+                        }
+                        return res.json();
+                    })
                     .then(result => {
                         sendRpcResponse({
                             success: result.success ?? true,
@@ -1762,14 +1767,12 @@ export default defineConfig({
                             compilerOutput: result.compilerOutput || result.stderr || ''
                         });
                     })
-                    .catch(_ => {
-                        // Offline or standalone fallback
+                    .catch(err => {
                         sendRpcResponse({
-                            success: true,
-                            simulated: true,
-                            generator: 'scratchbox_engine.hpp',
-                            timestamp: Date.now(),
-                            message: 'Procedural C++20 engine bridge active'
+                            success: false,
+                            simulated: false,
+                            error: err?.message || 'Failed to connect to native C++ compilation endpoint',
+                            compilerOutput: `Compilation Service Error: ${err?.message || 'Connection refused'}`
                         });
                     });
                 } else {
