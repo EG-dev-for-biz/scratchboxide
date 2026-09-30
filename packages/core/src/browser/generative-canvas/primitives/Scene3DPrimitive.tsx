@@ -72,6 +72,8 @@ import type {
 import {
     createHistoricalBattlefieldScene,
     createProceduralCityScene,
+    createHighwayOverpassScene,
+    createAlpineMatterhornScene,
     createSolarSystemScene,
     createMolecularPhysicsScene,
     createArchitecturalRoomScene,
@@ -312,6 +314,8 @@ export interface DynamicScriptContext {
     createPinMesh?: typeof createPinMesh;
     createHistoricalBattlefieldScene?: typeof createHistoricalBattlefieldScene;
     createProceduralCityScene?: typeof createProceduralCityScene;
+    createHighwayOverpassScene?: typeof createHighwayOverpassScene;
+    createAlpineMatterhornScene?: typeof createAlpineMatterhornScene;
     createSolarSystemScene?: typeof createSolarSystemScene;
     createMolecularPhysicsScene?: typeof createMolecularPhysicsScene;
     createArchitecturalRoomScene?: typeof createArchitecturalRoomScene;
@@ -2419,6 +2423,8 @@ int main(int argc, char** argv) {
                 createPinMesh,
                 createHistoricalBattlefieldScene,
                 createProceduralCityScene,
+                createHighwayOverpassScene,
+                createAlpineMatterhornScene,
                 createSolarSystemScene,
                 createMolecularPhysicsScene,
                 createArchitecturalRoomScene,

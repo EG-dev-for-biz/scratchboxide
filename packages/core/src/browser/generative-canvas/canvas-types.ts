@@ -726,7 +726,7 @@ export interface Scene3DData {
     title: string;
     subtitle?: string;
     worldBranch?: string;
-    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'solar-system' | 'mars_rover' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom' | 'gaussian_splat';
+    sceneType?: 'flight' | 'battlefield' | 'historical' | 'city' | 'highway_overpass' | 'alpine_valley' | 'solar-system' | 'mars_rover' | 'space' | 'molecular' | 'physics' | 'architecture' | 'room' | 'worldbuilder' | 'landscape' | 'terrain' | 'universal_scene' | 'glass_shatter' | 'general' | 'custom' | 'gaussian_splat';
     splatUrl?: string;
     splatTilesetUrl?: string;
     splatOptions?: {
@@ -979,7 +979,7 @@ export interface Scene3DData {
     customMeshes?: Array<{
         id: string;
         name?: string;
-        type?: 'box' | 'sphere' | 'cylinder' | 'plane' | 'torus' | 'custom' | 'procedural';
+        type?: 'box' | 'sphere' | 'cylinder' | 'cone' | 'plane' | 'torus' | 'custom' | 'procedural';
         geometry?: { type?: string; params?: any[] };
         tier?: 'primary' | 'secondary' | 'tertiary';
         material?: {

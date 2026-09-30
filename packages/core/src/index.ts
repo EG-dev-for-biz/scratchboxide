@@ -387,9 +387,15 @@ export {
     type MetricBoundingBox,
     type UniversalSurfaceMesh,
     type UniversalCollisionHull,
+    type CollisionEnvelopeOptions,
     type VideoDiffusionCameraBlockout,
     type Target3DFormat,
     type Universal3DStructureInitOptions,
-    type MultiFormatExportResult
+    type MultiFormatExportResult,
+    type UniversalPbrMaterial,
+    type UniversalTextureMap,
+    type UniversalTextureType,
+    type MaterialPresetName,
+    type PbrAlphaMode
 } from './common/spatial/universal-3d-structure-types';
 

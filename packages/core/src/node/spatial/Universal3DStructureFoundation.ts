@@ -13,10 +13,16 @@ import {
   MetricBoundingBox,
   UniversalSurfaceMesh,
   UniversalCollisionHull,
+  CollisionEnvelopeOptions,
   VideoDiffusionCameraBlockout,
   Target3DFormat,
   Universal3DStructureInitOptions,
-  MultiFormatExportResult
+  MultiFormatExportResult,
+  UniversalPbrMaterial,
+  UniversalTextureMap,
+  UniversalTextureType,
+  MaterialPresetName,
+  PbrAlphaMode
 } from '../../common/spatial/universal-3d-structure-types';
 import {
   ProceduralSfMDatasetService,
@@ -26,6 +32,8 @@ import {
 } from './ProceduralSfMDatasetService';
 import { GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
+import { decodePng, encodePng, synthesizeProceduralPbr } from '../texture-processing';
+import { ContinuousBiophysicalFields } from '../../common/adaptive-material-types';
 
 /**
  * Universal 3D Structure Foundation
@@ -45,12 +53,16 @@ export class Universal3DStructureFoundation {
   public readonly name: string;
   public readonly anchor?: GeodeticAnchor;
   public readonly mesh: UniversalSurfaceMesh;
+  public readonly materials: UniversalPbrMaterial[];
+  public readonly textures: UniversalTextureMap[];
   public readonly points: ProceduralPoint3D[];
   public readonly cameras: ProceduralCameraPose[];
   public readonly boundingBox: MetricBoundingBox;
   public readonly collisionHull: UniversalCollisionHull;
   public readonly tags: string[];
   public readonly metadata: Record<string, any>;
+
+  private _decodedTextureCache: Map<string, { width: number; height: number; rgba: Buffer }> = new Map();
 
   constructor(options: Universal3DStructureInitOptions) {
     this.id = options.id || `struct_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -61,12 +73,371 @@ export class Universal3DStructureFoundation {
       triangleCount: 0,
       vertexCount: 0
     };
-    this.points = options.points || [];
+    this.materials = options.materials && options.materials.length > 0
+      ? [...options.materials]
+      : [options.material || Universal3DStructureFoundation.createDefaultPbrMaterial()];
+    this.textures = options.textures ? [...options.textures] : [];
+    this.points = options.points ? [...options.points] : [];
     this.cameras = options.cameras || [];
     this.boundingBox = options.boundingBox || Universal3DStructureFoundation.computeBoundingBox(this.mesh);
-    this.collisionHull = options.collisionHull || Universal3DStructureFoundation.computeDefaultCollisionHull(this.boundingBox);
+    this.collisionHull = options.collisionHull || this.computeCollisionEnvelope({ mode: 'obb' });
     this.tags = options.tags || ['3d-structure', 'canonical-anchor'];
     this.metadata = options.metadata || {};
+  }
+
+  /**
+   * Primary physical material assigned to this structure.
+   */
+  public get primaryMaterial(): UniversalPbrMaterial {
+    return this.materials[0] || Universal3DStructureFoundation.createDefaultPbrMaterial();
+  }
+
+  /**
+   * Factory: Create standard neutral PBR material.
+   */
+  public static createDefaultPbrMaterial(name: string = 'default_material'): UniversalPbrMaterial {
+    return {
+      name,
+      baseColorFactor: [0.8, 0.85, 0.9, 1.0],
+      metallicFactor: 0.1,
+      roughnessFactor: 0.5,
+      emissiveFactor: [0, 0, 0],
+      ior: 1.5,
+      doubleSided: false,
+      alphaMode: 'OPAQUE'
+    };
+  }
+
+  /**
+   * Factory: Get physical material preset grounded in C++20 Astra 3D Engine parameters.
+   */
+  public static getMaterialPreset(preset: MaterialPresetName): UniversalPbrMaterial {
+    switch (preset) {
+      case 'titanium':
+        return {
+          name: 'brushed_titanium',
+          baseColorFactor: [0.75, 0.77, 0.82, 1.0],
+          metallicFactor: 0.95,
+          roughnessFactor: 0.22,
+          ior: 2.16
+        };
+      case 'gold':
+        return {
+          name: 'polished_gold',
+          baseColorFactor: [1.0, 0.84, 0.0, 1.0],
+          metallicFactor: 0.95,
+          roughnessFactor: 0.15,
+          ior: 1.35
+        };
+      case 'chrome':
+        return {
+          name: 'polished_chrome',
+          baseColorFactor: [0.96, 0.97, 0.99, 1.0],
+          metallicFactor: 0.98,
+          roughnessFactor: 0.06,
+          ior: 2.97
+        };
+      case 'basalt':
+        return {
+          name: 'volcanic_basalt',
+          baseColorFactor: [0.18, 0.17, 0.19, 1.0],
+          metallicFactor: 0.05,
+          roughnessFactor: 0.88,
+          ior: 1.54
+        };
+      case 'oak':
+        return {
+          name: 'procedural_oak',
+          baseColorFactor: [0.42, 0.28, 0.16, 1.0],
+          metallicFactor: 0.02,
+          roughnessFactor: 0.82,
+          ior: 1.50
+        };
+      case 'concrete':
+        return {
+          name: 'architectural_concrete',
+          baseColorFactor: [0.65, 0.65, 0.63, 1.0],
+          metallicFactor: 0.05,
+          roughnessFactor: 0.75,
+          ior: 1.52
+        };
+      case 'clay':
+        return {
+          name: 'studio_clay_blockout',
+          baseColorFactor: [0.86, 0.84, 0.80, 1.0],
+          metallicFactor: 0.02,
+          roughnessFactor: 0.82,
+          ior: 1.50
+        };
+      case 'default':
+      default:
+        return Universal3DStructureFoundation.createDefaultPbrMaterial();
+    }
+  }
+
+  /**
+   * Internal helper: Decodes texture map into RGBA pixel buffer and caches it.
+   */
+  private getDecodedTexture(tex: UniversalTextureMap): { width: number; height: number; rgba: Buffer } | null {
+    if (this._decodedTextureCache.has(tex.id)) {
+      return this._decodedTextureCache.get(tex.id)!;
+    }
+
+    try {
+      if (tex.mimeType === 'image/png') {
+        const decoded = decodePng(tex.buffer);
+        const res = { width: decoded.width, height: decoded.height, rgba: decoded.rgba };
+        this._decodedTextureCache.set(tex.id, res);
+        return res;
+      } else if (tex.mimeType === 'image/raw') {
+        const res = { width: tex.width, height: tex.height, rgba: tex.buffer };
+        this._decodedTextureCache.set(tex.id, res);
+        return res;
+      }
+    } catch {
+      // Decode fallback
+    }
+    return null;
+  }
+
+  /**
+   * Samples the base color / albedo at UV coordinate (u, v) using bilinear filtering.
+   * Returns [R, G, B] in [0, 255] integer range.
+   */
+  public sampleAlbedoAtUv(u: number, v: number): [number, number, number] {
+    const mat = this.primaryMaterial;
+    const factor = mat.baseColorFactor || [1, 1, 1, 1];
+    const tex = this.textures.find(t => t.id === mat.baseColorTextureId || t.type === 'albedo');
+
+    if (!tex) {
+      return [
+        Math.round(Math.min(255, Math.max(0, factor[0] * 255))),
+        Math.round(Math.min(255, Math.max(0, factor[1] * 255))),
+        Math.round(Math.min(255, Math.max(0, factor[2] * 255)))
+      ];
+    }
+
+    const decoded = this.getDecodedTexture(tex);
+    if (!decoded || decoded.width === 0 || decoded.height === 0) {
+      return [
+        Math.round(Math.min(255, Math.max(0, factor[0] * 255))),
+        Math.round(Math.min(255, Math.max(0, factor[1] * 255))),
+        Math.round(Math.min(255, Math.max(0, factor[2] * 255)))
+      ];
+    }
+
+    // Wrap UV coordinates to [0, 1)
+    let uu = u % 1.0;
+    if (uu < 0) uu += 1.0;
+    let vv = v % 1.0;
+    if (vv < 0) vv += 1.0;
+
+    const W = decoded.width;
+    const H = decoded.height;
+    const px = uu * (W - 1);
+    const py = vv * (H - 1);
+
+    const x0 = Math.floor(px);
+    const y0 = Math.floor(py);
+    const x1 = Math.min(W - 1, x0 + 1);
+    const y1 = Math.min(H - 1, y0 + 1);
+
+    const fx = px - x0;
+    const fy = py - y0;
+
+    const idx00 = (y0 * W + x0) * 4;
+    const idx10 = (y0 * W + x1) * 4;
+    const idx01 = (y1 * W + x0) * 4;
+    const idx11 = (y1 * W + x1) * 4;
+
+    const rgba = decoded.rgba;
+    const r = (1 - fx) * (1 - fy) * rgba[idx00] + fx * (1 - fy) * rgba[idx10] + (1 - fx) * fy * rgba[idx01] + fx * fy * rgba[idx11];
+    const g = (1 - fx) * (1 - fy) * rgba[idx00 + 1] + fx * (1 - fy) * rgba[idx10 + 1] + (1 - fx) * fy * rgba[idx01 + 1] + fx * fy * rgba[idx11 + 1];
+    const b = (1 - fx) * (1 - fy) * rgba[idx00 + 2] + fx * (1 - fy) * rgba[idx10 + 2] + (1 - fx) * fy * rgba[idx01 + 2] + fx * fy * rgba[idx11 + 2];
+
+    return [
+      Math.round(Math.min(255, Math.max(0, r * factor[0]))),
+      Math.round(Math.min(255, Math.max(0, g * factor[1]))),
+      Math.round(Math.min(255, Math.max(0, b * factor[2])))
+    ];
+  }
+
+  /**
+   * Samples physical ORM (Occlusion, Roughness, Metallic) at UV coordinate (u, v).
+   * Values returned in normalized [0, 1] range.
+   */
+  public sampleOrmAtUv(u: number, v: number): { occlusion: number; roughness: number; metallic: number } {
+    const mat = this.primaryMaterial;
+    const baseRoughness = mat.roughnessFactor ?? 0.5;
+    const baseMetallic = mat.metallicFactor ?? 0.1;
+    const tex = this.textures.find(t => t.id === mat.metallicRoughnessTextureId || t.type === 'metallicRoughness');
+
+    if (!tex) {
+      return { occlusion: 1.0, roughness: baseRoughness, metallic: baseMetallic };
+    }
+
+    const decoded = this.getDecodedTexture(tex);
+    if (!decoded || decoded.width === 0 || decoded.height === 0) {
+      return { occlusion: 1.0, roughness: baseRoughness, metallic: baseMetallic };
+    }
+
+    let uu = u % 1.0;
+    if (uu < 0) uu += 1.0;
+    let vv = v % 1.0;
+    if (vv < 0) vv += 1.0;
+
+    const W = decoded.width;
+    const H = decoded.height;
+    const px = Math.min(W - 1, Math.max(0, Math.floor(uu * (W - 1))));
+    const py = Math.min(H - 1, Math.max(0, Math.floor(vv * (H - 1))));
+    const idx = (py * W + px) * 4;
+
+    const ao = (decoded.rgba[idx] ?? 255) / 255.0;
+    const rough = ((decoded.rgba[idx + 1] ?? 128) / 255.0) * baseRoughness;
+    const metal = ((decoded.rgba[idx + 2] ?? 25) / 255.0) * baseMetallic;
+
+    return {
+      occlusion: Math.min(1.0, Math.max(0.0, ao)),
+      roughness: Math.min(1.0, Math.max(0.04, rough)),
+      metallic: Math.min(1.0, Math.max(0.0, metal))
+    };
+  }
+
+  /**
+   * Attaches or replaces physical material and textures on this structure,
+   * automatically resynchronizing surface point constellation properties.
+   */
+  public attachPbrMaterial(
+    material: UniversalPbrMaterial,
+    textures?: UniversalTextureMap[],
+    options?: { resyncPoints?: boolean; pointDensity?: number }
+  ): this {
+    this.materials.length = 0;
+    this.materials.push(material);
+    if (textures) {
+      this.textures.length = 0;
+      this.textures.push(...textures);
+      this._decodedTextureCache.clear();
+    }
+    if (options?.resyncPoints !== false) {
+      this.resynchronizePoints(options?.pointDensity);
+    }
+    return this;
+  }
+
+  /**
+   * Resynchronizes surface points with the mesh geometry and PBR texture maps.
+   * Points receive exact sampled RGB albedo colors, physical roughness, and metallicity.
+   */
+  public resynchronizePoints(density?: number): ProceduralPoint3D[] {
+    const mesh = this.mesh;
+    if (!mesh.vertices || mesh.vertices.length < 9) {
+      return this.points;
+    }
+
+    const count = density ?? Math.max(this.points.length, 1000);
+    const vertices = mesh.vertices;
+    const indices = mesh.indices;
+    const normals = mesh.normals;
+    const uvs = mesh.uvs;
+
+    const numTriangles = mesh.triangleCount || (indices ? indices.length / 3 : vertices.length / 9);
+    const newPoints: ProceduralPoint3D[] = [];
+
+    // Precompute cumulative surface areas for area-weighted sampling
+    const triAreas = new Float64Array(numTriangles);
+    let totalArea = 0;
+
+    for (let t = 0; t < numTriangles; t++) {
+      const i0 = indices ? indices[t * 3] : t * 3;
+      const i1 = indices ? indices[t * 3 + 1] : t * 3 + 1;
+      const i2 = indices ? indices[t * 3 + 2] : t * 3 + 2;
+
+      const p0x = vertices[i0 * 3], p0y = vertices[i0 * 3 + 1], p0z = vertices[i0 * 3 + 2];
+      const p1x = vertices[i1 * 3], p1y = vertices[i1 * 3 + 1], p1z = vertices[i1 * 3 + 2];
+      const p2x = vertices[i2 * 3], p2y = vertices[i2 * 3 + 1], p2z = vertices[i2 * 3 + 2];
+
+      const ax = p1x - p0x, ay = p1y - p0y, az = p1z - p0z;
+      const bx = p2x - p0x, by = p2y - p0y, bz = p2z - p0z;
+      const cx = ay * bz - az * by;
+      const cy = az * bx - ax * bz;
+      const cz = ax * by - ay * bx;
+      const area = 0.5 * Math.hypot(cx, cy, cz);
+      totalArea += area;
+      triAreas[t] = totalArea;
+    }
+
+    if (totalArea <= 1e-9) {
+      totalArea = 1.0;
+    }
+
+    for (let i = 0; i < count; i++) {
+      const targetArea = Math.random() * totalArea;
+      let triIdx = 0;
+      let low = 0, high = numTriangles - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (triAreas[mid] >= targetArea) {
+          triIdx = mid;
+          high = mid - 1;
+        } else {
+          low = mid + 1;
+        }
+      }
+
+      const i0 = indices ? indices[triIdx * 3] : triIdx * 3;
+      const i1 = indices ? indices[triIdx * 3 + 1] : triIdx * 3 + 1;
+      const i2 = indices ? indices[triIdx * 3 + 2] : triIdx * 3 + 2;
+
+      // Uniform barycentric coordinates
+      const r1 = Math.random();
+      const r2 = Math.random();
+      const sqrtR1 = Math.sqrt(r1);
+      const w0 = 1.0 - sqrtR1;
+      const w1 = sqrtR1 * (1.0 - r2);
+      const w2 = sqrtR1 * r2;
+
+      // Interpolate position
+      const px = w0 * vertices[i0 * 3] + w1 * vertices[i1 * 3] + w2 * vertices[i2 * 3];
+      const py = w0 * vertices[i0 * 3 + 1] + w1 * vertices[i1 * 3 + 1] + w2 * vertices[i2 * 3 + 1];
+      const pz = w0 * vertices[i0 * 3 + 2] + w1 * vertices[i1 * 3 + 2] + w2 * vertices[i2 * 3 + 2];
+
+      // Interpolate normal
+      let nx = 0, ny = 1, nz = 0;
+      if (normals && normals.length >= (Math.max(i0, i1, i2) + 1) * 3) {
+        nx = w0 * normals[i0 * 3] + w1 * normals[i1 * 3] + w2 * normals[i2 * 3];
+        ny = w0 * normals[i0 * 3 + 1] + w1 * normals[i1 * 3 + 1] + w2 * normals[i2 * 3 + 1];
+        nz = w0 * normals[i0 * 3 + 2] + w1 * normals[i1 * 3 + 2] + w2 * normals[i2 * 3 + 2];
+        const nlen = Math.hypot(nx, ny, nz) || 1.0;
+        nx /= nlen; ny /= nlen; nz /= nlen;
+      }
+
+      // Interpolate UV
+      let u = 0.5, v = 0.5;
+      if (uvs && uvs.length >= (Math.max(i0, i1, i2) + 1) * 2) {
+        u = w0 * uvs[i0 * 2] + w1 * uvs[i1 * 2] + w2 * uvs[i2 * 2];
+        v = w0 * uvs[i0 * 2 + 1] + w1 * uvs[i1 * 2 + 1] + w2 * uvs[i2 * 2 + 1];
+      }
+
+      // Sample albedo color & PBR physical parameters
+      const color = this.sampleAlbedoAtUv(u, v);
+      const orm = this.sampleOrmAtUv(u, v);
+
+      newPoints.push({
+        id: i + 1,
+        position: [px, py, pz],
+        normal: [nx, ny, nz],
+        color,
+        roughness: orm.roughness,
+        metallic: orm.metallic,
+        uv: [u, v],
+        error: 0.0
+      });
+    }
+
+    this.points.length = 0;
+    this.points.push(...newPoints);
+    return this.points;
   }
 
   /**
@@ -131,6 +502,301 @@ export class Universal3DStructureFoundation {
   }
 
   /**
+   * Cyclic Jacobi eigenvalue algorithm for 3x3 real symmetric matrices.
+   * Computes sorted eigenvalues (descending) and orthonormal eigenvectors (columns of V).
+   */
+  public static jacobiEigen3x3(A_in: number[][]): {
+    eigenvalues: [number, number, number];
+    eigenvectors: [Vector3Tuple, Vector3Tuple, Vector3Tuple];
+  } {
+    const A: number[][] = [
+      [A_in[0][0], A_in[0][1], A_in[0][2]],
+      [A_in[1][0], A_in[1][1], A_in[1][2]],
+      [A_in[2][0], A_in[2][1], A_in[2][2]]
+    ];
+
+    const V: number[][] = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1]
+    ];
+
+    const maxSweeps = 50;
+    const eps = 1e-10;
+
+    for (let sweep = 0; sweep < maxSweeps; sweep++) {
+      const offDiag = Math.abs(A[0][1]) + Math.abs(A[0][2]) + Math.abs(A[1][2]);
+      if (offDiag < eps) {
+        break;
+      }
+
+      for (let p = 0; p < 2; p++) {
+        for (let q = p + 1; q < 3; q++) {
+          const app = A[p][p];
+          const aqq = A[q][q];
+          const apq = A[p][q];
+
+          if (Math.abs(apq) < 1e-12) continue;
+
+          const tau = (aqq - app) / (2.0 * apq);
+          const t = Math.sign(tau || 1.0) / (Math.abs(tau) + Math.sqrt(1.0 + tau * tau));
+          const c = 1.0 / Math.sqrt(1.0 + t * t);
+          const s = t * c;
+
+          // Rotate diagonal and off-diagonal
+          A[p][p] = app - t * apq;
+          A[q][q] = aqq + t * apq;
+          A[p][q] = 0;
+
+          for (let r = 0; r < 3; r++) {
+            if (r !== p && r !== q) {
+              const min_rp = Math.min(r, p);
+              const max_rp = Math.max(r, p);
+              const min_rq = Math.min(r, q);
+              const max_rq = Math.max(r, q);
+              const arp = A[min_rp][max_rp];
+              const arq = A[min_rq][max_rq];
+              A[min_rp][max_rp] = c * arp - s * arq;
+              A[min_rq][max_rq] = s * arp + c * arq;
+            }
+          }
+
+          // Accumulate eigenvectors
+          for (let r = 0; r < 3; r++) {
+            const vrp = V[r][p];
+            const vrq = V[r][q];
+            V[r][p] = c * vrp - s * vrq;
+            V[r][q] = s * vrp + c * vrq;
+          }
+        }
+      }
+    }
+
+    const pairs = [
+      { val: A[0][0], vec: [V[0][0], V[1][0], V[2][0]] as Vector3Tuple },
+      { val: A[1][1], vec: [V[0][1], V[1][1], V[2][1]] as Vector3Tuple },
+      { val: A[2][2], vec: [V[0][2], V[1][2], V[2][2]] as Vector3Tuple }
+    ];
+
+    pairs.sort((a, b) => b.val - a.val);
+
+    for (const p of pairs) {
+      const len = Math.hypot(p.vec[0], p.vec[1], p.vec[2]);
+      if (len > 1e-9) {
+        p.vec[0] /= len;
+        p.vec[1] /= len;
+        p.vec[2] /= len;
+      }
+    }
+
+    const u0 = pairs[0].vec;
+    const u1 = pairs[1].vec;
+    let u2 = pairs[2].vec;
+
+    // Enforce right-handed coordinate system: u2 = u0 x u1
+    const cross: Vector3Tuple = [
+      u0[1] * u1[2] - u0[2] * u1[1],
+      u0[2] * u1[0] - u0[0] * u1[2],
+      u0[0] * u1[1] - u0[1] * u1[0]
+    ];
+    const dot = cross[0] * u2[0] + cross[1] * u2[1] + cross[2] * u2[2];
+    if (dot < 0) {
+      u2 = [-u2[0], -u2[1], -u2[2]];
+    }
+
+    return {
+      eigenvalues: [pairs[0].val, pairs[1].val, pairs[2].val],
+      eigenvectors: [u0, u1, u2]
+    };
+  }
+
+  /**
+   * Computes a tailored collision envelope (AABB, OBB, or Inflated Bumper) for the structure.
+   */
+  public computeCollisionEnvelope(options?: CollisionEnvelopeOptions): UniversalCollisionHull {
+    const mode = options?.mode || 'obb';
+    const margin = Math.max(0, options?.safetyMarginMeters ?? (mode === 'inflated_bumper' ? 1.5 : 0));
+    const v = this.mesh.vertices;
+
+    if (!v || v.length < 9 || mode === 'aabb') {
+      const bbox = this.boundingBox || Universal3DStructureFoundation.computeBoundingBox(this.mesh);
+      const hx = (bbox.extents[0] / 2) + margin;
+      const hy = (bbox.extents[1] / 2) + margin;
+      const hz = (bbox.extents[2] / 2) + margin;
+      const center = bbox.center;
+
+      const corners: Vector3Tuple[] = [
+        [center[0] - hx, center[1] - hy, center[2] - hz],
+        [center[0] + hx, center[1] - hy, center[2] - hz],
+        [center[0] + hx, center[1] + hy, center[2] - hz],
+        [center[0] - hx, center[1] + hy, center[2] - hz],
+        [center[0] - hx, center[1] - hy, center[2] + hz],
+        [center[0] + hx, center[1] - hy, center[2] + hz],
+        [center[0] + hx, center[1] + hy, center[2] + hz],
+        [center[0] - hx, center[1] + hy, center[2] + hz]
+      ];
+
+      return {
+        type: mode === 'inflated_bumper' ? 'inflated_bumper' : 'box',
+        center,
+        dimensions: [hx * 2, hy * 2, hz * 2],
+        radius: Math.hypot(hx, hy, hz),
+        safetyMarginMeters: margin,
+        axes: [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1]
+        ],
+        rotationMatrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        convexVertices: corners,
+        indices: [
+          0, 2, 1, 0, 3, 2,
+          4, 5, 6, 4, 6, 7,
+          0, 1, 5, 0, 5, 4,
+          2, 3, 7, 2, 7, 6,
+          0, 4, 7, 0, 7, 3,
+          1, 2, 6, 1, 6, 5
+        ]
+      };
+    }
+
+    // OBB / PCA Mode
+    const N = v.length / 3;
+    let meanX = 0, meanY = 0, meanZ = 0;
+    for (let i = 0; i < v.length; i += 3) {
+      meanX += v[i];
+      meanY += v[i + 1];
+      meanZ += v[i + 2];
+    }
+    meanX /= N;
+    meanY /= N;
+    meanZ /= N;
+
+    let c00 = 0, c01 = 0, c02 = 0;
+    let c11 = 0, c12 = 0, c22 = 0;
+
+    for (let i = 0; i < v.length; i += 3) {
+      const dx = v[i] - meanX;
+      const dy = v[i + 1] - meanY;
+      const dz = v[i + 2] - meanZ;
+      c00 += dx * dx;
+      c01 += dx * dy;
+      c02 += dx * dz;
+      c11 += dy * dy;
+      c12 += dy * dz;
+      c22 += dz * dz;
+    }
+
+    const cov = [
+      [c00 / N, c01 / N, c02 / N],
+      [c01 / N, c11 / N, c12 / N],
+      [c02 / N, c12 / N, c22 / N]
+    ];
+
+    const { eigenvectors } = Universal3DStructureFoundation.jacobiEigen3x3(cov);
+    const [u0, u1, u2] = eigenvectors;
+
+    let min0 = Infinity, max0 = -Infinity;
+    let min1 = Infinity, max1 = -Infinity;
+    let min2 = Infinity, max2 = -Infinity;
+
+    for (let i = 0; i < v.length; i += 3) {
+      const x = v[i], y = v[i + 1], z = v[i + 2];
+      const d0 = x * u0[0] + y * u0[1] + z * u0[2];
+      const d1 = x * u1[0] + y * u1[1] + z * u1[2];
+      const d2 = x * u2[0] + y * u2[1] + z * u2[2];
+
+      if (d0 < min0) min0 = d0;
+      if (d0 > max0) max0 = d0;
+      if (d1 < min1) min1 = d1;
+      if (d1 > max1) max1 = d1;
+      if (d2 < min2) min2 = d2;
+      if (d2 > max2) max2 = d2;
+    }
+
+    const mid0 = (min0 + max0) / 2;
+    const mid1 = (min1 + max1) / 2;
+    const mid2 = (min2 + max2) / 2;
+
+    const center: Vector3Tuple = [
+      mid0 * u0[0] + mid1 * u1[0] + mid2 * u2[0],
+      mid0 * u0[1] + mid1 * u1[1] + mid2 * u2[1],
+      mid0 * u0[2] + mid1 * u1[2] + mid2 * u2[2]
+    ];
+
+    const h0 = (max0 - min0) / 2 + margin;
+    const h1 = (max1 - min1) / 2 + margin;
+    const h2 = (max2 - min2) / 2 + margin;
+
+    const signs: [number, number, number][] = [
+      [-1, -1, -1],
+      [ 1, -1, -1],
+      [ 1,  1, -1],
+      [-1,  1, -1],
+      [-1, -1,  1],
+      [ 1, -1,  1],
+      [ 1,  1,  1],
+      [-1,  1,  1]
+    ];
+
+    const corners: Vector3Tuple[] = signs.map(([s0, s1, s2]) => [
+      center[0] + s0 * h0 * u0[0] + s1 * h1 * u1[0] + s2 * h2 * u2[0],
+      center[1] + s0 * h0 * u0[1] + s1 * h1 * u1[1] + s2 * h2 * u2[1],
+      center[2] + s0 * h0 * u0[2] + s1 * h1 * u1[2] + s2 * h2 * u2[2]
+    ]);
+
+    const rotMatrix: [number, number, number, number, number, number, number, number, number] = [
+      u0[0], u1[0], u2[0],
+      u0[1], u1[1], u2[1],
+      u0[2], u1[2], u2[2]
+    ];
+
+    return {
+      type: mode === 'inflated_bumper' ? 'inflated_bumper' : (mode === 'convex_hull' ? 'convex_hull' : 'obb'),
+      center,
+      dimensions: [h0 * 2, h1 * 2, h2 * 2],
+      radius: Math.hypot(h0, h1, h2),
+      safetyMarginMeters: margin,
+      axes: [u0, u1, u2],
+      rotationMatrix: rotMatrix,
+      convexVertices: corners,
+      indices: [
+        0, 2, 1, 0, 3, 2,
+        4, 5, 6, 4, 6, 7,
+        0, 1, 5, 0, 5, 4,
+        2, 3, 7, 2, 7, 6,
+        0, 4, 7, 0, 7, 3,
+        1, 2, 6, 1, 6, 5
+      ]
+    };
+  }
+
+  /**
+   * Serializes a collision hull to Wavefront OBJ format for 3D inspection.
+   */
+  public static collisionHullToObj(hull: UniversalCollisionHull): string {
+    const lines: string[] = [
+      `# Scratchbox IDE Collision Hull: ${hull.type}`,
+      `# Center: ${hull.center.join(', ')}`,
+      `# Dimensions: ${hull.dimensions.join(', ')}`,
+      `# Safety Margin: ${hull.safetyMarginMeters || 0}m`
+    ];
+
+    if (hull.convexVertices && hull.convexVertices.length > 0) {
+      for (const pt of hull.convexVertices) {
+        lines.push(`v ${pt[0].toFixed(4)} ${pt[1].toFixed(4)} ${pt[2].toFixed(4)}`);
+      }
+      if (hull.indices && hull.indices.length > 0) {
+        for (let i = 0; i < hull.indices.length; i += 3) {
+          lines.push(`f ${hull.indices[i] + 1} ${hull.indices[i + 1] + 1} ${hull.indices[i + 2] + 1}`);
+        }
+      }
+    }
+
+    return lines.join('\n') + '\n';
+  }
+
+  /**
    * Factory: Create structure from procedural geometry.
    */
   public static createFromProcedural(
@@ -142,6 +808,10 @@ export class Universal3DStructureFoundation {
       numViews?: number;
       pointDensity?: number;
       anchor?: GeodeticAnchor;
+      materialPreset?: MaterialPresetName;
+      material?: UniversalPbrMaterial;
+      synthesizePbrTextures?: boolean;
+      textureArchetype?: 'concrete' | 'brushed_metal' | 'marble' | 'wood' | 'hammered_copper' | 'chipped_paint';
     }
   ): Universal3DStructureFoundation {
     const scale = options?.scale ?? 1.0;
@@ -166,15 +836,61 @@ export class Universal3DStructureFoundation {
       radius: bbox.boundingSphereRadius * 2.5
     });
 
-    return new Universal3DStructureFoundation({
+    // 5. Material & Textures
+    const materials: UniversalPbrMaterial[] = [];
+    const textures: UniversalTextureMap[] = [];
+
+    let mat: UniversalPbrMaterial;
+    if (options?.material) {
+      mat = { ...options.material };
+    } else if (options?.materialPreset) {
+      mat = Universal3DStructureFoundation.getMaterialPreset(options.materialPreset);
+    } else {
+      mat = Universal3DStructureFoundation.createDefaultPbrMaterial();
+    }
+
+    if (options?.synthesizePbrTextures) {
+      const arch = options.textureArchetype || (
+        options.materialPreset === 'oak' ? 'wood'
+        : options.materialPreset === 'basalt' ? 'concrete'
+        : (options.materialPreset === 'titanium' || options.materialPreset === 'chrome' || options.materialPreset === 'gold') ? 'brushed_metal'
+        : 'concrete'
+      );
+      const pbrSet = synthesizeProceduralPbr(arch, 256, 256);
+      const albedoId = `tex_albedo_${shape}`;
+      const normalId = `tex_normal_${shape}`;
+      const ormId = `tex_orm_${shape}`;
+
+      textures.push(
+        { id: albedoId, type: 'albedo', width: 256, height: 256, channels: 4, buffer: pbrSet.albedoPng, mimeType: 'image/png' },
+        { id: normalId, type: 'normal', width: 256, height: 256, channels: 4, buffer: pbrSet.normalPng, mimeType: 'image/png' },
+        { id: ormId, type: 'metallicRoughness', width: 256, height: 256, channels: 4, buffer: pbrSet.ormPng, mimeType: 'image/png' }
+      );
+
+      mat.baseColorTextureId = albedoId;
+      mat.normalTextureId = normalId;
+      mat.metallicRoughnessTextureId = ormId;
+    }
+    materials.push(mat);
+
+    const foundation = new Universal3DStructureFoundation({
       name: options?.name || `Procedural_${shape.toUpperCase()}`,
       anchor: options?.anchor,
       mesh,
+      materials,
+      textures,
       points,
       cameras,
       boundingBox: bbox,
       tags: ['procedural', shape, 'canonical-anchor']
     });
+
+    // If custom material or textures present, synchronize surface points
+    if (options?.materialPreset || options?.material || options?.synthesizePbrTextures) {
+      foundation.resynchronizePoints(pointDensity);
+    }
+
+    return foundation;
   }
 
   /**
@@ -193,6 +909,23 @@ export class Universal3DStructureFoundation {
         cx - s, cy - s, cz + s,  cx + s, cy - s, cz + s,  cx + s, cy + s, cz + s,  cx - s, cy + s, cz + s,
         cx - s, cy - s, cz - s,  cx - s, cy + s, cz - s,  cx + s, cy + s, cz - s,  cx + s, cy - s, cz - s
       ];
+      // 8 UV coordinates
+      const rawUvs = [
+        0, 0,  1, 0,  1, 1,  0, 1,
+        0, 0,  0, 1,  1, 1,  1, 0
+      ];
+      // 8 vertex normals
+      const invSqrt3 = 1.0 / Math.sqrt(3);
+      const rawNormals = [
+        -invSqrt3, -invSqrt3,  invSqrt3,
+         invSqrt3, -invSqrt3,  invSqrt3,
+         invSqrt3,  invSqrt3,  invSqrt3,
+        -invSqrt3,  invSqrt3,  invSqrt3,
+        -invSqrt3, -invSqrt3, -invSqrt3,
+        -invSqrt3,  invSqrt3, -invSqrt3,
+         invSqrt3,  invSqrt3, -invSqrt3,
+         invSqrt3, -invSqrt3, -invSqrt3
+      ];
       // 12 triangles (36 indices)
       const rawIndices = [
         0, 1, 2,  0, 2, 3, // front
@@ -205,6 +938,8 @@ export class Universal3DStructureFoundation {
       return {
         vertices: new Float32Array(rawVerts),
         indices: new Uint32Array(rawIndices),
+        normals: new Float32Array(rawNormals),
+        uvs: new Float32Array(rawUvs),
         triangleCount: 12,
         vertexCount: 8
       };
@@ -216,20 +951,24 @@ export class Universal3DStructureFoundation {
     const vertices: number[] = [];
     const indices: number[] = [];
     const normals: number[] = [];
+    const uvs: number[] = [];
 
     if (shape === 'sphere') {
       for (let j = 0; j <= vSegs; j++) {
         const theta = (j * Math.PI) / vSegs;
         const sinTheta = Math.sin(theta);
         const cosTheta = Math.cos(theta);
+        const v = j / vSegs;
 
         for (let i = 0; i <= uSegs; i++) {
           const phi = (i * 2 * Math.PI) / uSegs;
+          const u = i / uSegs;
           const x = Math.cos(phi) * sinTheta;
           const y = cosTheta;
           const z = Math.sin(phi) * sinTheta;
 
           normals.push(x, y, z);
+          uvs.push(u, v);
           vertices.push(center[0] + x * scale, center[1] + y * scale, center[2] + z * scale);
         }
       }
@@ -246,12 +985,15 @@ export class Universal3DStructureFoundation {
       // Cylinder default
       const height = scale * 2;
       for (let j = 0; j <= vSegs; j++) {
-        const y = (j / vSegs - 0.5) * height;
+        const v = j / vSegs;
+        const y = (v - 0.5) * height;
         for (let i = 0; i <= uSegs; i++) {
+          const u = i / uSegs;
           const phi = (i * 2 * Math.PI) / uSegs;
           const x = Math.cos(phi);
           const z = Math.sin(phi);
           normals.push(x, 0, z);
+          uvs.push(u, v);
           vertices.push(center[0] + x * scale, center[1] + y, center[2] + z * scale);
         }
       }
@@ -269,6 +1011,7 @@ export class Universal3DStructureFoundation {
       vertices: new Float32Array(vertices),
       indices: new Uint32Array(indices),
       normals: new Float32Array(normals),
+      uvs: new Float32Array(uvs),
       triangleCount: indices.length / 3,
       vertexCount: vertices.length / 3
     };
@@ -337,7 +1080,10 @@ export class Universal3DStructureFoundation {
   /**
    * Adapter 4: Simplified Collision Hull & Navigation Bounds
    */
-  public toCollisionHull(): UniversalCollisionHull {
+  public toCollisionHull(options?: CollisionEnvelopeOptions): UniversalCollisionHull {
+    if (options) {
+      return this.computeCollisionEnvelope(options);
+    }
     return this.collisionHull;
   }
 
@@ -475,11 +1221,11 @@ export class Universal3DStructureFoundation {
   /**
    * Export all formats at once.
    */
-  public exportAll(): MultiFormatExportResult {
+  public exportAll(options?: { collisionOptions?: CollisionEnvelopeOptions }): MultiFormatExportResult {
     const colmap = this.toColmap();
     const nerfstudio = this.toNerfstudio();
     const videoBlockout = this.toVideoCameraBlockout();
-    const collisionHull = this.toCollisionHull();
+    const collisionHull = this.toCollisionHull(options?.collisionOptions);
     const geoJson = this.toGeoJson();
     const glbBuffer = this.toGlbBuffer();
 
@@ -501,14 +1247,15 @@ export class Universal3DStructureFoundation {
    */
   public async exportToDisk(
     outputDir: string,
-    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'geojson']
+    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson'],
+    options?: { collisionOptions?: CollisionEnvelopeOptions }
   ): Promise<MultiFormatExportResult> {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
     const filesWritten: Record<string, string> = {};
-    const result = this.exportAll();
+    const result = this.exportAll(options);
 
     if (formats.includes('glb')) {
       const glbPath = path.join(outputDir, `${this.name}.glb`);
@@ -543,6 +1290,15 @@ export class Universal3DStructureFoundation {
       const blockoutPath = path.join(outputDir, `${this.name}_video_blockout.json`);
       fs.writeFileSync(blockoutPath, JSON.stringify(result.videoBlockout, null, 2), 'utf8');
       filesWritten.videoBlockout = blockoutPath;
+    }
+
+    if (formats.includes('collision_hull') && result.collisionHull) {
+      const hullJsonPath = path.join(outputDir, `${this.name}_collision_hull.json`);
+      const hullObjPath = path.join(outputDir, `${this.name}_collision_hull.obj`);
+      fs.writeFileSync(hullJsonPath, JSON.stringify(result.collisionHull, null, 2), 'utf8');
+      fs.writeFileSync(hullObjPath, Universal3DStructureFoundation.collisionHullToObj(result.collisionHull), 'utf8');
+      filesWritten.collisionHullJson = hullJsonPath;
+      filesWritten.collisionHullObj = hullObjPath;
     }
 
     if (formats.includes('geojson')) {

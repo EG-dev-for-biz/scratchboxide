@@ -633,7 +633,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 )}
 
                 {/* High-Fidelity Multimedia & Maps Grounding Cards */}
-                {(msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (
+                {!isUser && (msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (
                     <ImageGeneratedCard imageContent={msg.imageContent} imagesContent={msg.imagesContent} />
                 )}
                 {msg.textureMatrixContent && (

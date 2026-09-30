@@ -47,8 +47,10 @@ describe('Universal3DStructureFoundation', () => {
     expect(bbox.boundingSphereRadius).toBeGreaterThan(0);
 
     const hull = struct.collisionHull;
-    expect(hull.type).toBe('box');
+    expect(hull.type).toBe('obb');
     expect(hull.dimensions[0]).toBeCloseTo(4.0, 1);
+    expect(hull.convexVertices?.length).toBe(8);
+    expect(hull.indices?.length).toBe(36);
   });
 
   it('projects canonical structure into COLMAP format', () => {
@@ -185,5 +187,103 @@ describe('Universal3DStructureFoundation', () => {
     const savedBlockout = JSON.parse(fs.readFileSync(result.filesWritten!.videoBlockout, 'utf8'));
     expect(savedBlockout.videoRef).toBe('<VIDEO_REF_0>');
     expect(savedBlockout.frames.length).toBe(12);
+  });
+
+  it('computes tight Oriented Bounding Box (OBB) via PCA on rotated 3D geometry', () => {
+    // Construct a long thin bar (10m x 2m x 2m) rotated by 45 degrees in XZ
+    const angle = Math.PI / 4;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const rawBox = Universal3DStructureFoundation.createFromProcedural('box', {
+      scale: 1.0
+    });
+    // Scale box to [10, 2, 2] and rotate 45 deg around Y
+    const origVerts = rawBox.mesh.vertices;
+    const rotatedVerts = new Float32Array(origVerts.length);
+    for (let i = 0; i < origVerts.length; i += 3) {
+      const x = origVerts[i] * 5.0; // half length 5
+      const y = origVerts[i + 1] * 1.0;
+      const z = origVerts[i + 2] * 1.0;
+      rotatedVerts[i] = cos * x - sin * z;
+      rotatedVerts[i + 1] = y;
+      rotatedVerts[i + 2] = sin * x + cos * z;
+    }
+
+    const rotatedStruct = new Universal3DStructureFoundation({
+      name: 'RotatedDiagonalBuilding',
+      mesh: {
+        vertices: rotatedVerts,
+        indices: rawBox.mesh.indices,
+        vertexCount: rawBox.mesh.vertexCount,
+        triangleCount: rawBox.mesh.triangleCount
+      }
+    });
+
+    const obb = rotatedStruct.computeCollisionEnvelope({ mode: 'obb' });
+    const aabb = rotatedStruct.computeCollisionEnvelope({ mode: 'aabb' });
+
+    expect(obb.type).toBe('obb');
+    expect(aabb.type).toBe('box');
+
+    // OBB should capture the true dimensions ~[10, 2, 2]
+    const sortedDims = [...obb.dimensions].sort((a, b) => b - a);
+    expect(sortedDims[0]).toBeCloseTo(10.0, 1);
+    expect(sortedDims[1]).toBeCloseTo(2.0, 1);
+    expect(sortedDims[2]).toBeCloseTo(2.0, 1);
+
+    // OBB volume should be substantially smaller than AABB volume (no diagonal wasted space)
+    const obbVol = obb.dimensions[0] * obb.dimensions[1] * obb.dimensions[2];
+    const aabbVol = aabb.dimensions[0] * aabb.dimensions[1] * aabb.dimensions[2];
+    expect(obbVol).toBeLessThan(aabbVol * 0.7); // At least 30% tighter!
+  });
+
+  it('computes Inflated Bumper with safety margin for camera flight and drone clearance', () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('box', {
+      scale: 2.0
+    });
+
+    const bumper = struct.computeCollisionEnvelope({
+      mode: 'inflated_bumper',
+      safetyMarginMeters: 2.5
+    });
+
+    expect(bumper.type).toBe('inflated_bumper');
+    expect(bumper.safetyMarginMeters).toBe(2.5);
+    // Base box scale 2.0 has dimensions [4, 4, 4]. Inflated with 2.5m bumper adds 5.0m to each dimension -> [9, 9, 9]
+    expect(bumper.dimensions[0]).toBeCloseTo(9.0, 1);
+    expect(bumper.dimensions[1]).toBeCloseTo(9.0, 1);
+    expect(bumper.dimensions[2]).toBeCloseTo(9.0, 1);
+  });
+
+  it('exports collision hull as both JSON and Wavefront OBJ (.obj) to disk', async () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('box', {
+      name: 'CollisionExportTest',
+      scale: 1.5
+    });
+
+    const outDir = path.join(tempDir, 'collision_export_run');
+    const result = await struct.exportToDisk(outDir, ['collision_hull'], {
+      collisionOptions: { mode: 'inflated_bumper', safetyMarginMeters: 1.0 }
+    });
+
+    expect(result.filesWritten!.collisionHullJson).toBeDefined();
+    expect(result.filesWritten!.collisionHullObj).toBeDefined();
+    expect(fs.existsSync(result.filesWritten!.collisionHullJson)).toBe(true);
+    expect(fs.existsSync(result.filesWritten!.collisionHullObj)).toBe(true);
+
+    const jsonContent = JSON.parse(fs.readFileSync(result.filesWritten!.collisionHullJson, 'utf8'));
+    expect(jsonContent.type).toBe('inflated_bumper');
+    expect(jsonContent.safetyMarginMeters).toBe(1.0);
+    expect(jsonContent.convexVertices.length).toBe(8);
+
+    const objContent = fs.readFileSync(result.filesWritten!.collisionHullObj, 'utf8');
+    expect(objContent).toContain('# Scratchbox IDE Collision Hull: inflated_bumper');
+    expect(objContent).toContain('v ');
+    expect(objContent).toContain('f ');
+    // 8 vertices and 12 triangular faces
+    const vCount = objContent.split('\n').filter(l => l.startsWith('v ')).length;
+    const fCount = objContent.split('\n').filter(l => l.startsWith('f ')).length;
+    expect(vCount).toBe(8);
+    expect(fCount).toBe(12);
   });
 });

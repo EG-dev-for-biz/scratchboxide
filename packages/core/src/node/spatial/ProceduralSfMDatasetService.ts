@@ -48,6 +48,9 @@ export interface ProceduralPoint3D {
   color: [number, number, number]; // [0, 255] RGB integers
   error: number;
   visibleCameraIds?: number[];
+  roughness?: number; // [0, 1] PBR physical roughness
+  metallic?: number;  // [0, 1] PBR physical metallicity
+  uv?: [number, number]; // [u, v] surface coordinates
 }
 
 export interface ProceduralDatasetOptions {
