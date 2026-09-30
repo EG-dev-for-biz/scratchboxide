@@ -2626,7 +2626,7 @@ export function parseOrSynthesizeArtifact(
                 const isMediaRequest = isImageRequest || isVideoRequest;
 
                 const is3DActive = request.activeArtifact?.type === '3d-scene';
-                const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|god\s*ray|crepuscular|light\s*shaft|contrail|control\s*surface|aileron|elevator|rudder|biome|terrain|atmosphere|scattering|shader/i.test(prompt) ||
+                const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|god\s*ray|crepuscular|light\s*shaft|contrail|control\s*surface|aileron|elevator|rudder|biome|terrain|atmosphere|scattering|shader|mesh|geometry|object|material|color|texture|roughness|metalness|preset|scale|rotate|translate|position|move|taller|wider|bigger|smaller|add|remove|clear|reset|sculpt|subdivide|bevel|extrude|torus|cylinder|box|sphere|emitter|chassis/i.test(prompt) ||
                     prompt.toLowerCase().includes('animate') || prompt.toLowerCase().includes('fly') || prompt.toLowerCase().includes('play') || prompt.toLowerCase().includes('orbit') || prompt.toLowerCase().includes('motion') || prompt.toLowerCase().includes('takeoff');
 
                 const isSandboxOrAppRequest = !isVideoTimelineRequest && !isMediaRequest && (!is3DActive || !is3DFollowUpKeywords) && (/preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator/i.test(prompt));
@@ -2664,11 +2664,12 @@ export function parseOrSynthesizeArtifact(
                     
                     const isAnimateOnly = is3DFollowUp && !/new|change|build|create|switch/i.test(prompt) && /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff/i.test(prompt);
 
-                    const isTopicChange = !isAnimateOnly && (
-                        /build|make|create|generate|new\s+scene|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt) ||
-                        (parsed.title && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(parsed.title)) ||
-                        (active3DData && !/car|vehicle|automobile|truck|sports\s*car|sedan/i.test(active3DData.title || '') && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt))
-                    );
+                    // Guarded Conversational Delta-Editing:
+                    // Never wipe the user's manual adjustments or scene meshes unless explicit destruction is commanded.
+                    const isExplicitDestruction = /\b(?:clear\s*scene|reset\s*scene|start\s*over|rebuild\s*from\s*scratch|wipe\s*(?:all|scene)|delete\s*all)\b/i.test(prompt);
+                    const isExplicitNewScene = /\b(?:new\s*scene|different\s*scene|from\s*scratch|completely\s*new)\b/i.test(prompt);
+                    const isVehicleSwitch = !!(active3DData && !/car|vehicle|automobile|truck|sports\s*car|sedan/i.test(active3DData.title || '') && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt));
+                    const isTopicChange = !is3DFollowUp || isExplicitDestruction || isExplicitNewScene || isVehicleSwitch;
 
                     // Synthesize procedural scene baseline based on prompt & active context
                     const docContent = request.activeArtifact?.type === 'markdown-document'
@@ -2771,19 +2772,44 @@ export function parseOrSynthesizeArtifact(
                         features: effectiveFeatures,
                         customMeshes: (() => {
                             if (data?.customMeshes && Array.isArray(data.customMeshes) && data.customMeshes.length > 0) {
-                                if (!isTopicChange && active3DData?.customMeshes && active3DData.customMeshes.length > 0) {
+                                if (!isExplicitDestruction && active3DData?.customMeshes && active3DData.customMeshes.length > 0) {
                                     const map = new Map<string, CustomMesh>();
-                                    active3DData.customMeshes.forEach(m => map.set(m.id, m));
-                                    (data.customMeshes as CustomMesh[]).forEach(m => map.set(m.id, m));
+                                    // Start with existing active meshes (preserving user gizmo transforms/edits)
+                                    active3DData.customMeshes.forEach(m => map.set(m.id, { ...m }));
+                                    // Non-destructive merge with incoming delta meshes
+                                    (data.customMeshes as CustomMesh[]).forEach(m => {
+                                        const existing = map.get(m.id);
+                                        if (existing) {
+                                            map.set(m.id, {
+                                                ...existing,
+                                                ...m,
+                                                position: m.position || existing.position,
+                                                rotation: m.rotation || existing.rotation,
+                                                scale: m.scale || existing.scale,
+                                                parentId: m.parentId ?? existing.parentId,
+                                                material: { ...(existing.material || {}), ...(m.material || {}) }
+                                            });
+                                        } else {
+                                            map.set(m.id, m);
+                                        }
+                                    });
                                     return Array.from(map.values());
                                 }
                                 return data.customMeshes;
                             }
-                            return isTopicChange ? contextualSynthesized.customMeshes : (active3DData?.customMeshes || contextualSynthesized.customMeshes);
+                            return isExplicitDestruction ? contextualSynthesized.customMeshes : (active3DData?.customMeshes || contextualSynthesized.customMeshes);
                         })(),
                         objects: isTopicChange ? (contextualSynthesized.objects || []) : (isExplicitFlight ? defaultObjects : (active3DData?.objects && active3DData.objects.length > 0 ? active3DData.objects : defaultObjects)),
-                        operatorStack: data?.operatorStack || (isTopicChange ? [] : active3DData?.operatorStack) || [],
-                        actionLog: data?.actionLog || (isTopicChange ? [] : active3DData?.actionLog) || [],
+                        operatorStack: isExplicitDestruction
+                            ? []
+                            : (data?.operatorStack && data.operatorStack.length > 0
+                                ? [...(active3DData?.operatorStack || []), ...data.operatorStack]
+                                : (active3DData?.operatorStack || [])),
+                        actionLog: isExplicitDestruction
+                            ? []
+                            : (data?.actionLog && data.actionLog.length > 0
+                                ? [...(active3DData?.actionLog || []), ...data.actionLog]
+                                : (active3DData?.actionLog || [])),
                         sculptSettings: data?.sculptSettings || (isTopicChange ? undefined : active3DData?.sculptSettings),
                         selectedMeshId: data?.selectedMeshId || (isTopicChange ? undefined : active3DData?.selectedMeshId),
                         wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || contextualSynthesized.wasmPhysics,

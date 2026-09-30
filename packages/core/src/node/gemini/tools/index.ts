@@ -21,6 +21,7 @@ export * from './algorithmic-uv-tools';
 export * from './adaptive-matchmove-tools';
 export * from './botanical-tree-tools';
 export * from './lighting-tools';
+export * from './universal-3d-structure-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -72,6 +73,10 @@ import {
     LIGHTING_TOOL_DECLARATIONS,
     lightingHandlers
 } from './lighting-tools';
+import {
+    UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
+    universal3DStructureHandlers
+} from './universal-3d-structure-tools';
 
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
@@ -80,6 +85,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
     ...UTDRA_TOOL_DECLARATIONS,
+    ...UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
     ...ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS,
     ...VFX_VIDEO_TOOL_DECLARATIONS,
     ...NANO_BANANA_TOOL_DECLARATIONS,
@@ -105,6 +111,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...google3DTilesHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
+    ...universal3DStructureHandlers,
     ...adaptiveMatchmoveHandlers,
     ...vfxVideoHandlers,
     ...nanoBananaHandlers,

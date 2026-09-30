@@ -36,6 +36,7 @@ Activate this skill whenever a user or workflow asks to:
    4. Collision Envelope        ──► [Physics / Obstacle Avoidance / NavMesh]
    5. WGS-84 GPS Anchor         ──► [Google Maps / GIS / Real-World Alignment]
    6. PBR Materials & Textures  ──► [Khronos glTF PBR Metallic-Roughness / Biophysical Fields]
+   7. Continuous Animation      ──► [glTF 2.0 Animations / VFX Camera Solve / NLE Video Timeline]
 ```
 
 ### The Cardinal Rule: Project Outward, Never Daisy-Chain
@@ -43,6 +44,7 @@ Activate this skill whenever a user or workflow asks to:
 - **NEVER** reverse-engineer camera flight paths from flat 2D AI videos.
 - **ALWAYS** anchor the ground truth in `Universal3DStructureFoundation`, and project outward deterministically via the built-in adapters.
 - **ALWAYS** keep the surface point constellation (`points`) synchronized with PBR materials and texture maps via `resynchronizePoints()`, ensuring point seeds for 3DGS reflect authentic albedo, roughness, and metallicity.
+- **NEVER** use preset structures (such as `sceneType` enums or keyword regexes) as a generation guide. Always honor structured types (`customMeshes`, `cppGenerator`, `objects`, `geoAnchor`, `splat`, `customScript`) with absolute precedence, and use Adaptive Domain Architecture (`AdaptiveDomainEngine.synthesizeAdaptive3DScene`) for procedural generation.
 
 ---
 
@@ -91,7 +93,24 @@ const geoJson = structure.toGeoJson();
 const [r, g, b] = structure.sampleAlbedoAtUv(0.5, 0.5); // [0, 255] RGB
 const { occlusion, roughness, metallic } = structure.sampleOrmAtUv(0.5, 0.5); // [0, 1] normalized
 
-// H. Resynchronize surface points to reflect updated PBR materials/textures
+// H. Continuous Animation: glTF 2.0 binary animations & VFX CameraSolveTrack
+structure.addAnimation({
+  id: 'arc-cam',
+  name: 'Hero Camera Arc',
+  durationSeconds: 4.0,
+  fps: 24,
+  tracks: [
+    { id: 't-pos', name: 'Position', targetNodeId: 'camera', property: 'translation', interpolation: 'linear', keyframes: [{ timeSeconds: 0, value: [0, 5, 10] }, { timeSeconds: 4, value: [10, 5, 0] }] }
+  ]
+});
+const solveTrack = structure.toCameraSolveTrack(); // VFX Plate Matchmove CameraSolveTrack
+const animatedGlb = structure.toGlbBuffer({ includeAnimations: true }); // Standard glTF 2.0 with embedded animation samplers
+
+// I. Bridge to Video Timeline NLE: Convert clip into TimelineElement with keyframe diamonds
+import { toTimelineElement } from '@scratchbox/core';
+const timelineClip = toTimelineElement(structure.animations[0], { startTime: 2.0 });
+
+// J. Resynchronize surface points to reflect updated PBR materials/textures
 structure.resynchronizePoints(); // points receive exact surface albedo, roughness, and metallicity
 ```
 

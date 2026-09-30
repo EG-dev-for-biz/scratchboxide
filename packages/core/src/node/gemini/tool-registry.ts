@@ -67,6 +67,8 @@ import {
     tapir4dgsHandlers,
     AVATAR_4DGS_TOOL_DECLARATIONS,
     avatar4dgsHandlers,
+    UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
+    universal3DStructureHandlers,
     COMFYUI_TOOL_DECLARATIONS,
     comfyuiHandlers,
     LENS_TOOL_DECLARATIONS,
@@ -135,6 +137,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('lighting_')) return `Lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('universal_3d_structure_')) return `Universal 3D: ${name.replace('universal_3d_structure_', '').replace(/_/g, ' ')}`;
             return `Workspace: ${name}`;
         },
         stepTitle: name => {
@@ -153,6 +156,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('lighting_')) return `Compute photometric lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Refine building structure with Archie: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `Classify terrain materials with SB-Terrain: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
+            if (name.startsWith('universal_3d_structure_')) return `Universal 3D Structure Foundation: ${name.replace('universal_3d_structure_', '').replace(/_/g, ' ')}`;
             return `Invoke ${name}`;
         },
         durationMs: { completed: 25, failed: 25 },
@@ -556,6 +560,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of AVATAR_4DGS_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, avatar4dgsHandlers[decl.name], 'workspace');
+    }
+    for (const decl of UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, universal3DStructureHandlers[decl.name], 'workspace');
     }
     for (const decl of COMFYUI_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, comfyuiHandlers[decl.name], 'comfyui');

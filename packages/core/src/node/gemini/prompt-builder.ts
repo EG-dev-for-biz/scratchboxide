@@ -342,7 +342,7 @@ Output complete, high-quality, fully runnable React 19 code with Tailwind CSS, L
 /**
  * Construct rich system instruction injecting Canvas Primitives, active Superpowers, and schemas.
  */
-export async function buildSystemInstruction(request: GeminiGenerateRequest, services: PromptContextServices): Promise<string> {
+export async function buildSystemInstruction(request: GeminiGenerateRequest, services: Partial<PromptContextServices> = {}): Promise<string> {
     const isAgent = request.mode === 'agent';
     const isPlan = request.mode === 'plan';
     const isAsk = request.mode === 'ask';
@@ -434,7 +434,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     }
 
     let contextGraphSection = '';
-    if (request.enableSemanticGraph !== false) {
+    if (request.enableSemanticGraph !== false && services.contextGraph) {
         try {
             const symResult = services.contextGraph.retrieveSymbolGraph({
                 query: request.prompt,
@@ -474,7 +474,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     }
 
     let lspDiagnosticSection = '';
-    if (request.enableLspDiagnostics !== false) {
+    if (request.enableLspDiagnostics !== false && services.lsp) {
         try {
             const diagPrompt = services.lsp.synthesizeDiagnosticFixPrompt(request.targetFiles);
             if (diagPrompt && (diagPrompt.errorCount > 0 || diagPrompt.warningCount > 0)) {
@@ -489,7 +489,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     }
 
     let diffMemorySection = '';
-    if (request.enableDiffMemory !== false) {
+    if (request.enableDiffMemory !== false && services.diffMemory) {
         try {
             const diffContext = services.diffMemory.buildDiffMemoryPromptContext({ maxTurns: 5 });
             if (diffContext && diffContext.fullPromptSection && (diffContext.recentTurnsSummary || diffContext.uncommittedChangesSummary)) {
@@ -501,10 +501,12 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
     }
 
     let memoriesSection = '';
-    try {
-        memoriesSection = await services.memories.buildPromptInjectionText();
-    } catch (err) {
-        // Ignore memory injection errors safely
+    if (services.memories) {
+        try {
+            memoriesSection = await services.memories.buildPromptInjectionText();
+        } catch (err) {
+            // Ignore memory injection errors safely
+        }
     }
 
     let workspaceToolsSection = '';
@@ -557,6 +559,10 @@ Available workspace tools:
 - spatial_closed_loop_edge_align / geobox_closed_loop_edge_align: Closed-loop iterative sub-pixel edge alignment driving dynamic offscreen headless software renders to achieve 100% edge overlap (< 0.1 px residual).
 - geobox_harmonize_location_lighting: Harmonize 3D photogrammetric location tiles with photograph lighting, stone albedo calibration (travertine, limestone, etc.), GLSL de-lighting shaders (shadow lift, highlight compression), dusk atmosphere, and interior window fixtures.
 - atmosphere_harmonize_location_3d: High-level atmospheric alias for physical de-lighting, twilight sky irradiance, ground bounce, and architectural portal backlighting for real-world 3D objects.
+- universal_3d_structure_create: Synthesize or initialize a canonical Universal 3D Structure Foundation maintaining synchronized solid mesh geometry, surface point clouds for 3DGS, calibrated 6-DoF camera rigs, physics collision envelope (AABB, sphere, convex bumper hull), and WGS-84 real-world anchors.
+- universal_3d_structure_export: Deterministically project and export a Universal 3D Structure outward to binary glTF 2.0 (.glb), COLMAP, Nerfstudio (3DGS transforms.json + sparse_pcd.ply), video camera blockout (<VIDEO_REF_0>), physics collision hull, GeoJSON, or animation tracks.
+- universal_3d_structure_animate: Add continuous-time animation clips (seconds, sub-frame LERP/SLERP) to a 3D structure, compile binary glTF 2.0 animation samplers, and bridge directly to the Video Timeline NLE primitive with interactive keyframe diamond markers.
+- universal_3d_structure_get_collision_hull: Extract metric collision envelopes (AABB, bounding sphere, convex bumper hull) for physics simulation or drone obstacle avoidance.
 
 When requested to inspect, modify, build, or test code, prefer actively calling these workspace tools first. After executing tools and receiving tool responses, provide clear reasoning and report your progress.`;
     }
@@ -565,6 +571,7 @@ When requested to inspect, modify, build, or test code, prefer actively calling 
 When the user is attempting to accomplish something specific (especially 3D-related, VFX-related, or generative):
 1. **TIER 1 (Native App Capabilities First)**:
    - Always look through what Scratchbox IDE can natively do via coding, pipelines, attached skills, and Google models:
+     - **Universal 3D Structure & Continuous Animation**: Universal 3D Structure Foundation ('Universal3DStructureFoundation', 'universal_3d_structure_create', 'universal_3d_structure_export', 'universal_3d_structure_animate', 'universal_3d_structure_get_collision_hull'), single authoritative geometric anchor across solid meshes, 3DGS point constellations, 6-DoF camera rigs, physics collision envelopes (AABB, sphere, convex bumper hull), continuous-time animation tracks (sub-frame LERP/SLERP, glTF 2.0 animation chunk), and real-world WGS-84 coordinates. Deterministic outward projections (.toGlbBuffer, .toColmap, .toNerfstudio, .toVideoCameraBlockout, .toCollisionHull, .toGeoJson) and NLE Video Timeline unification ('toTimelineElement', keyframe diamond markers).
      - **Image Location & 6-DOF Resection**: GeoBox Precision Resection & Spatial Pose Estimation ('SpatialPoseEstimatorService', 'VisualFeatureMatcherService', 'HeadlessMeshSilhouetteRenderer', 'SubPixelEdgeAlignmentOptimizer', 'GeoBoxPrecisionResectionService', 'resectImageLocation', 'spatial_solve_pnp', 'spatial_match_features_2d_3d', 'spatial_closed_loop_edge_align', 'geobox_resect_image_location'), analytical solvePnP DLT + Levenberg-Marquardt pose resection from photographs, 2D-to-3D keypoint matching, pure Node.js headless mesh silhouette rendering, closed-loop sub-pixel edge alignment optimizer (100% overlap score, < 0.1 px residual), Brown-Conrady lens calibration, and Google Maps 3D Platform tiles configuration.
      - **Location 3D Object De-Lighting & Atmosphere**: Location Object Lighting ('LocationObjectLightingService', 'harmonizeLocationObjectAtmosphere', 'geobox_harmonize_location_lighting', 'atmosphere_harmonize_location_3d'), photogrammetric de-lighting GLSL shaders (shadow lift, highlight compression, stone albedo tint), atmospheric lighting presets, and architectural portal backlighting fixtures.
      - **3D & Atmospherics**: Primary path is C++20 via Scratchbox 3D engine ('#include "scratchbox_engine.hpp"'), Apple Clang (-std=c++20 -O3), SIMD math, SDFs, Marching Cubes, FastNoise3D, UTDRA / ULDRA Universal Tile Decomposition ('UniversalTileDecompositionService', 'utdra_decompose_tile', 'utdra_probe_tile'), streaming binary .glb, Google Photorealistic 3D Tiles, and physical 3D Atmospheric Scattering & Diurnal Lighting ('AtmosphereService', 'SkyDomeModule', 'TerrainCloudShadows', 'VolumetricGodRays', 'atmosphere_calculate_solar_position', 'atmosphere_get_diurnal_profile', 'atmosphere_configure_scene', direct dispatch operators 'sb_configure_atmospheric_scattering', 'sb_set_diurnal_time_of_day', 'sb_configure_aerial_perspective', 'sb_configure_terrain_cloud_shadows', 'sb_add_volumetric_god_rays'). Fall back to Three.js customScript/shaders if needed.

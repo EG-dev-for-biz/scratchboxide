@@ -25,6 +25,14 @@ import {
   PbrAlphaMode
 } from '../../common/spatial/universal-3d-structure-types';
 import {
+  UniversalAnimationClip,
+  UniversalAnimationTrack,
+  toCameraSolveTrack,
+  fromCameraSolveTrack,
+  fromVideoDiffusionCameraBlockout
+} from '../../common/spatial/universal-animation-types';
+import type { CameraSolveTrack } from '../../common/vfx-plate-protocol';
+import {
   ProceduralSfMDatasetService,
   ProceduralCameraPose,
   ProceduralPoint3D,
@@ -38,6 +46,8 @@ import {
   buildBabylonianZigguratStructure,
   buildAlpineMatterhornStructure
 } from './ComplexProcedural3DGenerator';
+import * as THREE from 'three';
+import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
 
 /**
  * Universal 3D Structure Foundation
@@ -63,6 +73,7 @@ export class Universal3DStructureFoundation {
   public readonly cameras: ProceduralCameraPose[];
   public readonly boundingBox: MetricBoundingBox;
   public readonly collisionHull: UniversalCollisionHull;
+  public animations: UniversalAnimationClip[];
   public readonly tags: string[];
   public readonly metadata: Record<string, any>;
 
@@ -85,8 +96,43 @@ export class Universal3DStructureFoundation {
     this.cameras = options.cameras || [];
     this.boundingBox = options.boundingBox || Universal3DStructureFoundation.computeBoundingBox(this.mesh);
     this.collisionHull = options.collisionHull || this.computeCollisionEnvelope({ mode: 'obb' });
+    this.animations = options.animations ? [...options.animations] : [];
     this.tags = options.tags || ['3d-structure', 'canonical-anchor'];
     this.metadata = options.metadata || {};
+  }
+
+  /**
+   * Adds an animation clip to this structure.
+   */
+  public addAnimation(clip: UniversalAnimationClip): void {
+    this.animations.push(clip);
+  }
+
+  /**
+   * Converts the structure's primary camera animation or camera poses into a standard CameraSolveTrack.
+   */
+  public toCameraSolveTrack(clipIndexOrName?: number | string): CameraSolveTrack | undefined {
+    let clip: UniversalAnimationClip | undefined;
+    if (typeof clipIndexOrName === 'number') {
+      clip = this.animations[clipIndexOrName];
+    } else if (typeof clipIndexOrName === 'string') {
+      clip = this.animations.find(c => c.id === clipIndexOrName || c.name === clipIndexOrName);
+    } else if (this.animations.length > 0) {
+      clip = this.animations.find(c => c.tracks.some(t => t.targetNodeId === 'camera' || t.property === 'translation')) || this.animations[0];
+    }
+
+    if (clip) {
+      return toCameraSolveTrack(clip, { id: `solve_${this.id}`, name: clip.name ? `${this.name} - ${clip.name}` : `${this.name} Camera Solve` });
+    }
+
+    // If no explicit clip exists but videoBlockout or cameras exist, construct clip from blockout
+    const blockout = this.toVideoCameraBlockout();
+    if (blockout && blockout.frames.length > 0) {
+      const derivedClip = fromVideoDiffusionCameraBlockout(blockout);
+      return toCameraSolveTrack(derivedClip, { id: `solve_${this.id}`, name: `${this.name} Camera Solve` });
+    }
+
+    return undefined;
   }
 
   /**
@@ -1157,7 +1203,7 @@ export class Universal3DStructureFoundation {
    * Full Khronos glTF 2.0 binary container with geometry attributes (POSITION, NORMAL,
    * TEXCOORD_0, COLOR_0, INDICES), PBR materials, samplers, and embedded textures.
    */
-  public toGlbBuffer(): Buffer {
+  public toGlbBuffer(options?: { includeAnimations?: boolean }): Buffer {
     const v = this.mesh.vertices;
     const chunks: Buffer[] = [];
     let totalBinLength = 0;
@@ -1402,11 +1448,154 @@ export class Universal3DStructureFoundation {
       primitive.material = 0;
     }
 
+    // 6. Universal Animation Tracks & Clips (glTF 2.0 Animations)
+    const includeAnim = options?.includeAnimations !== false;
+    const effectiveClips: UniversalAnimationClip[] = [];
+    if (includeAnim) {
+      if (this.animations.length > 0) {
+        effectiveClips.push(...this.animations);
+      } else {
+        const blockout = this.toVideoCameraBlockout();
+        if (blockout && blockout.frames.length > 0) {
+          effectiveClips.push(fromVideoDiffusionCameraBlockout(blockout));
+        }
+      }
+    }
+
+    const gltfAnimations: any[] = [];
+    let hasCameraNode = false;
+
+    for (const clip of effectiveClips) {
+      const channels: any[] = [];
+      const samplersList: any[] = [];
+
+      for (const track of clip.tracks) {
+        if (!track.keyframes || track.keyframes.length === 0) continue;
+        const sortedKfs = [...track.keyframes].sort((a, b) => a.timeSeconds - b.timeSeconds);
+
+        // a. INPUT timestamps buffer (SCALAR FLOAT)
+        const timeBuf = Buffer.alloc(sortedKfs.length * 4);
+        for (let k = 0; k < sortedKfs.length; k++) {
+          timeBuf.writeFloatLE(sortedKfs[k].timeSeconds, k * 4);
+        }
+        const timeChunk = appendChunk(timeBuf);
+        const bvTime = bufferViews.length;
+        bufferViews.push({
+          buffer: 0,
+          byteOffset: timeChunk.byteOffset,
+          byteLength: timeChunk.byteLength
+        });
+        const accTime = accessors.length;
+        accessors.push({
+          bufferView: bvTime,
+          byteOffset: 0,
+          componentType: 5126, // FLOAT
+          count: sortedKfs.length,
+          type: 'SCALAR',
+          min: [sortedKfs[0].timeSeconds],
+          max: [sortedKfs[sortedKfs.length - 1].timeSeconds]
+        });
+
+        // b. OUTPUT values buffer
+        let gltfPath = 'translation';
+        let valType = 'VEC3';
+        let bytesPerKf = 12;
+
+        if (track.property === 'rotation') {
+          gltfPath = 'rotation';
+          valType = 'VEC4';
+          bytesPerKf = 16;
+        } else if (track.property === 'scale') {
+          gltfPath = 'scale';
+          valType = 'VEC3';
+          bytesPerKf = 12;
+        } else if (track.property === 'weight') {
+          gltfPath = 'weights';
+          valType = 'SCALAR';
+          bytesPerKf = 4;
+        } else {
+          gltfPath = 'translation';
+          valType = 'VEC3';
+          bytesPerKf = 12;
+        }
+
+        const valBuf = Buffer.alloc(sortedKfs.length * bytesPerKf);
+        for (let k = 0; k < sortedKfs.length; k++) {
+          const val = sortedKfs[k].value;
+          if (valType === 'VEC4') {
+            const q = Array.isArray(val) ? val : [0, 0, 0, 1];
+            valBuf.writeFloatLE(q[0] ?? 0, k * 16);
+            valBuf.writeFloatLE(q[1] ?? 0, k * 16 + 4);
+            valBuf.writeFloatLE(q[2] ?? 0, k * 16 + 8);
+            valBuf.writeFloatLE(q[3] ?? 1, k * 16 + 12);
+          } else if (valType === 'VEC3') {
+            const v = Array.isArray(val) ? val : [0, 0, 0];
+            valBuf.writeFloatLE(v[0] ?? 0, k * 12);
+            valBuf.writeFloatLE(v[1] ?? 0, k * 12 + 4);
+            valBuf.writeFloatLE(v[2] ?? 0, k * 12 + 8);
+          } else {
+            const s = typeof val === 'number' ? val : 0;
+            valBuf.writeFloatLE(s, k * 4);
+          }
+        }
+
+        const valChunk = appendChunk(valBuf);
+        const bvVal = bufferViews.length;
+        bufferViews.push({
+          buffer: 0,
+          byteOffset: valChunk.byteOffset,
+          byteLength: valChunk.byteLength
+        });
+        const accVal = accessors.length;
+        accessors.push({
+          bufferView: bvVal,
+          byteOffset: 0,
+          componentType: 5126,
+          count: sortedKfs.length,
+          type: valType
+        });
+
+        // c. Sampler
+        const samplerIndex = samplersList.length;
+        const interpolation = track.interpolation === 'step' ? 'STEP' : (track.interpolation === 'cubicspline' ? 'CUBICSPLINE' : 'LINEAR');
+        samplersList.push({
+          input: accTime,
+          interpolation,
+          output: accVal
+        });
+
+        // d. Target Node
+        const isCameraTarget = track.targetNodeId === 'camera';
+        if (isCameraTarget) hasCameraNode = true;
+        const targetNode = isCameraTarget ? 1 : 0;
+        channels.push({
+          sampler: samplerIndex,
+          target: {
+            node: targetNode,
+            path: gltfPath
+          }
+        });
+      }
+
+      if (channels.length > 0) {
+        gltfAnimations.push({
+          name: clip.name,
+          channels,
+          samplers: samplersList
+        });
+      }
+    }
+
+    const gltfNodes: any[] = [{ mesh: 0, name: this.name }];
+    if (hasCameraNode) {
+      gltfNodes.push({ name: 'Camera' });
+    }
+
     const gltfJson: any = {
       asset: { version: '2.0', generator: 'Scratchbox_Universal3DStructure' },
       scene: 0,
-      scenes: [{ nodes: [0] }],
-      nodes: [{ mesh: 0 }],
+      scenes: [{ nodes: gltfNodes.map((_, i) => i) }],
+      nodes: gltfNodes,
       meshes: [{ primitives: [primitive] }],
       accessors,
       bufferViews,
@@ -1417,6 +1606,7 @@ export class Universal3DStructureFoundation {
     if (textures.length > 0) gltfJson.textures = textures;
     if (images.length > 0) gltfJson.images = images;
     if (samplers) gltfJson.samplers = samplers;
+    if (gltfAnimations.length > 0) gltfJson.animations = gltfAnimations;
 
     const binBuffer = Buffer.concat(chunks, totalBinLength);
 
@@ -1815,6 +2005,327 @@ export class Universal3DStructureFoundation {
   }
 
   /**
+   * Factory: Ingest Scene3DData (from generative-canvas / Adaptive Domain Engine / in-memory edits)
+   * into the canonical Universal3DStructureFoundation master anchor.
+   *
+   * Solves hierarchical scene graph transforms (respecting parentId links), transforms all
+   * primitives into unified world coordinates, samples surface constellations with PBR physical
+   * properties, sets up calibrated camera poses & trajectories, and wires procedural PBR textures.
+   */
+  public static createFromScene3DData(
+    sceneData: Scene3DData,
+    options?: {
+      name?: string;
+      numViews?: number;
+      pointDensity?: number;
+      synthesizePbrTextures?: boolean;
+      textureResolution?: number;
+      anchor?: GeodeticAnchor;
+    }
+  ): Universal3DStructureFoundation {
+    const rawMeshes = sceneData.customMeshes && sceneData.customMeshes.length > 0
+      ? sceneData.customMeshes
+      : [
+          {
+            id: 'foundation-slab',
+            name: 'Foundation Ground Slab',
+            type: 'box' as const,
+            position: [0, 0, 0] as [number, number, number],
+            rotation: [0, 0, 0] as [number, number, number],
+            scale: [10, 0.2, 10] as [number, number, number],
+            material: { preset: 'concrete', roughness: 0.8, metalness: 0.1 }
+          }
+        ];
+
+    // 1. Build Mesh Index Map to resolve hierarchical parenting (parentId)
+    const meshMap = new Map<string, typeof rawMeshes[0]>();
+    for (const m of rawMeshes) {
+      meshMap.set(m.id, m);
+    }
+
+    const computeWorldMatrix = (m: typeof rawMeshes[0]): THREE.Matrix4 => {
+      const chain: typeof m[] = [m];
+      let curr = m;
+      const visited = new Set<string>([m.id]);
+      while (curr.parentId && meshMap.has(curr.parentId)) {
+        if (visited.has(curr.parentId)) break; // cycle protection
+        visited.add(curr.parentId);
+        curr = meshMap.get(curr.parentId)!;
+        chain.unshift(curr);
+      }
+      const worldMatrix = new THREE.Matrix4();
+      for (const node of chain) {
+        const p = node.position || [0, 0, 0];
+        const r = node.rotation || [0, 0, 0];
+        const s = node.scale || [1, 1, 1];
+        const nodeMat = new THREE.Matrix4().compose(
+          new THREE.Vector3(p[0], p[1], p[2]),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(r[0], r[1], r[2], 'XYZ')),
+          new THREE.Vector3(s[0], s[1], s[2])
+        );
+        worldMatrix.multiply(nodeMat);
+      }
+      return worldMatrix;
+    };
+
+    // 2. Helper to create base Three.js geometry for primitives
+    const createBaseGeometry = (type?: string): THREE.BufferGeometry => {
+      if (type === 'sphere') return new THREE.SphereGeometry(1, 24, 16);
+      if (type === 'cylinder') return new THREE.CylinderGeometry(1, 1, 2, 24);
+      if (type === 'cone') return new THREE.ConeGeometry(1, 2, 24);
+      if (type === 'plane') return new THREE.PlaneGeometry(2, 2);
+      if (type === 'torus') return new THREE.TorusGeometry(1, 0.4, 16, 48);
+      // Box default (1x1x1 matches Three.js BoxGeometry convention with half-extents ±0.5)
+      return new THREE.BoxGeometry(1, 1, 1);
+    };
+
+    // 3. Assemble combined surface mesh across all custom meshes
+    const allVertices: number[] = [];
+    const allNormals: number[] = [];
+    const allUvs: number[] = [];
+    const allIndices: number[] = [];
+    let vertexOffset = 0;
+
+    const materials: UniversalPbrMaterial[] = [];
+    const textures: UniversalTextureMap[] = [];
+
+    // Track color / material attributes for point constellation sampling
+    interface MeshInfo {
+      worldMatrix: THREE.Matrix4;
+      type: string;
+      colorRgb: [number, number, number];
+      roughness: number;
+      metallic: number;
+    }
+    const meshInfos: MeshInfo[] = [];
+
+    for (let mIdx = 0; mIdx < rawMeshes.length; mIdx++) {
+      const def = rawMeshes[mIdx];
+      const worldMat = computeWorldMatrix(def);
+      const normalMat = new THREE.Matrix3().getNormalMatrix(worldMat);
+
+      const geom = createBaseGeometry(def.type);
+      const posAttr = geom.getAttribute('position');
+      const normAttr = geom.getAttribute('normal');
+      const uvAttr = geom.getAttribute('uv');
+      const idxAttr = geom.getIndex();
+
+      const v = new THREE.Vector3();
+      const n = new THREE.Vector3();
+
+      for (let i = 0; i < posAttr.count; i++) {
+        v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+        v.applyMatrix4(worldMat);
+        allVertices.push(v.x, v.y, v.z);
+
+        if (normAttr) {
+          n.set(normAttr.getX(i), normAttr.getY(i), normAttr.getZ(i));
+          n.applyMatrix3(normalMat).normalize();
+          allNormals.push(n.x, n.y, n.z);
+        } else {
+          allNormals.push(0, 1, 0);
+        }
+
+        if (uvAttr) {
+          allUvs.push(uvAttr.getX(i), uvAttr.getY(i));
+        } else {
+          allUvs.push(0, 0);
+        }
+      }
+
+      if (idxAttr) {
+        for (let i = 0; i < idxAttr.count; i++) {
+          allIndices.push(idxAttr.getX(i) + vertexOffset);
+        }
+      } else {
+        for (let i = 0; i < posAttr.count; i++) {
+          allIndices.push(i + vertexOffset);
+        }
+      }
+
+      vertexOffset += posAttr.count;
+      geom.dispose();
+
+      // Extract physical material & color
+      let baseColorRgb: [number, number, number] = [200, 200, 200];
+      let roughness = typeof def.material?.roughness === 'number' ? def.material.roughness : 0.5;
+      let metallic = typeof def.material?.metalness === 'number' ? def.material.metalness : 0.1;
+
+      // Check preset
+      const presetKey = def.material?.preset as MaterialPresetName | undefined;
+      let pbrMat: UniversalPbrMaterial;
+      if (presetKey && ['titanium', 'gold', 'chrome', 'basalt', 'oak', 'concrete', 'clay'].includes(presetKey)) {
+        pbrMat = Universal3DStructureFoundation.getMaterialPreset(presetKey);
+        if (pbrMat.baseColorFactor) {
+          baseColorRgb = [
+            Math.round((pbrMat.baseColorFactor[0] ?? 0.8) * 255),
+            Math.round((pbrMat.baseColorFactor[1] ?? 0.8) * 255),
+            Math.round((pbrMat.baseColorFactor[2] ?? 0.8) * 255)
+          ];
+        }
+        roughness = pbrMat.roughnessFactor ?? 0.5;
+        metallic = pbrMat.metallicFactor ?? 0.1;
+      } else {
+        // Parse hex color if specified
+        if (typeof def.material?.color === 'number') {
+          const c = def.material.color;
+          baseColorRgb = [(c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff];
+        } else if (typeof def.material?.color === 'string') {
+          const str = def.material.color.replace('#', '');
+          const parsedInt = parseInt(str, 16);
+          if (!isNaN(parsedInt)) {
+            baseColorRgb = [(parsedInt >> 16) & 0xff, (parsedInt >> 8) & 0xff, parsedInt & 0xff];
+          }
+        }
+        pbrMat = {
+          name: `${def.id}_material`,
+          baseColorFactor: [baseColorRgb[0] / 255, baseColorRgb[1] / 255, baseColorRgb[2] / 255, 1.0],
+          roughnessFactor: roughness,
+          metallicFactor: metallic,
+          ior: 1.5
+        };
+      }
+
+      materials.push(pbrMat);
+
+      meshInfos.push({
+        worldMatrix: worldMat,
+        type: def.type || 'box',
+        colorRgb: baseColorRgb,
+        roughness,
+        metallic
+      });
+    }
+
+    const combinedMesh: UniversalSurfaceMesh = {
+      vertices: new Float32Array(allVertices),
+      normals: new Float32Array(allNormals),
+      uvs: new Float32Array(allUvs),
+      indices: new Uint32Array(allIndices),
+      triangleCount: allIndices.length / 3,
+      vertexCount: allVertices.length / 3
+    };
+
+    // 4. Bounding Box & Collision Hull
+    const bbox = Universal3DStructureFoundation.computeBoundingBox(combinedMesh);
+
+    // 5. Procedural PBR Textures (if requested or by default)
+    if (options?.synthesizePbrTextures) {
+      const texRes = options.textureResolution || 256;
+      // Infer archetype from dominant material
+      const hasGold = materials.some(m => m.name.includes('gold') || (typeof m.metallicFactor === 'number' && m.metallicFactor > 0.8 && m.baseColorFactor && (m.baseColorFactor[0] ?? 0) > 0.8));
+      const hasMetal = materials.some(m => typeof m.metallicFactor === 'number' && m.metallicFactor > 0.7);
+      const hasWood = materials.some(m => m.name.includes('oak') || m.name.includes('wood'));
+      const archetype = hasGold ? 'hammered_copper' : hasMetal ? 'brushed_metal' : hasWood ? 'wood' : 'concrete';
+
+      const pbrSet = synthesizeProceduralPbr(archetype, texRes, texRes);
+      const albedoId = `tex_scene_albedo_${Date.now()}`;
+      const normalId = `tex_scene_normal_${Date.now()}`;
+      const ormId = `tex_scene_orm_${Date.now()}`;
+
+      textures.push(
+        { id: albedoId, type: 'albedo', width: texRes, height: texRes, channels: 4, buffer: pbrSet.albedoPng, mimeType: 'image/png' },
+        { id: normalId, type: 'normal', width: texRes, height: texRes, channels: 4, buffer: pbrSet.normalPng, mimeType: 'image/png' },
+        { id: ormId, type: 'metallicRoughness', width: texRes, height: texRes, channels: 4, buffer: pbrSet.ormPng, mimeType: 'image/png' }
+      );
+
+      if (materials.length > 0) {
+        materials[0].baseColorTextureId = albedoId;
+        materials[0].normalTextureId = normalId;
+        materials[0].metallicRoughnessTextureId = ormId;
+      }
+    }
+
+    // 6. Surface Point Constellation Sampling
+    const totalPointsToSample = options?.pointDensity ?? 3000;
+    const pointsPerMesh = Math.max(Math.floor(totalPointsToSample / meshInfos.length), 50);
+    const sampledPoints: ProceduralPoint3D[] = [];
+    let ptId = 1;
+
+    for (const info of meshInfos) {
+      const shapeType = info.type === 'sphere' ? 'sphere' : info.type === 'cylinder' ? 'cylinder' : info.type === 'torus' ? 'torus' : 'box';
+      const primitiveScale = shapeType === 'box' ? 0.5 : 1.0;
+      const shapePts = ProceduralSfMDatasetService.sampleProceduralGeometry(shapeType, pointsPerMesh, primitiveScale, [0, 0, 0]);
+      const v = new THREE.Vector3();
+      const n = new THREE.Vector3();
+      const normMat = new THREE.Matrix3().getNormalMatrix(info.worldMatrix);
+
+      for (const p of shapePts) {
+        v.set(p.position[0], p.position[1], p.position[2]);
+        v.applyMatrix4(info.worldMatrix);
+
+        n.set(p.normal[0], p.normal[1], p.normal[2]);
+        n.applyMatrix3(normMat).normalize();
+
+        sampledPoints.push({
+          id: ptId++,
+          position: [v.x, v.y, v.z],
+          normal: [n.x, n.y, n.z],
+          color: info.colorRgb,
+          error: 0.0,
+          roughness: info.roughness,
+          metallic: info.metallic
+        });
+      }
+    }
+
+    // 7. Calibrated Observation Rig & Trajectory
+    const numViews = options?.numViews ?? 24;
+    const radius = Math.max(bbox.boundingSphereRadius * 2.2, 5.0);
+    const cameras = ProceduralSfMDatasetService.generateTrajectory({
+      trajectory: 'orbital_fibonacci',
+      numViews,
+      target: bbox.center,
+      radius
+    });
+
+    // If sceneData has an explicit camera pose, prepend it as View 0
+    if (sceneData.camera) {
+      const camPos: Vector3Tuple = [sceneData.camera.position[0], sceneData.camera.position[1], sceneData.camera.position[2]];
+      const camTgt: Vector3Tuple = [sceneData.camera.target[0], sceneData.camera.target[1], sceneData.camera.target[2]];
+      const intrinsics = ProceduralSfMDatasetService.calculateIntrinsics(1920, 1080, sceneData.camera.fov || 60);
+      const primaryCam = ProceduralSfMDatasetService.buildCameraPose(0, 'view_primary_camera.png', camPos, camTgt, intrinsics);
+      cameras.unshift(primaryCam);
+    }
+
+    // 8. Geodetic Anchor
+    let anchor: GeodeticAnchor | undefined = options?.anchor;
+    if (!anchor && sceneData.geoAnchor) {
+      const g = sceneData.geoAnchor as any;
+      anchor = {
+        lat: typeof g.lat === 'number' ? g.lat : (typeof g.latitude === 'number' ? g.latitude : 0),
+        lng: typeof g.lng === 'number' ? g.lng : (typeof g.longitude === 'number' ? g.longitude : 0),
+        elevationMeters: typeof g.elevation === 'number' ? g.elevation : (typeof g.altitudeMeters === 'number' ? g.altitudeMeters : 0)
+      };
+    }
+
+    const struct = new Universal3DStructureFoundation({
+      id: `u3d_scene_${Date.now()}`,
+      name: options?.name || sceneData.title || 'Scene3D_Universal_Foundation',
+      anchor,
+      mesh: combinedMesh,
+      materials,
+      textures,
+      points: sampledPoints,
+      cameras,
+      boundingBox: bbox,
+      tags: ['scene3d', sceneData.sceneType || 'adaptive', ...(sceneData.domainOrTopic ? [sceneData.domainOrTopic] : []), 'canonical-anchor'],
+      metadata: {
+        title: sceneData.title,
+        sceneType: sceneData.sceneType,
+        domainOrTopic: sceneData.domainOrTopic,
+        renderMode: sceneData.renderMode,
+        customMeshCount: rawMeshes.length,
+        operatorCount: sceneData.operatorStack?.length || 0,
+        features: sceneData.features,
+        environment: sceneData.environment
+      }
+    });
+
+    return struct;
+  }
+
+  /**
    * Generates a comprehensive project manifest markdown document detailing
    * the 6 synchronized layers of the Universal 3D Structure Foundation:
    * 1. Solid Surface Mesh & Geometric Telemetry
@@ -1956,15 +2467,31 @@ projects/${this.name}/
     const glbBuffer = this.toGlbBuffer();
     const manifestMarkdown = this.generateManifestMarkdown();
     const textureFiles: Record<string, string> = {};
+    const cameraSolveTrack = this.toCameraSolveTrack();
+
+    const formatsExported: Target3DFormat[] = [
+      'glb',
+      'colmap',
+      'nerfstudio',
+      'video_blockout',
+      'collision_hull',
+      'geojson',
+      'manifest'
+    ];
+    if (this.animations.length > 0 || cameraSolveTrack) {
+      formatsExported.push('animation_track');
+    }
 
     return {
       structureId: this.id,
       name: this.name,
-      formatsExported: ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson', 'manifest'],
+      formatsExported,
       colmap,
       nerfstudio,
       videoBlockout,
       collisionHull,
+      animations: this.animations,
+      cameraSolveTrack,
       geoJson,
       glbBuffer,
       manifestMarkdown,
@@ -1977,7 +2504,7 @@ projects/${this.name}/
    */
   public async exportToDisk(
     outputDir: string,
-    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson', 'manifest'],
+    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson', 'manifest', 'animation_track'],
     options?: { collisionOptions?: CollisionEnvelopeOptions }
   ): Promise<MultiFormatExportResult> {
     if (!fs.existsSync(outputDir)) {
@@ -2058,6 +2585,19 @@ projects/${this.name}/
       fs.writeFileSync(hullObjPath, Universal3DStructureFoundation.collisionHullToObj(result.collisionHull), 'utf8');
       filesWritten.collisionHullJson = hullJsonPath;
       filesWritten.collisionHullObj = hullObjPath;
+    }
+
+    if (formats.includes('animation_track')) {
+      if (result.animations && result.animations.length > 0) {
+        const animPath = path.join(outputDir, `${this.name}_animations.json`);
+        fs.writeFileSync(animPath, JSON.stringify(result.animations, null, 2), 'utf8');
+        filesWritten.animations = animPath;
+      }
+      if (result.cameraSolveTrack) {
+        const solvePath = path.join(outputDir, `${this.name}_camera_solve.json`);
+        fs.writeFileSync(solvePath, JSON.stringify(result.cameraSolveTrack, null, 2), 'utf8');
+        filesWritten.cameraSolve = solvePath;
+      }
     }
 
     if (formats.includes('geojson')) {

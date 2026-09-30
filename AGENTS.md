@@ -264,6 +264,31 @@ To prevent codebase clutter, avoid the "ontology trap", and maintain infinite se
 5. **Zero Static Heading / Content Mandates**:
    - Never mandate static section titles (e.g., `"Executive Summary"`, `"Central Spatial Monolith"`, or fixed column names like `"ASTROPHYSICS Telemetry"`) in system prompts or code. All titles, headers, and narratives must be composed dynamically on the fly based on the user's specific context.
 
+### Rule: Adaptive Domain Architecture Over Preset Structures (`sceneType` Guidance Deprecation)
+
+When synthesizing, managing, or rendering 3D scenes:
+1. **Never Use Preset Structures as a Guide**:
+   - `sceneType` must **NEVER** act as a rigid generation guide, routing trigger, or closed category enum that forces 3D scenes into predetermined canned shapes (e.g. `'highway_overpass'`, `'alpine_valley'`, `'ziggurat'`, `'battlefield'`, `'city'`, `'solar-system'`, `'architecture'`).
+   - Closed preset enums and keyword regex matchers are strictly prohibited from hijacking scenes away from structured types or dynamic domain synthesis.
+2. **Adaptive Domain Architecture When Possible**:
+   - For generative, procedural, or open-ended 3D requests, always deploy the **Adaptive Domain Architecture** (`AdaptiveDomainEngine.synthesizeAdaptive3DScene` / `classifyDomain` / `extractPromptEntities`).
+   - Synthesize scenes dynamically from first principles:
+     - **70-20-10 Geometric Form Hierarchy**: Primary hero massing (70%), secondary functional detailing (20%), and tertiary micro-elements / interface instrumentation (10%).
+     - **Biophysical PBR Materials**: Physically grounded dielectric and conductor parameters (`roughness`, `metalness`, `color`, `emissive`, ambient occlusion, and procedural weathering).
+     - **Domain-Calibrated Environment**: Tailored skybox (`studio`, `deep_space`, `dark_studio`, `realistic-sky`, `golden_hour`, `overcast`), Planckian Kelvin studio or daylight illumination, and ergonomic camera framing.
+     - **Adaptive Classification**: `sceneType: 'adaptive'` or the open semantic domain name (`'astrophysics'`, `'technology'`, `'geology'`, `'architecture'`, etc.).
+3. **Structured Types When Needed**:
+   - When explicit, typed geometric or simulation data exists on the scene, the engine and renderer must honor and render those structured types directly with absolute precedence:
+     - `customMeshes`: Explicit typed array of mesh definitions (`id`, `name`, `type`, `position`, `rotation`, `scale`, `material`, `tier`).
+     - `cppGenerator`: Native C++20 Astra engine with `sourceCode` and binary GLB mesh generation.
+     - `objects`: Typed 3D media objects with durable URIs, spatial coordinates, and mime types.
+     - `geoAnchor`: WGS-84 geodetic coordinates and Google Photorealistic 3D Tiles.
+     - `splat`: 3DGS Gaussian splat radiance fields.
+     - `customScript` / `code`: Typed dynamic WebGL / Three.js execution scripts.
+     - `timeline`: 4D temporal simulation solver configuration.
+     - `features`: PBR and rendering pipeline flags.
+   - Structured types must **never** be intercepted or overridden by legacy presets or keyword regexes.
+
 ## Video Pipeline & Multi-District Gallery Directives
 
 ### Rule: Strict District Asset Isolation & Semantic Coherence

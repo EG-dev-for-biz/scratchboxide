@@ -21,6 +21,9 @@ import {
     GeminiService
 } from '../src/node/gemini-service';
 import {
+    parseOrSynthesizeArtifact
+} from '../src/node/gemini/artifact-synthesis';
+import {
     createSculptableGeometry,
     applySculptStroke,
     MeshHistoryStack,
@@ -270,7 +273,131 @@ async function runInMemory3DSceneEditPersistenceTests() {
     assert.strictEqual(canRedo1, true, 'Engine must redo step');
     const sceneAfterRedo = engine.getSceneData();
     assert.ok(sceneAfterRedo.customMeshes?.find(m => m.id === 'building-gamma'), 'Redone mesh must be restored in sceneData');
-    console.log('    ✓ Lossless Undo/Redo timeline state preservation verified.');
+    // =========================================================================
+    // Test 8: Guarded Conversational Delta-Editing (Anti-Wipe Scene Protection)
+    // =========================================================================
+    console.log('  8. Testing Guarded Conversational Delta-Editing...');
+    const activeArtifactForDelta: CanvasArtifact = {
+        id: 'art-campus-delta-01',
+        title: 'Architectural Campus Workspace',
+        type: '3d-scene',
+        summary: 'Active 3D campus layout.',
+        version: 1,
+        data: {
+            title: 'Architectural Campus Workspace',
+            sceneType: 'adaptive',
+            customMeshes: [
+                {
+                    id: 'building-alpha',
+                    name: 'Alpha Tower',
+                    type: 'box',
+                    position: [5, 7, -3],
+                    rotation: [0, 0, 0],
+                    scale: [4, 10, 4],
+                    material: { color: 0x38bdf8, roughness: 0.3, metalness: 0.8 }
+                },
+                {
+                    id: 'building-beta',
+                    name: 'Beta Pavilion',
+                    type: 'box',
+                    position: [12, 3, -6],
+                    rotation: [0, Math.PI / 4, 0],
+                    scale: [9, 12, 9],
+                    material: { color: 0xf59e0b, roughness: 0.5, metalness: 0.2 }
+                }
+            ],
+            operatorStack: [
+                { operator: 'sb_translate', timestamp: Date.now(), payload: { objectId: 'building-alpha', delta: [5, 2, -3] } }
+            ],
+            actionLog: ['sb_translate: building-alpha by [5, 2, -3]']
+        }
+    };
+
+    // 8a. User gives refinement prompt: "make the alpha tower gold and add a torus ring"
+    // Model returns delta JSON that updates alpha tower's material and adds a torus ring.
+    const deltaModelResponse = `
+Here is the updated 3D scene with the gold material and torus ring:
+\`\`\`json
+{
+  "type": "3d-scene",
+  "data": {
+    "title": "Architectural Campus Workspace",
+    "customMeshes": [
+      {
+        "id": "building-alpha",
+        "name": "Alpha Tower",
+        "type": "box",
+        "material": { "color": 16766720, "roughness": 0.2, "metalness": 0.95, "preset": "polished_gold_24k" }
+      },
+      {
+        "id": "ring-mesh-1",
+        "name": "Energy Torus Ring",
+        "type": "torus",
+        "position": [5, 12, -3],
+        "scale": [3, 3, 3],
+        "material": { "color": 3847928, "roughness": 0.1, "metalness": 0.9 }
+      }
+    ]
+  }
+}
+\`\`\`
+    `;
+
+    const deltaResult = parseOrSynthesizeArtifact(
+        'make the alpha tower gold and add a torus ring',
+        deltaModelResponse,
+        {
+            prompt: 'make the alpha tower gold and add a torus ring',
+            activeArtifact: activeArtifactForDelta
+        } as any,
+        []
+    );
+
+    assert.strictEqual(deltaResult.type, '3d-scene');
+    const deltaSceneData = deltaResult.data as Scene3DData;
+    // Verify beta pavilion was NOT wiped out!
+    const preservedBeta = deltaSceneData.customMeshes?.find(m => m.id === 'building-beta');
+    assert.ok(preservedBeta, 'Beta Pavilion must be preserved during conversational delta-edit');
+    assert.deepStrictEqual(preservedBeta.position, [12, 3, -6], 'Beta Pavilion position must remain intact');
+    assert.deepStrictEqual(preservedBeta.scale, [9, 12, 9], 'Beta Pavilion scale must remain intact');
+
+    // Verify alpha tower merged material but preserved manual transform
+    const updatedAlpha = deltaSceneData.customMeshes?.find(m => m.id === 'building-alpha');
+    assert.ok(updatedAlpha, 'Alpha Tower must exist');
+    assert.strictEqual(updatedAlpha.material?.preset, 'polished_gold_24k');
+    assert.deepStrictEqual(updatedAlpha.position, [5, 7, -3], 'Alpha Tower manual transform must be preserved');
+
+    // Verify new ring was added
+    const newRing = deltaSceneData.customMeshes?.find(m => m.id === 'ring-mesh-1');
+    assert.ok(newRing, 'Energy Torus Ring must be added');
+
+    // Verify operatorStack was preserved
+    assert.ok(deltaSceneData.operatorStack?.some(op => op.operator === 'sb_translate'), 'Operator stack must be preserved during delta edit');
+
+    // 8b. User gives explicit destruction command: "clear scene and start over from scratch"
+    const destructionResponse = `
+\`\`\`json
+{
+  "type": "3d-scene",
+  "data": {
+    "title": "Fresh Blank Scene",
+    "customMeshes": []
+  }
+}
+\`\`\`
+    `;
+    const destructionResult = parseOrSynthesizeArtifact(
+        'clear scene and start over from scratch',
+        destructionResponse,
+        {
+            prompt: 'clear scene and start over from scratch',
+            activeArtifact: deltaResult
+        } as any,
+        []
+    );
+    const destructionData = destructionResult.data as Scene3DData;
+    assert.strictEqual(destructionData.operatorStack?.length, 0, 'Operator stack must be cleared upon explicit destruction');
+    console.log('    ✓ Guarded conversational delta-editing verified (anti-wipe scene protection).');
 
     console.log('\n🎉 ALL IN-MEMORY 3D SCENE EDIT PERSISTENCE TESTS PASSED SUCCESSFULLY!');
 }

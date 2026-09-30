@@ -23,6 +23,8 @@ import {
 } from "../src/browser/generative-canvas/hooks/sendMessageFallbacks";
 import { synthesizeContextual3DScene } from "../src/browser/generative-canvas/procedural-3d-synthesizer";
 import { synthesizeContextualVideoTimeline } from "../src/browser/generative-canvas/services/video/videoTimelineSynthesizer";
+import { classifySceneContent } from "../src/browser/generative-canvas/primitives/scene3d/syncSceneContent";
+import type { Scene3DData } from "../src/browser/generative-canvas/canvas-types";
 import type { MarkdownDocumentData } from "../src/browser/generative-canvas/canvas-types";
 
 describe("Antigravity-Style Adaptive Domain Architecture", () => {
@@ -93,6 +95,125 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
             expect(scene.renderMode).toBe("pbr");
             expect(scene.environment?.skybox).toBe("deep_space");
             expect(scene.customMeshes?.length).toBeGreaterThanOrEqual(2);
+            expect(scene.features?.pbrMaterials).toBe(true);
+        });
+
+        it("synthesizes adaptive 3D scenes across diverse domains with 70-20-10 hierarchy", () => {
+            // Technology / Quantum / Robotics
+            const techScene = synthesizeAdaptive3DScene("technology", "Quantum Fusion Reactor", "Magnetic confinement plasma fusion thruster");
+            expect(techScene.renderMode).toBe("pbr");
+            expect(techScene.environment?.skybox).toBe("studio");
+            expect(techScene.features?.cinematic3PointLighting).toBe(true);
+            expect(techScene.customMeshes?.some(m => m.tier === "primary")).toBe(true);
+            expect(techScene.customMeshes?.some(m => m.tier === "secondary")).toBe(true);
+            expect(techScene.customMeshes?.some(m => m.tier === "tertiary")).toBe(true);
+            expect(techScene.customMeshes?.some(m => m.material.preset === "titanium_grade5")).toBe(true);
+
+            // History / Archaeology
+            const histScene = synthesizeAdaptive3DScene("history", "Babylonian Ziggurat Excavation", "Ancient Mesopotamian temple complex ruins");
+            expect(histScene.environment?.skybox).toBe("golden_hour");
+            expect(histScene.customMeshes?.some(m => m.material.preset === "weathered_limestone")).toBe(true);
+
+            // Geology / Terrain
+            const geoScene = synthesizeAdaptive3DScene("geology", "Alpine Glacial Massif", "Matterhorn alpine mountain peak ridge");
+            expect(geoScene.environment?.skybox).toBe("realistic-sky");
+            expect(geoScene.customMeshes?.some(m => m.material.preset === "granite")).toBe(true);
+
+            // Infrastructure
+            const infraScene = synthesizeAdaptive3DScene("infrastructure", "Spanning Viaduct Overpass", "Reinforced concrete highway interchange");
+            expect(infraScene.environment?.skybox).toBe("overcast");
+            expect(infraScene.customMeshes?.some(m => m.material.preset === "weathered_concrete")).toBe(true);
+
+            // Open-Ended Novel Domain
+            const openScene = synthesizeAdaptive3DScene("general", "Brewing Science Fermentation Column", "Bioreactor column with feedback sensors");
+            expect(openScene.sceneType).toBe("adaptive");
+            expect(openScene.customMeshes?.length).toBeGreaterThanOrEqual(3);
+        });
+
+        it("establishes hierarchical scene graph parenting across adaptive domain assemblies", () => {
+            const techScene = synthesizeAdaptive3DScene("technology", "Tokamak Fusion Reactor", "Magnetic confinement torus and core");
+            const primaryTech = techScene.customMeshes?.find(m => m.tier === "primary" && m.id === "tech-primary-chassis");
+            const secondaryTech = techScene.customMeshes?.find(m => m.id === "tech-secondary-ring");
+            const tertiaryTech = techScene.customMeshes?.find(m => m.id === "tech-tertiary-emitter");
+            expect(primaryTech).toBeDefined();
+            expect(secondaryTech?.parentId).toBe(primaryTech?.id);
+            expect(tertiaryTech?.parentId).toBe(primaryTech?.id);
+
+            const geoScene = synthesizeAdaptive3DScene("geology", "Alpine Massif", "Granite buttress and summit horn");
+            const primaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-massif-primary");
+            const secondaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-scree-secondary");
+            const tertiaryGeo = geoScene.customMeshes?.find(m => m.id === "geo-summit-tertiary");
+            expect(primaryGeo).toBeDefined();
+            expect(secondaryGeo?.parentId).toBe(primaryGeo?.id);
+            expect(tertiaryGeo?.parentId).toBe(primaryGeo?.id);
+        });
+
+        it("enforces Structured Types When Needed over presets in classifySceneContent", () => {
+            // Scene with customMeshes matching an alpine prompt must NOT be hijacked to 'alpine_valley' preset
+            const alpineSceneWithMeshes: Scene3DData = {
+                title: "Alpine Matterhorn Custom Scan",
+                sceneType: "adaptive",
+                customMeshes: [
+                    { id: "m1", name: "Custom Mountain", type: "box", position: [0, 0, 0], scale: [1, 1, 1], material: { color: 0xffffff } }
+                ]
+            };
+            const alpineClassification = classifySceneContent({
+                title: "Alpine Matterhorn Custom Scan",
+                sceneType: "adaptive",
+                worldBranch: "alpine/matterhorn",
+                customMeshes: [
+                    { id: "m1", name: "Custom Mountain", type: "box", position: [0, 0, 0], scale: [1, 1, 1], material: { color: 0xffffff } }
+                ],
+                hasCustomMeshes: true,
+                hasActiveScript: false,
+                has3DTiles: false,
+                hasCppGenerator: false,
+                hasNonFallbackObjects: false,
+                isAirplane: false,
+                hasContrails: false,
+                selectedShape: 'box',
+                sculptWireframe: false
+            });
+            expect(alpineClassification).toBe("custom-meshes");
+
+            // Scene with cppGenerator matching an overpass prompt must NOT be hijacked to 'highway_overpass' preset
+            const overpassClassification = classifySceneContent({
+                title: "Highway Overpass Astra Engine",
+                sceneType: "adaptive",
+                worldBranch: "infrastructure/highway",
+                cppGenerator: {
+                    sourceCode: '// C++20 engine',
+                    status: 'compiled'
+                },
+                hasCustomMeshes: false,
+                hasActiveScript: false,
+                has3DTiles: false,
+                hasCppGenerator: true,
+                hasNonFallbackObjects: false,
+                isAirplane: false,
+                hasContrails: false,
+                selectedShape: 'box',
+                sculptWireframe: false
+            });
+            expect(overpassClassification).toBe("objects");
+
+            // Scene with active script matching space prompt must be classified as 'script'
+            const scriptClassification = classifySceneContent({
+                title: "Space Orbital Flight Simulation",
+                sceneType: "adaptive",
+                worldBranch: "space/orbital",
+                customScript: "console.log('orbit');",
+                hasCustomMeshes: false,
+                hasActiveScript: true,
+                has3DTiles: false,
+                hasCppGenerator: false,
+                hasNonFallbackObjects: false,
+                isAirplane: false,
+                hasContrails: false,
+                selectedShape: 'box',
+                sculptWireframe: false
+            });
+            expect(scriptClassification).toBe("script");
         });
     });
 

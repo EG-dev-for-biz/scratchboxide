@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import React, { useRef, useState, useCallback, useMemo } from 'react';
-import { VideoTimelineData, TimelineTrack, TimelineElement, NleTool } from '../../services/video/videoTypes';
+import { VideoTimelineData, TimelineTrack, TimelineElement, NleTool, PropertyKeyframe } from '../../services/video/videoTypes';
 import { formatTimecode, formatTimecodeShort } from '../../services/video/timecode';
 import { snapToFrameSeconds } from '../../services/video/rationalTime';
 import { magneticSnap, trimElementHead, trimElementTail, moveElement, splitElementAtTime } from '../../services/video/timelineMath';
@@ -501,6 +501,48 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                                                 )}
                                             </div>
                                         )}
+
+                                        {/* Keyframe Diamond Markers */}
+                                        {(() => {
+                                            if (!el.keyframes) return null;
+                                            const entries: Array<{ propName: string; kf: PropertyKeyframe }> = [];
+                                            if (Array.isArray(el.keyframes)) {
+                                                (el.keyframes as any[]).forEach(k => entries.push({ propName: (k as any).property || 'value', kf: k }));
+                                            } else {
+                                                Object.entries(el.keyframes).forEach(([propName, kfs]) => {
+                                                    if (Array.isArray(kfs)) {
+                                                        kfs.forEach(kf => entries.push({ propName, kf }));
+                                                    }
+                                                });
+                                            }
+                                            if (entries.length === 0) return null;
+
+                                            return (
+                                                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                                                    {entries.map(({ propName, kf }, kfIdx) => {
+                                                        const offsetSec = kf.time ?? 0;
+                                                        const kfTimeSec = el.startTime + offsetSec;
+                                                        const kfLeftPx = offsetSec * pxPerSec;
+                                                        if (kfLeftPx < 0 || kfLeftPx > widthPx) return null;
+
+                                                        return (
+                                                            <div
+                                                                key={kf.id || `kf-${kfIdx}`}
+                                                                onClick={e => {
+                                                                    e.stopPropagation();
+                                                                    onSeek(kfTimeSec);
+                                                                }}
+                                                                className="absolute top-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer group/kf z-20"
+                                                                style={{ left: `${kfLeftPx}px` }}
+                                                                title={`Keyframe: ${propName} (${JSON.stringify(kf.value)}) at ${formatTimecode(kfTimeSec, fps)}`}
+                                                            >
+                                                                <div className="w-2.5 h-2.5 -ml-1.25 rotate-45 bg-amber-300 border border-amber-600 shadow group-hover/kf:scale-125 group-hover/kf:bg-yellow-200 transition-transform" />
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })()}
 
                                         {/* Right Trim Handle */}
                                         <div

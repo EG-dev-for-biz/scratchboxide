@@ -609,22 +609,35 @@ export function synthesizeAdaptive3DScene(
     title?: string,
     prompt?: string
 ): Scene3DData {
-    const rawText = prompt || title || domainOrTopic || 'Spatial Model';
-    const { subject, keywords } = extractPromptEntities(rawText, 'Spatial Model');
+    const rawText = `${prompt || ''} ${title || ''} ${domainOrTopic || ''}`.trim() || 'Spatial Model';
+    const effectiveDomain = (domainOrTopic && domainOrTopic !== 'general')
+        ? domainOrTopic
+        : classifyDomain(rawText);
+    const { subject, keywords } = extractPromptEntities(title || prompt || rawText, 'Spatial Model');
     const sceneTitle = title || `${subject} - 3D Spatial Scene`;
 
-    const isSpace = /space|astro|orbit|planet|celestial|star|nebula|hubble|jwst/i.test(rawText);
-    const isMicro = /molecular|protein|cell|dna|rna|atom|micro/i.test(rawText);
+    const isSpace = effectiveDomain === 'astrophysics' || /space|astro|orbit|planet|celestial|star|nebula|hubble|jwst|kepler/i.test(rawText);
+    const isMicro = effectiveDomain === 'biology' || effectiveDomain === 'healthcare' || /molecular|protein|cell|dna|rna|atom|micro|enzyme|receptor|ligand/i.test(rawText);
+    const isTech = effectiveDomain === 'technology' || effectiveDomain === 'game-dev' || /robot|reactor|quantum|engine|fusion|cyber|chassis|server|chip|hardware|thruster/i.test(rawText);
+    const isGeology = effectiveDomain === 'geology' || /alpine|mountain|valley|matterhorn|canyon|glacier|rock|strata|terrain|geology|cliff|volcano/i.test(rawText);
+    const isHistory = effectiveDomain === 'history' || /ziggurat|temple|ancient|monument|pyramid|mesopotamia|babylon|ruins|excavation|relic/i.test(rawText);
+    const isInfrastructure = effectiveDomain === 'infrastructure' || /highway|overpass|viaduct|bridge|tower|skyline|building|architecture|interchange|flyover/i.test(rawText);
 
     let skybox = 'studio';
-    let lighting = 'studio';
+    let lighting = 'cinematic_3point_studio';
     let ground = true;
+    let cameraPos: [number, number, number] = [12, 9, 14];
+    let cameraTarget: [number, number, number] = [0, 1.8, 0];
+    let cameraFov = 45;
     let customMeshes: Scene3DData['customMeshes'] = [];
 
     if (isSpace) {
         skybox = 'deep_space';
         lighting = 'orbital';
         ground = false;
+        cameraPos = [20, 14, 22];
+        cameraTarget = [0, 0, 0];
+        cameraFov = 45;
         customMeshes = [
             {
                 id: 'mesh-body-1',
@@ -632,7 +645,8 @@ export function synthesizeAdaptive3DScene(
                 type: 'sphere',
                 position: [0, 0, 0],
                 scale: [4.2, 4.2, 4.2],
-                material: { color: 0x38bdf8, roughness: 0.6, metalness: 0.1 }
+                tier: 'primary',
+                material: { color: 0x38bdf8, roughness: 0.6, metalness: 0.1, emissive: 0x0284c7, emissiveIntensity: 0.6 }
             },
             {
                 id: 'mesh-body-2',
@@ -640,13 +654,26 @@ export function synthesizeAdaptive3DScene(
                 type: 'sphere',
                 position: [12, 3, -6],
                 scale: [1.6, 1.6, 1.6],
+                tier: 'secondary',
                 material: { color: 0xec4899, roughness: 0.4, metalness: 0.3 }
+            },
+            {
+                id: 'mesh-body-3',
+                name: 'Orbital Telemetry Relay',
+                type: 'cylinder',
+                position: [6, 1.5, 3],
+                scale: [0.5, 1.2, 0.5],
+                tier: 'tertiary',
+                material: { color: 0xffd700, roughness: 0.2, metalness: 0.95, preset: 'polished_gold_24k' }
             }
         ];
     } else if (isMicro) {
         skybox = 'dark_studio';
         lighting = 'rim_lit';
         ground = false;
+        cameraPos = [10, 8, 12];
+        cameraTarget = [0, 0.5, 0];
+        cameraFov = 40;
         customMeshes = [
             {
                 id: 'mesh-pocket-1',
@@ -654,6 +681,7 @@ export function synthesizeAdaptive3DScene(
                 type: 'sphere',
                 position: [0, 0, 0],
                 scale: [2.5, 2.5, 2.5],
+                tier: 'primary',
                 material: { color: 0x10b981, roughness: 0.3, metalness: 0.2 }
             },
             {
@@ -662,29 +690,263 @@ export function synthesizeAdaptive3DScene(
                 type: 'cylinder',
                 position: [3, 2, 0],
                 scale: [0.8, 4.0, 0.8],
+                tier: 'secondary',
                 material: { color: 0x6366f1, roughness: 0.2, metalness: 0.4 }
+            },
+            {
+                id: 'mesh-cofactor-1',
+                name: 'Catalytic Cofactor Complex',
+                type: 'sphere',
+                position: [-1.8, -1.2, 1.5],
+                scale: [0.6, 0.6, 0.6],
+                tier: 'tertiary',
+                material: { color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 2.0, roughness: 0.1 }
+            }
+        ];
+    } else if (isTech) {
+        skybox = 'studio';
+        lighting = 'cinematic_3point_studio';
+        ground = true;
+        cameraPos = [9, 6, 10];
+        cameraTarget = [0, 1.4, 0];
+        cameraFov = 42;
+        customMeshes = [
+            {
+                id: 'tech-primary-chassis',
+                name: `${subject} Functional Chassis`,
+                type: 'cylinder',
+                position: [0, 1.5, 0],
+                scale: [2.2, 2.8, 2.2],
+                tier: 'primary',
+                material: { color: 0xd0d8e2, metalness: 0.95, roughness: 0.22, preset: 'titanium_grade5' }
+            },
+            {
+                id: 'tech-secondary-ring',
+                name: `${keywords[0] || 'Flux'} Containment Torus`,
+                parentId: 'tech-primary-chassis',
+                type: 'torus',
+                position: [0, 2.2, 0],
+                scale: [1.8, 0.25, 1.8],
+                tier: 'secondary',
+                material: { color: 0xffd700, metalness: 0.96, roughness: 0.18, preset: 'polished_gold_24k' }
+            },
+            {
+                id: 'tech-tertiary-emitter',
+                name: 'Plasma Emission Core',
+                parentId: 'tech-primary-chassis',
+                type: 'sphere',
+                position: [0, 1.5, 0],
+                scale: [0.75, 0.75, 0.75],
+                tier: 'tertiary',
+                material: { color: 0x1af0ff, emissive: 0x33ccff, emissiveIntensity: 4.0, roughness: 0.05 }
+            },
+            {
+                id: 'tech-ground-pedestal',
+                name: 'Chamfered Studio Pedestal',
+                type: 'cylinder',
+                position: [0, -0.15, 0],
+                scale: [6.0, 0.3, 6.0],
+                tier: 'primary',
+                material: { color: 0x121418, metalness: 0.06, roughness: 0.25, preset: 'black_onyx' }
+            }
+        ];
+    } else if (isGeology) {
+        skybox = 'realistic-sky';
+        lighting = 'daylight';
+        ground = true;
+        cameraPos = [16, 11, 20];
+        cameraTarget = [0, 2.2, 0];
+        cameraFov = 45;
+        customMeshes = [
+            {
+                id: 'geo-massif-primary',
+                name: `${subject} Geological Massif`,
+                type: 'box',
+                position: [0, 2.5, 0],
+                scale: [5.5, 4.5, 5.0],
+                tier: 'primary',
+                material: { color: 0x57534e, roughness: 0.88, metalness: 0.06, preset: 'granite' }
+            },
+            {
+                id: 'geo-scree-secondary',
+                name: `${keywords[0] || 'Flank'} Ridge Buttress`,
+                parentId: 'geo-massif-primary',
+                type: 'box',
+                position: [3.0, 1.2, 1.2],
+                scale: [3.0, 2.2, 2.5],
+                tier: 'secondary',
+                material: { color: 0x78716c, roughness: 0.85, metalness: 0.05 }
+            },
+            {
+                id: 'geo-summit-tertiary',
+                name: 'Glacial Summit Outcrop',
+                parentId: 'geo-massif-primary',
+                type: 'cone',
+                position: [0, 5.2, 0],
+                scale: [2.0, 1.4, 2.0],
+                tier: 'tertiary',
+                material: { color: 0xf8fafc, roughness: 0.25, metalness: 0.1, preset: 'snow_ice' }
+            },
+            {
+                id: 'geo-valley-floor',
+                name: 'Valley Meadow Floor',
+                type: 'cylinder',
+                position: [0, -0.2, 0],
+                scale: [14.0, 0.4, 14.0],
+                tier: 'primary',
+                material: { color: 0x3f6212, roughness: 0.92, metalness: 0.02 }
+            }
+        ];
+    } else if (isHistory) {
+        skybox = 'golden_hour';
+        lighting = 'daylight';
+        ground = true;
+        cameraPos = [18, 12, 22];
+        cameraTarget = [0, 2.0, 0];
+        cameraFov = 45;
+        customMeshes = [
+            {
+                id: 'hist-monument-base',
+                name: `${subject} Monumental Foundation`,
+                type: 'box',
+                position: [0, 1.0, 0],
+                scale: [7.0, 2.0, 7.0],
+                tier: 'primary',
+                material: { color: 0xdcd6cd, roughness: 0.85, metalness: 0.04, preset: 'weathered_limestone' }
+            },
+            {
+                id: 'hist-terrace-tier',
+                name: `${keywords[0] || 'Upper'} Terraced Sanctuary`,
+                parentId: 'hist-monument-base',
+                type: 'box',
+                position: [0, 2.6, 0],
+                scale: [4.4, 1.6, 4.4],
+                tier: 'secondary',
+                material: { color: 0xc8bba8, roughness: 0.80, metalness: 0.05, preset: 'travertine' }
+            },
+            {
+                id: 'hist-summit-cella',
+                name: 'Summit Cella Observatory',
+                parentId: 'hist-monument-base',
+                type: 'cylinder',
+                position: [0, 3.9, 0],
+                scale: [1.8, 1.0, 1.8],
+                tier: 'tertiary',
+                material: { color: 0x3b82f6, emissive: 0x1d4ed8, emissiveIntensity: 1.0, roughness: 0.35, metalness: 0.3 }
+            },
+            {
+                id: 'hist-ground-pavement',
+                name: 'Excavated Courtyard Pavement',
+                type: 'cylinder',
+                position: [0, -0.1, 0],
+                scale: [14.0, 0.2, 14.0],
+                tier: 'primary',
+                material: { color: 0x78716c, roughness: 0.90, metalness: 0.02 }
+            }
+        ];
+    } else if (isInfrastructure) {
+        skybox = 'overcast';
+        lighting = 'daylight';
+        ground = true;
+        cameraPos = [15, 10, 18];
+        cameraTarget = [0, 2.8, 0];
+        cameraFov = 46;
+        customMeshes = [
+            {
+                id: 'infra-deck-primary',
+                name: `${subject} Spanning Viaduct Deck`,
+                type: 'box',
+                position: [0, 3.2, 0],
+                scale: [14.0, 0.8, 3.0],
+                tier: 'primary',
+                material: { color: 0x94a3b8, roughness: 0.65, metalness: 0.12, preset: 'weathered_concrete' }
+            },
+            {
+                id: 'infra-pier-left',
+                name: 'Reinforced Column West',
+                parentId: 'infra-deck-primary',
+                type: 'cylinder',
+                position: [-3.2, 1.6, 0],
+                scale: [1.1, 3.2, 1.1],
+                tier: 'secondary',
+                material: { color: 0x64748b, roughness: 0.70, metalness: 0.10 }
+            },
+            {
+                id: 'infra-pier-right',
+                name: 'Reinforced Column East',
+                parentId: 'infra-deck-primary',
+                type: 'cylinder',
+                position: [3.2, 1.6, 0],
+                scale: [1.1, 3.2, 1.1],
+                tier: 'secondary',
+                material: { color: 0x64748b, roughness: 0.70, metalness: 0.10 }
+            },
+            {
+                id: 'infra-gantry-sign',
+                name: 'Overhead Gantry Truss',
+                parentId: 'infra-deck-primary',
+                type: 'box',
+                position: [0, 4.5, 0],
+                scale: [3.6, 1.6, 0.3],
+                tier: 'tertiary',
+                material: { color: 0x16a34a, roughness: 0.35, metalness: 0.85 }
+            },
+            {
+                id: 'infra-ground-corridor',
+                name: 'Highway Ground Corridor',
+                type: 'box',
+                position: [0, -0.1, 0],
+                scale: [20.0, 0.2, 20.0],
+                tier: 'primary',
+                material: { color: 0x1e293b, roughness: 0.90, metalness: 0.05, preset: 'bitumen_asphalt' }
             }
         ];
     } else {
+        // Universal Open-Ended Adaptive Domain Architecture
         skybox = 'studio';
-        lighting = 'daylight';
+        lighting = 'cinematic_3point_studio';
         ground = true;
+        cameraPos = [12, 9, 14];
+        cameraTarget = [0, 1.8, 0];
+        cameraFov = 45;
         customMeshes = [
             {
-                id: 'mesh-monolith-1',
-                name: `${subject} Primary Structure`,
-                type: 'box',
-                position: [0, 1.5, 0],
-                scale: [3.0, 3.0, 3.0],
-                material: { color: 0x2563eb, roughness: 0.25, metalness: 0.7 }
+                id: 'adaptive-primary-core',
+                name: `${subject} Core Assembly`,
+                type: 'cylinder',
+                position: [0, 1.8, 0],
+                scale: [2.8, 3.6, 2.8],
+                tier: 'primary',
+                material: { color: 0x2563eb, roughness: 0.25, metalness: 0.80 }
             },
             {
-                id: 'mesh-pedestal-1',
-                name: 'Showroom Pedestal',
+                id: 'adaptive-secondary-node',
+                name: `${keywords[0] || 'Subsystem'} Functional Node`,
+                parentId: 'adaptive-primary-core',
+                type: 'box',
+                position: [2.6, 1.4, 0],
+                scale: [1.4, 2.0, 1.4],
+                tier: 'secondary',
+                material: { color: 0xf59e0b, roughness: 0.35, metalness: 0.60 }
+            },
+            {
+                id: 'adaptive-tertiary-sensor',
+                name: `${keywords[1] || 'Optical'} Feedback Sensor`,
+                parentId: 'adaptive-primary-core',
+                type: 'sphere',
+                position: [0, 3.8, 0],
+                scale: [0.6, 0.6, 0.6],
+                tier: 'tertiary',
+                material: { color: 0x10b981, emissive: 0x059669, emissiveIntensity: 2.5, roughness: 0.10 }
+            },
+            {
+                id: 'adaptive-ground-pedestal',
+                name: 'Chamfered Studio Pedestal',
                 type: 'cylinder',
-                position: [0, -0.2, 0],
-                scale: [8.0, 0.4, 8.0],
-                material: { color: 0x1e293b, roughness: 0.8, metalness: 0.1 }
+                position: [0, -0.15, 0],
+                scale: [7.0, 0.3, 7.0],
+                tier: 'primary',
+                material: { color: 0x1e293b, roughness: 0.80, metalness: 0.15, preset: 'black_onyx' }
             }
         ];
     }
@@ -693,19 +955,34 @@ export function synthesizeAdaptive3DScene(
         title: sceneTitle,
         subtitle: `PBR spatial environment tailored for ${subject}`,
         worldBranch: `spatial/${subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`,
-        sceneType: isSpace ? 'space' : isMicro ? 'molecular' : 'custom',
+        sceneType: isSpace ? 'space' : isMicro ? 'molecular' : 'adaptive',
         renderMode: 'pbr',
         cameraMode: 'orbit',
         animation: 'orbit',
         camera: {
-            position: [18, 14, 20],
-            target: [0, 1.8, 0],
-            fov: 45
+            position: cameraPos,
+            target: cameraTarget,
+            fov: cameraFov
         },
         environment: {
             skybox,
             lighting,
             ground
+        },
+        features: {
+            pbrMaterials: true,
+            curvatureAO: true,
+            multiLayerWeathering: true,
+            cinematic3PointLighting: true,
+            studioPedestal: ground
+        },
+        timeline: {
+            currentTimeMs: 0,
+            durationMs: 12000,
+            isPlaying: true,
+            speed: 1.0,
+            playbackSpeed: 1.0,
+            isLooping: true
         },
         customMeshes
     };

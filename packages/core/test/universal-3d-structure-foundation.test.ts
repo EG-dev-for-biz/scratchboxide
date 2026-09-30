@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { Universal3DStructureFoundation } from '../src/node/spatial/Universal3DStructureFoundation';
 import { ContinuousBiophysicalFields } from '../src/common/adaptive-material-types';
+import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('Universal3DStructureFoundation', () => {
   let tempDir: string;
@@ -522,6 +523,140 @@ describe('Universal3DStructureFoundation', () => {
 
     expect(fs.existsSync(path.join(outDir, 'AlpineMatterhornValleyTest.glb'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'AlpineMatterhornValleyTest_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'scene_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'transforms.json'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'sparse_pcd.ply'))).toBe(true);
+  });
+
+  it('creates canonical structure from Scene3DData with hierarchical parenting and exports to glb, nerfstudio, colmap', async () => {
+    const sceneData: Scene3DData = {
+      title: 'Orbital Research Spire',
+      sceneType: 'adaptive',
+      domainOrTopic: 'Technology',
+      camera: {
+        position: [20, 15, 25],
+        target: [10, 5, 0],
+        fov: 55
+      },
+      geoAnchor: {
+        latitude: 37.7749,
+        longitude: -122.4194,
+        altitudeMeters: 45.0
+      },
+      customMeshes: [
+        {
+          id: 'spire-base',
+          name: 'Spire Main Tower Base',
+          type: 'box',
+          position: [10, 0, 0],
+          rotation: [0, 0, 0],
+          scale: [4, 10, 4],
+          material: {
+            preset: 'titanium',
+            roughness: 0.25,
+            metalness: 0.95
+          }
+        },
+        {
+          id: 'spire-crown',
+          name: 'Observation Deck Crown',
+          parentId: 'spire-base',
+          type: 'cylinder',
+          position: [0, 0.6, 0], // Local offset above parent base (parent Y scale is 10, so local Y 0.6 => world Y 6.0)
+          rotation: [0, 0, 0],
+          scale: [0.8, 0.2, 0.8],
+          material: {
+            preset: 'gold',
+            roughness: 0.15,
+            metalness: 0.95
+          }
+        },
+        {
+          id: 'accelerator-ring',
+          name: 'Particle Accelerator Torus',
+          parentId: 'spire-crown',
+          type: 'torus',
+          position: [0, 0.5, 0],
+          rotation: [1.5707, 0, 0],
+          scale: [1.5, 1.5, 1.5],
+          material: {
+            color: 0x38bdf8,
+            roughness: 0.1,
+            metalness: 0.85
+          }
+        }
+      ]
+    };
+
+    const struct = Universal3DStructureFoundation.createFromScene3DData(sceneData, {
+      name: 'OrbitalResearchSpireTest',
+      synthesizePbrTextures: true,
+      numViews: 12,
+      pointDensity: 1200
+    });
+
+    // 1. Verify Structure Dimensions & Hierarchy
+    expect(struct.name).toBe('OrbitalResearchSpireTest');
+    expect(struct.mesh.vertexCount).toBeGreaterThan(100);
+    expect(struct.mesh.triangleCount).toBeGreaterThan(100);
+
+    // Bounding Box verification: world position of spire base is centered at X=10.
+    // Parent Y extents: center 0, scale 10 -> -5 to +5.
+    // Child crown local Y = 0.6 * 10 = +6, so world Y extends above +5.
+    expect(struct.boundingBox.center[0]).toBeCloseTo(10, 0);
+    expect(struct.boundingBox.max[1]).toBeGreaterThan(6.0);
+
+    // 2. Verify Material & Textures
+    expect(struct.materials.length).toBe(3);
+    expect(struct.materials[0].metallicFactor).toBeCloseTo(0.95, 1);
+    expect(struct.textures.length).toBe(3); // albedo, normal, orm
+    expect(struct.primaryMaterial.baseColorTextureId).toBeDefined();
+
+    // 3. Verify Points Constellation
+    expect(struct.points.length).toBeGreaterThanOrEqual(1000);
+    // Every point has valid normal and color
+    for (const pt of struct.points.slice(0, 20)) {
+      expect(pt.position.length).toBe(3);
+      expect(pt.normal.length).toBe(3);
+      expect(pt.color.length).toBe(3);
+    }
+
+    // 4. Verify Camera Rig & GeoAnchor
+    expect(struct.cameras.length).toBe(13); // 1 primary camera + 12 orbital trajectory poses
+    expect(struct.cameras[0].name).toBe('view_primary_camera.png');
+    expect(struct.anchor).toBeDefined();
+    expect(struct.anchor?.lat).toBeCloseTo(37.7749, 4);
+    expect(struct.anchor?.lng).toBeCloseTo(-122.4194, 4);
+
+    // 5. Verify Multi-Format Outward Projections
+    // A. glTF 2.0 Binary (.glb)
+    const glbBuffer = struct.toGlbBuffer();
+    expect(glbBuffer.length).toBeGreaterThan(1000);
+    const magic = glbBuffer.readUInt32LE(0);
+    expect(magic).toBe(0x46546C67); // 'glTF' in hex
+
+    // B. Nerfstudio transforms.json & PLY
+    const nerf = struct.toNerfstudio();
+    const nerfJson = JSON.parse(nerf.transformsJson);
+    expect(nerfJson.frames.length).toBe(13);
+    expect(nerf.sparsePcdPly).toContain('element vertex');
+
+    // C. COLMAP cameras, images, points3D
+    const colmap = struct.toColmap();
+    expect(colmap.camerasText).toContain('PINHOLE');
+    expect(colmap.imagesText).toContain('view_primary_camera.png');
+    expect(colmap.points3DText).toContain('# Number of points:');
+
+    // D. Collision Hull
+    const hull = struct.toCollisionHull({ mode: 'obb' });
+    expect(hull.type).toBe('obb');
+    expect(hull.axes).toBeDefined();
+    expect(hull.center[0]).toBeCloseTo(10, 0);
+
+    // E. Export to Disk
+    const outDir = path.join(tempDir, 'projects', 'OrbitalResearchSpireTest');
+    const result = await struct.exportToDisk(outDir, ['glb', 'manifest', 'colmap', 'nerfstudio']);
+    expect(fs.existsSync(path.join(outDir, 'OrbitalResearchSpireTest.glb'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'scene_manifest.md'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'transforms.json'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'sparse_pcd.ply'))).toBe(true);

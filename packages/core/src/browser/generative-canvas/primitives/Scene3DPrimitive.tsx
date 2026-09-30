@@ -137,6 +137,7 @@ import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { attachViewportControls, stepCamera } from './scene3d/attachViewportControls';
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
+import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle } from './scene3d/types';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -1220,6 +1221,7 @@ int main(int argc, char** argv) {
     const [selectedObjectId, setSelectedObjectId] = React.useState<string | null>(data?.selectedMeshId || null);
     const [selectedObjectName, setSelectedObjectName] = React.useState<string>('');
     const [isOutlinerOpen, setIsOutlinerOpen] = React.useState<boolean>(false);
+    const [isInspectorOpen, setIsInspectorOpen] = React.useState<boolean>(false);
     const [outlinerSearchQuery, setOutlinerSearchQuery] = React.useState<string>('');
     const [sceneEntities, setSceneEntities] = React.useState<Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }>>([]);
     const selectionBoxRef = React.useRef<THREE.BoxHelper | null>(null);
@@ -3521,6 +3523,33 @@ int main(int argc, char** argv) {
                         <path d="M21 7v6h-6M21 13a9 9 0 1 0-3 7.7" />
                     </svg>
                 </button>
+
+                {/* Divider */}
+                <div className="sb-3d-toolstrip-divider w-3.5 h-[1px] bg-white/10 my-0.5" />
+
+                {/* 15. Inspector / Properties Toggle */}
+                <button
+                    type="button"
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
+                        isInspectorOpen
+                            ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
+                            : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
+                    }`}
+                    onClick={() => setIsInspectorOpen(!isInspectorOpen)}
+                    title="Toggle Numeric Precision Inspector & Hierarchy"
+                >
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="4" y1="21" x2="4" y2="14" />
+                        <line x1="4" y1="10" x2="4" y2="3" />
+                        <line x1="12" y1="21" x2="12" y2="12" />
+                        <line x1="12" y1="8" x2="12" y2="3" />
+                        <line x1="20" y1="21" x2="20" y2="16" />
+                        <line x1="20" y1="12" x2="20" y2="3" />
+                        <line x1="1" y1="14" x2="7" y2="14" />
+                        <line x1="9" y1="8" x2="15" y2="8" />
+                        <line x1="17" y1="16" x2="23" y2="16" />
+                    </svg>
+                </button>
             </div>
 
             {/* Ultra-Minimalist Floating Top-Right Controls */}
@@ -3578,6 +3607,26 @@ int main(int argc, char** argv) {
                 onResetCameraToAnchor={handleResetCamera}
                 isOpen={isVectorRoadmapHUDOpen}
                 onToggleOpen={() => setIsVectorRoadmapHUDOpen(!isVectorRoadmapHUDOpen)}
+            />
+
+            {/* Numeric Precision Inspector & Scene Hierarchy Drawer */}
+            <NumericPrecisionInspector
+                isOpen={isInspectorOpen}
+                onToggleOpen={() => setIsInspectorOpen(false)}
+                selectedObjectId={selectedObjectId}
+                selectedObjectName={selectedObjectName}
+                sceneData={sceneData}
+                mutateSceneData={mutateSceneData}
+                onSelectObject={(id) => {
+                    if (id && threeSceneRef.current) {
+                        const target = threeSceneRef.current.getObjectByName(id) ||
+                                       customMeshRegistryRef.current.get(id)?.mesh || null;
+                        selectObject(target);
+                    } else {
+                        selectObject(null);
+                    }
+                }}
+                threeObject={selectedObjectRef.current}
             />
 
             {/* Ultra-Sleek Floating Bottom Scrubber Pill */}

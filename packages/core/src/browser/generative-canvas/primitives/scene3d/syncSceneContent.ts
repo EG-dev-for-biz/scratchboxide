@@ -70,18 +70,33 @@ export function classifySceneContent(input: SceneContentInput): 'script' | 'tile
     const sceneTitle = (input.title || '').toLowerCase();
     const haystack = `${worldBranch} ${sceneTitle}`;
     const t = input.sceneType;
-    if (input.hasActiveScript) return 'script';
-    if (input.has3DTiles) return 'tiles';
+
+    // 1. Structured Types First (Always honor explicit typed geometry and engines)
+    const hasActiveScript = input.hasActiveScript ?? !!(input as any).customScript;
+    const has3DTiles = input.has3DTiles ?? !!(input as any).geoAnchor?.active;
+    const hasCppGenerator = input.hasCppGenerator ?? !!(input as any).cppGenerator;
+    const hasCustomMeshes = input.hasCustomMeshes ?? ((input as any).customMeshes && (input as any).customMeshes.length > 0);
+    const hasNonFallbackObjects = input.hasNonFallbackObjects ?? ((input as any).objects && (input as any).objects.length > 0);
+
+    if (hasActiveScript) return 'script';
+    if (has3DTiles) return 'tiles';
+    if (hasCppGenerator) return 'objects';
+    if (hasCustomMeshes) return 'custom-meshes';
+    if (hasNonFallbackObjects) return 'objects';
     if (input.isAirplane) return 'aircraft';
-    if (t === 'highway_overpass' || /highway|overpass|viaduct|interchange/i.test(haystack)) return 'highway_overpass';
-    if (t === 'alpine_valley' || /matterhorn|alpine|chalet/i.test(haystack)) return 'alpine_valley';
-    if (t === 'ziggurat' || /ziggurat|mesopotamia|etemenanki|babylon/i.test(haystack)) return 'ziggurat';
-    if (input.hasCppGenerator) return 'objects';
-    if (t === 'solar-system' || SPACE_KEYWORDS.test(haystack)) return 'solar-system';
-    if (t === 'molecular' || MOLECULAR_KEYWORDS.test(haystack)) return 'molecular';
-    if (t === 'architecture' || ARCHITECTURE_KEYWORDS.test(haystack)) return 'architecture';
-    if (input.hasCustomMeshes) return 'custom-meshes';
-    if (input.hasNonFallbackObjects) return 'objects';
+
+    // 2. Legacy / Explicit Presets (Only when explicitly specified via sceneType and no structured types exist)
+    if (t === 'highway_overpass') return 'highway_overpass';
+    if (t === 'alpine_valley') return 'alpine_valley';
+    if (t === 'ziggurat') return 'ziggurat';
+    if (t === 'battlefield' || (BATTLEFIELD_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'battlefield';
+    if (t === 'city' || (CITY_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'city';
+    if (t === 'solar-system' || (SPACE_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'solar-system';
+    if (t === 'molecular' || (MOLECULAR_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'molecular';
+    if (t === 'architecture' || (ARCHITECTURE_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'architecture';
+    if (t === 'worldbuilder') return 'worldbuilder';
+
+    // 3. Adaptive Domain Architecture Default
     return 'spatial';
 }
 

@@ -17,6 +17,7 @@ import type { PbrTextureSet } from '../../canvas-types';
 export interface CustomMeshDefinition {
     id?: string;
     name?: string;
+    parentId?: string;
     type?: string;
     position?: [number, number, number];
     rotation?: [number, number, number];
@@ -334,6 +335,24 @@ export function syncCustomMeshes(
             }
         } catch (meshErr) {
             console.warn('[3D Custom Mesh Error]:', meshErr);
+        }
+    });
+
+    // Pass 2: Establish hierarchical scene-graph parenting (parentId -> parent object)
+    defs.forEach((def, index) => {
+        const id = customMeshDefinitionId(def, index);
+        const entry = registry.get(id);
+        if (!entry) return;
+        const object3D = entry.mesh;
+
+        if (def.parentId && def.parentId !== id) {
+            const parentEntry = registry.get(def.parentId);
+            const parentObj = parentEntry?.mesh || scene.getObjectByName(def.parentId);
+            if (parentObj && parentObj !== object3D && object3D.parent !== parentObj) {
+                parentObj.add(object3D);
+            }
+        } else if (object3D.parent && object3D.parent !== scene) {
+            scene.add(object3D);
         }
     });
 

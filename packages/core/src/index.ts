@@ -399,3 +399,22 @@ export {
     type PbrAlphaMode
 } from './common/spatial/universal-3d-structure-types';
 
+// Universal Animation Engine & Temporal Interpolation
+export {
+    type UniversalAnimationProperty,
+    type UniversalInterpolationType,
+    type UniversalKeyframe,
+    type UniversalAnimationTrack,
+    type UniversalAnimationClip,
+    type UniversalAnimationTimeline,
+    lerpScalar,
+    lerpVector3,
+    slerpQuaternion,
+    evaluateAnimationTrack,
+    evaluateAnimationClip,
+    toCameraSolveTrack,
+    fromCameraSolveTrack,
+    fromVideoDiffusionCameraBlockout,
+    toTimelineElement
+} from './common/spatial/universal-animation-types';
+

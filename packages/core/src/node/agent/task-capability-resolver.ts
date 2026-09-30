@@ -275,6 +275,18 @@ export class TaskCapabilityResolver {
                     serviceOrTool: 'VfxPlateMatchmoveService.interpolateCameraSolve & getSolarPosition',
                     details: 'Mount video-timeline with cameraSolveTrack and ephemerisAnchor.'
                 };
+            } else if (/universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|camera\s*arc\s*animation|slerp\s*camera/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'vfx-matchmove-nle';
+                nativeCapabilities.push('Universal Continuous-Time Animation Engine (UniversalAnimationClip, LERP/SLERP)');
+                nativeCapabilities.push('Video Timeline NLE Integration (toTimelineElement, VideoTimelineTracks Keyframe Diamonds)');
+                nativeCapabilities.push('In-App Agent Tools: universal_3d_structure_animate');
+                rationale = 'Native Universal Continuous-Time Animation Engine interpolates sub-frame LERP and SLERP tracks and unifies them directly with the Video Timeline NLE primitive via keyframe diamond markers.';
+                suggestedNativeAction = {
+                    primitiveType: 'video-timeline',
+                    serviceOrTool: 'universal_3d_structure_animate',
+                    details: 'Invoke universal_3d_structure_animate with mountToVideoTimeline: true to compile keyframe diamonds and mount directly onto video-timeline.'
+                };
             } else if (isNleEditing || isHoldoutMatte) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'vfx-matchmove-nle';
@@ -298,6 +310,21 @@ export class TaskCapabilityResolver {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
                 rationale = 'Single-image to 3D mesh reconstruction requires a neural generative diffusion model (such as Trellis, TripoSR, or SV3D). The native C++20 engine is built for procedural geometry, SDFs, and photogrammetric tiles, not zero-shot 2D-to-3D neural reconstruction.';
+            } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation.*(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'cpp-3d-engine';
+                nativeCapabilities.push('Universal 3D Structure Foundation (Universal3DStructureFoundation)');
+                nativeCapabilities.push('Universal Continuous-Time Animation Engine (UniversalAnimationClip, LERP/SLERP)');
+                nativeCapabilities.push('Deterministic Outward Projections (glTF 2.0 with Animation Chunks, COLMAP, Nerfstudio 3DGS, Video Camera Blockout, Collision Hull, GeoJSON)');
+                nativeCapabilities.push('Physics Collision Envelope (AABB, Bounding Sphere, Simplified Convex Bumper Hull)');
+                nativeCapabilities.push('Video Timeline NLE Integration (toTimelineElement, VideoTimelineTracks Keyframe Diamonds)');
+                nativeCapabilities.push('In-App Agent Tools: universal_3d_structure_create, universal_3d_structure_export, universal_3d_structure_animate, universal_3d_structure_get_collision_hull');
+                rationale = 'Native Universal 3D Structure Foundation maintains a single authoritative geometric anchor across solid meshes, 3DGS point constellations, 6-DoF cameras, physics collision envelopes, continuous animation tracks, and WGS-84 coordinates, with deterministic outward projections and NLE video timeline synchronization.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'universal_3d_structure_create or universal_3d_structure_export',
+                    details: 'Invoke universal_3d_structure_create to instantiate canonical anchor, export outward to target format(s), or animate with universal_3d_structure_animate and mount to video-timeline.'
+                };
             } else if (isAdaptiveMatchmove) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'adaptive-matchmove-calibration';

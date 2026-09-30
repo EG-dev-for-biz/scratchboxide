@@ -14,6 +14,7 @@ import {
   ProceduralPoint3D,
   Vector3Tuple
 } from '../../node/spatial/ProceduralSfMDatasetService';
+import type { UniversalAnimationClip } from './universal-animation-types';
 
 /**
  * 3D Bounding Box in local metric coordinates.
@@ -99,7 +100,8 @@ export type Target3DFormat =
   | 'video_blockout'
   | 'collision_hull'
   | 'geojson'
-  | 'manifest';
+  | 'manifest'
+  | 'animation_track';
 
 /**
  * PBR Alpha Mode standard in glTF 2.0.
@@ -192,6 +194,7 @@ export interface Universal3DStructureInitOptions {
   cameras?: ProceduralCameraPose[];
   boundingBox?: MetricBoundingBox;
   collisionHull?: UniversalCollisionHull;
+  animations?: UniversalAnimationClip[];
   tags?: string[];
   metadata?: Record<string, any>;
 }
@@ -216,6 +219,8 @@ export interface MultiFormatExportResult {
   };
   videoBlockout?: VideoDiffusionCameraBlockout;
   collisionHull?: UniversalCollisionHull;
+  animations?: UniversalAnimationClip[];
+  cameraSolveTrack?: any;
   geoJson?: Record<string, any>;
   glbBuffer?: Buffer;
   manifestMarkdown?: string;
