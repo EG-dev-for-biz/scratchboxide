@@ -48,7 +48,8 @@ const POPULAR_DEMOS = [
     { title: 'Botanical & Forest Procedural 3D Viewer', path: '/forest_3d_viewer.html', badge: 'PHOTOREAL PBR' },
     { title: 'Video-to-4D Performer Reconstruction Studio', path: '/video_to_4d_performer_studio.html', badge: '4D PIPELINE' },
     { title: 'Adaptive Matchmove & C² Spline Calibration', path: '/adaptive_matchmove_studio.html', badge: 'SUB-PIXEL RMS' },
-    { title: '4DAnyone & SMPL-X Avatar Showcase', path: '/model_showcase.html', badge: 'AVATAR SHOWCASE' },
+    { title: '4DAnyone & SB-Human Avatar Showcase', path: '/model_showcase.html', badge: 'AVATAR SHOWCASE' },
+    { title: 'SB-Veggie Real Scan Inversion Studio', path: '/sb_veggie_real_demo.html', badge: 'BOTANICAL C++' },
     { title: 'Person Matchmove & Dynamic Skeleton Aligner', path: '/person_matchmove_studio.html', badge: 'KINEMATICS' },
     { title: 'Google 360 Panorama Studio & Seam Healer', path: '/google_360_panorama_studio.html', badge: '360 PANORAMA' },
     { title: 'DepthBox Studio // 2D Image(s) -> 3DGS Engine', path: '/depthbox_image_to_3dgs.html', badge: 'IMAGE TO 3DGS' }

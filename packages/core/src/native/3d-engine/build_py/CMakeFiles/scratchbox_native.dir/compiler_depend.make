@@ -1105,6 +1105,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_colmap.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_delight.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_denoise.hpp \
+  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_displacement.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_engine.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_ephemeris.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_fabric.hpp \
@@ -1141,6 +1142,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_photoreal_reconstruction.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_physics.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_plant_builder.hpp \
+  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_png.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_rigidbody.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi_optimizer.hpp \
@@ -1151,8 +1153,6 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_shaper.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_skinning.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sky.hpp \
-  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_smpl_optimizer.hpp \
-  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_smpl_tree.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_spz.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sss.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_substrate.hpp \
@@ -1425,8 +1425,6 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_tectonic_analyzer.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_substrate.hpp:
-
-/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_smpl_tree.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_skinning.hpp:
 
@@ -2766,8 +2764,6 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__type_traits/is_scalar.h:
 
-/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_smpl_optimizer.hpp:
-
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__concepts/constructible.h:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__concepts/common_with.h:
@@ -2919,6 +2915,8 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__type_traits/lazy.h:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__format/format_functions.h:
+
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_displacement.hpp:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__algorithm/ranges_sort.h:
 
@@ -3713,6 +3711,8 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_xlocale.h:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_tile_cleanup.hpp:
+
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_png.hpp:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__type_traits/copy_cvref.h:
 

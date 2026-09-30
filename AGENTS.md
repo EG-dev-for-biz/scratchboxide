@@ -163,7 +163,7 @@ When directing or constructing prompts for video creation tools (Google Omni 1.1
      - Hands open facing forward with relaxed fingers (eliminating torso-arm occlusion).
      - Legs straight and shoulder-width apart.
      - Feet planted flat on the floor facing forward (eliminating leg-to-leg fusion).
-   - This provides the ground-truth baseline required for MediaPipe/SMPL shape estimation, 22-bone skeletal rigging, LBS weight assignment, and visual-hull carving.
+   - This provides the ground-truth baseline required for MediaPipe/SB-Human shape estimation, 22-bone skeletal rigging, LBS weight assignment, and visual-hull carving.
 5. **Programmatic Builder & Tool**:
    - Use `buildNeutralPerformerPrompt` (`omniVideoPromptService.ts`) or the agent tool `build_neutral_performer_prompt`.
 

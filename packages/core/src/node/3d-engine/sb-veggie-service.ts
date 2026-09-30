@@ -36,12 +36,11 @@ export class SbVeggieService {
         this.compiler = compiler || new NativeCppCompilerService();
         const candidateBinaries = [
             path.resolve(process.cwd(), 'build/run_sb_veggie'),
-            path.resolve(process.cwd(), 'build/run_smpl_tree'),
             path.resolve(process.cwd(), 'scripts/run_sb_veggie'),
-            path.resolve(process.cwd(), 'scripts/run_smpl_tree'),
             path.resolve(__dirname, '../../../../scripts/run_sb_veggie'),
-            path.resolve(__dirname, '../../../../scripts/run_smpl_tree'),
-            path.resolve(process.cwd(), 'build/3d-native/run_smpl_tree')
+            path.resolve(process.cwd(), 'build/3d-native/run_sb_veggie'),
+            path.resolve(process.cwd(), 'build/run_smpl_tree'),
+            path.resolve(process.cwd(), 'scripts/run_smpl_tree')
         ];
         this.binaryPath = candidateBinaries.find(p => fs.existsSync(p)) || candidateBinaries[0];
     }
@@ -56,11 +55,11 @@ export class SbVeggieService {
 
         const candidateSources = [
             path.resolve(process.cwd(), 'scripts/run_sb_veggie.cpp'),
-            path.resolve(process.cwd(), 'scripts/run_smpl_tree.cpp'),
             path.resolve(__dirname, '../../../../scripts/run_sb_veggie.cpp'),
+            path.resolve(process.cwd(), 'scripts/run_smpl_tree.cpp'),
             path.resolve(__dirname, '../../../../scripts/run_smpl_tree.cpp')
         ];
-        const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[1] || candidateSources[0];
+        const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
 
         const includePath = this.compiler.getSdkIncludePath();
         const outputDir = path.dirname(this.binaryPath);
@@ -274,7 +273,7 @@ export class SbVeggieService {
             evalTimeMs: extractFloat('Evaluator Render Time') || extractFloat('Mesh Eval Time')
         };
 
-        if (stdout.includes('SMPLify-Tree Inversion Solver Results') || stdout.includes('Inversion Solver Results') || stdout.includes('SMPLify-Tree Inversion Optimization Results') || stdout.includes('Inversion Optimization Results')) {
+        if (stdout.includes('SB-Veggie Inversion Solver Results') || stdout.includes('Inversion Solver Results') || stdout.includes('SMPLify-Tree Inversion Solver Results') || stdout.includes('Inversion Optimization Results')) {
             const fittedBeta: number[] = new Array(16).fill(0.0);
             const b0 = stdout.match(/Fitted Beta\[0\] \(DBH\):\s*([\d.-]+)/);
             const b1 = stdout.match(/Fitted Beta\[1\] \(Height\):\s*([\d.-]+)/);

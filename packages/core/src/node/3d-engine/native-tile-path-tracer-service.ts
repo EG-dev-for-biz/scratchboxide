@@ -53,6 +53,19 @@ export interface TileAtmosphereSpec {
     sunIntensity?: number;
 }
 
+export interface TileDisplacementSpec {
+    tessellationFactor?: number;
+    displacementScale?: number;
+    midpoint?: number;
+    sampleTextureHeight?: boolean;
+    textureHeightWeight?: number;
+    enableProceduralNoise?: boolean;
+    proceduralNoiseScale?: number;
+    proceduralNoiseFrequency?: number;
+    recomputeSmoothNormals?: boolean;
+    exportDisplacedGlb?: string;
+}
+
 export interface TilePathTraceRequest {
     glbPath: string;
     outputDir: string;
@@ -74,6 +87,8 @@ export interface TilePathTraceRequest {
     timeoutMs?: number;
     /** Geometry-only blockout: one matte material (linear RGB albedo) replaces every captured texture. */
     clay?: boolean | { albedo?: [number, number, number]; roughness?: number; metallic?: number };
+    /** Physical micro-polygon tessellation and surface displacement options */
+    displacement?: TileDisplacementSpec;
 }
 
 export interface TilePathTraceStats {
@@ -216,6 +231,9 @@ export class NativeTilePathTracerService {
         if (request.camera) {
             config.camera = request.camera;
         }
+        if (request.displacement) {
+            config.displacement = request.displacement;
+        }
         return config;
     }
 
@@ -243,7 +261,7 @@ export class NativeTilePathTracerService {
         if (!sourcePath) {
             throw new Error(`Cannot find ${CLI_SOURCE_NAME} (looked in ${candidates.join(', ')})`);
         }
-        const extraFlags = ['-pthread'];
+        const extraFlags = ['-pthread', '-lz'];
         if (process.env.SCRATCHBOX_NATIVE_ARCH === '1') {
             extraFlags.push('-march=native');
         }

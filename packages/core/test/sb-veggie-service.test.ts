@@ -17,44 +17,44 @@ import {
     NativeCppCompilerService
 } from '../src/node';
 
-describe('SB-Veggie (formerly SMPL-Tree) Parametric Botanical Synthesis & Inversion Engine (C++20 & Node.js)', () => {
+describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & Node.js)', () => {
     const service = new SbVeggieService();
 
-    it('1. should verify native C++20 SB-Veggie and SMPL-Tree headers are accessible', () => {
+    it('1. should verify native C++20 SB-Veggie canonical headers and legacy forwarders are accessible', () => {
         const compiler = new NativeCppCompilerService();
         const sdkInclude = compiler.getSdkIncludePath();
         expect(fs.existsSync(sdkInclude)).toBe(true);
 
-        const treeHeaderPath = path.join(sdkInclude, 'scratchbox_smpl_tree.hpp');
-        expect(fs.existsSync(treeHeaderPath)).toBe(true);
-
-        const treeContent = fs.readFileSync(treeHeaderPath, 'utf8');
-        expect(treeContent).toContain('namespace smpl_tree');
-        expect(treeContent).toContain('class SmplTreeModelBuilder');
-        expect(treeContent).toContain('class SmplTreeEvaluator');
-        expect(treeContent).toContain('struct SmplTreeTemplate');
-        expect(treeContent).toContain('struct SmplTreeParams');
-        expect(treeContent).toContain('enum class SmplTreeArchetype');
-
-        const optHeaderPath = path.join(sdkInclude, 'scratchbox_smpl_optimizer.hpp');
-        expect(fs.existsSync(optHeaderPath)).toBe(true);
-
-        const optContent = fs.readFileSync(optHeaderPath, 'utf8');
-        expect(optContent).toContain('class SmplTreeOptimizer');
-        expect(optContent).toContain('struct SmplOptimizerOptions');
-        expect(optContent).toContain('struct SmplOptimizerResult');
-        expect(optContent).toContain('evaluateChamferDistance');
-
+        // Canonical SB-Veggie header
         const veggieHeaderPath = path.join(sdkInclude, 'scratchbox_sb_veggie.hpp');
         expect(fs.existsSync(veggieHeaderPath)).toBe(true);
         const veggieContent = fs.readFileSync(veggieHeaderPath, 'utf8');
         expect(veggieContent).toContain('namespace sb_veggie');
-        expect(veggieContent).toContain('using SbVeggieModelBuilder');
+        expect(veggieContent).toContain('class SbVeggieModelBuilder');
+        expect(veggieContent).toContain('class SbVeggieEvaluator');
+        expect(veggieContent).toContain('struct SbVeggieTemplate');
+        expect(veggieContent).toContain('struct SbVeggieParams');
+        expect(veggieContent).toContain('enum class SbVeggieArchetype');
 
+        // Canonical SB-Veggie Optimizer header
         const veggieOptHeaderPath = path.join(sdkInclude, 'scratchbox_sb_veggie_optimizer.hpp');
         expect(fs.existsSync(veggieOptHeaderPath)).toBe(true);
         const veggieOptContent = fs.readFileSync(veggieOptHeaderPath, 'utf8');
-        expect(veggieOptContent).toContain('using SbVeggieOptimizer');
+        expect(veggieOptContent).toContain('class SbVeggieOptimizer');
+        expect(veggieOptContent).toContain('struct SbVeggieOptimizerOptions');
+        expect(veggieOptContent).toContain('struct SbVeggieOptimizerResult');
+        expect(veggieOptContent).toContain('evaluateChamferDistance');
+
+        // Legacy forwarder headers
+        const treeHeaderPath = path.join(sdkInclude, 'scratchbox_smpl_tree.hpp');
+        expect(fs.existsSync(treeHeaderPath)).toBe(true);
+        const treeContent = fs.readFileSync(treeHeaderPath, 'utf8');
+        expect(treeContent).toContain('scratchbox_sb_veggie.hpp');
+
+        const optHeaderPath = path.join(sdkInclude, 'scratchbox_smpl_optimizer.hpp');
+        expect(fs.existsSync(optHeaderPath)).toBe(true);
+        const optContent = fs.readFileSync(optHeaderPath, 'utf8');
+        expect(optContent).toContain('scratchbox_sb_veggie_optimizer.hpp');
     });
 
     it('2. should compile native runner binary cleanly', async () => {
@@ -189,7 +189,7 @@ describe('SB-Veggie (formerly SMPL-Tree) Parametric Botanical Synthesis & Invers
     });
 
     it('8. should solve 24-DOF Asymmetric Bough IK and reflect lopsided real-world canopy profile', () => {
-        const binPath = path.resolve(process.cwd(), 'build/run_smpl_tree');
+        const binPath = path.resolve(process.cwd(), 'build/run_sb_veggie');
         const realBlobPath = path.resolve(process.cwd(), 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
         const testGlbPath = path.resolve(process.cwd(), 'build/test_asymmetric_ik.glb');
 
@@ -219,7 +219,7 @@ describe('SB-Veggie (formerly SMPL-Tree) Parametric Botanical Synthesis & Invers
     });
 
     it('9. should sample 3D Spatial Color Field from raw scan and ground botanical vertex colors', () => {
-        const binPath = path.resolve(process.cwd(), 'build/run_smpl_tree');
+        const binPath = path.resolve(process.cwd(), 'build/run_sb_veggie');
         const realBlobPath = path.resolve(process.cwd(), 'public/models/botanical_tests/real_tile_extracted_tree_blob.glb');
         const testColorGlb = path.resolve(process.cwd(), 'build/test_color_field_test.glb');
 

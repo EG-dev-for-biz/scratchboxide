@@ -82,8 +82,6 @@
 #include "scratchbox_visual_hull.hpp"
 #include "scratchbox_atmosphere.hpp"
 #include "scratchbox_lens_shader.hpp"
-#include "scratchbox_smpl_tree.hpp"
-#include "scratchbox_smpl_optimizer.hpp"
 #include "scratchbox_sb_veggie.hpp"
 #include "scratchbox_sb_veggie_optimizer.hpp"
 #include "scratchbox_sb_archi.hpp"
@@ -93,8 +91,10 @@
 #include "scratchbox_plant_builder.hpp"
 #include "scratchbox_infinigen.hpp"
 #include "scratchbox_tile_restructurer.hpp"
+#include "scratchbox_displacement.hpp"
 
 namespace sb = scratchbox;
+namespace disp = scratchbox::displacement;
 namespace vhull = scratchbox::visual_hull;
 namespace gopt = scratchbox::gaussian_opt;
 namespace geo = scratchbox::geometry;

@@ -399,6 +399,37 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     />
                 )}
 
+                {/* User Supplied Image Reference Card */}
+                {isUser && (msg.imageContent || (msg.imagesContent && msg.imagesContent.length > 0)) && (
+                    <div className="sb-user-attached-image-card" style={{
+                        marginTop: '8px',
+                        marginBottom: '8px',
+                        borderRadius: '8px',
+                        overflow: 'hidden',
+                        border: '1px solid rgba(148, 163, 184, 0.25)',
+                        background: '#090d16',
+                        maxWidth: '340px'
+                    }}>
+                        <img
+                            src={msg.imageContent || msg.imagesContent?.[0]}
+                            alt="Supplied reference plate"
+                            style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }}
+                        />
+                        <div style={{
+                            padding: '6px 10px',
+                            fontSize: '11px',
+                            color: '#94a3b8',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: 'rgba(15, 23, 42, 0.95)'
+                        }}>
+                            <span>📷 Supplied Image Reference</span>
+                            <span style={{ marginLeft: 'auto', color: '#64748b', fontSize: '10px' }}>Input Plate</span>
+                        </div>
+                    </div>
+                )}
+
                 {cleanText && (
                     <ChatMarkdownRenderer
                         text={cleanText}

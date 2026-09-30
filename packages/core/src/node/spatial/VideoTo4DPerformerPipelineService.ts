@@ -252,8 +252,8 @@ export interface CanonicalGaussiansResult {
     heroPoseJoints?: Array<[number, number, number]>;
 }
 
-// SMPL-X 22 Joint Canonical Hierarchy & Names
-export const SMPLX_22_JOINTS: Array<{ index: number; name: string; parent: number; restOffset: [number, number, number] }> = [
+// SB-Human 22 Joint Canonical Hierarchy & Names
+export const SBHUMAN_22_JOINTS: Array<{ index: number; name: string; parent: number; restOffset: [number, number, number] }> = [
     { index: 0,  name: 'pelvis',          parent: -1, restOffset: [0.0, 0.95, 0.0] },
     { index: 1,  name: 'left_hip',        parent: 0,  restOffset: [-0.09, 0.88, 0.0] },
     { index: 2,  name: 'right_hip',       parent: 0,  restOffset: [0.09, 0.88, 0.0] },
@@ -277,6 +277,9 @@ export const SMPLX_22_JOINTS: Array<{ index: number; name: string; parent: numbe
     { index: 20, name: 'left_wrist',      parent: 18, restOffset: [-0.34, 0.88, -0.01] },
     { index: 21, name: 'right_wrist',     parent: 19, restOffset: [0.34, 0.88, -0.01] }
 ];
+
+// Backward compatibility alias for legacy SMPL-X nomenclature
+export const SMPLX_22_JOINTS = SBHUMAN_22_JOINTS;
 
 // ============================================================================
 // Video-to-Performer 4D Projection Pipeline Service
@@ -396,7 +399,7 @@ export class VideoTo4DPerformerPipelineService {
                 gaussians: gvhmrAvatar.gaussians,
                 canonicalJoints: gvhmrAvatar.canonicalJoints,
                 kintreeParents: gvhmrAvatar.kintreeParents,
-                jointNames: SMPLX_22_JOINTS.map(j => j.name),
+                jointNames: SBHUMAN_22_JOINTS.map(j => j.name),
                 heroPoseJoints: gvhmrBody!.frames[0].joints.map(j => [j[0], j[1], j[2]] as [number, number, number])
             }
             : this.generateCanonicalPosedGaussians(silhouetteResult, numGaussians, targetHeight);
@@ -1614,7 +1617,7 @@ export class VideoTo4DPerformerPipelineService {
         const legScale = silhouette.ratios.legToTorsoRatio;
 
         // Scale canonical joints
-        const canonicalJoints: Array<[number, number, number]> = SMPLX_22_JOINTS.map(j => {
+        const canonicalJoints: Array<[number, number, number]> = SBHUMAN_22_JOINTS.map(j => {
             let [x, y, z] = j.restOffset;
             x *= shoulderScale;
             if (y > 0.95) {
@@ -1627,8 +1630,8 @@ export class VideoTo4DPerformerPipelineService {
             return [x, y, z];
         });
 
-        const kintreeParents = SMPLX_22_JOINTS.map(j => j.parent);
-        const jointNames = SMPLX_22_JOINTS.map(j => j.name);
+        const kintreeParents = SBHUMAN_22_JOINTS.map(j => j.parent);
+        const jointNames = SBHUMAN_22_JOINTS.map(j => j.name);
 
         const gaussians: SkinWeightedGaussian[] = [];
 
@@ -1959,10 +1962,10 @@ export class VideoTo4DPerformerPipelineService {
         posedJoints: Array<[number, number, number]>,
         intrinsics: { width: number; height: number; fx: number; fy: number; cx: number; cy: number }
     ): { standoff: number; camX: number; camY: number } | null {
-        const px = new HumanoidMotionBridgeService().convertLandmarksToSMPLX22(
+        const px = new HumanoidMotionBridgeService().convertLandmarksToSbHuman22(
             imageLandmarks.map(([x, y, , v]) => ({ x: x * intrinsics.width, y: -y * intrinsics.height, z: 0, visibility: v }))
         );
-        const vis = new HumanoidMotionBridgeService().convertLandmarksToSMPLX22(
+        const vis = new HumanoidMotionBridgeService().convertLandmarksToSbHuman22(
             imageLandmarks.map(([, , , v]) => ({ x: v, y: 0, z: 0, visibility: v }))
         );
         // Normal equations for A·[camX, camY, standoff] = b
@@ -2581,11 +2584,11 @@ export class VideoTo4DPerformerPipelineService {
 
         return {
             clip_id: clipId,
-            body_model: 'smplx_22',
+            body_model: 'sbhuman_22',
             fps,
             num_frames: totalFrames,
             num_joints: 22,
-            joints_name: SMPLX_22_JOINTS.map(j => j.name),
+            joints_name: SBHUMAN_22_JOINTS.map(j => j.name),
             kintree_parents: parents,
             canonical_joints: canonicalJoints,
             frames,

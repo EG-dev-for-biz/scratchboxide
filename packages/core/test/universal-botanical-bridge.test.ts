@@ -18,7 +18,7 @@ import {
 } from '../src/node/spatial/UniversalBotanicalBridgeService';
 import { ColosseumTreeIdentificationEngine } from '../src/node/spatial/ColosseumTreeIdentificationEngine';
 
-describe('UniversalBotanicalBridgeService (Spatial Separator to SMPL-Tree)', () => {
+describe('UniversalBotanicalBridgeService (Spatial Separator to SB-Veggie)', () => {
     const bridge = new UniversalBotanicalBridgeService();
 
     it('correctly maps tree species and prompt descriptions to botanical adapters', () => {

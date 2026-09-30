@@ -12,18 +12,13 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SbVeggieService, SmplTreeService } from '../3d-engine/sb-veggie-service';
+import { SbVeggieService } from '../3d-engine/sb-veggie-service';
 import type {
     SbVeggieArchetype,
     SbVeggieSynthesizeOptions,
     SbVeggieResult,
     SbVeggiePhenologyParams,
-    SbVeggieShapingParams,
-    SmplTreeArchetype,
-    SmplTreeSynthesizeOptions,
-    SmplTreeResult,
-    SmplTreePhenologyParams,
-    SmplTreeShapingParams
+    SbVeggieShapingParams
 } from '../../common/botanical/sb-veggie-protocol';
 
 export type SupportedTreeSpecies =
@@ -43,7 +38,7 @@ export interface BotanicalSpeciesAdapter {
     species: SupportedTreeSpecies;
     commonName: string;
     scientificName: string;
-    archetype: SmplTreeArchetype;
+    archetype: SbVeggieArchetype;
     leafMorphology: number; // 0 = Lobed Oak, 1 = Broadleaf Serrated, 2 = Conifer Needles, 3 = Cypress Scales, 4 = Lanceolate Olive
     leafCupping: number;
     leafDensityMultiplier: number;
@@ -327,7 +322,7 @@ export interface TreeSynthesisBridgeOptions {
     saturationScale?: number;
     /** Output directory or explicit output path */
     outputGlbPath?: string;
-    /** If true, runs SMPLify-Tree scan inversion when rawScanGlbPath is present */
+    /** If true, runs SB-Veggie scan inversion when rawScanGlbPath is present */
     runInversionIfScanAvailable?: boolean;
     /** Custom species override */
     speciesOverride?: SupportedTreeSpecies;
@@ -336,7 +331,7 @@ export interface TreeSynthesisBridgeOptions {
 export interface TreeSynthesisBridgeResult {
     treeId: string;
     species: SupportedTreeSpecies;
-    archetype: SmplTreeArchetype;
+    archetype: SbVeggieArchetype;
     worldPosition: [number, number, number];
     worldRotationYawRad: number;
     fittedHeightMeters: number;
@@ -503,13 +498,13 @@ export class UniversalBotanicalBridgeService {
         const leafDensity = options.leafDensity !== undefined ? options.leafDensity : adapter.leafDensityMultiplier;
         const saturationScale = options.saturationScale ?? 0.78;
 
-        const phenology: SmplTreePhenologyParams = {
+        const phenology: SbVeggiePhenologyParams = {
             season,
             leafDensity,
             generateLeaves: season > 0.05 && leafDensity > 0.05
         };
 
-        const shaping: SmplTreeShapingParams = {
+        const shaping: SbVeggieShapingParams = {
             branchCurvature: adapter.branchCurvature,
             collarFlare: adapter.collarFlare,
             reactionWood: adapter.reactionWood,

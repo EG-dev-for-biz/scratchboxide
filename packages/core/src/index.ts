@@ -367,10 +367,29 @@ export {
     type FidelityFXSuperResolutionOptions
 } from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
 
+// Procedural Structure SfM & COLMAP Dataset Generator
+export {
+    ProceduralSfMDatasetService,
+    type Vector3Tuple,
+    type ProceduralPinholeIntrinsics,
+    type ProceduralCameraPose,
+    type ProceduralPoint3D,
+    type ProceduralDatasetOptions,
+    type ProceduralSfMBundle
+} from './node/spatial/ProceduralSfMDatasetService';
 
+// Universal 3D Structure Foundation & Multi-Format Adapters
+export {
+    Universal3DStructureFoundation
+} from './node/spatial/Universal3DStructureFoundation';
 
-
-
-
-
+export {
+    type MetricBoundingBox,
+    type UniversalSurfaceMesh,
+    type UniversalCollisionHull,
+    type VideoDiffusionCameraBlockout,
+    type Target3DFormat,
+    type Universal3DStructureInitOptions,
+    type MultiFormatExportResult
+} from './common/spatial/universal-3d-structure-types';
 

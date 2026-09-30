@@ -136,6 +136,30 @@ NB_MODULE(scratchbox_native, m) {
         .def("rotate_y", &ScratchboxMesh::rotateY, "angle_deg"_a)
         .def("rotate_z", &ScratchboxMesh::rotateZ, "angle_deg"_a)
         .def("set_color", &ScratchboxMesh::setColor, "color"_a)
+        .def_rw("material", &ScratchboxMesh::material)
+        .def("compute_curvature_ao", &ScratchboxMesh::computeCurvatureAO, "intensity"_a = 0.6f)
+        .def("apply_procedural_weathering", &ScratchboxMesh::applyProceduralWeathering, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
+        .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) {
+            math::FastNoise3D noise(42);
+            for (auto& v : self.vertices) {
+                float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 0.5f, 2.0f);
+                v.position = v.position + v.normal * (n * amplitude);
+            }
+            self.recomputeNormals();
+            self.recomputeBounds();
+        }, "frequency"_a = 2.0f, "amplitude"_a = 0.05f)
+        .def("tessellate_and_displace", [](ScratchboxMesh& self, uint32_t tessellationFactor, float displacementScale, float noiseFreq, float noiseAmp) {
+            disp::DisplacementOptions opt;
+            opt.tessellationFactor = tessellationFactor;
+            opt.displacementScale = displacementScale;
+            opt.proceduralNoiseFrequency = noiseFreq;
+            opt.proceduralNoiseScale = noiseAmp;
+            opt.enableProceduralNoise = (noiseAmp > 0.0f);
+            ScratchboxMesh displaced = disp::DisplacementEngine::tessellateAndDisplaceMesh(self, opt);
+            self.vertices = std::move(displaced.vertices);
+            self.indices = std::move(displaced.indices);
+            self.bounds = displaced.bounds;
+        }, "tessellation_factor"_a = 4, "displacement_scale"_a = 0.06f, "noise_freq"_a = 32.0f, "noise_amp"_a = 0.015f)
         .def("clear", &ScratchboxMesh::clear)
         .def("recompute_normals", &ScratchboxMesh::recomputeNormals)
         .def("recompute_smooth_normals", &ScratchboxMesh::recomputeSmoothNormals)
@@ -280,7 +304,32 @@ NB_MODULE(scratchbox_native, m) {
                "target_center"_a = Vec3(0, 1.0f, 0), "rig_scale"_a = 5.0f);
 
     // ========================================================================
-    // 6. IO & STREAMING SUBMODULE
+    // 6. SHAPER SUBMODULE (DEFORMERS & SCULPTING)
+    // ========================================================================
+    auto m_shaper = m.def_submodule("shaper", "Non-linear geometric mesh deformers and procedural shaping");
+
+    m_shaper.def("taper", [](ScratchboxMesh& mesh, int axisIdx, float factor) {
+        shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+        shaper::Deformer::taper(mesh, axis, factor);
+    }, "mesh"_a, "axis"_a = 1, "factor"_a = 0.5f);
+
+    m_shaper.def("twist", [](ScratchboxMesh& mesh, int axisIdx, float angleDeg) {
+        shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+        shaper::Deformer::twist(mesh, axis, angleDeg);
+    }, "mesh"_a, "axis"_a = 1, "angle_deg"_a = 45.0f);
+
+    m_shaper.def("bend", [](ScratchboxMesh& mesh, int mainAxisIdx, int bendAxisIdx, float angleDeg, float radius) {
+        shaper::Axis mainAxis = mainAxisIdx == 0 ? shaper::Axis::X : (mainAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+        shaper::Axis bendAxis = bendAxisIdx == 0 ? shaper::Axis::X : (bendAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+        shaper::Deformer::bend(mesh, mainAxis, bendAxis, angleDeg * (math::PI / 180.0f), radius);
+    }, "mesh"_a, "main_axis"_a = 1, "bend_axis"_a = 0, "angle_deg"_a = 30.0f, "radius"_a = 2.0f);
+
+    m_shaper.def("bulge", [](ScratchboxMesh& mesh, const Vec3& center, float radius, float strength, float power) {
+        shaper::Deformer::bulge(mesh, center, radius, strength, power);
+    }, "mesh"_a, "center"_a = Vec3(0, 0, 0), "radius"_a = 1.0f, "strength"_a = 0.3f, "power"_a = 2.0f);
+
+    // ========================================================================
+    // 7. IO & STREAMING SUBMODULE
     // ========================================================================
     auto m_io = m.def_submodule("io", "glTF 2.0 binary (.glb) packing and file serialization");
 
@@ -295,8 +344,24 @@ NB_MODULE(scratchbox_native, m) {
         return true;
     }, "path"_a, "mesh"_a, "Save a ScratchboxMesh directly to a standard binary glTF 2.0 (.glb) file");
 
+    m_io.def("write_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes) {
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open file for writing: " + path);
+        }
+        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+        out.close();
+        return true;
+    }, "path"_a, "meshes"_a, "Save multiple ScratchboxMeshes with distinct PBR materials to a multi-mesh glTF 2.0 (.glb) file");
+
     m_io.def("export_glb_bytes", [](const ScratchboxMesh& mesh) {
         auto glb = GlbWriter::writeGlb(mesh);
         return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
     }, "mesh"_a, "Export ScratchboxMesh directly as a Python bytes object containing .glb data");
+
+    m_io.def("export_glb_bytes", [](const std::vector<ScratchboxMesh>& meshes) {
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
+        return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
+    }, "meshes"_a, "Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data");
 }

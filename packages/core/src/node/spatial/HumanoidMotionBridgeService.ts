@@ -42,7 +42,7 @@ export interface RetargetOptions {
 }
 
 /**
- * Bridges MediaPipe 33 pose landmarks to 4DAnyone 22 SMPL-X skeletal joint representation.
+ * Bridges MediaPipe 33 pose landmarks to 4DAnyone 22 SB-Human skeletal joint representation.
  */
 export class HumanoidMotionBridgeService {
 
@@ -65,7 +65,7 @@ export class HumanoidMotionBridgeService {
             let jointPositions: Array<[number, number, number]>;
 
             if (frame.worldLandmarks && frame.worldLandmarks.length >= 33) {
-                jointPositions = this.convertLandmarksToSMPLX22(frame.worldLandmarks, scale);
+                jointPositions = this.convertLandmarksToSbHuman22(frame.worldLandmarks, scale);
             } else {
                 jointPositions = this.synthesizeJointsFromAngles(frame.angles, canonical, scale);
             }
@@ -311,9 +311,9 @@ export class HumanoidMotionBridgeService {
     }
 
     /**
-     * Maps 33 MediaPipe 3D landmarks into 22 SMPL-X / 4DAnyone joints in Y-up metric space.
+     * Maps 33 MediaPipe 3D landmarks into 22 SB-Human / 4DAnyone joints in Y-up metric space.
      */
-    public convertLandmarksToSMPLX22(
+    public convertLandmarksToSbHuman22(
         lm: MediaPipeLandmark[],
         scale: number = 1.0
     ): Array<[number, number, number]> {
@@ -372,7 +372,7 @@ export class HumanoidMotionBridgeService {
         const spine2 = lerp(pelvis, shoulderMid, 0.50);
         const spine3 = lerp(pelvis, shoulderMid, 0.75);
 
-        // Exactly 22 Canonical SMPL-X joints
+        // Exactly 22 Canonical SB-Human joints
         return [
             pelvis,    // 0
             lHip,      // 1
@@ -397,6 +397,16 @@ export class HumanoidMotionBridgeService {
             lWrist,    // 20
             rWrist     // 21
         ];
+    }
+
+    /**
+     * Backward-compatible alias for convertLandmarksToSbHuman22.
+     */
+    public convertLandmarksToSMPLX22(
+        lm: MediaPipeLandmark[],
+        scale: number = 1.0
+    ): Array<[number, number, number]> {
+        return this.convertLandmarksToSbHuman22(lm, scale);
     }
 
     /**

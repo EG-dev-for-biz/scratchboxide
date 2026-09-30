@@ -189,8 +189,13 @@ export {
     TileAtmosphereSpec,
     TilePathTraceRequest,
     TilePathTraceStats,
-    TilePathTraceResult
+    TilePathTraceResult,
+    TileDisplacementSpec
 } from './node/3d-engine/native-tile-path-tracer-service';
+export {
+    NativeDisplacementService,
+    DisplacementResult
+} from './node/3d-engine/native-displacement-service';
 export {
     ColmapReconstructionService,
     ColmapCameraModel,

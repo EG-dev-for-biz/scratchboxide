@@ -28,6 +28,7 @@ geometry = _native.geometry
 architecture = _native.architecture
 nature = _native.nature
 composer = _native.composer
+shaper = _native.shaper
 io = _native.io
 
 # Core Types

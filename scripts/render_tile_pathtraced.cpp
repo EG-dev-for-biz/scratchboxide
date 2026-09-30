@@ -17,6 +17,7 @@
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_texture.hpp"
 #include "scratchbox_view_transform.hpp"
+#include "scratchbox_displacement.hpp"
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -154,6 +155,44 @@ int main(int argc, char** argv) {
         std::cerr << "failed to load " << glbPath << ": " << scene.error << std::endl;
         return 1;
     }
+
+    uint32_t originalTris = static_cast<uint32_t>(scene.mesh.indices.size() / 3);
+    uint32_t originalVerts = static_cast<uint32_t>(scene.mesh.vertices.size());
+
+    if (config.has("displacement")) {
+        const Json& dispJson = config["displacement"];
+        displacement::DisplacementOptions dispOpt;
+        dispOpt.tessellationFactor = static_cast<uint32_t>(numberOr(dispJson["tessellationFactor"], 4.0f));
+        dispOpt.displacementScale = numberOr(dispJson["displacementScale"], 0.06f);
+        dispOpt.midpoint = numberOr(dispJson["midpoint"], 0.5f);
+        dispOpt.enableProceduralNoise = boolOr(dispJson["enableProceduralNoise"], true);
+        dispOpt.proceduralNoiseScale = numberOr(dispJson["proceduralNoiseScale"], 0.015f);
+        dispOpt.proceduralNoiseFrequency = numberOr(dispJson["proceduralNoiseFrequency"], 32.0f);
+        dispOpt.sampleTextureHeight = boolOr(dispJson["sampleTextureHeight"], true);
+        dispOpt.textureHeightWeight = numberOr(dispJson["textureHeightWeight"], 1.0f);
+        dispOpt.recomputeSmoothNormals = boolOr(dispJson["recomputeSmoothNormals"], true);
+
+        std::cout << "[Displacement] Subdividing and physically displacing scene: factor N=" 
+                  << dispOpt.tessellationFactor << ", scale=" << dispOpt.displacementScale << "m..." << std::endl;
+        scene = displacement::DisplacementEngine::tessellateAndDisplaceScene(scene, dispOpt);
+        std::cout << "[Displacement] Complete. Triangles: " << originalTris << " -> " 
+                  << (scene.mesh.indices.size() / 3) << " (x" 
+                  << ((scene.mesh.indices.size() / 3) / std::max<size_t>(1, originalTris))
+                  << "), Vertices: " << originalVerts << " -> " << scene.mesh.vertices.size() << std::endl;
+
+        if (dispJson.has("exportDisplacedGlb")) {
+            std::string outGlb = dispJson["exportDisplacedGlb"].asString("");
+            if (!outGlb.empty()) {
+                std::vector<uint8_t> glbData = io::GlbWriter::writeGlb(scene.mesh);
+                std::ofstream glbFile(outGlb, std::ios::binary);
+                if (glbFile.is_open()) {
+                    glbFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
+                    std::cout << "[Displacement] Exported displaced GLB mesh to " << outGlb << std::endl;
+                }
+            }
+        }
+    }
+
     render::PathTracer tracer(scene, boolOr(config["groundPlane"], true));
     if (config.has("clayAlbedo")) {
         // Linear RGB; studio clay #dcd6cd is [0.716, 0.672, 0.610]

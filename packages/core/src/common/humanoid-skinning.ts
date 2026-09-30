@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Skeletal Linear Blend Skinning for the 22-joint SMPL-X body used by 4DAnyone avatars.
+ * Skeletal Linear Blend Skinning for the 22-joint SB-Human body used by 4DAnyone avatars.
  *
  * Joint positions in motion.json are absolute (world, Y-up, metres). Each joint j owns the
  * segment that starts at j; its rotation maps the canonical segment frame onto the posed one.
@@ -22,16 +22,21 @@
 export type Vec3 = [number, number, number];
 export type Mat3 = [Vec3, Vec3, Vec3];
 
-export const SMPLX22_PARENTS: number[] = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
+export const SBHUMAN22_PARENTS: number[] = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
 
 /** Child joint defining each joint's own segment direction (-1: leaf, inherits its parent's rotation). */
-export const SMPLX22_SEGMENT_CHILD: number[] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -1, 15, 16, 17, -1, 18, 19, 20, 21, -1, -1];
+export const SBHUMAN22_SEGMENT_CHILD: number[] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -1, 15, 16, 17, -1, 18, 19, 20, 21, -1, -1];
 
 /** Lateral (right -> left) reference used to recover twist for torso joints, or null for swing-only. */
-export const SMPLX22_LATERAL_REF: Array<[number, number] | null> = [
+export const SBHUMAN22_LATERAL_REF: Array<[number, number] | null> = [
     [2, 1], null, null, [2, 1], null, null, [17, 16], null, null, [17, 16], null, null,
     [17, 16], null, null, null, null, null, null, null, null, null
 ];
+
+// Backward compatibility aliases
+export const SMPLX22_PARENTS = SBHUMAN22_PARENTS;
+export const SMPLX22_SEGMENT_CHILD = SBHUMAN22_SEGMENT_CHILD;
+export const SMPLX22_LATERAL_REF = SBHUMAN22_LATERAL_REF;
 
 const IDENTITY: Mat3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 

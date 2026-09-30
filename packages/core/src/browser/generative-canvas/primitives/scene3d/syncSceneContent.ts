@@ -12,6 +12,8 @@ import type { BakedGaussian } from '../../../../common/geospatial-4d-protocol';
 import {
     createHistoricalBattlefieldScene,
     createProceduralCityScene,
+    createHighwayOverpassScene,
+    createAlpineMatterhornScene,
     createSolarSystemScene,
     createMolecularPhysicsScene,
     createArchitecturalRoomScene,
@@ -157,6 +159,12 @@ export function syncSceneContent(
                 animatedVehicles: true,
                 cyberpunk: worldBranch.includes('cyberpunk') || sceneTitle.includes('cyberpunk')
             });
+            break;
+        case 'highway_overpass':
+            proceduralSceneGroup = createHighwayOverpassScene(scene, THREE);
+            break;
+        case 'alpine_valley':
+            proceduralSceneGroup = createAlpineMatterhornScene(scene, THREE);
             break;
         case 'solar-system':
             proceduralSceneGroup = createSolarSystemScene(scene, THREE, { includeAsteroidBelt: true, includeMoons: true });

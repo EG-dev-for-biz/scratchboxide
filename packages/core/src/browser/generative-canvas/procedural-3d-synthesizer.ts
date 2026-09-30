@@ -93,6 +93,8 @@ export type Procedural3DTheme =
     | 'worldbuilder'
     | 'battlefield'
     | 'city'
+    | 'highway_overpass'
+    | 'alpine_valley'
     | 'solar-system'
     | 'mars_rover'
     | 'molecular'
@@ -118,6 +120,16 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
 
     // Check prompt first for direct user intent, then fall back to surrounding context
     for (const text of [promptLower, combined]) {
+        // -0.98. Civil Highway Overpass / Freeway Interchange / Infrastructure Viaduct
+        if (/\b(?:civil_highway_overpass|overpass|viaduct|highway|freeway|interchange|flyover|expressway|bridge\s*piers?|gantry\s*signs?)\b/i.test(text)) {
+            return 'highway_overpass';
+        }
+
+        // -0.975. Alpine Matterhorn Peak / Glacial Valley / Mountain Horn / Swiss Chalets
+        if (/\b(?:matterhorn|alpine|glacial\s*valley|pyramidal\s*horn|chalets?|swiss\s*alps?|mountain\s*horn)\b/i.test(text)) {
+            return 'alpine_valley';
+        }
+
         // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields / 4D Avatar
         if (/\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|survey\s*stations?|survey\s*synthesis|4d\s*performer|4dgs\s*avatar)\b/i.test(text)) {
             return 'gaussian_splat';
@@ -2726,6 +2738,201 @@ onFrame((time, delta) => {
         };
     }
 
+    if (theme === 'highway_overpass') {
+        const title = '3D Highway Overpass & Civil Interchange';
+        const subtitle = 'Multi-span elevated viaduct with cylindrical concrete piers, jersey barriers, overhead gantry exit signs, and animated transit lanes.';
+        const customScript = `
+const overpass = createHighwayOverpassScene(scene, THREE, {
+    trafficDensity: 14,
+    includeOverheadSigns: true
+});
+
+onFrame((time, delta) => {
+    if (overpass && overpass.userData && typeof overpass.userData.update === 'function') {
+        overpass.userData.update(time, delta);
+    }
+});
+`;
+        return {
+            title,
+            subtitle,
+            worldBranch: 'infrastructure/highway-interchange',
+            sceneType: 'highway_overpass',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 15000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [24, 22, 38],
+                target: [0, 8, 0],
+                fov: 50
+            },
+            environment: {
+                skybox: 'daylight',
+                lighting: 'daylight',
+                ground: true
+            },
+            customMeshes: [
+                {
+                    id: 'mesh-viaduct-span-deck',
+                    name: 'Elevated Deck Structure',
+                    type: 'box',
+                    position: [0, 11.2, 0],
+                    scale: [15, 1.4, 140],
+                    material: { color: 0x1e242d, roughness: 0.82, metalness: 0.15 }
+                },
+                {
+                    id: 'mesh-viaduct-pier-crosshead',
+                    name: 'Reinforced Pier Bent Crosshead',
+                    type: 'box',
+                    position: [0, 9.4, 20],
+                    scale: [16.2, 1.4, 2.8],
+                    material: { color: 0x94a3b8, roughness: 0.75, metalness: 0.1 }
+                }
+            ],
+            customScript,
+            code: customScript,
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: `#include "scratchbox_engine.hpp"
+#include <iostream>
+#include <vector>
+
+int main() {
+    using namespace scratchbox::geometry;
+    using namespace scratchbox::math;
+
+    ScratchboxMesh viaduct("Highway_Overpass_Viaduct");
+    
+    // Extrude multi-span concrete box girder deck (140m long, 15m wide at Y=11.2m)
+    for (float z = -70.0f; z <= 70.0f; z += 1.0f) {
+        viaduct.extrudeCrossSectionProfile({
+            {-7.5f, 11.2f},
+            { 7.5f, 11.2f},
+            { 6.5f,  9.8f},
+            {-6.5f,  9.8f}
+        }, z);
+    }
+    
+    // Concrete support piers & crosshead bents
+    const float pierZ[4] = {-48.0f, -20.0f, 20.0f, 48.0f};
+    for (float pz : pierZ) {
+        viaduct.addCylinderBent({-4.2f, 0.0f, pz}, {4.2f, 0.0f, pz}, 9.8f, 1.2f);
+        viaduct.addBoxCrosshead({0.0f, 9.4f, pz}, {16.2f, 1.4f, 2.8f});
+    }
+
+    viaduct.recomputeSmoothNormals();
+    viaduct.computeCurvatureAO(0.85f);
+    scratchbox::io::GlbWriter::streamChunk(viaduct, "Highway_Overpass_Viaduct");
+    return 0;
+}`
+            }
+        };
+    }
+
+    if (theme === 'alpine_valley') {
+        const title = '3D Alpine Glacial Valley & Pyramidal Horn (Matterhorn)';
+        const subtitle = 'Towering 4-ridge rocky horn peak with snow cap, cascading river gorge, Swiss chalets, and subalpine conifer forest.';
+        const customScript = `
+const alpine = createAlpineMatterhornScene(scene, THREE, {
+    showChalets: true,
+    showGlacierRiver: true,
+    snowCover: 0.85
+});
+
+onFrame((time, delta) => {
+    if (alpine && alpine.userData && typeof alpine.userData.update === 'function') {
+        alpine.userData.update(time, delta);
+    }
+});
+`;
+        return {
+            title,
+            subtitle,
+            worldBranch: 'nature/alpine-glacier-valley',
+            sceneType: 'alpine_valley',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 15000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [0, 24, 60],
+                target: [0, 16, -10],
+                fov: 52
+            },
+            environment: {
+                skybox: 'daylight',
+                lighting: 'daylight',
+                ground: true
+            },
+            customMeshes: [
+                {
+                    id: 'mesh-matterhorn-summit',
+                    name: 'Matterhorn Pyramidal Peak',
+                    type: 'cone',
+                    position: [0, 36, -55],
+                    scale: [15, 20, 15],
+                    material: { color: 0x373b42, roughness: 0.9, metalness: 0.15 }
+                },
+                {
+                    id: 'mesh-swiss-chalet-village',
+                    name: 'Chalet Village Ensemble',
+                    type: 'box',
+                    position: [-16, 2.8, 18],
+                    scale: [6.0, 3.2, 4.8],
+                    material: { color: 0x452818, roughness: 0.85, metalness: 0.05 }
+                }
+            ],
+            customScript,
+            code: customScript,
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: `#include "scratchbox_engine.hpp"
+#include <iostream>
+#include <cmath>
+
+int main() {
+    using namespace scratchbox::geometry;
+    using namespace scratchbox::math;
+
+    ScratchboxMesh matterhorn("Matterhorn_Alpine_Valley");
+    
+    // 4-Ridge Asymmetric Pyramidal Horn SDF (Hornli, Furggen, Lion, Zmutt)
+    MarchingCubesVolume grid(128, 128, 128, Bounds3D({-80, 0, -80}, {80, 75, 80}));
+    grid.sampleSDF([](Vec3 p) {
+        float h = p.y / 65.0f;
+        if (h > 1.0f) return 1.0f;
+        float pyramid = std::max(std::abs(p.x), std::abs(p.z)) - (1.0f - h) * 45.0f;
+        float strata = std::sin(p.y * 0.6f + p.x * 0.1f) * 1.8f;
+        float ridgeNoise = FastNoise3D::fbm(p * 0.05f, 5) * 3.5f;
+        return pyramid + strata + ridgeNoise;
+    });
+
+    matterhorn.polygonize(grid);
+    matterhorn.recomputeSmoothNormals();
+    scratchbox::io::GlbWriter::streamChunk(matterhorn, "Matterhorn_Alpine_Valley");
+    return 0;
+}`
+            }
+        };
+    }
+
     if (theme === 'city') {
         const isCyberpunk = /cyberpunk|neon|future/i.test(prompt) || /cyberpunk|neon|future/i.test(docTitle);
         const title = isCyberpunk
@@ -3680,6 +3887,531 @@ export function createProceduralCityScene(
                 if (v.position.z > 45) v.position.z = -45;
             }
         }
+    };
+
+    scene.add(group);
+    return group;
+}
+
+/**
+ * Procedural Highway Overpass & Civil Interchange Viaduct.
+ */
+export function createHighwayOverpassScene(
+    scene: any,
+    THREE: any,
+    options?: {
+        trafficDensity?: number;
+        includeOverheadSigns?: boolean;
+    }
+): any {
+    const group = new THREE.Group();
+    group.name = 'highway-overpass-scene';
+
+    // Materials
+    const asphaltMat = new THREE.MeshStandardMaterial({
+        color: 0x1e242d,
+        roughness: 0.82,
+        metalness: 0.15
+    });
+    const concretePierMat = new THREE.MeshStandardMaterial({
+        color: 0x94a3b8,
+        roughness: 0.75,
+        metalness: 0.1
+    });
+    const concreteBarrierMat = new THREE.MeshStandardMaterial({
+        color: 0xc8ced8,
+        roughness: 0.65,
+        metalness: 0.05
+    });
+    const steelGirderMat = new THREE.MeshStandardMaterial({
+        color: 0x334155,
+        roughness: 0.35,
+        metalness: 0.85
+    });
+    const yellowStripeMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    const whiteStripeMat = new THREE.MeshBasicMaterial({ color: 0xf8fafc });
+    const highwaySignGreenMat = new THREE.MeshStandardMaterial({
+        color: 0x005c38,
+        roughness: 0.4,
+        metalness: 0.2
+    });
+    const signTrussMat = new THREE.MeshStandardMaterial({
+        color: 0x64748b,
+        roughness: 0.4,
+        metalness: 0.8
+    });
+
+    // 1. Ground Expressway (Lower Level: runs East-West along X axis)
+    const groundExpressway = new THREE.Mesh(new THREE.PlaneGeometry(160, 36), asphaltMat);
+    groundExpressway.name = 'Ground Interstate 80';
+    groundExpressway.rotation.x = -Math.PI / 2;
+    groundExpressway.position.y = 0.02;
+    group.add(groundExpressway);
+
+    // Ground Lane Striping
+    const gy1 = new THREE.Mesh(new THREE.PlaneGeometry(160, 0.2), yellowStripeMat);
+    gy1.rotation.x = -Math.PI / 2;
+    gy1.position.set(0, 0.04, -0.2);
+    group.add(gy1);
+    const gy2 = new THREE.Mesh(new THREE.PlaneGeometry(160, 0.2), yellowStripeMat);
+    gy2.rotation.x = -Math.PI / 2;
+    gy2.position.set(0, 0.04, 0.2);
+    group.add(gy2);
+
+    for (let x = -75; x <= 75; x += 6) {
+        const dashN = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 0.2), whiteStripeMat);
+        dashN.rotation.x = -Math.PI / 2;
+        dashN.position.set(x, 0.04, 6.0);
+        group.add(dashN);
+        const dashS = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 0.2), whiteStripeMat);
+        dashS.rotation.x = -Math.PI / 2;
+        dashS.position.set(x, 0.04, -6.0);
+        group.add(dashS);
+    }
+
+    // Ground Embankment / Grass Surrounding
+    const grassMat = new THREE.MeshStandardMaterial({ color: 0x2d3a24, roughness: 0.95 });
+    const grassGround = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), grassMat);
+    grassGround.rotation.x = -Math.PI / 2;
+    grassGround.position.y = 0;
+    group.add(grassGround);
+
+    // 2. Elevated Viaduct Deck (Upper Level: runs North-South along Z axis at Y = 11)
+    const deckLength = 140;
+    const deckWidth = 15;
+    const deckHeight = 11.2;
+
+    const deckGroup = new THREE.Group();
+    deckGroup.name = 'Elevated Viaduct Span';
+
+    const deckSlab = new THREE.Mesh(new THREE.BoxGeometry(deckWidth, 1.4, deckLength), asphaltMat);
+    deckSlab.position.set(0, deckHeight, 0);
+    deckGroup.add(deckSlab);
+
+    for (const gx of [-5.5, -1.8, 1.8, 5.5]) {
+        const girder = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.6, deckLength), steelGirderMat);
+        girder.position.set(gx, deckHeight - 1.2, 0);
+        deckGroup.add(girder);
+    }
+
+    const leftBarrier = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.1, deckLength), concreteBarrierMat);
+    leftBarrier.position.set(-deckWidth / 2 + 0.3, deckHeight + 1.0, 0);
+    deckGroup.add(leftBarrier);
+
+    const rightBarrier = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.1, deckLength), concreteBarrierMat);
+    rightBarrier.position.set(deckWidth / 2 - 0.3, deckHeight + 1.0, 0);
+    deckGroup.add(rightBarrier);
+
+    // Upper Deck Lane Striping
+    const uy1 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, deckLength), yellowStripeMat);
+    uy1.rotation.x = -Math.PI / 2;
+    uy1.position.set(-0.2, deckHeight + 0.72, 0);
+    deckGroup.add(uy1);
+    const uy2 = new THREE.Mesh(new THREE.PlaneGeometry(0.2, deckLength), yellowStripeMat);
+    uy2.rotation.x = -Math.PI / 2;
+    uy2.position.set(0.2, deckHeight + 0.72, 0);
+    deckGroup.add(uy2);
+
+    for (let z = -65; z <= 65; z += 6) {
+        const udashE = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 3.5), whiteStripeMat);
+        udashE.rotation.x = -Math.PI / 2;
+        udashE.position.set(3.8, deckHeight + 0.72, z);
+        deckGroup.add(udashE);
+        const udashW = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 3.5), whiteStripeMat);
+        udashW.rotation.x = -Math.PI / 2;
+        udashW.position.set(-3.8, deckHeight + 0.72, z);
+        deckGroup.add(udashW);
+    }
+
+    group.add(deckGroup);
+
+    // 3. Concrete Support Piers / Bents
+    const pierZStations = [-48, -20, 20, 48];
+    for (const pz of pierZStations) {
+        const bentGroup = new THREE.Group();
+        bentGroup.name = `Pier Bent Z=${pz}`;
+
+        for (const px of [-4.2, 4.2]) {
+            const column = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.25, deckHeight - 1.4, 20), concretePierMat);
+            column.position.set(px, (deckHeight - 1.4) / 2, pz);
+            bentGroup.add(column);
+
+            const footing = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.8, 3.2), concretePierMat);
+            footing.position.set(px, 0.4, pz);
+            bentGroup.add(footing);
+        }
+
+        const crosshead = new THREE.Mesh(new THREE.BoxGeometry(deckWidth + 1.2, 1.4, 2.8), concretePierMat);
+        crosshead.position.set(0, deckHeight - 1.8, pz);
+        bentGroup.add(crosshead);
+
+        group.add(bentGroup);
+    }
+
+    // 4. Overhead Highway Signage Truss Gantry
+    const gantryZ = -10;
+    const gantryGroup = new THREE.Group();
+    gantryGroup.name = 'Overhead Highway Sign Truss Gantry';
+
+    const mastLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 7.2, 12), signTrussMat);
+    mastLeft.position.set(-deckWidth / 2 - 0.4, deckHeight + 3.6, gantryZ);
+    gantryGroup.add(mastLeft);
+
+    const mastRight = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 7.2, 12), signTrussMat);
+    mastRight.position.set(deckWidth / 2 + 0.4, deckHeight + 3.6, gantryZ);
+    gantryGroup.add(mastRight);
+
+    const upperTruss = new THREE.Mesh(new THREE.BoxGeometry(deckWidth + 1.2, 0.25, 0.25), signTrussMat);
+    upperTruss.position.set(0, deckHeight + 6.8, gantryZ);
+    gantryGroup.add(upperTruss);
+
+    const lowerTruss = new THREE.Mesh(new THREE.BoxGeometry(deckWidth + 1.2, 0.25, 0.25), signTrussMat);
+    lowerTruss.position.set(0, deckHeight + 4.2, gantryZ);
+    gantryGroup.add(lowerTruss);
+
+    // Green Highway Signs
+    const sign1 = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.6, 0.15), highwaySignGreenMat);
+    sign1.position.set(-3.5, deckHeight + 5.5, gantryZ + 0.2);
+    gantryGroup.add(sign1);
+    const sign1Border = new THREE.Mesh(new THREE.BoxGeometry(6.3, 2.7, 0.08), whiteStripeMat);
+    sign1Border.position.set(-3.5, deckHeight + 5.5, gantryZ + 0.12);
+    gantryGroup.add(sign1Border);
+
+    const sign2 = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.6, 0.15), highwaySignGreenMat);
+    sign2.position.set(3.5, deckHeight + 5.5, gantryZ + 0.2);
+    gantryGroup.add(sign2);
+    const sign2Border = new THREE.Mesh(new THREE.BoxGeometry(6.3, 2.7, 0.08), whiteStripeMat);
+    sign2Border.position.set(3.5, deckHeight + 5.5, gantryZ + 0.12);
+    gantryGroup.add(sign2Border);
+
+    group.add(gantryGroup);
+
+    // 5. Cobra-Head Highway Light Poles
+    for (const lz of [-35, 5, 35]) {
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 5.5, 10), signTrussMat);
+        pole.position.set(deckWidth / 2 + 0.2, deckHeight + 3.2, lz);
+        group.add(pole);
+
+        const luminaire = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.9), signTrussMat);
+        luminaire.position.set(deckWidth / 2 - 0.4, deckHeight + 5.8, lz);
+        group.add(luminaire);
+
+        const lamp = new THREE.PointLight(0xfff1cf, 0.8, 18);
+        lamp.position.set(deckWidth / 2 - 0.4, deckHeight + 5.5, lz);
+        group.add(lamp);
+    }
+
+    // 6. Animated Vehicles
+    const upperVehicles: any[] = [];
+    const lowerVehicles: any[] = [];
+    const carColors = [0xef4444, 0x3b82f6, 0xf8fafc, 0x0f172a, 0x10b981, 0xca8a04];
+
+    for (let i = 0; i < 7; i++) {
+        const cColor = carColors[i % carColors.length];
+        const carMat = new THREE.MeshStandardMaterial({ color: cColor, metalness: 0.7, roughness: 0.3 });
+        const car = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 3.8), carMat);
+        body.position.y = 0.5;
+        car.add(body);
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 2.0), new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2 }));
+        cabin.position.set(0, 1.0, -0.2);
+        car.add(cabin);
+
+        const laneX = (i % 2 === 0 ? 3.8 : -3.8) + (Math.random() - 0.5) * 0.4;
+        const startZ = ((i * 20) % deckLength) - deckLength / 2;
+        car.position.set(laneX, deckHeight + 0.7, startZ);
+        car.userData.speed = 12 + Math.random() * 8;
+        car.userData.direction = i % 2 === 0 ? 1 : -1;
+        deckGroup.add(car);
+        upperVehicles.push(car);
+    }
+
+    for (let i = 0; i < 6; i++) {
+        const isTruck = i === 2;
+        const car = new THREE.Group();
+        if (isTruck) {
+            const cabMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.4 });
+            const cab = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.5, 3.2), cabMat);
+            cab.position.set(0, 1.3, 0);
+            car.add(cab);
+            const trailerMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.3, metalness: 0.4 });
+            const trailer = new THREE.Mesh(new THREE.BoxGeometry(2.5, 3.2, 9.5), trailerMat);
+            trailer.position.set(0, 1.8, -6.5);
+            car.add(trailer);
+        } else {
+            const cColor = carColors[(i + 3) % carColors.length];
+            const carMat = new THREE.MeshStandardMaterial({ color: cColor, metalness: 0.7, roughness: 0.3 });
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 3.8), carMat);
+            body.position.y = 0.5;
+            car.add(body);
+        }
+        const laneZ = i % 2 === 0 ? 6.0 : -6.0;
+        const startX = ((i * 25) % 150) - 75;
+        car.position.set(startX, 0.1, laneZ);
+        car.rotation.y = i % 2 === 0 ? Math.PI / 2 : -Math.PI / 2;
+        car.userData.speed = isTruck ? 10 : 16 + Math.random() * 6;
+        car.userData.direction = i % 2 === 0 ? 1 : -1;
+        group.add(car);
+        lowerVehicles.push(car);
+    }
+
+    const sunLight = new THREE.DirectionalLight(0xfffaed, 1.8);
+    sunLight.position.set(50, 70, 35);
+    sunLight.castShadow = true;
+    group.add(sunLight);
+
+    const skyLight = new THREE.HemisphereLight(0x93c5fd, 0x334155, 0.75);
+    group.add(skyLight);
+
+    group.userData.update = (_time: number, delta: number) => {
+        for (const v of upperVehicles) {
+            v.position.z += delta * v.userData.speed * v.userData.direction;
+            if (v.position.z > deckLength / 2) v.position.z = -deckLength / 2;
+            if (v.position.z < -deckLength / 2) v.position.z = deckLength / 2;
+        }
+        for (const v of lowerVehicles) {
+            v.position.x += delta * v.userData.speed * v.userData.direction;
+            if (v.position.x > 80) v.position.x = -80;
+            if (v.position.x < -80) v.position.x = 80;
+        }
+    };
+
+    scene.add(group);
+    return group;
+}
+
+/**
+ * Procedural Alpine Mountain Valley with Matterhorn Pyramidal Peak, Glacial Gorge & Swiss Chalets.
+ */
+export function createAlpineMatterhornScene(
+    scene: any,
+    THREE: any,
+    _options?: {
+        showChalets?: boolean;
+        showGlacierRiver?: boolean;
+        snowCover?: number;
+    }
+): any {
+    const group = new THREE.Group();
+    group.name = 'alpine-matterhorn-scene';
+
+    // Materials
+    const darkGneissRockMat = new THREE.MeshStandardMaterial({
+        color: 0x373b42,
+        roughness: 0.9,
+        metalness: 0.15,
+        flatShading: true
+    });
+    const paleStrataMat = new THREE.MeshStandardMaterial({
+        color: 0x787d88,
+        roughness: 0.88,
+        metalness: 0.1,
+        flatShading: true
+    });
+    const snowCapMat = new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        roughness: 0.95,
+        metalness: 0.02,
+        flatShading: true
+    });
+    const meadowGrassMat = new THREE.MeshStandardMaterial({
+        color: 0x3b5723,
+        roughness: 0.92,
+        metalness: 0.05
+    });
+    const riverWaterMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        roughness: 0.12,
+        metalness: 0.15,
+        transparent: true,
+        opacity: 0.88
+    });
+    const chaletTimberMat = new THREE.MeshStandardMaterial({
+        color: 0x452818,
+        roughness: 0.85
+    });
+    const chaletRoofMat = new THREE.MeshStandardMaterial({
+        color: 0x292524,
+        roughness: 0.75
+    });
+    const windowGlowMat = new THREE.MeshStandardMaterial({
+        color: 0xfef08a,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 0.8
+    });
+    const foliageMat = new THREE.MeshStandardMaterial({
+        color: 0x14361e,
+        roughness: 0.9
+    });
+    const trunkMat = new THREE.MeshStandardMaterial({
+        color: 0x3e2723,
+        roughness: 0.9
+    });
+
+    // 1. Alpine Valley Floor & Rolling Forehills
+    const valleyFloor = new THREE.Mesh(new THREE.PlaneGeometry(160, 160, 48, 48), meadowGrassMat);
+    valleyFloor.rotation.x = -Math.PI / 2;
+    valleyFloor.name = 'Alpine Valley Floor';
+    const posAttr = valleyFloor.geometry.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+        const vx = posAttr.getX(i);
+        const vy = posAttr.getY(i);
+        const undulation = Math.sin(vx * 0.08) * Math.cos(vy * 0.08) * 1.5;
+        const slope = Math.max(0, (Math.abs(vy) - 25) * 0.25);
+        posAttr.setZ(i, undulation + slope);
+    }
+    valleyFloor.geometry.computeVertexNormals();
+    group.add(valleyFloor);
+
+    // 2. Glacial River / Alpine Canyon
+    const river = new THREE.Mesh(new THREE.PlaneGeometry(160, 8, 32, 4), riverWaterMat);
+    river.rotation.x = -Math.PI / 2;
+    river.position.set(0, 0.15, 0);
+    group.add(river);
+
+    const bankL = new THREE.Mesh(new THREE.BoxGeometry(160, 0.4, 1.2), darkGneissRockMat);
+    bankL.position.set(0, 0.2, 4.4);
+    group.add(bankL);
+    const bankR = new THREE.Mesh(new THREE.BoxGeometry(160, 0.4, 1.2), darkGneissRockMat);
+    bankR.position.set(0, 0.2, -4.4);
+    group.add(bankR);
+
+    // 3. The Matterhorn Pyramidal Horn (Hero Mountain)
+    const matterhornGroup = new THREE.Group();
+    matterhornGroup.name = 'Matterhorn Pyramidal Horn';
+    matterhornGroup.position.set(0, 0, -55);
+
+    const basePyramid = new THREE.Mesh(new THREE.ConeGeometry(42, 26, 4), darkGneissRockMat);
+    basePyramid.position.set(0, 13, 0);
+    basePyramid.rotation.y = Math.PI / 4;
+    matterhornGroup.add(basePyramid);
+
+    const midStrata = new THREE.Mesh(new THREE.ConeGeometry(28, 22, 4), paleStrataMat);
+    midStrata.position.set(0, 24, 0);
+    midStrata.rotation.y = Math.PI / 4 + 0.05;
+    matterhornGroup.add(midStrata);
+
+    const summitHorn = new THREE.Mesh(new THREE.ConeGeometry(15, 20, 4), darkGneissRockMat);
+    summitHorn.position.set(0, 36, 0);
+    summitHorn.rotation.y = Math.PI / 4;
+    matterhornGroup.add(summitHorn);
+
+    const snowCap = new THREE.Mesh(new THREE.ConeGeometry(11, 14, 4), snowCapMat);
+    snowCap.position.set(-0.8, 38.5, 0.5);
+    snowCap.rotation.y = Math.PI / 4;
+    snowCap.scale.set(1.02, 1.02, 1.02);
+    matterhornGroup.add(snowCap);
+
+    const hornliRidge = new THREE.Mesh(new THREE.BoxGeometry(6, 18, 24), darkGneissRockMat);
+    hornliRidge.position.set(14, 12, 10);
+    hornliRidge.rotation.set(-0.4, 0.5, -0.3);
+    matterhornGroup.add(hornliRidge);
+
+    const zmuttRidge = new THREE.Mesh(new THREE.BoxGeometry(6, 16, 24), darkGneissRockMat);
+    zmuttRidge.position.set(-14, 11, 10);
+    zmuttRidge.rotation.set(-0.4, -0.5, 0.3);
+    matterhornGroup.add(zmuttRidge);
+
+    group.add(matterhornGroup);
+
+    // 4. Secondary Background Mountain Ranges
+    const leftRange = new THREE.Mesh(new THREE.ConeGeometry(32, 28, 4), darkGneissRockMat);
+    leftRange.position.set(-52, 14, -45);
+    leftRange.rotation.y = 0.3;
+    group.add(leftRange);
+
+    const rightRange = new THREE.Mesh(new THREE.ConeGeometry(36, 30, 4), paleStrataMat);
+    rightRange.position.set(54, 15, -42);
+    rightRange.rotation.y = -0.4;
+    group.add(rightRange);
+
+    // 5. Traditional Swiss Chalet Village
+    const chaletPositions = [
+        { x: -16, z: 18, rot: 0.2 },
+        { x: -8, z: 28, rot: -0.15 },
+        { x: 14, z: 20, rot: -0.4 },
+        { x: 24, z: 32, rot: 0.3 }
+    ];
+
+    for (let c = 0; c < chaletPositions.length; c++) {
+        const cp = chaletPositions[c];
+        const chalet = new THREE.Group();
+        chalet.name = `Swiss Chalet ${c + 1}`;
+
+        const foundation = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.2, 5.2), paleStrataMat);
+        foundation.position.y = 0.6;
+        chalet.add(foundation);
+
+        const walls = new THREE.Mesh(new THREE.BoxGeometry(6.0, 3.2, 4.8), chaletTimberMat);
+        walls.position.y = 2.8;
+        chalet.add(walls);
+
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(5.2, 2.2, 4), chaletRoofMat);
+        roof.position.y = 5.2;
+        roof.rotation.y = Math.PI / 4;
+        roof.scale.set(1.2, 1.0, 0.95);
+        chalet.add(roof);
+
+        const balcony = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.8, 0.8), chaletTimberMat);
+        balcony.position.set(0, 3.0, 2.6);
+        chalet.add(balcony);
+
+        const winFront1 = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), windowGlowMat);
+        winFront1.position.set(-1.4, 2.8, 2.42);
+        chalet.add(winFront1);
+        const winFront2 = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), windowGlowMat);
+        winFront2.position.set(1.4, 2.8, 2.42);
+        chalet.add(winFront2);
+
+        const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 0.8), paleStrataMat);
+        chimney.position.set(1.6, 5.2, -0.6);
+        chalet.add(chimney);
+
+        chalet.position.set(cp.x, 0, cp.z);
+        chalet.rotation.y = cp.rot;
+        group.add(chalet);
+    }
+
+    // 6. Subalpine Conifer Fir Trees
+    const treePositions = [
+        [-22, 12], [-26, 18], [-18, 32], [-30, 26], [-12, 10], [-5, 12],
+        [8, 14], [18, 12], [28, 16], [32, 24], [22, 38], [12, 32],
+        [-35, 4], [-40, 12], [38, 6], [42, 14], [-10, 42], [4, 44]
+    ];
+
+    for (let t = 0; t < treePositions.length; t++) {
+        const [tx, tz] = treePositions[t];
+        const tree = new THREE.Group();
+        tree.name = `Alpine Fir Tree ${t + 1}`;
+
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 1.6, 8), trunkMat);
+        trunk.position.y = 0.8;
+        tree.add(trunk);
+
+        const scaleF = 0.8 + (t % 3) * 0.25;
+        for (let tier = 0; tier < 3; tier++) {
+            const tierMesh = new THREE.Mesh(
+                new THREE.ConeGeometry((2.2 - tier * 0.45) * scaleF, 1.8 * scaleF, 7),
+                foliageMat
+            );
+            tierMesh.position.y = (1.8 + tier * 1.1) * scaleF;
+            tree.add(tierMesh);
+        }
+
+        tree.position.set(tx, 0, tz);
+        group.add(tree);
+    }
+
+    const alpineSun = new THREE.DirectionalLight(0xfff7ed, 2.2);
+    alpineSun.position.set(45, 65, 30);
+    alpineSun.castShadow = true;
+    group.add(alpineSun);
+
+    const mountainSkyFill = new THREE.HemisphereLight(0x93c5fd, 0x4a5568, 0.85);
+    group.add(mountainSkyFill);
+
+    group.userData.update = (time: number, _delta: number) => {
+        riverWaterMat.opacity = 0.85 + Math.sin(time * 2.5) * 0.05;
     };
 
     scene.add(group);

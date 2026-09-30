@@ -1,15 +1,15 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox IDE.
  *
- * Standalone Headless SMPL-Tree Parametric Botanical Synthesis & Inversion CLI.
+ * Standalone Headless SB-Veggie Parametric Botanical Synthesis & Inversion CLI.
  * Suitable for In-App Native Execution, Service Pipelines, and Cloud Run.
  *
  * Streams binary glTF 2.0 (.glb) chunks or writes to disk.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
-#include "scratchbox_smpl_tree.hpp"
-#include "scratchbox_smpl_optimizer.hpp"
+#include "scratchbox_sb_veggie.hpp"
+#include "scratchbox_sb_veggie_optimizer.hpp"
 #include "scratchbox_botanical_texture.hpp"
 #include "scratchbox_io.hpp"
 
@@ -25,7 +25,7 @@ namespace fs = std::filesystem;
 using namespace scratchbox;
 using namespace scratchbox::math;
 using namespace scratchbox::geometry;
-using namespace scratchbox::smpl_tree;
+using namespace scratchbox::sb_veggie;
 using namespace scratchbox::botanical;
 using namespace scratchbox::io;
 
@@ -70,14 +70,14 @@ static ScratchboxMesh createBenchmarkTreeBlob() {
 }
 
 int main(int argc, char** argv) {
-    std::string outputPath = "smpl_tree_output.glb";
+    std::string outputPath = "sb_veggie_output.glb";
     std::string fitScanPath = "";
     std::string archetypeStr = "decurrent";
     bool exportOverlay = false;
     bool sideBySide = false;
     bool runFitBenchmark = false;
     bool generateLeaves = true;
-    SmplTreeParams params = SmplTreeParams::createNeutral();
+    SbVeggieParams params = SbVeggieParams::createNeutral();
     bool userSeasonSpecified = false;
     float userSeason = 1.0f;
     bool userDensitySpecified = false;
@@ -162,18 +162,18 @@ int main(int argc, char** argv) {
         }
     }
 
-    SmplTreeArchetype archetype = SmplTreeArchetype::DecurrentHardwood;
-    if (archetypeStr == "conifer") archetype = SmplTreeArchetype::ExcurrentConifer;
-    else if (archetypeStr == "palmate") archetype = SmplTreeArchetype::Palmate;
-    else if (archetypeStr == "columnar") archetype = SmplTreeArchetype::FastigiateColumnar;
+    SbVeggieArchetype archetype = SbVeggieArchetype::DecurrentHardwood;
+    if (archetypeStr == "conifer") archetype = SbVeggieArchetype::ExcurrentConifer;
+    else if (archetypeStr == "palmate") archetype = SbVeggieArchetype::Palmate;
+    else if (archetypeStr == "columnar") archetype = SbVeggieArchetype::FastigiateColumnar;
 
     // 1. Build Canonical Model Template
     auto startBuild = std::chrono::high_resolution_clock::now();
-    SmplTreeTemplate tmpl = SmplTreeModelBuilder::buildCanonicalTemplate(archetype);
+    SbVeggieTemplate tmpl = SbVeggieModelBuilder::buildCanonicalTemplate(archetype);
     auto endBuild = std::chrono::high_resolution_clock::now();
     double buildTimeMs = std::chrono::duration<double, std::milli>(endBuild - startBuild).count();
 
-    SmplOptimizerResult optResult;
+    SbVeggieOptimizerResult optResult;
     bool didOptimize = false;
     ScratchboxMesh rawScanMesh;
     Vec3 harvestedAnchor(0.0f, 0.0f, 0.0f);
@@ -219,9 +219,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        SmplOptimizerOptions opt;
+        SbVeggieOptimizerOptions opt;
         opt.maxIterations = 25;
-        optResult = SmplTreeOptimizer::fitToScan(scanPoints, tmpl, opt, hasExplicitAnchor ? &harvestedAnchor : nullptr);
+        optResult = SbVeggieOptimizer::fitToScan(scanPoints, tmpl, opt, hasExplicitAnchor ? &harvestedAnchor : nullptr);
         int savedMorphology = params.leafMorphology;
         float savedCupping = params.leafCupping;
         float savedCurvature = params.branchCurvature;
@@ -245,14 +245,14 @@ int main(int argc, char** argv) {
     }
 
     // 2B. Build Spatial Color Field from Scan if Fitting
-    SmplSpatialColorField scanColorField;
+    SbVeggieSpatialColorField scanColorField;
     if (didOptimize && rawScanMesh.vertices.size() > 0) {
         Vec3 scanAnchorOffset = hasExplicitAnchor ? Vec3(harvestedAnchor.x, 0.0f, harvestedAnchor.z) : Vec3(0.0f, 0.0f, 0.0f);
         scanColorField.buildFromScan(rawScanMesh, scanAnchorOffset);
         if (!userColorInfluenceSpecified) {
             params.colorInfluenceWeight = 0.85f; // Default 85% photogrammetric color grounding when fitting to a scan
         }
-        std::cout << "[SMPL-Tree] Built 3D Spatial Color Field from scan (" 
+        std::cout << "[SB-Veggie] Built 3D Spatial Color Field from scan (" 
                   << scanColorField.positions.size() << " samples, weight=" 
                   << params.colorInfluenceWeight << ", mode=" 
                   << params.colorInfluenceMode << ")" << std::endl;
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
 
     // 3. Evaluate Posed & Shaped Botanical Mesh
     auto startEval = std::chrono::high_resolution_clock::now();
-    auto decomposed = SmplTreeEvaluator::evaluateDecomposed(tmpl, params, generateLeaves, &scanColorField);
+    auto decomposed = SbVeggieEvaluator::evaluateDecomposed(tmpl, params, generateLeaves, &scanColorField);
     ScratchboxMesh finalMesh = decomposed.getCombined();
     auto endEval = std::chrono::high_resolution_clock::now();
     double evalTimeMs = std::chrono::duration<double, std::milli>(endEval - startEval).count();
@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
                 scanTex.mimeType = "image/jpeg";
                 scanTex.data = std::move(scanAtlasJpg);
                 embeddedTextures.push_back(scanTex);
-                std::cout << "[run_smpl_tree] Attached authentic tile texture atlas (" 
+                std::cout << "[run_sb_veggie] Attached authentic tile texture atlas (" 
                           << (scanTex.data.size() / 1024) << " KB) to RawPhotogrammetryScan (material " 
                           << scanSubmeshIdx << ")\n";
             }
@@ -476,7 +476,7 @@ int main(int argc, char** argv) {
 
     // 5. Output Telemetry
     std::cout << "\n======================================================================\n";
-    std::cout << "  SCRATCHBOX SB-VEGGIE (SMPL-TREE) BOTANICAL SYNTHESIS TELEMETRY\n";
+    std::cout << "  SCRATCHBOX SB-VEGGIE BOTANICAL SYNTHESIS TELEMETRY\n";
     std::cout << "======================================================================\n";
     std::cout << "  Archetype:               " << archetypeStr << "\n";
     std::cout << "  Canonical Template:      " << tmpl.name << " (" << tmpl.canonicalVertices.size() << " verts, " << tmpl.skeleton.size() << " joints)\n";
@@ -494,7 +494,7 @@ int main(int argc, char** argv) {
 
     if (didOptimize) {
         std::cout << "----------------------------------------------------------------------\n";
-        std::cout << "  SMPLify-Tree Inversion Solver Results:\n";
+        std::cout << "  SB-Veggie Inversion Solver Results:\n";
         std::cout << "  Initial Chamfer Error:   " << optResult.initialChamferMeters << " m\n";
         std::cout << "  Final Chamfer Error:     " << optResult.finalChamferMeters << " m\n";
         std::cout << "  Error Reduction:         " << optResult.chamferReductionPercent << " %\n";

@@ -13,6 +13,7 @@
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_io.hpp"
 #include "scratchbox_jpeg.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_math.hpp"
 #include "scratchbox_texture.hpp"
 #include <cmath>
@@ -300,8 +301,14 @@ private:
             }
             const uint8_t* bytes = ctx.bin + offset;
             bool isJpeg = si.mimeType == "image/jpeg" || (size > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8);
+            bool isPng = si.mimeType == "image/png" || (size > 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47);
             if (isJpeg) {
                 auto decoded = jpeg::decode(bytes, size, jpeg::OutputFormat::Rgb);
+                si.decoded = decoded.ok;
+                si.error = decoded.error;
+                si.pixels = std::move(decoded.image);
+            } else if (isPng) {
+                auto decoded = png::decode(bytes, size, png::OutputFormat::Rgb);
                 si.decoded = decoded.ok;
                 si.error = decoded.error;
                 si.pixels = std::move(decoded.image);
