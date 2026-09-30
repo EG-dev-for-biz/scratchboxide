@@ -287,4 +287,195 @@ describe('Universal3DStructureFoundation', () => {
     expect(vCount).toBe(8);
     expect(fCount).toBe(12);
   });
+
+  it('creates procedural structure with PBR material preset and procedural textures', () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('box', {
+      materialPreset: 'titanium',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal',
+      pointDensity: 200
+    });
+
+    expect(struct.materials.length).toBe(1);
+    const mat = struct.primaryMaterial;
+    expect(mat.name).toContain('titanium');
+    expect(mat.metallicFactor).toBeCloseTo(0.9, 1);
+    expect(mat.roughnessFactor).toBeCloseTo(0.35, 1);
+
+    expect(struct.textures.length).toBeGreaterThanOrEqual(3);
+    const albedoTex = struct.textures.find(t => t.type === 'albedo');
+    const normalTex = struct.textures.find(t => t.type === 'normal');
+    const ormTex = struct.textures.find(t => t.type === 'metallicRoughness');
+
+    expect(albedoTex).toBeDefined();
+    expect(normalTex).toBeDefined();
+    expect(ormTex).toBeDefined();
+
+    expect(albedoTex!.width).toBe(256);
+    expect(albedoTex!.height).toBe(256);
+  });
+
+  it('samples bilinear albedo and ORM from texture maps at UV coordinates', () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('sphere', {
+      materialPreset: 'gold',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal'
+    });
+
+    const albedoCenter = struct.sampleAlbedoAtUv(0.5, 0.5);
+    expect(albedoCenter.length).toBe(4);
+    // Gold is yellowish: R > 0.8, G > 0.6, B < 0.5
+    expect(albedoCenter[0]).toBeGreaterThan(0.7);
+    expect(albedoCenter[1]).toBeGreaterThan(0.5);
+    expect(albedoCenter[3]).toBe(1.0); // Alpha is 1
+
+    const ormCenter = struct.sampleOrmAtUv(0.5, 0.5);
+    expect(ormCenter.length).toBe(3);
+    // ORM: R=AO, G=Roughness, B=Metallic. Gold is highly metallic: B > 0.8
+    expect(ormCenter[2]).toBeGreaterThan(0.8);
+  });
+
+  it('resynchronizes point constellation with sampled texture colors and PBR properties', () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('cylinder', {
+      materialPreset: 'gold',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal',
+      pointDensity: 300
+    });
+
+    expect(struct.points.length).toBeGreaterThan(150);
+    const pt = struct.points[0];
+    expect(pt.color).toBeDefined();
+    expect(pt.color[0]).toBeGreaterThan(150); // Gold red component
+    expect(pt.roughness).toBeDefined();
+    expect(pt.metallic).toBeDefined();
+    expect(pt.metallic).toBeGreaterThan(0.8); // Metallic > 0.8
+    expect(pt.uv).toBeDefined();
+    expect(pt.uv![0]).toBeGreaterThanOrEqual(0);
+    expect(pt.uv![0]).toBeLessThanOrEqual(1);
+  });
+
+  it('projects into binary glTF 2.0 (.glb) with embedded PBR materials and textures', () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('box', {
+      materialPreset: 'titanium',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal'
+    });
+
+    const glb = struct.toGlbBuffer();
+    expect(glb.length).toBeGreaterThan(1000);
+
+    // Verify 12-byte header
+    expect(glb.readUInt32LE(0)).toBe(0x46546C67);
+    expect(glb.readUInt32LE(4)).toBe(2);
+
+    const jsonLength = glb.readUInt32LE(12);
+    const jsonText = glb.toString('utf8', 20, 20 + jsonLength).trim();
+    const gltf = JSON.parse(jsonText);
+
+    expect(gltf.materials).toBeDefined();
+    expect(gltf.materials.length).toBe(1);
+    expect(gltf.materials[0].pbrMetallicRoughness.baseColorTexture).toBeDefined();
+    expect(gltf.materials[0].pbrMetallicRoughness.metallicRoughnessTexture).toBeDefined();
+    expect(gltf.textures.length).toBeGreaterThanOrEqual(3);
+    expect(gltf.images.length).toBeGreaterThanOrEqual(3);
+    expect(gltf.images[0].bufferView).toBeDefined();
+  });
+
+  it('ingests binary glTF 2.0 (.glb) via createFromGlb with extracted materials and textures', () => {
+    const originalStruct = Universal3DStructureFoundation.createFromProcedural('sphere', {
+      materialPreset: 'gold',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal',
+      pointDensity: 200
+    });
+
+    const glbBuffer = originalStruct.toGlbBuffer();
+    const ingested = Universal3DStructureFoundation.createFromGlb(glbBuffer, {
+      name: 'ReconstructedGoldSphere'
+    });
+
+    expect(ingested.name).toBe('ReconstructedGoldSphere');
+    expect(ingested.mesh.vertexCount).toBe(originalStruct.mesh.vertexCount);
+    expect(ingested.mesh.triangleCount).toBe(originalStruct.mesh.triangleCount);
+    expect(ingested.mesh.normals).toBeDefined();
+    expect(ingested.mesh.uvs).toBeDefined();
+    expect(ingested.materials.length).toBe(1);
+    expect(ingested.textures.length).toBe(originalStruct.textures.length);
+
+    // Point constellation resynchronization verification
+    expect(ingested.points.length).toBeGreaterThan(100);
+    expect(ingested.points[0].color).toBeDefined();
+  });
+
+  it('ingests continuous biophysical fields via createFromBiophysicalFields', () => {
+    const box = Universal3DStructureFoundation.createFromProcedural('box', { scale: 1.0 });
+    const width = 64;
+    const height = 64;
+
+    const albedoRgba = new Uint8Array(width * height * 4);
+    const normalRgb = new Uint8Array(width * height * 3);
+    const ormRgb = new Uint8Array(width * height * 3);
+
+    for (let i = 0; i < width * height; i++) {
+      albedoRgba[i * 4] = 220;     // R
+      albedoRgba[i * 4 + 1] = 180; // G
+      albedoRgba[i * 4 + 2] = 140; // B
+      albedoRgba[i * 4 + 3] = 255; // A
+
+      normalRgb[i * 3] = 128;     // Nx = 0
+      normalRgb[i * 3 + 1] = 128; // Ny = 0
+      normalRgb[i * 3 + 2] = 255; // Nz = 1
+
+      ormRgb[i * 3] = 255;        // AO
+      ormRgb[i * 3 + 1] = 75;     // Roughness (0.3)
+      ormRgb[i * 3 + 2] = 230;    // Metallic (0.9)
+    }
+
+    const fields: ContinuousBiophysicalFields = {
+      width,
+      height,
+      albedoRgba,
+      normalRgb,
+      roughness: new Float32Array(width * height).fill(0.3),
+      metallic: new Float32Array(width * height).fill(0.9),
+      ambientOcclusion: new Float32Array(width * height).fill(1.0),
+      ormRgb
+    };
+
+    const biophysStruct = Universal3DStructureFoundation.createFromBiophysicalFields(box.mesh, fields, {
+      name: 'BiophysBoxTest',
+      materialPreset: 'gold'
+    });
+
+    expect(biophysStruct.name).toBe('BiophysBoxTest');
+    expect(biophysStruct.textures.length).toBe(3);
+    expect(biophysStruct.materials.length).toBe(1);
+    expect(biophysStruct.primaryMaterial.baseColorTextureId).toBeDefined();
+
+    // Verify sampled albedo at UV
+    const sampledAlbedo = biophysStruct.sampleAlbedoAtUv(0.5, 0.5);
+    expect(sampledAlbedo[0]).toBeCloseTo(220 / 255, 1);
+    expect(sampledAlbedo[1]).toBeCloseTo(180 / 255, 1);
+  });
+
+  it('exports textures to disk in exportToDisk alongside other multi-format assets', async () => {
+    const struct = Universal3DStructureFoundation.createFromProcedural('box', {
+      name: 'PbrDiskExportTest',
+      materialPreset: 'titanium',
+      synthesizePbrTextures: true,
+      textureArchetype: 'brushed_metal'
+    });
+
+    const outDir = path.join(tempDir, 'pbr_export_run');
+    const result = await struct.exportToDisk(outDir, ['glb', 'colmap', 'nerfstudio']);
+
+    expect(result.textureFiles).toBeDefined();
+    expect(Object.keys(result.textureFiles!).length).toBeGreaterThanOrEqual(3);
+
+    for (const [texId, filePath] of Object.entries(result.textureFiles!)) {
+      expect(fs.existsSync(filePath)).toBe(true);
+      expect(filePath).toContain(path.join(outDir, 'textures'));
+    }
+  });
 });
