@@ -98,7 +98,7 @@ export class Universal3DStructureFoundation {
   public static createDefaultPbrMaterial(name: string = 'default_material'): UniversalPbrMaterial {
     return {
       name,
-      baseColorFactor: [0.8, 0.85, 0.9, 1.0],
+      baseColorFactor: [1.0, 1.0, 1.0, 1.0],
       metallicFactor: 0.1,
       roughnessFactor: 0.5,
       emissiveFactor: [0, 0, 0],

@@ -35,12 +35,14 @@ Activate this skill whenever a user or workflow asks to:
    3. Calibrated 6-DoF Cameras  ──► [Photogrammetry / View Synthesis / Raymarching]
    4. Collision Envelope        ──► [Physics / Obstacle Avoidance / NavMesh]
    5. WGS-84 GPS Anchor         ──► [Google Maps / GIS / Real-World Alignment]
+   6. PBR Materials & Textures  ──► [Khronos glTF PBR Metallic-Roughness / Biophysical Fields]
 ```
 
 ### The Cardinal Rule: Project Outward, Never Daisy-Chain
 - **NEVER** convert neural representations into solid meshes directly (e.g. running Poisson reconstruction on 3DGS splats to guess a mesh).
 - **NEVER** reverse-engineer camera flight paths from flat 2D AI videos.
 - **ALWAYS** anchor the ground truth in `Universal3DStructureFoundation`, and project outward deterministically via the built-in adapters.
+- **ALWAYS** keep the surface point constellation (`points`) synchronized with PBR materials and texture maps via `resynchronizePoints()`, ensuring point seeds for 3DGS reflect authentic albedo, roughness, and metallicity.
 
 ---
 
@@ -84,11 +86,30 @@ const hull = structure.toCollisionHull();
 
 // F. RFC 7946 GeoJSON for Google Maps Platform
 const geoJson = structure.toGeoJson();
+
+// G. Sample PBR materials & textures at arbitrary UV
+const [r, g, b] = structure.sampleAlbedoAtUv(0.5, 0.5); // [0, 255] RGB
+const { occlusion, roughness, metallic } = structure.sampleOrmAtUv(0.5, 0.5); // [0, 1] normalized
+
+// H. Resynchronize surface points to reflect updated PBR materials/textures
+structure.resynchronizePoints(); // points receive exact surface albedo, roughness, and metallicity
 ```
 
-### 3. Concurrent Multi-Format Disk Export
+### 3. Ingestion from External Formats
 ```typescript
-// Concurrently export everything to a clean folder tree
+// Ingest binary glTF 2.0 (.glb) with full PBR materials & embedded textures
+const glbStruct = Universal3DStructureFoundation.createFromGlb(glbBuffer);
+
+// Ingest continuous biophysical fields (AdaptiveMaterialPbrService)
+const biophysStruct = Universal3DStructureFoundation.createFromBiophysicalFields(mesh, biophysicalFields, {
+  name: 'TravertineFacade',
+  materialPreset: 'concrete'
+});
+```
+
+### 4. Concurrent Multi-Format Disk Export
+```typescript
+// Concurrently export everything to a clean folder tree including textures
 await structure.exportToDisk('./output/scene_bundle', [
   'glb',
   'colmap',
@@ -96,6 +117,7 @@ await structure.exportToDisk('./output/scene_bundle', [
   'video_blockout',
   'geojson'
 ]);
+// Emits textures to ./output/scene_bundle/textures/
 ```
 
 ---
@@ -104,6 +126,8 @@ await structure.exportToDisk('./output/scene_bundle', [
 
 Before presenting any 3D asset to the user or downstream stage:
 - [ ] **GLB Integrity**: Check that the file begins with the 12-byte header `0x46546C67` ("glTF"), version 2.
+- [ ] **PBR Material Alignment**: Verify embedded PNG textures and accessors in binary glTF 2.0 align to 4-byte boundaries.
+- [ ] **Point Constellation Sync**: When updating textures or materials, call `resynchronizePoints()` to update point RGB, roughness, and metallic seeds.
 - [ ] **Coordinate Conventions**: 
   - Nerfstudio `transforms.json` must adhere to OpenGL (+Y Up, -Z Forward).
   - COLMAP must adhere to OpenCV (+Y Down, +Z Forward).
