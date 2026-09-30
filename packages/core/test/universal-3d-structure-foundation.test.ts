@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Universal3DStructureFoundation } from '../src/node/spatial/Universal3DStructureFoundation';
+import { ContinuousBiophysicalFields } from '../src/common/adaptive-material-types';
 
 describe('Universal3DStructureFoundation', () => {
   let tempDir: string;
