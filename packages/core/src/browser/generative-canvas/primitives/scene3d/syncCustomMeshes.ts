@@ -13,6 +13,7 @@ import type { RendererStack } from './types';
 import { removeAndDispose } from './types';
 
 import type { PbrTextureSet } from '../../canvas-types';
+import { getPresetConfig, getProceduralPbrTextures } from './proceduralPbrTextures';
 
 export interface CustomMeshDefinition {
     id?: string;
@@ -85,12 +86,26 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
     if (def.rotation) obj.rotation.set(...def.rotation);
     if (def.scale) obj.scale.set(...def.scale);
 
+    obj.castShadow = true;
+    obj.receiveShadow = true;
+
     if (obj instanceof THREE.InstancedMesh && def.instanceTransforms) {
         updateInstancedTransforms(obj, def.instanceTransforms);
     }
 
     const mesh = (obj instanceof THREE.Mesh ? obj : (obj.children.find(c => c instanceof THREE.Mesh) as THREE.Mesh | undefined));
     if (!mesh) return;
+
+    obj.traverse(c => {
+        if ((c as any).isMesh) {
+            c.castShadow = true;
+            c.receiveShadow = true;
+        }
+    });
+
+    const presetName = def.material?.preset || (def.pbrTextures as any)?.preset;
+    const presetConfig = presetName ? getPresetConfig(presetName) : null;
+    const proceduralTextures = presetName ? getProceduralPbrTextures(presetName) : null;
 
     if (def.pbrTextures) {
         const pbr = def.pbrTextures;
@@ -101,9 +116,9 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         if (!(mesh.material instanceof THREE.MeshPhysicalMaterial)) {
             const oldMat = mesh.material as THREE.Material;
             mesh.material = new THREE.MeshPhysicalMaterial({
-                color: 0xffffff,
-                metalness: def.material?.metalness ?? 0.1,
-                roughness: def.material?.roughness ?? 0.5,
+                color: (def.material?.color ?? presetConfig?.color ?? 0xffffff) as any,
+                metalness: def.material?.metalness ?? presetConfig?.metalness ?? 0.1,
+                roughness: def.material?.roughness ?? presetConfig?.roughness ?? 0.5,
                 wireframe: !!def.material?.wireframe
             });
             oldMat?.dispose();
@@ -116,6 +131,16 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         const roughnessSrc = pbr.roughnessUrl || pbr.roughnessMap;
         const metallicSrc = pbr.metallicUrl || pbr.metalnessMap;
         const aoSrc = pbr.aoUrl || pbr.aoMap;
+
+        // Apply procedural maps if sources not explicitly provided
+        if (proceduralTextures?.normalMap && !normalSrc && !pbrMat.normalMap) {
+            pbrMat.normalMap = proceduralTextures.normalMap;
+            const ns = presetConfig?.normalScale ?? 0.6;
+            pbrMat.normalScale.set(ns, ns);
+        }
+        if (proceduralTextures?.roughnessMap && !roughnessSrc && !ormSrc && !pbrMat.roughnessMap) {
+            pbrMat.roughnessMap = proceduralTextures.roughnessMap;
+        }
 
         if (ormSrc) {
             loader.load(ormSrc, (tex) => {
@@ -185,17 +210,18 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
         }
         pbrMat.needsUpdate = true;
     } else {
-        const hasSheenOrHair = !!(def.fabricProperties || def.hairGroom || def.material?.sheen);
-        const hasGlassOrPhysical = hasSheenOrHair || def.material?.transmission !== undefined || def.material?.ior !== undefined || def.material?.clearcoat !== undefined;
-        const fallbackCol = def.hairGroom ? 0x8b5a2b : 0x38bdf8;
+        const hasPreset = !!presetConfig;
+        const hasSheenOrHair = !!(def.fabricProperties || def.hairGroom || def.material?.sheen || (presetConfig && presetConfig.sheen));
+        const hasGlassOrPhysical = hasPreset || hasSheenOrHair || def.material?.transmission !== undefined || def.material?.ior !== undefined || def.material?.clearcoat !== undefined;
+        const fallbackCol = def.hairGroom ? 0x8b5a2b : (presetConfig?.color ?? 0x38bdf8);
         const colorVal = def.material?.color !== undefined ? def.material.color : fallbackCol;
 
         if (hasGlassOrPhysical && !(mesh.material instanceof THREE.MeshPhysicalMaterial)) {
             const oldMat = mesh.material as THREE.Material;
             mesh.material = new THREE.MeshPhysicalMaterial({
                 color: colorVal as any,
-                metalness: def.material?.metalness ?? 0.05,
-                roughness: def.material?.roughness ?? 0.65,
+                metalness: def.material?.metalness ?? presetConfig?.metalness ?? 0.05,
+                roughness: def.material?.roughness ?? presetConfig?.roughness ?? 0.65,
                 wireframe: !!def.material?.wireframe
             });
             oldMat?.dispose();
@@ -208,9 +234,20 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
             } catch {
                 mat.color.set(fallbackCol);
             }
-            mat.metalness = def.material?.metalness ?? 0.5;
-            mat.roughness = def.material?.roughness ?? 0.5;
+            mat.metalness = def.material?.metalness ?? presetConfig?.metalness ?? 0.5;
+            mat.roughness = def.material?.roughness ?? presetConfig?.roughness ?? 0.5;
             mat.wireframe = !!def.material?.wireframe;
+
+            if (proceduralTextures) {
+                if (!mat.normalMap) {
+                    mat.normalMap = proceduralTextures.normalMap;
+                    const ns = presetConfig?.normalScale ?? 0.6;
+                    mat.normalScale.set(ns, ns);
+                }
+                if (!mat.roughnessMap) {
+                    mat.roughnessMap = proceduralTextures.roughnessMap;
+                }
+            }
 
             if (def.material?.emissive !== undefined) {
                 try {
@@ -223,16 +260,20 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
 
             if (mesh.material instanceof THREE.MeshPhysicalMaterial) {
                 const physMat = mesh.material as THREE.MeshPhysicalMaterial;
-                if (def.material?.transmission !== undefined) {
-                    physMat.transmission = def.material.transmission;
+                const trans = def.material?.transmission ?? presetConfig?.transmission;
+                if (trans !== undefined) {
+                    physMat.transmission = trans;
                     physMat.transparent = true;
                     physMat.opacity = 1.0;
                 }
-                if (def.material?.ior !== undefined) {
-                    physMat.ior = def.material.ior;
+                const iorVal = def.material?.ior ?? presetConfig?.ior;
+                if (iorVal !== undefined) {
+                    physMat.ior = iorVal;
                 }
-                if (def.material?.clearcoat !== undefined) {
-                    physMat.clearcoat = def.material.clearcoat;
+                const coat = def.material?.clearcoat ?? presetConfig?.clearcoat;
+                if (coat !== undefined) {
+                    physMat.clearcoat = coat;
+                    physMat.clearcoatRoughness = presetConfig?.clearcoatRoughness ?? 0.1;
                 }
                 if (def.fabricProperties) {
                     physMat.sheen = def.fabricProperties.sheenIntensity ?? 0.85;
@@ -241,6 +282,8 @@ function applyDefinition(obj: THREE.Object3D, def: CustomMeshDefinition): void {
                 } else if (def.hairGroom) {
                     physMat.roughness = 0.25;
                     physMat.sheen = 0.5;
+                } else if (presetConfig?.sheen) {
+                    physMat.sheen = presetConfig.sheen;
                 }
             }
             mat.needsUpdate = true;

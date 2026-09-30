@@ -2269,10 +2269,54 @@ function _synthesizeRawContextual3DSceneInner(
                 vertexCount: tileResult.stats.vertexCount,
                 triangleCount: tileResult.stats.faceCount
             }
-        };
     }
 
-    if (theme === 'vehicle' || /\b(?:cars?|vehicles?|automobiles?|trucks?|pickups?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|racers?|formula\s*1?|f1\b|cybertrucks?|roadsters?|speedsters?|hot\s*rods?|evs?|hypercars?|supercars?|convertibles?|vans?)\b/i.test(prompt)) {
+    // Direct 3D Gaussian Splat (.splat / .spz / 3DGS) scene synthesis
+    const splatMatch = prompt.match(/(?:(?:\/splats\/|\/models\/|[a-zA-Z0-9_\-.]+\/)?([a-zA-Z0-9_\-]+\.sp(?:lat|z)))/i);
+    if (isSplatRequested || Boolean(splatMatch)) {
+        const splatFileName = splatMatch?.[1] || 'scene_2_photorealistic_final.splat';
+        const rawUrl = splatMatch?.[0];
+        const splatUrl = rawUrl?.startsWith('/') ? rawUrl : `/splats/${splatFileName}`;
+        const displayName = splatFileName.replace(/\.sp(?:lat|z)$/i, '').replace(/[_\-]+/g, ' ');
+
+        return {
+            title: `${displayName.charAt(0).toUpperCase() + displayName.slice(1)} — 3D Gaussian Splats`,
+            subtitle: `Photorealistic 3DGS radiance field unprojected from photographic source with high-density oriented Gaussian splats.`,
+            worldBranch: `splat-world/${displayName.replace(/\s+/g, '-')}`,
+            sceneType: 'gaussian_splat',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            splatUrl,
+            splatOptions: {
+                splatScale: 1.0,
+                contactShadow: true,
+                enableSoftZ: true
+            },
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 20000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [0, 1.6, 0],
+                target: [0, 1.6, -12],
+                fov: 55
+            },
+            environment: {
+                skybox: 'dusk',
+                lighting: 'dusk',
+                ground: false
+            },
+            customMeshes: [],
+            features: {
+                ...baseFeatures
+            }
+        };
+    }
         return synthesizeProceduralVehicleScene(prompt, context);
     }
 
@@ -2971,9 +3015,9 @@ onFrame((time, delta) => {
                 isLooping: true
             },
             camera: {
-                position: [-16, 14, 22],
-                target: [0, 4, 0],
-                fov: 50
+                position: [-42, 28, 52],
+                target: [0, 8, 0],
+                fov: 48
             },
             environment: {
                 skybox: 'dusk',

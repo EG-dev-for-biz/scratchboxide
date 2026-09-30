@@ -1190,6 +1190,40 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
+        name: 'single_image_to_3dgs',
+        description: 'Convert any single 2D image or AI concept render into photorealistic 3D Gaussian Splats (.splat and Niantic .spz). Uses Depth Anything / metric pinhole depth reconstruction to project pixels into 3D Gaussians with authentic view-dependent color, normal vectors, and covariance scales. Directly loadable into Scene3DPrimitive via splatUrl.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                inputImagePath: {
+                    type: 'STRING',
+                    description: 'Absolute path to the input 2D image (PNG, JPG, or WebP).'
+                },
+                fovDegrees: {
+                    type: 'NUMBER',
+                    description: 'Camera field of view in degrees (default: 65.0).'
+                },
+                stride: {
+                    type: 'NUMBER',
+                    description: 'Pixel stride for Gaussian subsampling (default: 2, where 1 is full resolution).'
+                },
+                minDepth: {
+                    type: 'NUMBER',
+                    description: 'Minimum metric distance in meters (default: 0.2).'
+                },
+                maxDepth: {
+                    type: 'NUMBER',
+                    description: 'Maximum metric distance in meters (default: 150.0).'
+                },
+                outDir: {
+                    type: 'STRING',
+                    description: 'Output directory to store .splat and .spz files (default: public/splats).'
+                }
+            },
+            required: ['inputImagePath']
+        }
+    },
+    {
         name: 'splat_to_3dtiles',
         description: 'Convert a Gaussian splat cloud (.splat or Niantic .spz) into an OGC 3D Tiles 1.1 tileset: native C++20 Morton octree with LOD simplification, per-tile GLB using KHR_gaussian_splatting + KHR_gaussian_splatting_compression_spz_2, and an optional WGS-84 root transform (from a lat/lng/alt anchor via the ENU tangent plane) so the splats overlay Google Photorealistic 3D Tiles in any 3D Tiles viewer.',
         parameters: {
@@ -2041,6 +2075,91 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 metaPath: synthesisRes.metaPath
             } as unknown as ToolResultPayload,
             summaryResult: `Built walkable 3DGS world: ${synthesisRes.numFusedSplats} fused Gaussians across ${synthesisRes.activePoses.length + 1} perspectives (original: ${synthesisRes.numOriginalSplats}). Capture height ${eyeHeight.toFixed(2)} m (${depthRes.eyeHeightInferred ? 'inferred from metric floor' : 'supplied'}), depth: ${depthRes.modelUsed}. Wrote .splat, NGSP v2 .spz and .meta.json sidecar.`
+        };
+    },
+
+    single_image_to_3dgs: async (args, ctx) => {
+        const inputImagePath = asString(args.inputImagePath);
+        if (!inputImagePath) throw new Error('single_image_to_3dgs: "inputImagePath" argument is required.');
+
+        const fsMod = await import('fs-extra');
+        if (!fsMod.existsSync(inputImagePath)) {
+            throw new Error(`single_image_to_3dgs: input image does not exist: ${inputImagePath}`);
+        }
+
+        const fovDegrees = typeof args.fovDegrees === 'number' ? args.fovDegrees : 65.0;
+        const stride = typeof args.stride === 'number' ? Math.max(1, Math.round(args.stride)) : 2;
+        const minDepth = typeof args.minDepth === 'number' ? args.minDepth : 0.2;
+        const maxDepth = typeof args.maxDepth === 'number' ? args.maxDepth : 150.0;
+
+        const pathMod = await import('path');
+        const childProcess = await import('child_process');
+        const osMod = await import('os');
+        const { decodePng } = await import('../../texture-processing');
+        const { ImageToSplatService } = await import('../../3d-engine/image-to-splat-service');
+        const { SplatService } = await import('../../3d-engine/splat-service');
+
+        const workspaceRoot = ctx?.workspaceRoot || process.cwd();
+        const baseName = pathMod.basename(inputImagePath, pathMod.extname(inputImagePath));
+        const ext = pathMod.extname(inputImagePath).toLowerCase();
+
+        let pngBuf: Buffer;
+        if (ext === '.png') {
+            pngBuf = await fsMod.readFile(inputImagePath);
+        } else {
+            const tmpPng = pathMod.join(osMod.tmpdir(), `s4d_splat_${Date.now()}_${Math.random().toString(36).slice(2)}.png`);
+            childProcess.execFileSync('ffmpeg', ['-y', '-i', inputImagePath, tmpPng], { stdio: 'pipe' });
+            pngBuf = await fsMod.readFile(tmpPng);
+            try { await fsMod.unlink(tmpPng); } catch {}
+        }
+
+        const decoded = decodePng(pngBuf);
+        const splats = ImageToSplatService.convertSingleImageToSplat({
+            rgbPixels: new Uint8Array(decoded.rgba),
+            width: decoded.width,
+            height: decoded.height,
+            channels: 4,
+            fovDegrees,
+            stride,
+            minDepth,
+            maxDepth
+        });
+
+        const splatBuffer = SplatService.serializeSplatBuffer(splats);
+        const spzBuffer = SplatService.serializeSpzBuffer(splats);
+
+        const targetDir = asString(args.outDir) || pathMod.join(workspaceRoot, 'public', 'splats');
+        await fsMod.mkdirp(targetDir);
+
+        const splatPath = pathMod.join(targetDir, `${baseName}.splat`);
+        const spzPath = pathMod.join(targetDir, `${baseName}.spz`);
+
+        await fsMod.writeFile(splatPath, splatBuffer);
+        await fsMod.writeFile(spzPath, spzBuffer);
+
+        const splatUrl = `/splats/${baseName}.splat`;
+        const spzUrl = `/splats/${baseName}.spz`;
+
+        return {
+            resultPayload: {
+                success: true,
+                splatPath,
+                spzPath,
+                splatUrl,
+                spzUrl,
+                splatCount: splats.length,
+                width: decoded.width,
+                height: decoded.height,
+                fovDegrees,
+                suggestedScene3DData: {
+                    splatUrl,
+                    camera: {
+                        position: [0, 1.6, 0],
+                        target: [0, 1.6, -5]
+                    }
+                }
+            } as unknown as ToolResultPayload,
+            summaryResult: `Synthesized photorealistic 3D Gaussian Splats from image (${splats.length.toLocaleString()} splats). Saved standard binary .splat (${(splatBuffer.length / 1024 / 1024).toFixed(2)} MB) and compressed .spz (${(spzBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${splatPath}.`
         };
     },
 

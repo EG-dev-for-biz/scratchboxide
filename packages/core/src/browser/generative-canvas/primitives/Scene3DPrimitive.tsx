@@ -138,6 +138,7 @@ import { attachViewportControls, stepCamera } from './scene3d/attachViewportCont
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
+import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle } from './scene3d/types';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -2367,17 +2368,27 @@ int main(int argc, char** argv) {
         const tz = cameraDef?.target ? cameraDef.target[2] : 0;
         cameraTargetRef.current.set(tx, ty, tz);
 
-        const [px, py, pz] = cameraDef?.position || [15, ty + 12, 15];
-        const dx = px - tx;
-        const dy = py - ty;
-        const dz = pz - tz;
-        const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
-        const theta = Math.atan2(dx, dz);
+        const bounds = computeSceneGeometryBounds(stack.scene);
+        const autoFrame = calculateStandoffCamera(bounds, cameraDef, { fovDegrees: stack.camera.fov });
 
-        cameraRotationRef.current = { theta, phi, distance: dist };
-        stack.camera.position.set(px, py, pz);
-        stack.camera.lookAt(cameraTargetRef.current);
+        if (autoFrame) {
+            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+            stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+            stack.camera.lookAt(cameraTargetRef.current);
+        } else {
+            const [px, py, pz] = cameraDef?.position || [15, ty + 12, 15];
+            const dx = px - tx;
+            const dy = py - ty;
+            const dz = pz - tz;
+            const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+            const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
+            const theta = Math.atan2(dx, dz);
+
+            cameraRotationRef.current = { theta, phi, distance: dist };
+            stack.camera.position.set(px, py, pz);
+            stack.camera.lookAt(cameraTargetRef.current);
+        }
     }, [cameraFingerprint, tilesFingerprint]);
 
     // ---- 5. Focal content: procedural theme / aircraft / sculpt mesh / splats / dynamic script ----
@@ -2641,6 +2652,17 @@ int main(int argc, char** argv) {
                     currentMap.set(obj.id, splatMesh);
                     activeSplatMeshesRef.current.set(obj.id, splatMesh);
                     refreshEntities();
+
+                    if (stackRef.current) {
+                        const bounds = computeSceneGeometryBounds(stackRef.current.scene);
+                        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stackRef.current.camera.fov });
+                        if (autoFrame && autoFrame.autoFramed) {
+                            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+                            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+                            stackRef.current.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+                            stackRef.current.camera.lookAt(cameraTargetRef.current);
+                        }
+                    }
                 }).catch(err => {
                     console.warn(`[External Splat Loader Error] Failed to load ${uri}:`, err);
                 });
@@ -2683,6 +2705,17 @@ int main(int argc, char** argv) {
                     scene.add(model);
                     currentMap.set(obj.id, model);
                     refreshEntities();
+
+                    if (stackRef.current) {
+                        const bounds = computeSceneGeometryBounds(stackRef.current.scene);
+                        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stackRef.current.camera.fov });
+                        if (autoFrame && autoFrame.autoFramed) {
+                            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+                            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+                            stackRef.current.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+                            stackRef.current.camera.lookAt(cameraTargetRef.current);
+                        }
+                    }
                 },
                 undefined,
                 (err) => {
@@ -2743,6 +2776,15 @@ int main(int argc, char** argv) {
             has3DTiles: tilesInputRef.current.has3DTiles
         });
         refreshEntities();
+
+        const bounds = computeSceneGeometryBounds(stack.scene);
+        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stack.camera.fov });
+        if (autoFrame && autoFrame.autoFramed) {
+            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+            stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+            stack.camera.lookAt(cameraTargetRef.current);
+        }
     }, [customMeshesFingerprint, tilesFingerprint]);
 
     React.useEffect(() => {
