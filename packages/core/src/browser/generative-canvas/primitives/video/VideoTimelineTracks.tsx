@@ -39,13 +39,16 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
 
     const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
     const [dragAction, setDragAction] = useState<{
-        type: 'move' | 'trim-head' | 'trim-tail';
+        type: 'move' | 'trim-head' | 'trim-tail' | 'drag-keyframe';
         trackId: string;
         elementId: string;
         initialX: number;
         initialStart: number;
         initialDuration: number;
         initialTrimStart: number;
+        keyframeId?: string;
+        propName?: string;
+        initialKfTime?: number;
     } | null>(null);
 
     const fps = data.fps || 30;
@@ -191,6 +194,88 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
             }
 
             onUpdateTracks(updatedTracks);
+        };
+
+        const handleMouseUp = () => {
+            setDragAction(null);
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+    };
+
+    // Keyframe Dragging (Re-time property animation with magnetic & frame snapping)
+    const handleKeyframeMouseDown = (
+        track: TimelineTrack,
+        element: TimelineElement,
+        propName: string,
+        kf: PropertyKeyframe,
+        keyframeId: string,
+        e: React.MouseEvent
+    ) => {
+        e.stopPropagation();
+        if (track.locked) return;
+
+        onSelectClip(element.id, track.id);
+
+        const initialKfTime = kf.time ?? 0;
+        setDragAction({
+            type: 'drag-keyframe',
+            trackId: track.id,
+            elementId: element.id,
+            initialX: e.clientX,
+            initialStart: element.startTime,
+            initialDuration: element.duration,
+            initialTrimStart: element.trimStart,
+            keyframeId,
+            propName,
+            initialKfTime
+        });
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            const deltaPx = moveEvent.clientX - e.clientX;
+            const deltaSec = deltaPx / pxPerSec;
+            let targetKfTime = Math.max(0, Math.min(element.duration, initialKfTime + deltaSec));
+
+            if (snappingEnabled) {
+                const absoluteTime = element.startTime + targetKfTime;
+                const snap = magneticSnap(absoluteTime, snapTargets, 10, pxPerSec);
+                if (snap.didSnap) {
+                    targetKfTime = Math.max(0, Math.min(element.duration, snap.snappedTime - element.startTime));
+                }
+            }
+
+            targetKfTime = snapToFrameSeconds(targetKfTime, fps);
+
+            const updatedTracks = data.tracks.map(t => {
+                if (t.id !== track.id) return t;
+                return {
+                    ...t,
+                    elements: t.elements.map(el => {
+                        if (el.id !== element.id || !el.keyframes) return el;
+                        const propKfs = el.keyframes[propName];
+                        if (!Array.isArray(propKfs)) return el;
+                        return {
+                            ...el,
+                            keyframes: {
+                                ...el.keyframes,
+                                [propName]: propKfs.map((k, idx) => {
+                                    const currId = k.id || `kf-${idx}`;
+                                    if (currId === keyframeId || k === kf) {
+                                        return { ...k, time: targetKfTime };
+                                    }
+                                    return k;
+                                })
+                            }
+                        };
+                    })
+                };
+            });
+
+            onUpdateTracks(updatedTracks);
+            onSeek(snapToFrameSeconds(element.startTime + targetKfTime, fps));
         };
 
         const handleMouseUp = () => {
@@ -524,19 +609,33 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                                                         const kfTimeSec = el.startTime + offsetSec;
                                                         const kfLeftPx = offsetSec * pxPerSec;
                                                         if (kfLeftPx < 0 || kfLeftPx > widthPx) return null;
+                                                        const keyframeId = kf.id || `kf-${kfIdx}`;
+                                                        const isKeyframeDragging = dragAction?.type === 'drag-keyframe' &&
+                                                            dragAction.elementId === el.id &&
+                                                            dragAction.keyframeId === keyframeId &&
+                                                            dragAction.propName === propName;
 
                                                         return (
                                                             <div
-                                                                key={kf.id || `kf-${kfIdx}`}
+                                                                key={keyframeId}
+                                                                onMouseDown={e => {
+                                                                    handleKeyframeMouseDown(track, el, propName, kf, keyframeId, e);
+                                                                }}
                                                                 onClick={e => {
                                                                     e.stopPropagation();
                                                                     onSeek(kfTimeSec);
                                                                 }}
-                                                                className="absolute top-1/2 -translate-y-1/2 pointer-events-auto cursor-pointer group/kf z-20"
+                                                                className={`absolute top-1/2 -translate-y-1/2 pointer-events-auto cursor-ew-resize group/kf z-20 ${
+                                                                    isKeyframeDragging ? 'scale-125 z-30' : ''
+                                                                }`}
                                                                 style={{ left: `${kfLeftPx}px` }}
-                                                                title={`Keyframe: ${propName} (${JSON.stringify(kf.value)}) at ${formatTimecode(kfTimeSec, fps)}`}
+                                                                title={`Keyframe: ${propName} (${JSON.stringify(kf.value)}) at ${formatTimecode(kfTimeSec, fps)} (Click to seek, drag to re-time)`}
                                                             >
-                                                                <div className="w-2.5 h-2.5 -ml-1.25 rotate-45 bg-amber-300 border border-amber-600 shadow group-hover/kf:scale-125 group-hover/kf:bg-yellow-200 transition-transform" />
+                                                                <div className={`w-2.5 h-2.5 -ml-1.25 rotate-45 border shadow transition-transform ${
+                                                                    isKeyframeDragging
+                                                                        ? 'bg-yellow-200 border-amber-400 scale-125'
+                                                                        : 'bg-amber-300 border-amber-600 group-hover/kf:scale-125 group-hover/kf:bg-yellow-200'
+                                                                }`} />
                                                             </div>
                                                         );
                                                     })}

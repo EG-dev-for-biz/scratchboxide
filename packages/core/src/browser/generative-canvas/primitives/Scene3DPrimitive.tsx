@@ -21,6 +21,8 @@ import type {
     TransformGizmoSpace,
     ViewportToolMode
 } from '../canvas-types';
+import { VideoTimelineTracks } from './video/VideoTimelineTracks';
+import type { TimelineTrack, VideoTimelineData, NleTool } from '../services/video/videoTypes';
 import {
     evaluateFalloff,
     applySculptStroke,
@@ -1255,10 +1257,15 @@ int main(int argc, char** argv) {
     const isRoutingActiveRef = useLatest(isRoutingActive);
 
     // 4D Timeline & Playback States
-    const [currentTimeMs, setCurrentTimeMs] = React.useState<number>(0);
-    const [durationMs] = React.useState<number>(10000);
-    const [isPlaying, setIsPlaying] = React.useState<boolean>(false);
-    const [playbackSpeed, setPlaybackSpeed] = React.useState<number>(1.0);
+    const [currentTimeMs, setCurrentTimeMs] = React.useState<number>(data.timeline?.currentTimeMs || 0);
+    const [durationMs, setDurationMs] = React.useState<number>(data.timeline?.durationMs || 10000);
+    const [isPlaying, setIsPlaying] = React.useState<boolean>(data.timeline?.isPlaying || false);
+    const [playbackSpeed, setPlaybackSpeed] = React.useState<number>(data.timeline?.playbackSpeed || data.timeline?.speed || 1.0);
+    const [isTimelineDrawerOpen, setIsTimelineDrawerOpen] = React.useState<boolean>(false);
+    const [timelineActiveTool] = React.useState<NleTool>('select');
+    const [timelineSnapping, setTimelineSnapping] = React.useState<boolean>(true);
+    const [timelineZoom, setTimelineZoom] = React.useState<number>(50);
+    const [selectedClipId, setSelectedClipId] = React.useState<string | undefined>(undefined);
 
     const currentTimeMsRef = React.useRef<number>(0);
     const isPlayingRef = useLatest(isPlaying);
@@ -1700,6 +1707,9 @@ int main(int argc, char** argv) {
                 if (data.timeline.playbackSpeed !== undefined) {
                     setPlaybackSpeed(data.timeline.playbackSpeed);
                     playbackSpeedRef.current = data.timeline.playbackSpeed;
+                }
+                if (data.timeline.durationMs !== undefined) {
+                    setDurationMs(data.timeline.durationMs);
                 }
                 if (data.timeline.currentTimeMs !== undefined) {
                     setCurrentTimeMs(data.timeline.currentTimeMs);
@@ -2910,6 +2920,87 @@ int main(int argc, char** argv) {
         setIsPlaying(!isPlaying);
     };
 
+    const handleTimelineSeek = React.useCallback((timeSec: number) => {
+        const timeMs = Math.round(timeSec * 1000);
+        currentTimeMsRef.current = timeMs;
+        setCurrentTimeMs(timeMs);
+    }, []);
+
+    const handleUpdateTimelineTracks = React.useCallback((newTracks: TimelineTrack[]) => {
+        mutateSceneData(prev => ({
+            ...prev,
+            timeline: {
+                ...prev.timeline,
+                tracks: newTracks
+            }
+        }), { operator: 'timeline_update_tracks', params: { trackCount: newTracks.length } });
+    }, [mutateSceneData]);
+
+    const timelineData: VideoTimelineData = React.useMemo(() => {
+        const fps = 30;
+        const durSec = durationMs / 1000;
+        const curSec = currentTimeMs / 1000;
+
+        if (sceneData.timeline?.tracks && sceneData.timeline.tracks.length > 0) {
+            return {
+                title: sceneData.title || '3D Scene Timeline',
+                fps,
+                duration: durSec,
+                currentTime: curSec,
+                isPlaying,
+                zoom: timelineZoom,
+                aspectRatio: '16:9',
+                mediaAssets: [],
+                tracks: sceneData.timeline.tracks
+            };
+        }
+
+        const defaultTracks: TimelineTrack[] = [
+            {
+                id: 'track-3d-scene',
+                name: '3D Scene & Camera',
+                type: '3d',
+                visible: true,
+                locked: false,
+                elements: [
+                    {
+                        id: 'clip-3d-main',
+                        trackId: 'track-3d-scene',
+                        name: sceneData.title || 'Main 3D Scene',
+                        type: '3d',
+                        startTime: 0,
+                        duration: durSec,
+                        trimStart: 0,
+                        trimEnd: durSec,
+                        keyframes: {
+                            'camera.position': [
+                                { id: 'kf-cam-0', time: 0, value: 0 },
+                                { id: 'kf-cam-1', time: durSec * 0.5, value: 1 },
+                                { id: 'kf-cam-2', time: durSec, value: 2 }
+                            ],
+                            'camera.fov': [
+                                { id: 'kf-fov-0', time: 0, value: 45 },
+                                { id: 'kf-fov-1', time: durSec, value: 60 }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ];
+
+        return {
+            title: sceneData.title || '3D Scene Timeline',
+            fps,
+            duration: durSec,
+            currentTime: curSec,
+            isPlaying,
+            zoom: timelineZoom,
+            aspectRatio: '16:9',
+            mediaAssets: [],
+            tracks: defaultTracks
+        };
+    }, [sceneData.timeline?.tracks, sceneData.title, durationMs, currentTimeMs, isPlaying, timelineZoom]);
+
     const handleUndo = React.useCallback(() => {
         if (sculptMeshRef.current && historyStackRef.current) {
             const ok = historyStackRef.current.undo(sculptMeshRef.current.geometry);
@@ -3672,7 +3763,7 @@ int main(int argc, char** argv) {
             />
 
             {/* Ultra-Sleek Floating Bottom Scrubber Pill */}
-            <div className="sb-3d-timeline-scrubber absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl select-none animate-fadeIn">
+            <div className={`sb-3d-timeline-scrubber absolute ${isTimelineDrawerOpen ? 'bottom-[255px]' : 'bottom-4'} left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 rounded-full bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl select-none transition-all duration-300 animate-fadeIn`}>
                 <button
                     type="button"
                     className="sb-3d-play-mini-btn flex items-center justify-center w-7 h-7 rounded-full bg-blue-600/30 text-blue-400 border border-blue-500/40 hover:bg-blue-600/50 transition-all active:scale-95"
@@ -3696,7 +3787,90 @@ int main(int argc, char** argv) {
                 <span className="text-[11px] font-mono text-zinc-300 font-medium shrink-0">
                     {(currentTimeMs / 1000).toFixed(1)}s
                 </span>
+                <button
+                    type="button"
+                    onClick={() => setIsTimelineDrawerOpen(!isTimelineDrawerOpen)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
+                        isTimelineDrawerOpen
+                            ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
+                            : 'bg-zinc-800/80 text-zinc-300 border-white/10 hover:bg-zinc-700/80'
+                    }`}
+                    title={isTimelineDrawerOpen ? 'Collapse Animation Timeline' : 'Open Animation Timeline Tracks'}
+                >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="2" y="4" width="20" height="16" rx="2" />
+                        <path d="M10 4v16M2 12h20" />
+                    </svg>
+                    <span>{isTimelineDrawerOpen ? 'Hide Tracks' : 'Tracks'}</span>
+                </button>
             </div>
+
+            {/* Docked Animation Sequencer (Reusing VideoTimelineTracks) */}
+            {isTimelineDrawerOpen && (
+                <div className="sb-3d-docked-timeline absolute bottom-0 left-0 right-0 z-30 flex flex-col bg-zinc-950/95 backdrop-blur-xl border-t border-zinc-800 shadow-2xl h-[245px] overflow-hidden animate-slideUp">
+                    {/* Top Control Bar */}
+                    <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-300 select-none shrink-0">
+                        <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-100 flex items-center gap-1.5 text-[11.5px]">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                                3D Animation Sequencer
+                            </span>
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                                ({(currentTimeMs / 1000).toFixed(2)}s / {(durationMs / 1000).toFixed(2)}s)
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setTimelineSnapping(!timelineSnapping)}
+                                className={`px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors ${
+                                    timelineSnapping
+                                        ? 'bg-blue-600/30 text-blue-300 border-blue-500/40'
+                                        : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                                }`}
+                                title="Toggle magnetic snapping"
+                            >
+                                Snap {timelineSnapping ? 'ON' : 'OFF'}
+                            </button>
+                            <div className="flex items-center gap-1 text-[10.5px] text-zinc-400">
+                                <span>Zoom</span>
+                                <input
+                                    type="range"
+                                    min="20"
+                                    max="120"
+                                    value={timelineZoom}
+                                    onChange={e => setTimelineZoom(Number(e.target.value))}
+                                    className="w-14 h-1 bg-zinc-800 rounded accent-blue-500 cursor-pointer"
+                                />
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsTimelineDrawerOpen(false)}
+                                className="p-0.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                                title="Close Timeline Drawer"
+                            >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M18 6L6 18M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Reused VideoTimelineTracks Canvas */}
+                    <div className="flex-1 overflow-hidden relative">
+                        <VideoTimelineTracks
+                            data={timelineData}
+                            onUpdateTracks={handleUpdateTimelineTracks}
+                            onSeek={handleTimelineSeek}
+                            onSelectClip={(clipId) => setSelectedClipId(clipId)}
+                            selectedClipId={selectedClipId}
+                            activeTool={timelineActiveTool}
+                            snappingEnabled={timelineSnapping}
+                            zoom={timelineZoom}
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

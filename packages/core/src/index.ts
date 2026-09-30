@@ -378,10 +378,16 @@ export {
     type ProceduralSfMBundle
 } from './node/spatial/ProceduralSfMDatasetService';
 
-// Universal 3D Structure Foundation & Multi-Format Adapters
-export {
+// Universal 3D Structure Foundation & Multi-Format Adapters (Types for Browser)
+export type {
     Universal3DStructureFoundation
 } from './node/spatial/Universal3DStructureFoundation';
+
+export type {
+    FoundationScenePackagerService,
+    FoundationScenePackageOptions,
+    FoundationScenePackageResult
+} from './node/spatial/FoundationScenePackagerService';
 
 export {
     type MetricBoundingBox,

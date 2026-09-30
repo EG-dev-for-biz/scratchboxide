@@ -46,9 +46,20 @@ import {
     type AtmosphericScatteringConfig
 } from './services/atmosphere';
 
+import {
+    ProceduralMicroSurfaceShaderPatcher,
+    type MicroSurfacePreset,
+    type ProceduralMicroSurfaceConfig
+} from './services/spatial/ProceduralMicroSurfaceShaderPatcher';
+
 export * from './services/worldbuilder';
 export * from './services/mesh';
 export * from './services/atmosphere';
+export {
+    ProceduralMicroSurfaceShaderPatcher,
+    type MicroSurfacePreset,
+    type ProceduralMicroSurfaceConfig
+};
 export {
     detectRealWorldLocationIntent,
     castCreativeLocation,
@@ -121,6 +132,11 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
 
     // Check prompt first for direct user intent, then fall back to surrounding context
     for (const text of [promptLower, combined]) {
+        // -0.99. 3D Gaussian Splatting / 3DGS / Radiance Fields / 4D Avatar / .splat / .spz
+        if (/\b(?:\.sp(?:lat|z)|gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|survey\s*stations?|survey\s*synthesis|4d\s*performer|4dgs\s*avatar)\b/i.test(text)) {
+            return 'gaussian_splat';
+        }
+
         // -0.98. Civil Highway Overpass / Freeway Interchange / Infrastructure Viaduct
         if (/\b(?:civil_highway_overpass|overpass|viaduct|highway|freeway|interchange|flyover|expressway|bridge\s*piers?|gantry\s*signs?)\b/i.test(text)) {
             return 'highway_overpass';
@@ -134,11 +150,6 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         // -0.972. Babylonian Ziggurat Observatory / Etemenanki Mesopotamian Temple
         if (/\b(?:ziggurat|etemenanki|babylon(?:ian)?|mesopotami(?:a|an)|astrolabe\s*observatory|mudbrick\s*temple)\b/i.test(text)) {
             return 'ziggurat';
-        }
-
-        // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields / 4D Avatar
-        if (/\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|survey\s*stations?|survey\s*synthesis|4d\s*performer|4dgs\s*avatar)\b/i.test(text)) {
-            return 'gaussian_splat';
         }
 
         // -0.96. High-Speed Ballistics, Voronoi Glass Fracture & Supersonic Impact
@@ -2054,11 +2065,59 @@ function _synthesizeRawContextual3DSceneInner(
         ...(hasControlSurfaces ? { controlSurfaces: true } : {})
     };
 
+    // Direct 3D Gaussian Splat (.splat / .spz / 3DGS) scene synthesis
+    const splatMatch = prompt.match(/(?:(?:\/splats\/|\/models\/|[a-zA-Z0-9_\-.]+\/)?([a-zA-Z0-9_\-]+\.sp(?:lat|z)))/i);
+    const isSplatRequested = theme === 'gaussian_splat' || Boolean(splatMatch) || /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(prompt);
+
+    if (splatMatch || (isSplatRequested && !detectRealWorldLocationIntent(prompt, context)?.isRealWorld)) {
+        const splatFileName = splatMatch?.[1] || 'scene_2_photorealistic_final.splat';
+        const rawUrl = splatMatch?.[0];
+        const splatUrl = rawUrl?.startsWith('/') ? rawUrl : `/splats/${splatFileName}`;
+        const displayName = splatFileName.replace(/\.sp(?:lat|z)$/i, '').replace(/[_\-]+/g, ' ');
+
+        return {
+            title: `${displayName.charAt(0).toUpperCase() + displayName.slice(1)} — 3D Gaussian Splats`,
+            subtitle: `Photorealistic 3DGS radiance field unprojected from photographic source with high-density oriented Gaussian splats.`,
+            worldBranch: `splat-world/${displayName.replace(/\s+/g, '-')}`,
+            sceneType: 'gaussian_splat',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            splatUrl,
+            splatOptions: {
+                splatScale: 1.0,
+                contactShadow: true,
+                enableSoftZ: true
+            },
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 20000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [0, 1.6, 0],
+                target: [0, 1.6, -12],
+                fov: 55
+            },
+            environment: {
+                skybox: 'dusk',
+                lighting: 'dusk',
+                ground: false
+            },
+            customMeshes: [],
+            features: {
+                ...baseFeatures
+            }
+        };
+    }
+
     // Check if the prompt asks for a real-world location or landmark.
     // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
-    const isSplatRequested = theme === 'gaussian_splat' || /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(prompt);
     const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
     if (realWorldLoc && realWorldLoc.isRealWorld) {
         if (isSplatRequested) {
@@ -2271,52 +2330,6 @@ function _synthesizeRawContextual3DSceneInner(
             }
     }
 
-    // Direct 3D Gaussian Splat (.splat / .spz / 3DGS) scene synthesis
-    const splatMatch = prompt.match(/(?:(?:\/splats\/|\/models\/|[a-zA-Z0-9_\-.]+\/)?([a-zA-Z0-9_\-]+\.sp(?:lat|z)))/i);
-    if (isSplatRequested || Boolean(splatMatch)) {
-        const splatFileName = splatMatch?.[1] || 'scene_2_photorealistic_final.splat';
-        const rawUrl = splatMatch?.[0];
-        const splatUrl = rawUrl?.startsWith('/') ? rawUrl : `/splats/${splatFileName}`;
-        const displayName = splatFileName.replace(/\.sp(?:lat|z)$/i, '').replace(/[_\-]+/g, ' ');
-
-        return {
-            title: `${displayName.charAt(0).toUpperCase() + displayName.slice(1)} — 3D Gaussian Splats`,
-            subtitle: `Photorealistic 3DGS radiance field unprojected from photographic source with high-density oriented Gaussian splats.`,
-            worldBranch: `splat-world/${displayName.replace(/\s+/g, '-')}`,
-            sceneType: 'gaussian_splat',
-            renderMode: 'pbr',
-            cameraMode: 'orbit',
-            animation: 'orbit',
-            splatUrl,
-            splatOptions: {
-                splatScale: 1.0,
-                contactShadow: true,
-                enableSoftZ: true
-            },
-            timeline: {
-                currentTimeMs: 0,
-                durationMs: 20000,
-                isPlaying: true,
-                speed: 1.0,
-                playbackSpeed: 1.0,
-                isLooping: true
-            },
-            camera: {
-                position: [0, 1.6, 0],
-                target: [0, 1.6, -12],
-                fov: 55
-            },
-            environment: {
-                skybox: 'dusk',
-                lighting: 'dusk',
-                ground: false
-            },
-            customMeshes: [],
-            features: {
-                ...baseFeatures
-            }
-        };
-    }
         return synthesizeProceduralVehicleScene(prompt, context);
     }
 
@@ -3015,7 +3028,7 @@ onFrame((time, delta) => {
                 isLooping: true
             },
             camera: {
-                position: [-42, 28, 52],
+                position: [-36, 22, 44],
                 target: [0, 8, 0],
                 fov: 48
             },
@@ -4055,20 +4068,20 @@ export function createHighwayOverpassScene(
     const group = new THREE.Group();
     group.name = 'highway-overpass-scene';
 
-    // Materials
-    const asphaltMat = new THREE.MeshStandardMaterial({
+    // Materials with procedural micro-surface shaders
+    const asphaltMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('alluvial_sand', {
         color: 0x1e242d,
-        roughness: 0.82,
+        roughness: 0.85,
         metalness: 0.15
     });
-    const concretePierMat = new THREE.MeshStandardMaterial({
+    const concretePierMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('stone_cavitation', {
         color: 0x94a3b8,
-        roughness: 0.75,
-        metalness: 0.1
+        roughness: 0.78,
+        metalness: 0.08
     });
-    const concreteBarrierMat = new THREE.MeshStandardMaterial({
+    const concreteBarrierMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('stone_cavitation', {
         color: 0xc8ced8,
-        roughness: 0.65,
+        roughness: 0.68,
         metalness: 0.05
     });
     const steelGirderMat = new THREE.MeshStandardMaterial({
@@ -4640,23 +4653,23 @@ export function createBabylonianZigguratScene(
     const group = new THREE.Group();
     group.name = 'babylonian-ziggurat-scene';
 
-    // Materials
-    const mudbrickMat = new THREE.MeshStandardMaterial({
+    // Materials with procedural micro-surface shaders injected (Sobel mortar deepening, stone cavitation, lapis crazing)
+    const mudbrickMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('mudbrick_masonry', {
         color: 0xbaa47a,
         roughness: 0.88,
         metalness: 0.02
     });
-    const lapisMat = new THREE.MeshStandardMaterial({
+    const lapisMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('lapis_glaze', {
         color: 0x143485,
-        roughness: 0.22,
+        roughness: 0.14,
         metalness: 0.15
     });
-    const goldMat = new THREE.MeshStandardMaterial({
+    const goldMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('hammered_metal', {
         color: 0xd4af37,
         roughness: 0.26,
         metalness: 0.92
     });
-    const bronzeMat = new THREE.MeshStandardMaterial({
+    const bronzeMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('hammered_metal', {
         color: 0x8c6d3b,
         roughness: 0.44,
         metalness: 0.82
@@ -4666,7 +4679,7 @@ export function createBabylonianZigguratScene(
         emissive: 0xff3300,
         emissiveIntensity: 1.5
     });
-    const desertSandMat = new THREE.MeshStandardMaterial({
+    const desertSandMat = ProceduralMicroSurfaceShaderPatcher.createMaterial('alluvial_sand', {
         color: 0xd6b885,
         roughness: 0.95,
         metalness: 0.0

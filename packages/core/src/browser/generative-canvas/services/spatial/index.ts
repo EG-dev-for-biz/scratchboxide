@@ -17,3 +17,4 @@ export * from './SpatialSplatCalibrationGizmo';
 export * from './SpatialGenerativeRuntime';
 export * from './ArchieBuildingRefiner';
 export * from './SbTerrainGroundEngine';
+export * from './ProceduralMicroSurfaceShaderPatcher';

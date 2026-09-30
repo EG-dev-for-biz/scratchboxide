@@ -298,6 +298,17 @@ export {
     type FidelityFXSuperResolutionOptions
 } from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
 
+// Procedural Micro-Surface Triplanar PBR Shaders
+export {
+    ProceduralMicroSurfaceShaderPatcher,
+    resolveMicroSurfaceConfig,
+    type MicroSurfacePreset,
+    type ProceduralMicroSurfaceConfig,
+    type MortarDeepeningConfig,
+    type CavitationPoresConfig,
+    type GlazeCrackleConfig
+} from './browser/generative-canvas/services/spatial/ProceduralMicroSurfaceShaderPatcher';
+
 
 
 

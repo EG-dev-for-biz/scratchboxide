@@ -27,8 +27,8 @@ export function getActiveUserName(customName?: string): string {
     return DEFAULT_ACTIVE_USER_NAME;
 }
 
-import type { VideoTimelineData } from './services/video/videoTypes';
-export type { VideoTimelineData };
+import type { VideoTimelineData, TimelineTrack } from './services/video/videoTypes';
+export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
 export type PrimitiveType =
@@ -848,6 +848,8 @@ export interface Scene3DData {
         playbackSpeed?: number;
         speed?: number;
         isLooping?: boolean;
+        tracks?: TimelineTrack[];
+        animationClip?: any;
     };
     customScript?: string;
     code?: string;

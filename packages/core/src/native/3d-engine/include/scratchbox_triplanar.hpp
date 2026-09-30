@@ -29,7 +29,10 @@ enum class TriplanarMaterialType {
     ROCK_STRATA,
     CONCRETE_WEATHERED,
     RUST_PATINA,
-    MOSS_OVERGROWTH
+    MOSS_OVERGROWTH,
+    MUDBRICK_MASONRY,
+    STONE_CAVITATION,
+    LAPIS_GLAZE
 };
 
 struct TriplanarSample {
@@ -189,6 +192,80 @@ inline TriplanarSample sampleProceduralMoss(const Vec3& p, const Vec3& normal, f
 }
 
 /**
+ * Procedural Mudbrick Masonry with staggered mortar courses and micro-porosity.
+ */
+inline TriplanarSample sampleProceduralMudbrick(const Vec3& p, const Vec3& normal, float scale = 1.0f) {
+    float yCourse = p.y * 1.25f * scale;
+    float row = std::floor(yCourse);
+    float yFrac = yCourse - row;
+    float rowStagger = (std::fmod(row, 2.0f) != 0.0f) ? 0.5f : 0.0f;
+    float xBrick = (p.x * 2.75f * scale) + rowStagger;
+    float xFrac = xBrick - std::floor(xBrick);
+
+    float dBed = std::min(yFrac, 1.0f - yFrac);
+    float dHead = std::min(xFrac, 1.0f - xFrac);
+    float dJoint = std::min(dBed, dHead);
+
+    float mortarFactor = 1.0f - math::smoothstep(0.0f, 0.085f, dJoint);
+    float poreNoise = FastNoise3D::fbm(p.x * 8.0f, p.y * 8.0f, p.z * 8.0f, 3, 2.0f, 0.5f, 303);
+    float porePit = (poreNoise < 0.24f) ? std::pow((0.24f - poreNoise) / 0.24f, 2.0f) : 0.0f;
+
+    Vec3 brickAlbedo = {0.73f, 0.64f, 0.48f};
+    Vec3 mortarAlbedo = {0.52f, 0.48f, 0.42f};
+    Vec3 col = math::lerp(brickAlbedo, mortarAlbedo, mortarFactor);
+    col = col * (1.0f - porePit * 0.45f);
+
+    TriplanarSample s;
+    s.albedo = col;
+    s.roughness = math::lerp(0.86f, 0.98f, mortarFactor) + porePit * 0.15f;
+    s.metallic = 0.02f;
+    s.ao = (1.0f - mortarFactor * 0.35f);
+    return s;
+}
+
+/**
+ * Procedural Stone Cavitation Pores (travertine/limestone porosity and mineral grain).
+ */
+inline TriplanarSample sampleProceduralStoneCavitation(const Vec3& p, const Vec3& normal, float scale = 1.0f) {
+    float poreNoise = FastNoise3D::fbm(p.x * 10.0f * scale, p.y * 10.0f * scale, p.z * 10.0f * scale, 4, 2.0f, 0.5f, 404);
+    float pit = (poreNoise < 0.26f) ? std::pow((0.26f - poreNoise) / 0.26f, 2.0f) : 0.0f;
+    float mineral = FastNoise3D::perlin(p.x * 32.0f, p.y * 32.0f, p.z * 32.0f, 505);
+
+    Vec3 stoneAlbedo = {0.68f + mineral * 0.06f, 0.67f + mineral * 0.05f, 0.65f + mineral * 0.04f};
+    stoneAlbedo = stoneAlbedo * (1.0f - pit * 0.55f);
+
+    TriplanarSample s;
+    s.albedo = stoneAlbedo;
+    s.roughness = std::clamp(0.72f + pit * 0.25f, 0.0f, 1.0f);
+    s.metallic = 0.04f;
+    s.ao = 1.0f - pit * 0.40f;
+    return s;
+}
+
+/**
+ * Procedural Lapis Lazuli Glaze with vitreous gloss and golden pyrite specks.
+ */
+inline TriplanarSample sampleProceduralLapisGlaze(const Vec3& p, const Vec3& normal, float scale = 1.0f) {
+    float crazing = FastNoise3D::worley(p.x * 6.5f * scale, p.y * 6.5f * scale, p.z * 6.5f * scale, 606);
+    float pyrite = FastNoise3D::perlin(p.x * 24.0f, p.y * 24.0f, p.z * 24.0f, 707);
+
+    Vec3 lapisDeep = {0.08f, 0.20f, 0.55f};
+    Vec3 lapisBright = {0.12f, 0.28f, 0.72f};
+    Vec3 pyriteGold = {0.84f, 0.70f, 0.24f};
+
+    Vec3 col = math::lerp(lapisDeep, lapisBright, crazing);
+    float isPyrite = (pyrite > 0.65f) ? 1.0f : 0.0f;
+    col = math::lerp(col, pyriteGold, isPyrite);
+
+    TriplanarSample s;
+    s.albedo = col;
+    s.roughness = isPyrite > 0.5f ? 0.32f : 0.14f; // Vitreous smooth silicate glaze
+    s.metallic = isPyrite > 0.5f ? 0.85f : 0.12f;
+    s.ao = 1.0f;
+    return s;
+}
+
+/**
  * Bakes triplanar procedural materials directly into mesh vertex attributes (COLOR_0 and normals).
  */
 inline void applyTriplanarToMesh(geometry::Mesh& mesh, TriplanarMaterialType matType, float scale = 1.0f) {
@@ -213,6 +290,15 @@ inline void applyTriplanarToMesh(geometry::Mesh& mesh, TriplanarMaterialType mat
                 break;
             case TriplanarMaterialType::MOSS_OVERGROWTH:
                 s = sampleProceduralMoss(p, n, scale);
+                break;
+            case TriplanarMaterialType::MUDBRICK_MASONRY:
+                s = sampleProceduralMudbrick(p, n, scale);
+                break;
+            case TriplanarMaterialType::STONE_CAVITATION:
+                s = sampleProceduralStoneCavitation(p, n, scale);
+                break;
+            case TriplanarMaterialType::LAPIS_GLAZE:
+                s = sampleProceduralLapisGlaze(p, n, scale);
                 break;
             default:
                 s = sampleProceduralRock(p, n, scale);
@@ -239,6 +325,15 @@ inline void applyTriplanarToMesh(geometry::ScratchboxMesh& mesh, TriplanarMateri
                 break;
             case TriplanarMaterialType::MOSS_OVERGROWTH:
                 s = sampleProceduralMoss(v.position, v.normal, scale);
+                break;
+            case TriplanarMaterialType::MUDBRICK_MASONRY:
+                s = sampleProceduralMudbrick(v.position, v.normal, scale);
+                break;
+            case TriplanarMaterialType::STONE_CAVITATION:
+                s = sampleProceduralStoneCavitation(v.position, v.normal, scale);
+                break;
+            case TriplanarMaterialType::LAPIS_GLAZE:
+                s = sampleProceduralLapisGlaze(v.position, v.normal, scale);
                 break;
             default:
                 s = sampleProceduralRock(v.position, v.normal, scale);

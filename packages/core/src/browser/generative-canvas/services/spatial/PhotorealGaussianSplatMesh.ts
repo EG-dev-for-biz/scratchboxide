@@ -286,7 +286,7 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.18, 1.0);
 
           vec3 S = instanceScale * uSplatScale;
-          S = clamp(S, vec3(0.0015), vec3(0.035));
+          S = clamp(S, vec3(0.0015), vec3(1.5));
           float rMajor = max(S.x, S.y) * 3.6;
           float rMinor = max(0.0015, min(S.x, S.y) * 3.2 * cosIncidence);
 

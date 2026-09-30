@@ -948,5 +948,15 @@ export {
     AdaptiveDomainParticleService
 } from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
 
+// Universal 3D Structure Foundation & Scene Packaging
+export {
+    Universal3DStructureFoundation
+} from './node/spatial/Universal3DStructureFoundation';
+export {
+    FoundationScenePackagerService,
+    type FoundationScenePackageOptions,
+    type FoundationScenePackageResult
+} from './node/spatial/FoundationScenePackagerService';
+
 
 
