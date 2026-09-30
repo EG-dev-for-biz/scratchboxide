@@ -12,6 +12,7 @@ const args = [
   '--no-sandbox',
   '--disable-gpu-sandbox',
   '--remote-debugging-port=9222',
+  '--remote-allow-origins=*',
   `--user-data-dir=${tmpDir}`,
   '--no-first-run',
   '--no-default-browser-check',

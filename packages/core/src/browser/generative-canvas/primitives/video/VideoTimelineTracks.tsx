@@ -233,7 +233,7 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                     {data.tracks.map(track => (
                         <div
                             key={track.id}
-                            className={`sb-nle-track-header-cell h-16 border-b border-zinc-800/80 px-2.5 py-1.5 flex flex-col justify-between transition-colors ${
+                            className={`sb-nle-track-header-cell h-11 border-b border-zinc-800/80 px-2 py-1 flex flex-col justify-center gap-0.5 transition-colors ${
                                 track.locked ? 'bg-zinc-950/60 opacity-60' : 'bg-zinc-900 hover:bg-zinc-850'
                             }`}
                         >
@@ -419,7 +419,7 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                     {data.tracks.map(track => (
                         <div
                             key={track.id}
-                            className={`h-16 border-b border-zinc-800/60 relative overflow-hidden ${
+                            className={`h-11 border-b border-zinc-800/60 relative overflow-hidden ${
                                 track.locked ? 'bg-zinc-950/40' : 'bg-zinc-900/20'
                             }`}
                         >
@@ -443,7 +443,7 @@ export const VideoTimelineTracks: React.FC<VideoTimelineTracksProps> = ({
                                         key={el.id}
                                         onClick={e => handleClipClick(track, el, e)}
                                         onMouseDown={e => handleClipMouseDown(track, el, 'move', e)}
-                                        className={`sb-nle-clip-block absolute top-1.5 bottom-1.5 rounded-md px-2 flex items-center justify-between shadow-md cursor-grab active:cursor-grabbing transition-shadow ${
+                                        className={`sb-nle-clip-block absolute top-1 bottom-1 rounded px-2 flex items-center justify-between shadow-md cursor-grab active:cursor-grabbing transition-shadow ${
                                             isSelected
                                                 ? 'ring-2 ring-blue-400 z-10'
                                                 : 'hover:brightness-110 z-0'

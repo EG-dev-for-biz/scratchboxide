@@ -952,6 +952,29 @@ export interface Scene3DData {
         studioPedestal?: boolean;
         showBoundingBoxes?: boolean;
         objectSeparation?: boolean;
+        resectionOverlay?: {
+            opticalCenter?: [number, number, number];
+            headingDeg?: number;
+            pitchDeg?: number;
+            rollDeg?: number;
+            focalLengthMm?: number;
+            subPixelResidualPx?: number;
+            edgeAlignmentScore?: number;
+        };
+        utdraDecomposition?: {
+            macroDomain?: string;
+            buildingShaftRectified?: boolean;
+            crownPreserved?: boolean;
+            planarSutherlandHodgman?: boolean;
+            bridgeVoidCarved?: boolean;
+        };
+        algorithmicUvRewrap?: {
+            mode?: string;
+            spatialDriftMm?: number;
+            travertineCavitation?: boolean;
+            calciteBeddingStrata?: boolean;
+            sobelJointDeepening?: boolean;
+        };
     };
     customMeshes?: Array<{
         id: string;

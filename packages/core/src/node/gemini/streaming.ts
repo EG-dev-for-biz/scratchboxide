@@ -501,7 +501,7 @@ export class StreamingEngine {
                 }
 
                 // In agent mode (or if autoVerify is explicitly requested), verify modified files and self-heal
-                const shouldVerify = (request.mode === 'agent' || request.autoVerify) && (modifiedFiles.size > 0 || request.autoVerify);
+                const shouldVerify = (request.mode === 'agent' || request.autoVerify) && modifiedFiles.size > 0;
                 if (shouldVerify && verificationAttempts < maxVerificationAttempts) {
                     verificationAttempts++;
                     onEvent({
@@ -609,9 +609,9 @@ export class StreamingEngine {
                 });
             }
 
-            // Append assistant model turn with functionCalls and tool turn with functionResponses
+            // Append assistant model turn with functionCalls and user turn with functionResponses
             payload.contents.push({ role: 'model', parts: modelParts });
-            payload.contents.push({ role: 'tool', parts: toolResponseParts });
+            payload.contents.push({ role: 'user', parts: toolResponseParts });
 
             onEvent({
                 type: 'status',

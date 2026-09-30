@@ -1008,8 +1008,12 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
     const sendMessage = React.useCallback(async (textToSend?: string, targetPrimitiveType?: PrimitiveType) => {
         const d = depsRef.current;
         const text = textToSend !== undefined ? textToSend : d.inputValue;
-        if (!text.trim() || d.isGenerating) {
+        if (!text.trim()) {
             return;
+        }
+        if (d.isGenerating) {
+            cancelInFlight();
+            await new Promise(r => setTimeout(r, 60));
         }
         if (await handleSlashCommands(d, text)) {
             return;

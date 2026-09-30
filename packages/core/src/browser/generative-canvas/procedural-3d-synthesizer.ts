@@ -118,8 +118,8 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
 
     // Check prompt first for direct user intent, then fall back to surrounding context
     for (const text of [promptLower, combined]) {
-        // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields
-        if (/\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)\b/i.test(text)) {
+        // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields / 4D Avatar
+        if (/\b(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|survey\s*stations?|survey\s*synthesis|4d\s*performer|4dgs\s*avatar)\b/i.test(text)) {
             return 'gaussian_splat';
         }
 

@@ -33,6 +33,129 @@ export interface MessageItemProps {
     checkpointFeedbackValue: string;
 }
 
+const InlineMcpCard: React.FC<{ exec: any }> = ({ exec }) => {
+    // Default to collapsed state to save vertical space; users can expand on click
+    const [isExpanded, setIsExpanded] = React.useState(false);
+
+    return (
+        <div className={`sb-chat-inline-mcp-card ${isExpanded ? 'sb-expanded' : 'sb-collapsed'}`}>
+            <div
+                className="sb-inline-mcp-top"
+                onClick={() => setIsExpanded(prev => !prev)}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+                title={isExpanded ? 'Click to collapse details' : 'Click to expand tool execution details'}
+            >
+                <div className="sb-inline-mcp-title-wrap">
+                    <span className="sb-mcp-pulse-dot" />
+                    <span className="sb-inline-mcp-title">{exec.humanTitle}</span>
+                    <span className="sb-inline-mcp-expand-icon" style={{ fontSize: '10px', color: 'var(--sb-text-secondary, #8e8e93)', marginLeft: '6px', opacity: 0.8 }}>
+                        {isExpanded ? '▾' : '▸'}
+                    </span>
+                </div>
+                <span className={`sb-inline-mcp-status sb-status-${exec.status}`}>
+                    {exec.status === 'completed' ? '✓ Done' : exec.status === 'running' ? 'Running…' : 'Failed'}
+                </span>
+            </div>
+
+            {/* Execution step telemetry and human-friendly output rendered when expanded */}
+            {isExpanded && (
+                <>
+                    <div className="sb-inline-mcp-steps">
+                        {exec.steps.map((st: any) => (
+                            <div key={st.id} className={`sb-inline-mcp-step-item sb-step-${st.status}`}>
+                                <div className="sb-step-icon-state">
+                                    {st.status === 'done' ? (
+                                        <span className="sb-step-check">✓</span>
+                                    ) : st.status === 'running' ? (
+                                        <span className="sb-step-spinner" />
+                                    ) : (
+                                        <span className="sb-step-bullet">•</span>
+                                    )}
+                                </div>
+                                <span className="sb-step-title">{st.title}</span>
+                                {st.durationMs && <span className="sb-inline-step-dur">{st.durationMs}ms</span>}
+                            </div>
+                        ))}
+                    </div>
+
+                    {exec.humanFriendlyOutput && (
+                        <div className="sb-inline-mcp-output-card">
+                            <div className="sb-mcp-card-head">
+                                <span className="sb-mcp-card-title">{exec.humanFriendlyOutput.title}</span>
+                                {exec.humanFriendlyOutput.note && (
+                                    <span className="sb-mcp-card-note">{exec.humanFriendlyOutput.note}</span>
+                                )}
+                            </div>
+
+                            {exec.humanFriendlyOutput.cardType === 'metric' && exec.humanFriendlyOutput.items && (
+                                <div className="sb-mcp-metric-grid">
+                                    {exec.humanFriendlyOutput.items.map((item: any, itmIdx: number) => (
+                                        <div key={`${item.label}-${itmIdx}`} className={`sb-mcp-metric-pill sb-accent-${item.color || 'blue'}`}>
+                                            <span className="sb-mcp-metric-label">{item.label}</span>
+                                            <span className="sb-mcp-metric-value">{item.value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {exec.humanFriendlyOutput.cardType === 'table' && exec.humanFriendlyOutput.headers && exec.humanFriendlyOutput.rows && (
+                                <div className="sb-mcp-table-wrapper">
+                                    <table className="sb-mcp-mini-table">
+                                        <thead>
+                                            <tr>
+                                                {exec.humanFriendlyOutput.headers.map((h: string, hIdx: number) => (
+                                                    <th key={`${h}-${hIdx}`}>{h}</th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {exec.humanFriendlyOutput.rows.map((row: string[], rIdx: number) => (
+                                                <tr key={`${row.join('|')}-${rIdx}`}>
+                                                    {row.map((cell: string, cIdx: number) => (
+                                                        <td key={`${cell}-${cIdx}`}>{cell}</td>
+                                                    ))}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+
+                            {exec.humanFriendlyOutput.cardType === 'badge-list' && exec.humanFriendlyOutput.items && (
+                                <div className="sb-mcp-badge-list">
+                                    {exec.humanFriendlyOutput.items.map((bItem: any, bIdx: number) => (
+                                        <div key={`${bItem.label}-${bIdx}`} className={`sb-mcp-badge-tag sb-accent-${bItem.color || 'indigo'}`}>
+                                            <span className="sb-badge-tag-lbl">{bItem.label}:</span>
+                                            <span className="sb-badge-tag-val">{bItem.value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {exec.humanFriendlyOutput.cardType === 'status-card' && exec.humanFriendlyOutput.items && (
+                                <div className="sb-mcp-status-grid">
+                                    {exec.humanFriendlyOutput.items.map((sItem: any, sIdx: number) => (
+                                        <div key={`${sItem.label}-${sIdx}`} className="sb-mcp-status-row">
+                                            <span className="sb-status-k">{sItem.label}</span>
+                                            <span className={`sb-status-v sb-accent-${sItem.color || 'emerald'}`}>{sItem.value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {exec.summaryResult && !exec.humanFriendlyOutput && (
+                        <div className="sb-inline-mcp-summary">
+                            {exec.summaryResult}
+                        </div>
+                    )}
+                </>
+            )}
+        </div>
+    );
+};
+
 const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactId, activeArtifactVersion, checkpointFeedbackValue }) => {
     const msg = message;
     const {
@@ -362,7 +485,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                                                 {getPrimitiveLabel(art.type)} · {actionLabel}
                                             </span>
                                         </div>
-                                        <div className="sb-chip-actions" onClick={e => e.stopPropagation()}>
+                                        <div className="sb-chip-actions flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                                             <button
                                                 type="button"
                                                 className="sb-btn sb-btn-xs sb-chip-action-btn"
@@ -373,6 +496,26 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                                             >
                                                 {actionLabel}
                                             </button>
+                                            {(targetMode === '3d' || art.type === '3d-scene' || (art.type as string) === 'gaussian-splat' || (art.type as string) === '4d-performer') && (
+                                                <button
+                                                    type="button"
+                                                    className="sb-btn sb-btn-xs sb-chip-action-btn flex items-center gap-1 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 text-[11px] font-medium px-2 py-0.5 rounded transition-all"
+                                                    onClick={() => {
+                                                        handleSelectVersion(art);
+                                                        setTimeout(() => {
+                                                            window.dispatchEvent(new CustomEvent('sb-export-glb'));
+                                                        }, 80);
+                                                    }}
+                                                    title="Export 3D Scene as standardized binary glTF (.glb)"
+                                                >
+                                                    <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                                        <polyline points="7 10 12 15 17 10" />
+                                                        <line x1="12" y1="15" x2="12" y2="3" />
+                                                    </svg>
+                                                    <span>Export GLB</span>
+                                                </button>
+                                            )}
                                         </div>
                                         <div className="sb-chip-badge-wrap">
                                             {isCurrent ? (
@@ -393,111 +536,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 })()}
 
                 {/* Inline MCP & CLI Tool Execution Cards with Structured Outputs */}
-                {msg.mcpExecutions && msg.mcpExecutions.map(exec => (
-                    <div key={exec.id} className="sb-chat-inline-mcp-card">
-                        <div className="sb-inline-mcp-top">
-                            <div className="sb-inline-mcp-title-wrap">
-                                <span className="sb-mcp-pulse-dot" />
-                                <span className="sb-inline-mcp-title">{exec.humanTitle}</span>
-                            </div>
-                            <span className={`sb-inline-mcp-status sb-status-${exec.status}`}>
-                                {exec.status === 'completed' ? '✓ Done' : exec.status === 'running' ? 'Running…' : 'Failed'}
-                            </span>
-                        </div>
-
-                        {/* Execution step telemetry */}
-                        <div className="sb-inline-mcp-steps">
-                            {exec.steps.map(st => (
-                                <div key={st.id} className={`sb-inline-mcp-step-item sb-step-${st.status}`}>
-                                    <div className="sb-step-icon-state">
-                                        {st.status === 'done' ? (
-                                            <span className="sb-step-check">✓</span>
-                                        ) : st.status === 'running' ? (
-                                            <span className="sb-step-spinner" />
-                                        ) : (
-                                            <span className="sb-step-bullet">•</span>
-                                        )}
-                                    </div>
-                                    <span className="sb-step-title">{st.title}</span>
-                                    {st.durationMs && <span className="sb-inline-step-dur">{st.durationMs}ms</span>}
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* Human-friendly Card Render (Table, Metric Items, Status Badges) */}
-                        {exec.humanFriendlyOutput && (
-                            <div className="sb-inline-mcp-output-card">
-                                <div className="sb-mcp-card-head">
-                                    <span className="sb-mcp-card-title">{exec.humanFriendlyOutput.title}</span>
-                                    {exec.humanFriendlyOutput.note && (
-                                        <span className="sb-mcp-card-note">{exec.humanFriendlyOutput.note}</span>
-                                    )}
-                                </div>
-
-                                {exec.humanFriendlyOutput.cardType === 'metric' && exec.humanFriendlyOutput.items && (
-                                    <div className="sb-mcp-metric-grid">
-                                        {exec.humanFriendlyOutput.items.map((item, itmIdx) => (
-                                            <div key={`${item.label}-${itmIdx}`} className={`sb-mcp-metric-pill sb-accent-${item.color || 'blue'}`}>
-                                                <span className="sb-mcp-metric-label">{item.label}</span>
-                                                <span className="sb-mcp-metric-value">{item.value}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {exec.humanFriendlyOutput.cardType === 'table' && exec.humanFriendlyOutput.headers && exec.humanFriendlyOutput.rows && (
-                                    <div className="sb-mcp-table-wrapper">
-                                        <table className="sb-mcp-mini-table">
-                                            <thead>
-                                                <tr>
-                                                    {exec.humanFriendlyOutput.headers.map((h, hIdx) => (
-                                                        <th key={`${h}-${hIdx}`}>{h}</th>
-                                                    ))}
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {exec.humanFriendlyOutput.rows.map((row, rIdx) => (
-                                                    <tr key={`${row.join('|')}-${rIdx}`}>
-                                                        {row.map((cell, cIdx) => (
-                                                            <td key={`${cell}-${cIdx}`}>{cell}</td>
-                                                        ))}
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-
-                                {exec.humanFriendlyOutput.cardType === 'badge-list' && exec.humanFriendlyOutput.items && (
-                                    <div className="sb-mcp-badge-list">
-                                        {exec.humanFriendlyOutput.items.map((bItem, bIdx) => (
-                                            <div key={`${bItem.label}-${bIdx}`} className={`sb-mcp-badge-tag sb-accent-${bItem.color || 'indigo'}`}>
-                                                <span className="sb-badge-tag-lbl">{bItem.label}:</span>
-                                                <span className="sb-badge-tag-val">{bItem.value}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {exec.humanFriendlyOutput.cardType === 'status-card' && exec.humanFriendlyOutput.items && (
-                                    <div className="sb-mcp-status-grid">
-                                        {exec.humanFriendlyOutput.items.map((sItem, sIdx) => (
-                                            <div key={`${sItem.label}-${sIdx}`} className="sb-mcp-status-row">
-                                                <span className="sb-status-k">{sItem.label}</span>
-                                                <span className={`sb-status-v sb-accent-${sItem.color || 'emerald'}`}>{sItem.value}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {exec.summaryResult && !exec.humanFriendlyOutput && (
-                            <div className="sb-inline-mcp-summary">
-                                {exec.summaryResult}
-                            </div>
-                        )}
-                    </div>
+                {msg.mcpExecutions && msg.mcpExecutions.map((exec, idx) => (
+                    <InlineMcpCard key={`${exec.id || 'exec'}-${idx}`} exec={exec} />
                 ))}
 
                 {/* Inline Google Search Grounding & Citations Card */}

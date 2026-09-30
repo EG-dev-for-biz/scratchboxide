@@ -489,10 +489,10 @@ export const VideoTimelinePrimitive: React.FC<VideoTimelinePrimitiveProps> = ({
                 </div>
             )}
 
-            {/* Upper Stage: Monitor (Left) + Inspector (Right) */}
+            {/* Upper Stage: Monitor (Left - Expanded) + Inspector (Right) */}
             <div className="sb-nle-upper-stage flex-1 grid grid-cols-12 gap-2 p-2 min-h-0 overflow-hidden">
-                {/* Left: Program Monitor */}
-                <div className="sb-nle-monitor-col col-span-12 lg:col-span-7 xl:col-span-7 flex flex-col min-h-0">
+                {/* Left: Program Monitor (Maximized Workspace) */}
+                <div className="sb-nle-monitor-col col-span-12 lg:col-span-8 xl:col-span-8 flex flex-col min-h-0">
                     <VideoPreviewMonitor
                         data={timelineState}
                         onSeek={handleSeek}
@@ -502,7 +502,7 @@ export const VideoTimelinePrimitive: React.FC<VideoTimelinePrimitiveProps> = ({
                 </div>
 
                 {/* Right: Inspector Panel */}
-                <div className="sb-nle-inspector-col col-span-12 lg:col-span-5 xl:col-span-5 flex flex-col min-h-0">
+                <div className="sb-nle-inspector-col col-span-12 lg:col-span-4 xl:col-span-4 flex flex-col min-h-0">
                     <VideoInspectorPanel
                         data={timelineState}
                         selectedClip={selectedClip}
@@ -521,8 +521,8 @@ export const VideoTimelinePrimitive: React.FC<VideoTimelinePrimitiveProps> = ({
                 </div>
             </div>
 
-            {/* Lower Stage: Toolbar + Multi-Track Timeline */}
-            <div className="sb-nle-lower-stage shrink-0 flex flex-col border-t border-zinc-800 bg-zinc-950">
+            {/* Lower Stage: Toolbar + Multi-Track Timeline (Compact) */}
+            <div className="sb-nle-lower-stage shrink-0 max-h-[210px] overflow-y-auto flex flex-col border-t border-zinc-800 bg-zinc-950">
                 <VideoToolbar
                     activeTool={activeTool}
                     onSelectTool={setActiveTool}

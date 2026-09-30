@@ -2547,6 +2547,12 @@ int main(int argc, char** argv) {
                     }
                 });
                 scene.add(gltf.scene);
+                if (stack.camera) {
+                    stack.camera.position.set(14, 11, 16);
+                    stack.camera.lookAt(0, 1.5, 0);
+                }
+                cameraTargetRef.current.set(0, 1.5, 0);
+                cameraRotationRef.current = { theta: 0.72, phi: 1.12, distance: 23.3 };
                 refreshEntities();
             }, (err) => {
                 console.warn('[C++ GLB Loader Error]:', err);
@@ -3235,12 +3241,12 @@ int main(int argc, char** argv) {
                 )}
             </div>
 
-            {/* Precision Creative Vertical Tool Strip (Left Docked) */}
-            <div className="sb-3d-toolstrip absolute top-16 left-4 z-20 flex flex-col items-center gap-1 p-1.5 rounded-2xl bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl pointer-events-auto select-none animate-fadeIn">
+            {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}
+            <div className="sb-3d-toolstrip absolute top-16 left-3 z-20 flex flex-col items-center gap-0.5 p-1 rounded-xl bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl pointer-events-auto select-none animate-fadeIn">
                 {/* 1. Selection / Orbit Camera (V) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'view'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3248,7 +3254,7 @@ int main(int argc, char** argv) {
                     onClick={() => setToolMode('view')}
                     title="Selection / Camera Orbit (V)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 3l7 18 3-7 7-3L3 3z" />
                     </svg>
                 </button>
@@ -3256,7 +3262,7 @@ int main(int argc, char** argv) {
                 {/* 2. Translate / Move (W) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'transform' && transformMode === 'translate'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3267,7 +3273,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Translate / Move (W)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20" />
                     </svg>
                 </button>
@@ -3275,7 +3281,7 @@ int main(int argc, char** argv) {
                 {/* 3. Rotate (E) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'transform' && transformMode === 'rotate'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3286,7 +3292,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Rotate (E)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
                     </svg>
                 </button>
@@ -3294,7 +3300,7 @@ int main(int argc, char** argv) {
                 {/* 4. Scale (R) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'transform' && transformMode === 'scale'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3305,18 +3311,18 @@ int main(int argc, char** argv) {
                     }}
                     title="Scale (R)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
                     </svg>
                 </button>
 
                 {/* Divider */}
-                <div className="sb-3d-toolstrip-divider w-5 h-[1px] bg-white/10 my-0.5" />
+                <div className="sb-3d-toolstrip-divider w-3.5 h-[1px] bg-white/10 my-0.5" />
 
                 {/* 5. Sculpt Draw (B) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'draw'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3327,7 +3333,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Draw (B)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.375-9.375z" />
                         <path d="M14 6l4 4" />
                     </svg>
@@ -3336,7 +3342,7 @@ int main(int argc, char** argv) {
                 {/* 6. Sculpt Grab (G) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'grab'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3347,7 +3353,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Grab (G)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v4" />
                         <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v6" />
                         <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8" />
@@ -3358,7 +3364,7 @@ int main(int argc, char** argv) {
                 {/* 7. Sculpt Clay Strips (C) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'clay'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3369,7 +3375,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Clay Strips (C)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="4" width="18" height="4" rx="1" />
                         <rect x="3" y="10" width="18" height="4" rx="1" />
                         <rect x="3" y="16" width="18" height="4" rx="1" />
@@ -3379,7 +3385,7 @@ int main(int argc, char** argv) {
                 {/* 8. Sculpt Smooth (S) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'smooth'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3390,7 +3396,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Smooth (S / Shift+S)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
                     </svg>
                 </button>
@@ -3398,7 +3404,7 @@ int main(int argc, char** argv) {
                 {/* 9. Sculpt Inflate (I) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'inflate'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3409,7 +3415,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Inflate (I)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="6" />
                         <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
                     </svg>
@@ -3418,7 +3424,7 @@ int main(int argc, char** argv) {
                 {/* 10. Sculpt Pinch (P) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'pinch'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3429,7 +3435,7 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Pinch (P)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M7 17l5-5-5-5M17 17l-5-5 5-5" />
                     </svg>
                 </button>
@@ -3437,7 +3443,7 @@ int main(int argc, char** argv) {
                 {/* 11. Sculpt Flatten (F) */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         toolMode === 'sculpt' && sculptSettings.brush === 'flatten'
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3448,18 +3454,18 @@ int main(int argc, char** argv) {
                     }}
                     title="Sculpt Flatten (F)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M4 18h16M7 14l5-8 5 8H7z" />
                     </svg>
                 </button>
 
                 {/* Divider */}
-                <div className="sb-3d-toolstrip-divider w-5 h-[1px] bg-white/10 my-0.5" />
+                <div className="sb-3d-toolstrip-divider w-3.5 h-[1px] bg-white/10 my-0.5" />
 
                 {/* 12. Wireframe Toggle */}
                 <button
                     type="button"
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         sculptSettings.wireframeOverlay
                             ? 'sb-3d-toolstrip-btn-active bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-md shadow-blue-900/30'
                             : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent'
@@ -3467,7 +3473,7 @@ int main(int argc, char** argv) {
                     onClick={() => setSculptSettings(s => ({ ...s, wireframeOverlay: !s.wireframeOverlay }))}
                     title="Toggle Wireframe Overlay"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 2l10 6.5v7L12 22 2 15.5v-7L12 2z" />
                         <path d="M12 22V12M2 8.5l10 3.5 10-3.5" />
                     </svg>
@@ -3477,7 +3483,7 @@ int main(int argc, char** argv) {
                 <button
                     type="button"
                     disabled={!canUndo}
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         canUndo
                             ? 'text-zinc-300 hover:text-white hover:bg-white/10 border border-transparent'
                             : 'text-zinc-600 cursor-not-allowed border border-transparent opacity-40'
@@ -3485,7 +3491,7 @@ int main(int argc, char** argv) {
                     onClick={handleUndo}
                     title="Undo Stroke (⌘Z / Ctrl+Z)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 7v6h6M3 13a9 9 0 1 1 3 7.7" />
                     </svg>
                 </button>
@@ -3494,15 +3500,15 @@ int main(int argc, char** argv) {
                 <button
                     type="button"
                     disabled={!canRedo}
-                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
+                    className={`sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md transition-all ${
                         canRedo
                             ? 'text-zinc-300 hover:text-white hover:bg-white/10 border border-transparent'
                             : 'text-zinc-600 cursor-not-allowed border border-transparent opacity-40'
                     }`}
                     onClick={handleRedo}
-                    title="Redo Stroke (⌘⇧Z / Ctrl+Shift+Z)"
+                    title="Redo Stroke (⌘⇧Z / Ctrl+Y)"
                 >
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M21 7v6h-6M21 13a9 9 0 1 0-3 7.7" />
                     </svg>
                 </button>

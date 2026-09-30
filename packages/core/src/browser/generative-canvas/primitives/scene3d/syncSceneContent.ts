@@ -197,33 +197,79 @@ export function syncSceneContent(
     // Splat viewer (procedural observation only for splat/gaussian branches)
     const splatViewer = factories.createSplatViewer();
     scene.add(splatViewer.group);
-    if (worldBranch.includes('splat') || worldBranch.includes('gaussian')) {
+    if ((worldBranch.includes('splat') || worldBranch.includes('gaussian')) && !input.hasNonFallbackObjects) {
         const proceduralSplats: BakedGaussian[] = [];
-        for (let i = 0; i < 500; i++) {
-            const theta = Math.random() * 2 * Math.PI;
-            const phi = Math.acos(Math.random() * 2 - 1);
-            const radius = Math.random() * 4.0;
+        // Colonnade pillars (16 pillars around circle radius 4.5m)
+        const pillarCount = 16;
+        for (let p = 0; p < pillarCount; p++) {
+            const angle = (p / pillarCount) * Math.PI * 2;
+            const px = Math.cos(angle) * 4.5;
+            const pz = Math.sin(angle) * 4.5;
+            for (let y = 0; y <= 5.0; y += 0.08) {
+                for (let r = 0; r < 6; r++) {
+                    const ra = (r / 6) * Math.PI * 2;
+                    proceduralSplats.push({
+                        position: [px + Math.cos(ra) * 0.28, y, pz + Math.sin(ra) * 0.28],
+                        scale: [0.08, 0.08, 0.08],
+                        quaternion: [0, 0, 0, 1],
+                        colorRgb: [220 + Math.floor(Math.random() * 25), 210 + Math.floor(Math.random() * 25), 195 + Math.floor(Math.random() * 25)],
+                        opacity: 0.85
+                    });
+                }
+            }
+        }
+        // Entablature and dome arch ring
+        for (let a = 0; a < 250; a++) {
+            const angle = (a / 250) * Math.PI * 2;
+            for (let dy = 5.0; dy <= 5.6; dy += 0.1) {
+                proceduralSplats.push({
+                    position: [Math.cos(angle) * 4.5, dy, Math.sin(angle) * 4.5],
+                    scale: [0.12, 0.1, 0.12],
+                    quaternion: [0, 0, 0, 1],
+                    colorRgb: [230, 222, 205],
+                    opacity: 0.9
+                });
+            }
+        }
+        // Hemispherical dome
+        for (let i = 0; i < 3000; i++) {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = u * 2.0 * Math.PI;
+            const phi = Math.acos(1.0 - v);
+            const rad = 4.5;
             proceduralSplats.push({
                 position: [
-                    Math.sin(phi) * Math.cos(theta) * radius,
-                    Math.cos(phi) * radius + 2.5,
-                    Math.sin(phi) * Math.sin(theta) * radius
+                    rad * Math.sin(phi) * Math.cos(theta),
+                    5.6 + rad * Math.cos(phi),
+                    rad * Math.sin(phi) * Math.sin(theta)
                 ],
-                scale: [0.1 + Math.random() * 0.15, 0.1 + Math.random() * 0.15, 0.1 + Math.random() * 0.15],
+                scale: [0.12, 0.12, 0.12],
                 quaternion: [0, 0, 0, 1],
-                colorRgb: [
-                    Math.floor(100 + Math.random() * 155),
-                    Math.floor(50 + Math.random() * 100),
-                    Math.floor(150 + Math.random() * 105)
-                ],
-                opacity: 0.3 + Math.random() * 0.5
+                colorRgb: [210 + Math.floor(Math.random() * 30), 200 + Math.floor(Math.random() * 30), 180 + Math.floor(Math.random() * 30)],
+                opacity: 0.8
             });
+        }
+        // Stepped stylobate base
+        for (let step = 0; step < 3; step++) {
+            const rStep = 4.8 + step * 0.4;
+            const yStep = -step * 0.18;
+            for (let a = 0; a < 200; a++) {
+                const angle = (a / 200) * Math.PI * 2;
+                proceduralSplats.push({
+                    position: [Math.cos(angle) * rStep, yStep, Math.sin(angle) * rStep],
+                    scale: [0.15, 0.08, 0.15],
+                    quaternion: [0, 0, 0, 1],
+                    colorRgb: [180 + Math.floor(Math.random() * 20), 175 + Math.floor(Math.random() * 20), 165 + Math.floor(Math.random() * 20)],
+                    opacity: 0.9
+                });
+            }
         }
         splatViewer.loadSplatObservation(proceduralSplats);
     }
 
     // Sculptable focal mesh (general / custom scenes) or first procedural mesh as sculpt target
-    if (!input.hasCppGenerator && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup || input.sceneType === 'general' || input.sceneType === 'custom')) {
+    if (!input.hasCppGenerator && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && !input.hasNonFallbackObjects && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup || input.sceneType === 'general' || input.sceneType === 'custom')) {
         const sGeo = createSculptableGeometry(input.selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
         const sMat = new THREE.MeshStandardMaterial({
             color: 0x60a5fa,

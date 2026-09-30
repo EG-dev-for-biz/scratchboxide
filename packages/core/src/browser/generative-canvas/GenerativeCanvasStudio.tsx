@@ -1144,6 +1144,22 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         aiInteractionMode,
         openSettingsToTab
     });
+
+    React.useEffect(() => {
+        (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
+        const handleSendPromptEvent = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.prompt) {
+                handleSendMessage(detail.prompt);
+            }
+        };
+        window.addEventListener('scratchbox:send-prompt', handleSendPromptEvent);
+        return () => {
+            delete (window as any).__scratchbox_send_prompt;
+            window.removeEventListener('scratchbox:send-prompt', handleSendPromptEvent);
+        };
+    }, [handleSendMessage]);
+
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
     const { handleCreateWorkspaceFile } = useWorkspaceFileCreation(workspaceFileDeps);
