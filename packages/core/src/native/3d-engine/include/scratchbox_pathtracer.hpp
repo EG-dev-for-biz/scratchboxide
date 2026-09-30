@@ -31,6 +31,7 @@ using math::AABB;
 using math::Ray;
 using math::Vec2;
 using math::Vec3;
+using math::Vec4;
 
 enum class ShadingMode {
     Relit,  // texture is surface albedo, lit by the physical sun and sky
@@ -534,6 +535,10 @@ private:
         if (mat.baseColorImage >= 0 && mat.baseColorImage < static_cast<int>(scene_.images.size())) {
             const auto& image = scene_.images[static_cast<size_t>(mat.baseColorImage)];
             if (image.decoded) base = base * detail::sampleTextureLinear(image.pixels, uv, mat.wrapS, mat.wrapT);
+        }
+        Vec4 vertCol = v0.color * w + v1.color * u + v2.color * v;
+        if (vertCol.w > 0.001f && (vertCol.x != 1.0f || vertCol.y != 1.0f || vertCol.z != 1.0f)) {
+            base = base * Vec3(vertCol.x, vertCol.y, vertCol.z);
         }
         return base;
     }

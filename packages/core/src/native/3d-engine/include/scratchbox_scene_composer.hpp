@@ -57,7 +57,7 @@ struct FormDescriptor {
 };
 
 // Procedural Torus primitive
-inline ScratchboxMesh createTorus(float mainRadius = 1.0f, float tubeRadius = 0.25f, int radialSegments = 24, int tubularSegments = 36) {
+inline ScratchboxMesh createTorus(float mainRadius = 1.0f, float tubeRadius = 0.25f, int radialSegments = 24, int tubularSegments = 36, const Vec4& color = {0.8f, 0.8f, 0.8f, 1.0f}) {
     ScratchboxMesh mesh("torus");
     for (int j = 0; j <= tubularSegments; ++j) {
         float u = float(j) * 2.0f * math::PI / float(tubularSegments);
@@ -73,7 +73,7 @@ inline ScratchboxMesh createTorus(float mainRadius = 1.0f, float tubeRadius = 0.
                 (mainRadius + tubeRadius * cosV) * sinU
             );
             Vec3 norm(cosV * cosU, sinV, cosV * sinU);
-            mesh.addVertex(Vertex(pos, norm.normalized(), Vec2(float(j)/tubularSegments, float(i)/radialSegments)));
+            mesh.addVertex(Vertex(pos, norm.normalized(), Vec2(float(j)/tubularSegments, float(i)/radialSegments), color));
         }
     }
     for (int j = 0; j < tubularSegments; ++j) {

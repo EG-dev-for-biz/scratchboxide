@@ -1,0 +1,379 @@
+import { test, expect } from 'vitest';
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox IDE.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License, which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
+import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
+
+const ARTIFACT_DIR = '/Users/eligreen/.gemini/antigravity/brain/7661fe23-d225-442c-9323-f94362db535b';
+
+test('Zero-Presets 3D Pipeline: Generates and Renders 3 Complex Unrelated Scenes from Scratch', async () => {
+    const pythonRunner = NativePythonRunnerService.getInstance();
+    const pathTracer = new NativeTilePathTracerService();
+    const workDir = path.resolve(process.cwd(), 'build/zero_presets_renders');
+    fs.mkdirSync(workDir, { recursive: true });
+
+    // =========================================================================
+    // SCENE 1: Deep-Sea Hydrothermal Vent Caldera
+    // =========================================================================
+    console.log('\n🌋 [Scene 1/3] Generating Deep-Sea Hydrothermal Vent Caldera...');
+    const scene1Script = `
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("AbyssalHydrothermalCaldera")
+
+# 1. Volcanic Basalt Caldera Bed Mound
+bed = sb.geometry.create_studio_pedestal(4.2, 0.45, 0.15, 48)
+bed.set_color(sb.math.Vec4(0.18, 0.18, 0.20, 1.0))
+scene.append(bed)
+
+# 2. Main Central Hydrothermal Black Smoker Spire (segmented volcanic column)
+segments_data = [
+    (1.15, 0.85, 0.90, 0.22),
+    (0.85, 0.65, 0.95, 0.20),
+    (0.65, 0.48, 0.85, 0.24),
+    (0.48, 0.36, 0.80, 0.19),
+    (0.36, 0.26, 0.70, 0.26)
+]
+curr_y = 0.25
+for rt, rb, h, col_val in segments_data:
+    seg = sb.geometry.create_cylinder(rt, rb, h, 28, sb.math.Vec4(col_val, col_val * 0.96, col_val * 1.05, 1.0))
+    seg.translate(sb.math.Vec3(0, curr_y + h * 0.5, 0))
+    scene.append(seg)
+    curr_y += h
+
+# Top Vent Chimney Rim (dark basalt collar)
+vent_rim = sb.geometry.create_torus(0.32, 0.09, 16, 28, sb.math.Vec4(0.28, 0.27, 0.26, 1.0))
+vent_rim.translate(sb.math.Vec3(0, curr_y, 0))
+scene.append(vent_rim)
+
+# Superheated Internal Magmatic Vent Plume Fissure (blazing orange-red)
+magma_fissure = sb.geometry.create_sphere(0.25, 12, 16, sb.math.Vec4(1.0, 0.38, 0.05, 1.0))
+magma_fissure.translate(sb.math.Vec3(0, curr_y - 0.08, 0))
+scene.append(magma_fissure)
+
+# 3. Flanking Parasitic Hydrothermal Vent Spires
+parasitic_spires = [
+    (1.5, 0.8, 2.2, 0.20, 0.42, 0.22),
+    (-1.4, 0.9, 1.8, 0.18, 0.38, 0.25),
+    (0.6, -1.6, 2.5, 0.22, 0.45, 0.20)
+]
+for px, pz, ph, prt, prb, pcol in parasitic_spires:
+    spire = sb.geometry.create_cylinder(prt, prb, ph, 20, sb.math.Vec4(pcol, pcol * 0.95, pcol * 1.1, 1.0))
+    spire.translate(sb.math.Vec3(px, 0.25 + ph * 0.5, pz))
+    scene.append(spire)
+    # Parasitic vent tip glow
+    tip_glow = sb.geometry.create_sphere(prt * 0.8, 8, 12, sb.math.Vec4(1.0, 0.45, 0.08, 1.0))
+    tip_glow.translate(sb.math.Vec3(px, 0.25 + ph, pz))
+    scene.append(tip_glow)
+
+# 4. Dense Colonies of Crimson-Tipped Riftia Tubeworms
+for t_i in range(56):
+    angle = (t_i / 56.0) * math.pi * 2.0
+    dist = 1.0 + (t_i % 9) * 0.28
+    tx = math.cos(angle) * dist
+    tz = math.sin(angle) * dist
+    th = 0.85 + (t_i % 6) * 0.22
+    # White chitin stalk
+    stalk = sb.geometry.create_cylinder(0.024, 0.034, th, 10, sb.math.Vec4(0.92, 0.91, 0.88, 1.0))
+    stalk.translate(sb.math.Vec3(tx, 0.25 + th * 0.5, tz))
+    scene.append(stalk)
+    # Vibrant crimson branch plume
+    plume = sb.geometry.create_sphere(0.052, 8, 12, sb.math.Vec4(0.92, 0.06, 0.12, 1.0))
+    plume.translate(sb.math.Vec3(tx, 0.25 + th + 0.03, tz))
+    scene.append(plume)
+
+# 5. Glowing Bioluminescent Siphonophore Organism (Space Colonization Tree)
+tree_cfg = sb.nature.SpaceColonizationConfig()
+tree_cfg.attractor_count = 110
+tree_cfg.crown_center = sb.math.Vec3(1.6, 2.6, -1.1)
+tree_cfg.crown_extents = sb.math.Vec3(1.4, 1.6, 1.4)
+tree_cfg.base_radius = 0.06
+tree_cfg.tip_radius = 0.02
+siphonophore = sb.nature.generate_tree(tree_cfg)
+siphonophore.set_color(sb.math.Vec4(0.10, 0.85, 0.95, 1.0))
+scene.append(siphonophore)
+
+# 6. Golden Pyrite & Sulfide Mineral Crystal Formations
+for c_i in range(18):
+    c_ang = c_i * 0.35
+    cx = math.cos(c_ang) * (2.1 + (c_i % 5) * 0.32)
+    cz = math.sin(c_ang) * (2.1 + (c_i % 5) * 0.32)
+    ch = 0.45 + (c_i % 4) * 0.18
+    crystal = sb.geometry.create_box(sb.math.Vec3(0.24, ch, 0.24), sb.math.Vec4(0.92, 0.78, 0.24, 1.0))
+    crystal.rotate_y(c_i * 25.0)
+    crystal.translate(sb.math.Vec3(cx, 0.25 + ch * 0.5, cz))
+    scene.append(crystal)
+
+print(f"[Scene 1] Vertices: {scene.vertex_count}, Triangles: {scene.triangle_count}")
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+
+    const res1 = await pythonRunner.runScript(scene1Script, { timeoutMs: 30000 });
+    expect(res1.success).toBe(true);
+    expect(res1.glbPath).toBeDefined();
+
+    const outDir1 = path.join(workDir, 'scene_1_hydrothermal_vent');
+    const render1 = await pathTracer.render({
+        glbPath: res1.glbPath!,
+        outputDir: outDir1,
+        width: 1280,
+        height: 720,
+        samplesPerPixel: 32,
+        maxBounces: 4,
+        sun: { elevationDeg: 52, azimuthDeg: 125 },
+        camera: { auto: { pitchDeg: 22, headingDeg: 35, verticalFovDeg: 42, distanceScale: 0.68 } },
+        denoise: true,
+        groundPlane: true
+    });
+    expect(render1.success).toBe(true);
+    const dest1 = path.join(ARTIFACT_DIR, 'screenshot_scene_1_hydrothermal_vent.png');
+    fs.copyFileSync(render1.beautyPngPath, dest1);
+    console.log(`✅ [Scene 1] Rendered Screenshot saved to: ${dest1}`);
+
+    // =========================================================================
+    // SCENE 2: Ancient Monumental Babylonian Ziggurat Observatory
+    // =========================================================================
+    console.log('\n🏛️ [Scene 2/3] Generating Ancient Monumental Babylonian Ziggurat Observatory...');
+    const scene2Script = `
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("BabylonianZigguratObservatory")
+
+# 1. Base Foundation Terrace (9m x 9m x 2.4m) - Terracotta Mudbrick
+tier1_cfg = sb.architecture.BuildingConfig()
+tier1_cfg.width = 9.0
+tier1_cfg.depth = 9.0
+tier1_cfg.floor_count = 1
+tier1_cfg.ground_floor_height = 2.4
+tier1_cfg.floor_height = 2.4
+tier1_cfg.plinth_height = 0.0
+tier1_cfg.parapet_height = 0.30
+tier1_cfg.roof_type = sb.architecture.RoofType.FlatParapet
+tier1 = sb.architecture.generate_building(tier1_cfg, "Tier1_Foundation")
+tier1.set_color(sb.math.Vec4(0.78, 0.64, 0.46, 1.0))
+scene.append(tier1)
+
+# 2. Second Stepped Terrace (6.5m x 6.5m x 2.0m) - Glazed Lapis-Lazuli Royal Blue
+tier2_cfg = sb.architecture.BuildingConfig()
+tier2_cfg.width = 6.5
+tier2_cfg.depth = 6.5
+tier2_cfg.floor_count = 1
+tier2_cfg.ground_floor_height = 2.0
+tier2_cfg.floor_height = 2.0
+tier2_cfg.plinth_height = 0.0
+tier2_cfg.parapet_height = 0.30
+tier2_cfg.roof_type = sb.architecture.RoofType.FlatParapet
+tier2 = sb.architecture.generate_building(tier2_cfg, "Tier2_Lapis")
+tier2.set_color(sb.math.Vec4(0.08, 0.22, 0.68, 1.0))
+tier2.translate(sb.math.Vec3(0, 2.4, 0))
+scene.append(tier2)
+
+# 3. Third Upper Celestial Sanctuary Terrace (4.2m x 4.2m x 1.6m) - Gold Leaf Frieze
+tier3_cfg = sb.architecture.BuildingConfig()
+tier3_cfg.width = 4.2
+tier3_cfg.depth = 4.2
+tier3_cfg.floor_count = 1
+tier3_cfg.ground_floor_height = 1.6
+tier3_cfg.floor_height = 1.6
+tier3_cfg.plinth_height = 0.0
+tier3_cfg.parapet_height = 0.25
+tier3_cfg.roof_type = sb.architecture.RoofType.FlatParapet
+tier3 = sb.architecture.generate_building(tier3_cfg, "Tier3_Sanctuary")
+tier3.set_color(sb.math.Vec4(0.88, 0.76, 0.32, 1.0))
+tier3.translate(sb.math.Vec3(0, 4.4, 0))
+scene.append(tier3)
+
+# 4. Monumental Front Central Ramp / Grand Staircase
+steps = 14
+for step_idx in range(steps):
+    t = step_idx / float(steps)
+    sz = 4.5 + (1.0 - t) * 2.5
+    sy = t * 2.4 + 0.09
+    step_box = sb.geometry.create_box(sb.math.Vec3(2.2, 0.18, 0.45), sb.math.Vec4(0.82, 0.72, 0.55, 1.0))
+    step_box.translate(sb.math.Vec3(0, sy, sz))
+    scene.append(step_box)
+
+# 5. Celestial Armillary Sphere Sanctuary (interlocking brass rings & central golden globe on summit)
+altar_pylon = sb.geometry.create_cylinder(0.35, 0.45, 1.0, 20, sb.math.Vec4(0.85, 0.78, 0.65, 1.0))
+altar_pylon.translate(sb.math.Vec3(0, 6.0 + 0.5, 0))
+scene.append(altar_pylon)
+
+ring_meridian = sb.geometry.create_torus(1.1, 0.055, 20, 32, sb.math.Vec4(0.92, 0.78, 0.25, 1.0))
+ring_meridian.translate(sb.math.Vec3(0, 7.6, 0))
+scene.append(ring_meridian)
+
+ring_equator = sb.geometry.create_torus(0.9, 0.048, 20, 32, sb.math.Vec4(0.88, 0.72, 0.22, 1.0))
+ring_equator.rotate_x(65.0)
+ring_equator.translate(sb.math.Vec3(0, 7.6, 0))
+scene.append(ring_equator)
+
+ring_solstice = sb.geometry.create_torus(0.72, 0.042, 18, 28, sb.math.Vec4(0.95, 0.82, 0.28, 1.0))
+ring_solstice.rotate_y(45.0)
+ring_solstice.translate(sb.math.Vec3(0, 7.6, 0))
+scene.append(ring_solstice)
+
+central_globe = sb.geometry.create_sphere(0.24, 16, 20, sb.math.Vec4(1.0, 0.85, 0.25, 1.0))
+central_globe.translate(sb.math.Vec3(0, 7.6, 0))
+scene.append(central_globe)
+
+# 6. Four Bronze Ritual Braziers on Tier 1 Terrace Corners with Blazing Fire Embers
+for bx, bz in [(-3.8, -3.8), (3.8, -3.8), (-3.8, 3.8), (3.8, 3.8)]:
+    brazier_base = sb.geometry.create_cylinder(0.25, 0.18, 0.75, 16, sb.math.Vec4(0.38, 0.28, 0.18, 1.0))
+    brazier_base.translate(sb.math.Vec3(bx, 2.4 + 0.375, bz))
+    scene.append(brazier_base)
+
+    brazier_bowl = sb.geometry.create_torus(0.26, 0.065, 12, 20, sb.math.Vec4(0.48, 0.36, 0.22, 1.0))
+    brazier_bowl.translate(sb.math.Vec3(bx, 2.4 + 0.75, bz))
+    scene.append(brazier_bowl)
+
+    brazier_flame = sb.geometry.create_sphere(0.18, 12, 16, sb.math.Vec4(1.0, 0.42, 0.06, 1.0))
+    brazier_flame.translate(sb.math.Vec3(bx, 2.4 + 0.88, bz))
+    scene.append(brazier_flame)
+
+# Courtyard Ground Pedestal
+ground = sb.geometry.create_studio_pedestal(7.5, 0.25, 0.05, 48)
+ground.set_color(sb.math.Vec4(0.72, 0.62, 0.48, 1.0))
+scene.append(ground)
+
+print(f"[Scene 2] Vertices: {scene.vertex_count}, Triangles: {scene.triangle_count}")
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+
+    const res2 = await pythonRunner.runScript(scene2Script, { timeoutMs: 30000 });
+    expect(res2.success).toBe(true);
+    expect(res2.glbPath).toBeDefined();
+
+    const outDir2 = path.join(workDir, 'scene_2_babylonian_ziggurat');
+    const render2 = await pathTracer.render({
+        glbPath: res2.glbPath!,
+        outputDir: outDir2,
+        width: 1280,
+        height: 720,
+        samplesPerPixel: 32,
+        maxBounces: 4,
+        sun: { elevationDeg: 24, azimuthDeg: 235 }, // Mesopotamian golden hour sunset
+        camera: { auto: { pitchDeg: 26, headingDeg: 34, verticalFovDeg: 44, distanceScale: 0.82 } },
+        denoise: true,
+        groundPlane: true
+    });
+    expect(render2.success).toBe(true);
+    const dest2 = path.join(ARTIFACT_DIR, 'screenshot_scene_2_babylonian_ziggurat.png');
+    fs.copyFileSync(render2.beautyPngPath, dest2);
+    console.log(`✅ [Scene 2] Rendered Screenshot saved to: ${dest2}`);
+
+    // =========================================================================
+    // SCENE 3: Sub-Orbital Superconducting Fusion Thruster
+    // =========================================================================
+    console.log('\n🚀 [Scene 3/3] Generating Sub-Orbital Superconducting Fusion Thruster...');
+    const scene3Script = `
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("FusionThrusterAssembly")
+
+# 1. Divergent Hyperbolic Titanium Rocket Nozzle Bell
+throat_radius = 0.65
+exit_radius = 2.2
+stages = 6
+h_seg = 0.38
+base_y = 2.4
+
+for s in range(stages):
+    frac_b = s / float(stages)
+    frac_t = (s + 1) / float(stages)
+    rb = throat_radius + (exit_radius - throat_radius) * (frac_b ** 1.5)
+    rt = throat_radius + (exit_radius - throat_radius) * (frac_t ** 1.5)
+    y_pos = base_y - (s * h_seg + h_seg * 0.5)
+    seg = sb.geometry.create_cylinder(rb, rt, h_seg, 32, sb.math.Vec4(0.70, 0.72, 0.76, 1.0))
+    seg.translate(sb.math.Vec3(0, y_pos, 0))
+    scene.append(seg)
+
+# 2. Toroidal Superconducting Magnetic Confinement Chamber (burnished copper coils)
+primary_mag_ring = sb.geometry.create_torus(1.65, 0.30, 24, 40, sb.math.Vec4(0.88, 0.48, 0.20, 1.0))
+primary_mag_ring.translate(sb.math.Vec3(0, 2.7, 0))
+scene.append(primary_mag_ring)
+
+secondary_mag_ring = sb.geometry.create_torus(1.30, 0.22, 20, 36, sb.math.Vec4(0.88, 0.48, 0.20, 1.0))
+secondary_mag_ring.translate(sb.math.Vec3(0, 3.4, 0))
+scene.append(secondary_mag_ring)
+
+# 3. Superheated Fusion Reaction Zone (Brilliant Blue Plasma Sphere)
+plasma_core = sb.geometry.create_sphere(0.55, 20, 28, sb.math.Vec4(0.20, 0.85, 1.0, 1.0))
+plasma_core.translate(sb.math.Vec3(0, 3.0, 0))
+scene.append(plasma_core)
+
+# 4. Regenerative Cooling Jacket Rings (Chrome manifolds)
+for ring_i in range(4):
+    cooling_ring = sb.geometry.create_torus(0.75 + ring_i * 0.12, 0.038, 16, 32, sb.math.Vec4(0.95, 0.95, 0.98, 1.0))
+    cooling_ring.translate(sb.math.Vec3(0, 2.35 + ring_i * 0.15, 0))
+    scene.append(cooling_ring)
+
+# 5. Quad Hydraulic Gimbal Actuator Pistons (Chrome Rods & Carbon-Composite Bodies)
+for g_angle_deg in [45, 135, 225, 315]:
+    rad = math.radians(g_angle_deg)
+    gx = math.cos(rad) * 1.6
+    gz = math.sin(rad) * 1.6
+    cylinder_body = sb.geometry.create_cylinder(0.09, 0.09, 1.0, 16, sb.math.Vec4(0.18, 0.18, 0.20, 1.0))
+    cylinder_body.translate(sb.math.Vec3(gx, 3.9, gz))
+    piston_rod = sb.geometry.create_cylinder(0.048, 0.048, 1.1, 16, sb.math.Vec4(0.96, 0.97, 0.99, 1.0))
+    piston_rod.translate(sb.math.Vec3(gx, 4.4, gz))
+    scene.append(cylinder_body)
+    scene.append(piston_rod)
+
+# 6. Structural Thrust Puck & Octagonal Mounting Ring Truss
+thrust_ring = sb.geometry.create_torus(1.95, 0.14, 16, 40, sb.math.Vec4(0.72, 0.74, 0.78, 1.0))
+thrust_ring.translate(sb.math.Vec3(0, 4.8, 0))
+scene.append(thrust_ring)
+
+for strut_i in range(8):
+    s_ang = strut_i * (math.pi / 4.0)
+    sx = math.cos(s_ang) * 1.5
+    sz = math.sin(s_ang) * 1.5
+    strut = sb.geometry.create_box(sb.math.Vec3(0.12, 1.2, 0.12), sb.math.Vec4(0.35, 0.36, 0.40, 1.0))
+    strut.translate(sb.math.Vec3(sx, 4.1, sz))
+    scene.append(strut)
+
+# Test Mount Base Pedestal
+pedestal = sb.geometry.create_studio_pedestal(3.8, 0.25, 0.05, 40)
+pedestal.set_color(sb.math.Vec4(0.55, 0.55, 0.58, 1.0))
+scene.append(pedestal)
+
+print(f"[Scene 3] Vertices: {scene.vertex_count}, Triangles: {scene.triangle_count}")
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+
+    const res3 = await pythonRunner.runScript(scene3Script, { timeoutMs: 30000 });
+    expect(res3.success).toBe(true);
+    expect(res3.glbPath).toBeDefined();
+
+    const outDir3 = path.join(workDir, 'scene_3_fusion_thruster');
+    const render3 = await pathTracer.render({
+        glbPath: res3.glbPath!,
+        outputDir: outDir3,
+        width: 1280,
+        height: 720,
+        samplesPerPixel: 32,
+        maxBounces: 4,
+        sun: { elevationDeg: 46, azimuthDeg: 140 }, // High-contrast orbital sunlight
+        camera: { auto: { pitchDeg: 22, headingDeg: 40, verticalFovDeg: 44, distanceScale: 0.65 } },
+        denoise: true,
+        groundPlane: true
+    });
+    expect(render3.success).toBe(true);
+    const dest3 = path.join(ARTIFACT_DIR, 'screenshot_scene_3_fusion_thruster.png');
+    fs.copyFileSync(render3.beautyPngPath, dest3);
+    console.log(`✅ [Scene 3] Rendered Screenshot saved to: ${dest3}`);
+
+    console.log('\n🎉 Finished generating and rendering all 3 complex 3D scenes!');
+}, 180000);

@@ -424,6 +424,77 @@ public:
         recomputeBounds();
     }
 
+    void translate(const Vec3& offset) {
+        for (auto& v : vertices) {
+            v.position += offset;
+        }
+        recomputeBounds();
+    }
+
+    void scale(const Vec3& factors) {
+        for (auto& v : vertices) {
+            v.position = Vec3(v.position.x * factors.x, v.position.y * factors.y, v.position.z * factors.z);
+        }
+        recomputeBounds();
+    }
+
+    void rotateX(float angleDeg) {
+        float rad = angleDeg * math::DEG_TO_RAD;
+        float cosA = std::cos(rad);
+        float sinA = std::sin(rad);
+        for (auto& v : vertices) {
+            float y = v.position.y * cosA - v.position.z * sinA;
+            float z = v.position.y * sinA + v.position.z * cosA;
+            v.position.y = y;
+            v.position.z = z;
+            float ny = v.normal.y * cosA - v.normal.z * sinA;
+            float nz = v.normal.y * sinA + v.normal.z * cosA;
+            v.normal.y = ny;
+            v.normal.z = nz;
+        }
+        recomputeBounds();
+    }
+
+    void rotateY(float angleDeg) {
+        float rad = angleDeg * math::DEG_TO_RAD;
+        float cosA = std::cos(rad);
+        float sinA = std::sin(rad);
+        for (auto& v : vertices) {
+            float x = v.position.x * cosA - v.position.z * sinA;
+            float z = v.position.x * sinA + v.position.z * cosA;
+            v.position.x = x;
+            v.position.z = z;
+            float nx = v.normal.x * cosA - v.normal.z * sinA;
+            float nz = v.normal.x * sinA + v.normal.z * cosA;
+            v.normal.x = nx;
+            v.normal.z = nz;
+        }
+        recomputeBounds();
+    }
+
+    void rotateZ(float angleDeg) {
+        float rad = angleDeg * math::DEG_TO_RAD;
+        float cosA = std::cos(rad);
+        float sinA = std::sin(rad);
+        for (auto& v : vertices) {
+            float x = v.position.x * cosA - v.position.y * sinA;
+            float y = v.position.x * sinA + v.position.y * cosA;
+            v.position.x = x;
+            v.position.y = y;
+            float nx = v.normal.x * cosA - v.normal.y * sinA;
+            float ny = v.normal.x * sinA + v.normal.y * cosA;
+            v.normal.x = nx;
+            v.normal.y = ny;
+        }
+        recomputeBounds();
+    }
+
+    void setColor(const Vec4& color) {
+        for (auto& v : vertices) {
+            v.color = color;
+        }
+    }
+
     // ========================================================================
     // Standard Geometric Primitives
     // ========================================================================

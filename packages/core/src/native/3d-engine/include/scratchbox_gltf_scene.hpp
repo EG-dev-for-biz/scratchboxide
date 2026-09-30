@@ -379,9 +379,11 @@ private:
         if (!pos.valid() || pos.components != 3) return;
         Accessor nrm = accessor(ctx, attrs["NORMAL"].asInt(-1));
         Accessor uv = accessor(ctx, attrs["TEXCOORD_0"].asInt(-1));
+        Accessor col = accessor(ctx, attrs["COLOR_0"].asInt(-1));
         Accessor idx = accessor(ctx, prim["indices"].asInt(-1));
         const bool hasNormals = nrm.valid() && nrm.components == 3 && nrm.count == pos.count;
         const bool hasUv = uv.valid() && uv.components == 2 && uv.count == pos.count;
+        const bool hasColor = col.valid() && (col.components == 3 || col.components == 4) && col.count == pos.count;
 
         int materialIndex = prim["material"].asInt(-1);
         if (materialIndex < 0 || materialIndex >= static_cast<int>(scene.materials.size())) {
@@ -402,6 +404,13 @@ private:
                 vert.normal = Vec3(0, 0, 0);
             }
             if (hasUv) vert.uv = Vec2(component(uv, v, 0), component(uv, v, 1));
+            if (hasColor) {
+                float r = component(col, v, 0);
+                float g = component(col, v, 1);
+                float b = component(col, v, 2);
+                float a = col.components == 4 ? component(col, v, 3) : 1.0f;
+                vert.color = Vec4(r, g, b, a);
+            }
             scene.mesh.addVertex(vert);
         }
 

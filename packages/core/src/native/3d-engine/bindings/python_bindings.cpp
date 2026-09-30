@@ -109,7 +109,14 @@ NB_MODULE(scratchbox_native, m) {
         .def_static("optical_glass", &PbrMaterial::opticalGlass)
         .def_static("stone_limestone", &PbrMaterial::stoneLimestone)
         .def_static("concrete_brutalist", &PbrMaterial::concreteBrutalist)
-        .def_static("asphalt_street", &PbrMaterial::asphaltStreet);
+        .def_static("asphalt_street", &PbrMaterial::asphaltStreet)
+        .def_static("quartz_crystal", &PbrMaterial::quartzCrystal)
+        .def_static("carbon_composite", &PbrMaterial::carbonComposite)
+        .def_static("polished_brass", &PbrMaterial::polishedBrass)
+        .def_static("copper_bullet", &PbrMaterial::copperBullet)
+        .def_static("emissive_glow", [](const Vec3& color, float intensity) {
+            return PbrMaterial::emissiveGlow(color, intensity);
+        }, "color"_a, "intensity"_a = 1.0f);
 
     nb::class_<ScratchboxMesh>(m_geom, "Mesh")
         .def(nb::init<>())
@@ -118,7 +125,17 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("material", &ScratchboxMesh::material)
         .def_prop_ro("vertex_count", [](const ScratchboxMesh& self) { return self.vertices.size(); })
         .def_prop_ro("triangle_count", [](const ScratchboxMesh& self) { return self.indices.size() / 3; })
+        .def("add_vertex", [](ScratchboxMesh& self, const Vec3& pos, const Vec3& norm, const Vec2& uv, const Vec4& color) {
+            self.addVertex(Vertex(pos, norm, uv, color));
+        }, "pos"_a, "norm"_a = Vec3(0, 1, 0), "uv"_a = Vec2(0, 0), "color"_a = Vec4(1, 1, 1, 1))
+        .def("add_triangle", &ScratchboxMesh::addTriangle, "i0"_a, "i1"_a, "i2"_a)
         .def("append", &ScratchboxMesh::append, "other"_a, "Merge another mesh into this container")
+        .def("translate", &ScratchboxMesh::translate, "offset"_a)
+        .def("scale", &ScratchboxMesh::scale, "factors"_a)
+        .def("rotate_x", &ScratchboxMesh::rotateX, "angle_deg"_a)
+        .def("rotate_y", &ScratchboxMesh::rotateY, "angle_deg"_a)
+        .def("rotate_z", &ScratchboxMesh::rotateZ, "angle_deg"_a)
+        .def("set_color", &ScratchboxMesh::setColor, "color"_a)
         .def("clear", &ScratchboxMesh::clear)
         .def("recompute_normals", &ScratchboxMesh::recomputeNormals)
         .def("recompute_smooth_normals", &ScratchboxMesh::recomputeSmoothNormals)
@@ -135,13 +152,21 @@ NB_MODULE(scratchbox_native, m) {
         return GeometryBuilder::createPlane(width, height, segX, segY);
     }, "width"_a = 2.0f, "height"_a = 2.0f, "seg_x"_a = 4, "seg_y"_a = 4);
 
-    m_geom.def("create_sphere", [](float radius, int rings, int sectors) {
-        return GeometryBuilder::createSphere(radius, rings, sectors);
-    }, "radius"_a = 1.0f, "rings"_a = 16, "sectors"_a = 32);
+    m_geom.def("create_sphere", [](float radius, int rings, int sectors, const Vec4& color) {
+        return ScratchboxMesh::createSphere(radius, rings, sectors, color);
+    }, "radius"_a = 1.0f, "rings"_a = 16, "sectors"_a = 32, "color"_a = Vec4(0.9f, 0.3f, 0.3f, 1.0f));
 
-    m_geom.def("create_torus", [](float mainRadius, float tubeRadius, int radialSegments, int tubularSegments) {
-        return createTorus(mainRadius, tubeRadius, radialSegments, tubularSegments);
-    }, "main_radius"_a = 1.0f, "tube_radius"_a = 0.25f, "radial_segments"_a = 24, "tubular_segments"_a = 36);
+    m_geom.def("create_box", [](const Vec3& size, const Vec4& color) {
+        return ScratchboxMesh::createBox(size, color);
+    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+
+    m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color) {
+        return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color);
+    }, "radius_top"_a = 1.0f, "radius_bottom"_a = 1.0f, "height"_a = 2.0f, "segments"_a = 24, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+
+    m_geom.def("create_torus", [](float mainRadius, float tubeRadius, int radialSegments, int tubularSegments, const Vec4& color) {
+        return createTorus(mainRadius, tubeRadius, radialSegments, tubularSegments, color);
+    }, "main_radius"_a = 1.0f, "tube_radius"_a = 0.25f, "radial_segments"_a = 24, "tubular_segments"_a = 36, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
     m_geom.def("create_studio_pedestal", [](float radius, float height, float bevelRadius, int segments) {
         return generateStudioPedestal(radius, height, bevelRadius, segments);
@@ -172,7 +197,8 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("window_recess_depth", &BuildingConfig::windowRecessDepth)
         .def_rw("roof_type", &BuildingConfig::roofType)
         .def_rw("roof_pitch_degrees", &BuildingConfig::roofPitchDegrees)
-        .def_rw("roof_overhang", &BuildingConfig::roofOverhang);
+        .def_rw("roof_overhang", &BuildingConfig::roofOverhang)
+        .def_rw("parapet_height", &BuildingConfig::parapetHeight);
 
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);
