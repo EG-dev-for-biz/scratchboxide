@@ -1149,54 +1149,279 @@ export class Universal3DStructureFoundation {
   }
 
   /**
-   * Adapter 6: Minimal binary glTF 2.0 (.glb) Buffer
+   * Adapter 6: Standard binary glTF 2.0 (.glb) Buffer
+   * Full Khronos glTF 2.0 binary container with geometry attributes (POSITION, NORMAL,
+   * TEXCOORD_0, COLOR_0, INDICES), PBR materials, samplers, and embedded textures.
    */
   public toGlbBuffer(): Buffer {
     const v = this.mesh.vertices;
-    const vertexByteLength = v.length * 4;
-    const binBuffer = Buffer.alloc(vertexByteLength);
+    const chunks: Buffer[] = [];
+    let totalBinLength = 0;
 
+    const appendChunk = (buf: Buffer): { byteOffset: number; byteLength: number } => {
+      const byteOffset = totalBinLength;
+      const byteLength = buf.length;
+      chunks.push(buf);
+      totalBinLength += byteLength;
+      const padding = (4 - (byteLength % 4)) % 4;
+      if (padding > 0) {
+        chunks.push(Buffer.alloc(padding, 0));
+        totalBinLength += padding;
+      }
+      return { byteOffset, byteLength };
+    };
+
+    // 1. POSITION Chunk
+    const vBuf = Buffer.alloc(v.length * 4);
     for (let i = 0; i < v.length; i++) {
-      binBuffer.writeFloatLE(v[i], i * 4);
+      vBuf.writeFloatLE(v[i], i * 4);
+    }
+    const posChunk = appendChunk(vBuf);
+
+    // 2. NORMAL Chunk
+    let normChunk: { byteOffset: number; byteLength: number } | null = null;
+    if (this.mesh.normals && this.mesh.normals.length > 0) {
+      const n = this.mesh.normals;
+      const nBuf = Buffer.alloc(n.length * 4);
+      for (let i = 0; i < n.length; i++) {
+        nBuf.writeFloatLE(n[i], i * 4);
+      }
+      normChunk = appendChunk(nBuf);
     }
 
-    const gltfJson = {
+    // 3. TEXCOORD_0 Chunk
+    let uvChunk: { byteOffset: number; byteLength: number } | null = null;
+    if (this.mesh.uvs && this.mesh.uvs.length > 0) {
+      const uv = this.mesh.uvs;
+      const uvBuf = Buffer.alloc(uv.length * 4);
+      for (let i = 0; i < uv.length; i++) {
+        uvBuf.writeFloatLE(uv[i], i * 4);
+      }
+      uvChunk = appendChunk(uvBuf);
+    }
+
+    // 4. INDICES Chunk
+    let idxChunk: { byteOffset: number; byteLength: number } | null = null;
+    if (this.mesh.indices && this.mesh.indices.length > 0) {
+      const ind = this.mesh.indices;
+      const indBuf = Buffer.alloc(ind.length * 4);
+      for (let i = 0; i < ind.length; i++) {
+        indBuf.writeUInt32LE(ind[i], i * 4);
+      }
+      idxChunk = appendChunk(indBuf);
+    }
+
+    // 5. Texture Images Chunk
+    const imageChunks: { byteOffset: number; byteLength: number; mimeType: string }[] = [];
+    for (const tex of this.textures) {
+      let imgBuf: Buffer;
+      if (tex.mimeType === 'image/raw') {
+        imgBuf = encodePng(tex.width, tex.height, tex.buffer);
+      } else {
+        imgBuf = tex.buffer;
+      }
+      const chunk = appendChunk(imgBuf);
+      imageChunks.push({
+        byteOffset: chunk.byteOffset,
+        byteLength: chunk.byteLength,
+        mimeType: tex.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
+      });
+    }
+
+    // Assemble BufferViews
+    const bufferViews: any[] = [];
+    const bvPos = bufferViews.length;
+    bufferViews.push({
+      buffer: 0,
+      byteOffset: posChunk.byteOffset,
+      byteLength: posChunk.byteLength,
+      target: 34962 // ARRAY_BUFFER
+    });
+
+    let bvNorm: number | null = null;
+    if (normChunk) {
+      bvNorm = bufferViews.length;
+      bufferViews.push({
+        buffer: 0,
+        byteOffset: normChunk.byteOffset,
+        byteLength: normChunk.byteLength,
+        target: 34962
+      });
+    }
+
+    let bvUv: number | null = null;
+    if (uvChunk) {
+      bvUv = bufferViews.length;
+      bufferViews.push({
+        buffer: 0,
+        byteOffset: uvChunk.byteOffset,
+        byteLength: uvChunk.byteLength,
+        target: 34962
+      });
+    }
+
+    let bvIdx: number | null = null;
+    if (idxChunk) {
+      bvIdx = bufferViews.length;
+      bufferViews.push({
+        buffer: 0,
+        byteOffset: idxChunk.byteOffset,
+        byteLength: idxChunk.byteLength,
+        target: 34963 // ELEMENT_ARRAY_BUFFER
+      });
+    }
+
+    const bvImages: number[] = [];
+    for (const ic of imageChunks) {
+      bvImages.push(bufferViews.length);
+      bufferViews.push({
+        buffer: 0,
+        byteOffset: ic.byteOffset,
+        byteLength: ic.byteLength
+      });
+    }
+
+    // Assemble Accessors
+    const accessors: any[] = [];
+    const accPos = accessors.length;
+    accessors.push({
+      bufferView: bvPos,
+      byteOffset: 0,
+      componentType: 5126, // FLOAT
+      count: this.mesh.vertexCount,
+      type: 'VEC3',
+      min: this.boundingBox.min,
+      max: this.boundingBox.max
+    });
+
+    let accNorm: number | null = null;
+    if (bvNorm !== null) {
+      accNorm = accessors.length;
+      accessors.push({
+        bufferView: bvNorm,
+        byteOffset: 0,
+        componentType: 5126,
+        count: this.mesh.vertexCount,
+        type: 'VEC3'
+      });
+    }
+
+    let accUv: number | null = null;
+    if (bvUv !== null) {
+      accUv = accessors.length;
+      accessors.push({
+        bufferView: bvUv,
+        byteOffset: 0,
+        componentType: 5126,
+        count: this.mesh.vertexCount,
+        type: 'VEC2'
+      });
+    }
+
+    let accIdx: number | null = null;
+    if (bvIdx !== null && this.mesh.indices) {
+      accIdx = accessors.length;
+      accessors.push({
+        bufferView: bvIdx,
+        byteOffset: 0,
+        componentType: 5125, // UNSIGNED_INT
+        count: this.mesh.indices.length,
+        type: 'SCALAR'
+      });
+    }
+
+    // Images & Samplers & Textures
+    const images = imageChunks.map((ic, i) => ({
+      bufferView: bvImages[i],
+      mimeType: ic.mimeType
+    }));
+
+    const samplers = images.length > 0 ? [{
+      magFilter: 9729,
+      minFilter: 9987,
+      wrapS: 10497,
+      wrapT: 10497
+    }] : undefined;
+
+    const textures = images.map((_, i) => ({
+      sampler: 0,
+      source: i
+    }));
+
+    // Materials
+    const materials = this.materials.map(mat => {
+      const pbr: any = {
+        baseColorFactor: mat.baseColorFactor ?? [1, 1, 1, 1],
+        metallicFactor: mat.metallicFactor ?? 0.1,
+        roughnessFactor: mat.roughnessFactor ?? 0.5
+      };
+
+      const baseColorTexIdx = this.textures.findIndex(t => t.id === mat.baseColorTextureId || t.type === 'albedo');
+      if (baseColorTexIdx >= 0 && baseColorTexIdx < textures.length) {
+        pbr.baseColorTexture = { index: baseColorTexIdx };
+      }
+
+      const mrTexIdx = this.textures.findIndex(t => t.id === mat.metallicRoughnessTextureId || t.type === 'metallicRoughness');
+      if (mrTexIdx >= 0 && mrTexIdx < textures.length) {
+        pbr.metallicRoughnessTexture = { index: mrTexIdx };
+      }
+
+      const normTexIdx = this.textures.findIndex(t => t.id === mat.normalTextureId || t.type === 'normal');
+      const normalTexture = normTexIdx >= 0 && normTexIdx < textures.length ? { index: normTexIdx } : undefined;
+
+      const occTexIdx = this.textures.findIndex(t => t.id === mat.occlusionTextureId || t.type === 'occlusion');
+      const occlusionTexture = occTexIdx >= 0 && occTexIdx < textures.length ? { index: occTexIdx } : undefined;
+
+      return {
+        name: mat.name,
+        pbrMetallicRoughness: pbr,
+        ...(normalTexture ? { normalTexture } : {}),
+        ...(occlusionTexture ? { occlusionTexture } : {}),
+        emissiveFactor: mat.emissiveFactor ?? [0, 0, 0],
+        doubleSided: mat.doubleSided ?? false,
+        alphaMode: mat.alphaMode ?? 'OPAQUE'
+      };
+    });
+
+    const attributes: Record<string, number> = { POSITION: accPos };
+    if (accNorm !== null) attributes.NORMAL = accNorm;
+    if (accUv !== null) attributes.TEXCOORD_0 = accUv;
+
+    const primitive: any = {
+      attributes,
+      mode: 4
+    };
+    if (accIdx !== null) {
+      primitive.indices = accIdx;
+    }
+    if (materials.length > 0) {
+      primitive.material = 0;
+    }
+
+    const gltfJson: any = {
       asset: { version: '2.0', generator: 'Scratchbox_Universal3DStructure' },
       scene: 0,
       scenes: [{ nodes: [0] }],
       nodes: [{ mesh: 0 }],
-      meshes: [{
-        primitives: [{
-          attributes: { POSITION: 0 },
-          mode: 4 // TRIANGLES
-        }]
-      }],
-      accessors: [{
-        bufferView: 0,
-        byteOffset: 0,
-        componentType: 5126, // FLOAT
-        count: this.mesh.vertexCount,
-        type: 'VEC3',
-        max: this.boundingBox.max,
-        min: this.boundingBox.min
-      }],
-      bufferViews: [{
-        buffer: 0,
-        byteOffset: 0,
-        byteLength: vertexByteLength,
-        target: 34962 // ARRAY_BUFFER
-      }],
-      buffers: [{
-        byteLength: vertexByteLength
-      }]
+      meshes: [{ primitives: [primitive] }],
+      accessors,
+      bufferViews,
+      buffers: [{ byteLength: totalBinLength }]
     };
+
+    if (materials.length > 0) gltfJson.materials = materials;
+    if (textures.length > 0) gltfJson.textures = textures;
+    if (images.length > 0) gltfJson.images = images;
+    if (samplers) gltfJson.samplers = samplers;
+
+    const binBuffer = Buffer.concat(chunks, totalBinLength);
 
     const jsonText = JSON.stringify(gltfJson);
     const jsonPaddedLength = Math.ceil(jsonText.length / 4) * 4;
     const jsonBuffer = Buffer.alloc(jsonPaddedLength, 0x20); // Pad with spaces
     jsonBuffer.write(jsonText, 'utf8');
 
-    const totalLength = 12 + 8 + jsonPaddedLength + 8 + vertexByteLength;
+    const totalLength = 12 + 8 + jsonPaddedLength + 8 + totalBinLength;
     const glb = Buffer.alloc(totalLength);
 
     // GLB Header
@@ -1211,11 +1436,330 @@ export class Universal3DStructureFoundation {
 
     // BIN Chunk Header
     const binOffset = 20 + jsonPaddedLength;
-    glb.writeUInt32LE(vertexByteLength, binOffset);
+    glb.writeUInt32LE(totalBinLength, binOffset);
     glb.writeUInt32LE(0x004E4942, binOffset + 4); // 'BIN\0'
     binBuffer.copy(glb, binOffset + 8);
 
     return glb;
+  }
+
+  /**
+   * Factory: Ingest binary glTF 2.0 (.glb) into a canonical Universal3DStructureFoundation.
+   * Extracts geometry, UVs, normals, indices, PBR materials, and embedded textures.
+   */
+  public static createFromGlb(
+    glbBuffer: Buffer,
+    options?: {
+      name?: string;
+      anchor?: GeodeticAnchor;
+      numViews?: number;
+      resyncPoints?: boolean;
+    }
+  ): Universal3DStructureFoundation {
+    if (glbBuffer.length < 20 || glbBuffer.readUInt32LE(0) !== 0x46546C67) {
+      throw new Error('Invalid glTF 2.0 binary header');
+    }
+
+    let offset = 12;
+    let gltf: any = null;
+    let binBuffer: Buffer = Buffer.alloc(0);
+
+    while (offset < glbBuffer.length) {
+      const chunkLength = glbBuffer.readUInt32LE(offset);
+      const chunkType = glbBuffer.readUInt32LE(offset + 4);
+      const chunkData = glbBuffer.subarray(offset + 8, offset + 8 + chunkLength);
+
+      if (chunkType === 0x4E4F534A) {
+        // 'JSON'
+        gltf = JSON.parse(chunkData.toString('utf8'));
+      } else if (chunkType === 0x004E4942) {
+        // 'BIN\0'
+        binBuffer = chunkData;
+      }
+      offset += 8 + chunkLength;
+    }
+
+    if (!gltf || !gltf.meshes || gltf.meshes.length === 0) {
+      throw new Error('No meshes found in GLB structure');
+    }
+
+    const prim = gltf.meshes[0].primitives?.[0];
+    if (!prim || prim.attributes?.POSITION === undefined) {
+      throw new Error('No valid mesh primitive with POSITION attribute found');
+    }
+
+    const readAccessor = (accIdx: number) => {
+      if (accIdx === undefined || !gltf.accessors || !gltf.accessors[accIdx]) return null;
+      const acc = gltf.accessors[accIdx];
+      const bv = gltf.bufferViews[acc.bufferView];
+      const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+      return { acc, bv, start };
+    };
+
+    // 1. POSITION
+    const posInfo = readAccessor(prim.attributes.POSITION)!;
+    const vertexCount = posInfo.acc.count;
+    const vertices = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount * 3; i++) {
+      vertices[i] = binBuffer.readFloatLE(posInfo.start + i * 4);
+    }
+
+    // 2. NORMAL
+    let normals: Float32Array | undefined;
+    if (prim.attributes.NORMAL !== undefined) {
+      const normInfo = readAccessor(prim.attributes.NORMAL);
+      if (normInfo) {
+        normals = new Float32Array(normInfo.acc.count * 3);
+        for (let i = 0; i < normInfo.acc.count * 3; i++) {
+          normals[i] = binBuffer.readFloatLE(normInfo.start + i * 4);
+        }
+      }
+    }
+
+    // 3. TEXCOORD_0
+    let uvs: Float32Array | undefined;
+    if (prim.attributes.TEXCOORD_0 !== undefined) {
+      const uvInfo = readAccessor(prim.attributes.TEXCOORD_0);
+      if (uvInfo) {
+        uvs = new Float32Array(uvInfo.acc.count * 2);
+        for (let i = 0; i < uvInfo.acc.count * 2; i++) {
+          uvs[i] = binBuffer.readFloatLE(uvInfo.start + i * 4);
+        }
+      }
+    }
+
+    // 4. INDICES
+    let indices: Uint32Array | undefined;
+    let triangleCount = 0;
+    if (prim.indices !== undefined) {
+      const idxInfo = readAccessor(prim.indices);
+      if (idxInfo) {
+        indices = new Uint32Array(idxInfo.acc.count);
+        if (idxInfo.acc.componentType === 5123) {
+          // UNSIGNED_SHORT
+          for (let i = 0; i < idxInfo.acc.count; i++) {
+            indices[i] = binBuffer.readUInt16LE(idxInfo.start + i * 2);
+          }
+        } else if (idxInfo.acc.componentType === 5125) {
+          // UNSIGNED_INT
+          for (let i = 0; i < idxInfo.acc.count; i++) {
+            indices[i] = binBuffer.readUInt32LE(idxInfo.start + i * 4);
+          }
+        } else if (idxInfo.acc.componentType === 5121) {
+          // UNSIGNED_BYTE
+          for (let i = 0; i < idxInfo.acc.count; i++) {
+            indices[i] = binBuffer.readUInt8(idxInfo.start + i);
+          }
+        }
+        triangleCount = indices.length / 3;
+      }
+    } else {
+      triangleCount = vertexCount / 3;
+    }
+
+    const mesh: UniversalSurfaceMesh = {
+      vertices,
+      indices,
+      normals,
+      uvs,
+      vertexCount,
+      triangleCount
+    };
+
+    // 5. Embedded Images
+    const embeddedImages: { buffer: Buffer; mimeType: string }[] = [];
+    for (let i = 0; i < (gltf.images?.length || 0); i++) {
+      const img = gltf.images[i];
+      if (img.bufferView !== undefined) {
+        const bv = gltf.bufferViews[img.bufferView];
+        const start = bv.byteOffset || 0;
+        const buf = Buffer.from(binBuffer.subarray(start, start + bv.byteLength));
+        embeddedImages.push({ buffer: buf, mimeType: img.mimeType || 'image/png' });
+      }
+    }
+
+    // 6. Textures & Materials
+    const textures: UniversalTextureMap[] = [];
+    const materials: UniversalPbrMaterial[] = [];
+
+    const getOrCreateTexture = (texIdx: number, type: UniversalTextureType, idPrefix: string): string | undefined => {
+      if (texIdx === undefined || !gltf.textures || !gltf.textures[texIdx]) return undefined;
+      const imgIdx = gltf.textures[texIdx].source ?? texIdx;
+      const img = embeddedImages[imgIdx];
+      if (!img) return undefined;
+
+      const id = `${idPrefix}_${imgIdx}`;
+      if (!textures.some(t => t.id === id)) {
+        let width = 256, height = 256;
+        try {
+          const dec = decodePng(img.buffer);
+          width = dec.width;
+          height = dec.height;
+        } catch {
+          // Fallback dimension
+        }
+        textures.push({
+          id,
+          type,
+          width,
+          height,
+          channels: 4,
+          buffer: img.buffer,
+          mimeType: img.mimeType as any
+        });
+      }
+      return id;
+    };
+
+    for (let i = 0; i < (gltf.materials?.length || 0); i++) {
+      const mat = gltf.materials[i];
+      const pbr = mat.pbrMetallicRoughness || {};
+      const baseColorTexId = pbr.baseColorTexture !== undefined
+        ? getOrCreateTexture(pbr.baseColorTexture.index, 'albedo', 'tex_albedo')
+        : undefined;
+      const mrTexId = pbr.metallicRoughnessTexture !== undefined
+        ? getOrCreateTexture(pbr.metallicRoughnessTexture.index, 'metallicRoughness', 'tex_orm')
+        : undefined;
+      const normTexId = mat.normalTexture !== undefined
+        ? getOrCreateTexture(mat.normalTexture.index, 'normal', 'tex_normal')
+        : undefined;
+      const occTexId = mat.occlusionTexture !== undefined
+        ? getOrCreateTexture(mat.occlusionTexture.index, 'occlusion', 'tex_ao')
+        : undefined;
+
+      materials.push({
+        name: mat.name || `Material_${i}`,
+        baseColorFactor: pbr.baseColorFactor ?? [1, 1, 1, 1],
+        metallicFactor: pbr.metallicFactor ?? 0.1,
+        roughnessFactor: pbr.roughnessFactor ?? 0.5,
+        emissiveFactor: mat.emissiveFactor ?? [0, 0, 0],
+        doubleSided: mat.doubleSided ?? false,
+        alphaMode: mat.alphaMode ?? 'OPAQUE',
+        baseColorTextureId: baseColorTexId,
+        metallicRoughnessTextureId: mrTexId,
+        normalTextureId: normTexId,
+        occlusionTextureId: occTexId
+      });
+    }
+
+    if (materials.length === 0) {
+      materials.push(Universal3DStructureFoundation.createDefaultPbrMaterial('Ingested_GLB_Material'));
+    }
+
+    const bbox = Universal3DStructureFoundation.computeBoundingBox(mesh);
+    const cameras = ProceduralSfMDatasetService.generateTrajectory({
+      trajectory: 'orbital_fibonacci',
+      numViews: options?.numViews ?? 24,
+      target: bbox.center,
+      radius: bbox.boundingSphereRadius * 2.5
+    });
+
+    const struct = new Universal3DStructureFoundation({
+      name: options?.name || 'Ingested_GLB_Structure',
+      anchor: options?.anchor,
+      mesh,
+      materials,
+      textures,
+      cameras,
+      boundingBox: bbox,
+      tags: ['glb-ingested', 'canonical-anchor']
+    });
+
+    if (options?.resyncPoints !== false) {
+      struct.resynchronizePoints(1500);
+    }
+
+    return struct;
+  }
+
+  /**
+   * Factory: Ingest continuous biophysical fields from AdaptiveMaterialPbrService.
+   */
+  public static createFromBiophysicalFields(
+    mesh: UniversalSurfaceMesh,
+    fields: ContinuousBiophysicalFields,
+    options?: {
+      name?: string;
+      anchor?: GeodeticAnchor;
+      materialPreset?: MaterialPresetName;
+    }
+  ): Universal3DStructureFoundation {
+    const { width, height } = fields;
+
+    const ensureRgba = (src: Uint8Array | Buffer, channels: number): Buffer => {
+      const out = Buffer.alloc(width * height * 4);
+      if (channels === 4) {
+        Buffer.from(src.buffer, src.byteOffset, src.byteLength).copy(out);
+      } else if (channels === 3) {
+        for (let i = 0; i < width * height; i++) {
+          out[i * 4] = src[i * 3];
+          out[i * 4 + 1] = src[i * 3 + 1];
+          out[i * 4 + 2] = src[i * 3 + 2];
+          out[i * 4 + 3] = 255;
+        }
+      } else if (channels === 1) {
+        for (let i = 0; i < width * height; i++) {
+          const val = src[i];
+          out[i * 4] = val;
+          out[i * 4 + 1] = val;
+          out[i * 4 + 2] = val;
+          out[i * 4 + 3] = 255;
+        }
+      }
+      return out;
+    };
+
+    const albedoRgba = ensureRgba(fields.albedoRgba, 4);
+    const normalRgba = ensureRgba(fields.normalRgb, 3);
+    const ormRgba = ensureRgba(fields.ormRgb, 3);
+
+    const albedoPng = encodePng(width, height, albedoRgba);
+    const normalPng = encodePng(width, height, normalRgba);
+    const ormPng = encodePng(width, height, ormRgba);
+
+    const albedoId = `tex_biophys_albedo_${Date.now()}`;
+    const normalId = `tex_biophys_normal_${Date.now()}`;
+    const ormId = `tex_biophys_orm_${Date.now()}`;
+
+    const textures: UniversalTextureMap[] = [
+      { id: albedoId, type: 'albedo', width, height, channels: 4, buffer: albedoPng, mimeType: 'image/png' },
+      { id: normalId, type: 'normal', width, height, channels: 4, buffer: normalPng, mimeType: 'image/png' },
+      { id: ormId, type: 'metallicRoughness', width, height, channels: 4, buffer: ormPng, mimeType: 'image/png' }
+    ];
+
+    const basePreset = options?.materialPreset
+      ? Universal3DStructureFoundation.getMaterialPreset(options.materialPreset)
+      : Universal3DStructureFoundation.createDefaultPbrMaterial();
+
+    const material: UniversalPbrMaterial = {
+      ...basePreset,
+      name: options?.name ? `${options.name}_Material` : 'Biophysical_Adaptive_PBR',
+      baseColorTextureId: albedoId,
+      normalTextureId: normalId,
+      metallicRoughnessTextureId: ormId
+    };
+
+    const bbox = Universal3DStructureFoundation.computeBoundingBox(mesh);
+    const cameras = ProceduralSfMDatasetService.generateTrajectory({
+      trajectory: 'orbital_fibonacci',
+      numViews: 24,
+      target: bbox.center,
+      radius: bbox.boundingSphereRadius * 2.5
+    });
+
+    const struct = new Universal3DStructureFoundation({
+      name: options?.name || 'Biophysical_Structure',
+      anchor: options?.anchor,
+      mesh,
+      materials: [material],
+      textures,
+      cameras,
+      boundingBox: bbox,
+      tags: ['biophysical', 'adaptive-pbr', 'canonical-anchor']
+    });
+
+    struct.resynchronizePoints(1500);
+    return struct;
   }
 
   /**
@@ -1228,6 +1772,7 @@ export class Universal3DStructureFoundation {
     const collisionHull = this.toCollisionHull(options?.collisionOptions);
     const geoJson = this.toGeoJson();
     const glbBuffer = this.toGlbBuffer();
+    const textureFiles: Record<string, string> = {};
 
     return {
       structureId: this.id,
@@ -1238,7 +1783,8 @@ export class Universal3DStructureFoundation {
       videoBlockout,
       collisionHull,
       geoJson,
-      glbBuffer
+      glbBuffer,
+      textureFiles
     };
   }
 
@@ -1261,6 +1807,24 @@ export class Universal3DStructureFoundation {
       const glbPath = path.join(outputDir, `${this.name}.glb`);
       fs.writeFileSync(glbPath, result.glbBuffer!);
       filesWritten.glb = glbPath;
+    }
+
+    if (this.textures.length > 0) {
+      const texDir = path.join(outputDir, 'textures');
+      if (!fs.existsSync(texDir)) {
+        fs.mkdirSync(texDir, { recursive: true });
+      }
+      for (const tex of this.textures) {
+        const ext = tex.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+        const texPath = path.join(texDir, `${this.name}_${tex.type}.${ext}`);
+        let buf = tex.buffer;
+        if (tex.mimeType === 'image/raw') {
+          buf = encodePng(tex.width, tex.height, tex.buffer);
+        }
+        fs.writeFileSync(texPath, buf);
+        result.textureFiles![tex.id] = texPath;
+        filesWritten[`texture_${tex.type}`] = texPath;
+      }
     }
 
     if (formats.includes('colmap')) {
