@@ -14,6 +14,7 @@ import {
     createProceduralCityScene,
     createHighwayOverpassScene,
     createAlpineMatterhornScene,
+    createBabylonianZigguratScene,
     createSolarSystemScene,
     createMolecularPhysicsScene,
     createArchitecturalRoomScene,
@@ -64,7 +65,7 @@ export interface SceneContentFactories {
     } | null;
 }
 
-export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'worldbuilder' | 'battlefield' | 'city' | 'highway_overpass' | 'alpine_valley' | 'solar-system' | 'molecular' | 'architecture' | 'custom-meshes' | 'objects' | 'spatial' {
+export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'worldbuilder' | 'battlefield' | 'city' | 'highway_overpass' | 'alpine_valley' | 'ziggurat' | 'solar-system' | 'molecular' | 'architecture' | 'custom-meshes' | 'objects' | 'spatial' {
     const worldBranch = (input.worldBranch || '').toLowerCase();
     const sceneTitle = (input.title || '').toLowerCase();
     const haystack = `${worldBranch} ${sceneTitle}`;
@@ -74,6 +75,7 @@ export function classifySceneContent(input: SceneContentInput): 'script' | 'tile
     if (input.isAirplane) return 'aircraft';
     if (t === 'highway_overpass' || /highway|overpass|viaduct|interchange/i.test(haystack)) return 'highway_overpass';
     if (t === 'alpine_valley' || /matterhorn|alpine|chalet/i.test(haystack)) return 'alpine_valley';
+    if (t === 'ziggurat' || /ziggurat|mesopotamia|etemenanki|babylon/i.test(haystack)) return 'ziggurat';
     if (input.hasCppGenerator) return 'objects';
     if (t === 'solar-system' || SPACE_KEYWORDS.test(haystack)) return 'solar-system';
     if (t === 'molecular' || MOLECULAR_KEYWORDS.test(haystack)) return 'molecular';
@@ -164,6 +166,9 @@ export function syncSceneContent(
             break;
         case 'alpine_valley':
             proceduralSceneGroup = createAlpineMatterhornScene(scene, THREE);
+            break;
+        case 'ziggurat':
+            proceduralSceneGroup = createBabylonianZigguratScene(scene, THREE);
             break;
         case 'solar-system':
             proceduralSceneGroup = createSolarSystemScene(scene, THREE, { includeAsteroidBelt: true, includeMoons: true });

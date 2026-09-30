@@ -98,7 +98,8 @@ export type Target3DFormat =
   | 'nerfstudio'
   | 'video_blockout'
   | 'collision_hull'
-  | 'geojson';
+  | 'geojson'
+  | 'manifest';
 
 /**
  * PBR Alpha Mode standard in glTF 2.0.
@@ -217,5 +218,6 @@ export interface MultiFormatExportResult {
   collisionHull?: UniversalCollisionHull;
   geoJson?: Record<string, any>;
   glbBuffer?: Buffer;
+  manifestMarkdown?: string;
 }
 

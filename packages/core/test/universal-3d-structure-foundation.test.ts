@@ -476,4 +476,55 @@ describe('Universal3DStructureFoundation', () => {
       expect(filePath).toContain(path.join(outDir, 'textures'));
     }
   });
+
+  it('generates project manifest markdown and exports scene_manifest.md to project folder', async () => {
+    const struct = Universal3DStructureFoundation.createBabylonianZigguratComplex({
+      name: 'BabylonZigguratProjectTest'
+    });
+
+    const markdown = struct.generateManifestMarkdown();
+    expect(markdown).toContain('# 3D Scene Project Manifest: BabylonZigguratProjectTest');
+    expect(markdown).toContain('Ziggurat of Etemenanki');
+    expect(markdown).toContain('32.536300°N');
+    expect(markdown).toContain('BabylonianMudbrick');
+    expect(markdown).toContain('GlazedLapisLazuli');
+    expect(markdown).toContain('BeatenGoldLeaf');
+    expect(markdown).toContain('projects/BabylonZigguratProjectTest/');
+
+    const outDir = path.join(tempDir, 'projects', 'BabylonZigguratProjectTest');
+    const result = await struct.exportToDisk(outDir, ['glb', 'manifest', 'video_blockout']);
+
+    expect(result.manifestMarkdown).toBeDefined();
+    expect(fs.existsSync(path.join(outDir, 'BabylonZigguratProjectTest_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'scene_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'BabylonZigguratProjectTest.glb'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'BabylonZigguratProjectTest_video_blockout.json'))).toBe(true);
+  });
+
+  it('synthesizes complex Alpine Matterhorn Mountain Valley structure with continuous terrain and chalets', async () => {
+    const alpine = Universal3DStructureFoundation.createAlpineMatterhornComplex({
+      name: 'AlpineMatterhornValleyTest'
+    });
+
+    expect(alpine.name).toBe('AlpineMatterhornValleyTest');
+    expect(alpine.mesh.vertexCount).toBeGreaterThan(5000);
+    expect(alpine.mesh.triangleCount).toBeGreaterThan(5000);
+    expect(alpine.materials.length).toBeGreaterThanOrEqual(5);
+    expect(alpine.materials.some(m => m.name === 'MatterhornGneiss')).toBe(true);
+    expect(alpine.materials.some(m => m.name === 'AgedLarchTimber')).toBe(true);
+    expect(alpine.materials.some(m => m.name === 'GlacialRiver')).toBe(true);
+    expect(alpine.anchor?.formattedAddress).toContain('Matterhorn Alpine Valley');
+    expect(alpine.cameras.length).toBeGreaterThanOrEqual(24);
+    expect(alpine.points.length).toBeGreaterThanOrEqual(5000);
+
+    const outDir = path.join(tempDir, 'projects', 'AlpineMatterhornValleyTest');
+    const result = await alpine.exportToDisk(outDir, ['glb', 'manifest', 'colmap', 'nerfstudio']);
+
+    expect(fs.existsSync(path.join(outDir, 'AlpineMatterhornValleyTest.glb'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'AlpineMatterhornValleyTest_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'scene_manifest.md'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'transforms.json'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'sparse_pcd.ply'))).toBe(true);
+  });
 });
+

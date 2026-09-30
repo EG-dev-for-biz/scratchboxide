@@ -74,6 +74,7 @@ import {
     createProceduralCityScene,
     createHighwayOverpassScene,
     createAlpineMatterhornScene,
+    createBabylonianZigguratScene,
     createSolarSystemScene,
     createMolecularPhysicsScene,
     createArchitecturalRoomScene,
@@ -316,6 +317,7 @@ export interface DynamicScriptContext {
     createProceduralCityScene?: typeof createProceduralCityScene;
     createHighwayOverpassScene?: typeof createHighwayOverpassScene;
     createAlpineMatterhornScene?: typeof createAlpineMatterhornScene;
+    createBabylonianZigguratScene?: typeof createBabylonianZigguratScene;
     createSolarSystemScene?: typeof createSolarSystemScene;
     createMolecularPhysicsScene?: typeof createMolecularPhysicsScene;
     createArchitecturalRoomScene?: typeof createArchitecturalRoomScene;
@@ -2425,6 +2427,7 @@ int main(int argc, char** argv) {
                 createProceduralCityScene,
                 createHighwayOverpassScene,
                 createAlpineMatterhornScene,
+                createBabylonianZigguratScene,
                 createSolarSystemScene,
                 createMolecularPhysicsScene,
                 createArchitecturalRoomScene,
@@ -3526,15 +3529,6 @@ int main(int argc, char** argv) {
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
-                <button
-                    type="button"
-                    onClick={handleExportGlb}
-                    className="sb-btn sb-btn-xs flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#121216]/80 hover:bg-zinc-800 text-zinc-200 border border-white/10 text-[11px] font-mono shadow-md transition-all shrink-0"
-                    title="Export 3D Scene as standardized binary glTF (.glb)"
-                >
-                    <span>📦</span>
-                    <span>Export GLB</span>
-                </button>
                 <button
                     type="button"
                     onClick={() => {

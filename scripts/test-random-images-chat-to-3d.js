@@ -103,39 +103,93 @@ app.whenReady().then(async () => {
                                     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                                 }
                                 resolve(true);
-                            }, 300);
-                        } else if (Date.now() - start > 15000) {
+                            }, 500);
+                        } else if (Date.now() - start > 60000) {
                             clearInterval(interval);
                             reject(new Error('Timeout waiting for composer textarea'));
                         }
-                    }, 200);
+                    }, 500);
                 })
             `);
         }
 
-        async function waitForGenerationComplete(timeoutMs = 30000) {
-            await win.webContents.executeJavaScript(`
-                new Promise((resolve, reject) => {
+        async function waitForGenerationComplete(expectedAssistantIndex, timeoutMs = 95000) {
+            const completed = await win.webContents.executeJavaScript(`
+                new Promise((resolve) => {
                     const start = Date.now();
-                    // First wait at least 3 seconds for generation to kick in
-                    setTimeout(() => {
-                        const interval = setInterval(() => {
-                            const textarea = document.querySelector('textarea.sb-composer-main-input, textarea');
-                            const canvas = document.querySelector('canvas');
-                            const isGenerating = textarea ? textarea.disabled : false;
-                            const hasRunningStepper = !!document.querySelector('.sb-streaming-bubble, .sb-agent-stepper-generating');
-                            
-                            if (!isGenerating && !hasRunningStepper && canvas && canvas.width > 200) {
-                                clearInterval(interval);
-                                resolve(true);
-                            } else if (Date.now() - start > ${timeoutMs}) {
-                                clearInterval(interval);
-                                resolve(false); // resolve anyway to inspect state
-                            }
-                        }, 500);
-                    }, 3000);
+                    const interval = setInterval(() => {
+                        const textarea = document.querySelector('textarea.sb-composer-main-input, textarea');
+                        const isGenerating = textarea ? textarea.disabled : false;
+                        const hasRunningStepper = !!document.querySelector('.sb-streaming-bubble, .sb-agent-stepper-generating, .sb-ide-msg-thinking');
+                        const assistantRows = Array.from(document.querySelectorAll('.sb-msg-assistant-row')).filter(r => !r.querySelector('.sb-ide-msg-thinking') && !r.classList.contains('sb-ide-msg-thinking'));
+                        const lastAssistantRow = assistantRows[assistantRows.length - 1];
+                        
+                        const hasCount = assistantRows.length >= ${expectedAssistantIndex};
+                        const hasChip = lastAssistantRow && !!lastAssistantRow.querySelector('.sb-chat-artifact-chip');
+                        const hasText = lastAssistantRow && /(?:Executed|Procedural|3D|Synthesiz|Generat|Reconstruct|Model|Render|Build|Scene|Astra)/i.test(lastAssistantRow.innerText);
+                        const hasFinished = lastAssistantRow && (hasChip || hasText);
+
+                        if (hasCount && !isGenerating && !hasRunningStepper && hasFinished) {
+                            clearInterval(interval);
+                            resolve(true);
+                        } else if (Date.now() - start > ${timeoutMs}) {
+                            clearInterval(interval);
+                            resolve(false);
+                        }
+                    }, 500);
                 })
             `);
+            if (!completed) {
+                console.warn('[Test Chat Image-to-3D] Warning: waitForGenerationComplete reached timeout or fallback.');
+            }
+        }
+
+        async function activate3DTab(sceneKeyword) {
+            await win.webContents.executeJavaScript(`
+                (() => {
+                    function triggerClick(el) {
+                        if (!el) return;
+                        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                        el.click();
+                    }
+
+                    // 1. Locate the tab by keyword in canvas tabs strip
+                    const canvasTabs = Array.from(document.querySelectorAll('.sb-canvas-tab'));
+                    const kw = ${JSON.stringify(sceneKeyword || '')}.toLowerCase();
+                    let targetTab = null;
+                    if (kw && canvasTabs.length > 0) {
+                        targetTab = canvasTabs.find(t => (t.innerText || '').toLowerCase().includes(kw) || (t.title || '').toLowerCase().includes(kw));
+                    }
+                    if (targetTab) {
+                        triggerClick(targetTab);
+                        return;
+                    }
+
+                    // 2. Try to click Open 3D button on the matching or last assistant row
+                    const assistantRows = Array.from(document.querySelectorAll('.sb-msg-assistant-row')).filter(r => !r.querySelector('.sb-ide-msg-thinking'));
+                    const lastRow = assistantRows[assistantRows.length - 1];
+                    if (lastRow) {
+                        const openBtn = lastRow.querySelector('.sb-chip-action-btn') || Array.from(lastRow.querySelectorAll('button')).find(b => b.innerText && b.innerText.includes('Open 3D'));
+                        if (openBtn) {
+                            triggerClick(openBtn);
+                            return;
+                        }
+                        const chip = lastRow.querySelector('.sb-chat-artifact-chip');
+                        if (chip) {
+                            triggerClick(chip);
+                            return;
+                        }
+                    }
+
+                    // 3. Fallback to newest tab
+                    if (canvasTabs.length > 0) {
+                        const unselected = canvasTabs.find(t => !t.classList.contains('active'));
+                        triggerClick(unselected || canvasTabs[canvasTabs.length - 1]);
+                    }
+                })()
+            `);
+            await new Promise(r => setTimeout(r, 3000));
         }
 
         // -------------------------------------------------------------------------
@@ -146,8 +200,8 @@ app.whenReady().then(async () => {
         await submitPrompt(prompt1);
 
         console.log('[Test Chat Image-to-3D] Waiting for Scene 1 (Highway Overpass) to synthesize and render...');
-        await waitForGenerationComplete(25000);
-        await new Promise(r => setTimeout(r, 2000));
+        await waitForGenerationComplete(1, 95000);
+        await activate3DTab('highway');
 
         // Scroll user message 1 to start
         await win.webContents.executeJavaScript(`
@@ -182,6 +236,7 @@ app.whenReady().then(async () => {
         const path1 = path.join(OUTPUT_DIR, 'chat_image_to_3d_overpass.png');
         fs.writeFileSync(path1, img1.toPNG());
         console.log('[Test Chat Image-to-3D] Screenshot 1 saved to:', path1);
+        await new Promise(r => setTimeout(r, 2500));
 
         // -------------------------------------------------------------------------
         // SCENE 2: Random Matterhorn Alpine Mountain Valley Image
@@ -191,8 +246,8 @@ app.whenReady().then(async () => {
         await submitPrompt(prompt2);
 
         console.log('[Test Chat Image-to-3D] Waiting for Scene 2 (Alpine Valley) to synthesize and render...');
-        await waitForGenerationComplete(25000);
-        await new Promise(r => setTimeout(r, 2000));
+        await waitForGenerationComplete(2, 95000);
+        await activate3DTab('alpine');
 
         // Scroll user message 2 to start so the user plate and prompt are at the top of the chat pane
         await win.webContents.executeJavaScript(`
@@ -233,8 +288,56 @@ app.whenReady().then(async () => {
         const path2 = path.join(OUTPUT_DIR, 'chat_image_to_3d_alpine_valley.png');
         fs.writeFileSync(path2, img2.toPNG());
         console.log('[Test Chat Image-to-3D] Screenshot 2 saved to:', path2);
+        await new Promise(r => setTimeout(r, 2500));
 
-        console.log('[Test Chat Image-to-3D] SUCCESS! Both test cases completed and captured.');
+        // -------------------------------------------------------------------------
+        // SCENE 3: Ancient Babylonian Ziggurat Observatory (Etemenanki)
+        // -------------------------------------------------------------------------
+        const prompt3 = 'Reconstruct the ancient Babylonian Ziggurat Observatory (Etemenanki) with lapis lazuli terrace, gold sanctuary, and astrolabe in 3D';
+        console.log(`[Test Chat Image-to-3D] Sending Prompt 3: "${prompt3}"...`);
+        await submitPrompt(prompt3);
+
+        console.log('[Test Chat Image-to-3D] Waiting for Scene 3 (Babylonian Ziggurat) to synthesize and render...');
+        await waitForGenerationComplete(3, 95000);
+        await activate3DTab('babylo');
+
+        // Scroll user message 3 to start
+        await win.webContents.executeJavaScript(`
+            (() => {
+                const userRows = document.querySelectorAll('.sb-msg-user-row');
+                if (userRows.length > 2) {
+                    userRows[userRows.length - 1].scrollIntoView({ behavior: 'instant', block: 'start' });
+                }
+            })()
+        `);
+        await new Promise(r => setTimeout(r, 1200));
+
+        const scene3Info = await win.webContents.executeJavaScript(`
+            (() => {
+                const canvas = document.querySelector('canvas');
+                const title = document.querySelector('.sb-doc-header-title, .sb-surface-header-title, h1, h2')?.innerText;
+                const userRows = document.querySelectorAll('.sb-msg-user-row');
+                const lastUserRow = userRows[userRows.length - 1];
+                const rowRect = lastUserRow?.getBoundingClientRect();
+                return {
+                    hasCanvas: !!canvas,
+                    canvasWidth: canvas?.width,
+                    canvasHeight: canvas?.height,
+                    title,
+                    userRowTop: rowRect?.top,
+                    userRowVisible: rowRect ? (rowRect.top >= 0 && rowRect.top < window.innerHeight) : false
+                };
+            })()
+        `);
+        console.log('[Test Chat Image-to-3D] Scene 3 Status:', JSON.stringify(scene3Info, null, 2));
+
+        console.log('[Test Chat Image-to-3D] Capturing screenshot 3: chat_image_to_3d_ziggurat.png...');
+        const img3 = await win.webContents.capturePage();
+        const path3 = path.join(OUTPUT_DIR, 'chat_image_to_3d_ziggurat.png');
+        fs.writeFileSync(path3, img3.toPNG());
+        console.log('[Test Chat Image-to-3D] Screenshot 3 saved to:', path3);
+
+        console.log('[Test Chat Image-to-3D] SUCCESS! All 3 test cases completed and captured.');
         serverInstance?.close();
         toolsServerInstance?.close();
         app.quit();

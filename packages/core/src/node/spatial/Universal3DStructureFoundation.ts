@@ -34,6 +34,10 @@ import { GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-typ
 import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 import { decodePng, encodePng, synthesizeProceduralPbr } from '../texture-processing';
 import { ContinuousBiophysicalFields } from '../../common/adaptive-material-types';
+import {
+  buildBabylonianZigguratStructure,
+  buildAlpineMatterhornStructure
+} from './ComplexProcedural3DGenerator';
 
 /**
  * Universal 3D Structure Foundation
@@ -1763,6 +1767,184 @@ export class Universal3DStructureFoundation {
   }
 
   /**
+   * Factory: Create high-complexity Babylonian Ziggurat & Astrolabe Observatory structure
+   * adhering to the 70-20-10 geometric form hierarchy and biophysical PBR materials.
+   */
+  public static createBabylonianZigguratComplex(options?: {
+    name?: string;
+    numViews?: number;
+    pointDensity?: number;
+  }): Universal3DStructureFoundation {
+    const data = buildBabylonianZigguratStructure(options);
+    const struct = new Universal3DStructureFoundation({
+      name: options?.name || 'babylonian_ziggurat_observatory',
+      anchor: data.anchor,
+      mesh: data.mesh,
+      materials: data.materials,
+      textures: data.textures,
+      cameras: data.cameras,
+      boundingBox: data.boundingBox,
+      tags: ['ancient_near_east', 'ziggurat', 'astronomy', 'photorealistic', 'canonical-anchor']
+    });
+    struct.resynchronizePoints(options?.pointDensity ?? 5000);
+    return struct;
+  }
+
+  /**
+   * Factory: Create high-complexity Alpine Matterhorn Mountain Valley & Swiss Chalet Hamlet structure
+   * with continuous FBM heightfield, knife-edge arêtes, glacial cirques, river canyon, and timber chalets.
+   */
+  public static createAlpineMatterhornComplex(options?: {
+    name?: string;
+    numViews?: number;
+    pointDensity?: number;
+  }): Universal3DStructureFoundation {
+    const data = buildAlpineMatterhornStructure(options);
+    const struct = new Universal3DStructureFoundation({
+      name: options?.name || 'alpine_matterhorn_valley',
+      anchor: data.anchor,
+      mesh: data.mesh,
+      materials: data.materials,
+      textures: data.textures,
+      cameras: data.cameras,
+      boundingBox: data.boundingBox,
+      tags: ['alpine', 'mountain', 'matterhorn', 'timber_chalet', 'photorealistic', 'canonical-anchor']
+    });
+    struct.resynchronizePoints(options?.pointDensity ?? 6000);
+    return struct;
+  }
+
+  /**
+   * Generates a comprehensive project manifest markdown document detailing
+   * the 6 synchronized layers of the Universal 3D Structure Foundation:
+   * 1. Solid Surface Mesh & Geometric Telemetry
+   * 2. Calibrated Observation Rig & Optics
+   * 3. Biophysical PBR Materials & Texture Maps
+   * 4. Point Constellation & 3DGS Gaussian Seeds
+   * 5. Bounding Envelopes & Flight Clearance Hulls
+   * 6. Geodetic Spatial Anchor & Real-World Solar Ephemeris
+   */
+  public generateManifestMarkdown(): string {
+    const vertCount = this.mesh.vertexCount || (this.mesh.vertices.length / 3);
+    const triCount = this.mesh.triangleCount || (this.mesh.indices ? this.mesh.indices.length / 3 : 0);
+    const submeshCount = this.materials.length || 1;
+    const box = this.boundingBox;
+    const dimX = (box.max[0] - box.min[0]).toFixed(2);
+    const dimY = (box.max[1] - box.min[1]).toFixed(2);
+    const dimZ = (box.max[2] - box.min[2]).toFixed(2);
+    const volume = ((box.max[0] - box.min[0]) * (box.max[1] - box.min[1]) * (box.max[2] - box.min[2])).toFixed(2);
+
+    const anchorSection = this.anchor
+      ? `| Parameter | Value |
+| :--- | :--- |
+| **Latitude** | \`${this.anchor.lat.toFixed(6)}°N\` |
+| **Longitude** | \`${this.anchor.lng.toFixed(6)}°E\` |
+| **Elevation ASL** | \`${this.anchor.elevationMeters.toFixed(2)} m\` |
+| **Heading** | \`${this.anchor.headingDeg !== undefined ? this.anchor.headingDeg.toFixed(1) + '°' : 'N/A'}\` |
+| **Landmark / Place** | \`${this.anchor.formattedAddress || this.anchor.placeId || 'Canonical Geodetic Anchor'}\` |`
+      : `_No real-world geodetic anchor assigned (Local Tangent Plane coordinates)._`;
+
+    const materialsRows = this.materials.length > 0
+      ? this.materials.map(m => {
+          const col = m.baseColorFactor ? `[${m.baseColorFactor.map(v => v.toFixed(2)).join(', ')}]` : '[1.00, 1.00, 1.00, 1.00]';
+          const met = m.metallicFactor !== undefined ? m.metallicFactor.toFixed(2) : '0.10';
+          const rough = m.roughnessFactor !== undefined ? m.roughnessFactor.toFixed(2) : '0.50';
+          const tex = [
+            m.baseColorTextureId ? 'Albedo' : null,
+            m.normalTextureId ? 'Normal' : null,
+            m.metallicRoughnessTextureId ? 'ORM' : null,
+            m.occlusionTextureId ? 'AO' : null
+          ].filter(Boolean).join(', ') || 'Procedural Factor';
+          return `| **${m.name}** | \`${col}\` | \`${rough}\` | \`${met}\` | \`${m.alphaMode || 'OPAQUE'}\` | ${tex} |`;
+        }).join('\n')
+      : `| **DefaultMaterial** | \`[1.00, 1.00, 1.00, 1.00]\` | \`0.50\` | \`0.10\` | \`OPAQUE\` | Procedural Factor |`;
+
+    const texturesRows = this.textures.length > 0
+      ? this.textures.map(t => `| \`${t.id}\` | \`${t.type}\` | \`${t.width}x${t.height}\` | \`${t.mimeType}\` | \`${t.buffer ? (t.buffer.length / 1024).toFixed(1) + ' KB' : 'N/A'}\` |`).join('\n')
+      : `_No external raster texture files attached (procedural shader shading)._`;
+
+    return `# 3D Scene Project Manifest: ${this.name}
+
+> **Universal 3D Structure Foundation (Single Source of Truth)**
+> Canonical 6-layer geometric blueprint for real-time WebGL, 3DGS, neural video diffusion, and photogrammetry.
+
+---
+
+## 1. Scene Overview & Identification
+- **Project Structure ID**: \`${this.id}\`
+- **Asset Name**: \`${this.name}\`
+- **Creation Provenance**: \`Universal3DStructureFoundation (C++20 Astra / Biophysical PBR)\`
+- **Standardized glTF Export**: \`${this.name}.glb\`
+
+---
+
+## 2. Geodetic Spatial Anchor (WGS-84)
+${anchorSection}
+
+---
+
+## 3. Geometric Telemetry (Solid Metric Mesh)
+| Metric | Measurement | Description |
+| :--- | :--- | :--- |
+| **Vertices** | \`${vertCount.toLocaleString()}\` | Total 3D position, normal, and UV coordinates |
+| **Triangles** | \`${triCount.toLocaleString()}\` | Indexed triangular facets |
+| **Submeshes** | \`${submeshCount}\` | Distinct material slots and drawing groups |
+| **Bounding Box Extents** | \`${dimX}m × ${dimY}m × ${dimZ}m\` | Metric AABB width ($X$), height ($Y$), depth ($Z$) |
+| **Enclosed Volume** | \`${volume} m³\` | Spatial bounding volume |
+| **Centroid** | \`[${((box.min[0] + box.max[0]) * 0.5).toFixed(2)}, ${((box.min[1] + box.max[1]) * 0.5).toFixed(2)}, ${((box.min[2] + box.max[2]) * 0.5).toFixed(2)}]\` | Center of bounding box in local coordinates |
+
+---
+
+## 4. Calibrated Observation Rig (Cameras)
+- **Calibrated Poses**: \`${this.cameras.length}\` viewpoints
+- **Camera Intrinsics**:
+  - Optical Center: \`(c_x = 0.5, c_y = 0.5)\` (Principal point normalized)
+  - Focal Length: \`f = 50.0mm\` equivalent pinhole optics
+  - Vertical Field of View: \`~44.0° - 55.0°\`
+  - Format Support: Nerfstudio \`transforms.json\` (OpenGL) + COLMAP \`cameras.txt\` / \`images.txt\` (OpenCV)
+
+---
+
+## 5. Biophysical PBR Materials & Textures
+| Material Name | Base Color | Roughness | Metallic | Alpha Mode | Texture Maps |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+${materialsRows}
+
+### Texture Map Assets
+${typeof texturesRows === 'string' && texturesRows.startsWith('|') ? '| Texture ID | Type | Dimensions | Format | File Size |\n| :--- | :--- | :--- | :--- | :--- |\n' + texturesRows : texturesRows}
+
+---
+
+## 6. Surface Point Constellation (3DGS Splatting Seeds)
+- **Synchronized Points**: \`${this.points.length.toLocaleString()}\` points
+- **Point Attributes**: Metric position \`(x, y, z)\`, unit normal \`(nx, ny, nz)\`, bilinear-sampled RGB \`(r, g, b)\`, and surface roughness.
+- **Resynchronization Method**: Area-weighted barycentric interpolation across triangle faces with bilinear UV texture sampling (\`resynchronizePoints()\`).
+
+---
+
+## 7. Bounding Envelopes & Flight Clearance Hulls
+- **Oriented Bounding Box (OBB)**: Computed via cyclic Jacobi eigenvalue decomposition on covariance tensor.
+- **Convex Hull / Safety Bumper**: Inflated safety margin for collision avoidance, camera flight choreography, and physics simulation.
+
+---
+
+## 8. Exported Project File Tree
+\`\`\`
+projects/${this.name}/
+├── ${this.name}.glb                  # Standard binary glTF 2.0 with embedded PBR textures
+├── ${this.name}_manifest.md         # Comprehensive project manifest (this document)
+├── scene_manifest.md                # Canonical alias for IDE project discovery
+├── ${this.name}_video_blockout.json # Catmull-Rom trajectory for Google Omni / Veo (<VIDEO_REF_0>)
+├── ${this.name}_collision_hull.obj  # Wavefront OBJ collision envelope
+├── ${this.name}_spatial.geojson     # RFC 7946 geodetic camera frustum footprints
+├── transforms.json                  # Nerfstudio camera observation rig
+├── sparse_pcd.ply                   # 3DGS Gaussian splat point cloud
+└── textures/                        # Extracted PBR texture maps (Albedo, ORM, Normal)
+\`\`\`
+`;
+  }
+
+  /**
    * Export all formats at once.
    */
   public exportAll(options?: { collisionOptions?: CollisionEnvelopeOptions }): MultiFormatExportResult {
@@ -1772,18 +1954,20 @@ export class Universal3DStructureFoundation {
     const collisionHull = this.toCollisionHull(options?.collisionOptions);
     const geoJson = this.toGeoJson();
     const glbBuffer = this.toGlbBuffer();
+    const manifestMarkdown = this.generateManifestMarkdown();
     const textureFiles: Record<string, string> = {};
 
     return {
       structureId: this.id,
       name: this.name,
-      formatsExported: ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson'],
+      formatsExported: ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson', 'manifest'],
       colmap,
       nerfstudio,
       videoBlockout,
       collisionHull,
       geoJson,
       glbBuffer,
+      manifestMarkdown,
       textureFiles
     };
   }
@@ -1793,7 +1977,7 @@ export class Universal3DStructureFoundation {
    */
   public async exportToDisk(
     outputDir: string,
-    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson'],
+    formats: Target3DFormat[] = ['glb', 'colmap', 'nerfstudio', 'video_blockout', 'collision_hull', 'geojson', 'manifest'],
     options?: { collisionOptions?: CollisionEnvelopeOptions }
   ): Promise<MultiFormatExportResult> {
     if (!fs.existsSync(outputDir)) {
@@ -1807,6 +1991,17 @@ export class Universal3DStructureFoundation {
       const glbPath = path.join(outputDir, `${this.name}.glb`);
       fs.writeFileSync(glbPath, result.glbBuffer!);
       filesWritten.glb = glbPath;
+    }
+
+    // Always generate manifest markdown in project directory
+    if (formats.includes('manifest') || true) {
+      const manifestPath = path.join(outputDir, `${this.name}_manifest.md`);
+      fs.writeFileSync(manifestPath, result.manifestMarkdown!, 'utf8');
+      filesWritten.manifest = manifestPath;
+
+      const genericManifestPath = path.join(outputDir, 'scene_manifest.md');
+      fs.writeFileSync(genericManifestPath, result.manifestMarkdown!, 'utf8');
+      filesWritten.genericManifest = genericManifestPath;
     }
 
     if (this.textures.length > 0) {

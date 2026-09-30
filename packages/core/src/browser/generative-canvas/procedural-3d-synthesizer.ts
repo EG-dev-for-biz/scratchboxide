@@ -95,6 +95,7 @@ export type Procedural3DTheme =
     | 'city'
     | 'highway_overpass'
     | 'alpine_valley'
+    | 'ziggurat'
     | 'solar-system'
     | 'mars_rover'
     | 'molecular'
@@ -128,6 +129,11 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         // -0.975. Alpine Matterhorn Peak / Glacial Valley / Mountain Horn / Swiss Chalets
         if (/\b(?:matterhorn|alpine|glacial\s*valley|pyramidal\s*horn|chalets?|swiss\s*alps?|mountain\s*horn)\b/i.test(text)) {
             return 'alpine_valley';
+        }
+
+        // -0.972. Babylonian Ziggurat Observatory / Etemenanki Mesopotamian Temple
+        if (/\b(?:ziggurat|etemenanki|babylon(?:ian)?|mesopotami(?:a|an)|astrolabe\s*observatory|mudbrick\s*temple)\b/i.test(text)) {
+            return 'ziggurat';
         }
 
         // -0.97. 3D Gaussian Splatting / 3DGS / Radiance Fields / 4D Avatar
@@ -2933,6 +2939,104 @@ int main() {
         };
     }
 
+    if (theme === 'ziggurat') {
+        const title = '3D Babylonian Ziggurat Observatory (Etemenanki)';
+        const subtitle = 'Monumental 3-tiered mudbrick ziggurat with buttressed facades, axial staircase, lapis lazuli terrace, gold sanctuary, and astrolabe observatory.';
+        const customScript = `
+const ziggurat = createBabylonianZigguratScene(scene, THREE, {
+    showAstrolabe: true,
+    showBraziers: true
+});
+
+onFrame((time, delta) => {
+    if (ziggurat && ziggurat.userData && typeof ziggurat.userData.update === 'function') {
+        ziggurat.userData.update(time, delta);
+    }
+});
+`;
+        return {
+            title,
+            subtitle,
+            worldBranch: 'history/babylon-ziggurat-observatory',
+            sceneType: 'ziggurat',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 15000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [-16, 14, 22],
+                target: [0, 4, 0],
+                fov: 50
+            },
+            environment: {
+                skybox: 'dusk',
+                lighting: 'dusk',
+                ground: true
+            },
+            customMeshes: [
+                {
+                    id: 'mesh-ziggurat-foundation',
+                    name: 'Mudbrick Foundation Terrace',
+                    type: 'box',
+                    position: [0, 4, 0],
+                    scale: [48, 8, 48],
+                    material: { color: 0xbaa47a, roughness: 0.88, metalness: 0.02 }
+                },
+                {
+                    id: 'mesh-lapis-terrace',
+                    name: 'Glazed Lapis Lazuli Terrace',
+                    type: 'box',
+                    position: [0, 11, 0],
+                    scale: [34, 6, 34],
+                    material: { color: 0x143485, roughness: 0.22, metalness: 0.15 }
+                },
+                {
+                    id: 'mesh-gold-sanctuary',
+                    name: 'Gold High Sanctuary',
+                    type: 'box',
+                    position: [0, 21.5, 0],
+                    scale: [10, 5, 8],
+                    material: { color: 0xd4af37, roughness: 0.26, metalness: 0.92 }
+                }
+            ],
+            customScript,
+            code: customScript,
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: `#include "scratchbox_engine.hpp"
+#include <iostream>
+
+int main() {
+    using namespace scratchbox::geometry;
+    using namespace scratchbox::math;
+
+    ScratchboxMesh ziggurat("Babylonian_Ziggurat_Observatory");
+    // Multi-tiered stepped massing with axial stairway and astrolabe plinth
+    MarchingCubesVolume grid(128, 128, 128, Bounds3D({-30, 0, -30}, {30, 30, 30}));
+    grid.sampleSDF([](Vec3 p) {
+        float t1 = sdBox(p - Vec3(0, 4, 0), Vec3(24, 4, 24));
+        float t2 = sdBox(p - Vec3(0, 11, 0), Vec3(17, 3, 17));
+        float t3 = sdBox(p - Vec3(0, 16.5f, 0), Vec3(11, 2.5f, 11));
+        return std::min({t1, t2, t3});
+    });
+
+    ziggurat.polygonize(grid);
+    ziggurat.recomputeSmoothNormals();
+    scratchbox::io::GlbWriter::streamChunk(ziggurat, "Babylonian_Ziggurat_Observatory");
+    return 0;
+}`
+            }
+        };
+    }
+
     if (theme === 'city') {
         const isCyberpunk = /cyberpunk|neon|future/i.test(prompt) || /cyberpunk|neon|future/i.test(docTitle);
         const title = isCyberpunk
@@ -4195,223 +4299,496 @@ export function createAlpineMatterhornScene(
     const group = new THREE.Group();
     group.name = 'alpine-matterhorn-scene';
 
-    // Materials
-    const darkGneissRockMat = new THREE.MeshStandardMaterial({
-        color: 0x373b42,
-        roughness: 0.9,
-        metalness: 0.15,
-        flatShading: true
-    });
-    const paleStrataMat = new THREE.MeshStandardMaterial({
-        color: 0x787d88,
+    // 1. Shading Materials
+    const terrainMaterial = new THREE.MeshStandardMaterial({
+        vertexColors: true,
         roughness: 0.88,
-        metalness: 0.1,
+        metalness: 0.08,
         flatShading: true
-    });
-    const snowCapMat = new THREE.MeshStandardMaterial({
-        color: 0xf8fafc,
-        roughness: 0.95,
-        metalness: 0.02,
-        flatShading: true
-    });
-    const meadowGrassMat = new THREE.MeshStandardMaterial({
-        color: 0x3b5723,
-        roughness: 0.92,
-        metalness: 0.05
     });
     const riverWaterMat = new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
-        roughness: 0.12,
+        roughness: 0.10,
         metalness: 0.15,
         transparent: true,
         opacity: 0.88
     });
+    const stonePlinthMat = new THREE.MeshStandardMaterial({
+        color: 0x696d75,
+        roughness: 0.92,
+        metalness: 0.05
+    });
     const chaletTimberMat = new THREE.MeshStandardMaterial({
-        color: 0x452818,
-        roughness: 0.85
+        color: 0x4a2e1b,
+        roughness: 0.85,
+        metalness: 0.02
     });
     const chaletRoofMat = new THREE.MeshStandardMaterial({
-        color: 0x292524,
-        roughness: 0.75
+        color: 0x242220,
+        roughness: 0.78,
+        metalness: 0.04
+    });
+    const balconyTimberMat = new THREE.MeshStandardMaterial({
+        color: 0x5c3a21,
+        roughness: 0.82
     });
     const windowGlowMat = new THREE.MeshStandardMaterial({
         color: 0xfef08a,
         emissive: 0xf59e0b,
-        emissiveIntensity: 0.8
+        emissiveIntensity: 0.9
     });
-    const foliageMat = new THREE.MeshStandardMaterial({
+    const coniferFoliageMat = new THREE.MeshStandardMaterial({
         color: 0x14361e,
-        roughness: 0.9
+        roughness: 0.92,
+        metalness: 0.02
     });
-    const trunkMat = new THREE.MeshStandardMaterial({
+    const coniferTrunkMat = new THREE.MeshStandardMaterial({
         color: 0x3e2723,
-        roughness: 0.9
+        roughness: 0.90
     });
 
-    // 1. Alpine Valley Floor & Rolling Forehills
-    const valleyFloor = new THREE.Mesh(new THREE.PlaneGeometry(160, 160, 48, 48), meadowGrassMat);
-    valleyFloor.rotation.x = -Math.PI / 2;
-    valleyFloor.name = 'Alpine Valley Floor';
-    const posAttr = valleyFloor.geometry.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-        const vx = posAttr.getX(i);
-        const vy = posAttr.getY(i);
-        const undulation = Math.sin(vx * 0.08) * Math.cos(vy * 0.08) * 1.5;
-        const slope = Math.max(0, (Math.abs(vy) - 25) * 0.25);
-        posAttr.setZ(i, undulation + slope);
-    }
-    valleyFloor.geometry.computeVertexNormals();
-    group.add(valleyFloor);
+    // 2. Continuous FBM Heightfield Elevation Function
+    function getElevation(x: number, z: number): number {
+        // Meandering river depression
+        const xr = 10.0 * Math.sin(z * 0.045) + 3.0 * Math.cos(z * 0.10);
+        const distRiver = Math.abs(x - xr);
+        const riverTrough = -3.2 * Math.exp(-Math.pow(distRiver / 5.0, 2));
 
-    // 2. Glacial River / Alpine Canyon
-    const river = new THREE.Mesh(new THREE.PlaneGeometry(160, 8, 32, 4), riverWaterMat);
-    river.rotation.x = -Math.PI / 2;
-    river.position.set(0, 0.15, 0);
-    group.add(river);
+        // Rolling moraine forehills
+        const moraine = (Math.sin(x * 0.05) * Math.cos(z * 0.05) * 2.2) +
+                        (Math.sin(x * 0.11 + 1.0) * Math.cos(z * 0.09 + 0.5) * 1.1);
 
-    const bankL = new THREE.Mesh(new THREE.BoxGeometry(160, 0.4, 1.2), darkGneissRockMat);
-    bankL.position.set(0, 0.2, 4.4);
-    group.add(bankL);
-    const bankR = new THREE.Mesh(new THREE.BoxGeometry(160, 0.4, 1.2), darkGneissRockMat);
-    bankR.position.set(0, 0.2, -4.4);
-    group.add(bankR);
+        // Flanking canyon walls
+        const canyonL = Math.max(0, (-x - 20.0) * 0.55);
+        const canyonR = Math.max(0, (x - 22.0) * 0.55);
 
-    // 3. The Matterhorn Pyramidal Horn (Hero Mountain)
-    const matterhornGroup = new THREE.Group();
-    matterhornGroup.name = 'Matterhorn Pyramidal Horn';
-    matterhornGroup.position.set(0, 0, -55);
-
-    const basePyramid = new THREE.Mesh(new THREE.ConeGeometry(42, 26, 4), darkGneissRockMat);
-    basePyramid.position.set(0, 13, 0);
-    basePyramid.rotation.y = Math.PI / 4;
-    matterhornGroup.add(basePyramid);
-
-    const midStrata = new THREE.Mesh(new THREE.ConeGeometry(28, 22, 4), paleStrataMat);
-    midStrata.position.set(0, 24, 0);
-    midStrata.rotation.y = Math.PI / 4 + 0.05;
-    matterhornGroup.add(midStrata);
-
-    const summitHorn = new THREE.Mesh(new THREE.ConeGeometry(15, 20, 4), darkGneissRockMat);
-    summitHorn.position.set(0, 36, 0);
-    summitHorn.rotation.y = Math.PI / 4;
-    matterhornGroup.add(summitHorn);
-
-    const snowCap = new THREE.Mesh(new THREE.ConeGeometry(11, 14, 4), snowCapMat);
-    snowCap.position.set(-0.8, 38.5, 0.5);
-    snowCap.rotation.y = Math.PI / 4;
-    snowCap.scale.set(1.02, 1.02, 1.02);
-    matterhornGroup.add(snowCap);
-
-    const hornliRidge = new THREE.Mesh(new THREE.BoxGeometry(6, 18, 24), darkGneissRockMat);
-    hornliRidge.position.set(14, 12, 10);
-    hornliRidge.rotation.set(-0.4, 0.5, -0.3);
-    matterhornGroup.add(hornliRidge);
-
-    const zmuttRidge = new THREE.Mesh(new THREE.BoxGeometry(6, 16, 24), darkGneissRockMat);
-    zmuttRidge.position.set(-14, 11, 10);
-    zmuttRidge.rotation.set(-0.4, -0.5, 0.3);
-    matterhornGroup.add(zmuttRidge);
-
-    group.add(matterhornGroup);
-
-    // 4. Secondary Background Mountain Ranges
-    const leftRange = new THREE.Mesh(new THREE.ConeGeometry(32, 28, 4), darkGneissRockMat);
-    leftRange.position.set(-52, 14, -45);
-    leftRange.rotation.y = 0.3;
-    group.add(leftRange);
-
-    const rightRange = new THREE.Mesh(new THREE.ConeGeometry(36, 30, 4), paleStrataMat);
-    rightRange.position.set(54, 15, -42);
-    rightRange.rotation.y = -0.4;
-    group.add(rightRange);
-
-    // 5. Traditional Swiss Chalet Village
-    const chaletPositions = [
-        { x: -16, z: 18, rot: 0.2 },
-        { x: -8, z: 28, rot: -0.15 },
-        { x: 14, z: 20, rot: -0.4 },
-        { x: 24, z: 32, rot: 0.3 }
-    ];
-
-    for (let c = 0; c < chaletPositions.length; c++) {
-        const cp = chaletPositions[c];
-        const chalet = new THREE.Group();
-        chalet.name = `Swiss Chalet ${c + 1}`;
-
-        const foundation = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.2, 5.2), paleStrataMat);
-        foundation.position.y = 0.6;
-        chalet.add(foundation);
-
-        const walls = new THREE.Mesh(new THREE.BoxGeometry(6.0, 3.2, 4.8), chaletTimberMat);
-        walls.position.y = 2.8;
-        chalet.add(walls);
-
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(5.2, 2.2, 4), chaletRoofMat);
-        roof.position.y = 5.2;
-        roof.rotation.y = Math.PI / 4;
-        roof.scale.set(1.2, 1.0, 0.95);
-        chalet.add(roof);
-
-        const balcony = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.8, 0.8), chaletTimberMat);
-        balcony.position.set(0, 3.0, 2.6);
-        chalet.add(balcony);
-
-        const winFront1 = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), windowGlowMat);
-        winFront1.position.set(-1.4, 2.8, 2.42);
-        chalet.add(winFront1);
-        const winFront2 = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), windowGlowMat);
-        winFront2.position.set(1.4, 2.8, 2.42);
-        chalet.add(winFront2);
-
-        const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 0.8), paleStrataMat);
-        chimney.position.set(1.6, 5.2, -0.6);
-        chalet.add(chimney);
-
-        chalet.position.set(cp.x, 0, cp.z);
-        chalet.rotation.y = cp.rot;
-        group.add(chalet);
-    }
-
-    // 6. Subalpine Conifer Fir Trees
-    const treePositions = [
-        [-22, 12], [-26, 18], [-18, 32], [-30, 26], [-12, 10], [-5, 12],
-        [8, 14], [18, 12], [28, 16], [32, 24], [22, 38], [12, 32],
-        [-35, 4], [-40, 12], [38, 6], [42, 14], [-10, 42], [4, 44]
-    ];
-
-    for (let t = 0; t < treePositions.length; t++) {
-        const [tx, tz] = treePositions[t];
-        const tree = new THREE.Group();
-        tree.name = `Alpine Fir Tree ${t + 1}`;
-
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 1.6, 8), trunkMat);
-        trunk.position.y = 0.8;
-        tree.add(trunk);
-
-        const scaleF = 0.8 + (t % 3) * 0.25;
-        for (let tier = 0; tier < 3; tier++) {
-            const tierMesh = new THREE.Mesh(
-                new THREE.ConeGeometry((2.2 - tier * 0.45) * scaleF, 1.8 * scaleF, 7),
-                foliageMat
-            );
-            tierMesh.position.y = (1.8 + tier * 1.1) * scaleF;
-            tree.add(tierMesh);
+        // Towering Matterhorn Horn Peak (z < 10)
+        let mountain = 0;
+        if (z < 12) {
+            const peakX = -8.0;
+            const peakZ = -48.0;
+            const dx = x - peakX;
+            const dz = z - peakZ;
+            const distPeak = Math.sqrt(dx * dx + dz * dz);
+            const angle = Math.atan2(dz, dx);
+            const ridgeMod = Math.pow(Math.abs(Math.sin(angle * 2.0)), 0.7) * 0.35 + 0.65;
+            const hornProfile = Math.max(0, 1.0 - distPeak / 54.0);
+            const peakElev = Math.pow(hornProfile, 2.2) * 44.0 * ridgeMod;
+            const rockNoise = (Math.sin(x * 0.22) * Math.cos(z * 0.22) + Math.sin(x * 0.45 + z * 0.35) * 0.5) * 3.2 * hornProfile;
+            mountain = peakElev + rockNoise;
         }
 
-        tree.position.set(tx, 0, tz);
-        group.add(tree);
+        return riverTrough + moraine + canyonL + canyonR + mountain;
     }
 
-    const alpineSun = new THREE.DirectionalLight(0xfff7ed, 2.2);
-    alpineSun.position.set(45, 65, 30);
+    // 3. Dense Continuous Terrain Plane
+    const terrainGeo = new THREE.PlaneGeometry(150, 150, 96, 96);
+    terrainGeo.rotateX(-Math.PI / 2);
+    const posAttr = terrainGeo.attributes.position;
+    const colors = new Float32Array(posAttr.count * 3);
+
+    for (let i = 0; i < posAttr.count; i++) {
+        const vx = posAttr.getX(i);
+        const vz = posAttr.getZ(i);
+        const vy = getElevation(vx, vz);
+        posAttr.setY(i, vy);
+
+        // Continuous Vertex Color Classification
+        const xr = 10.0 * Math.sin(vz * 0.045) + 3.0 * Math.cos(vz * 0.10);
+        const distRiver = Math.abs(vx - xr);
+
+        let r = 0.24, g = 0.38, b = 0.14; // Meadow green
+        if (vy > 25.0) {
+            // Glacial Snow
+            r = 0.96; g = 0.98; b = 1.0;
+        } else if (vy > 12.0) {
+            // Dark Gneiss Rock Cliff
+            const rockBlend = (vy - 12.0) / 13.0;
+            r = 0.23 + rockBlend * 0.18;
+            g = 0.24 + rockBlend * 0.18;
+            b = 0.26 + rockBlend * 0.20;
+        } else if (distRiver < 4.5) {
+            // Riverbank gravel
+            r = 0.40; g = 0.42; b = 0.45;
+        } else if (vy > 4.0) {
+            // Subalpine pasture
+            r = 0.32; g = 0.46; b = 0.18;
+        }
+
+        colors[i * 3 + 0] = r;
+        colors[i * 3 + 1] = g;
+        colors[i * 3 + 2] = b;
+    }
+
+    terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    terrainGeo.computeVertexNormals();
+    const terrainMesh = new THREE.Mesh(terrainGeo, terrainMaterial);
+    terrainMesh.name = 'Matterhorn Alpine Valley Continuous Terrain';
+    terrainMesh.castShadow = true;
+    terrainMesh.receiveShadow = true;
+    group.add(terrainMesh);
+
+    // 4. Glacial River Ribbon
+    const riverSegments = 64;
+    const riverGeo = new THREE.PlaneGeometry(8, 150, 4, riverSegments);
+    riverGeo.rotateX(-Math.PI / 2);
+    const rPos = riverGeo.attributes.position;
+    for (let i = 0; i < rPos.count; i++) {
+        const rz = rPos.getZ(i);
+        const xr = 10.0 * Math.sin(rz * 0.045) + 3.0 * Math.cos(rz * 0.10);
+        rPos.setX(i, rPos.getX(i) + xr);
+        rPos.setY(i, getElevation(xr, rz) + 0.35);
+    }
+    riverGeo.computeVertexNormals();
+    const riverMesh = new THREE.Mesh(riverGeo, riverWaterMat);
+    riverMesh.name = 'Glacial Meltwater River';
+    group.add(riverMesh);
+
+    // 5. Authentic Swiss Chalet Hamlet (5 chalets with real pitched gables & balconies)
+    const chalets = [
+        { x: -16.0, z: 22.0, rot: 0.22, scale: 1.0 },
+        { x: -24.0, z: 32.0, rot: 0.45, scale: 0.9 },
+        { x: -8.0,  z: 36.0, rot: -0.15, scale: 0.85 },
+        { x: 18.0,  z: 24.0, rot: -0.38, scale: 1.05 },
+        { x: 26.0,  z: 34.0, rot: 0.18, scale: 0.95 }
+    ];
+
+    for (let c = 0; c < chalets.length; c++) {
+        const ch = chalets[c];
+        const chaletGroup = new THREE.Group();
+        chaletGroup.name = `Swiss Alpine Chalet ${c + 1}`;
+        const groundY = getElevation(ch.x, ch.z);
+        chaletGroup.position.set(ch.x, groundY, ch.z);
+        chaletGroup.rotation.y = ch.rot;
+        chaletGroup.scale.set(ch.scale, ch.scale, ch.scale);
+
+        // Stone Foundation Plinth
+        const plinth = new THREE.Mesh(new THREE.BoxGeometry(7.0, 1.4, 5.8), stonePlinthMat);
+        plinth.position.y = 0.7;
+        plinth.castShadow = true;
+        chaletGroup.add(plinth);
+
+        // Timber Log Walls
+        const walls = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3.2, 5.2), chaletTimberMat);
+        walls.position.y = 3.0;
+        walls.castShadow = true;
+        chaletGroup.add(walls);
+
+        // Overhanging Pitched Gable Roof (Two angled planes with 1.2m eaves)
+        const roofGroup = new THREE.Group();
+        roofGroup.position.y = 4.6;
+
+        const roofSlopeL = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.22, 6.6), chaletRoofMat);
+        roofSlopeL.position.set(-1.7, 0.9, 0);
+        roofSlopeL.rotation.z = 0.52; // ~30 degree pitch
+        roofSlopeL.castShadow = true;
+        roofGroup.add(roofSlopeL);
+
+        const roofSlopeR = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.22, 6.6), chaletRoofMat);
+        roofSlopeR.position.set(1.7, 0.9, 0);
+        roofSlopeR.rotation.z = -0.52;
+        roofSlopeR.castShadow = true;
+        roofGroup.add(roofSlopeR);
+
+        // Timber Ridge Beam
+        const ridgeBeam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 6.8), chaletTimberMat);
+        ridgeBeam.position.set(0, 1.95, 0);
+        roofGroup.add(ridgeBeam);
+        chaletGroup.add(roofGroup);
+
+        // Cantilevered Timber Balcony & Railing
+        const balconyFloor = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.2, 1.2), balconyTimberMat);
+        balconyFloor.position.set(0, 3.1, 3.0);
+        chaletGroup.add(balconyFloor);
+
+        const balconyRail = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.8, 0.08), balconyTimberMat);
+        balconyRail.position.set(0, 3.6, 3.6);
+        chaletGroup.add(balconyRail);
+
+        // Stone Chimney with Flue
+        const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.0, 0.9), stonePlinthMat);
+        chimney.position.set(1.8, 5.2, -1.0);
+        chimney.castShadow = true;
+        chaletGroup.add(chimney);
+
+        // Glowing Amber Multi-Pane Windows
+        const win1 = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), windowGlowMat);
+        win1.position.set(-1.6, 3.2, 2.62);
+        chaletGroup.add(win1);
+        const win2 = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), windowGlowMat);
+        win2.position.set(1.6, 3.2, 2.62);
+        chaletGroup.add(win2);
+        const winSide = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), windowGlowMat);
+        winSide.position.set(-3.22, 3.2, 0);
+        winSide.rotation.y = -Math.PI / 2;
+        chaletGroup.add(winSide);
+
+        group.add(chaletGroup);
+    }
+
+    // 6. Subalpine Conifer Fir Trees (24 trees with stratified tiered foliage)
+    const treeCoords = [
+        [-20, 14], [-26, 20], [-14, 28], [-32, 28], [-10, 14], [-4, 16],
+        [10, 16], [16, 14], [26, 18], [30, 26], [20, 36], [14, 30],
+        [-34, 6], [-38, 14], [36, 8], [40, 16], [-8, 44], [6, 46],
+        [-18, 48], [24, 48], [-28, 40], [32, 42], [-2, 26], [4, 22]
+    ];
+
+    for (let t = 0; t < treeCoords.length; t++) {
+        const [tx, tz] = treeCoords[t];
+        const treeGroup = new THREE.Group();
+        treeGroup.name = `Alpine Conifer Tree ${t + 1}`;
+        const groundY = getElevation(tx, tz);
+        treeGroup.position.set(tx, groundY, tz);
+
+        const treeScale = 0.85 + (t % 4) * 0.2;
+        treeGroup.scale.set(treeScale, treeScale, treeScale);
+
+        // Tapered Trunk
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.4, 2.2, 8), coniferTrunkMat);
+        trunk.position.y = 1.1;
+        trunk.castShadow = true;
+        treeGroup.add(trunk);
+
+        // 3-Tier Foliage Cones
+        for (let tier = 0; tier < 3; tier++) {
+            const coneR = 2.4 - tier * 0.55;
+            const coneH = 2.0;
+            const foliage = new THREE.Mesh(new THREE.ConeGeometry(coneR, coneH, 8), coniferFoliageMat);
+            foliage.position.y = 2.2 + tier * 1.3;
+            foliage.castShadow = true;
+            treeGroup.add(foliage);
+        }
+
+        group.add(treeGroup);
+    }
+
+    // 7. Atmospheric Lighting & Diurnal Sun
+    const alpineSun = new THREE.DirectionalLight(0xfff7ed, 2.4);
+    alpineSun.position.set(45, 68, 35);
     alpineSun.castShadow = true;
     group.add(alpineSun);
 
-    const mountainSkyFill = new THREE.HemisphereLight(0x93c5fd, 0x4a5568, 0.85);
-    group.add(mountainSkyFill);
+    const ambientSkylight = new THREE.HemisphereLight(0x93c5fd, 0x3d5a22, 0.88);
+    group.add(ambientSkylight);
 
     group.userData.update = (time: number, _delta: number) => {
-        riverWaterMat.opacity = 0.85 + Math.sin(time * 2.5) * 0.05;
+        riverWaterMat.opacity = 0.85 + Math.sin(time * 2.2) * 0.05;
+    };
+
+    scene.add(group);
+    return group;
+}
+
+/**
+ * Procedural Babylonian Ziggurat Observatory (Etemenanki).
+ * Monumental 3-tiered mudbrick ziggurat with axial staircase, lapis lazuli terrace,
+ * beaten gold sanctuary, and summit astrolabe observatory.
+ */
+export function createBabylonianZigguratScene(
+    scene: any,
+    THREE: any,
+    _options?: {
+        showAstrolabe?: boolean;
+        showBraziers?: boolean;
+    }
+): any {
+    const group = new THREE.Group();
+    group.name = 'babylonian-ziggurat-scene';
+
+    // Materials
+    const mudbrickMat = new THREE.MeshStandardMaterial({
+        color: 0xbaa47a,
+        roughness: 0.88,
+        metalness: 0.02
+    });
+    const lapisMat = new THREE.MeshStandardMaterial({
+        color: 0x143485,
+        roughness: 0.22,
+        metalness: 0.15
+    });
+    const goldMat = new THREE.MeshStandardMaterial({
+        color: 0xd4af37,
+        roughness: 0.26,
+        metalness: 0.92
+    });
+    const bronzeMat = new THREE.MeshStandardMaterial({
+        color: 0x8c6d3b,
+        roughness: 0.44,
+        metalness: 0.82
+    });
+    const emberMat = new THREE.MeshStandardMaterial({
+        color: 0xff4500,
+        emissive: 0xff3300,
+        emissiveIntensity: 1.5
+    });
+    const desertSandMat = new THREE.MeshStandardMaterial({
+        color: 0xd6b885,
+        roughness: 0.95,
+        metalness: 0.0
+    });
+
+    // 1. Alluvial Desert Base Plane
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160, 32, 32), desertSandMat);
+    ground.rotateX(-Math.PI / 2);
+    ground.receiveShadow = true;
+    group.add(ground);
+
+    // 2. 3-Tiered Battered Ziggurat Terraces
+    // Tier 1: Foundation Terrace (48m x 48m x 8m)
+    const tier1 = new THREE.Mesh(new THREE.BoxGeometry(48, 8, 48), mudbrickMat);
+    tier1.position.y = 4.0;
+    tier1.castShadow = true;
+    tier1.receiveShadow = true;
+    group.add(tier1);
+
+    // Buttresses around Tier 1
+    const buttressMat = mudbrickMat;
+    for (let side = 0; side < 4; side++) {
+        for (let b = -3; b <= 3; b++) {
+            if (side === 2 && Math.abs(b) <= 1) continue; // Opening for axial staircase
+            const buttress = new THREE.Mesh(new THREE.BoxGeometry(1.6, 8.2, 1.2), buttressMat);
+            const dist = 24.3;
+            const offset = b * 6.0;
+            if (side === 0) buttress.position.set(offset, 4.0, -dist);
+            else if (side === 1) buttress.position.set(dist, 4.0, offset);
+            else if (side === 2) buttress.position.set(offset, 4.0, dist);
+            else buttress.position.set(-dist, 4.0, offset);
+            buttress.castShadow = true;
+            group.add(buttress);
+        }
+    }
+
+    // Tier 2: Glazed Lapis Lazuli Middle Terrace (34m x 34m x 6m)
+    const tier2 = new THREE.Mesh(new THREE.BoxGeometry(34, 6, 34), lapisMat);
+    tier2.position.y = 11.0;
+    tier2.castShadow = true;
+    tier2.receiveShadow = true;
+    group.add(tier2);
+
+    // Tier 3: Summit Platform (22m x 22m x 5m)
+    const tier3 = new THREE.Mesh(new THREE.BoxGeometry(22, 5, 22), mudbrickMat);
+    tier3.position.y = 16.5;
+    tier3.castShadow = true;
+    tier3.receiveShadow = true;
+    group.add(tier3);
+
+    // 3. Axial Ceremonial Staircase (28 steps from plain to Tier 2)
+    const stepCount = 28;
+    for (let s = 0; s < stepCount; s++) {
+        const progress = s / stepCount;
+        const step = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.45, 1.2), mudbrickMat);
+        step.position.set(0, progress * 13.5 + 0.22, 24.0 + (1.0 - progress) * 20.0);
+        step.castShadow = true;
+        group.add(step);
+    }
+
+    // Flanking Wing Staircases converging on central landing
+    for (let s = 0; s < 16; s++) {
+        const p = s / 16;
+        // Left Wing
+        const stepL = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.45, 3.5), mudbrickMat);
+        stepL.position.set(-18.0 + p * 14.0, p * 7.5 + 0.22, 25.0);
+        stepL.castShadow = true;
+        group.add(stepL);
+        // Right Wing
+        const stepR = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.45, 3.5), mudbrickMat);
+        stepR.position.set(18.0 - p * 14.0, p * 7.5 + 0.22, 25.0);
+        stepR.castShadow = true;
+        group.add(stepR);
+    }
+
+    // 4. Gold High Sanctuary Shrine (Seat of Marduk)
+    const sanctuaryGroup = new THREE.Group();
+    sanctuaryGroup.name = 'Gold High Sanctuary';
+    sanctuaryGroup.position.set(0, 19.0, 0);
+
+    const sanctuaryWalls = new THREE.Mesh(new THREE.BoxGeometry(10.0, 5.0, 8.0), goldMat);
+    sanctuaryWalls.position.y = 2.5;
+    sanctuaryWalls.castShadow = true;
+    sanctuaryGroup.add(sanctuaryWalls);
+
+    const sanctuaryCornice = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.6, 8.8), goldMat);
+    sanctuaryCornice.position.y = 5.2;
+    sanctuaryGroup.add(sanctuaryCornice);
+
+    // Recessed Portal
+    const portal = new THREE.Mesh(new THREE.BoxGeometry(2.4, 3.6, 0.4), lapisMat);
+    portal.position.set(0, 1.8, 4.02);
+    sanctuaryGroup.add(portal);
+    group.add(sanctuaryGroup);
+
+    // 5. Summit Astrolabe Observatory
+    const astrolabeGroup = new THREE.Group();
+    astrolabeGroup.name = 'Mesopotamian Astrolabe Observatory';
+    astrolabeGroup.position.set(0, 24.8, 0);
+
+    // 12-sided Dodecagonal Observation Plinth
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 3.8, 0.6, 12), lapisMat);
+    astrolabeGroup.add(plinth);
+
+    // Interlocking Bronze Armillary Rings
+    const ringEquatorial = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.08, 8, 36), bronzeMat);
+    ringEquatorial.rotation.x = Math.PI / 2;
+    ringEquatorial.position.y = 1.4;
+    astrolabeGroup.add(ringEquatorial);
+
+    const ringMeridian = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.08, 8, 36), bronzeMat);
+    ringMeridian.rotation.y = Math.PI / 2;
+    ringMeridian.position.y = 1.4;
+    astrolabeGroup.add(ringMeridian);
+
+    // Central Polished Celestial Sphere
+    const celestialSphere = new THREE.Mesh(new THREE.SphereGeometry(0.85, 24, 24), goldMat);
+    celestialSphere.position.y = 1.4;
+    astrolabeGroup.add(celestialSphere);
+    group.add(astrolabeGroup);
+
+    // 6. Corner Fire Braziers (4 bronze tripods with glowing embers)
+    const brazierPositions = [
+        [-20, 8.0, -20],
+        [20,  8.0, -20],
+        [-20, 8.0, 20],
+        [20,  8.0, 20]
+    ];
+
+    const brazierLights: any[] = [];
+    for (let b = 0; b < brazierPositions.length; b++) {
+        const [bx, by, bz] = brazierPositions[b];
+        const brazier = new THREE.Group();
+        brazier.position.set(bx, by, bz);
+
+        const bowl = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 0.6, 0.8, 12), bronzeMat);
+        bowl.position.y = 1.2;
+        brazier.add(bowl);
+
+        const flame = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), emberMat);
+        flame.position.y = 1.6;
+        brazier.add(flame);
+
+        const brazierLight = new THREE.PointLight(0xff6600, 1.8, 18);
+        brazierLight.position.y = 2.0;
+        brazier.add(brazierLight);
+        brazierLights.push(brazierLight);
+
+        group.add(brazier);
+    }
+
+    // 7. Golden-Hour Diurnal Lighting
+    const duskSun = new THREE.DirectionalLight(0xffb366, 2.6);
+    duskSun.position.set(-35, 28, 45);
+    duskSun.castShadow = true;
+    group.add(duskSun);
+
+    const ambientTwilight = new THREE.HemisphereLight(0x738cb0, 0xc4a47c, 0.75);
+    group.add(ambientTwilight);
+
+    group.userData.update = (time: number, _delta: number) => {
+        astrolabeGroup.rotation.y = time * 0.15;
+        ringMeridian.rotation.x = time * 0.25;
+        for (let l = 0; l < brazierLights.length; l++) {
+            brazierLights[l].intensity = 1.6 + Math.sin(time * 6.0 + l) * 0.4;
+        }
     };
 
     scene.add(group);

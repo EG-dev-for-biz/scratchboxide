@@ -351,9 +351,9 @@ export function synthesize3DFallback(text: string, lower: string, activeArtifact
         return mutateExisting3DScene(text, lower, baseArtifact!);
     }
 
-    const isMutationDirective = /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
-    const isTopicChange = !isMutationDirective && /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field|overpass|viaduct|highway|interchange|matterhorn|alpine|chalet/i.test(text);
-    const isNewSceneDirective = !isMutationDirective && /\b(?:build|make|create|generate|render|new|fresh|start)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
+    const isMutationDirective = !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
+    const isTopicChange = !isMutationDirective && /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field|overpass|viaduct|highway|interchange|matterhorn|alpine|chalet|ziggurat|etemenanki|babylon|mesopotamia/i.test(text);
+    const isNewSceneDirective = !isMutationDirective && /\b(?:build|make|create|generate|render|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
     const isFreshSceneRequest = !isExisting3D || (!isMutationDirective && (isNewSceneDirective || isTopicChange));
 
     if (isFreshSceneRequest) {
