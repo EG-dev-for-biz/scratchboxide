@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Trains an animatable Gaussian performer avatar on 4DAnyone multi-view diffusion output.
+"""Trains an animatable Gaussian performer avatar on multi-view diffusion output.
 
 Inputs
-  --body        gvhmr_body.json from scripts/run_gvhmr.py --motion-dir (needs world_from_4danyone)
-  --result-dir  4DAnyone result dir (cameras.json + videos/dense/*.mp4)
+  --body        gvhmr_body.json from scripts/run_gvhmr.py --motion-dir (needs world_from_multiview)
+  --result-dir  Multi-view result dir (cameras.json + videos/dense/*.mp4)
   --source      the original performer clip (gvhmr_input.mp4), supervised through GVHMR's camera
   --out-dir     writes human_4dgs.ply (Scratchbox codec: SH-DC colour, w-first quats, 4-bone weights),
                 refine_report.json and qa/*.png
@@ -138,7 +138,7 @@ def write_ply(path: Path, pos, rgb, opacity, scales, quats_wxyz, normals, bone_i
     ], 1)
     header = '\n'.join([
         'ply', 'format ascii 1.0', 'comment scratchbox_encoding color=sh_dc quat=wxyz',
-        'comment generator refine_multiview_avatar (4DAnyone multi-view + GVHMR)',
+        'comment generator refine_multiview_avatar (Multi-view + GVHMR)',
         f'element vertex {len(pos)}',
         *[f'property float {p}' for p in ['x', 'y', 'z', 'nx', 'ny', 'nz', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
                                           'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3']],
@@ -157,7 +157,7 @@ def main() -> int:
     ap.add_argument('--result-dir', required=True)
     ap.add_argument('--source', required=True)
     ap.add_argument('--out-dir', required=True)
-    ap.add_argument('--birefnet', required=True, help='BiRefNet model dir (4DAnyone models/birefnet)')
+    ap.add_argument('--birefnet', required=True, help='BiRefNet model dir (models/birefnet)')
     ap.add_argument('--fdanyone-root', required=True)
     ap.add_argument('--num-body', type=int, default=80000)
     ap.add_argument('--num-hull', type=int, default=60000)
@@ -191,7 +191,7 @@ def main() -> int:
     # ---- cameras & images ----------------------------------------------------------------
     result = Path(args.result_dir)
     rig = json.load(open(result / 'cameras.json'))
-    world_from_4d = np.asarray(body['world_from_4danyone'])
+    world_from_4d = np.asarray(body.get('world_from_multiview', np.eye(4)))
     views = []
     for cam in rig['cameras']:
         c2w = world_from_4d @ np.asarray(cam['camera_to_world'])

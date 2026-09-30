@@ -30,10 +30,10 @@ import { VideoTo4DPerformerPipelineService } from '../src/node/spatial/VideoTo4D
 import { Dynamic4DGaussianSplatService } from '../src/node/3d-engine/Dynamic4DGaussianSplatService';
 import { PerformerPoseTrack, PoseLandmarkTuple } from '../src/node/spatial/PerformerPoseTrackService';
 import { GvhmrBody, GvhmrBodyService } from '../src/node/spatial/GvhmrBodyService';
-import { FourDAnyoneCloudService } from '../src/node/spatial/FourDAnyoneCloudService';
+import { MultiviewCloudService } from '../src/node/spatial/MultiviewCloudService';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
-const DEMOS_DIR = path.join(REPO_ROOT, 'models/4danyone/demos');
+const DEMOS_DIR = path.join(REPO_ROOT, 'models/performer_4dgs/demos');
 const FEATURED_DEMOS = ['10331522', '2785536', '5435720', '15443888', '5885633'];
 const CANONICAL: Vec3[] = new HumanoidMotionBridgeService().getDefaultCanonicalJoints();
 
@@ -369,7 +369,7 @@ describe('Viewer skinning parity', () => {
     });
 });
 
-describe('Featured 4DAnyone demo avatars', () => {
+describe('Featured Performer demo avatars', () => {
     const service = new Dynamic4DGaussianSplatService(REPO_ROOT);
 
     for (const id of FEATURED_DEMOS) {
@@ -414,10 +414,10 @@ describe('Featured 4DAnyone demo avatars', () => {
     }
 });
 
-describe('4DAnyone multi-view cloud job', () => {
+describe('Multi-view cloud job', () => {
     it('launches an internal-IP A100 VM with the job metadata and falls through stocked-out zones', () => {
         const calls: string[][] = [];
-        const service = new FourDAnyoneCloudService((cmd, args) => {
+        const service = new MultiviewCloudService((cmd, args) => {
             calls.push([cmd, ...args]);
             if (cmd === 'gcloud' && args.includes('--zone=us-central1-a')) {
                 throw Object.assign(new Error('fail'), { stderr: 'ZONE_RESOURCE_POOL_EXHAUSTED' });
@@ -430,20 +430,20 @@ describe('4DAnyone multi-view cloud job', () => {
         expect(create).toContain('--no-address');
         expect(create).toContain('--accelerator=type=nvidia-tesla-a100,count=1');
         expect(create.find(a => a.startsWith('--metadata='))).toContain('views-per-layer=6,layer-pitches=[0,30]');
-        expect(calls.some(c => c[0] === 'gsutil' && c.at(-1) === 'gs://scratchbox-canvas-4danyone-artifacts/jobs/test-job/input.mp4')).toBe(true);
+        expect(calls.some(c => c[0] === 'gsutil' && c.at(-1) === 'gs://scratchbox-canvas-multiview-artifacts/jobs/test-job/input.mp4')).toBe(true);
     });
 
     it('executes the Cloud Run GPU job with per-run environment overrides by default', () => {
         const calls: string[][] = [];
-        const service = new FourDAnyoneCloudService((cmd, args) => {
+        const service = new MultiviewCloudService((cmd, args) => {
             calls.push([cmd, ...args]);
-            return cmd === 'gcloud' ? 'sbx-4danyone-multiview-abc12\n' : '';
+            return cmd === 'gcloud' ? 'sbx-multiview-diffusion-abc12\n' : '';
         });
         const job = service.submit({ videoPath: path.join(DEMOS_DIR, '2785536', 'canonical_frame.jpg'), jobId: 'cr-job', layerPitches: [0, 30], reuseFrom: 'old-job', stage: 'refine' });
         expect(job.backend).toBe('cloudrun');
-        expect(job.execution).toBe('sbx-4danyone-multiview-abc12');
+        expect(job.execution).toBe('sbx-multiview-diffusion-abc12');
         const exec = calls.find(c => c[0] === 'gcloud')!;
-        expect(exec.slice(1, 5)).toEqual(['run', 'jobs', 'execute', 'sbx-4danyone-multiview']);
+        expect(exec.slice(1, 5)).toEqual(['run', 'jobs', 'execute', 'sbx-multiview-diffusion']);
         expect(exec.find(a => a.startsWith('--update-env-vars='))).toBe(
             '--update-env-vars=^;^JOB_ID=cr-job;CLIP=performer;VIEWS=24;PITCHES=[0,30];ITERS=30000;REUSE_FROM=old-job;STAGE=refine;REFINE_MAX_SECONDS=2800;VIEWS_PER_GROUP=4');
         service.submit({ videoPath: path.join(DEMOS_DIR, '2785536', 'canonical_frame.jpg'), jobId: 'cr-job-2', viewsPerGroup: 6 });
@@ -466,10 +466,10 @@ describe('4DAnyone multi-view cloud job', () => {
             position: [0, 1, 0], colorRgb: [0.5, 0.5, 0.5], opacity: 0.9, scale: [0.01, 0.01, 0.01], quaternion: [0, 0, 0, 1],
             boneIndices: [0, 0, 0, 0], boneWeights: [1, 0, 0, 0]
         }]));
-        new FourDAnyoneCloudService(() => '').install(download, avatar, 'demo');
+        new MultiviewCloudService(() => '').install(download, avatar, 'demo');
         const motion = JSON.parse(fs.readFileSync(path.join(avatar, 'motion.json'), 'utf-8'));
         expect(motion.motion_source).toBe('gvhmr');
-        expect(motion.avatar_source).toBe('4danyone_multiview_refined');
+        expect(motion.avatar_source).toBe('multiview_refined');
         expect(decodeGaussianPly(fs.readFileSync(path.join(avatar, 'human_4dgs.ply'), 'utf-8')).gaussians.length).toBe(1);
 
         // A longer local GVHMR track of the same clip drives the avatar on the trained body's bone lengths.
@@ -477,7 +477,7 @@ describe('4DAnyone multi-view cloud job', () => {
         const longBody: GvhmrBody = { ...body, fps: 24, num_frames: 3, rest_joints: scaled,
             frames: [0, 1, 2].map(f => ({ joints: scaled.map(j => [j[0] + f * 0.1, j[1], j[2]] as Vec3) })) };
         fs.writeFileSync(path.join(root, 'long_body.json'), JSON.stringify(longBody));
-        new FourDAnyoneCloudService(() => '').install(download, avatar, 'demo', { motionBodyPath: path.join(root, 'long_body.json') });
+        new MultiviewCloudService(() => '').install(download, avatar, 'demo', { motionBodyPath: path.join(root, 'long_body.json') });
         const long = JSON.parse(fs.readFileSync(path.join(avatar, 'motion.json'), 'utf-8'));
         expect(long.frames.length).toBe(3);
         expect(long.fps).toBe(24);

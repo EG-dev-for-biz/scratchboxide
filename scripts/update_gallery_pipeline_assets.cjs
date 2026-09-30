@@ -51,15 +51,15 @@ if (texturedDist) {
   texturedDist.videoSources = {
     comparison: {
       local: "videos/google_tiles_textured_vs_omni_comparison.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_textured_vs_omni_comparison.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_textured_vs_omni_comparison.mp4"
     },
     synthesis: {
       local: "videos/google_tiles_omni_restyled.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_omni_restyled.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_omni_restyled.mp4"
     },
     blockout: {
       local: "videos/google_tiles_textured_blockout_camera.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_textured_blockout_camera.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_textured_blockout_camera.mp4"
     }
   };
   console.log('✅ Updated texturedDist (s4d_google_tiles_textured_01) with textured assets.');
@@ -104,15 +104,15 @@ if (clayDist) {
   clayDist.videoSources = {
     comparison: {
       local: "videos/google_tiles_clay_vs_omni_real_comparison.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_clay_vs_omni_comparison.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_clay_vs_omni_comparison.mp4"
     },
     synthesis: {
       local: "videos/google_tiles_omni_restyled.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_omni_restyled.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_omni_restyled.mp4"
     },
     blockout: {
       local: "videos/google_tiles_clay_blockout_camera.mp4",
-      gcs: "https://scratchbox-canvas-4danyone-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_clay_blockout_camera.mp4"
+      gcs: "https://scratchbox-canvas-multiview-artifacts.storage.googleapis.com/s4d_viewer/videos/google_tiles_clay_blockout_camera.mp4"
     }
   };
   console.log('✅ Updated clayDist (s4d_google_tiles_clay_01) with clay assets.');

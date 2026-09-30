@@ -42,12 +42,12 @@ export interface RetargetOptions {
 }
 
 /**
- * Bridges MediaPipe 33 pose landmarks to 4DAnyone 22 SB-Human skeletal joint representation.
+ * Bridges MediaPipe 33 pose landmarks to 22 SB-Human skeletal joint representation.
  */
 export class HumanoidMotionBridgeService {
 
     /**
-     * Converts a full MediaPipe video motion track into a 4DAnyone HumanoidMotionData object.
+     * Converts a full MediaPipe video motion track into a SB-Human HumanoidMotionData object.
      */
     public retargetVideoMotionTrack(
         trackResult: VideoMotionTrackResult,
@@ -311,7 +311,7 @@ export class HumanoidMotionBridgeService {
     }
 
     /**
-     * Maps 33 MediaPipe 3D landmarks into 22 SB-Human / 4DAnyone joints in Y-up metric space.
+     * Maps 33 MediaPipe 3D landmarks into 22 SB-Human joints in Y-up metric space.
      */
     public convertLandmarksToSbHuman22(
         lm: MediaPipeLandmark[],
@@ -319,7 +319,7 @@ export class HumanoidMotionBridgeService {
     ): Array<[number, number, number]> {
         const IDX = MEDIAPIPE_LANDMARK_INDEX;
 
-        // Convert MediaPipe (X=right, Y=down, Z=depth) to Three.js/4DAnyone metric space (X=right, Y=up, Z=depth)
+        // Convert MediaPipe (X=right, Y=down, Z=depth) to Three.js metric space (X=right, Y=up, Z=depth)
         const pt = (index: number): [number, number, number] => {
             const p = lm[index] || { x: 0, y: 0, z: 0 };
             return [p.x * scale, -p.y * scale, -p.z * scale];

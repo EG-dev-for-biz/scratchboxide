@@ -5,7 +5,7 @@ import { PerformerSurfaceMeshService } from '../packages/core/src/node/spatial/P
 // Rebuilds the studio's "Photoreal Surface" mesh (public/models/humanoid_<id>.glb) for each demo from its
 // fitted SMPL-X body and trained splats. Usage: npx vite-node scripts/build_performer_surfaces.ts [ids...]
 
-const demosDir = path.resolve(process.cwd(), 'models/4danyone/demos');
+const demosDir = path.resolve(process.cwd(), 'models/performer_4dgs/demos');
 const only = process.argv.slice(2);
 const ids = fs.readdirSync(demosDir).filter(id =>
     (only.length === 0 || only.includes(id))

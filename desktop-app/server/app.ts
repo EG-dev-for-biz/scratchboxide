@@ -504,7 +504,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/tools', createToolsRouter(exportedToolsStore, toolsHost, toolsPort));
     app.use('/api/models', createModelsRouter());
     app.use('/api/performer/pipeline', createPerformerRouter(allowedWorkspaceRoots));
-    app.use('/api/models/4danyone/pipeline', createPerformerRouter(allowedWorkspaceRoots));
+    app.use('/api/models/performer/pipeline', createPerformerRouter(allowedWorkspaceRoots));
     app.use('/api/comfyui', createComfyRouter());
     app.post('/api/capabilities/resolve', handleCapabilitiesResolve);
 

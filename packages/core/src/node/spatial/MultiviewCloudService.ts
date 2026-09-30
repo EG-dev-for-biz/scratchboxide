@@ -14,9 +14,9 @@ import { execFileSync } from 'child_process';
 import { retargetSegmentDirections } from '../../common/humanoid-skinning';
 import { GvhmrBodyService } from './GvhmrBodyService';
 
-export interface FourDAnyoneJobOptions {
+export interface MultiviewJobOptions {
     videoPath: string;
-    /** 'cloudrun' (default): the sbx-4danyone-multiview Cloud Run GPU job; 'gce': a one-off A100 VM. */
+    /** 'cloudrun' (default): the sbx-multiview-diffusion Cloud Run GPU job; 'gce': a one-off A100 VM. */
     backend?: 'cloudrun' | 'gce';
     jobId?: string;
     viewsPerLayer?: number;
@@ -39,14 +39,14 @@ export interface FourDAnyoneJobOptions {
     acceleratorType?: string;
 }
 
-export interface FourDAnyoneJobStatus {
+export interface MultiviewJobStatus {
     state: 'submitted' | 'setup' | 'inference' | 'staged' | 'export' | 'refine' | 'upload' | 'done' | 'failed' | 'unknown';
     detail?: string;
     time?: string;
     instance?: string;
 }
 
-export interface FourDAnyoneJob {
+export interface MultiviewJob {
     jobId: string;
     bucket: string;
     jobUri: string;
@@ -59,10 +59,10 @@ export interface FourDAnyoneJob {
     execution?: string;
 }
 
-const DEFAULT_BUCKET = 'scratchbox-canvas-4danyone-artifacts';
+const DEFAULT_BUCKET = 'scratchbox-canvas-multiview-artifacts';
 const IMAGE_FAMILY = 'common-cu129-ubuntu-2204-nvidia-580';
-const JOB_SCRIPTS = ['scripts/run_gvhmr.py', 'scripts/refine_multiview_avatar.py', 'scripts/sbx_skinning.py', 'deploy/4danyone-cloudrun/entrypoint.sh'];
-const CLOUD_RUN_JOB = 'sbx-4danyone-multiview';
+const JOB_SCRIPTS = ['scripts/run_gvhmr.py', 'scripts/refine_multiview_avatar.py', 'scripts/sbx_skinning.py', 'deploy/multiview-cloudrun/entrypoint.sh'];
+const CLOUD_RUN_JOB = 'sbx-multiview-diffusion';
 const CLOUD_RUN_REGION = 'us-central1';
 
 function findRepoFile(relative: string): string {
@@ -78,9 +78,9 @@ function findRepoFile(relative: string): string {
 }
 
 /**
- * Runs the 4DAnyone multi-view diffusion stage plus Scratchbox's animatable Gaussian refinement on GPU,
- * either as the Cloud Run job built by deploy/4danyone-cloudrun (default) or on a one-off GCE A100 VM
- * (deploy/4danyone-gpu/startup.sh), and installs the trained avatar. Both share the GCS job layout
+ * Runs the multi-view diffusion stage plus Scratchbox's animatable Gaussian refinement on GPU,
+ * either as the Cloud Run job built by deploy/multiview-cloudrun (default) or on a one-off GCE A100 VM
+ * (deploy/multiview-gpu/startup.sh), and installs the trained avatar. Both share the GCS job layout
  * gs://<bucket>/jobs/<id>/{input.mp4, scripts/, status.json, log.txt, stage/, output/}.
  */
 export type CommandRunner = (cmd: string, args: string[], input?: string) => string;
@@ -88,12 +88,12 @@ export type CommandRunner = (cmd: string, args: string[], input?: string) => str
 const execRunner: CommandRunner = (cmd, args, input) =>
     execFileSync(cmd, args, { encoding: 'utf-8', input, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
 
-export class FourDAnyoneCloudService {
+export class MultiviewCloudService {
     constructor(private readonly run: CommandRunner = execRunner) {}
 
-    public submit(options: FourDAnyoneJobOptions): FourDAnyoneJob {
+    public submit(options: MultiviewJobOptions): MultiviewJob {
         const bucket = options.bucket || DEFAULT_BUCKET;
-        const jobId = options.jobId || `4da-${path.basename(options.videoPath, path.extname(options.videoPath))}-${Date.now().toString(36)}`
+        const jobId = options.jobId || `mv-${path.basename(options.videoPath, path.extname(options.videoPath))}-${Date.now().toString(36)}`
             .toLowerCase().replace(/[^a-z0-9-]/g, '-');
         const jobUri = `gs://${bucket}/jobs/${jobId}`;
         const clip = 'performer';
@@ -140,7 +140,7 @@ export class FourDAnyoneCloudService {
                     '--no-address',
                     '--max-run-duration=6h', '--instance-termination-action=DELETE',
                     `--metadata=${metadata},install-nvidia-driver=True`,
-                    `--metadata-from-file=startup-script=${findRepoFile('deploy/4danyone-gpu/startup.sh')}`,
+                    `--metadata-from-file=startup-script=${findRepoFile('deploy/multiview-gpu/startup.sh')}`,
                     '--quiet'
                 ]);
                 return { jobId, bucket, zone, instance, jobUri, backend: 'gce' };
@@ -149,18 +149,18 @@ export class FourDAnyoneCloudService {
                 if (!/ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources|unavailable|stockout/i.test(lastError)) break;
             }
         }
-        throw new Error(`Could not start the 4DAnyone GPU VM: ${lastError.trim().split('\n').slice(-3).join(' ')}`);
+        throw new Error(`Could not start the Multi-View GPU VM: ${lastError.trim().split('\n').slice(-3).join(' ')}`);
     }
 
-    public status(job: Pick<FourDAnyoneJob, 'jobUri'>): FourDAnyoneJobStatus {
+    public status(job: Pick<MultiviewJob, 'jobUri'>): MultiviewJobStatus {
         try {
-            return JSON.parse(this.run('gsutil', ['cat', `${job.jobUri}/status.json`])) as FourDAnyoneJobStatus;
+            return JSON.parse(this.run('gsutil', ['cat', `${job.jobUri}/status.json`])) as MultiviewJobStatus;
         } catch {
             return { state: 'unknown' };
         }
     }
 
-    public async waitForCompletion(job: FourDAnyoneJob, onStatus?: (s: FourDAnyoneJobStatus) => void, pollMs = 60000): Promise<FourDAnyoneJobStatus> {
+    public async waitForCompletion(job: MultiviewJob, onStatus?: (s: MultiviewJobStatus) => void, pollMs = 60000): Promise<MultiviewJobStatus> {
         let last = '';
         for (;;) {
             const s = this.status(job);
@@ -179,7 +179,7 @@ export class FourDAnyoneCloudService {
         }
     }
 
-    private cloudRunExecutionFailed(job: FourDAnyoneJob): boolean {
+    private cloudRunExecutionFailed(job: MultiviewJob): boolean {
         if (!job.execution) return false;
         try {
             const failed = this.run('gcloud', ['run', 'jobs', 'executions', 'describe', job.execution,
@@ -191,7 +191,7 @@ export class FourDAnyoneCloudService {
     }
 
     /** Best-effort: the VM's own service account typically lacks compute permissions to delete itself. */
-    public deleteInstance(job: Pick<FourDAnyoneJob, 'zone' | 'instance'>, instance?: string): void {
+    public deleteInstance(job: Pick<MultiviewJob, 'zone' | 'instance'>, instance?: string): void {
         if (!job.zone) return;
         const name = instance || job.instance;
         if (!name || !job.zone) return;
@@ -202,7 +202,7 @@ export class FourDAnyoneCloudService {
         }
     }
 
-    public download(job: Pick<FourDAnyoneJob, 'jobUri'>, destDir: string): string {
+    public download(job: Pick<MultiviewJob, 'jobUri'>, destDir: string): string {
         fs.mkdirSync(destDir, { recursive: true });
         this.run('gsutil', ['-q', '-m', 'cp', '-r', `${job.jobUri}/output/*`, destDir]);
         try {
@@ -216,10 +216,6 @@ export class FourDAnyoneCloudService {
     /**
      * Installs a downloaded job into an avatar directory: the trained PLY becomes human_4dgs.ply and
      * motion.json is regenerated from the same GVHMR body the Gaussians were trained against.
-     */
-    /**
-     * Installs a finished job into a demo directory. `motionBodyPath` (a longer local GVHMR track of the same
-     * clip) replaces 4DAnyone's 121-frame window, retargeted onto the trained body's bone lengths.
      */
     public install(downloadDir: string, avatarDir: string, clipId: string, options: { motionBodyPath?: string } = {}): void {
         const refinedPly = path.join(downloadDir, 'refined', 'human_4dgs.ply');
@@ -245,13 +241,13 @@ export class FourDAnyoneCloudService {
                     [f.joints[0][0] + shift[0], f.joints[0][1] + shift[1], f.joints[0][2] + shift[2]]) }))
             };
         }
-        const motion = { ...service.toMotion(driver, clipId), motion_source: 'gvhmr', avatar_source: '4danyone_multiview_refined' };
+        const motion = { ...service.toMotion(driver, clipId), motion_source: 'gvhmr', avatar_source: 'multiview_refined' };
         fs.writeFileSync(path.join(avatarDir, 'motion.json'), JSON.stringify(motion, null, 2));
         const report = path.join(downloadDir, 'refined', 'refine_report.json');
         if (fs.existsSync(report)) fs.copyFileSync(report, path.join(avatarDir, 'refine_report.json'));
     }
 
     public static defaultWorkDir(jobId: string): string {
-        return path.join(os.homedir(), '.cache/scratchbox/4danyone-jobs', jobId);
+        return path.join(os.homedir(), '.cache/scratchbox/multiview-jobs', jobId);
     }
 }

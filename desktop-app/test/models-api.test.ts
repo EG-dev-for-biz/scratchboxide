@@ -64,8 +64,8 @@ describe('Trained Models API Endpoints (/api/models)', () => {
         expect(data.summary.totalModels).toBeGreaterThan(0);
     });
 
-    it('3. should list 4DGS humanoid avatars on GET /api/models/4danyone/demos', async () => {
-        const res = await authedFetch('/api/models/4danyone/demos');
+    it('3. should list 4DGS humanoid avatars on GET /api/models/performer/demos', async () => {
+        const res = await authedFetch('/api/models/performer/demos');
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.success).toBe(true);
@@ -73,8 +73,8 @@ describe('Trained Models API Endpoints (/api/models)', () => {
         expect(Array.isArray(data.demos)).toBe(true);
     });
 
-    it('4. should retrieve specific avatar manifest on GET /api/models/4danyone/demos/2785536', async () => {
-        const res = await authedFetch('/api/models/4danyone/demos/2785536');
+    it('4. should retrieve specific avatar manifest on GET /api/models/performer/demos/2785536', async () => {
+        const res = await authedFetch('/api/models/performer/demos/2785536');
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.success).toBe(true);

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Skeletal Linear Blend Skinning for the 22-joint SB-Human body used by 4DAnyone avatars.
+ * Skeletal Linear Blend Skinning for the 22-joint SB-Human body used by performer 4DGS avatars.
  *
  * Joint positions in motion.json are absolute (world, Y-up, metres). Each joint j owns the
  * segment that starts at j; its rotation maps the canonical segment frame onto the posed one.

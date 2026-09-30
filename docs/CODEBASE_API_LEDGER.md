@@ -15,7 +15,7 @@ This ledger provides an exhaustive index of all completed APIs, services, operat
    - [Atmospheric Scattering, Ephemeris & Radiometric Lighting](#atmospheric-scattering-ephemeris--radiometric-lighting)
    - [Optics, Lens Distortion & Physical Cameras](#optics-lens-distortion--physical-cameras)
    - [6-DOF Camera Resection, Tracking & Matchmoving](#6-dof-camera-resection-tracking--matchmoving)
-   - [4D Gaussian Splatting & Parametric Humanoids (4DAnyone / SMPL-X)](#4d-gaussian-splatting--parametric-humanoids-4danyone--smpl-x)
+   - [4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SMPL-X)](#4d-gaussian-splatting--parametric-humanoids-performer-4dgs--smpl-x)
    - [Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)](#universal-tile-decomposition--mesh-engineering-utdra--uldra)
    - [PBR Materials, Texture Baking & Algorithmic UV Rewrapping](#pbr-materials-texture-baking--algorithmic-uv-rewrapping)
    - [Parametric Botany & Architecture (SB-Veggie & SB-Archi)](#parametric-botany--architecture-sb-veggie--sb-archi)
@@ -90,18 +90,18 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`VanishingPointHorizonEstimator`** (`packages/core/src/node/spatial/VanishingPointHorizonEstimator.ts`): 3-point vanishing perspective analysis for camera pitch and roll estimation.
 - **`TapirTrackingService`** (`packages/core/src/node/spatial/TapirTrackingService.ts`): Google DeepMind TAPIR dense point tracking integration for tracking physical feature points across frames.
 
-### 4D Gaussian Splatting & Parametric Humanoids (4DAnyone / SMPL-X)
+### 4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SMPL-X)
 - **`Dynamic4DGaussianSplatService`** (`packages/core/src/node/3d-engine/Dynamic4DGaussianSplatService.ts`):
   - 4-bone partition-of-unity Linear Blend Skinning (LBS) for dynamic Gaussians.
   - Streaming real-time deformed Gaussian point clouds at 60 FPS.
 - **`VideoTo4DPerformerPipelineService`** (`packages/core/src/node/spatial/VideoTo4DPerformerPipelineService.ts`):
-  - Ingests casual video, runs Wan2.2-TI2V-5B multi-view synthesis, BiRefNet silhouette extraction, visual-hull carving, and fits SMPL-X 22-joint canonical splat representations.
+  - Ingests casual video, runs Google Veo 2 / multi-view synthesis, BiRefNet silhouette extraction, visual-hull carving, and fits SMPL-X 22-joint canonical splat representations.
 - **`HumanoidMotionBridgeService`** (`packages/core/src/node/spatial/HumanoidMotionBridgeService.ts`): Retargets MediaPipe 33-landmark and GVHMR 3D kinematics into the canonical SMPL-X 22-joint kinematic skeleton.
 - **`GvhmrBodyService`** (`packages/core/src/node/spatial/GvhmrBodyService.ts`): 3D human body mesh and trajectory extraction from monocular video.
 - **`PerformerPoseTrackService`** (`packages/core/src/node/spatial/PerformerPoseTrackService.ts`): Trajectory filtering, velocity smoothing, and foot-sliding contact clamping.
 - **`SbHumanLoader`** (`packages/core/src/common/spatial/SbHumanLoader.ts`): Serializes/deserializes `.sbhuman` binary skinning assets (header, joints, 4-bone skin weights, canonical Gaussian positions).
 - **`CharacterClothingMorphology`** (`packages/core/src/node/spatial/CharacterClothingMorphology.ts`): Models loose clothing offset fields and drape deformation vectors.
-- **`FourDAnyoneCloudService`** (`packages/core/src/node/spatial/FourDAnyoneCloudService.ts`): Google Cloud Run NVIDIA L4 GPU dispatcher for dense neural 4D avatar training.
+- **`MultiviewCloudService`** (`packages/core/src/node/spatial/MultiviewCloudService.ts`): Google Cloud Run NVIDIA L4 GPU dispatcher for dense neural 4D avatar training.
 - **`gaussian-ply-codec`** (`packages/core/src/common/gaussian-ply-codec.ts`): High-speed binary PLY encoder/decoder supporting Spherical Harmonics degree 0-3, scale, rotation quaternions, and opacity.
 - **`NerfstudioDatasetService`** (`packages/core/src/node/spatial/NerfstudioDatasetService.ts`): Universal interchange serializer (`transforms.json`, `sparse_pcd.ply`, `images/`, `masks/`) with OpenGL $\leftrightarrow$ OpenCV coordinate transform matrices and visual-hull voxel carving.
 - **`SplatService`** & **`ImageToSplatService`** (`packages/core/src/node/3d-engine/splat-service.ts`): 3D Gaussian Splatting conversion, PLY optimization, and viewing utilities.
@@ -296,7 +296,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - `build_beautify_prompt`: Verbatim AI Beautify prompt template.
 - `build_neutral_performer_prompt`: Symmetrical A-pose flat studio prompt builder.
 - `build_frame_motivated_performer_prompt`: `<FIRST_FRAME>` syntax builder.
-- `generate_4danyone_multiview_video`: Wan2.2-TI2V-5B multi-view runner.
+- `generate_veo2_multiview_video`: Google Veo 2 / Multi-View runner.
 - `vfx_ffmpeg_quick_edit`: Fast trimming and concatenation.
 - `vfx_ffmpeg_extract_frames`: Extracts PNG keyframes.
 - `vfx_ffmpeg_split_screen`: Compiles synchronized side-by-side comparisons.
@@ -472,7 +472,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 | `/api/3d-engine/splat-studio` | `splatStudioRouter` | Gaussian splatting editing, bounding crops, PLY exporting |
 | `/api/tools` | `toolsRouter` | Dynamic tools registry, tool execution, schema reflection |
 | `/api/models` | `modelsRouter` | Catalog of trained neural models, checkpoints, and LoRAs |
-| `/api/performer/pipeline`, `/api/models/4danyone/pipeline` | `performerRouter` | End-to-end 4DAnyone 4D dynamic performer reconstruction pipeline |
+| `/api/performer/pipeline`, `/api/models/performer/pipeline` | `performerRouter` | End-to-end Performer 4D dynamic performer reconstruction pipeline |
 | `/api/comfyui` | `comfyRouter` | ComfyUI local & Cloud Run L4 GPU cluster bridge, queueing, dynamic nodes |
 | `/api/capabilities/resolve`| `resolveTaskCapability`| Two-tier capability assessor (Tier 1 Native vs Tier 2 ComfyUI) |
 

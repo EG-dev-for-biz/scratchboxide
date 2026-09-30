@@ -88,14 +88,14 @@ export interface Avatar4DGSDetails {
 function findRepoRoot(startDir: string = process.cwd()): string {
     let cur = startDir;
     while (cur !== path.dirname(cur)) {
-        if (fs.existsSync(path.join(cur, 'models/4danyone/demos'))) {
+        if (fs.existsSync(path.join(cur, 'models/performer_4dgs/demos'))) {
             return cur;
         }
         cur = path.dirname(cur);
     }
     let fromDirname = __dirname;
     while (fromDirname !== path.dirname(fromDirname)) {
-        if (fs.existsSync(path.join(fromDirname, 'models/4danyone/demos'))) {
+        if (fs.existsSync(path.join(fromDirname, 'models/performer_4dgs/demos'))) {
             return fromDirname;
         }
         fromDirname = path.dirname(fromDirname);
@@ -104,7 +104,7 @@ function findRepoRoot(startDir: string = process.cwd()): string {
 }
 
 /**
- * Service for runtime loading, skinning, and deformation of 4DAnyone 4D Gaussian Splatting avatars.
+ * Service for runtime loading, skinning, and deformation of Performer 4D Gaussian Splatting avatars.
  */
 export class Dynamic4DGaussianSplatService {
     private repoRoot: string;
@@ -117,11 +117,11 @@ export class Dynamic4DGaussianSplatService {
 
     constructor(customRepoRoot?: string) {
         this.repoRoot = customRepoRoot || findRepoRoot();
-        this.demosDir = path.join(this.repoRoot, 'models', '4danyone', 'demos');
+        this.demosDir = path.join(this.repoRoot, 'models', 'performer_4dgs', 'demos');
     }
 
     /**
-     * Lists all discovered 4DAnyone avatars in the local catalog.
+     * Lists all discovered Performer avatars in the local catalog.
      */
     public listAvatars(): Avatar4DGSDetails[] {
         const results: Avatar4DGSDetails[] = [];
@@ -185,7 +185,7 @@ export class Dynamic4DGaussianSplatService {
 
             results.push({
                 id: entry,
-                title: catEntry?.title || `4DAnyone Avatar ${entry}`,
+                title: catEntry?.title || `Performer Avatar ${entry}`,
                 numFrames,
                 fps,
                 numJoints,
@@ -218,7 +218,7 @@ export class Dynamic4DGaussianSplatService {
 
         const avatarDir = path.join(this.demosDir, avatarId);
         if (!fs.existsSync(avatarDir)) {
-            throw new Error(`4DAnyone avatar not found: ${avatarId} at ${avatarDir}`);
+            throw new Error(`Performer avatar not found: ${avatarId} at ${avatarDir}`);
         }
 
         const plyPath = path.join(avatarDir, 'human_4dgs.ply');
@@ -253,7 +253,7 @@ export class Dynamic4DGaussianSplatService {
         const avatars = this.listAvatars();
         const details = avatars.find(a => a.id === avatarId) || {
             id: avatarId,
-            title: `4DAnyone Avatar ${avatarId}`,
+            title: `Performer Avatar ${avatarId}`,
             numFrames: motion.num_frames,
             fps: motion.fps,
             numJoints: motion.num_joints,
@@ -454,7 +454,7 @@ export class Dynamic4DGaussianSplatService {
     }
 
     /**
-     * Converts a 4DAnyone avatar sequence into a Decomposed4DSplatScene compatible with GaussianSplat4DService.
+     * Converts a performer avatar sequence into a Decomposed4DSplatScene compatible with GaussianSplat4DService.
      */
     public exportDecomposed4DScene(avatarId: string, maxFrames: number = 30): Decomposed4DSplatScene {
         const { motion } = this.loadAvatar(avatarId);

@@ -56,7 +56,7 @@ function findRepoFile(relative: string): string | null {
 
 /**
  * Runs MediaPipe PoseLandmarker (scripts/track_performer_pose.py) over a performer video and
- * returns per-frame 33-landmark image + world poses used to drive 4DAnyone avatar motion.
+ * returns per-frame 33-landmark image + world poses used to drive performer avatar motion.
  */
 export class PerformerPoseTrackService {
     public static resolvePythonBinary(explicit?: string): string {

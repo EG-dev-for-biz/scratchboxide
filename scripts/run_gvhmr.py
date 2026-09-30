@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Runs GVHMR (zju3dv, SIGGRAPH Asia 2024) on a static-camera performer clip and exports the
-SMPL-X body the 4DAnyone performer pipeline builds its avatar from.
+SMPL-X body the performer pipeline builds its avatar from.
 
-Uses the GVHMR checkout and checkpoints vendored by ant-research/4DAnyone (third_party/GVHMR),
-plus 4DAnyone's PyTorch3D compatibility shim, so no CUDA or compiled PyTorch3D is needed:
+Uses the GVHMR checkout and checkpoints (third_party/GVHMR),
+plus PyTorch3D compatibility shim, so no CUDA or compiled PyTorch3D is needed:
 `.cuda()` calls are redirected to --device (mps or cpu).
 
 Output JSON (consumed by GvhmrBodyService):
@@ -19,14 +19,14 @@ Output JSON (consumed by GvhmrBodyService):
     "source_world_to_camera": 4x4    # static source camera (OpenCV) in the world below
     "frames": [{"joints": 22 x 3}]   # world: gravity Y-up, source camera looks along -Z, pelvis(0) at x=z=0
     "world_from_gvhmr": 4x4          # GVHMR global (gravity) frame -> the world above
-    "world_from_4danyone": 4x4       # only with --motion-dir: 4DAnyone canonical world -> the world above
+    "world_from_multiview": 4x4      # only with --motion-dir: canonical world -> the world above
   }
 
 Usage:
   run_gvhmr.py --video clip.mp4 --out-dir out/ [--device mps] [--max-frames 121]
-      [--gvhmr-root ~/dev/4DAnyone-main/third_party/GVHMR]
+      [--gvhmr-root ~/dev/third_party/GVHMR]
   run_gvhmr.py --video clip.mp4 --out-dir out/ --motion-dir data/gvhmr/results/<clip>
-      # export from 4DAnyone's saved GVHMR motion so avatar and generated cameras share one fit
+      # export from saved GVHMR motion so avatar and generated cameras share one fit
 """
 import argparse
 import contextlib
@@ -47,7 +47,7 @@ HAND_FACE_TO_BODY.update({j: 21 for j in range(40, 55)})  # right hand -> right 
 
 def default_gvhmr_root() -> Path:
     env = os.environ.get('SCRATCHBOX_GVHMR_ROOT')
-    return Path(env).expanduser() if env else Path('~/dev/4DAnyone-main/third_party/GVHMR').expanduser()
+    return Path(env).expanduser() if env else Path('third_party/GVHMR').expanduser()
 
 
 def trim_clip(video: Path, out: Path, max_frames: int) -> None:
@@ -99,7 +99,7 @@ def main() -> int:
     parser.add_argument('--device', default='mps')
     parser.add_argument('--max-frames', type=int, default=121)
     parser.add_argument('--gvhmr-root', default=None)
-    parser.add_argument('--motion-dir', default=None, help='4DAnyone GVHMR result dir (motion.safetensors) to export instead of inferring')
+    parser.add_argument('--motion-dir', default=None, help='GVHMR result dir (motion.safetensors) to export instead of inferring')
     args = parser.parse_args()
     # Resolve every path before chdir-ing into the GVHMR checkout.
     args.video = str(Path(args.video).expanduser().resolve())
@@ -145,7 +145,7 @@ def main() -> int:
 
     length, width, height = get_video_lwh(str(clip))
     if args.motion_dir:
-        pred = load_4danyone_motion(Path(args.motion_dir).expanduser().resolve())
+        pred = load_multiview_motion(Path(args.motion_dir).expanduser().resolve())
         K = pred['K_fullimg'][0]
     else:
         pred, K = infer(cfg, paths, clip, length, width, height, args.device)
@@ -153,7 +153,7 @@ def main() -> int:
     return 0
 
 
-def load_4danyone_motion(motion_dir: Path) -> dict:
+def load_multiview_motion(motion_dir: Path) -> dict:
     from safetensors.torch import load_file
     tensors = load_file(str(motion_dir / 'motion.safetensors'))
     group = lambda prefix: {k.split('.', 1)[1]: v for k, v in tensors.items() if k.startswith(prefix + '.')}
@@ -267,7 +267,7 @@ def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
         'source_world_to_camera': source_world_to_camera.tolist(),
     }
     if args.motion_dir:
-        result['world_from_4danyone'] = (world_from_gvhmr @ np.linalg.inv(fourdanyone_world_from_gvhmr(
+        result['world_from_multiview'] = (world_from_gvhmr @ np.linalg.inv(multiview_world_from_gvhmr(
             Path(args.motion_dir).expanduser().resolve(), root, fdanyone_root, args.device))).tolist()
     out_path = Path(args.out_dir).expanduser().resolve() / 'gvhmr_body.json'
     with open(out_path, 'w') as f:
@@ -275,11 +275,11 @@ def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
     print(json.dumps({'frames': int(length), 'output': str(out_path), 'device': args.device}))
 
 
-def fourdanyone_world_from_gvhmr(motion_dir: Path, gvhmr_root: Path, fdanyone_root: Path, device: str) -> np.ndarray:
-    """4DAnyone's own GVHMR-global -> canonical-world transform (the frame its cameras.json lives in)."""
+def multiview_world_from_gvhmr(motion_dir: Path, gvhmr_root: Path, fdanyone_root: Path, device: str) -> np.ndarray:
+    """Multi-view GVHMR-global -> canonical-world transform (the frame its cameras.json lives in)."""
     from fdanyone.motion.result import MotionResult
     from fdanyone.skeleton.pipeline import _body_geometry
-    regressor = fdanyone_root / 'models/4danyone/smplx_to_goliath70.pt'
+    regressor = fdanyone_root / 'models/performer_4dgs/smplx_to_goliath70.pt'
     geometry = _body_geometry(MotionResult.load(motion_dir), regressor, gvhmr_root, device)
     return np.asarray(geometry.motion_world_to_canonical_world, dtype=np.float64)
 

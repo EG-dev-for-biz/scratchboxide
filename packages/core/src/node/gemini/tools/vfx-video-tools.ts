@@ -11,7 +11,7 @@ import { buildBeautifyPrompt } from '../../../browser/generative-canvas/services
 import {
     buildNeutralPerformerPrompt,
     buildFrameMotivatedPerformerVideoPrompt,
-    generate4DAnyoneCameraRig,
+    generateMultiViewCameraRig,
     type MultiViewCameraPosition
 } from '../../../browser/generative-canvas/services/video/omniVideoPromptService';
 import { ComfyUiPipelineAgent } from '../../agent/comfyui-pipeline-agent';
@@ -164,7 +164,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 cameraRigPreset: {
                     type: 'STRING',
-                    description: '4DAnyone camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
+                    description: 'Multi-view camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
                 },
                 actionPrompt: {
                     type: 'STRING',
@@ -176,7 +176,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 videoDiffusionModel: {
                     type: 'STRING',
-                    description: 'Target video diffusion model architecture: "Wan2.2-TI2V-5B" (default 4DAnyone backbone), "SVD", or "Veo2"'
+                    description: 'Target video diffusion model architecture: "veo-2.0-generate-001" (default), "Wan2.2-TI2V-5B", or "Omni1.1"'
                 },
                 extraNegativePrompt: {
                     type: 'STRING',
@@ -187,8 +187,8 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
-        name: 'generate_4danyone_multiview_video',
-        description: 'Orchestrate multi-view video capture using the 4DAnyone Wan2.2-TI2V-5B video diffusion backbone with Reference Context Packing (RCP), Target Context Routing (TCR), 4DAnyone camera capture rigs (6-view, 24-view dense, 48-view multi-pitch), and 3D skeleton conditioning across camera positions.',
+        name: 'generate_veo2_multiview_video',
+        description: 'Orchestrate multi-view video capture using Google Veo 2 / Wan2.2 multi-view video diffusion with Reference Context Packing (RCP), Target Context Routing (TCR), multi-view camera capture rigs (6-view, 24-view dense, 48-view multi-pitch), and 3D skeleton conditioning across camera positions.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -203,7 +203,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 cameraRigPreset: {
                     type: 'STRING',
-                    description: '4DAnyone camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
+                    description: 'Multi-view camera rig preset: "6-view-orbit", "24-view-dense", "48-view-multipitch", or "24-view-frontal-arc"'
                 },
                 heroPoseType: {
                     type: 'STRING',
@@ -347,20 +347,23 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
         };
     },
 
-    generate_4danyone_multiview_video: async (args, _ctx) => {
+    generate_veo2_multiview_video: async (args, _ctx) => {
         const referenceFramePath = asString(args.referenceFramePath);
-        if (!referenceFramePath) throw new Error('generate_4danyone_multiview_video: "referenceFramePath" is required.');
+        if (!referenceFramePath) throw new Error('generate_veo2_multiview_video: "referenceFramePath" is required.');
 
         const cameraPositions = Array.isArray(args.cameraPositions)
             ? (args.cameraPositions as string[]).map(s => String(s))
             : ['front', 'left_45', 'right_45', 'rear_180'];
         const cameraRigPreset = asString(args.cameraRigPreset) || '6-view-orbit';
         const heroPoseType = asString(args.heroPoseType) || 'casual';
-        const cameraRig = generate4DAnyoneCameraRig(cameraRigPreset as any);
+        const cameraRig = generateMultiViewCameraRig(cameraRigPreset as any);
         const prompt = asString(args.prompt) || `Performer in ${heroPoseType === 'a-pose' ? 'symmetrical A-pose' : 'natural casual posture'} maintaining subtle motion on neutral grey background`;
 
-        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution: false });
-        const goal = `4DAnyone multi-view video diffusion using Wan2.2-TI2V-5B backbone for capture positions ${cameraPositions.join(', ')} with rig preset ${cameraRigPreset} motivated by reference frame ${referenceFramePath} in ${heroPoseType} stance`;
+        const mockExecution = typeof args.mockExecution === 'boolean'
+            ? args.mockExecution
+            : (process.env.NODE_ENV === 'test' || !process.env.COMFYUI_CLOUDRUN_URL);
+        const comfyAgent = new ComfyUiPipelineAgent({ mockExecution, workspaceRoot: _ctx?.workspaceRoot });
+        const goal = `Multi-view video diffusion using Google Veo 2 / Wan2.2-TI2V-5B backbone for capture positions ${cameraPositions.join(', ')} with rig preset ${cameraRigPreset} motivated by reference frame ${referenceFramePath} in ${heroPoseType} stance`;
         const blueprint = await comfyAgent.researchPipeline(goal);
         const execution = await comfyAgent.executeAndHeal(goal);
 
@@ -369,7 +372,7 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
                 success: execution.success,
                 blueprintId: blueprint.id,
                 category: blueprint.category,
-                videoDiffusionModel: 'Wan2.2-TI2V-5B',
+                videoDiffusionModel: 'veo-2.0-generate-001',
                 referenceFramePath,
                 cameraPositions,
                 cameraRigPreset,
@@ -381,7 +384,7 @@ export const aiBeautifyHandlers: Record<string, ToolHandler> = {
                 executionDurationMs: execution.executionDurationMs,
                 diagnostics: execution.diagnostics
             },
-            summaryResult: `Dispatched 4DAnyone Wan2.2-TI2V-5B multi-view video generation across ${cameraPositions.length} capture positions (${cameraPositions.join(', ')}, rig: ${cameraRigPreset}, pose: ${heroPoseType}).`
+            summaryResult: `Dispatched Google Veo 2 / Wan2.2 multi-view video generation across ${cameraPositions.length} capture positions (${cameraPositions.join(', ')}, rig: ${cameraRigPreset}, pose: ${heroPoseType}).`
         };
     }
 };

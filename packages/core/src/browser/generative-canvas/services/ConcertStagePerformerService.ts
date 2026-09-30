@@ -150,7 +150,7 @@ export interface PerformerTelemetry {
 }
 
 /**
- * 22 Canonical SMPL-X / 4DAnyone Joint Names and Hierarchy.
+ * 22 Canonical SMPL-X / SB-Human Joint Names and Hierarchy.
  */
 export const SMPLX_22_JOINT_NAMES = [
   'pelvis',         // 0
@@ -213,7 +213,7 @@ export const DEFAULT_CANONICAL_JOINTS: Array<[number, number, number]> = [
  * ConcertStagePerformerService
  *
  * Bridges Google Photorealistic 3D Tiles geodetic venues (Red Rocks Amphitheatre)
- * with 4DAnyone 4D Gaussian Splatting performers, featuring VFX-grade 4-bone Linear
+ * with Performer 4D Gaussian Splatting avatars, featuring VFX-grade 4-bone Linear
  * Blend Skinning, true forward kinematics rotations, and strict ground clamping.
  */
 export class ConcertStagePerformerService {
@@ -424,7 +424,7 @@ export class ConcertStagePerformerService {
   }
 
   /**
-   * Ingests canonical 4DAnyone 4D Gaussian Splatting performer model and binds 4-bone weights.
+   * Ingests canonical Performer 4D Gaussian Splatting avatar model and binds 4-bone weights.
    */
   public loadPerformerSplats(splats: BakedGaussian[], canonicalJoints?: Array<[number, number, number]>) {
     this.restSplats = splats;
@@ -519,7 +519,7 @@ export class ConcertStagePerformerService {
   }
 
   /**
-   * Ingests 22-joint kinematics motion frames (e.g. from 4DAnyone benchmark clip).
+   * Ingests 22-joint kinematics motion frames (e.g. from performer benchmark clip).
    */
   public loadMotionFrames(frames: PerformerKinematicsFrame[]) {
     this.motionFrames = frames;

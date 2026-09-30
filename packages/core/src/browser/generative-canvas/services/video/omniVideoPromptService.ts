@@ -842,10 +842,10 @@ export function buildNeutralPerformerVideoPrompt(options: Omit<NeutralPerformerP
 
 export type MultiViewCameraPosition = 'front' | 'left_45' | 'right_45' | 'rear_180' | 'orbit_360';
 
-export type FourDAnyoneCameraRigPreset = '6-view-orbit' | '24-view-dense' | '48-view-multipitch' | '24-view-frontal-arc' | 'custom';
+export type MultiViewCameraRigPreset = '6-view-orbit' | '24-view-dense' | '48-view-multipitch' | '24-view-frontal-arc' | 'custom';
 
-export interface FourDAnyoneCameraRigOptions {
-    preset?: FourDAnyoneCameraRigPreset;
+export interface MultiViewCameraRigOptions {
+    preset?: MultiViewCameraRigPreset;
     viewsPerLayer?: number;
     layerPitches?: number[];
     startYaw?: number;
@@ -855,7 +855,7 @@ export interface FourDAnyoneCameraRigOptions {
     fovDeg?: number;
 }
 
-export interface FourDAnyoneCameraEntry {
+export interface MultiViewCameraEntry {
     index: number;
     yaw: number;
     yawDeg: number;
@@ -869,8 +869,8 @@ export interface FourDAnyoneCameraEntry {
     transformMatrixNerfstudio: number[][];
 }
 
-export interface FourDAnyoneCameraRigResult {
-    preset: FourDAnyoneCameraRigPreset;
+export interface MultiViewCameraRigResult {
+    preset: MultiViewCameraRigPreset;
     viewsPerLayer: number;
     layerPitches: number[];
     startYaw: number;
@@ -882,7 +882,7 @@ export interface FourDAnyoneCameraRigResult {
     elevation: number;
     fov: number;
     totalCameras: number;
-    cameras: FourDAnyoneCameraEntry[];
+    cameras: MultiViewCameraEntry[];
     camerasJson: {
         camera_angle_x: number;
         camera_angle_y: number;
@@ -903,17 +903,17 @@ export interface FourDAnyoneCameraRigResult {
 }
 
 /**
- * Replicates the 4DAnyone (ant-research/4DAnyone) multi-view camera rig configuration.
+ * Multi-view camera rig configuration for multi-angle video conditioning and 4DGS capture.
  * Supports:
  * - '6-view-orbit': Standard 6-camera ring (pitch 0°, yaw 0°..360°, 60° step)
  * - '24-view-dense': Dense 24-camera ring (pitch 0°, yaw 0°..360°, 15° step) for 4DGS
  * - '48-view-multipitch': 16 views per layer across 3 pitches [-10°, 15°, 35°]
  * - '24-view-frontal-arc': 12 views per layer across 2 pitches [0°, 30°] from -90° to +90°
  */
-export function generate4DAnyoneCameraRig(
-    optionsOrPreset: FourDAnyoneCameraRigOptions | FourDAnyoneCameraRigPreset = {}
-): FourDAnyoneCameraRigResult {
-    const options: FourDAnyoneCameraRigOptions = typeof optionsOrPreset === 'string'
+export function generateMultiViewCameraRig(
+    optionsOrPreset: MultiViewCameraRigOptions | MultiViewCameraRigPreset = {}
+): MultiViewCameraRigResult {
+    const options: MultiViewCameraRigOptions = typeof optionsOrPreset === 'string'
         ? { preset: optionsOrPreset }
         : optionsOrPreset;
     const preset = options.preset || '6-view-orbit';
@@ -1087,9 +1087,9 @@ export interface FrameMotivatedPerformerVideoOptions extends Omit<NeutralPerform
      */
     referenceFrameRef?: string;
     /**
-     * Underlying video diffusion backbone. Defaults to 'Wan2.2-TI2V-5B' (the 4DAnyone video model backbone).
+     * Underlying video diffusion backbone. Defaults to 'veo-2.0-generate-001'.
      */
-    videoModelBackbone?: 'Wan2.2-TI2V-5B' | 'Wan2.1-I2V' | 'Omni1.1' | string;
+    videoModelBackbone?: 'veo-2.0-generate-001' | 'Wan2.2-TI2V-5B' | 'Wan2.1-I2V' | 'Omni1.1' | string;
     /**
      * Camera position or multi-view capture angle.
      * Front (0°), Left Lateral (45°), Right Lateral (45°), Rear (180°), or full continuous orbit (360°).
@@ -1112,13 +1112,13 @@ export interface FrameMotivatedPerformerVideoOptions extends Omit<NeutralPerform
      */
     enforceAFrameMotionStart?: boolean;
     /**
-     * 4DAnyone multi-view camera rig preset.
+     * Multi-view camera rig preset.
      */
-    cameraRigPreset?: FourDAnyoneCameraRigPreset;
+    cameraRigPreset?: MultiViewCameraRigPreset;
     /**
      * Optional custom camera rig options.
      */
-    cameraRigOptions?: FourDAnyoneCameraRigOptions;
+    cameraRigOptions?: MultiViewCameraRigOptions;
 }
 
 export interface FrameMotivatedVideoPromptResult extends NeutralPerformerPromptResult {
@@ -1127,22 +1127,22 @@ export interface FrameMotivatedVideoPromptResult extends NeutralPerformerPromptR
     cameraPosition: MultiViewCameraPosition;
     firstFrameSyntax: string;
     heroPoseType: 'casual' | 'a-pose' | 'as-input';
-    cameraRig?: FourDAnyoneCameraRigResult;
+    cameraRig?: MultiViewCameraRigResult;
 }
 
 /**
  * Builds a frame-motivated, multi-view consistent video prompt for performer capture.
- * Follows the 4DAnyone multi-view capture model (Wan2.2-TI2V-5B backbone):
+ * Follows the multi-view capture model (Google Veo 2 / Wan2.2 backbone):
  * 1. Frame-Motivated Conditioning: Motion begins seamlessly from the provided hero reference frame (<FIRST_FRAME>).
  * 2. Hero Pose Fidelity: If the hero frame is in a casual or natural posture, conditions strictly on that natural pose without forcing an A-pose.
- * 3. Multi-View Capture Positions: Front 0°, Left 45°, Right 45°, Rear 180°, or Orbit 360° (or full 4DAnyone camera rig).
+ * 3. Multi-View Capture Positions: Front 0°, Left 45°, Right 45°, Rear 180°, or Orbit 360° (or full multi-view camera rig).
  * 4. Zero Context & Zero Directional Lighting: Plain solid #808080 grey backdrop, flat diffuse shadowless lighting.
  */
 export function buildFrameMotivatedPerformerVideoPrompt(
     options: FrameMotivatedPerformerVideoOptions = {}
 ): FrameMotivatedVideoPromptResult {
     const referenceFrameRef = options.referenceFrameRef?.trim() || '<IMAGE_REF_0>';
-    const videoModelBackbone = options.videoModelBackbone || 'Wan2.2-TI2V-5B';
+    const videoModelBackbone = options.videoModelBackbone || 'veo-2.0-generate-001';
     const cameraPosition: MultiViewCameraPosition = options.cameraPosition || 'front';
 
     // Hero pose determination: if heroPoseType is 'casual' or isAFramePose is explicitly false, do NOT enforce A-frame
@@ -1187,9 +1187,9 @@ export function buildFrameMotivatedPerformerVideoPrompt(
         ? `The video motion is strictly motivated by and begins seamlessly from ${firstFrameSyntax}, originating smoothly from the initial symmetrical A-frame pose (A-pose) established in <FIRST_FRAME> with arms angled downward and outward 35-45 degrees, preserving continuous identity, texture, clothing morphology, and limb boundaries with zero abrupt scene cuts.`
         : `The video motion is strictly motivated by and begins seamlessly from ${firstFrameSyntax}, originating smoothly from the initial ${poseDesc} established in <FIRST_FRAME>, preserving continuous identity, texture, clothing morphology, and limb boundaries with zero abrupt scene cuts.`;
 
-    const modelClause = videoModelBackbone.includes('Wan2.2') || videoModelBackbone.includes('4DAnyone')
-        ? `Synthesized via ${videoModelBackbone} multi-view video diffusion with Reference Context Packing (RCP) and Target Context Routing (TCR) for cross-view consistency.`
-        : `Synthesized via ${videoModelBackbone} multi-view video diffusion with reference context consistency.`;
+    const modelClause = videoModelBackbone.includes('veo')
+        ? `Synthesized via ${videoModelBackbone} closed-loop orbital video conditioning with high-fidelity identity and boundary preservation.`
+        : `Synthesized via ${videoModelBackbone} multi-view video diffusion with Reference Context Packing (RCP) and Target Context Routing (TCR) for cross-view consistency.`;
 
     const fullPrompt = [
         firstFrameSyntax,
@@ -1211,7 +1211,7 @@ export function buildFrameMotivatedPerformerVideoPrompt(
     const negativePrompt = Array.from(new Set(negativePromptParts.filter(Boolean))).join(', ');
 
     const cameraRig = options.cameraRigPreset || options.cameraRigOptions
-        ? generate4DAnyoneCameraRig({ preset: options.cameraRigPreset, ...options.cameraRigOptions })
+        ? generateMultiViewCameraRig({ preset: options.cameraRigPreset, ...options.cameraRigOptions })
         : undefined;
 
     return {

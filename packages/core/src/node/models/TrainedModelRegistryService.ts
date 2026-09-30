@@ -10,7 +10,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 
-export type TrainedModelFamily = 'sbhuman' | 'smplx' | '4danyone_4dgs' | 'omniroam' | 'geobox' | 'depthbox';
+export type TrainedModelFamily = 'sbhuman' | 'smplx' | 'performer_4dgs' | 'omniroam' | 'geobox' | 'depthbox';
 
 export interface TrainedModelItem {
     id: string;
@@ -78,7 +78,7 @@ export class TrainedModelRegistryService {
         // 2. SMPL-X Body Models (Compatibility)
         models.push(...this.discoverSmplxModels());
 
-        // 3. 4DAnyone 4DGS Humanoid Models (Demos & Artifacts)
+        // 3. Performer 4DGS Humanoid Models (Demos & Artifacts)
         models.push(...this.discover4DGSModels());
 
         // 4. OmniRoam Checkpoints
@@ -194,11 +194,11 @@ export class TrainedModelRegistryService {
     }
 
     /**
-     * Discovers 4DAnyone 4D Gaussian Splatting humanoid avatars.
+     * Discovers Performer 4D Gaussian Splatting humanoid avatars.
      */
-    public discover4DGSModels(): TrainedModelItem[] {
+     public discover4DGSModels(): TrainedModelItem[] {
         const results: TrainedModelItem[] = [];
-        const demosDir = path.join(this.repoRoot, 'models', '4danyone', 'demos');
+        const demosDir = path.join(this.repoRoot, 'models', 'performer_4dgs', 'demos');
 
         if (fs.existsSync(demosDir)) {
             const catalogPath = path.join(demosDir, 'demos_catalog.json');
@@ -223,11 +223,11 @@ export class TrainedModelRegistryService {
                     const catEntry = catalogList.find(d => d.id === entry);
                     results.push({
                         id: `4dgs_demo_${entry}`,
-                        name: catEntry?.title || `4DAnyone 4DGS Avatar (${entry})`,
-                        family: '4danyone_4dgs',
+                        name: catEntry?.title || `Performer 4DGS Avatar (${entry})`,
+                        family: 'performer_4dgs',
                         format: 'ply',
                         filePath: plyPath,
-                        webUri: `/models/4danyone/demos/${entry}/human_4dgs.ply`,
+                        webUri: `/models/performer_4dgs/demos/${entry}/human_4dgs.ply`,
                         sizeBytes: size,
                         status: size > 0 ? 'ready' : 'missing',
                         metadata: {
@@ -264,7 +264,7 @@ export class TrainedModelRegistryService {
                 results.push({
                     id: file.replace(`.${ext}`, ''),
                     name: `4DGS Humanoid Avatar (${ext.toUpperCase()})`,
-                    family: '4danyone_4dgs',
+                    family: 'performer_4dgs',
                     format: ext,
                     filePath: p,
                     webUri: `/models/${file}`,
@@ -351,14 +351,14 @@ export class TrainedModelRegistryService {
      */
     public get4DGSAvatar(id: string): Avatar4DGSManifest | undefined {
         const cleanId = id.replace('4dgs_demo_', '').replace('humanoid_', '');
-        const demoDir = path.join(this.repoRoot, 'models', '4danyone', 'demos', cleanId);
+        const demoDir = path.join(this.repoRoot, 'models', 'performer_4dgs', 'demos', cleanId);
         const plyPath = path.join(demoDir, 'human_4dgs.ply');
 
         if (!fs.existsSync(plyPath)) {
             return undefined;
         }
 
-        const catalogPath = path.join(this.repoRoot, 'models', '4danyone', 'demos', 'demos_catalog.json');
+        const catalogPath = path.join(this.repoRoot, 'models', 'performer_4dgs', 'demos', 'demos_catalog.json');
         let meta: any = {};
         if (fs.existsSync(catalogPath)) {
             try {
@@ -438,7 +438,7 @@ export class TrainedModelRegistryService {
         const families: Record<TrainedModelFamily, number> = {
             sbhuman: 0,
             smplx: 0,
-            '4danyone_4dgs': 0,
+            performer_4dgs: 0,
             omniroam: 0,
             geobox: 0,
             depthbox: 0

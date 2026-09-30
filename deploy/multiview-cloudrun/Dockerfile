@@ -1,6 +1,6 @@
-# Cloud Run GPU job image: 4DAnyone multi-view diffusion + Scratchbox animatable Gaussian refinement.
-# Build context (assembled by FourDAnyoneCloudRunBuilder / deploy/4danyone-cloudrun/build.sh):
-#   Dockerfile, entrypoint.sh, 4danyone-src.tgz (ant-research/4DAnyone checkout incl. third_party/GVHMR)
+# Cloud Run GPU job image: Multi-view diffusion + Scratchbox animatable Gaussian refinement.
+# Build context (assembled by MultiviewCloudRunBuilder / deploy/multiview-cloudrun/build.sh):
+#   Dockerfile, entrypoint.sh, multiview-src.tgz (checkout incl. third_party/GVHMR)
 # Weights, inputs and outputs live in the GCS bucket mounted at /mnt/artifacts at run time.
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
@@ -14,11 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3.10 python3.10-venv python3-dev build-essential ffmpeg git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY 4danyone-src.tgz /opt/
-RUN cd /opt && tar --no-same-owner -xzf 4danyone-src.tgz 2>/dev/null && rm 4danyone-src.tgz \
+COPY multiview-src.tgz /opt/
+RUN cd /opt && tar --no-same-owner -xzf multiview-src.tgz 2>/dev/null && rm multiview-src.tgz \
     && git config --system --add safe.directory '*'
 
-WORKDIR /opt/4DAnyone-main
+WORKDIR /opt/multiview-main
 RUN python3.10 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt scipy ninja gsplat==1.5.3

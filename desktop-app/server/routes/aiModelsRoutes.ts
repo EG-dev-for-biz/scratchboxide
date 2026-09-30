@@ -81,9 +81,9 @@ export function createModelsRouter(): Router {
         }
     });
 
-    router.get('/4danyone/demos', (_req: Request, res: Response) => {
+    router.get('/performer/demos', (_req: Request, res: Response) => {
         try {
-            const demos = modelRegistry.getModelsByFamily('4danyone_4dgs');
+            const demos = modelRegistry.getModelsByFamily('performer_4dgs');
             res.json({
                 success: true,
                 count: demos.length,
@@ -94,7 +94,7 @@ export function createModelsRouter(): Router {
         }
     });
 
-    router.get('/4danyone/demos/:id', (req: Request, res: Response) => {
+    router.get('/performer/demos/:id', (req: Request, res: Response) => {
         try {
             const avatar = modelRegistry.get4DGSAvatar(req.params.id);
             if (!avatar) {
@@ -196,7 +196,7 @@ export function createPerformerRouter(allowedWorkspaceRoots: string[]): Router {
             }
 
             if (!resolvedVideoPath && characterId) {
-                const demoDir = path.join(effectiveRoot, 'public/models/4danyone/demos', String(characterId));
+                const demoDir = path.join(effectiveRoot, 'public/models/performer_4dgs/demos', String(characterId));
                 const sourceVideo = path.join(demoDir, 'source_video.mp4');
                 const defaultHero = path.join(demoDir, 'canonical_frame.jpg');
                 if (fs.existsSync(sourceVideo)) {
@@ -225,7 +225,7 @@ export function createPerformerRouter(allowedWorkspaceRoots: string[]): Router {
 
             const resolvedOutDir = outputDir
                 ? (path.isAbsolute(outputDir) ? outputDir : path.resolve(effectiveRoot, outputDir))
-                : path.resolve(effectiveRoot, 'public/models/4danyone/demos', String(characterId || 'custom'));
+                : path.resolve(effectiveRoot, 'public/models/performer_4dgs/demos', String(characterId || 'custom'));
 
             const result = await performerPipeline.executePipeline({
                 videoPath: resolvedVideoPath,

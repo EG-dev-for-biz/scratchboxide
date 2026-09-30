@@ -768,7 +768,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             playbackSpeed: 1.0
         };
         updated3D.title = 'Dynamic 4D Performer Avatar Pipeline';
-        updated3D.subtitle = '4DAnyone Wan2.2-TI2V-5B Backbone | 4DGS Deformable Splats | 4-Bone LBS Partition-of-Unity';
+        updated3D.subtitle = 'Veo 2 / Multi-View Backbone | 4DGS Deformable Splats | 4-Bone LBS Partition-of-Unity';
         explanation = `Synthesized **Dynamic 4D Performer Avatar Pipeline**: conditioned on reference A-frame pose (<FIRST_FRAME><IMAGE_REF_0>), synthesized multi-angle views via Wan2.2-TI2V-5B DiT, and reconstructed deformable 4D Gaussians with 4-bone partition-of-unity Linear Blend Skinning (LBS).`;
     } else if (/\b(?:procedural\s*(?:3d|scene|geometry|generation)|3d\s*engine(?:\s*coding)?|engine\s*coding|c\+\+20(?:\s*engine)?|sanctuary\s*of\s*synthesis|marching\s*cubes|fastnoise|ragdoll|xpbd|bvh|rtao)\b/i.test(text)) {
         updated3D.renderMode = 'pbr';
@@ -1077,7 +1077,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             playbackSpeed: 1.0
         };
         updated3D.title = 'Dynamic 4D Performer Avatar Pipeline';
-        updated3D.subtitle = '4DAnyone Wan2.2-TI2V-5B Backbone | 4DGS Deformable Splats | 4-Bone LBS Partition-of-Unity';
+        updated3D.subtitle = 'Veo 2 / Multi-View Backbone | 4DGS Deformable Splats | 4-Bone LBS Partition-of-Unity';
         explanation = `Synthesized **Dynamic 4D Performer Avatar Pipeline**: conditioned on reference A-frame pose (<FIRST_FRAME><IMAGE_REF_0>), synthesized multi-angle views via Wan2.2-TI2V-5B DiT, and reconstructed deformable 4D Gaussians with 4-bone partition-of-unity Linear Blend Skinning (LBS).`;
     } else if (lower.includes('ambient') || (lower.includes('light') && !lower.includes('flight')) || lower.includes('bright') || lower.includes('illuminate') || lower.includes('daylight') || lower.includes('exposure') || lower.includes('sunlight') || lower.includes('sunset') || lower.includes('golden hour') || lower.includes('dusk')) {
         updated3D.renderMode = 'pbr';

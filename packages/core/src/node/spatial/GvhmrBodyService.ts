@@ -105,7 +105,7 @@ function quatFromNormal(n: Vec3): [number, number, number, number] {
 }
 
 /**
- * Builds 4DAnyone performer avatars from GVHMR's SMPL-X body: the canonical Gaussians are sampled on
+ * Builds performer avatars from GVHMR's SMPL-X body: the canonical Gaussians are sampled on
  * the fitted rest mesh, textured by projecting their exact hero-frame positions through GVHMR's camera,
  * and driven by GVHMR's world-grounded joint motion.
  */
@@ -116,7 +116,7 @@ export class GvhmrBodyService {
     }
 
     public static resolveGvhmrRoot(explicit?: string): string {
-        return explicit || process.env.SCRATCHBOX_GVHMR_ROOT || path.join(os.homedir(), 'dev/4DAnyone-main/third_party/GVHMR');
+        return explicit || process.env.SCRATCHBOX_GVHMR_ROOT || path.join(os.homedir(), 'dev/GVHMR');
     }
 
     public load(bodyPath: string): GvhmrBody {
@@ -133,7 +133,7 @@ export class GvhmrBodyService {
         if (!script) throw new Error('scripts/run_gvhmr.py not found');
         const root = GvhmrBodyService.resolveGvhmrRoot(options.gvhmrRoot);
         if (!fs.existsSync(path.join(root, 'hmr4d'))) {
-            throw new Error(`GVHMR checkout not found at ${root}; clone ant-research/4DAnyone with third_party/GVHMR or set SCRATCHBOX_GVHMR_ROOT`);
+            throw new Error(`GVHMR checkout not found at ${root}; clone GVHMR or set SCRATCHBOX_GVHMR_ROOT`);
         }
         const python = GvhmrBodyService.resolvePythonBinary(options.pythonBinary);
         const device = options.device || process.env.SCRATCHBOX_GVHMR_DEVICE || (process.platform === 'darwin' ? 'mps' : 'cuda');
@@ -145,7 +145,7 @@ export class GvhmrBodyService {
             const tail = String(err?.stderr || err?.message || '').split('\n').filter(Boolean).slice(-4).join('\n');
             throw new Error(
                 `GVHMR failed (${python}, device ${device}). Create the environment with ` +
-                '`python3.11 -m venv ~/.cache/scratchbox/gvhmr-venv && ~/.cache/scratchbox/gvhmr-venv/bin/pip install -r ~/dev/4DAnyone-main/requirements.txt` ' +
+                '`python3.11 -m venv ~/.cache/scratchbox/gvhmr-venv && ~/.cache/scratchbox/gvhmr-venv/bin/pip install -r requirements.txt` ' +
                 `or set SCRATCHBOX_GVHMR_PYTHON. ${tail}`
             );
         }

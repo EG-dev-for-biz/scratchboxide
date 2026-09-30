@@ -196,7 +196,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
     it('6. should evaluate runtime deformation cleanly via Dynamic4DGaussianSplatService', () => {
         const charOutputDir = path.join(testOutputDir, 'demo_character');
         const customRepoRoot = testOutputDir; // Point to custom test root
-        const mockDemosDir = path.join(customRepoRoot, 'models', '4danyone', 'demos', 'performer_red_rocks_test');
+        const mockDemosDir = path.join(customRepoRoot, 'models', 'performer_4dgs', 'demos', 'performer_red_rocks_test');
         fs.ensureDirSync(mockDemosDir);
         fs.copySync(charOutputDir, mockDemosDir);
 
@@ -270,7 +270,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         const results: Record<string, any> = {};
 
         for (const id of demoIds) {
-            const heroPath = path.resolve(process.cwd(), `models/4danyone/demos/${id}/canonical_frame.jpg`);
+            const heroPath = path.resolve(process.cwd(), `models/performer_4dgs/demos/${id}/canonical_frame.jpg`);
             if (await fs.pathExists(heroPath)) {
                 const morph = await pipeline.solvePerformerMorphology(heroPath, 1.78);
                 results[id] = {
@@ -328,7 +328,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         landmarks33[27] = { x: 0.60, y: 0.91, z: 0.0, visibility: 0.95 }; // LEFT_ANKLE
         landmarks33[28] = { x: 0.40, y: 0.91, z: 0.0, visibility: 0.95 }; // RIGHT_ANKLE
 
-        const dummyFrame = path.resolve(process.cwd(), 'models/4danyone/demos/10331522/canonical_frame.jpg');
+        const dummyFrame = path.resolve(process.cwd(), 'models/performer_4dgs/demos/10331522/canonical_frame.jpg');
         const morph = await pipeline.solvePerformerMorphology(dummyFrame, 1.78, landmarks33);
 
         expect(morph.landmarks2D).toBeDefined();

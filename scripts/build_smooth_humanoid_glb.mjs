@@ -15,8 +15,8 @@ if (typeof globalThis.FileReader === 'undefined') {
 }
 
 // 1. Read authentic 120,000 Gaussians from human_4dgs.ply
-console.log('Reading Gaussians from public/models/4danyone/demos/10331522/human_4dgs.ply...');
-const plyText = fs.readFileSync('public/models/4danyone/demos/10331522/human_4dgs.ply', 'utf8');
+console.log('Reading Gaussians from public/models/performer_4dgs/demos/10331522/human_4dgs.ply...');
+const plyText = fs.readFileSync('public/models/performer_4dgs/demos/10331522/human_4dgs.ply', 'utf8');
 const lines = plyText.split('\n');
 let headerEnded = false;
 const pts = [];

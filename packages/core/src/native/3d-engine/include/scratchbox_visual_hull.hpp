@@ -29,7 +29,7 @@ using math::Quat;
 using math::Mat4;
 using spz::GaussianSplat;
 
-// Canonical 4DAnyone & Nerfstudio defaults
+// Canonical Performer 4DGS & Nerfstudio defaults
 constexpr float DEFAULT_VISUAL_HULL_HALF_EXTENT = 1.25f; // 2.5m bounding cube
 constexpr float DEFAULT_VISUAL_HULL_VOXEL_SIZE = 0.02f;   // 2cm voxel resolution
 constexpr uint8_t NERFSTUDIO_MASK_THRESHOLD = 128;

@@ -2,10 +2,10 @@ import * as fs from 'fs';
 import { PerformerSurfaceMeshService, SurfaceBuildOptions } from './packages/core/src/node/spatial/PerformerSurfaceMeshService';
 import { GvhmrBodyService } from './packages/core/src/node/spatial/GvhmrBodyService';
 
-const body = JSON.parse(fs.readFileSync('models/4danyone/demos/man-in-black/gvhmr_body.json', 'utf-8'));
+const body = JSON.parse(fs.readFileSync('models/performer_4dgs/demos/man-in-black/gvhmr_body.json', 'utf-8'));
 const gvhmr = new GvhmrBodyService();
 const w = body.width || 1080, h = body.height || 1920;
-const heroRgb = gvhmr.readRgb('models/4danyone/demos/man-in-black/hero_frame.png', w, h);
+const heroRgb = gvhmr.readRgb('models/performer_4dgs/demos/man-in-black/hero_frame.png', w, h);
 
 const base = PerformerSurfaceMeshService.fromBody(body);
 const sub = PerformerSurfaceMeshService.subdivideMidpoint(base, 2);

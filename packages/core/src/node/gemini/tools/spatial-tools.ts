@@ -4249,7 +4249,7 @@ export const TAPIR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
 export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'avatar_4dgs_list',
-        description: 'Lists all available 4DAnyone 4D Gaussian Splatting dynamic humanoid avatars discovered in the local catalog.',
+        description: 'Lists all available Performer 4D Gaussian Splatting dynamic humanoid avatars discovered in the local catalog.',
         parameters: {
             type: 'OBJECT',
             properties: {}
@@ -4257,7 +4257,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'avatar_4dgs_get',
-        description: 'Retrieves metadata, skeletal joint hierarchy, and geospatial anchoring info for a 4DAnyone 4DGS humanoid avatar.',
+        description: 'Retrieves metadata, skeletal joint hierarchy, and geospatial anchoring info for a Performer 4DGS humanoid avatar.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4271,7 +4271,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'avatar_4dgs_animate',
-        description: 'Animates and deforms a 4DAnyone 4DGS humanoid avatar at a specific motion frame index via skeletal Linear Blend Skinning (LBS).',
+        description: 'Animates and deforms a Performer 4DGS humanoid avatar at a specific motion frame index via skeletal Linear Blend Skinning (LBS).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4293,7 +4293,7 @@ export const AVATAR_4DGS_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'avatar_4dgs_retarget',
-        description: 'Retargets MediaPipe 33 pose motion track or custom pose angles onto a 4DAnyone 22 SMPL-X skeletal avatar with terrain ground-contact altitude clamping.',
+        description: 'Retargets MediaPipe 33 pose motion track or custom pose angles onto a 22-joint SB-Human skeletal avatar with terrain ground-contact altitude clamping.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -4499,7 +4499,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
                 totalAvatars: avatars.length,
                 avatars
             } as unknown as ToolResultPayload,
-            summaryResult: `Found ${avatars.length} 4DAnyone 4DGS avatars (${avatars.map(a => a.id).join(', ')}).`
+            summaryResult: `Found ${avatars.length} Performer 4DGS avatars (${avatars.map(a => a.id).join(', ')}).`
         };
     },
 
@@ -4516,7 +4516,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
                 numFrames: motion.num_frames,
                 fps: motion.fps
             } as unknown as ToolResultPayload,
-            summaryResult: `Loaded 4DAnyone avatar "${details.title}" (${avatarId}): ${details.numSplats} Gaussians, ${details.numFrames} frames @ ${details.fps} FPS, ${details.numJoints} joints.`
+            summaryResult: `Loaded Performer avatar "${details.title}" (${avatarId}): ${details.numSplats} Gaussians, ${details.numFrames} frames @ ${details.fps} FPS, ${details.numJoints} joints.`
         };
     },
 

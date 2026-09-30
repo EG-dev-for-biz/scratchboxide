@@ -298,7 +298,7 @@ export class VideoTo4DPerformerPipelineService {
     public async executePipeline(options: VideoTo4DPerformerOptions): Promise<VideoTo4DPerformerResult> {
         const startTime = Date.now();
         const characterId = options.characterId || `performer_${path.basename(options.videoPath, path.extname(options.videoPath))}_${Date.now()}`;
-        const outputDir = options.outputDir || path.resolve(process.cwd(), 'models/4danyone/demos', characterId);
+        const outputDir = options.outputDir || path.resolve(process.cwd(), 'models/performer_4dgs/demos', characterId);
         await fs.ensureDir(outputDir);
 
         const targetHeight = options.targetHeightMeters ?? 1.78;
@@ -571,7 +571,7 @@ export class VideoTo4DPerformerPipelineService {
         // Write geo_manifest.json
         const geoManifest = {
             character_id: characterId,
-            dataset_name: `4DAnyone - ${characterId}`,
+            dataset_name: `Performer 4DGS - ${characterId}`,
             created_at: new Date().toISOString(),
             generator: 'Scratchbox IDE VideoTo4DPerformerPipelineService',
             geographic_anchor: {

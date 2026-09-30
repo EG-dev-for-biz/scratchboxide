@@ -190,29 +190,28 @@ When directing or constructing prompts for video creation tools (Google Omni 1.1
 5. **Programmatic Builder & Tool**:
    - Use `buildNeutralPerformerPrompt` (`omniVideoPromptService.ts`) or the agent tool `build_neutral_performer_prompt`.
 
-### Rule: 4DAnyone Video Diffusion Backbone (Wan2.2-TI2V-5B) & Frame-Motivated A-Pose Ingestion
+### Rule: Google Veo 2 Multi-View Video Conditioning & Frame-Motivated A-Pose Ingestion
 When conditioning video generation for performer avatars or generating multi-view capture angles for 4D dynamic reconstruction:
-1. **Frame-Motivated Video Conditioning (<FIRST_FRAME>)**:
+1. **Frame-Motivated Closed-Loop Video Conditioning (<FIRST_FRAME> + <LAST_FRAME>)**:
    - The video fed into the 4D performer reconstruction pipeline must be explicitly motivated by and anchored to the hero reference frame.
-   - Always condition video prompts using `<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>` syntax (or Frame 0 latents).
-   - The video motion must strictly originate from the initial symmetrical A-frame pose (A-pose: arms angled outward 35°–45°, palms facing forward, legs straight and shoulder-width apart, feet flat on floor).
-   - Motion must preserve identity, hair/skin texture, and clothing morphology seamlessly from Frame 0 with zero abrupt scene cuts or perspective jumps.
-2. **4DAnyone Video Diffusion Backbone (Wan2.2-TI2V-5B)**:
-   - To synthesize the complete set of camera capture positions around the performer from a single casual frame, use the video diffusion architecture established by `4DAnyone` (`ant-research/4DAnyone`, arXiv:2608.20335): **Wan2.2-TI2V-5B** (Text-and-Image to Video 5B DiT backbone).
-   - Enforce **Reference Context Packing (RCP)** for $O(1)$ memory consumption while conditioning on high-resolution reference appearances.
-   - Enforce **Target Context Routing (TCR)** for cross-view multi-angle attention synchronization across capture viewpoints.
+   - Always condition video prompts using Google Veo 2 / Omni 1.1 closed-loop syntax (`image: <HERO_FRAME>` and `last_frame: <HERO_FRAME>`) or `<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>` with `<LAST_FRAME><IMAGE_REF_0></LAST_FRAME>`.
+   - The video motion must strictly originate from and return to the initial symmetrical A-frame pose (A-pose: arms angled outward 35°–45°, palms facing forward, legs straight and shoulder-width apart, feet flat on floor).
+   - Motion must preserve identity, hair/skin texture, and clothing morphology seamlessly from Frame 0 with zero loop drift ($\text{SSIM} \ge 0.95$).
+2. **Google Veo 2 Diffusion Backbone (veo-2.0-generate-001)**:
+   - Primary video generation path is **Google Veo 2** (`veo-2.0-generate-001` / Vertex AI) for continuous 360° orbital camera trajectories (72 frames, $\Delta\theta = 5.0^\circ$, Zero-COLMAP analytical extrinsics).
+   - Secondary / offline path uses open-weights multi-view diffusion (Wan2.2-TI2V-5B) via ComfyUI service if local offline inference is explicitly required.
+   - Enforce Reference Context Packing (RCP) and Target Context Routing (TCR) across multi-view angle attention synchronization.
 3. **Capture Viewpoint Rig & Photogrammetric Angles**:
-   - Capture viewpoints must systematically cover:
+   - Capture viewpoints must systematically cover a continuous 360° orbital ring (radius $2.2\text{m}$, elevation $1.25\text{m}$) or orthogonal viewpoints:
      - Front: 0° eye-level perspective
      - Left Oblique: 45° azimuth
      - Right Oblique: -45° azimuth
      - Rear Dorsal: 180° azimuth
-     - (Or full continuous 360° orbital ring at radius $2.2\text{m}$, elevation $1.25\text{m}$)
    - All synthesized multi-view video streams must maintain identical subject timing, A-pose starting frame, and shadowless `#808080` studio environment.
 4. **Programmatic Builder, Tool & Pipeline Invariant**:
    - Prompt Builder: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`) and Gemini tool `build_frame_motivated_performer_prompt`.
-   - Multi-View Diffusion Runner: `ComfyUiPipelineAgent` Wan2.2 blueprint and Gemini tool `generate_4danyone_multiview_video`.
-   - 4D Pipeline Ingestion: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { referenceFramePath, videoModelBackbone: 'Wan2.2-TI2V-5B', cameraPositions, initialPose: 'a-pose' } })`.
+   - Multi-View Diffusion Runner: Google Veo 2 Orbit Runner (`runVeo2OrbitPipeline`) and Gemini tool `generate_veo2_multiview_video`.
+   - 4D Pipeline Ingestion: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { referenceFramePath, videoModelBackbone: 'veo-2.0-generate-001', cameraPositions, initialPose: 'a-pose' } })`.
 
 ## Code Quality & Engineering Principles
 

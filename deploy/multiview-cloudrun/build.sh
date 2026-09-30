@@ -1,16 +1,16 @@
 #!/bin/bash
 # Builds the Cloud Run job image with Cloud Build and (re)creates the GPU job.
-#   deploy/4danyone-cloudrun/build.sh [4DAnyone checkout, default ~/dev/4DAnyone-main]
-#   SKIP_BUILD=1 deploy/4danyone-cloudrun/build.sh   # only (re)create the job
+#   deploy/multiview-cloudrun/build.sh [multiview checkout, default ~/dev/multiview-main]
+#   SKIP_BUILD=1 deploy/multiview-cloudrun/build.sh   # only (re)create the job
 # Cloud Run caps GPU task time at 1 hour; jobs therefore run as separate inference and refine executions.
 set -euo pipefail
 
 PROJECT=$(gcloud config get-value project 2>/dev/null)
 REGION=us-central1
-BUCKET=scratchbox-canvas-4danyone-artifacts
-JOB=sbx-4danyone-multiview
+BUCKET=scratchbox-canvas-multiview-artifacts
+JOB=sbx-multiview-diffusion
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/cloud-run-source-deploy/$JOB:latest"
-SRC="${1:-$HOME/dev/4DAnyone-main}"
+SRC="${1:-$HOME/dev/multiview-main}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 CTX=$(mktemp -d)
@@ -19,7 +19,7 @@ cp "$HERE/Dockerfile" "$HERE/entrypoint.sh" "$CTX/"
 tar -C "$(dirname "$SRC")" --exclude="$(basename "$SRC")/models" --exclude="$(basename "$SRC")/data" \
   --exclude="$(basename "$SRC")/.venv" --exclude='*.png' --exclude='*.jpg' --exclude='__pycache__' \
   --exclude="$(basename "$SRC")/third_party/GVHMR/inputs/checkpoints" \
-  -czf "$CTX/4danyone-src.tgz" "$(basename "$SRC")"
+  -czf "$CTX/multiview-src.tgz" "$(basename "$SRC")"
 
 [ "${SKIP_BUILD:-0}" = 1 ] || gcloud builds submit "$CTX" --tag "$IMAGE" --machine-type=e2-highcpu-32 --timeout=2h --region "$REGION"
 

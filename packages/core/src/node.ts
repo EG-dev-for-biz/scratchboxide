@@ -693,7 +693,7 @@ export {
     type CameraIntrinsicsInput,
     type Build4DFromCanonicalOptions
 } from './node/3d-engine/gaussian-splat-4d-service';
-// 4DAnyone & Video-to-Performer 4D Projection Pipeline Services
+// Performer 4DGS & Video-to-Performer 4D Projection Pipeline Services
 export {
     Dynamic4DGaussianSplatService,
     type HumanoidMotionData,

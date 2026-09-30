@@ -17,7 +17,7 @@ describe('Regenerate All 5 Demo PLYs', () => {
 
     for (const demo of demos) {
         it(`rebuilds ${demo.id} from its hero frame and GVHMR body`, async () => {
-            const demoDir = path.resolve(process.cwd(), 'models/4danyone/demos', demo.id);
+            const demoDir = path.resolve(process.cwd(), 'models/performer_4dgs/demos', demo.id);
             const gvhmrBodyPath = path.join(demoDir, 'gvhmr_body.json');
             expect(fs.existsSync(gvhmrBodyPath)).toBe(true);
 

@@ -2,7 +2,7 @@
  * Download Trained Models and Checkpoints from Google Cloud Run / Cloud Storage to Local Drive.
  * 
  * Supports:
- * - 4DAnyone / 4DGS Humanoid Models and SMPL-X Base Weights (scratchbox-canvas-4danyone-artifacts)
+ * - Performer / 4DGS Humanoid Models and SMPL-X Base Weights (scratchbox-canvas-multiview-artifacts)
  * - OmniRoam Preview & Refine Checkpoints (wander-ray-models-scratchbox-canvas)
  * - GeoBox Location Checkpoints & Gallery (scratchbox-canvas-geobox)
  */
@@ -116,13 +116,13 @@ async function main() {
   ];
   for (const file of smplxFiles) {
     const local = path.join(REPO_ROOT, 'models', 'smplx', path.basename(file));
-    await downloadFile('scratchbox-canvas-4danyone-artifacts', file, local, token);
+    await downloadFile('scratchbox-canvas-multiview-artifacts', file, local, token);
   }
 
-  // 2. 4DAnyone Trained 4DGS Humanoid Models (artifacts/ ~86 MB and demos/ ~98 MB)
-  console.log('\n--- Step 2: Downloading 4DAnyone Trained Humanoid Models (4DGS) ---');
-  await downloadPrefix('scratchbox-canvas-4danyone-artifacts', 'artifacts/', path.join(REPO_ROOT, 'models', '4danyone', 'artifacts'), token);
-  await downloadPrefix('scratchbox-canvas-4danyone-artifacts', 'demos/', path.join(REPO_ROOT, 'models', '4danyone', 'demos'), token);
+  // 2. Performer Trained 4DGS Humanoid Models (artifacts/ ~86 MB and demos/ ~98 MB)
+  console.log('\n--- Step 2: Downloading Performer Trained Humanoid Models (4DGS) ---');
+  await downloadPrefix('scratchbox-canvas-multiview-artifacts', 'artifacts/', path.join(REPO_ROOT, 'models', 'performer_4dgs', 'artifacts'), token);
+  await downloadPrefix('scratchbox-canvas-multiview-artifacts', 'demos/', path.join(REPO_ROOT, 'models', 'performer_4dgs', 'demos'), token);
 
   // 3. OmniRoam Foundation Checkpoints (~6 GB)
   console.log('\n--- Step 3: Downloading OmniRoam Checkpoints ---');

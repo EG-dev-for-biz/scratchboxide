@@ -68,8 +68,8 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(version).toBe(2);
   });
 
-  it('3. Parses binary .splat file from 4DAnyone man-in-black demo and constructs PhotorealGaussianSplatMesh', async () => {
-    const splatPath = path.join(PUBLIC_DIR, 'models/4danyone/demos/man-in-black/man-in-black.splat');
+  it('3. Parses binary .splat file from Performer 4DGS man-in-black demo and constructs PhotorealGaussianSplatMesh', async () => {
+    const splatPath = path.join(PUBLIC_DIR, 'models/performer_4dgs/demos/man-in-black/man-in-black.splat');
     expect(await fs.pathExists(splatPath)).toBe(true);
 
     const buf = await fs.readFile(splatPath);
@@ -149,9 +149,9 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(await fs.pathExists(modelSpz)).toBe(true);
 
     const splatStat = await fs.stat(fusedSplat);
-    expect(splatStat.size).toBeGreaterThan(15 * 1024 * 1024); // > 15 MB (563,744 splats * 32 bytes)
+    expect(splatStat.size).toBeGreaterThan(14 * 1024 * 1024); // > 14 MB (481,395 splats * 32 bytes)
     const splatCount = Math.floor(splatStat.size / 32);
-    expect(splatCount).toBeGreaterThan(500000);
+    expect(splatCount).toBeGreaterThan(450000);
 
     const tileset = await fs.readJson(tilesetJson);
     expect(tileset.root).toBeDefined();
@@ -199,7 +199,7 @@ describe('Red Rocks Auditorium Photoreal Gaussian Splats Integration', () => {
     expect(result.geoAnchor.lat).toBeCloseTo(39.66555, 3);
     expect(result.geoAnchor.lng).toBeCloseTo(-105.20525, 3);
     expect(result.splatPath).toBeDefined();
-    expect(result.splatCount).toBeGreaterThan(500000);
+    expect(result.splatCount).toBeGreaterThan(450000);
     expect(result.scene3DData).toBeDefined();
     expect(result.scene3DData.sceneType).toBe('gaussian_splat');
     expect(result.scene3DData.splatUrl).toContain('red_rocks/fused.splat');

@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-    generate4DAnyoneCameraRig,
+    generateMultiViewCameraRig,
     buildFrameMotivatedPerformerVideoPrompt
 } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import {
@@ -20,10 +20,10 @@ import {
     VideoTo4DPerformerPipelineService
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
 
-describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual Ingestion', () => {
-    describe('1. 4DAnyone Camera Rig Generator (generate4DAnyoneCameraRig)', () => {
+describe('Multi-View Video Diffusion & Non-A-Pose Casual Ingestion', () => {
+    describe('1. Multi-View Camera Rig Generator (generateMultiViewCameraRig)', () => {
         it('should generate canonical 6-view full orbit rig with correct orbital geometry', () => {
-            const rig = generate4DAnyoneCameraRig('6-view-orbit');
+            const rig = generateMultiViewCameraRig('6-view-orbit');
             expect(rig.preset).toBe('6-view-orbit');
             expect(rig.totalCameras).toBe(6);
             expect(rig.cameras.length).toBe(6);
@@ -62,7 +62,7 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
         });
 
         it('should generate 24-view dense orbit rig (15° steps for high-fidelity 4DGS training)', () => {
-            const rig = generate4DAnyoneCameraRig('24-view-dense');
+            const rig = generateMultiViewCameraRig('24-view-dense');
             expect(rig.preset).toBe('24-view-dense');
             expect(rig.totalCameras).toBe(24);
             expect(rig.cameras.length).toBe(24);
@@ -76,7 +76,7 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
         });
 
         it('should generate 48-view multi-pitch orbit rig across [-10°, 15°, 35°] layers', () => {
-            const rig = generate4DAnyoneCameraRig('48-view-multipitch');
+            const rig = generateMultiViewCameraRig('48-view-multipitch');
             expect(rig.preset).toBe('48-view-multipitch');
             expect(rig.totalCameras).toBe(48);
             expect(rig.cameras.length).toBe(48);
@@ -93,7 +93,7 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
         });
 
         it('should generate 24-view frontal arc rig across 180° frontal hemisphere', () => {
-            const rig = generate4DAnyoneCameraRig('24-view-frontal-arc');
+            const rig = generateMultiViewCameraRig('24-view-frontal-arc');
             expect(rig.preset).toBe('24-view-frontal-arc');
             expect(rig.totalCameras).toBe(24);
             expect(rig.viewsPerLayer).toBe(12);
@@ -126,12 +126,23 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
 
             // Must contain casual stance anchors and Frame 0 motivated syntax
             expect(result.prompt).toContain('<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>');
-            expect(result.prompt).toContain('relaxed standing posture with arms resting naturally along flanks and thighs');
-            expect(result.prompt).toContain('Wan2.2-TI2V-5B');
-            expect(result.prompt).toContain('Reference Context Packing (RCP)');
-            expect(result.prompt).toContain('Target Context Routing (TCR)');
+            // Default video model backbone is Google Veo 2
+            expect(result.prompt).toContain('veo-2.0-generate-001');
+            expect(result.prompt).toContain('closed-loop orbital video conditioning');
             expect(result.cameraRig).toBeDefined();
             expect(result.cameraRig?.totalCameras).toBe(6);
+
+            // Also test explicit Wan2.2-TI2V-5B fallback
+            const wanResult = buildFrameMotivatedPerformerVideoPrompt({
+                referenceFrameRef: '<IMAGE_REF_0>',
+                subject: 'young male vocalist in black tailored jacket and dark trousers',
+                videoModelBackbone: 'wan2.2-ti2v-5b',
+                heroPoseType: 'casual',
+                cameraRigPreset: '6-view-orbit'
+            });
+            expect(wanResult.prompt.toLowerCase()).toContain('wan2.2-ti2v-5b');
+            expect(wanResult.prompt).toContain('Reference Context Packing (RCP)');
+            expect(wanResult.prompt).toContain('Target Context Routing (TCR)');
         });
 
         it('should correctly condition A-frame pose ONLY when explicitly requested (heroPoseType === "a-pose")', () => {
@@ -157,7 +168,7 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
             expect(handler).toBeDefined();
 
             const response = await handler({
-                referenceFramePath: 'public/models/4danyone/demos/10331522/canonical_frame.jpg',
+                referenceFramePath: 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
                 characterDescription: 'performer in grey studio',
                 heroPoseType: 'casual',
                 heroPoseDescription: 'natural standing posture',
@@ -168,23 +179,23 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
             expect(response.resultPayload.cameraRig.preset).toBe('48-view-multipitch');
             expect(response.resultPayload.videoModelBackbone).toBe('Wan2.2-TI2V-5B');
             expect(response.resultPayload.cameraRig.totalCameras).toBe(48);
-            expect(response.resultPayload.prompt).toContain('<FIRST_FRAME>public/models/4danyone/demos/10331522/canonical_frame.jpg</FIRST_FRAME>');
+            expect(response.resultPayload.prompt).toContain('<FIRST_FRAME>public/models/performer_4dgs/demos/10331522/canonical_frame.jpg</FIRST_FRAME>');
             expect(response.resultPayload.prompt).not.toContain('symmetrical A-frame pose');
             expect(response.resultPayload.negativePrompt).not.toContain('non-A-frame pose');
         });
 
-        it('should handle generate_4danyone_multiview_video with 24-view dense rig', async () => {
-            const handler = vfxVideoHandlers['generate_4danyone_multiview_video'];
+        it('should handle generate_veo2_multiview_video with 24-view dense rig', async () => {
+            const handler = vfxVideoHandlers['generate_veo2_multiview_video'];
             expect(handler).toBeDefined();
 
             const response = await handler({
-                referenceFramePath: 'public/models/4danyone/demos/10331522/canonical_frame.jpg',
+                referenceFramePath: 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
                 characterDescription: 'lead singer',
                 heroPoseType: 'casual',
                 cameraRigPreset: '24-view-dense'
             }, {} as any);
 
-            expect(response.resultPayload.videoDiffusionModel).toBe('Wan2.2-TI2V-5B');
+            expect(response.resultPayload.videoDiffusionModel).toBe('veo-2.0-generate-001');
             expect(response.resultPayload.cameraRigPreset).toBe('24-view-dense');
             expect(response.resultPayload.heroPoseType).toBe('casual');
             expect(response.resultPayload.totalCameras).toBe(24);
@@ -197,12 +208,12 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
     describe('4. VideoTo4DPerformerPipelineService Ingestion Contract', () => {
         it('should validate frameMotivatedInput casual stance and cameraRigPreset schema', () => {
             const input = {
-                videoPath: 'public/models/4danyone/demos/10331522/canonical_frame.jpg',
+                videoPath: 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
                 characterId: 'test_10331522',
                 heroPoseType: 'casual' as const,
                 cameraRigPreset: '24-view-frontal-arc' as const,
                 frameMotivatedInput: {
-                    referenceFramePath: 'public/models/4danyone/demos/10331522/canonical_frame.jpg',
+                    referenceFramePath: 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg',
                     isAFramePose: false,
                     heroPoseType: 'casual' as const,
                     cameraRigPreset: '24-view-frontal-arc' as const,
@@ -216,7 +227,7 @@ describe('4DAnyone Wan2.2-TI2V-5B Multi-View Video Diffusion & Non-A-Pose Casual
             expect(input.frameMotivatedInput.videoDiffusionModel).toBe('Wan2.2-TI2V-5B');
 
             // Verify rig configuration generates matching viewpoints
-            const rig = generate4DAnyoneCameraRig(input.frameMotivatedInput.cameraRigPreset);
+            const rig = generateMultiViewCameraRig(input.frameMotivatedInput.cameraRigPreset);
             expect(rig.totalCameras).toBe(24);
             expect(rig.yawSpan).toBe(180);
         });

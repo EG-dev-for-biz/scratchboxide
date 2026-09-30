@@ -100,7 +100,7 @@ export class TaskCapabilityResolver {
 
         // Generative Diffusion / Neural (Check first so neural diffusion doesn't get masked by generic mesh/video keywords)
         if (
-            /diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.[12]|4danyone|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana/i.test(lower)
+            /diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.[12]|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana/i.test(lower)
         ) {
             return 'generative';
         }
@@ -179,11 +179,11 @@ export class TaskCapabilityResolver {
             /build_?frame_?motivated_?performer_?prompt|buildframemotivatedperformerprompt|frame\s*motivated.*(?:prompt|video)|motivated\s*by\s*the\s*frame.*(?:prompt|format)|format.*motivated\s*by/i.test(lower) ||
             (opts.promptContext ? /buildframemotivatedperformerprompt|frame_?motivated/i.test(opts.promptContext) : false);
 
-        const isWan4DAnyoneDiffusionExecution =
-            (/wan2\.2|4danyone|all\s*(?:the\s*)?different\s*video\s*positions/i.test(lower) &&
+        const isWanMultiviewDiffusionExecution =
+            (/wan2\.2|multiview\s*(?:video|diffusion)|all\s*(?:the\s*)?different\s*video\s*positions/i.test(lower) &&
             /video\s*model|capture|diffusion|generate|run/i.test(lower) &&
             !/prompt\s*only|format\s*prompt|text\s*only|author/i.test(lower)) ||
-            (opts.promptContext ? /comfyui_execute_pipeline|wan2\.2|4danyone/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
+            (opts.promptContext ? /comfyui_execute_pipeline|wan2\.2/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
 
         const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral.*(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist).*(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image).*(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
 
@@ -194,10 +194,10 @@ export class TaskCapabilityResolver {
             /(?:of|for|at|around|in)\s+[a-z0-9]/i.test(lower)
         );
 
-        if (isWan4DAnyoneDiffusionExecution) {
+        if (isWanMultiviewDiffusionExecution) {
             canSolveNatively = false;
             primaryNativeEngine = 'none';
-            rationale = 'Multi-view 360-degree video capture using the 4DAnyone / Wan2.2-TI2V-5B video diffusion backbone requires heavy multi-camera video generation with Reference Context Packing (RCP) and Target Context Routing (TCR), requiring GPU ComfyUI / Cloud Run acceleration.';
+            rationale = 'Multi-view 360-degree video capture using the Wan2.2-TI2V-5B video diffusion backbone requires heavy multi-camera video generation with Reference Context Packing (RCP) and Target Context Routing (TCR), requiring GPU ComfyUI / Cloud Run acceleration.';
         } else if (isLocationSplat) {
             canSolveNatively = true;
             primaryNativeEngine = 'cpp-3d-engine';
@@ -647,7 +647,7 @@ export class TaskCapabilityResolver {
                     requiresDynamicNodes = true;
                     suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
                 }
-            } else if (isWan4DAnyoneDiffusionExecution) {
+            } else if (isWanMultiviewDiffusionExecution) {
                 category = 'video-generation';
                 executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy multi-view video offloads to Cloud Run GPU
                 suggestedNodes.push(

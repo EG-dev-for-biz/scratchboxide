@@ -132,7 +132,7 @@ export type {
     AdaptiveAtlasTelemetry
 } from './common/adaptive-material-types';
 
-// 4DAnyone 4D Gaussian Splatting Dynamic Humanoid Avatar Engine
+// Performer 4DGS Dynamic Humanoid Avatar Engine
 export type {
     Dynamic4DGaussianSplatService,
     HumanoidMotionData,

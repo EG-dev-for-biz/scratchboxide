@@ -3,7 +3,7 @@ import * as fs from 'fs-extra';
 import { execFileSync } from 'child_process';
 import { VideoTo4DPerformerPipelineService } from '../packages/core/src/node/spatial/VideoTo4DPerformerPipelineService';
 
-const GCS_SAMPLES = 'gs://scratchbox-canvas-4danyone-artifacts/samples';
+const GCS_SAMPLES = 'gs://scratchbox-canvas-multiview-artifacts/samples';
 
 // Motion, body shape, hero frame and texture all come from the performer's source video via GVHMR
 // (cached gvhmr_body.json is reused unless --retrack; --mediapipe selects the landmark fallback).
@@ -37,7 +37,7 @@ async function main() {
 
     for (const demo of demos.filter(d => only.length === 0 || only.includes(d.id))) {
         console.log(`\n=== Performer ${demo.id} (${demo.label}) ===`);
-        const outputDir = path.resolve(process.cwd(), 'models/4danyone/demos', demo.id);
+        const outputDir = path.resolve(process.cwd(), 'models/performer_4dgs/demos', demo.id);
         const videoPath = await ensureSourceVideo(outputDir, demo.source);
         const cachedBody = path.join(outputDir, 'gvhmr_body.json');
         const cachedTrack = path.join(outputDir, 'pose_track.json');
@@ -72,7 +72,7 @@ async function main() {
         results.push(summary);
     }
 
-    const summaryPath = path.resolve(process.cwd(), 'models/4danyone/demos/regeneration_summary.json');
+    const summaryPath = path.resolve(process.cwd(), 'models/performer_4dgs/demos/regeneration_summary.json');
     const previous: Array<{ id: string }> = (await fs.pathExists(summaryPath)) ? await fs.readJson(summaryPath).catch(() => []) : [];
     const merged = [...previous.filter(p => !results.some(r => r.id === p.id)), ...results];
     await fs.writeJson(summaryPath, merged, { spaces: 2 });

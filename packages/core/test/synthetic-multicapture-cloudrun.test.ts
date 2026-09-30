@@ -229,7 +229,7 @@ describe('Tier 2 Synthetic Multi-Capture & Cloud Run Splatfacto Pipeline', () =>
   });
 
   describe('5. Demo Multi-Camera transforms.json Verification', () => {
-    it('generates and updates models/4danyone/demos/10331522/transforms.json with all 4 calibrated camera frames', () => {
+    it('generates and updates models/performer_4dgs/demos/10331522/transforms.json with all 4 calibrated camera frames', () => {
       const rig = NerfstudioDatasetService.generateOrbitalCameraRig({
         target: [0.0, 1.0, 0.0],
         radius: 2.4,
@@ -249,7 +249,7 @@ describe('Tier 2 Synthetic Multi-Capture & Cloud Run Splatfacto Pipeline', () =>
         }
       });
 
-      const demoTransformsPath = path.resolve(__dirname, '../../../models/4danyone/demos/10331522/transforms.json');
+      const demoTransformsPath = path.resolve(__dirname, '../../../models/performer_4dgs/demos/10331522/transforms.json');
       const transformsData = {
         camera_model: 'OPENCV',
         fl_x: 2484,

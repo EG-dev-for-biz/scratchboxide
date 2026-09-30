@@ -8,7 +8,7 @@ import {
     buildNeutralPerformerPrompt
 } from '../packages/core/src/browser/generative-canvas/services/video/omniVideoPromptService';
 
-// Generates an original (fictional) 1960s-style country performer as a 4DAnyone-ready source clip:
+// Generates an original (fictional) 1960s-style country performer as a Performer 4DGS-ready source clip:
 // neutral #808080 studio, flat light, 9:16 head-to-toe, A-pose Frame 0, locked camera, 8 s @ 1080p.
 // Usage: GOOGLE_CLOUD_PROJECT=scratchbox-canvas npx vite-node scripts/generate_man_in_black_performer.ts [--image-only] [--reuse-image]
 
@@ -22,7 +22,7 @@ const likenessGuard = 'likeness of any real person, celebrity lookalike, famous 
 async function main() {
     const args = process.argv.slice(2);
     const workspaceRoot = process.cwd();
-    const outDir = path.resolve(workspaceRoot, 'models/4danyone/demos', DEMO_ID);
+    const outDir = path.resolve(workspaceRoot, 'models/performer_4dgs/demos', DEMO_ID);
     await fs.ensureDir(outDir);
     const service = new GoogleMediaGenerationService(new MediaAssetStore());
     const store = new MediaAssetStore();

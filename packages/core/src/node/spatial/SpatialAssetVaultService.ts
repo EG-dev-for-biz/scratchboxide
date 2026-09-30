@@ -185,12 +185,12 @@ export class SpatialAssetVaultService {
         type: 'gaussian-splat',
         durableUri: 'vault://humanoid/2785536',
         metadata: {
-          title: '4DAnyone Humanoid 2785536 (Stage Choreography)',
+          title: 'Performer 4DGS Humanoid 2785536 (Stage Choreography)',
           splatCount: 121942,
           splatUri: '/models/humanoid_2785536.splat',
           glbUri: '/models/humanoid_2785536.glb',
-          plyUri: '/models/4danyone/demos/2785536/human_4dgs.ply',
-          canonicalFrame: '/models/4danyone/demos/2785536/canonical_frame.jpg'
+          plyUri: '/models/performer_4dgs/demos/2785536/human_4dgs.ply',
+          canonicalFrame: '/models/performer_4dgs/demos/2785536/canonical_frame.jpg'
         }
       },
       50.0
@@ -203,12 +203,12 @@ export class SpatialAssetVaultService {
         type: 'gaussian-splat',
         durableUri: 'vault://humanoid/10331522',
         metadata: {
-          title: '4DAnyone Humanoid 10331522 (Performer Motion)',
+          title: 'Performer 4DGS Humanoid 10331522 (Performer Motion)',
           splatCount: 121944,
           splatUri: '/models/humanoid_10331522.splat',
           glbUri: '/models/humanoid_10331522.glb',
-          plyUri: '/models/4danyone/demos/10331522/human_4dgs.ply',
-          canonicalFrame: '/models/4danyone/demos/10331522/canonical_frame.jpg'
+          plyUri: '/models/performer_4dgs/demos/10331522/human_4dgs.ply',
+          canonicalFrame: '/models/performer_4dgs/demos/10331522/canonical_frame.jpg'
         }
       },
       50.0
@@ -221,12 +221,12 @@ export class SpatialAssetVaultService {
         type: 'gaussian-splat',
         durableUri: 'vault://humanoid/5435720',
         metadata: {
-          title: '4DAnyone Humanoid 5435720 (Extended Motion)',
+          title: 'Performer 4DGS Humanoid 5435720 (Extended Motion)',
           splatCount: 121862,
           splatUri: '/models/humanoid_5435720.splat',
           glbUri: '/models/humanoid_5435720.glb',
-          plyUri: '/models/4danyone/demos/5435720/human_4dgs.ply',
-          canonicalFrame: '/models/4danyone/demos/5435720/canonical_frame.jpg'
+          plyUri: '/models/performer_4dgs/demos/5435720/human_4dgs.ply',
+          canonicalFrame: '/models/performer_4dgs/demos/5435720/canonical_frame.jpg'
         }
       },
       50.0

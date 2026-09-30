@@ -188,18 +188,18 @@ When generating character plates, motion references, or performer conditioning v
 
 ---
 
-## 10. Frame-Motivated Video Conditioning & 4DAnyone Multi-View Capture (Wan2.2-TI2V-5B)
+## 10. Frame-Motivated Video Conditioning & Multi-View Capture (Google Veo 2 & Multi-View Diffusion)
 
 When capturing or generating video specifically for 4D dynamic Gaussian Splatting, SMPL rigging, or volumetric neural human reconstruction:
 
-### A. Frame-Motivated Video Conditioning (`<FIRST_FRAME>`)
+### A. Frame-Motivated Closed-Loop Video Conditioning (`<FIRST_FRAME>` + `<LAST_FRAME>`)
 - Video motion fed into the 4D reconstruction pipeline must NOT be arbitrary unconditioned motion; it must be **strictly motivated by the hero reference frame**.
-- Enforce opening frame binding via `<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>`.
-- The subject must begin motion seamlessly originating from the symmetrical **A-frame pose (A-pose)** established in Frame 0 (arms angled 35°–45°, palms forward, legs shoulder-width apart, feet flat on floor).
+- Enforce opening and closing frame binding via `<FIRST_FRAME><IMAGE_REF_0></FIRST_FRAME>` and `<LAST_FRAME><IMAGE_REF_0></LAST_FRAME>`.
+- The subject must begin motion seamlessly originating from the symmetrical **A-frame pose (A-pose)** established in Frame 0 (arms angled 35°–45°, palms forward, legs shoulder-width apart, feet flat on floor) and complete a seamless loop ($\text{SSIM} \ge 0.95$).
 - Identity, skin albedo, and clothing morphology must remain continuous with zero jump cuts or perspective snapping.
 
-### B. 4DAnyone Video Diffusion Architecture (Wan2.2-TI2V-5B)
-- To synthesize multi-view camera capture streams around the performer from a single casual frame, adopt the video diffusion model backbone from `4DAnyone` (`ant-research/4DAnyone`, arXiv:2608.20335): **Wan2.2-TI2V-5B** (Text-and-Image to Video 5B DiT).
+### B. Google Veo 2 & Multi-View Video Diffusion Architecture
+- To synthesize multi-view camera capture streams around the performer from a single casual frame, adopt **Google Veo 2** (`veo-2.0-generate-001` / Vertex AI) for closed-loop continuous orbital sweeps or **Wan2.2-TI2V-5B** (Text-and-Image to Video 5B DiT) for open-weights offline rigs.
 - **Reference Context Packing (RCP)**: Packs reference appearance tokens into an $O(1)$ memory representation, ensuring accurate albedo and silhouette preservation across all video frames.
 - **Target Context Routing (TCR)**: Routes cross-view attention across simultaneous multi-angle capture viewpoints, guaranteeing cross-view consistency during dynamic movement.
 
@@ -209,10 +209,11 @@ Capture viewpoints must systematically cover:
 2. **Left 45°**: 45° left lateral oblique perspective, locked-off elevation.
 3. **Right 45°**: 45° right lateral oblique perspective, locked-off elevation.
 4. **Rear 180°**: 180° rear dorsal perspective, locked-off elevation.
-5. *(Optional continuous ring)*: 360° orbital camera at radius $2.2\text{m}$, elevation $1.25\text{m}$, FOV $50^\circ$.
+5. *(Canonical continuous loop)*: 360° orbital camera at radius $2.2\text{m}$, elevation $1.25\text{m}$, FOV $50^\circ$, 72 frames with Zero-COLMAP analytical extrinsics.
 
 ### D. Programmatic Builders & Tools
 - **Prompt Formulation**: `buildFrameMotivatedPerformerVideoPrompt` (`omniVideoPromptService.ts`) or Gemini tool `build_frame_motivated_performer_prompt`.
-- **ComfyUI Multi-View Video Generation**: `generate_4danyone_multiview_video` invoking `ComfyUiPipelineAgent` Wan2.2 blueprint with `Wan22TI2VModelLoader`, `WanMultiViewCameraRigNode`, `Wan22MultiViewSampler`, and `SkeletonConditioningNode`.
+- **Multi-View Video Generation**: `generate_veo2_multiview_video` invoking Google Veo 2 closed-loop orbit pipeline or ComfyUI Wan2.2 multi-view blueprint (`Wan22TI2VModelLoader`, `WanMultiViewCameraRigNode`, `Wan22MultiViewSampler`, `SkeletonConditioningNode`).
 - **Pipeline Ingestion**: `VideoTo4DPerformerPipelineService.process({ frameMotivatedInput: { ... } })`.
+
 

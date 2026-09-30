@@ -33,7 +33,7 @@ export * from './common/geospatial-4d-protocol';
 // ComfyUI Pipeline & Agent Protocol
 export * from './common/comfyui-protocol';
 
-// 4DAnyone Gaussian PLY codec & 22-joint humanoid skinning (shared by Node pipeline and browser viewer)
+// Performer 4DGS Gaussian PLY codec & 22-joint humanoid skinning (shared by Node pipeline and browser viewer)
 export {
     decodeGaussianPly,
     encodeGaussianPly,

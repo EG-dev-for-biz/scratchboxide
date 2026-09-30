@@ -14,7 +14,7 @@ const { execSync } = require('child_process');
  * to sample true photorealistic albedos (dark skin, purple headphones, pastel tie-dye silk, cream pants with magenta cuffs, white sneakers).
  */
 async function main() {
-  const demoDir = path.resolve(__dirname, '../public/models/4danyone/demos/10331522');
+  const demoDir = path.resolve(__dirname, '../public/models/performer_4dgs/demos/10331522');
   const heroFramePath = path.join(demoDir, 'canonical_frame.jpg');
   const plyPath = path.join(demoDir, 'human_4dgs.ply');
   const motionPath = path.join(demoDir, 'motion.json');
@@ -481,7 +481,7 @@ async function main() {
     fs.writeFileSync(altSplat, splatBuf);
   }
 
-  const repoDemoDir = path.resolve(__dirname, '../models/4danyone/demos/10331522');
+  const repoDemoDir = path.resolve(__dirname, '../models/performer_4dgs/demos/10331522');
   if (fs.existsSync(repoDemoDir)) {
     fs.writeFileSync(path.join(repoDemoDir, 'human_4dgs.ply'), fs.readFileSync(plyPath));
     fs.writeFileSync(path.join(repoDemoDir, '10331522.splat'), splatBuf);

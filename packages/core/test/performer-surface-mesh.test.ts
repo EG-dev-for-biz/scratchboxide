@@ -19,7 +19,7 @@ import {
 } from '../src/node/spatial/PerformerSurfaceMeshService';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
-const DEMOS_DIR = path.join(REPO_ROOT, 'models/4danyone/demos');
+const DEMOS_DIR = path.join(REPO_ROOT, 'models/performer_4dgs/demos');
 const PUBLIC_MODELS = path.join(REPO_ROOT, 'public/models');
 
 function triangleMesh(): SurfaceMesh {

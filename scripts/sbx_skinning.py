@@ -2,7 +2,7 @@
 
 The multi-view refinement trains Gaussians under exactly the deformation the performer studio plays
 back, so trained splats render identically in the viewer. Parity is enforced by
-packages/core/test/4danyone-performer-integrity.test.ts.
+packages/core/test/performer-avatar-integrity.test.ts.
 """
 import json
 import sys

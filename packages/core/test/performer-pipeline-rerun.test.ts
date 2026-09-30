@@ -20,7 +20,7 @@ describe('PerformerPipelineRerun', () => {
     });
 
     it('successfully triggers and executes on-demand pipeline rerun with custom parameters', async () => {
-        const fixtureHeroPath = path.resolve(process.cwd(), 'public/models/4danyone/demos/10331522/canonical_frame.jpg');
+        const fixtureHeroPath = path.resolve(process.cwd(), 'public/models/performer_4dgs/demos/10331522/canonical_frame.jpg');
         expect(fs.existsSync(fixtureHeroPath)).toBe(true);
 
         const customOptions: VideoTo4DPerformerOptions = {

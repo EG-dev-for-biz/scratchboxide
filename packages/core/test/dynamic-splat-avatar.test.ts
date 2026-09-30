@@ -21,11 +21,11 @@ import {
 } from '../src/node/gemini/tools/spatial-tools';
 import { VideoMotionTrackResult } from '../src/node/video/MediaPipeVideoDirectorService';
 
-describe('4DAnyone 4D Gaussian Splatting Dynamic Humanoid Avatar System', () => {
+describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () => {
     const splatService = new Dynamic4DGaussianSplatService();
     const bridgeService = new HumanoidMotionBridgeService();
 
-    it('should discover 4DAnyone avatars in local catalog', () => {
+    it('should discover Performer avatars in local catalog', () => {
         const avatars = splatService.listAvatars();
         expect(avatars.length).toBeGreaterThan(0);
 
@@ -284,7 +284,7 @@ int main() {
 
         // Test avatar_4dgs_get
         const getRes = await avatar4dgsHandlers.avatar_4dgs_get({ avatarId: '2785536' });
-        expect(getRes.summaryResult).toContain('Loaded 4DAnyone avatar');
+        expect(getRes.summaryResult).toContain('Loaded Performer avatar');
         const getPayload = getRes.resultPayload as any;
         expect(getPayload.details.id).toBe('2785536');
         expect(getPayload.joints.length).toBe(22);

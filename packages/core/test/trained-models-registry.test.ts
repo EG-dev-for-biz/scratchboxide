@@ -28,7 +28,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
 
         // All core families should have models discovered
         expect(summary.families.smplx).toBeGreaterThanOrEqual(3);
-        expect(summary.families['4danyone_4dgs']).toBeGreaterThanOrEqual(1);
+        expect(summary.families['performer_4dgs']).toBeGreaterThanOrEqual(1);
         expect(summary.families.omniroam).toBeGreaterThanOrEqual(2);
         expect(summary.families.geobox).toBeGreaterThanOrEqual(2);
     });
@@ -46,7 +46,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(fs.statSync(neutral!).size).toBeGreaterThan(1024 * 1024); // > 1 MB (.sbhuman is ~1.96 MB, legacy npz is ~108 MB)
     });
 
-    it('3. should provide 4DAnyone 4DGS humanoid avatar manifests and viewport assets', () => {
+    it('3. should provide Performer 4DGS humanoid avatar manifests and viewport assets', () => {
         const avatar = registry.get4DGSAvatar('2785536');
         expect(avatar).toBeDefined();
         expect(avatar!.id).toBe('2785536');

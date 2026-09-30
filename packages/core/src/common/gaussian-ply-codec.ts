@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * ASCII 3D Gaussian Splatting PLY codec shared by the 4DAnyone performer pipeline,
+ * ASCII 3D Gaussian Splatting PLY codec shared by the performer 4DGS pipeline,
  * the Node avatar runtime and (mirrored) the browser performer studio.
  *
  * Written files follow the reference 3DGS layout: `f_dc_*` are degree-0 spherical-harmonic

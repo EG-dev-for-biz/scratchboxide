@@ -691,7 +691,7 @@ export class ComfyUiPipelineAgent {
         if (/inpaint|remove shadow|de-light|restore facade|erase|replace area/i.test(lower)) {
             return 'inpainting';
         }
-        if (/video|animate|motion|camera pan|orbit|cinematic clip|svd|wan|4danyone|capture.*positions|camera.*positions|multiview/i.test(lower)) {
+        if (/video|animate|motion|camera pan|orbit|cinematic clip|svd|wan|capture.*positions|camera.*positions|multiview/i.test(lower)) {
             return 'video-generation';
         }
         if (/upscale|hires|super resolution|4k|denoise/i.test(lower)) {
@@ -901,13 +901,13 @@ export class ComfyUiPipelineAgent {
         }
 
         if (category === 'video-generation') {
-            const isWan4DAnyone = /wan|4danyone|multiview|camera.*positions|capture.*positions|a.?pose.*video|motivated/i.test(goal);
-            if (isWan4DAnyone) {
+            const isWanMultiview = /wan|multiview|camera.*positions|capture.*positions|a.?pose.*video|motivated/i.test(goal);
+            if (isWanMultiview) {
                 return {
                     id,
                     goal,
                     category: 'video-generation',
-                    rationale: '4DAnyone Multi-View Video Diffusion using Wan2.2-TI2V-5B backbone with Reference Context Packing (RCP), Target Context Routing (TCR), and 3D Skeleton Conditioning for multi-camera 4DGS capture positions',
+                    rationale: 'Multi-View Video Diffusion using Wan2.2-TI2V-5B backbone with Reference Context Packing (RCP), Target Context Routing (TCR), and 3D Skeleton Conditioning for multi-camera 4DGS capture positions',
                     requiredModels: [{ type: 'checkpoint', name: 'Wan2.2-TI2V-5B' }],
                     requiredCustomNodes: [
                         'Wan22TI2VModelLoader',
@@ -957,7 +957,7 @@ export class ComfyUiPipelineAgent {
                         {
                             id: '4',
                             classType: 'WanMultiViewCameraRigNode',
-                            title: '4DAnyone Multi-View Camera Rig (6-View / 24-View Orbit / 48-View MultiPitch)',
+                            title: 'Multi-View Camera Rig (6-View / 24-View Orbit / 48-View MultiPitch)',
                             category: 'camera/multiview',
                             inputs: {
                                 rig_preset: goal.includes('24-view') ? '24-view-dense' : (goal.includes('48-view') ? '48-view-multipitch' : '6-view-orbit'),
@@ -989,7 +989,7 @@ export class ComfyUiPipelineAgent {
                             classType: 'SaveVideo',
                             title: 'Export Multi-View Video Captures',
                             category: 'video/io',
-                            inputs: { filename_prefix: 'wan22_4danyone_multiview' },
+                            inputs: { filename_prefix: 'wan22_multiview' },
                             outputs: []
                         }
                     ],
@@ -1262,7 +1262,7 @@ NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
             category = 'loaders/video';
             code = `
 class ${sanitizedClass}:
-    """Dynamic Wan2.2-TI2V-5B model loader synthesized for 4DAnyone multi-view video generation."""
+    """Dynamic Wan2.2-TI2V-5B model loader synthesized for multi-view video generation."""
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -1319,7 +1319,7 @@ NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
             category = 'camera/multiview';
             code = `
 class ${sanitizedClass}:
-    """Dynamic multi-view camera rig / skeleton conditioning node for 4DAnyone."""
+    """Dynamic multi-view camera rig / skeleton conditioning node for multi-view video."""
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -1340,7 +1340,7 @@ NODE_CLASS_MAPPINGS = {"${sanitizedClass}": ${sanitizedClass}}
             category = 'video/io';
             code = `
 class ${sanitizedClass}:
-    """Dynamic video saver node for 4DAnyone and ComfyUI."""
+    """Dynamic video saver node for multi-view video and ComfyUI."""
     @classmethod
     def INPUT_TYPES(s):
         return {
