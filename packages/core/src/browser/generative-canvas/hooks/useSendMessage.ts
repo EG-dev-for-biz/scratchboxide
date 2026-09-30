@@ -443,7 +443,9 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     let art = event.artifact;
                     const promptText = textToSend || '';
                     const lowerPromptText = promptText.toLowerCase();
-                    const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(promptText) ||
+                    const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
+                        promptText.trim().startsWith('/video') ||
+                        /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
                         ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
 
                     if (isVideoTimelinePrompt && art.type !== 'video-timeline') {
@@ -1057,7 +1059,9 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                 }
             }
             const lowerPromptText = promptText.toLowerCase();
-            const isVideoTimelinePrompt = /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip/i.test(promptText) ||
+            const isVideoTimelinePrompt = promptText.trim().startsWith('/timeline') ||
+                promptText.trim().startsWith('/video') ||
+                /split\s+(?:active\s+)?clip|ripple\s+delete|playhead|video\s+timeline|timeline\s+editor|video\s+editor|\bnle\b|cut\s+clip|trim\s+clip|multi-track\s+video|b-roll|a-roll|video\s+track|audio\s+mixer\s+track|color\s+grade\s+clip|vfx\s+plate|anti[- ]drift|matchmove/i.test(promptText) ||
                 ((lowerPromptText.includes('clip') || lowerPromptText.includes('timeline')) && (lowerPromptText.includes('split') || lowerPromptText.includes('cut') || lowerPromptText.includes('delete') || lowerPromptText.includes('playhead') || lowerPromptText.includes('ripple') || lowerPromptText.includes('track') || lowerPromptText.includes('video')));
             if (isVideoTimelinePrompt && (!backend.generatedArtifact || backend.generatedArtifact.type !== 'video-timeline')) {
                 const fb = synthesizeVideoTimelineFallback(promptText, depsRef.current.activeArtifact);

@@ -253,6 +253,32 @@ export interface VideoEditorJobResult {
     [key: string]: unknown;
 }
 
+export function resolveMediaFilePath(filePath: string): string {
+    if (!filePath) return filePath;
+    const candidates = [
+        filePath,
+        path.resolve(process.cwd(), filePath),
+        path.resolve(process.cwd(), 'desktop-app', 'public', filePath),
+        path.resolve(process.cwd(), 'desktop-app', 'public', filePath.replace(/^\/?(?:desktop-app\/public\/)?/, '')),
+        path.resolve(process.cwd(), 'public', filePath.replace(/^\/?(?:public\/)?/, ''))
+    ];
+    for (const c of candidates) {
+        if (fs.existsSync(c)) return c;
+    }
+    // Fuzzy fallback for synthesis / restyled aliases
+    if (filePath.includes('synthesis')) {
+        const alt = filePath.replace('synthesis', 'restyled');
+        const resolvedAlt = resolveMediaFilePath(alt);
+        if (fs.existsSync(resolvedAlt)) return resolvedAlt;
+    }
+    if (filePath.includes('restyled')) {
+        const alt = filePath.replace('restyled', 'synthesis');
+        const resolvedAlt = resolveMediaFilePath(alt);
+        if (fs.existsSync(resolvedAlt)) return resolvedAlt;
+    }
+    return candidates[1];
+}
+
 export class HeadlessVideoEditorService {
     private ffmpegBin: string;
     private ffprobeBin: string;
@@ -274,18 +300,19 @@ export class HeadlessVideoEditorService {
      * Inspects media file metadata via ffprobe.
      */
     async probeMedia(inputPath: string, timeoutMs: number = 10000): Promise<VideoProbeResult> {
-        if (!fs.existsSync(inputPath)) {
+        const resolvedInput = resolveMediaFilePath(inputPath);
+        if (!fs.existsSync(resolvedInput)) {
             throw new Error(`probeMedia: input file does not exist at "${inputPath}"`);
         }
 
-        const sizeBytes = fs.statSync(inputPath).size;
+        const sizeBytes = fs.statSync(resolvedInput).size;
 
         // 1. Duration
         const durCmd = await execFileAsync(this.ffprobeBin, [
             '-v', 'error',
             '-show_entries', 'format=duration',
             '-of', 'default=noprint_wrappers=1:nokey=1',
-            inputPath
+            resolvedInput
         ], { timeout: timeoutMs });
         const durationSec = parseFloat(durCmd.stdout.trim()) || 0;
 
@@ -630,10 +657,23 @@ export class HeadlessVideoEditorService {
             filterGraph = '[0:v]scale=960:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=960:1080[left];[1:v]scale=960:1080:flags=lanczos:force_original_aspect_ratio=increase,crop=960:1080[right];[left][right]hstack[v]';
         }
 
+        const actualLeft = resolveMediaFilePath(leftVideoPath);
+        const actualRight = resolveMediaFilePath(rightVideoPath);
+        const actualOutput = path.isAbsolute(outputPath) ? outputPath : path.resolve(process.cwd(), outputPath);
+
+        if (!dryRun) {
+            if (!fs.existsSync(actualLeft)) {
+                throw new Error(`createSplitScreen: left input video does not exist at "${leftVideoPath}" (resolved: "${actualLeft}")`);
+            }
+            if (!fs.existsSync(actualRight)) {
+                throw new Error(`createSplitScreen: right input video does not exist at "${rightVideoPath}" (resolved: "${actualRight}")`);
+            }
+        }
+
         const args = [
             '-y',
-            '-i', leftVideoPath,
-            '-i', rightVideoPath,
+            '-i', actualLeft,
+            '-i', actualRight,
             '-filter_complex', filterGraph,
             '-map', '[v]',
             '-map', '0:a:0?'
@@ -645,14 +685,14 @@ export class HeadlessVideoEditorService {
             args.push('-c:v', 'libx264', '-preset', 'fast', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
         }
 
-        args.push(outputPath);
+        args.push(actualOutput);
 
         const command = `${this.ffmpegBin} ${args.map(a => (a.includes(' ') || a.includes(';') ? `"${a}"` : a)).join(' ')}`;
 
         if (dryRun) {
             return {
                 success: true,
-                outputPath,
+                outputPath: actualOutput,
                 command,
                 commandString: command,
                 ffmpegCommand: command,
@@ -661,17 +701,17 @@ export class HeadlessVideoEditorService {
             };
         }
 
-        const outDir = path.dirname(outputPath);
+        const outDir = path.dirname(actualOutput);
         if (!fs.existsSync(outDir)) {
             fs.mkdirSync(outDir, { recursive: true });
         }
 
         const execRes = await execFileAsync(this.ffmpegBin, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
-        const sizeBytes = fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0;
+        const sizeBytes = fs.existsSync(actualOutput) ? fs.statSync(actualOutput).size : 0;
 
         return {
             success: true,
-            outputPath,
+            outputPath: actualOutput,
             outputSizeBytes: sizeBytes,
             command,
             commandString: command,
