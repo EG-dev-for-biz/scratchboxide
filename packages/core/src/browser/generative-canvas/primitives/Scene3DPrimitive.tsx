@@ -2045,6 +2045,15 @@ int main(int argc, char** argv) {
         (window as any).__SB_3D_SCENE_DATA__ = sceneData;
         (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
         (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
+        (window as any).__SB_SET_CAMERA_VIEW__ = (target: [number, number, number], rot: { theta: number; phi: number; distance: number }) => {
+            if (cameraTargetRef.current) cameraTargetRef.current.set(target[0], target[1], target[2]);
+            if (cameraRotationRef.current) {
+                cameraRotationRef.current.theta = rot.theta;
+                cameraRotationRef.current.phi = rot.phi;
+                cameraRotationRef.current.distance = rot.distance;
+            }
+            stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);
+        };
 
         // Brush cursor ring overlay (positioned on the hovered mesh surface in sculpt mode)
         const initRadius = sculptSettingsRef.current.radius || 2.0;
