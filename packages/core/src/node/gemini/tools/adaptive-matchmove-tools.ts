@@ -83,7 +83,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 milestones: {
                     type: 'ARRAY',
-                    description: 'Array of KeyframeCalibrationState milestone objects containing spatial anchor correspondences and initial poses.'
+                    description: 'Array of KeyframeCalibrationState milestone objects containing spatial anchor correspondences and initial poses.',
+                    items: { type: 'OBJECT' }
                 },
                 outputCameraPath: {
                     type: 'STRING',
@@ -128,19 +129,23 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 anchors: {
                     type: 'ARRAY',
-                    description: 'Array of SpatialAnchorCorrespondence objects ({ id, label, point3D: [x, y, z], pixel2D: [u, v], weight }).'
+                    description: 'Array of SpatialAnchorCorrespondence objects ({ id, label, point3D: [x, y, z], pixel2D: [u, v], weight }).',
+                    items: { type: 'OBJECT' }
                 },
                 cameraPosition: {
                     type: 'ARRAY',
-                    description: 'Initial camera position [x, y, z] in metric local space.'
+                    description: 'Initial camera position [x, y, z] in metric local space.',
+                    items: { type: 'NUMBER' }
                 },
                 targetPosition: {
                     type: 'ARRAY',
-                    description: 'Initial camera look-at target position [x, y, z] in metric local space.'
+                    description: 'Initial camera look-at target position [x, y, z] in metric local space.',
+                    items: { type: 'NUMBER' }
                 },
                 upVector: {
                     type: 'ARRAY',
-                    description: 'Initial camera up-vector [x, y, z] (default: [0, 1, 0]).'
+                    description: 'Initial camera up-vector [x, y, z] (default: [0, 1, 0]).',
+                    items: { type: 'NUMBER' }
                 },
                 lens: {
                     type: 'OBJECT',
@@ -201,7 +206,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 milestones: {
                     type: 'ARRAY',
-                    description: 'Array of KeyframeCalibrationState milestone objects.'
+                    description: 'Array of KeyframeCalibrationState milestone objects.',
+                    items: { type: 'OBJECT' }
                 },
                 sequenceId: {
                     type: 'STRING',
@@ -229,7 +235,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 facadeNormal: {
                     type: 'ARRAY',
-                    description: 'Facade normal unit vector [nx, ny, nz] (default: [-0.8746, 0.0, -0.4848]).'
+                    description: 'Facade normal unit vector [nx, ny, nz] (default: [-0.8746, 0.0, -0.4848]).',
+                    items: { type: 'NUMBER' }
                 },
                 outputPath: {
                     type: 'STRING',
@@ -321,7 +328,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 trajectory: {
                     type: 'ARRAY',
-                    description: 'Array of trajectory frame objects containing timeSec, position [x,y,z], target [x,y,z], and optional up/fov.'
+                    description: 'Array of trajectory frame objects containing timeSec, position [x,y,z], target [x,y,z], and optional up/fov.',
+                    items: { type: 'OBJECT' }
                 },
                 trajectoryPath: {
                     type: 'STRING',
@@ -375,7 +383,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 knots: {
                     type: 'ARRAY',
-                    description: 'Array of SplineKnot objects with timeSec, position, target, up, fovYDeg, and optional k1.'
+                    description: 'Array of SplineKnot objects with timeSec, position, target, up, fovYDeg, and optional k1.',
+                    items: { type: 'OBJECT' }
                 },
                 knotsPath: {
                     type: 'STRING',
@@ -383,7 +392,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 tracks: {
                     type: 'ARRAY',
-                    description: 'Array of PersistentTrack3D2D with worldPoint3D and frame observations.'
+                    description: 'Array of PersistentTrack3D2D with worldPoint3D and frame observations.',
+                    items: { type: 'OBJECT' }
                 },
                 tracksPath: {
                     type: 'STRING',
@@ -391,7 +401,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 anchors: {
                     type: 'ARRAY',
-                    description: 'Array of SplineAnchorConstraint with timeSec, position, target, up, and weight.'
+                    description: 'Array of SplineAnchorConstraint with timeSec, position, target, up, and weight.',
+                    items: { type: 'OBJECT' }
                 },
                 width: {
                     type: 'NUMBER',
@@ -436,7 +447,8 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             properties: {
                 knots: {
                     type: 'ARRAY',
-                    description: 'Array of SplineKnot objects.'
+                    description: 'Array of SplineKnot objects.',
+                    items: { type: 'OBJECT' }
                 },
                 knotsPath: {
                     type: 'STRING',

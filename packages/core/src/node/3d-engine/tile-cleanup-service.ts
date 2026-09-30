@@ -97,8 +97,11 @@ export class PhotorealTileCleanupService {
         // Look for compiled binary in scripts or build directory
         const candidateBinaries = [
             path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline'),
+            path.resolve(process.cwd(), '../scripts/run_tile_cleanup_pipeline'),
+            path.resolve(__dirname, '../../../../../scripts/run_tile_cleanup_pipeline'),
             path.resolve(__dirname, '../../../../scripts/run_tile_cleanup_pipeline'),
-            path.resolve(process.cwd(), 'build/3d-native/run_tile_cleanup_pipeline')
+            path.resolve(process.cwd(), 'build/3d-native/run_tile_cleanup_pipeline'),
+            path.resolve(process.cwd(), '../build/3d-native/run_tile_cleanup_pipeline')
         ];
         this.binaryPath = candidateBinaries.find(p => fs.existsSync(p)) || candidateBinaries[0];
     }
@@ -111,7 +114,13 @@ export class PhotorealTileCleanupService {
             return this.binaryPath;
         }
 
-        const sourcePath = path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline.cpp');
+        const candidateSources = [
+            path.resolve(process.cwd(), 'scripts/run_tile_cleanup_pipeline.cpp'),
+            path.resolve(process.cwd(), '../scripts/run_tile_cleanup_pipeline.cpp'),
+            path.resolve(__dirname, '../../../../../scripts/run_tile_cleanup_pipeline.cpp'),
+            path.resolve(__dirname, '../../../../scripts/run_tile_cleanup_pipeline.cpp')
+        ];
+        const sourcePath = candidateSources.find(p => fs.existsSync(p)) || candidateSources[0];
         const includePath = this.compiler.getSdkIncludePath();
         const outputDir = path.dirname(this.binaryPath);
 

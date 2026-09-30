@@ -267,6 +267,34 @@ export function inferToolGroup(name: string): ToolGroup {
 const timestampNow = (): string => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const execId = (): string => `exec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+function sanitizeSchemaNode(schemaNode: any): any {
+    if (!schemaNode || typeof schemaNode !== 'object') return schemaNode;
+    const sanitized = { ...schemaNode };
+    const typeStr = String(sanitized.type || '').toUpperCase();
+    if (typeStr === 'ARRAY' && !sanitized.items) {
+        sanitized.items = { type: 'STRING' };
+    }
+    if (sanitized.items && typeof sanitized.items === 'object') {
+        sanitized.items = sanitizeSchemaNode(sanitized.items);
+    }
+    if (sanitized.properties && typeof sanitized.properties === 'object') {
+        const nextProps: Record<string, any> = {};
+        for (const [key, val] of Object.entries(sanitized.properties)) {
+            nextProps[key] = sanitizeSchemaNode(val);
+        }
+        sanitized.properties = nextProps;
+    }
+    return sanitized;
+}
+
+export function sanitizeToolDeclaration(decl: ToolDeclaration): ToolDeclaration {
+    if (!decl || !decl.parameters) return decl;
+    return {
+        ...decl,
+        parameters: sanitizeSchemaNode(decl.parameters)
+    };
+}
+
 /**
  * Registry of Gemini function-calling tools. Each tool contributes its declaration and a handler;
  * `dispatch` resolves a model tool call to a handler, runs it with a `ToolContext`, and wraps the
@@ -308,7 +336,7 @@ export class ToolRegistry {
         const wanted = groups ? new Set(groups) : undefined;
         return Array.from(this.tools.values())
             .filter(t => !wanted || wanted.has(t.group))
-            .map(t => t.declaration);
+            .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
     async dispatch(name: string, args: Record<string, unknown> | undefined, ctx: ToolContext): Promise<ToolExecutionResult> {

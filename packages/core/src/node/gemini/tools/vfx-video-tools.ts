@@ -513,7 +513,8 @@ export const FFMPEG_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 timestampsSec: {
                     type: 'ARRAY',
-                    description: 'Array of timestamps in seconds to extract (e.g. [0, 1.5, 3.0])'
+                    description: 'Array of timestamps in seconds to extract (e.g. [0, 1.5, 3.0])',
+                    items: { type: 'NUMBER' }
                 },
                 heroFrameOnly: {
                     type: 'BOOLEAN',
