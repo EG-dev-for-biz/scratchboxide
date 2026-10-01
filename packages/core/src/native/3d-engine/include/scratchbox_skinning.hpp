@@ -283,7 +283,7 @@ public:
 
 /**
  * Gender and Somatotype Morphological Archetypes
- * Derived from SMPL-X empirical sexual dimorphism metrics (height, biacromial breadth, pelvic width)
+ * Derived from SB-Human empirical sexual dimorphism metrics (height, biacromial breadth, pelvic width)
  */
 enum class GenderMorph {
     Neutral, // Standard balanced reference morphology

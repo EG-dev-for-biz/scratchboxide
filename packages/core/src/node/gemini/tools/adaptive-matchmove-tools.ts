@@ -281,7 +281,7 @@ export const ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'adaptive_matchmove_extract_pose_anchors',
-        description: 'Intelligently extracts 3D-to-2D spatial anchor correspondences for a human or articulated subject from a plate image or video frame using MediaPipe / Gemini Multimodal vision and anatomical skeletal priors. Maps the 33 canonical MediaPipe/SMPL-X landmarks into metric 3D coordinates and sub-pixel 2D image coordinates, ready for 6-DOF optical camera resection.',
+        description: 'Intelligently extracts 3D-to-2D spatial anchor correspondences for a human or articulated subject from a plate image or video frame using MediaPipe / Gemini Multimodal vision and anatomical skeletal priors. Maps the 33 canonical MediaPipe/SB-Human landmarks into metric 3D coordinates and sub-pixel 2D image coordinates, ready for 6-DOF optical camera resection.',
         parameters: {
             type: 'OBJECT',
             properties: {

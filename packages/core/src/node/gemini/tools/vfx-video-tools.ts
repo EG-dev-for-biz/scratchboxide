@@ -215,7 +215,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 skeletonGuidanceFile: {
                     type: 'STRING',
-                    description: 'Optional path to SMPL-X or MediaPipe 3D skeleton motion JSON'
+                    description: 'Optional path to SB-Human or MediaPipe 3D skeleton motion JSON'
                 },
                 steps: {
                     type: 'NUMBER',

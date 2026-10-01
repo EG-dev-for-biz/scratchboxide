@@ -220,7 +220,7 @@ export class TaskCapabilityResolver {
             primaryNativeEngine = 'google-models';
             nativeCapabilities.push('Frame-Motivated Performer Video Prompt Pipeline (buildFrameMotivatedPerformerVideoPrompt)');
             nativeCapabilities.push('build_frame_motivated_performer_prompt Agent Tool (<FIRST_FRAME> Syntax, A-Pose Invariant, Multi-View Video Positions)');
-            nativeCapabilities.push('Wan2.2-TI2V-5B conditioning tags & A-pose continuity');
+            nativeCapabilities.push('Google Veo 2 / Wan2.2 conditioning tags & A-pose continuity');
             rationale = 'Native Frame-Motivated Performer Video Prompt Pipeline formulates exact <FIRST_FRAME> conditioning, A-pose continuity clauses, camera viewpoint angles (0°, 45°, 180°), and prompt neutrality rules.';
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',

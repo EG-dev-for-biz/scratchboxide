@@ -101,7 +101,7 @@ export interface VideoTo4DPerformerOptions {
     dryRun?: boolean;
     landmarks2D?: MediaPipeNormalizedLandmark33[];
     /**
-     * Human motion & shape recovery. 'gvhmr' (default for video) fits an SMPL-X body with GVHMR and builds
+     * Human motion & shape recovery. 'gvhmr' (default for video) fits an SB-Human body with GVHMR and builds
      * the avatar from it; 'mediapipe' uses landmark tracking on the parametric template. GVHMR failures
      * fall back to MediaPipe.
      */
@@ -315,7 +315,7 @@ export class VideoTo4DPerformerPipelineService {
 
         const isVideoInput = VIDEO_EXTENSIONS.includes(path.extname(options.videoPath).toLowerCase());
 
-        // GVHMR fits the performer's SMPL-X body (shape + world-grounded motion + hero camera).
+        // GVHMR fits the performer's SB-Human body (shape + world-grounded motion + hero camera).
         const gvhmrService = new GvhmrBodyService();
         let gvhmrBody: GvhmrBody | null = null;
         let gvhmrError: string | undefined;
@@ -1432,7 +1432,7 @@ export class VideoTo4DPerformerPipelineService {
 
     /**
      * Stage 3: Generates 35k–50k dense canonical Gaussians in natural Frame-0 resting pose
-     * with 4-influence partition-of-unity skinning weights bound to the 22 SMPL-X joints.
+     * with 4-influence partition-of-unity skinning weights bound to the 22 SB-Human joints.
      */
     public generateCanonicalPosedGaussians(
         silhouette: SilhouetteExtractionResult,
@@ -1470,7 +1470,7 @@ export class VideoTo4DPerformerPipelineService {
             const meshHeight = (maxY - minY) || 1.72;
             const heightScale = targetHeight / meshHeight;
 
-            // Scaled canonical joints (first 22 map to SMPL-X body skeleton)
+            // Scaled canonical joints (first 22 map to SB-Human body skeleton)
             const canonicalJoints: Array<[number, number, number]> = loader.joints.slice(0, 22).map(j => [
                 j.pos[0] * heightScale,
                 (j.pos[1] - minY) * heightScale,
@@ -1847,7 +1847,7 @@ export class VideoTo4DPerformerPipelineService {
             rightFlexRad = Math.atan2(dx, dy);
         }
 
-        // Left arm (positive X in SMPL-X model coordinates)
+        // Left arm (positive X in SB-Human model coordinates)
         posed[18] = [
             canLeftShoulder[0] + leftUpperArmLen * Math.cos(leftAdductRad),
             canLeftShoulder[1] - leftUpperArmLen * Math.sin(leftAdductRad),
@@ -1859,7 +1859,7 @@ export class VideoTo4DPerformerPipelineService {
             posed[18][2] + leftForearmLen * Math.sin(leftFlexRad) * 0.2
         ];
 
-        // Right arm (negative X in SMPL-X model coordinates)
+        // Right arm (negative X in SB-Human model coordinates)
         posed[19] = [
             canRightShoulder[0] - rightUpperArmLen * Math.cos(rightAdductRad),
             canRightShoulder[1] - rightUpperArmLen * Math.sin(rightAdductRad),
@@ -1902,7 +1902,7 @@ export class VideoTo4DPerformerPipelineService {
         const posed: Array<[number, number, number]> = canonicalJoints.map(j => [j[0], j[1], j[2]]);
         if (canonicalJoints.length < 22) return posed;
 
-        // SMPL-X arm joints:
+        // SB-Human arm joints:
         // Left: 16 (shoulder), 18 (elbow), 20 (wrist)
         // Right: 17 (shoulder), 19 (elbow), 21 (wrist)
         const leftShoulder = canonicalJoints[16];
@@ -1923,7 +1923,7 @@ export class VideoTo4DPerformerPipelineService {
         const adductRad = (78 * Math.PI) / 180;
         const flexRad = (8 * Math.PI) / 180;
 
-        // Left arm (positive X in SMPL-X model coordinates)
+        // Left arm (positive X in SB-Human model coordinates)
         posed[18] = [
             leftShoulder[0] + leftUpperArmLen * Math.cos(adductRad),
             leftShoulder[1] - leftUpperArmLen * Math.sin(adductRad),
@@ -1935,7 +1935,7 @@ export class VideoTo4DPerformerPipelineService {
             posed[18][2] + leftForearmLen * Math.sin(flexRad) * 0.2
         ];
 
-        // Right arm (negative X in SMPL-X model coordinates)
+        // Right arm (negative X in SB-Human model coordinates)
         posed[19] = [
             rightShoulder[0] - rightUpperArmLen * Math.cos(adductRad),
             rightShoulder[1] - rightUpperArmLen * Math.sin(adductRad),

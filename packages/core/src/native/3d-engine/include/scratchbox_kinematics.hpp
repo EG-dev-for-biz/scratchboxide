@@ -77,7 +77,7 @@ enum class Canonical55Joint : int32_t {
     Jaw,
     LeftEye,
     RightEye,
-    // Left Hand (canonical SMPL-X order: Index, Middle, Pinky, Ring, Thumb)
+    // Left Hand (canonical SB-Human order: Index, Middle, Pinky, Ring, Thumb)
     LeftIndex1,
     LeftIndex2,
     LeftIndex3,
@@ -93,7 +93,7 @@ enum class Canonical55Joint : int32_t {
     LeftThumb1,
     LeftThumb2,
     LeftThumb3,
-    // Right Hand (canonical SMPL-X order: Index, Middle, Pinky, Ring, Thumb)
+    // Right Hand (canonical SB-Human order: Index, Middle, Pinky, Ring, Thumb)
     RightIndex1,
     RightIndex2,
     RightIndex3,
@@ -185,8 +185,8 @@ struct HandPcaSubspace {
     }
 
     void initDefault() {
-        // Authentic Empirical Left Hand Mean Pose from SMPL-X (15 joints x 3 DOFs)
-        static constexpr std::array<float, NUM_DOFS> SMPLX_HANDS_MEAN_L = {
+        // Authentic Empirical Left Hand Mean Pose from SB-Human (15 joints x 3 DOFs)
+        static constexpr std::array<float, NUM_DOFS> SBHUMAN_HANDS_MEAN_L = {
             +0.1117f, +0.0429f, -0.4164f, // 0: Index1
             +0.1088f, -0.0660f, -0.7562f, // 1: Index2
             -0.0964f, -0.0909f, -0.1885f, // 2: Index3
@@ -203,7 +203,8 @@ struct HandPcaSubspace {
             -0.4998f, +0.0266f, +0.0529f, // 13: Thumb2
             +0.5356f, +0.0460f, -0.2774f  // 14: Thumb3
         };
-        meanPose = SMPLX_HANDS_MEAN_L;
+        static constexpr auto& SMPLX_HANDS_MEAN_L = SBHUMAN_HANDS_MEAN_L;
+        meanPose = SBHUMAN_HANDS_MEAN_L;
 
         for (size_t c = 0; c < NUM_COMPONENTS; ++c) {
             components[c].fill(0.0f);
@@ -499,7 +500,7 @@ public:
         rig.addJoint("LeftEye", head, math::Vec3(0.034f, 1.680f, 0.055f) * scale);
         rig.addJoint("RightEye", head, math::Vec3(-0.034f, 1.680f, 0.055f) * scale);
 
-        // 6. Left Hand 5-Digit Finger Chains (childed to LeftWrist, canonical SMPL-X order)
+        // 6. Left Hand 5-Digit Finger Chains (childed to LeftWrist, canonical SB-Human order)
         // Index (3 joints)
         int32_t li1 = rig.addJoint("LeftIndex1", lWrist, math::Vec3(0.80f * scale + armXOffset, 1.43f * scale, 0.02f * scale));
         int32_t li2 = rig.addJoint("LeftIndex2", li1,    math::Vec3(0.83f * scale + armXOffset, 1.43f * scale, 0.02f * scale));
@@ -525,7 +526,7 @@ public:
         int32_t lt2 = rig.addJoint("LeftThumb2", lt1,    math::Vec3(0.80f * scale + armXOffset, 1.38f * scale, 0.04f * scale));
         rig.addJoint("LeftThumb3", lt2,                   math::Vec3(0.82f * scale + armXOffset, 1.37f * scale, 0.05f * scale));
 
-        // 7. Right Hand 5-Digit Finger Chains (childed to RightWrist, canonical SMPL-X order)
+        // 7. Right Hand 5-Digit Finger Chains (childed to RightWrist, canonical SB-Human order)
         // Index (3 joints)
         int32_t ri1 = rig.addJoint("RightIndex1", rWrist, math::Vec3(-0.80f * scale - armXOffset, 1.43f * scale, 0.02f * scale));
         int32_t ri2 = rig.addJoint("RightIndex2", ri1,    math::Vec3(-0.83f * scale - armXOffset, 1.43f * scale, 0.02f * scale));

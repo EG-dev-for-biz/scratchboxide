@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { VideoTo4DPerformerPipelineService } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
 
-// Rebuilds every featured performer from its cached GVHMR SMPL-X body into a temp directory.
+// Rebuilds every featured performer from its cached GVHMR SB-Human body into a temp directory.
 // The shipped demos are regenerated from source video by scripts/regenerate_5_demos.ts, never by tests.
 describe('Regenerate All 5 Demo PLYs', () => {
     const demos = [

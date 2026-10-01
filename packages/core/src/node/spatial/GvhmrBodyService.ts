@@ -12,7 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync, execSync } from 'child_process';
 import { HumanoidMotionData, SkinWeightedGaussian } from '../3d-engine/Dynamic4DGaussianSplatService';
-import { SMPLX22_PARENTS, Vec3 } from '../../common/humanoid-skinning';
+import { SBHUMAN22_PARENTS, Vec3 } from '../../common/humanoid-skinning';
 import { resolveBinary } from '../video/HeadlessVideoEditorService';
 
 /** Output of scripts/run_gvhmr.py (see its docstring for coordinate conventions). */
@@ -105,7 +105,7 @@ function quatFromNormal(n: Vec3): [number, number, number, number] {
 }
 
 /**
- * Builds performer avatars from GVHMR's SMPL-X body: the canonical Gaussians are sampled on
+ * Builds performer avatars from GVHMR's SB-Human body: the canonical Gaussians are sampled on
  * the fitted rest mesh, textured by projecting their exact hero-frame positions through GVHMR's camera,
  * and driven by GVHMR's world-grounded joint motion.
  */
@@ -219,7 +219,7 @@ export class GvhmrBodyService {
             gaussians,
             samples,
             canonicalJoints: body.rest_joints.map(j => [j[0], j[1], j[2]]),
-            kintreeParents: SMPLX22_PARENTS.slice()
+            kintreeParents: SBHUMAN22_PARENTS.slice()
         };
     }
 
@@ -313,12 +313,12 @@ export class GvhmrBodyService {
         const fps = body.fps || 25;
         return {
             clip_id: clipId,
-            body_model: 'smplx_22',
+            body_model: 'sbhuman_22',
             fps,
             num_frames: body.frames.length,
             num_joints: 22,
             joints_name: JOINT_NAMES,
-            kintree_parents: SMPLX22_PARENTS.slice(),
+            kintree_parents: SBHUMAN22_PARENTS.slice(),
             canonical_joints: rest.map(j => [j[0], j[1], j[2]]),
             frames: body.frames.map((f, i) => ({
                 frame_index: i,

@@ -250,7 +250,7 @@ export class SpatialAssetVaultService {
       10.0
     );
 
-    // 5. SMPL-X Compatibility Alias
+    // 5b. Backward compatibility alias pointing to native SB-Human assets
     this.storeAsset(
       'body_models/smplx',
       { lat: 0.0, lng: 0.0, alt: 0.0 },
@@ -258,10 +258,10 @@ export class SpatialAssetVaultService {
         type: 'mesh-glb',
         durableUri: 'vault://body_models/smplx/neutral',
         metadata: {
-          title: 'SMPL-X Parametric Body Model',
-          neutralUri: '/models/smplx/SMPLX_NEUTRAL.npz',
-          maleUri: '/models/smplx/SMPLX_MALE.npz',
-          femaleUri: '/models/smplx/SMPLX_FEMALE.npz',
+          title: 'SB-Human Body Model (Legacy Alias)',
+          neutralUri: '/models/sbhuman_neutral.sbhuman',
+          maleUri: '/models/sbhuman_male.sbhuman',
+          femaleUri: '/models/sbhuman_female.sbhuman',
           numVertices: 10475
         }
       },

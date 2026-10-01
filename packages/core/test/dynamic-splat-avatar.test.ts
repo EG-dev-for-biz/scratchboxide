@@ -132,7 +132,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         expect(heroDelta[2]).toBeCloseTo(0.0, 4);
     });
 
-    it('should retarget 33 MediaPipe landmarks to 22 SMPL-X joints with terrain grounding', () => {
+    it('should retarget 33 MediaPipe landmarks to 22 SB-Human joints with terrain grounding', () => {
         // Create synthetic MediaPipe 33 landmarks
         const synthLandmarks = Array.from({ length: 33 }, (_, i) => ({
             x: (i % 5) * 0.1 - 0.2,
@@ -149,14 +149,14 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
         synthLandmarks[31] = { x: 0.1, y: 0.9, z: 0.1, visibility: 0.95 }; // left foot idx
         synthLandmarks[32] = { x: -0.1, y: 0.9, z: 0.1, visibility: 0.95 }; // right foot idx
 
-        const smplxJoints = bridgeService.convertLandmarksToSMPLX22(synthLandmarks);
-        expect(smplxJoints.length).toBe(22);
+        const sbhumanJoints = bridgeService.convertLandmarksToSbHuman22(synthLandmarks);
+        expect(sbhumanJoints.length).toBe(22);
 
         // Verify pelvis is midpoint of hips
         const lHip = synthLandmarks[23];
         const rHip = synthLandmarks[24];
         const expectedPelvisX = (lHip.x + rHip.x) * 0.5;
-        expect(smplxJoints[0][0]).toBeCloseTo(expectedPelvisX, 4);
+        expect(sbhumanJoints[0][0]).toBeCloseTo(expectedPelvisX, 4);
 
         // Verify retargetVideoMotionTrack with ground pinning
         const trackResult: VideoMotionTrackResult = {

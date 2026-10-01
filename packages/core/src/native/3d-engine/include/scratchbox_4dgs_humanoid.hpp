@@ -43,7 +43,7 @@ struct Gaussian {
 };
 
 /**
- * 22 Canonical SMPL-X / SB-Human Joint Hierarchy
+ * 22 Canonical SB-Human Joint Hierarchy
  */
 inline const std::vector<std::string> CANONICAL_22_JOINT_NAMES = {
     "pelvis",         // 0

@@ -945,10 +945,10 @@ export class ComfyUiPipelineAgent {
                         {
                             id: '3',
                             classType: 'SkeletonConditioningNode',
-                            title: '3D Skeleton Depth Guidance (SMPL-X / MediaPipe)',
+                            title: '3D Skeleton Depth Guidance (SB-Human / MediaPipe)',
                             category: 'conditioning/skeleton',
                             inputs: {
-                                skeleton_source: goal.includes('a-pose') ? 'smpl_a_pose_motion.json' : 'smpl_motion.json',
+                                skeleton_source: goal.includes('a-pose') ? 'sbhuman_a_pose_motion.json' : 'sbhuman_motion.json',
                                 depth_buffer_render: true,
                                 confidence_threshold: 0.85
                             },

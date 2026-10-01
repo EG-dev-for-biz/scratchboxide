@@ -106,8 +106,8 @@ export class HumanoidMotionBridgeService {
             fps: trackResult.sampleFps || 25.0,
             num_frames: smoothedFrames.length,
             num_joints: 22,
-            joints_name: this.getSMPLX22JointNames(),
-            kintree_parents: this.getSMPLX22Parents(),
+            joints_name: this.getSbHuman22JointNames(),
+            kintree_parents: this.getSbHuman22Parents(),
             canonical_joints: canonical,
             frames: smoothedFrames
         };
@@ -142,7 +142,7 @@ export class HumanoidMotionBridgeService {
             images.push(lastImage);
         }
 
-        const worldJoints = worlds.map(w => this.convertLandmarksToSMPLX22(w.map(([x, y, z, v]) => ({ x, y, z, visibility: v }))));
+        const worldJoints = worlds.map(w => this.convertLandmarksToSbHuman22(w.map(([x, y, z, v]) => ({ x, y, z, visibility: v }))));
         const focalLengthPx = options.focalLengthPx ?? track.width / (2 * Math.tan(DEFAULT_HORIZONTAL_FOV_RAD / 2));
         const cameraJoints = this.liftLimbsFromImage(worldJoints, worlds, images, canonicalJoints as Vec3[], track.width, track.height, focalLengthPx);
 
@@ -203,12 +203,12 @@ export class HumanoidMotionBridgeService {
 
         return {
             clip_id: options.clipId,
-            body_model: 'smplx_22',
+            body_model: 'sbhuman_22',
             fps,
             num_frames: frames.length,
             num_joints: 22,
-            joints_name: this.getSMPLX22JointNames(),
-            kintree_parents: this.getSMPLX22Parents(),
+            joints_name: this.getSbHuman22JointNames(),
+            kintree_parents: this.getSbHuman22Parents(),
             canonical_joints: canonicalJoints,
             frames,
             motion_source: 'mediapipe_pose_track',
@@ -234,7 +234,7 @@ export class HumanoidMotionBridgeService {
         focalLengthPx: number
     ): Vec3[][] {
         const LIMBS: Array<[number, number]> = [[16, 18], [18, 20], [17, 19], [19, 21], [1, 4], [4, 7], [2, 5], [5, 8]];
-        const parents = this.getSMPLX22Parents();
+        const parents = this.getSbHuman22Parents();
         const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
         const mid = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
         const median = (v: number[]) => {
@@ -246,9 +246,9 @@ export class HumanoidMotionBridgeService {
         const cy = height / 2;
 
         const pixelJoints = images.map(img => img
-            ? this.convertLandmarksToSMPLX22(img.map(([x, y, , v]) => ({ x: x * width, y: -y * height, z: 0, visibility: v })))
+            ? this.convertLandmarksToSbHuman22(img.map(([x, y, , v]) => ({ x: x * width, y: -y * height, z: 0, visibility: v })))
             : null);
-        const visibility = worlds.map(w => this.convertLandmarksToSMPLX22(w.map(([, , , v]) => ({ x: v, y: 0, z: 0, visibility: v }))));
+        const visibility = worlds.map(w => this.convertLandmarksToSbHuman22(w.map(([, , , v]) => ({ x: v, y: 0, z: 0, visibility: v }))));
         const ray = (px: Vec3): Vec3 => {
             const d: Vec3 = [(px[0] - cx) / focalLengthPx, -(px[1] - cy) / focalLengthPx, -1];
             const l = Math.hypot(d[0], d[1], d[2]);
@@ -481,7 +481,7 @@ export class HumanoidMotionBridgeService {
         return smoothed;
     }
 
-    public getSMPLX22JointNames(): string[] {
+    public getSbHuman22JointNames(): string[] {
         return [
             'pelvis', 'left_hip', 'right_hip', 'spine1',
             'left_knee', 'right_knee', 'spine2', 'left_ankle',
@@ -492,8 +492,22 @@ export class HumanoidMotionBridgeService {
         ];
     }
 
-    public getSMPLX22Parents(): number[] {
+    public getSbHuman22Parents(): number[] {
         return [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
+    }
+
+    /**
+     * Backward-compatible alias for getSbHuman22JointNames.
+     */
+    public getSMPLX22JointNames(): string[] {
+        return this.getSbHuman22JointNames();
+    }
+
+    /**
+     * Backward-compatible alias for getSbHuman22Parents.
+     */
+    public getSMPLX22Parents(): number[] {
+        return this.getSbHuman22Parents();
     }
 
     public getDefaultCanonicalJoints(): Array<[number, number, number]> {

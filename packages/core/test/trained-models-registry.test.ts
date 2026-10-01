@@ -27,6 +27,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(summary.totalSizeBytes).toBeGreaterThan(100 * 1024 * 1024); // Over 100 MB
 
         // All core families should have models discovered
+        expect(summary.families.sbhuman).toBeGreaterThanOrEqual(3);
         expect(summary.families.smplx).toBeGreaterThanOrEqual(3);
         expect(summary.families['performer_4dgs']).toBeGreaterThanOrEqual(1);
         expect(summary.families.omniroam).toBeGreaterThanOrEqual(2);
@@ -34,6 +35,10 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
     });
 
     it('2. should properly resolve parametric humanoid body models (.sbhuman or smplx)', () => {
+        const sbNeutral = registry.getSbHumanModel('neutral');
+        expect(sbNeutral).toBeDefined();
+        expect(fs.existsSync(sbNeutral!)).toBe(true);
+
         const neutral = registry.getSmplxModel('neutral');
         const male = registry.getSmplxModel('male');
         const female = registry.getSmplxModel('female');
@@ -93,7 +98,12 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(humanoidRecord!.representation.type).toBe('gaussian-splat');
         expect(humanoidRecord!.representation.metadata?.splatCount).toBe(121942);
 
-        // Check for SMPL-X body model vault registration
+        // Check for SB-Human parametric body model vault registration
+        const sbhumanRecord = records.find(r => r.representation.durableUri === 'vault://body_models/sbhuman/neutral');
+        expect(sbhumanRecord).toBeDefined();
+        expect(sbhumanRecord!.representation.metadata?.numVertices).toBe(10475);
+
+        // Check for backward-compatibility legacy alias
         const smplxRecord = records.find(r => r.representation.durableUri === 'vault://body_models/smplx/neutral');
         expect(smplxRecord).toBeDefined();
         expect(smplxRecord!.representation.metadata?.numVertices).toBe(10475);

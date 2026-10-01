@@ -120,18 +120,18 @@ function mulABt(a: Mat3, b: Mat3): Mat3 {
 
 /** Per-joint rotation (canonical -> posed) for all 22 joints. */
 export function computeBoneRotations(canonical: Vec3[], posed: Vec3[]): Mat3[] {
-    const n = Math.min(canonical.length, posed.length, SMPLX22_PARENTS.length);
+    const n = Math.min(canonical.length, posed.length, SBHUMAN22_PARENTS.length);
     const rotations: Mat3[] = new Array(n);
     for (let j = 0; j < n; j++) {
-        const child = SMPLX22_SEGMENT_CHILD[j];
+        const child = SBHUMAN22_SEGMENT_CHILD[j];
         if (child < 0 || child >= n) {
-            const parent = SMPLX22_PARENTS[j];
+            const parent = SBHUMAN22_PARENTS[j];
             rotations[j] = parent >= 0 ? rotations[parent] : IDENTITY;
             continue;
         }
         const segC = sub(canonical[child], canonical[j]);
         const segP = sub(posed[child], posed[j]);
-        const lateral = SMPLX22_LATERAL_REF[j];
+        const lateral = SBHUMAN22_LATERAL_REF[j];
         let R: Mat3 | null = null;
         if (lateral) {
             const fC = segmentFrame(segC, sub(canonical[lateral[1]], canonical[lateral[0]]));
@@ -140,7 +140,7 @@ export function computeBoneRotations(canonical: Vec3[], posed: Vec3[]): Mat3[] {
         }
         if (!R) {
             // Swing relative to the parent so body/pelvis twist propagates down the limbs.
-            const parent = SMPLX22_PARENTS[j];
+            const parent = SBHUMAN22_PARENTS[j];
             const Rp = parent >= 0 ? rotations[parent] : IDENTITY;
             R = mulAB(swingRotation(applyMat3(Rp, segC), segP), Rp);
         }
@@ -218,7 +218,7 @@ export function retargetSegmentDirections(canonical: Vec3[], source: Vec3[], roo
     const out: Vec3[] = new Array(canonical.length);
     out[0] = rootPosition ? [rootPosition[0], rootPosition[1], rootPosition[2]] : [canonical[0][0], canonical[0][1], canonical[0][2]];
     for (let j = 1; j < canonical.length; j++) {
-        const p = SMPLX22_PARENTS[j];
+        const p = SBHUMAN22_PARENTS[j];
         const len = Math.hypot(...sub(canonical[j], canonical[p]));
         const dir = normalize(sub(source[j], source[p])) || normalize(sub(canonical[j], canonical[p])) || [0, 1, 0];
         out[j] = [out[p][0] + dir[0] * len, out[p][1] + dir[1] * len, out[p][2] + dir[2] * len];

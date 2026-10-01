@@ -23,7 +23,7 @@ import {
     computeBoneRotations,
     retargetSegmentDirections,
     skinPoint,
-    SMPLX22_PARENTS
+    SBHUMAN22_PARENTS
 } from '../src/common/humanoid-skinning';
 import { HumanoidMotionBridgeService } from '../src/node/spatial/HumanoidMotionBridgeService';
 import { VideoTo4DPerformerPipelineService } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
@@ -215,7 +215,7 @@ describe('Pose-track retargeting and camera resection', () => {
         for (const fr of motion.frames) {
             const js = fr.joint_positions_3d as Vec3[];
             for (let j = 1; j < 22; j++) {
-                const p = SMPLX22_PARENTS[j];
+                const p = SBHUMAN22_PARENTS[j];
                 const len = Math.hypot(js[j][0] - js[p][0], js[j][1] - js[p][1], js[j][2] - js[p][2]);
                 const canonLen = Math.hypot(CANONICAL[j][0] - CANONICAL[p][0], CANONICAL[j][1] - CANONICAL[p][1], CANONICAL[j][2] - CANONICAL[p][2]);
                 expect(len).toBeCloseTo(canonLen, 5);
@@ -257,7 +257,7 @@ describe('Pose-track retargeting and camera resection', () => {
             const camZ = cam[2] - Z;
             return [(intr.fx * (X - cam[0]) / camZ + intr.cx) / intr.width, (intr.fy * (-(Y - cam[1])) / camZ + intr.cy) / intr.height, 0, v] as [number, number, number, number];
         });
-        const posed22 = bridge.convertLandmarksToSMPLX22(world.map(([x, y, z, v]) => ({ x, y, z, visibility: v })));
+        const posed22 = bridge.convertLandmarksToSbHuman22(world.map(([x, y, z, v]) => ({ x, y, z, visibility: v })));
         const solved = pipeline.solveCameraFromLandmarks(image, posed22, intr)!;
         expect(solved).not.toBeNull();
         expect(solved.camX).toBeCloseTo(cam[0], 1);
@@ -274,7 +274,7 @@ describe('Pose-track retargeting and camera resection', () => {
     });
 });
 
-describe('GVHMR SMPL-X body avatar', () => {
+describe('GVHMR SB-Human body avatar', () => {
     // Rest: front quad (bone 1) facing +Z at z=0 and a hidden quad (bone 2) 0.5 m behind it.
     // Hero camera frame (OpenCV, y down): front quad at z=2, hidden quad at z=2.5, both centred on the axis.
     const quad = (z: number, flipY: boolean): Vec3[] => [[-0.5, 0, z], [0.5, 0, z], [0.5, 1, z], [-0.5, 1, z]]
@@ -486,7 +486,7 @@ describe('Multi-view cloud job', () => {
         expect(f2[0][0]).toBeCloseTo(CANONICAL[0][0] + 0.2, 6);
         expect(f2[0][1]).toBeCloseTo(CANONICAL[0][1], 6);
         for (let j = 1; j < 22; j++) {
-            const p = SMPLX22_PARENTS[j];
+            const p = SBHUMAN22_PARENTS[j];
             const len = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
             expect(len(f2[j], f2[p])).toBeCloseTo(len(CANONICAL[j], CANONICAL[p]), 6);
         }

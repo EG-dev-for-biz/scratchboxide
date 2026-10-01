@@ -14,7 +14,7 @@ import { SbHumanLoader } from '../src/common/spatial/SbHumanLoader';
 import { CharacterClothingMorphology } from '../src/node/spatial/CharacterClothingMorphology';
 
 describe('CharacterClothingMorphology (Palazzo Pants, Tunic Shirt & Headphone Synthesis)', () => {
-    it('should map joints correctly to 22 SMPL-X standard joints', () => {
+    it('should map joints correctly to 22 SB-Human standard joints', () => {
         expect(CharacterClothingMorphology.mapJointTo22(0)).toBe(0); // Pelvis
         expect(CharacterClothingMorphology.mapJointTo22(1)).toBe(1); // LeftHip
         expect(CharacterClothingMorphology.mapJointTo22(7)).toBe(7); // LeftAnkle

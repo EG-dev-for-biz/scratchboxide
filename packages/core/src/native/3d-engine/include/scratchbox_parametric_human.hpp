@@ -55,7 +55,7 @@ struct SbHumanHeaderV1 {
 
 /**
  * Barycentric Surface & Facial Landmark Representation
- * Directly maps to SMPL-X lmk_bary_coords / lmk_faces_idx architecture
+ * Directly maps to SB-Human lmk_bary_coords / lmk_faces_idx architecture
  * L_k = u * V_0 + v * V_1 + w * V_2
  */
 struct BarycentricLandmark {
@@ -384,7 +384,7 @@ public:
 
     /**
      * Initializes canonical anthropometric facial landmarks via barycentric coordinates
-     * matching SMPL-X / FLAME facial topology.
+     * matching SB-Human / FLAME facial topology.
      */
     static void initializeFacialLandmarks(SbHumanModel& model) {
         const auto& mesh = model.templateMesh;

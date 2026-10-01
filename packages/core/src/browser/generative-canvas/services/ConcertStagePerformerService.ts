@@ -150,9 +150,9 @@ export interface PerformerTelemetry {
 }
 
 /**
- * 22 Canonical SMPL-X / SB-Human Joint Names and Hierarchy.
+ * 22 Canonical SB-Human Joint Names and Hierarchy.
  */
-export const SMPLX_22_JOINT_NAMES = [
+export const SBHUMAN_22_JOINT_NAMES = [
   'pelvis',         // 0
   'left_hip',       // 1
   'right_hip',      // 2
@@ -177,12 +177,16 @@ export const SMPLX_22_JOINT_NAMES = [
   'right_wrist',    // 21
 ];
 
-export const SMPLX_22_PARENTS = [
+export const SBHUMAN_22_PARENTS = [
   -1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19
 ];
 
+/** Backward-compatible aliases */
+export const SMPLX_22_JOINT_NAMES = SBHUMAN_22_JOINT_NAMES;
+export const SMPLX_22_PARENTS = SBHUMAN_22_PARENTS;
+
 /**
- * Default metric canonical rest joints for SMPL-X humanoids.
+ * Default metric canonical rest joints for SB-Human humanoids.
  */
 export const DEFAULT_CANONICAL_JOINTS: Array<[number, number, number]> = [
   [0.0031, 0.9353, 0.0400],   // 0: pelvis
@@ -236,7 +240,7 @@ export class ConcertStagePerformerService {
   public restSplats: BakedGaussian[] = [];
   public splatWeights: SplatSkinWeight[] = [];
   public canonicalJoints: Array<[number, number, number]> = DEFAULT_CANONICAL_JOINTS;
-  public kintreeParents: number[] = SMPLX_22_PARENTS;
+  public kintreeParents: number[] = SBHUMAN_22_PARENTS;
 
   // Kinematic Motion Frames
   public motionFrames: PerformerKinematicsFrame[] = [];

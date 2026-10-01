@@ -10,7 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { decodeGaussianPly } from '../../common/gaussian-ply-codec';
-import { SMPLX22_PARENTS } from '../../common/humanoid-skinning';
+import { SBHUMAN22_PARENTS } from '../../common/humanoid-skinning';
 import { GvhmrBody, GvhmrBodyService } from './GvhmrBodyService';
 
 type Vec3 = [number, number, number];
@@ -44,7 +44,7 @@ export interface SurfaceFitOptions {
     minOpacity?: number;
     /** Convert sRGB splat colors to linear for COLOR_0. Defaults to true. */
     linearizeColors?: boolean;
-    /** Per-bone displacement caps, blended by skin weight (defaults keep SMPL-X fingers and face anatomical). */
+    /** Per-bone displacement caps, blended by skin weight (defaults keep SB-Human fingers and face anatomical). */
     boneMaxOffset?: Record<number, number>;
     /** Optional high-resolution hero frame RGB24 buffer for optical facial and cloth texture projection. */
     heroImageRgb?: Buffer | Uint8Array;
@@ -54,7 +54,7 @@ export interface SurfaceFitOptions {
 }
 
 const DEFAULT_BONE_MAX_OFFSET: Record<number, number> = {
-    15: 0.00, // Head: 100% anatomical lock to SMPL-X facial features
+    15: 0.00, // Head: 100% anatomical lock to SB-Human facial features
     20: 0.00, // Left wrist/hand: 100% anatomical lock to fingers
     21: 0.00  // Right wrist/hand: 100% anatomical lock to fingers
 };
@@ -63,10 +63,10 @@ export interface SurfaceBuildOptions extends SurfaceFitOptions {
     subdivisionLevels?: number;
 }
 
-const BONE_ADJACENCY: number[] = SMPLX22_PARENTS.map((parent, j) => {
+const BONE_ADJACENCY: number[] = SBHUMAN22_PARENTS.map((parent, j) => {
     let mask = 1 << j;
     if (parent >= 0) mask |= 1 << parent;
-    SMPLX22_PARENTS.forEach((p, c) => { if (p === j) mask |= 1 << c; });
+    SBHUMAN22_PARENTS.forEach((p, c) => { if (p === j) mask |= 1 << c; });
     return mask;
 });
 
@@ -89,7 +89,7 @@ function srgbToLinear(c: number): number {
 }
 
 /**
- * Builds the "Photoreal Surface" mesh for an avatar: the fitted SMPL-X rest mesh, subdivided,
+ * Builds the "Photoreal Surface" mesh for an avatar: the fitted SB-Human rest mesh, subdivided,
  * pushed out to the trained splats' outer shell (clothing/hair volume) and colored from them.
  * The result shares the splats' canonical frame and bone weights, so the viewer skins both identically.
  */

@@ -13,7 +13,7 @@ import * as fs from 'fs-extra';
 import * as os from 'os';
 import {
     VideoTo4DPerformerPipelineService,
-    SMPLX_22_JOINTS
+    SBHUMAN_22_JOINTS
 } from '../src/node/spatial/VideoTo4DPerformerPipelineService';
 import { SbHumanLoader } from '../src/common/spatial/SbHumanLoader';
 import { Dynamic4DGaussianSplatService } from '../src/node/3d-engine/Dynamic4DGaussianSplatService';
@@ -65,7 +65,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
             const weightSum = g.boneWeights[0] + g.boneWeights[1] + g.boneWeights[2] + g.boneWeights[3];
             expect(weightSum).toBeCloseTo(1.0, 4);
 
-            // Bone indices must be valid SMPL-X indices [0..21]
+            // Bone indices must be valid SB-Human indices [0..21]
             for (let b = 0; b < 4; b++) {
                 expect(g.boneIndices[b]).toBeGreaterThanOrEqual(0);
                 expect(g.boneIndices[b]).toBeLessThan(22);
@@ -126,8 +126,8 @@ describe('VideoTo4DPerformerPipelineService', () => {
     });
 
     it('4. should enforce foot-contact ground clamping across motion frames', () => {
-        const canonicalJoints = SMPLX_22_JOINTS.map(j => j.restOffset);
-        const parents = SMPLX_22_JOINTS.map(j => j.parent);
+        const canonicalJoints = SBHUMAN_22_JOINTS.map(j => j.restOffset);
+        const parents = SBHUMAN_22_JOINTS.map(j => j.parent);
         const heroJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
         const motion = pipeline.recoverPerformerMotion(canonicalJoints, parents, 25, 2.0, 'test_motion', heroJoints);
@@ -232,7 +232,7 @@ describe('VideoTo4DPerformerPipelineService', () => {
         expect(loader.header.numJoints).toBe(55);
         expect(loader.joints).toHaveLength(55);
 
-        // First 22 joints match SMPL-X body skeleton
+        // First 22 joints match SB-Human body skeleton
         expect(loader.joints[0].name).toBe('Pelvis');
         expect(loader.joints[15].name).toBe('Head');
         expect(loader.joints[20].name).toBe('LeftWrist');
@@ -520,8 +520,8 @@ describe('VideoTo4DPerformerPipelineService', () => {
             execSync(`ffmpeg -y -f lavfi -i "color=c=gray:s=64x128:d=1,drawbox=x=20:y=20:w=24:h=80:color=white:t=fill" -c:v libx264 -pix_fmt yuv420p "${tempVideoPath}"`, { stdio: 'ignore' });
 
             if (fs.existsSync(tempVideoPath)) {
-                const canonicalJoints = SMPLX_22_JOINTS.map(j => [...j.restOffset] as [number, number, number]);
-                const kintreeParents = SMPLX_22_JOINTS.map(j => j.parent);
+                const canonicalJoints = SBHUMAN_22_JOINTS.map(j => [...j.restOffset] as [number, number, number]);
+                const kintreeParents = SBHUMAN_22_JOINTS.map(j => j.parent);
                 const heroPoseJoints = pipeline.computeHeroRestingPoseJoints(canonicalJoints);
 
                 const motion = pipeline.recoverPerformerMotion(

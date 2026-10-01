@@ -30,7 +30,7 @@ export interface CharacterClothingMorphologyOptions {
 
 export class CharacterClothingMorphology {
     /**
-     * Maps 55 SbHuman joints or raw joint IDs down to the standard 22 SMPL-X body joints.
+     * Maps 55 SbHuman joints or raw joint IDs down to the standard 22 SB-Human body joints.
      */
     public static mapJointTo22(j: number): number {
         if (j <= 21 && j >= 0) return j;

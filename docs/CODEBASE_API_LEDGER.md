@@ -15,7 +15,7 @@ This ledger provides an exhaustive index of all completed APIs, services, operat
    - [Atmospheric Scattering, Ephemeris & Radiometric Lighting](#atmospheric-scattering-ephemeris--radiometric-lighting)
    - [Optics, Lens Distortion & Physical Cameras](#optics-lens-distortion--physical-cameras)
    - [6-DOF Camera Resection, Tracking & Matchmoving](#6-dof-camera-resection-tracking--matchmoving)
-   - [4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SMPL-X)](#4d-gaussian-splatting--parametric-humanoids-performer-4dgs--smpl-x)
+   - [4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SB-Human)](#4d-gaussian-splatting--parametric-humanoids-performer-4dgs--sb-human)
    - [Universal Tile Decomposition & Mesh Engineering (UTDRA / ULDRA)](#universal-tile-decomposition--mesh-engineering-utdra--uldra)
    - [PBR Materials, Texture Baking & Algorithmic UV Rewrapping](#pbr-materials-texture-baking--algorithmic-uv-rewrapping)
    - [Parametric Botany & Architecture (SB-Veggie & SB-Archi)](#parametric-botany--architecture-sb-veggie--sb-archi)
@@ -90,13 +90,13 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`VanishingPointHorizonEstimator`** (`packages/core/src/node/spatial/VanishingPointHorizonEstimator.ts`): 3-point vanishing perspective analysis for camera pitch and roll estimation.
 - **`TapirTrackingService`** (`packages/core/src/node/spatial/TapirTrackingService.ts`): Google DeepMind TAPIR dense point tracking integration for tracking physical feature points across frames.
 
-### 4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SMPL-X)
+### 4D Gaussian Splatting & Parametric Humanoids (Performer 4DGS / SB-Human)
 - **`Dynamic4DGaussianSplatService`** (`packages/core/src/node/3d-engine/Dynamic4DGaussianSplatService.ts`):
   - 4-bone partition-of-unity Linear Blend Skinning (LBS) for dynamic Gaussians.
   - Streaming real-time deformed Gaussian point clouds at 60 FPS.
 - **`VideoTo4DPerformerPipelineService`** (`packages/core/src/node/spatial/VideoTo4DPerformerPipelineService.ts`):
-  - Ingests casual video, runs Google Veo 2 / multi-view synthesis, BiRefNet silhouette extraction, visual-hull carving, and fits SMPL-X 22-joint canonical splat representations.
-- **`HumanoidMotionBridgeService`** (`packages/core/src/node/spatial/HumanoidMotionBridgeService.ts`): Retargets MediaPipe 33-landmark and GVHMR 3D kinematics into the canonical SMPL-X 22-joint kinematic skeleton.
+  - Ingests casual video, runs Google Veo 2 / multi-view synthesis, BiRefNet silhouette extraction, visual-hull carving, and fits SB-Human 22-joint canonical splat representations.
+- **`HumanoidMotionBridgeService`** (`packages/core/src/node/spatial/HumanoidMotionBridgeService.ts`): Retargets MediaPipe 33-landmark and GVHMR 3D kinematics into the canonical SB-Human 22-joint kinematic skeleton.
 - **`GvhmrBodyService`** (`packages/core/src/node/spatial/GvhmrBodyService.ts`): 3D human body mesh and trajectory extraction from monocular video.
 - **`PerformerPoseTrackService`** (`packages/core/src/node/spatial/PerformerPoseTrackService.ts`): Trajectory filtering, velocity smoothing, and foot-sliding contact clamping.
 - **`SbHumanLoader`** (`packages/core/src/common/spatial/SbHumanLoader.ts`): Serializes/deserializes `.sbhuman` binary skinning assets (header, joints, 4-bone skin weights, canonical Gaussian positions).
@@ -158,7 +158,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 - **`MediaPipeVideoDirectorService`** (`packages/core/src/node/video/MediaPipeVideoDirectorService.ts`): Autonomous camera framing, subject tracking, and the 8-Dimension Visual Critic audit.
 - **`omniVideoPromptService`** (`packages/core/src/browser/generative-canvas/services/video/omniVideoPromptService.ts`):
   - `buildNeutralPerformerPrompt`: Head-to-toe, flat studio, `#808080` shadowless lighting, symmetrical A-pose prompt builder.
-  - `buildFrameMotivatedPerformerVideoPrompt`: `<FIRST_FRAME>` video conditioning syntax for Wan2.2-TI2V-5B.
+  - `buildFrameMotivatedPerformerVideoPrompt`: Closed-loop (`<FIRST_FRAME>` + `<LAST_FRAME>`) video conditioning syntax for Google Veo 2 (`veo-2.0-generate-001`) / multi-view.
   - `buildBeautifyPrompt`: Location beautification prompt maintaining 1:1 camera parameters.
 
 ### Survey Station Synthesis & AI Beautify
@@ -492,7 +492,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 8. **`scratchbox_skinning.hpp`**: SIMD linear blend skinning and dual quaternion skinning.
 9. **`scratchbox_kinematics.hpp`**: Forward and inverse kinematics solvers for humanoid rigs.
 10. **`scratchbox_parametric_human.hpp`**: Parametric human body topology and shape blendshapes.
-11. **`scratchbox_smpl_optimizer.hpp`**: Levenberg-Marquardt optimizer for SMPL/SMPL-X body parameters.
+11. **`scratchbox_smpl_optimizer.hpp`**: Levenberg-Marquardt optimizer for SB-Human parametric body parameters.
 12. **`scratchbox_shaper.hpp`**: Prompt-driven non-linear mesh deformation (taper, twist, bend, bulge, FFD).
 13. **`scratchbox_field_remesh.hpp`**: 4-RoSy directional cross-field calculation and quad remeshing.
 14. **`scratchbox_halfedge.hpp`**: Half-edge geometric Euler operators and face adjacency graphs.
@@ -605,9 +605,9 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
                        ▼                                           ▼
              [Environment & Set Extension]             [Dynamic Character & Performer]
           - SurveySynthesisEngine & SAIP unproject      - VideoTo4DPerformerPipelineService
-          - AlgorithmicUvEngine & PBR Baking            - Wan2.2-TI2V-5B Multiview Synthesis
+          - AlgorithmicUvEngine & PBR Baking            - Google Veo 2 Multi-View Orbit Synthesis
           - SbVeggie & SbArchi procedural assets        - Dynamic4DGaussianSplatService (LBS)
-          - Google360PanoramaPipelineService            - SMPL-X 22-Joint Kinematic Rig
+          - Google360PanoramaPipelineService            - SB-Human 22-Joint Kinematic Rig
                        │                                           │
                        └─────────────────────┬─────────────────────┘
                                              ▼
@@ -654,8 +654,8 @@ All components form a unified, circular Visual Effects & Virtual Production pipe
 3. **Procedural Set Dressing**: `UniversalBotanicalBridgeService` (SB-Veggie) scatters biologically accurate trees, while `UniversalArchiBridgeService` (SB-Archi) snaps classical architectural colonnades and entablatures to real-world ground datum planes.
 
 ### Stage 4: 4D Dynamic Performer & Character Integration
-1. **Wan2.2-TI2V-5B Multi-View Diffusion**: When synthesizing a dynamic character or performer from casual video, `VideoTo4DPerformerPipelineService` conditions on `<FIRST_FRAME>` A-pose latents to produce synchronized capture angles (0°, 45°, -45°, 180°).
-2. **Visual-Hull Carving & SMPL-X Skinning**: `NerfstudioDatasetService` carves candidate voxels into initial point clouds without relying on brittle SfM. `HumanoidMotionBridgeService` retargets body landmarks into 22-joint SMPL-X skeletons.
+1. **Google Veo 2 Closed-Loop Orbital Video Conditioning**: When synthesizing a dynamic character or performer from casual video, `VideoTo4DPerformerPipelineService` conditions on `<FIRST_FRAME>` and `<LAST_FRAME>` latents using Google Veo 2 (`veo-2.0-generate-001`) to produce seamless 360° orbital camera trajectories (72 frames, $\Delta\theta = 5.0^\circ$) with Zero-COLMAP analytical extrinsics.
+2. **Visual-Hull Carving & SB-Human Skinning**: `NerfstudioDatasetService` carves candidate voxels into initial point clouds without relying on brittle SfM. `HumanoidMotionBridgeService` retargets body landmarks into 22-joint SB-Human kinematic skeletons.
 3. **Real-Time 4DGS Deformed Playback**: `Dynamic4DGaussianSplatService` evaluates 4-bone partition-of-unity Linear Blend Skinning in real-time WebGL at 60 FPS, with dynamic cloth wrinkles simulated via `CharacterClothingMorphology`.
 
 ### Stage 5: Compositing, Holdout Mattes & Lens Emulation
