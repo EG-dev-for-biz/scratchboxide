@@ -66,6 +66,7 @@ import { SpotlightLauncherModal } from './SpotlightLauncherModal';
 import { AutomationsModal } from './AutomationsModal';
 export { AutomationsModal };
 import { GoogleDriveConnectModal } from './GoogleDriveConnectModal';
+import { GitReviewModal } from './GitReviewModal';
 import { GoogleDriveService } from './google-drive-service';
 import type {
     ContextMentionCategory,
@@ -288,6 +289,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const isSpotlightOpen = modalStack.includes('spotlight');
     const isSettingsOpen = modalStack.includes('settings');
     const isGoogleDriveOpen = modalStack.includes('google-drive');
+    const isGitReviewOpen = modalStack.includes('git-review');
     const [globalToast, setGlobalToast] = React.useState<{ text: string; icon: string } | undefined>(undefined);
 
     const showToast = React.useCallback((text: string, icon: string = '') => {
@@ -398,7 +400,14 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setExecutionEnvironment,
         showEnvironmentMenu,
         setShowEnvironmentMenu,
-        handleCheckoutBranch
+        handleCheckoutBranch,
+        gitStatus,
+        isGitLoading,
+        fetchGitStatus,
+        fetchGitDiff,
+        handleStageFile,
+        handleUnstageFile,
+        handleCommit
     } = useComposerGitEnv({ activeWorkspace, showToast });
 
     const handleCreateNewWorkspace = React.useCallback(async (workspaceName?: string, customPath?: string) => {
@@ -1005,6 +1014,17 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     onOpenKeyboardShortcuts();
                 } else {
                     openSettingsToTab('shortcuts');
+                }
+                return;
+            }
+
+            // 13b. ⌘⇧G -> Git Review & Staging
+            if (isCmdOrCtrl && e.shiftKey && (e.key === 'G' || e.key === 'g')) {
+                e.preventDefault();
+                if (modalManagerRef.current.isModalOpen('git-review')) {
+                    closeModal('git-review');
+                } else {
+                    openModal('git-review');
                 }
                 return;
             }
@@ -1635,6 +1655,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                     closeModal('spotlight');
                     openSettingsToTab('mcp');
                 }}
+                onOpenGitReview={() => {
+                    closeModal('spotlight');
+                    openModal('git-review');
+                }}
                 onDebugTerminal={() => {
                     closeModal('spotlight');
                     if (activeTerminalError) {
@@ -1723,6 +1747,21 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 isOpen={isGoogleDriveOpen}
                 onClose={() => closeModal('google-drive')}
                 onExportCurrentDocument={triggerGoogleDocsExport}
+            />
+
+            {/* Git Review & Staging Modal (⌘⇧G) */}
+            <GitReviewModal
+                isOpen={isGitReviewOpen}
+                onClose={() => closeModal('git-review')}
+                workspacePath={activeWorkspace.path}
+                currentBranch={currentBranch}
+                gitStatus={gitStatus}
+                isGitLoading={isGitLoading}
+                fetchGitStatus={fetchGitStatus}
+                fetchGitDiff={fetchGitDiff}
+                handleStageFile={handleStageFile}
+                handleUnstageFile={handleUnstageFile}
+                handleCommit={handleCommit}
             />
 
             {/* Apple-Grade Settings & Guide Modal */}

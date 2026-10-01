@@ -17,6 +17,7 @@ import {
     IconChat,
     IconClose,
     IconCode,
+    IconDiff,
     IconDocument,
     IconKanban,
     IconMcp,
@@ -43,6 +44,7 @@ export interface SpotlightLauncherModalProps {
     onOpenSettings: (tab?: string) => void;
     onOpenAutomations?: () => void;
     onOpenMcpHub?: () => void;
+    onOpenGitReview?: () => void;
     onDebugTerminal?: () => void;
     recentSessions?: ChatSession[];
     onSelectSession?: (sessionId: string) => void;
@@ -58,6 +60,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
     onOpenSettings,
     onOpenAutomations,
     onOpenMcpHub,
+    onOpenGitReview,
     onDebugTerminal,
     recentSessions = [],
     onSelectSession,
@@ -99,6 +102,18 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
                 onClose();
                 if (onOpenAutomations) onOpenAutomations();
                 else onCreateArtifact('node-graph', 'System Node Flow');
+            }
+        },
+        {
+            id: 'act-git-review-staging',
+            title: 'Review Git Changes & Staging',
+            subtitle: 'Inspect unified diffs, stage files, and commit changes',
+            category: 'Actions',
+            icon: <IconDiff size={15} className="text-emerald-400" />,
+            shortcut: '⌘⇧G',
+            onExecute: () => {
+                onClose();
+                if (onOpenGitReview) onOpenGitReview();
             }
         },
         {
