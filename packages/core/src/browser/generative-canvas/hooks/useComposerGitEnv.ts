@@ -15,6 +15,19 @@ export interface UseComposerGitEnvOptions {
     showToast: (text: string, icon?: string) => void;
 }
 
+export interface GitStatusFile {
+    path: string;
+    status: string;
+}
+
+export interface GitStatusSummary {
+    branch: string;
+    clean: boolean;
+    staged: GitStatusFile[];
+    unstaged: GitStatusFile[];
+    untracked: string[];
+}
+
 export interface UseComposerGitEnvReturn {
     currentBranch: string;
     setCurrentBranch: React.Dispatch<React.SetStateAction<string>>;
@@ -27,6 +40,13 @@ export interface UseComposerGitEnvReturn {
     showEnvironmentMenu: boolean;
     setShowEnvironmentMenu: React.Dispatch<React.SetStateAction<boolean>>;
     handleCheckoutBranch: (branch: string) => Promise<void>;
+    gitStatus: GitStatusSummary | null;
+    isGitLoading: boolean;
+    fetchGitStatus: () => Promise<GitStatusSummary | null>;
+    fetchGitDiff: (file?: string, cached?: boolean) => Promise<string>;
+    handleStageFile: (file?: string) => Promise<boolean>;
+    handleUnstageFile: (file?: string) => Promise<boolean>;
+    handleCommit: (message: string) => Promise<boolean>;
 }
 
 export function useComposerGitEnv({
@@ -87,6 +107,129 @@ export function useComposerGitEnv({
         setShowGitBranchMenu(false);
     }, [activeWorkspace.path, showToast]);
 
+    const [gitStatus, setGitStatus] = React.useState<GitStatusSummary | null>(null);
+    const [isGitLoading, setIsGitLoading] = React.useState<boolean>(false);
+
+    const fetchGitStatus = React.useCallback(async (): Promise<GitStatusSummary | null> => {
+        setIsGitLoading(true);
+        try {
+            const rootParam = activeWorkspace.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+            const res = await fetch(`/git/status${rootParam}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success) {
+                    const summary: GitStatusSummary = {
+                        branch: data.branch || 'main',
+                        clean: !!data.clean,
+                        staged: Array.isArray(data.staged) ? data.staged : [],
+                        unstaged: Array.isArray(data.unstaged) ? data.unstaged : [],
+                        untracked: Array.isArray(data.untracked) ? data.untracked : []
+                    };
+                    setGitStatus(summary);
+                    if (data.branch) setCurrentBranch(data.branch);
+                    return summary;
+                }
+            }
+            return null;
+        } catch {
+            return null;
+        } finally {
+            setIsGitLoading(false);
+        }
+    }, [activeWorkspace.path]);
+
+    const fetchGitDiff = React.useCallback(async (file?: string, cached?: boolean): Promise<string> => {
+        try {
+            const params = new URLSearchParams();
+            if (activeWorkspace.path) params.append('root', activeWorkspace.path);
+            if (file) params.append('file', file);
+            if (cached) params.append('cached', 'true');
+            const res = await fetch(`/git/diff?${params.toString()}`);
+            if (res.ok) {
+                const data = await res.json();
+                return data.rawDiff || '';
+            }
+            return '';
+        } catch {
+            return '';
+        }
+    }, [activeWorkspace.path]);
+
+    const handleStageFile = React.useCallback(async (file?: string): Promise<boolean> => {
+        try {
+            const rootParam = activeWorkspace.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+            const res = await fetch(`/git/stage${rootParam}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeWorkspace.path, file })
+            });
+            if (res.ok) {
+                showToast(file ? `Staged ${file}` : 'Staged all changes', 'git');
+                await fetchGitStatus();
+                return true;
+            } else {
+                const err = await res.json();
+                showToast(`Staging failed: ${err.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch {
+            showToast('Staging failed (network error)');
+            return false;
+        }
+    }, [activeWorkspace.path, showToast, fetchGitStatus]);
+
+    const handleUnstageFile = React.useCallback(async (file?: string): Promise<boolean> => {
+        try {
+            const rootParam = activeWorkspace.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+            const res = await fetch(`/git/unstage${rootParam}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeWorkspace.path, file })
+            });
+            if (res.ok) {
+                showToast(file ? `Unstaged ${file}` : 'Unstaged all changes', 'git');
+                await fetchGitStatus();
+                return true;
+            } else {
+                const err = await res.json();
+                showToast(`Unstaging failed: ${err.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch {
+            showToast('Unstaging failed (network error)');
+            return false;
+        }
+    }, [activeWorkspace.path, showToast, fetchGitStatus]);
+
+    const handleCommit = React.useCallback(async (message: string): Promise<boolean> => {
+        if (!message || !message.trim()) {
+            showToast('Commit message cannot be empty');
+            return false;
+        }
+        try {
+            const rootParam = activeWorkspace.path ? `?root=${encodeURIComponent(activeWorkspace.path)}` : '';
+            const res = await fetch(`/git/commit${rootParam}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeWorkspace.path, message: message.trim() })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const hashShort = data.commitHash ? ` (${data.commitHash.slice(0, 7)})` : '';
+                showToast(`Committed${hashShort}: ${message.trim().split('\n')[0]}`, 'git');
+                await fetchGitStatus();
+                return true;
+            } else {
+                const err = await res.json();
+                showToast(`Commit failed: ${err.error || 'Unknown error'}`);
+                return false;
+            }
+        } catch {
+            showToast('Commit failed (network error)');
+            return false;
+        }
+    }, [activeWorkspace.path, showToast, fetchGitStatus]);
+
     return {
         currentBranch,
         setCurrentBranch,
@@ -98,6 +241,13 @@ export function useComposerGitEnv({
         setExecutionEnvironment,
         showEnvironmentMenu,
         setShowEnvironmentMenu,
-        handleCheckoutBranch
+        handleCheckoutBranch,
+        gitStatus,
+        isGitLoading,
+        fetchGitStatus,
+        fetchGitDiff,
+        handleStageFile,
+        handleUnstageFile,
+        handleCommit
     };
 }
