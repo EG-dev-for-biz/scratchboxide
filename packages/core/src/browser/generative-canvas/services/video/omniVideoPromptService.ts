@@ -869,6 +869,8 @@ export interface MultiViewCameraEntry {
     transformMatrixNerfstudio: number[][];
 }
 
+export type FourDAnyoneCameraEntry = MultiViewCameraEntry;
+
 export interface MultiViewCameraRigResult {
     preset: MultiViewCameraRigPreset;
     viewsPerLayer: number;
