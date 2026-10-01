@@ -877,15 +877,181 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData, cspNonce?: string)
       return window.require(specifier);
     }
 
+    function __sb_offline_transpile__(rawCode) {
+      var source = rawCode;
+      // 1. Strip TypeScript types and interfaces
+      source = source.replace(/interface\\s+[A-Za-z0-9_$]+(?:\\s*<[^>]+>)?(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\}/g, '');
+      source = source.replace(/type\\s+[A-Za-z0-9_$]+(?:\\s*<[^>]+>)?\\s*=[^;]+;/g, '');
+      source = source.replace(/\\s+as\\s+[A-Za-z0-9_$]+(?:<[^>]+>)?/g, '');
+      source = source.replace(/(useState|useRef|useMemo|useCallback|createContext|useReducer)<[^>]+>\\(/g, '$1(');
+      source = source.replace(/:\\s*(?:string|number|boolean|any|void|unknown|never|React\\.[A-Za-z0-9_$]+|Record<[^>]+>|Array<[^>]+>|[A-Za-z0-9_$]+(?:<[^>]+>)?)(?=[,\\)\\=\\s])/g, '');
+
+      // 2. Parse and transpile JSX constructs
+      var pos = 0;
+      var len = source.length;
+
+      function skipWhitespace() {
+        while (pos < len && /\\s/.test(source[pos])) pos++;
+      }
+
+      function parseAttrs() {
+        var attrs = [];
+        while (pos < len) {
+          skipWhitespace();
+          if (source[pos] === '/' || source[pos] === '>') break;
+          if (source[pos] === '{') {
+            pos++;
+            var depth = 1;
+            var start = pos;
+            while (pos < len && depth > 0) {
+              if (source[pos] === '{') depth++;
+              else if (source[pos] === '}') depth--;
+              pos++;
+            }
+            var expr = source.slice(start, pos - 1).trim();
+            if (expr.startsWith('...')) attrs.push(expr.slice(3));
+            else attrs.push(expr);
+            continue;
+          }
+          var nameStart = pos;
+          while (pos < len && /[A-Za-z0-9_$-]/.test(source[pos])) pos++;
+          var name = source.slice(nameStart, pos);
+          if (!name) break;
+          skipWhitespace();
+          if (source[pos] === '=') {
+            pos++;
+            skipWhitespace();
+            if (source[pos] === '"' || source[pos] === "'") {
+              var q = source[pos++];
+              var valStart = pos;
+              while (pos < len && source[pos] !== q) {
+                if (source[pos] === '\\\\') pos++;
+                pos++;
+              }
+              var val = source.slice(valStart, pos);
+              pos++;
+              attrs.push(JSON.stringify(name) + ': ' + JSON.stringify(val));
+            } else if (source[pos] === '{') {
+              pos++;
+              var depth2 = 1;
+              var valStart2 = pos;
+              while (pos < len && depth2 > 0) {
+                if (source[pos] === '{') depth2++;
+                else if (source[pos] === '}') depth2--;
+                pos++;
+              }
+              var valExpr = source.slice(valStart2, pos - 1).trim();
+              attrs.push(JSON.stringify(name) + ': (' + valExpr + ')');
+            }
+          } else {
+            attrs.push(JSON.stringify(name) + ': true');
+          }
+        }
+        return attrs.length ? '{' + attrs.join(', ') + '}' : 'null';
+      }
+
+      function parseElement() {
+        if (source[pos] !== '<') return null;
+        pos++;
+        skipWhitespace();
+        var isFragment = false;
+        var tag = '';
+        if (source[pos] === '>') {
+          isFragment = true;
+          pos++;
+        } else {
+          var tagStart = pos;
+          while (pos < len && /[A-Za-z0-9_$.]/.test(source[pos])) pos++;
+          tag = source.slice(tagStart, pos);
+          if (!tag) return null;
+        }
+
+        var attrCode = 'null';
+        if (!isFragment) {
+          attrCode = parseAttrs();
+          skipWhitespace();
+          if (source[pos] === '/' && source[pos + 1] === '>') {
+            pos += 2;
+            var tagRef = /^[a-z]/.test(tag) ? JSON.stringify(tag) : tag;
+            return 'React.createElement(' + tagRef + ', ' + attrCode + ')';
+          }
+          if (source[pos] === '>') {
+            pos++;
+          } else {
+            return null;
+          }
+        }
+
+        var children = [];
+        while (pos < len) {
+          if (source[pos] === '<') {
+            if (source[pos + 1] === '/') {
+              pos += 2;
+              var closeTagStart = pos;
+              while (pos < len && /[A-Za-z0-9_$.]/.test(source[pos])) pos++;
+              var closeTag = source.slice(closeTagStart, pos);
+              skipWhitespace();
+              if (source[pos] === '>') pos++;
+              break;
+            } else {
+              var childElem = parseElement();
+              if (childElem) children.push(childElem);
+              else pos++;
+            }
+          } else if (source[pos] === '{') {
+            pos++;
+            var depth3 = 1;
+            var expStart = pos;
+            while (pos < len && depth3 > 0) {
+              if (source[pos] === '{') depth3++;
+              else if (source[pos] === '}') depth3--;
+              pos++;
+            }
+            var childExpr = source.slice(expStart, pos - 1).trim();
+            if (childExpr) children.push('(' + childExpr + ')');
+          } else {
+            var textStart = pos;
+            while (pos < len && source[pos] !== '<' && source[pos] !== '{') pos++;
+            var text = source.slice(textStart, pos).trim();
+            if (text) children.push(JSON.stringify(text));
+          }
+        }
+
+        var resTagRef = isFragment ? 'React.Fragment' : (/^[a-z]/.test(tag) ? JSON.stringify(tag) : tag);
+        return 'React.createElement(' + resTagRef + ', ' + attrCode + (children.length ? ', ' + children.join(', ') : '') + ')';
+      }
+
+      var out = '';
+      while (pos < len) {
+        if (source[pos] === '<' && /[A-Za-z0-9_$>.]/.test(source[pos + 1] || '')) {
+          var lookbehind = source.slice(Math.max(0, pos - 20), pos).trim();
+          var isJsxContext = /(?:return|\\(|\\[|\\=|,|:|\\?|&|\\||>)\\s*$/.test(lookbehind) || lookbehind === '';
+          if (isJsxContext) {
+            var savedPos = pos;
+            var elem = parseElement();
+            if (elem) {
+              out += elem;
+              continue;
+            } else {
+              pos = savedPos;
+            }
+          }
+        }
+        out += source[pos++];
+      }
+      return out;
+    }
+
     async function __sb_boot__() {
       try {
         let attempts = 0;
-        while (!window.Babel && attempts < 80) {
+        // Wait briefly for Babel CDN (up to 30 attempts / 1.5s)
+        while (!window.Babel && attempts < 30) {
           await new Promise(r => setTimeout(r, 50));
           attempts++;
         }
         if (!window.Babel) {
-          throw new Error('Babel Standalone compiler is still loading from CDN. Please check network.');
+          console.warn('[Scratchbox Sandbox] Babel Standalone CDN not reachable. Using embedded offline AST transpiler fallback.');
         }
 
         for (const f of __sb_files__) {
@@ -939,13 +1105,18 @@ export function buildSandboxSrcDoc(data: LiveCodeSandboxData, cspNonce?: string)
         code = code.replace(/export\\s+\\*\\s+from\\s+['"][^'"]*['"];?/g, '');
         code = code.replace(/^\\s*export\\s+/gm, '');
 
-        const transpiled = window.Babel.transform(code, {
-          presets: [
-            'react',
-            ['typescript', { isTSX: true, allExtensions: true }]
-          ],
-          filename: f.name
-        }).code;
+        let transpiled = '';
+        if (window.Babel && typeof window.Babel.transform === 'function') {
+          transpiled = window.Babel.transform(code, {
+            presets: [
+              'react',
+              ['typescript', { isTSX: true, allExtensions: true }]
+            ],
+            filename: f.name
+          }).code;
+        } else {
+          transpiled = __sb_offline_transpile__(code);
+        }
 
         const fallbackCheck = '\\nif (typeof App !== "undefined" && !module.exports.default && !module.exports.App) { module.exports.App = App; }\\n' +
           'if (typeof AudioVisualizer !== "undefined" && !module.exports.default) { module.exports.AudioVisualizer = AudioVisualizer; }\\n';
