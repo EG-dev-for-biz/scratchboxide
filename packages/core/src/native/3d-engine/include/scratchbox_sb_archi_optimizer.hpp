@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture Inversion Optimizer)
  * Native C++20 Analysis-by-Synthesis Architectural Inversion Solver.
@@ -10,8 +10,6 @@
  * - Chamfer distance residual minimization
  * - Void opening ratio computation (restoring hollow see-through arches)
  * - Telemetry reporting for pipeline auditing and visual criticism
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #ifndef SCRATCHBOX_SB_ARCHI_OPTIMIZER_HPP

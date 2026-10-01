@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Procedural C++20 Photorealistic Building Generator with Authentic PBR Textures
  * Empire State Building - 350 5th Ave, New York, NY 10118

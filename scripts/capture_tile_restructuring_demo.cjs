@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Proof & Verification Runner for 3D Tile Restructuring Studio.
  * Spawns ephemeral server, launches headless Chrome with WebGL,
  * exercises interactive prompt & style presets, and captures verification screenshots.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 const http = require('http');

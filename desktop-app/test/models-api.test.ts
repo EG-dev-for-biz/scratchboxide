@@ -1,11 +1,11 @@
 import { test, describe, it, expect, beforeAll, afterAll } from 'vitest';
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import http from 'http';

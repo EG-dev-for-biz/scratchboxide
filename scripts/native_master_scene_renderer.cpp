@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Grand Master Scene Synthesis Renderer:
  * Unifies all 8 native C++20 engine capabilities:

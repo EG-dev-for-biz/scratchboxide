@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Automated Test Suite: Instant Meshes Field-Aligned Quad Remesher
  * Tests 4-RoSy orientation field, Manhattan priors, integer grid contouring,

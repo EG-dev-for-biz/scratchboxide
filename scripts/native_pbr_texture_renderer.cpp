@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Demonstrates and visually validates:
  * Generative Media Studio & 3D Texture Projection

@@ -301,8 +301,8 @@ async function runColosseum1kPbrPipeline() {
       const ty0 = mPos[i0 * 3 + 1], ty1 = mPos[i1 * 3 + 1], ty2 = mPos[i2 * 3 + 1];
       const triY = (ty0 + ty1 + ty2) / 3.0;
 
-      // Filter ground range: between 68.0m and 76.0m, predominantly upward facing
-      if (triY >= 68.0 && triY <= 76.0) {
+      // Filter ground range: between 16.0m and 26.0m, predominantly upward facing
+      if (triY >= 16.0 && triY <= 26.0) {
         let fny = 0.5;
         if (mNorm) {
           fny = (mNorm[i0 * 3 + 1] + mNorm[i1 * 3 + 1] + mNorm[i2 * 3 + 1]) / 3.0;
@@ -311,7 +311,7 @@ async function runColosseum1kPbrPipeline() {
           const bx = mPos[i2 * 3] - mPos[i0 * 3], by = ty2 - ty0, bz = mPos[i2 * 3 + 2] - mPos[i0 * 3 + 2];
           fny = az * bx - ax * bz;
         }
-        if (fny > 0.40 || triY <= 73.5) {
+        if (fny > 0.40 || triY <= 22.0) {
           const triX = (mPos[i0 * 3] + mPos[i1 * 3] + mPos[i2 * 3]) / 3.0;
           const triZ = (mPos[i0 * 3 + 2] + mPos[i1 * 3 + 2] + mPos[i2 * 3 + 2]) / 3.0;
           const key = `${Math.floor(triX / groundGridCellSize)},${Math.floor(triZ / groundGridCellSize)}`;
@@ -340,7 +340,7 @@ async function runColosseum1kPbrPipeline() {
       }
       if (found) return minR;
     }
-    return 72.30; // Rome Colosseum datum fallback
+    return 21.50; // Rome Colosseum datum fallback
   }
   console.log(`Global ground elevation grid initialized: ${globalGroundGrid.size} cells.`);
 

@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Native C++20 Generator: Google Maps-Informed Low-Poly Grey-Box Empire State Building
  *

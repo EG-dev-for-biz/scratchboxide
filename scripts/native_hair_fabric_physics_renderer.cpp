@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Studio Showcase Renderer for:
  * 1. Native C++20 Hair & Fur Grooming (XPBD Splines, Voronoi Clumping, Marschner BSDF).

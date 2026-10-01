@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Real-World Photograph & Google 3D Tiles Precision Alignment Preview Generator
  * Supports both Everyday Random Samples and Iconic Landmark Baselines.

@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal Architectural Bridge Service (SB-Archi)
  * Connects the Google 3D Tile Spatial Separator with the native C++20 SB-Archi
@@ -7,8 +7,6 @@
  * entities, resolves classical typologies, fits stereotomic proportion systems,
  * and synthesizes 1:1 metric watertight replacement glTF 2.0 assets across any
  * geographic area.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as fs from 'fs';

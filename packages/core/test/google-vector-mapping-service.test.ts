@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Automated Test Suite: Google Maps-Informed Vector Mapping Service
  * Verifies geodetic anchoring, ENU tangent plane projection, Manhattan 29°

@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal Spatial Visual Alignment Verification Service
  * Metrology certification engine that audits 1:1 metric scale, translation,
  * ground snapping, pinhole optical consistency (H3D = h_px * d / fy), sub-pixel
  * edge overlap, and dual AABB vs OBB volume tightness against VFX quality gates.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 export interface BoundingBox3D {

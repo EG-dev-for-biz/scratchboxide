@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Generates public/models/cg_architectural_monolith.glb
  * Production-grade binary glTF asset matching the VFX Plate Anti-Drift specification:

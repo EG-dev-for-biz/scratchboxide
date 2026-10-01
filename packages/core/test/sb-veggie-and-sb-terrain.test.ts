@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Comprehensive Test Suite for SB-Veggie (Parametric Botanical Engine) and
  * SB-Terrain (Multi-Material Ground Engine) Integration.
@@ -9,8 +9,6 @@
  * 2. SB-Terrain multi-material classification (pavement, grass, rock) & textures.
  * 3. SB-Veggie planting on SB-Terrain: raycast ground snapping, biome admissibility,
  *    phototropic trunk vs slope root alignment, and grove distribution.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect, beforeAll } from 'vitest';

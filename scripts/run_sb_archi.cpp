@@ -1,13 +1,11 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless SB-Archi Classical Architectural Synthesis & Inversion CLI.
  * Fits parametric classical Roman arcade priors against raw photogrammetry scans
  * (Google Maps 3D Tiles) and outputs watertight, hollow binary glTF 2.0 (.glb).
  *
  * Suitable for In-App Native Execution, Cloud Run, and Service Pipelines.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"

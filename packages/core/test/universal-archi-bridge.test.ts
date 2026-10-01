@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal Architectural Bridge Service Unit Tests (SB-Archi)
  * Validates ingesting real-world 3D architectural entities from the Spatial Separator
  * and generating watertight 1:1 metric replacement classical monuments across typologies.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';

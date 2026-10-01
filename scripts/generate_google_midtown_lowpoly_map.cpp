@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Accurate Low-Poly 3D Map Environment Generator (Native C++20)
  * Directly Informed by Google Maps Platform Vector Corridors & Parcels.

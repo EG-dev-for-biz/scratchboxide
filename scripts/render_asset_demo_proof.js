@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Verification Proof Renderer for Spatial Asset Studio
  * (public/asset_demo_studio.html)

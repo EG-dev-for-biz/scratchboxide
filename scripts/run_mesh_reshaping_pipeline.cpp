@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless Mesh Reshaping Pipeline CLI (C++20).
  * Implements high-performance native mesh deformation, FFD lattices,
  * digital sculpting, topology refinement, and binary glTF 2.0 streaming.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"

@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import * as path from 'path';
@@ -280,9 +280,9 @@ export class Location3DGaussianSplatService {
         const beautifyContext = {
             locationName: req.location || preset.beautify.locationName,
             architecturalStyle: req.architecturalStyle || preset.beautify.architecturalStyle,
-            moodPromptContext: req.moodPromptContext || preset.beautify.moodPromptContext || 'Authentic daylight with natural sun shadows.',
-            // In draft mode or when explicitly set, styleSuffix defaults to empty string so users can supply custom styles later
-            styleSuffix: req.styleSuffix !== undefined ? req.styleSuffix : (isDraft ? '' : (preset.beautify.styleSuffix || ''))
+            // Injecting anything more into the prompt should only happen in {styleSuffix}, leave empty unless user prompts a style
+            moodPromptContext: req.moodPromptContext || '',
+            styleSuffix: req.styleSuffix !== undefined ? req.styleSuffix : ''
         };
 
         progressReporter(0.1, `Launching SurveySplatPipelineService for ${beautifyContext.locationName}...`);

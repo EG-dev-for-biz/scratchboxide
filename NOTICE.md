@@ -1,17 +1,14 @@
 # Notices for Scratchbox IDE
 
-This content is produced and maintained by the Scratchbox project.
+This content is produced and maintained by Scratchbox LLC.
 
 ## Copyright
 
-All content is the property of the respective authors or their employers.
+Copyright (C) 2026 Scratchbox LLC. All rights reserved.
 
 ## Declared Project Licenses
 
-This program and the accompanying materials are made available under the terms
-of the MIT License which is available at https://opensource.org/license/mit/.
-
-SPDX-License-Identifier: MIT
+This software and associated documentation files are proprietary and confidential to Scratchbox LLC and are provided under a commercial license. See LICENSE in the repository root for details.
 
 ## Third-party Content
 

@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless SMPL-Tree Parametric Botanical Synthesis & Inversion CLI.
  * Suitable for In-App Native Execution, Service Pipelines, and Cloud Run.

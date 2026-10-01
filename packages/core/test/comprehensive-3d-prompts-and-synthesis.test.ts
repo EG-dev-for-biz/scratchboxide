@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Comprehensive Test Suite across Diverse 3D Prompts:
  * Verifies intent classification, theme detection, procedural scene synthesis,

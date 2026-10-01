@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Native C++20 Multithreaded BVH Raytracer for Pure Google 3D Tile GLB Extractions.
  * Renders ONLY the geometry extracted from the Google 3D Tile mesh:

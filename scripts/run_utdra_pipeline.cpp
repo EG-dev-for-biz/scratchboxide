@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless Universal Tile Decomposition & Rectification Pipeline CLI
  * (UTDRA / ULDRA)

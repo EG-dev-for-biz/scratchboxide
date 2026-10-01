@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Continuous-Time SE(3) Spline Bundle Adjustment with Persistent Video Track Fusion.
  * Parameterizes the camera trajectory as a continuous C2 Catmull-Rom spline with M
  * control knots, regularized by persistent multi-frame 2D tracks, 3D boundary anchors,
  * and kinematic smoothness constraints (preventing floor-hopping and sudden teleports).
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import type { CameraSolveTrack, CameraSolveFrame } from '../../common/vfx-plate-protocol';

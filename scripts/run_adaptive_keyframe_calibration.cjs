@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Sequence-Wide Keyframe Calibration Runner
  * Architecture: Adaptive Domain Architecture (Zero Presets, Schema-Guided)
@@ -11,8 +11,6 @@
  * - Gimbal-free facade-normal slerp up-vector interpolation
  * - Non-uniform time-scaled C2 Hermite spline trajectory synthesis
  * - Rigorous sequence metrology certification (< 0.05 px RMS, >= 99.0% edge overlap)
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 const fs = require('fs');

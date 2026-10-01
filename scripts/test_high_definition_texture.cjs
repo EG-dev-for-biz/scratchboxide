@@ -227,9 +227,9 @@ function fbm3D(x, y, z, octaves = 4) {
 
         // Semantic discrimination
         const isFoliage = (g > r + 3) && (g > b + 3) && (g > 45);
-        const isGround = (wy < 73.5) || (absNy > 0.70 && wy < 80.0);
+        const isGround = (wy < 22.5) || (absNy > 0.70 && wy < 23.5);
         // All vertical/slanted architecture above ground is Roman stone masonry!
-        const isStone = !isGround && !isFoliage && (wy >= 73.5);
+        const isStone = !isGround && !isFoliage && (wy >= 22.5);
 
         let deltaR = 0, deltaG = 0, deltaB = 0;
 

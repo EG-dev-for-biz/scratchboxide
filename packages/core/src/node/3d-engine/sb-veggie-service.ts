@@ -1,12 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Veggie (Scratchbox Vegetation) Native C++20 Parametric Engine Service.
- *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+
  ********************************************************************************/
 
 import * as fs from 'fs';

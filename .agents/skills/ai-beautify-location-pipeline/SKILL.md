@@ -36,6 +36,7 @@ Transform this photorealistic 3D tiles rendering of {locationName} (camera at co
 4. **`{moodPromptContext}`**:
    - Atmospheric lighting, weather, or time-of-day directives.
    - Cleanly whitespace-padded so words never collide with `This is a real location`.
+   - **CRITICAL DIRECTIVE**: Must remain EMPTY (`""`) unless explicitly requested by the user. Never inject unsolicited lighting or atmospheric defaults.
 5. **`{subjectDistanceHint}`**:
    - **When distance is available**:
      ```text
@@ -44,7 +45,9 @@ Transform this photorealistic 3D tiles rendering of {locationName} (camera at co
      *(Note the mandatory leading space).*
    - **When distance is omitted / undefined**: Empty string `""`.
 6. **`{styleSuffix}`**:
-   - Caller-supplied artistic style and generation modifiers injected verbatim at the end.
+   - **CRITICAL INVARIANT**: Injecting anything more into the prompt should **ONLY** happen in `{styleSuffix}`.
+   - **Leave empty (`""`) unless the user explicitly prompts a style**.
+   - When the user prompts a style, it is injected verbatim at the end with a leading space.
 
 ---
 

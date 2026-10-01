@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal Botanical Bridge Service Unit Tests
  * Validates ingesting real-world 3D tree entities from the Spatial Separator
  * and generating watertight 1:1 metric replacement trees across species.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';

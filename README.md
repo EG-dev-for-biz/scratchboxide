@@ -178,4 +178,5 @@ Never commit `secrets.json`, `service-account.json` or `.env`; they are ignored 
 
 ## License
 
-MIT License. Copyright (C) 2026 Scratchbox IDE.
+Commercial License. Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+See [LICENSE](file:///Users/eligreen/dev/scratchbox-ide-master/LICENSE) for commercial licensing terms.

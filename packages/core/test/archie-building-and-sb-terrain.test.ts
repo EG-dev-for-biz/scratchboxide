@@ -1,10 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Test suite for Universal Archie Building Structure Refinement &
  * SB-Terrain Multi-Material Ground Engine.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';

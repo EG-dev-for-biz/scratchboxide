@@ -1,5 +1,5 @@
-# Copyright (C) 2026 Scratchbox IDE.
-# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying is strictly prohibited.
 
 """
 DA3 Backbone: Vision Transformer with Register Tokens (DINOv2)

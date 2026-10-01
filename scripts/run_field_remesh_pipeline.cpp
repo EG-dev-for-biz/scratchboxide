@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless Instant Meshes Field-Aligned Quad Remesher CLI
  * Suitable for In-App Native Execution, Service Pipelines, and Cloud Run.

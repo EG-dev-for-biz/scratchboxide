@@ -1,10 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Legacy forwarder header for SB-Veggie (Scratchbox Vegetation Engine).
  * Supercedes legacy SMPL-Tree nomenclature.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #ifndef SCRATCHBOX_SMPL_TREE_HPP

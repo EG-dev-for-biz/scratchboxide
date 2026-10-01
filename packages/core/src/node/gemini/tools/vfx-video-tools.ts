@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import { buildBeautifyPrompt } from '../../../browser/generative-canvas/services/location-beautify-service';
@@ -77,7 +77,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 moodPromptContext: {
                     type: 'STRING',
-                    description: 'Optional atmospheric lighting and environmental mood context'
+                    description: 'Optional atmospheric lighting and environmental mood context. Leave empty unless explicitly requested by the user.'
                 },
                 distance: {
                     type: 'NUMBER',
@@ -85,7 +85,7 @@ export const AI_BEAUTIFY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 styleSuffix: {
                     type: 'STRING',
-                    description: 'Optional caller-supplied artistic style and related generation modifiers'
+                    description: 'Optional caller-supplied artistic style and related generation modifiers. In accordance with style neutrality, extra prompt injections should ONLY happen here, and MUST be left empty unless the user explicitly prompts a style.'
                 }
             },
             required: ['locationName']

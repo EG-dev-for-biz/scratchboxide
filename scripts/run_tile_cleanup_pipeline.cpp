@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless 3D Photogrammetry & Tile Cleanup Pipeline CLI
  * Suitable for In-App Native Execution and Google Cloud Run Microservices.

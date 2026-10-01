@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import * as THREE from 'three';
@@ -31,7 +31,7 @@ export const SOFT_Z_SHADER_CHUNK = /* glsl */ `
   varying float vLinearDepth;
 
   float linearizeTileDepth(float rawDepth) {
-    return (2.0 * uNear * uFar) / (uFar + uNear - rawDepth * (uFar - uNear));
+    return (uNear * uFar) / (uFar - rawDepth * (uFar - uNear));
   }
 
   float computeSoftZFactor(vec2 fragCoord, float splatLinearDepth) {

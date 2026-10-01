@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Demonstrates and visually validates Gaps 2, 3, and 4:
  * 1. Gap 2: Half-Edge DCEL, QEM Decimation, Laplace-Beltrami Curvature Field.

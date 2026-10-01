@@ -2,6 +2,8 @@
   "name": "@scratchbox/cli",
   "version": "1.0.0",
   "description": "Scratchbox CLI (sbox) — Git for the Physical World & Headless 3D Procedural Engine",
+  "author": "Scratchbox LLC",
+  "license": "UNLICENSED",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

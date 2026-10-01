@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Extract and synthesize authentic PBR texture maps from forest_reference.png
  * using the zero-dependency texture processing pipeline.

@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture) Service.
  *
  * Orchestrates native C++20 Classical Roman amphitheater arcade synthesis,
  * scan inversion, and binary glTF 2.0 streaming.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as fs from 'fs';

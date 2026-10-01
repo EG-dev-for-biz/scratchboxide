@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Verification Renderer for Live-Action VFX Plate Coordination & Anti-Drift Demo Project
  * Generates:

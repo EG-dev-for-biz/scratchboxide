@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Botanical Tree Gemini / Antigravity Agent Tools
  * Exposes the SB-Veggie (formerly SMPL-Tree) Botanical Synthesis & Inversion Engine
  * as high-level agent tools that ingest entities from the 3D Tile Spatial Separator,
  * adjust dynamically to any tree species, and output 1:1 metric watertight GLBs.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import type { ToolDeclaration, ToolHandler } from './types';

@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * 3D Bounding Box Comparison Service
  * Compares Standard Axis-Aligned Bounding Boxes (AABB) against
@@ -8,8 +8,6 @@
  *
  * Provides comprehensive metrology, corner calculations, volumetric delta
  * analysis, and interactive side-by-side WebGL demo generation.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import {

@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import * as THREE from 'three';
@@ -295,10 +295,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
           float dFocus = max(1.0, uFocusDist);
           float N_ap = max(1.4, uAperture);
           float coc = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
-          coc = clamp(coc * 35.0 * uDofStrength, 0.0, 12.0);
+          coc = clamp(coc * 35.0 * uDofStrength, 0.0, 10.0);
           vCircleOfConfusion = coc;
 
-          float bokehSpread = coc * 0.6;
+          // Subtle physical blur spread (avoiding multi-meter ballooning)
+          float bokehSpread = coc * 0.035;
           rMajor += bokehSpread;
           rMinor += bokehSpread;
           vEllipseAxes = vec2(rMajor, rMinor);

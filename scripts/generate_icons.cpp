@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Asset Generation Pipeline: Modern C++20 + CoreGraphics + ImageIO
  * Generates multi-resolution icon assets from the canonical impossible cube logo.

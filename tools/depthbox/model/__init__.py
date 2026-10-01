@@ -1,5 +1,5 @@
-# Copyright (C) 2026 Scratchbox IDE.
-# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying is strictly prohibited.
 
 from .da3_backbone import DINOv2FeatureExtractor
 from .cross_view_attention import CrossViewAttentionBlock, CameraPoseEncoder

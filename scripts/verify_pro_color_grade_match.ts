@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Professional Color Grading Studio Verification Runner
  * Runs end-to-end ProColorGradeMatchingService matching, generates HTML report,
  * and captures high-resolution screenshot with optical scopes.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as http from 'http';

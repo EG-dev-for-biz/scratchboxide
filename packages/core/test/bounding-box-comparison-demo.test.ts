@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Test suite for 3D Bounding Box Technology Comparison:
  * Axis-Aligned Bounding Box (AABB) vs. Ground-Constrained Oriented Bounding Box (OBB)
  * with PCA Covariance Analysis and Gemini 3D Box Spatial Grounding.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';

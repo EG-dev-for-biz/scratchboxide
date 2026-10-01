@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Street View restyle: removes every vehicle and person from a street-level image and, optionally, relights it
  * for a time of day or weather. Port of spce's `cleanStreetViewImage` (apps/web/app/actions.ts); the prompt and
  * lighting clauses are kept identical so both apps produce the same restyle.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import type { GoogleGenAI } from '@google/genai';

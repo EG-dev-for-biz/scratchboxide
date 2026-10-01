@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Native C++20 Fire Explosion Simulation Pipeline CLI.
  * Implements Stokes aerodynamic drag, convective toroidal swirl,
  * multipole harmonic lobe asymmetry, Planckian thermal blackbody radiation,
  * Beer-Lambert optical extinction, and binary glTF 2.0 streaming.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"

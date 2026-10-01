@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture Parametric Engine)
  * Native C++20 Classical Vitruvian Structural Prior & Procedural Synthesizer.
@@ -11,8 +11,6 @@
  * - Hollow, see-through radial vomitoria barrel vaults
  * - Engaged columns on continuous plinths with entasis taper
  * - Procedural rusticated Roman travertine ashlar PBR materials
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #ifndef SCRATCHBOX_SB_ARCHI_HPP

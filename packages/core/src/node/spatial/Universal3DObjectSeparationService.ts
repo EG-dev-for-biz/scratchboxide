@@ -1,13 +1,11 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal 3D Object Separation Pipeline Service
  * Decomposes arbitrary real-world 3D meshes (Google 3D Tiles, photogrammetry,
  * CAD models) into discrete spatial entities with tight ground-constrained
  * Oriented Bounding Boxes (OBBs), schema-guided semantic categories, and
  * downstream generator routing (SB-Archi, SB-Veggie, Archie-Building, SB-Terrain).
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as fs from 'fs';

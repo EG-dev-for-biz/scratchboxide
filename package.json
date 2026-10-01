@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "description": "Scratchbox IDE — Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Workspace",
+  "license": "UNLICENSED",
+  "author": "Scratchbox LLC",
   "workspaces": [
     "packages/*",
     "desktop-app"

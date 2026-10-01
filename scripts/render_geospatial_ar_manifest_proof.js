@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Proof Benchmark: ARCore Geospatial API Integration, WGS-84 Local Frame,
  * NOAA Solar Ephemeris, Vector Road Corridors & 3D Gaussian Splats.

@@ -2,6 +2,8 @@
   "name": "@scratchbox/core",
   "version": "1.0.0",
   "description": "Scratchbox IDE Core Library — Generative Canvas Studio, Visual Primitives, 3D Geospatial Engine, and AI Services",
+  "author": "Scratchbox LLC",
+  "license": "UNLICENSED",
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -33,7 +35,6 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
-  "license": "MIT",
   "dependencies": {
     "@google/genai": "1.32.0",
     "@monaco-editor/react": "^4.7.0",

@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Cloud Run Spatial Separator Service - Integration Test Suite
  * Validates endpoints, health probes, Gemini 3D bounding box verification,
  * and metric alignment benchmarks without sandbox socket restrictions.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';

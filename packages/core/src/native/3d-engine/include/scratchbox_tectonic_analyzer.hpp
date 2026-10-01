@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture Parametric Engine)
  * Universal Scan-to-Skeleton Tectonic Slicer & Architectural Analyzer.
@@ -11,8 +11,6 @@
  *   bay rhythm spacing and intercolumniation.
  * - Plan footprint fitting via Direct Least Squares Ellipse (Fitzgibbon-Pilu-Fisher)
  *   and Covariance Principal Component Analysis (PCA) Oriented Bounding Box.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #ifndef SCRATCHBOX_TECTONIC_ANALYZER_HPP

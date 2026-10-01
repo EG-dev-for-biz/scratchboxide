@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import {
@@ -486,15 +486,17 @@ export function buildBlockoutNanoBananaPrompt(options: BlockoutNanoBananaPromptO
         ? `https://earth.google.com/web/@${options.coordinates.lat},${options.coordinates.lng}`
         : 'https://earth.google.com/web/@40.7484,-73.9857');
     const aspectRatio = options.aspectRatio || '16:9';
+    // In accordance with style neutrality directive: extra injections into the prompt
+    // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
     const moodPromptContext = options.moodPromptContext !== undefined
         ? options.moodPromptContext
-        : 'Golden hour warm sunlight casting long dramatic shadows across facade geometries, clear atmospheric perspective. ';
+        : '';
     const subjectDistanceHint = options.subjectDistanceHint !== undefined
         ? options.subjectDistanceHint
-        : ' Subject distance: approximately 250 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze).';
+        : '';
     const styleSuffix = options.styleSuffix !== undefined
         ? options.styleSuffix
-        : ' Cinematic 35mm film photography, high dynamic range, crisp architectural edge details, authentic glass reflection and atmospheric depth.';
+        : '';
 
     return buildBeautifyPrompt({
         locationName: options.locationName,

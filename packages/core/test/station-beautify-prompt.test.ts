@@ -1,14 +1,15 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
 import { buildBeautifyPrompt, buildHybridPromptPayload, buildStationBeautifyPrompt } from '../src/browser/generative-canvas/services/location-beautify-service';
+import { buildBlockoutNanoBananaPrompt } from '../src/browser/generative-canvas/services/video/omniVideoPromptService';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor } from '../src/common/spatial/colmap-vector-reference-types';
 
@@ -69,5 +70,42 @@ describe('Station-grounded AI Beautify prompt', () => {
         const prompt = buildStationBeautifyPrompt(s2, { locationName: 'Sydney Opera House' });
         expect(prompt).not.toContain('Subject distance');
         expect(prompt).toContain('Camera lock');
+    });
+
+    it('strictly leaves {styleSuffix} and {moodPromptContext} empty unless the user explicitly prompts a style', () => {
+        // 1. buildStationBeautifyPrompt with no stylePrompt: must NOT inject unprompted styles or moods
+        const cleanStationPrompt = buildStationBeautifyPrompt(station, { locationName: 'Colosseum, Rome' });
+        expect(cleanStationPrompt).not.toContain('Golden hour');
+        expect(cleanStationPrompt).not.toContain('Cinematic');
+        expect(cleanStationPrompt).not.toContain('Editorial');
+        expect(cleanStationPrompt).not.toContain('Authentic daylight');
+        // Ends strictly with the factual solar ephemeris clause
+        expect(cleanStationPrompt.endsWith('cast shadows accordingly.')).toBe(true);
+
+        // 2. buildStationBeautifyPrompt WITH user prompted style: must place it strictly at the end in styleSuffix
+        const styledStationPrompt = buildStationBeautifyPrompt(station, {
+            locationName: 'Colosseum, Rome',
+            styleSuffix: ' Ancient Roman travertine stonework, dusk torchlight.'
+        });
+        expect(styledStationPrompt.endsWith('cast shadows accordingly. Ancient Roman travertine stonework, dusk torchlight.')).toBe(true);
+
+        // 3. buildBlockoutNanoBananaPrompt: defaults must be empty unless user prompts a style
+        const cleanNanoBananaPrompt = buildBlockoutNanoBananaPrompt({
+            locationName: 'Colosseum, Rome',
+            coordinates: { lat: 41.8902, lng: 12.4922 }
+        });
+        expect(cleanNanoBananaPrompt).not.toContain('Golden hour');
+        expect(cleanNanoBananaPrompt).not.toContain('Cinematic 35mm');
+        expect(cleanNanoBananaPrompt).not.toContain('Subject distance: approximately 250 meters');
+        // Ends strictly with the canonical framing template
+        expect(cleanNanoBananaPrompt.endsWith('taken from this exact vantage point.')).toBe(true);
+
+        // 4. buildBlockoutNanoBananaPrompt WITH user prompted style: injected strictly in styleSuffix
+        const styledNanoBananaPrompt = buildBlockoutNanoBananaPrompt({
+            locationName: 'Colosseum, Rome',
+            coordinates: { lat: 41.8902, lng: 12.4922 },
+            styleSuffix: ' High contrast chiaroscuro oil painting.'
+        });
+        expect(styledNanoBananaPrompt.endsWith('taken from this exact vantage point. High contrast chiaroscuro oil painting.')).toBe(true);
     });
 });

@@ -1,9 +1,7 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Unit tests for Continuous Spline Matchmove HTTP REST Router.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

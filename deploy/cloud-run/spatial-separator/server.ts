@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Google Cloud Run Spatial Separator & 3D Bounding Box Service
  * Exposes endpoints for multi-modal object separation, Gemini 3D bounding box
  * validation, and 1:1 metric alignment with Google 3D Tiles.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import http from 'http';

@@ -1,10 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * This program and the accompanying materials are modern C++20 and Node.js
  * services for 3D geospatial processing and material harmonization.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as fs from 'fs';

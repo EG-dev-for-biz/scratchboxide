@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture) Parametric Protocol.
  *
  * Defines parameters, configuration interfaces, and telemetry structures for
  * C++20 Classical Roman amphitheater arcade synthesis and scan inversion.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 export type RomanOrderType = 'tuscan' | 'doric' | 'ionic' | 'corinthian' | 'attic_pilaster';

@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * 50-Material 2K PBR Texture Library Generator & Multi-Source Synthesis CLI
  * Synthesizes 50 biophysically calibrated PBR material sets at up to 2K resolution,

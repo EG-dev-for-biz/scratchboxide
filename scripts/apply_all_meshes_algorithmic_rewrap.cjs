@@ -252,11 +252,11 @@ function fbm3D(x, y, z, octaves = 3) {
           const isFoliage = (g > r + 3) && (g > b + 3) && (g > 45);
 
           // 2. GROUND / ASPHALT / ROAD / SIDEWALK / PAVEMENT
-          // Ground level elevation (wy < 73.5m) or flat horizontal ground normal
-          const isGround = (wy < 73.5) || (absNy > 0.70 && wy < 80.0);
+          // Ground level elevation (wy < 22.5m) or flat horizontal ground normal
+          const isGround = (wy < 22.5) || (absNy > 0.70 && wy < 23.5);
 
           // 3. UNIVERSAL ROMAN ARCHITECTURAL STONE
-          // All elevated architecture (wy >= 73.5m) that is not foliage
+          // All elevated architecture (wy >= 22.5m) that is not foliage
           const isArchitecture = !isGround && !isFoliage;
 
           let deltaR = 0, deltaG = 0, deltaB = 0;

@@ -1,10 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Google Omni video generation through the Vertex AI Interactions API: a blockout video drives the camera
  * move while optional first/last frames pin the opening and closing composition.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import { GoogleAuth } from 'google-auth-library';

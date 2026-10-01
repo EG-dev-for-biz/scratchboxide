@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Archie Authentic Building Structure Refinement Engine (Universal).
  *
@@ -12,8 +12,6 @@
  *    datum to seal open cavities and floating building geometry).
  * 3. Photoreal architectural PBR materials across canonical global archetypes
  *    (Roman ochre, Travertine limestone, Imperial brick, Metro bronze/granite).
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as THREE from 'three';

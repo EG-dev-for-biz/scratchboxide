@@ -2,6 +2,8 @@
   "name": "@scratchbox/spatial-separator-cloudrun",
   "version": "1.0.0",
   "description": "Google Cloud Run service for 3D Tile Multi-Modal Object Separation and Gemini 3D Bounding Box Validation",
+  "author": "Scratchbox LLC",
+  "license": "UNLICENSED",
   "main": "server.ts",
   "type": "module",
   "scripts": {

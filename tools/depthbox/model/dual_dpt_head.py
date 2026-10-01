@@ -1,5 +1,5 @@
-# Copyright (C) 2026 Scratchbox IDE.
-# SPDX-License-Identifier: MIT
+# Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+# Proprietary and confidential. Unauthorized copying is strictly prohibited.
 
 """
 Dual-DPT (Dense Prediction Transformer) Head for DepthBox (Depth Anything 3 Logic).

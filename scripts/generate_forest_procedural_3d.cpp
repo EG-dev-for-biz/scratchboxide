@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Hyperrealistic Procedural 3D Forest Reconstruction (Astra Engine C++20)
  * Clean-Slate Master 3D Artist Architecture adhering to:

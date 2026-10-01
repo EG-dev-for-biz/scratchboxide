@@ -1,12 +1,8 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Veggie (Scratchbox Vegetation) Parametric Botanical Model & Inversion Protocol.
- *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+
  ********************************************************************************/
 
 export type SbVeggieArchetype = 'decurrent' | 'conifer' | 'palmate' | 'columnar';

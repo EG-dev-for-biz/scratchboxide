@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Archi (Scratchbox Classical Architecture Parametric Engine)
  * Modular C++20 Tectonic Geometry Library.
@@ -12,8 +12,6 @@
  * - Continuous Vitruvian Entasis & Classical Orders Column Engine
  * - Bishop Frame Entablature Extrusion with Mitered Ressaut Breaks
  * - Procedural Chamfered Ashlar Masonry & Rustication Fields
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #ifndef SCRATCHBOX_TECTONICS_HPP

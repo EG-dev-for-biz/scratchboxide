@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual & Functional Verification Runner for 3DGS Survey & Radiance Pipeline Studio.
  * Exercises Pipeline configuration modal, triggers C++20 voxel fusion execution,
  * streams logs, verifies hot-reloaded splats in Three.js viewport, and captures
  * screenshots to verify every milestone.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 const http = require('http');

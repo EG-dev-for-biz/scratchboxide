@@ -1,11 +1,9 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless 3D Tile Terraforming & Primitive Restructuring Pipeline CLI (C++20).
  * Implements native topography analysis, terrain leveling/terracing,
  * foundation-conformal primitive grafting, and binary glTF 2.0 streaming.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #include "scratchbox_math.hpp"

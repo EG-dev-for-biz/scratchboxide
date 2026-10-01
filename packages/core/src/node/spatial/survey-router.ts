@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 import * as path from 'path';
@@ -291,9 +291,12 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
         stations,
         beautify: {
             locationName: locName,
-            architecturalStyle: extractedEra.eraContext || `${locName} architectural structure under clear natural illumination`,
+            architecturalStyle: extractedEra.eraContext || `${locName} architectural structure`,
             stylePreset: extractedEra.stylePreset,
-            moodPromptContext: 'Authentic daylight with natural sun illumination.',
+            // In accordance with style neutrality directive: extra injections into the prompt
+            // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
+            moodPromptContext: args?.beautify?.moodPromptContext || '',
+            styleSuffix: args?.beautify?.styleSuffix || '',
             ...(args?.beautify || {})
         },
         cropRadius: radius,
@@ -340,8 +343,10 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         const beautify = {
             locationName: args?.locationName || preset?.beautify?.locationName || anchor.formattedAddress || 'the location',
             architecturalStyle: args?.architecturalStyle || preset?.beautify?.architecturalStyle,
-            moodPromptContext: args?.moodPromptContext || preset?.beautify?.moodPromptContext,
-            styleSuffix: args?.styleSuffix || preset?.beautify?.styleSuffix
+            // In accordance with style neutrality directive: extra injections into the prompt
+            // should only happen in {styleSuffix}, and remain empty unless explicitly prompted by the user.
+            moodPromptContext: args?.moodPromptContext || args?.beautify?.moodPromptContext || '',
+            styleSuffix: args?.styleSuffix || args?.beautify?.styleSuffix || ''
         };
 
         const svc = new SurveySplatPipelineService({ generator });

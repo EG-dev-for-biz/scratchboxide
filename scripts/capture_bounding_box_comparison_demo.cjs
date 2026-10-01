@@ -1,12 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Proof & Verification Runner for 3D Bounding Box Metrology Comparison Demo.
  * Spawns an ephemeral server, launches headless Chrome with WebGL,
  * exercises Side-by-Side Dual Viewport, Combined Overlay Mode, and Benchmark
  * Presets, and captures verification screenshots.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 const http = require('http');

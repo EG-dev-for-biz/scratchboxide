@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Standalone Headless SB-Archi Tectonic Generator & Analyzer: Arch of Constantine.
  * Synthesizes the monumental triple-fornix Triumphal Arch of Constantine in Rome
@@ -14,8 +14,6 @@
  * - Attic Storey with Colossal Latin Inscription Tabula & 8 Dacian Prisoner Statues
  * - Hollow Interior Attic Chamber with Staircase Access
  * - Automated Tectonic Classification & Elevation Slicing Analysis
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"

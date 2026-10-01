@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Enrich Google Midtown Vector Mapping with authentic Google Solar API rooftop shapes,
  * setback tier elevations, planar facets, and normal vectors.

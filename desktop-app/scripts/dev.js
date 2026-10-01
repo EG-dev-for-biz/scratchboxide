@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
- *
- * SPDX-License-Identifier: MIT
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Dev launcher: mints one per-launch API token and starts the backend and the
  * Vite dev server with it, so the Vite proxy can inject the token into every

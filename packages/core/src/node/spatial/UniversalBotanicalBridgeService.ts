@@ -1,13 +1,11 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Universal Botanical Bridge Service
  * Connects the Google 3D Tile Spatial Separator with the native C++20 SB-Veggie
  * (formerly SMPL-Tree) Parametric Botanical Inversion Engine. Ingests extracted
  * 3D tree entities, infers or adapts species archetypes, and synthesizes 1:1 metric
  * watertight replacement glTF 2.0 assets across any geographic area.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as fs from 'fs';

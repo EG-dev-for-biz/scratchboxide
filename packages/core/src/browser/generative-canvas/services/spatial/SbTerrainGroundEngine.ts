@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * SB-Terrain Multi-Material Ground Engine (Universal).
  *
@@ -11,8 +11,6 @@
  *
  * Each material system is backed by procedural canvas bump maps (or DataTextures
  * in headless Node environments) for tactile micro-surface definition.
- *
- * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
 import * as THREE from 'three';

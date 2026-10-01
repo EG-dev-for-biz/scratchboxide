@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Demonstrates and visually validates 3D Engine Gaps 1, 2, 3, 4, and 7:
  * 1. Gap 1: Spatial BVH Acceleration & Real-time Ambient Occlusion (RTAO).

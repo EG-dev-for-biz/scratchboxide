@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
  * Visual Proof Benchmark: Nanite Micro-Poly Displacement, Lumen Dynamic GI,
  * and Substrate Layered Physical Materials.

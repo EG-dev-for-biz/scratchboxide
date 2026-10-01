@@ -1,10 +1,10 @@
 /********************************************************************************
- * Copyright (C) 2026 Scratchbox IDE.
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * This program and the accompanying materials are made available under the
- * terms of the MIT License, which is available in the project root.
- *
- * SPDX-License-Identifier: MIT
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
  ********************************************************************************/
 
 /** AboutTab content of the Customize settings group. Extracted verbatim from SettingsModal.tsx. */
@@ -45,7 +45,7 @@ export const AboutTab: React.FC = () => {
                     </div>
                     <div className="p-3 bg-zinc-100/70 dark:bg-zinc-900/80 rounded-xl border border-zinc-200 dark:border-zinc-800">
                         <div className="text-xs uppercase font-bold tracking-wider text-zinc-500 dark:text-zinc-400">License</div>
-                        <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 mt-0.5">MIT Open License</div>
+                        <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 mt-0.5">Commercial (Scratchbox LLC)</div>
                     </div>
                 </div>
 
