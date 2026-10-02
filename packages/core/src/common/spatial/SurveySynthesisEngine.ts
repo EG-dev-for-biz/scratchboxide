@@ -7,7 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { LocalTangentPlane } from '../coordinate/LocalTangentPlane';
+import { LocalTangentPlane } from '../coordinate/LocalTangentPlane.js';
 import type {
   ColmapCameraModel,
   ColmapCameraPose,

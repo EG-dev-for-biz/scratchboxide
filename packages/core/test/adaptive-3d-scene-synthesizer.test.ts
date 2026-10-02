@@ -108,4 +108,49 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         expect(result.vertexCount).toBeGreaterThan(5000);
         expect(result.triangleCount).toBeGreaterThan(3000);
     }, 60000); // Allow up to 60s for C++ Clang compilation & execution
+
+    it('builds an authoritative multimodal deconstruction prompt for visual reverse-engineering', () => {
+        const prompt = synthesizer.buildMultimodalDeconstructionPrompt('geothermal volcanic monitoring station');
+        expect(prompt).toContain('Master Architectural Surveyor');
+        expect(prompt).toContain('geothermal volcanic monitoring station');
+        expect(prompt).toContain('Adaptive3DSceneContract');
+        expect(prompt).toContain('fenestration');
+        expect(prompt).toContain('Botany');
+    });
+
+    it('executes 4-stage ephemeral reference image pipeline and unlinks temporary image on completion', async () => {
+        const scratchDir = path.resolve(process.cwd(), 'build/ephemeral-test');
+        if (!fs.existsSync(scratchDir)) {
+            fs.mkdirSync(scratchDir, { recursive: true });
+        }
+        const tempImagePath = path.join(scratchDir, `test_ephemeral_ref_${Date.now()}.png`);
+        fs.writeFileSync(tempImagePath, Buffer.from('mock_png_image_bytes'));
+        expect(fs.existsSync(tempImagePath)).toBe(true);
+
+        const mockPrompt = 'brutalist arctic outpost in glacial valley';
+        const outputDir = path.resolve(process.cwd(), 'build/3d-test');
+        const outputGlbPath = path.join(outputDir, 'test_ephemeral_scene.glb');
+
+        const result = await synthesizer.synthesizeWithEphemeralReferenceImage(mockPrompt, {
+            imageGenerator: async () => ({
+                imagePath: tempImagePath
+            }),
+            multimodalExtractor: async (imageInput, extractionPrompt) => {
+                expect(imageInput.imagePath).toBe(tempImagePath);
+                expect(extractionPrompt).toContain(mockPrompt);
+                // Return synthesized contract
+                return synthesizer.synthesizeContractFromPrompt(mockPrompt);
+            },
+            outputDir,
+            outputGlbPath
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.glbPath).toBe(outputGlbPath);
+        expect(fs.existsSync(outputGlbPath)).toBe(true);
+
+        // Crucial Invariant: Ephemeral reference image MUST be unlinked / deleted
+        expect(fs.existsSync(tempImagePath)).toBe(false);
+    }, 60000);
 });
+

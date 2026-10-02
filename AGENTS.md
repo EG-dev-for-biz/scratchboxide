@@ -323,6 +323,28 @@ When writing, auditing, or refactoring types, interfaces, schemas, and contracts
      ```
    - Execution logic must NEVER branch on string matches (e.g. `if (topology === 'alpine_massif')`). Execution must read the continuous mathematical fields (`peakHeight`, `sharpnessExponent`, `screeNoiseAmplitude`).
 
+### Rule: Zero Canned Asset Libraries (Procedural Mathematical Grammars Only)
+To uphold Adaptive Domain Architecture and eliminate static kitbashing:
+1. **Strict Prohibition on Asset Libraries (Nouns)**:
+   - The repository and runtime must NEVER rely on static mesh libraries or catalogues of finished assets (e.g. `chiller_01.glb`, `pine_tree_03.glb`, `bunker_preset.obj`).
+   - Kitbashing static assets violates ADA: it locks the application to human-modeled presets and fails completely when faced with open-domain or novel prompts (e.g. alien spore towers, geothermal biomes).
+2. **Procedural Grammars Over Static Meshes (Verbs)**:
+   - All spatial assets must be generated on the fly using continuous parametric grammars:
+     - **Archie** ([`scratchbox_architecture.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_architecture.hpp)): Procedural architectural operations (`extrudeSlab`, `punchRecessedOpening`, `generateLouverBay`, `createChamferedParapet`).
+     - **SB-Veggie** ([`scratchbox_sb_veggie.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_sb_veggie.hpp)): Algorithmic botanical branching (`apicalDominance`, `branchAngleDeg`, stem tapering, transferred envelope normals).
+     - **Astra Noise** ([`scratchbox_engine.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_engine.hpp)): Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
+
+### Rule: Ephemeral Multimodal Vision Conditioning (Fast Reference -> CAD-Grade C++20)
+When synthesizing a 3D scene from an open-ended natural language prompt:
+1. **The Latent Entropy Gap**:
+   - Short text prompts (e.g. *"arctic research outpost"*) have low information entropy, causing LLMs to collapse into generic tropes (a box with a radar dish).
+   - In contrast, 2D diffusion models (Nano Banana Lite / Imagen 3 Fast) possess infinite visual variety, composition, and atmospheric subtlety, but direct 3D diffusion produces melted, non-manifold geometry with baked-in shadows.
+2. **The 4-Stage Ephemeral Pipeline**:
+   - **Stage 1 (Ephemeral 2D Draft)**: Generate an ephemeral 2D reference image using a fast, low-cost image model (Nano Banana Lite / Imagen 3 Fast) saved to a temporary scratch path (`scratch/ephemeral_ref_${timestamp}.png`).
+   - **Stage 2 (Multimodal Vision Reverse-Engineering)**: Gemini Multimodal Vision inspects the reference image as an architectural draftsperson, reverse-engineering visual features into the continuous physical fields of `Adaptive3DSceneContract` (measuring fenestration reveals, cantilevered floorplates, specific rooftop mechanical dimensions, and ridge profiles).
+   - **Stage 3 (Immediate Cleanup / Zero Chat Clutter)**: The reference image is strictly an internal, intermediate latent representation. It must NEVER be presented to the user in chat or retained in the gallery. The file is unlinked immediately upon schema extraction.
+   - **Stage 4 (Bare-Metal C++20 Polygonization)**: The native C++20 engine polygonizes the schema with CAD-grade precision (sub-millimeter bevels, planar walls, authentic window reveals, 100,000+ vertices) in under 200 milliseconds and streams the `.glb` directly to the viewport.
+
 ## Video Pipeline & Multi-District Gallery Directives
 
 ### Rule: Strict District Asset Isolation & Semantic Coherence

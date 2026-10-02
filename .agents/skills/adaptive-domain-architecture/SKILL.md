@@ -91,6 +91,23 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
     ```
   - Execution logic must **never** branch on string matches (e.g. `if (topology === 'alpine_massif')`). Execution must read the continuous mathematical fields (`peakHeight`, `sharpnessExponent`, `screeNoiseAmplitude`).
 
+### Pillar 9: Ephemeral Multimodal Vision Conditioning (Fast Reference -> CAD-Grade C++20)
+- **The Information Entropy Gap**:
+  - Short natural language prompts (e.g. *"arctic glaciated research station"*) have low information entropy, causing LLMs to collapse into generic tropes (a plain box with a radar dish).
+  - 2D diffusion models (Nano Banana Lite / Imagen 3 Fast) have infinite visual variety, composition, and micro-clutter, but direct 3D diffusion produces melted, non-manifold geometry with baked-in shadows.
+- **The 4-Stage Ephemeral Pipeline**:
+  1. *Ephemeral 2D Draft*: Synthesize an ephemeral reference image via Nano Banana Lite / Imagen 3 Fast to a temporary scratch path.
+  2. *Multimodal Vision Reverse-Engineering*: Gemini Multimodal Vision inspects the image as an architectural surveyor, translating visual forms into continuous physical fields of `Adaptive3DSceneContract` (measuring fenestration reveals, cantilevered floorplates, specific rooftop mechanical dimensions, and ridge profiles).
+  3. *Immediate Cleanup / Zero Chat Clutter*: The reference image is an internal, intermediate latent representation. It is **never** shown to the user in the chat UI and is unlinked immediately upon schema extraction.
+  4. *Bare-Metal C++20 Polygonization*: The C++20 engine polygonizes the schema with CAD-grade precision (sub-millimeter bevels, planar walls, authentic window reveals, 100,000+ vertices) in under 200 milliseconds.
+
+### Pillar 10: Zero Canned Asset Libraries (Mathematical Grammars over Static Meshes)
+- **Strict Prohibition on Asset Libraries (Nouns)**: The codebase must never maintain catalogues of finished `.glb` / `.obj` models (`chiller_01.glb`, `pine_tree_03.glb`). Kitbashing violates ADA and fails on novel concepts.
+- **Procedural Grammars Only (Verbs)**: All spatial elements must be generated dynamically from continuous mathematical operators:
+  - *Archie*: Procedural architectural operations (`extrudeSlab`, `punchRecessedOpening`, `generateLouverBay`, `createChamferedParapet`).
+  - *SB-Veggie*: Algorithmic botanical branching (`apicalDominance`, `branchAngleDeg`, stem tapering, transferred envelope normals).
+  - *Astra Noise*: Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
+
 ---
 
 ## 2. Canonical Contracts & APIs
@@ -132,7 +149,7 @@ console.log(`Generated ${result.meshMetrics?.vertexCount} vertices in ${result.c
 
 ---
 
-## 3. The 6 Red Lines: Anti-Patterns to Reject
+## 3. The 7 Red Lines: Anti-Patterns to Reject
 
 | # | Anti-Pattern | Violation | ADA Remedy |
 | :--- | :--- | :--- | :--- |
@@ -142,6 +159,7 @@ console.log(`Generated ${result.meshMetrics?.vertexCount} vertices in ${result.c
 | **4** | Three.js fallback for procedural meshes | Quality / Performance Regression | Enforce modern C++20 SIMD / SDF / Marching Cubes via Apple Clang |
 | **5** | Hardcoded titles ("Executive Summary") | Preset Infiltration | Compose all headers, narratives, and labels dynamically |
 | **6** | Closed taxonomic unions (`'arctic' \| 'desert'`) | Taxonomic Choking of LLM | Use continuous dimensional schemas & open literals `(string & {})` (Pillar 8) |
+| **7** | Canned asset kitbashing (`assets/*.glb`) | Static Preset Trap | Generate all geometry dynamically via procedural C++20 grammars (Pillar 10) |
 
 ---
 

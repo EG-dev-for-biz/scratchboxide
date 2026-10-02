@@ -777,4 +777,104 @@ int main(int argc, char** argv) {
             executionTimeMs: execResult.executionTimeMs
         };
     }
+
+    /**
+     * Builds the authoritative architectural surveyor prompt for multimodal vision extraction
+     * from an ephemeral reference image into an Adaptive3DSceneContract.
+     */
+    public buildMultimodalDeconstructionPrompt(userPrompt: string): string {
+        return `You are a Master Architectural Surveyor and Environmental Director.
+Analyze this concept reference image for the user's prompt: "${userPrompt}".
+Reverse-engineer the visual composition into exact metric parameters conforming to the Adaptive3DSceneContract schema.
+
+Schema requirements:
+1. Terrain:
+   - topology: descriptive string (e.g. 'alpine_massif', 'canyon', 'plateau', 'glaciated_basin')
+   - peakHeight: peak height in meters (e.g. 20.0 to 120.0)
+   - peakPosition: [x, z] offset in meters
+   - sharpnessExponent: knife-edge ridge sharpness (e.g. 1.0 to 2.5)
+   - ridgeCount: number of major radiating mountain ridges (e.g. 2 to 6)
+   - valleyFloorElevation: valley floor elevation (e.g. 0.0)
+   - screeNoiseAmplitude: talus/scree roughness amplitude
+   - gridSize: grid resolution (default 120)
+   - gridSpacing: metric spacing between vertices (e.g. 1.25)
+   - snowLineElevation: elevation in meters where rock transitions to snow
+   - rockColor: [r, g, b] normalized (0.0 - 1.0)
+   - snowColor: [r, g, b] normalized (0.0 - 1.0)
+
+2. Architecture:
+   - structures: array of structures with:
+     - id, name
+     - position: [x, y, z]
+     - rotationYDeg: orientation in degrees
+     - dimensions: { width, depth, floorCount, floorHeight }
+     - fenestration: { bayWidth, windowRecess, sillHeight, headerHeight, mullionProfile }
+     - glazing: { color, roughness, metalness, emissiveColor, emissiveIntensity }
+     - parapet: { height, copingWidth }
+     - rooftopMechanicals: boolean
+     - features: array of volumetric sub-elements ({ type, position: [x, y, z], scale: [w, h, d], rotationYDeg })
+
+3. Botany:
+   - forestPatches: array of botanical fields ({ species, archetype, density, elevationMin, elevationMax, maxSlopeDeg, exclusionRadius, exclusionCenter, envelopeNormalFactor, foliageColor, biomeStratification })
+
+4. Atmosphere (Only if visible in prompt or image):
+   - sunAzimuthDeg, sunElevationDeg, fogDensity, skyColor
+
+Return ONLY valid JSON strictly matching Adaptive3DSceneContract with zero markdown ticks or commentary.`;
+    }
+
+    /**
+     * Synthesizes an Adaptive3DSceneContract and compiles a 3D GLB scene using an ephemeral
+     * 2D reference image generated via a fast/cheap image model (e.g. Nano Banana Lite / Imagen 3 Fast).
+     *
+     * Invariant: The reference image is an internal latent visual representation. It is NEVER
+     * exposed to the user chat UI or persisted to long-term storage; it is cleaned up immediately
+     * after multimodal reverse-engineering.
+     */
+    public async synthesizeWithEphemeralReferenceImage(
+        prompt: string,
+        options: {
+            imageGenerator: (prompt: string) => Promise<{ imagePath?: string; imageBuffer?: Buffer }>;
+            multimodalExtractor: (imageInput: { imagePath?: string; imageBuffer?: Buffer }, extractionPrompt: string) => Promise<Adaptive3DSceneContract>;
+            outputGlbPath?: string;
+            outputDir?: string;
+            preserveEphemeralImage?: boolean;
+        }
+    ): Promise<Adaptive3DSceneExecutionResult> {
+        let tempImagePath: string | undefined;
+        try {
+            // Stage 1: Generate ephemeral reference image
+            const imageRef = await options.imageGenerator(prompt);
+            tempImagePath = imageRef.imagePath;
+
+            // Stage 2: Multimodal vision extraction
+            const extractionPrompt = this.buildMultimodalDeconstructionPrompt(prompt);
+            const contract = await options.multimodalExtractor(imageRef, extractionPrompt);
+
+            // Stage 3: Immediate ephemeral cleanup before compilation
+            if (!options.preserveEphemeralImage && tempImagePath && fs.existsSync(tempImagePath)) {
+                try {
+                    fs.unlinkSync(tempImagePath);
+                    tempImagePath = undefined;
+                } catch {
+                    // Ignore transient cleanup errors
+                }
+            }
+
+            // Stage 4: Bare-metal C++20 polygonization & compilation
+            return await this.synthesizeAndCompile(contract, {
+                outputGlbPath: options.outputGlbPath,
+                outputDir: options.outputDir
+            });
+        } finally {
+            // Guarantee cleanup even on error
+            if (!options.preserveEphemeralImage && tempImagePath && fs.existsSync(tempImagePath)) {
+                try {
+                    fs.unlinkSync(tempImagePath);
+                } catch {
+                    // Ignore
+                }
+            }
+        }
+    }
 }

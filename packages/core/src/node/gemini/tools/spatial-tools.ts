@@ -2243,7 +2243,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 groundDatumY: res.groundDatumY,
                 standoffMeters: res.standoffMeters,
                 tiers: res.tiers,
-                summary: res.summary,
+                stats: res.stats,
                 outJsonPath: outJsonPath || undefined,
                 stations: res.poses.map(p => ({
                     id: p.id,

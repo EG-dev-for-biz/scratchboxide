@@ -9,14 +9,14 @@
 
 import * as path from 'path';
 import * as fs from 'fs-extra';
-import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer';
-import type { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer';
-import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine';
-import type { ColmapCameraPose, StationBeautifyMetrics } from '../../common/spatial/colmap-vector-reference-types';
-import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
-import { getSolarPosition } from '../../common/coordinate/solarPosition';
-import { NativeTilePathTracerService, type TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
-import { calibrateStoneAlbedoRgba, type StoneAlbedoPreset, decodePng } from '../texture-processing';
+import { HeadlessMeshSilhouetteRenderer, type RenderMesh3D } from './HeadlessMeshSilhouetteRenderer.js';
+import type { CameraPose6DOF } from './SubPixelEdgeAlignmentOptimizer.js';
+import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../common/spatial/SurveySynthesisEngine.js';
+import type { ColmapCameraPose, StationBeautifyMetrics } from '../../common/spatial/colmap-vector-reference-types.js';
+import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane.js';
+import { getSolarPosition } from '../../common/coordinate/solarPosition.js';
+import { NativeTilePathTracerService, type TileSunSpec } from '../3d-engine/native-tile-path-tracer-service.js';
+import { calibrateStoneAlbedoRgba, type StoneAlbedoPreset, decodePng } from '../texture-processing.js';
 
 /**
  * getSolarPosition() treats the Date's machine-local wall clock as the destination's local solar

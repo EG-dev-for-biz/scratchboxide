@@ -9,7 +9,7 @@
  ********************************************************************************/
 
 export interface AdaptiveTerrainField {
-    topology: 'alpine_massif' | 'canyon' | 'plateau' | 'rolling_hills' | 'flat_plinth' | 'custom_sdf' | (string & {});
+    topology?: string;
     peakHeight: number;
     peakPosition: [number, number];
     sharpnessExponent: number;
@@ -54,7 +54,7 @@ export interface AdaptiveArchitecturalStructure {
     };
     rooftopMechanicals?: boolean;
     features?: Array<{
-        type: 'mast' | 'radar_dish' | 'plinth' | 'access_bridge' | 'hvac_chiller' | (string & {});
+        type?: string;
         position: [number, number, number];
         scale: [number, number, number];
         rotationYDeg?: number;
@@ -63,7 +63,7 @@ export interface AdaptiveArchitecturalStructure {
 
 export interface AdaptiveBotanyField {
     species: string;
-    archetype: 'conifer' | 'decurrent' | 'columnar' | 'shrub' | (string & {});
+    archetype?: string;
     density: number;
     elevationMin: number;
     elevationMax: number;
