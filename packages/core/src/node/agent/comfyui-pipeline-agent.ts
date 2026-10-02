@@ -237,6 +237,8 @@ export class ComfyUiPipelineAgent {
             targetEnvironment: options.targetEnvironment
         });
 
+        const isSceneOrEnvironment = /scene|urban|city|district|world|environment|street|layout|architecture|building|floorplan|landscape|terrain/i.test(goal);
+
         // If Tier 1 is capable and native executor is provided, attempt Tier 1 first
         if (capabilityResolution.tier1Assessment.canSolveNatively && nativeExecutor) {
             try {
@@ -248,7 +250,18 @@ export class ComfyUiPipelineAgent {
                     capabilityResolution
                 };
             } catch (nativeErr: any) {
-                // Tier 1 encountered an error; log and fall through to Tier 2 ComfyUI
+                // For 3D scenes and environments, never fall back to Trellis or external 3D diffusion services.
+                // The scene itself must be created in codebase.
+                if (isSceneOrEnvironment) {
+                    return {
+                        tier: 'tier1-native',
+                        success: false,
+                        capabilityResolution,
+                        error: `Tier 1 native scene execution encountered error (${nativeErr.message}). 3D scenes and environments are created natively in codebase (Tier 1 C++20 Astra / UniversalArchiBridgeService / Three.js) and cannot fall back to Trellis or external 3D neural services.`
+                    };
+                }
+
+                // Tier 1 encountered an error for non-scene task; log and fall through to Tier 2 ComfyUI
                 if (options.onProgress) {
                     options.onProgress({
                         phase: 'research',
@@ -258,9 +271,17 @@ export class ComfyUiPipelineAgent {
                     });
                 }
             }
+        } else if (isSceneOrEnvironment && capabilityResolution.domain === '3d') {
+            // Scene creation request without native executor cannot fall back to Trellis
+            return {
+                tier: 'tier1-native',
+                success: false,
+                capabilityResolution,
+                error: '3D scenes and environments must be created natively in codebase. Fallback to Trellis or external 3D services is disabled for scenes.'
+            };
         }
 
-        // Tier 2: Resort to ComfyUI execution
+        // Tier 2: Resort to ComfyUI execution (strictly for discrete props/objects, neural video restyling, or latent inpainting)
         const comfyResult = await this.executeAndHeal(goal, options);
         return {
             tier: 'tier2-comfyui',
@@ -771,50 +792,11 @@ export class ComfyUiPipelineAgent {
                 };
             }
 
-            const isUrban = /urban|tile|remesh|footprint|vector/i.test(goal);
-            if (isUrban) {
-                return {
-                    id,
-                    goal,
-                    category,
-                    rationale: 'Urban 3D Remeshing using fine-tuned Trellis Urban DiT conditioned on Google 3D Tiles and Vector Maps',
-                    requiredModels: [{ type: 'checkpoint', name: 'trellis-urban-remesh.safetensors' }],
-                    requiredCustomNodes: ['TrellisUrbanRemeshNode', 'SaveMesh3D'],
-                    nodes: [
-                        {
-                            id: '1',
-                            classType: 'TrellisUrbanRemeshNode',
-                            title: 'Trellis Urban 3D Remesher',
-                            category: '3d/urban',
-                            inputs: {
-                                tile_mesh: 'input_tile.glb',
-                                vector_metadata: '{"category":"commercial_highrise"}',
-                                building_category: 'commercial_highrise',
-                                target_resolution: '1024',
-                                planar_regularization: 0.85
-                            },
-                            outputs: [{ name: 'MESH_3D', type: 'MESH_3D' }]
-                        },
-                        {
-                            id: '2',
-                            classType: 'SaveMesh3D',
-                            title: 'Export Binary GLB Mesh',
-                            category: '3d/io',
-                            inputs: { filename_prefix: 'Scratchbox_Urban_Remeshed' },
-                            outputs: []
-                        }
-                    ],
-                    connections: [
-                        { fromNodeId: '1', fromOutputIndex: 0, toNodeId: '2', toInputName: 'mesh' }
-                    ]
-                };
-            }
-
             return {
                 id,
                 goal,
                 category,
-                rationale: 'Image to 3D Neural Reconstruction using Trellis mesh generator to stream standard binary .glb',
+                rationale: 'Image to 3D Neural Reconstruction using Trellis mesh generator to stream standard binary .glb for discrete scene props/objects',
                 requiredModels: [{ type: 'checkpoint', name: 'trellis-image-to-3d' }],
                 requiredCustomNodes: ['Trellis3DGenerator', 'SaveMesh3D'],
                 nodes: [

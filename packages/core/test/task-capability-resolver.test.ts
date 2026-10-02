@@ -105,6 +105,18 @@ describe('TaskCapabilityResolver (Two-Tier Problem-Solving Architecture)', () =>
             expect(res.tier1Assessment.primaryNativeEngine).toBe('workspace-coding');
             expect(res.tier2Fallback.needed).toBe(false);
         });
+
+        it('resolves 3D scenes, urban environments, and architectural layouts natively in codebase with zero fallback to Trellis', () => {
+            const res = TaskCapabilityResolver.resolveTaskCapability(
+                'Generate an urban 3D scene with skyscraper blocks, street corridors, and architectural facades'
+            );
+
+            expect(res.recommendedResolutionRoute).toBe('tier1-native');
+            expect(res.tier1Assessment.canSolveNatively).toBe(true);
+            expect(res.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
+            expect(res.tier2Fallback.needed).toBe(false);
+            expect(res.tier2Fallback.suggestedNodes).not.toContain('TrellisUrbanRemeshNode');
+        });
     });
 
     describe('Tier 2 ComfyUI Fallback Resolution (Resort to ComfyUI if Incapable)', () => {
@@ -183,6 +195,24 @@ describe('TaskCapabilityResolver (Two-Tier Problem-Solving Architecture)', () =>
             expect(result.capabilityResolution).toBeDefined();
             expect(result.capabilityResolution.recommendedResolutionRoute).toBe('tier2-comfyui');
             expect(result.capabilityResolution.tier2Fallback.recommendedPipelineCategory).toBe('image-to-3d');
+        });
+
+        it('refuses to fall back to Trellis or external 3D services when native 3D scene generation encounters an error', async () => {
+            const agent = new ComfyUiPipelineAgent({ mockExecution: true });
+            const failingNativeExecutor = async () => {
+                throw new Error('Simulated Clang compilation failure on urban scene generator');
+            };
+
+            const result = await agent.executeWithTwoTierFallback(
+                'Synthesize procedural urban 3D scene with architectural facades and road corridors',
+                failingNativeExecutor
+            );
+
+            // Scenes must NEVER fall back to Trellis or Tier 2 ComfyUI
+            expect(result.tier).toBe('tier1-native');
+            expect(result.success).toBe(false);
+            expect(result.error).toContain('3D scenes and environments are created natively in codebase');
+            expect(result.error).toContain('cannot fall back to Trellis or external 3D neural services');
         });
     });
 

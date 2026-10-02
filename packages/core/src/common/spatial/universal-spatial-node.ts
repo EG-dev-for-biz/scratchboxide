@@ -16,10 +16,19 @@ export interface MetricOBB {
     quaternion?: [number, number, number, number]; // [x, y, z, w]
 }
 
+export type MountPlaneType =
+    | 'floor'
+    | 'ceiling'
+    | 'wall'
+    | 'window_sill'
+    | 'roof_deck'
+    | 'curb_top'
+    | (string & {});
+
 export interface SurfaceMountPlane {
     id: string;
     name: string;
-    planeType: 'floor' | 'ceiling' | 'wall' | 'window_sill' | 'roof_deck' | 'curb_top';
+    planeType: MountPlaneType;
     planeEquation: [number, number, number, number]; // ax + by + cz + d = 0
     normal: [number, number, number];
     center: [number, number, number];
@@ -66,6 +75,28 @@ export interface UniversalSpatialNode {
 }
 
 /**
+ * Continuously classifies a surface mount plane based on its normal vector dot product
+ * with the gravity/up vector (+Y in right-handed Three.js/glTF space), strictly adhering
+ * to Adaptive Domain Architecture (ADA Continuous vs. Discrete Test).
+ */
+export function classifyMountPlaneFromNormal(
+    normal: [number, number, number],
+    up: [number, number, number] = [0, 1, 0]
+): MountPlaneType {
+    const dot = normal[0] * up[0] + normal[1] * up[1] + normal[2] * up[2];
+    if (dot > 0.85) {
+        return 'floor';
+    }
+    if (dot < -0.85) {
+        return 'ceiling';
+    }
+    if (Math.abs(dot) < 0.25) {
+        return 'wall';
+    }
+    return 'inclined_plane';
+}
+
+/**
  * Creates a default 4x4 identity matrix as a Float32Array.
  */
 export function createIdentityMatrix(): Float32Array {
@@ -82,7 +113,7 @@ export function createSpatialNode(params: {
     name: string;
     polarity?: SpatialPolarity;
     localTransform?: Float32Array;
-    localBounds: MetricOBB;
+    localBounds?: MetricOBB;
     geometry?: NodeGeometryChunk;
     mountPlanes?: SurfaceMountPlane[];
     children?: UniversalSpatialNode[];
@@ -94,7 +125,10 @@ export function createSpatialNode(params: {
         name: params.name,
         polarity: params.polarity ?? 'positive_mass',
         localTransform: params.localTransform ?? createIdentityMatrix(),
-        localBounds: params.localBounds,
+        localBounds: params.localBounds ?? {
+            center: [0, 0, 0],
+            halfExtents: [0.5, 0.5, 0.5]
+        },
         geometry: params.geometry,
         mountPlanes: params.mountPlanes ?? [],
         children: params.children ?? [],

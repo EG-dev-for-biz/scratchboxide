@@ -151,10 +151,13 @@ export class TaskCapabilityResolver {
             ? opts.domainHint
             : this.classifyTaskDomain(goal);
 
-        // Check for specific neural/generative triggers that exceed native algorithmic and Google model capabilities
-        const isNeuralImageTo3D = (/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
+        // Check for specific neural/generative triggers that exceed native algorithmic and Google model capabilities.
+        // Trellis can be used to create discrete objects/props in a scene, but scenes themselves are created in codebase.
+        const isSceneOrEnvironment = /scene|urban|city|district|world|environment|street|layout|architecture|building|floorplan|landscape|terrain/i.test(lower);
+
+        const isNeuralImageTo3D = !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
             !/point\s*correspondence|keypoint|pnp|solvepnp|feature\s*match|optical\s*center|resect/i.test(lower)) ||
-            ((lower.includes('image') || lower.includes('photo') || options.hasInputImage) && (lower.includes('reconstruct 3d') || lower.includes('generate 3d mesh') || lower.includes('convert to 3d mesh')));
+            ((lower.includes('image') || lower.includes('photo') || options.hasInputImage) && (lower.includes('reconstruct 3d') || lower.includes('generate 3d mesh') || lower.includes('convert to 3d mesh'))));
 
         const isNeuralVideoRestyle = /video-to-video|restyle\s+video|neural\s+video|animatediff|omni\s*restyle|temporal\s+restyl|video\s+style\s+transfer/i.test(lower) ||
             ((lower.includes('video') || options.hasInputVideo) && (lower.includes('restyle') || lower.includes('stylize video') || lower.includes('anime style') || lower.includes('cyberpunk restyle')));
@@ -310,7 +313,7 @@ export class TaskCapabilityResolver {
             if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Single-image to 3D mesh reconstruction requires a neural generative diffusion model (such as Trellis, TripoSR, or SV3D). The native C++20 engine is built for procedural geometry, SDFs, and photogrammetric tiles, not zero-shot 2D-to-3D neural reconstruction.';
+                rationale = 'Single-image to discrete 3D object mesh reconstruction requires a neural generative diffusion model (such as Trellis or TripoSR for isolated props/objects). 3D scenes, urban environments, and architectural layouts are created natively in codebase (Tier 1 C++20 Astra / UniversalArchiBridgeService / Three.js).';
             } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation.*(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -640,14 +643,9 @@ export class TaskCapabilityResolver {
             if (isNeuralImageTo3D) {
                 category = 'image-to-3d';
                 executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy 3D offloads to Cloud Run GPU
-                if (lower.includes('urban') || lower.includes('tile') || lower.includes('vector') || lower.includes('remesh')) {
-                    suggestedNodes.push('TrellisUrbanRemeshNode', 'SaveMesh3D');
-                    requiresDynamicNodes = false;
-                } else {
-                    suggestedNodes.push('LoadImage', 'TrellisImageTo3D', 'MeshDecimatorNode', 'SaveGLB');
-                    requiresDynamicNodes = true;
-                    suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
-                }
+                suggestedNodes.push('LoadImage', 'TrellisImageTo3D', 'MeshDecimatorNode', 'SaveGLB');
+                requiresDynamicNodes = true;
+                suggestedDynamicClasses.push('SaveGLB', 'MeshDecimatorNode');
             } else if (isWanMultiviewDiffusionExecution) {
                 category = 'video-generation';
                 executionTarget = options.targetEnvironment || 'cloud-run'; // Heavy multi-view video offloads to Cloud Run GPU

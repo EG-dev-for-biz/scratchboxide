@@ -2220,7 +2220,7 @@ export function synthesizeQuestionCardFallback(prompt: string, _activeArtifact?:
                     {
                         id: 'tier2-cloudrun-diffusion',
                         label: 'Neural Mesh Diffusion (Google Cloud Run L4 GPU)',
-                        description: 'Dense neural reconstruction via Trellis / TripoSR on Cloud Run ComfyUI service'
+                        description: 'Discrete object neural reconstruction via Trellis / TripoSR on Cloud Run (for isolated scene props/objects)'
                     }
                 ] : [
                     {

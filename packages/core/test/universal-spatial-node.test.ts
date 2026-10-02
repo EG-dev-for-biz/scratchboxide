@@ -15,6 +15,7 @@ import {
     multiplyMatrices4x4,
     createTranslationMatrix,
     createIdentityMatrix,
+    classifyMountPlaneFromNormal,
     type UniversalSpatialNode,
     type SurfaceMountPlane
 } from '../src/common/spatial/universal-spatial-node';
@@ -152,5 +153,44 @@ describe('UniversalSpatialNode (Scale-Free Tectonic Hierarchy)', () => {
         expect(transformedNode.localTransform[13]).toBe(0);
         expect(transformedNode.localTransform[14]).toBe(-25);
         expect(transformedNode.localBounds?.center).toEqual([10, 0.5, -25]);
+    });
+
+    it('defaults localBounds to unit OBB when omitted, avoiding runtime exceptions', () => {
+        const nodeWithoutBounds = createSpatialNode({
+            id: 'unbounded_prop',
+            name: 'Unbounded Prop'
+        });
+
+        expect(nodeWithoutBounds.localBounds).toBeDefined();
+        expect(nodeWithoutBounds.localBounds.center).toEqual([0, 0, 0]);
+        expect(nodeWithoutBounds.localBounds.halfExtents).toEqual([0.5, 0.5, 0.5]);
+    });
+
+    it('classifies mount planes continuously from normal vectors and supports open literal types', () => {
+        // Upward normal -> floor
+        expect(classifyMountPlaneFromNormal([0, 1, 0])).toBe('floor');
+        expect(classifyMountPlaneFromNormal([0.05, 0.99, 0])).toBe('floor');
+
+        // Downward normal -> ceiling
+        expect(classifyMountPlaneFromNormal([0, -1, 0])).toBe('ceiling');
+
+        // Lateral normal -> wall
+        expect(classifyMountPlaneFromNormal([1, 0, 0])).toBe('wall');
+        expect(classifyMountPlaneFromNormal([0, 0.1, 1])).toBe('wall');
+
+        // Angled normal -> inclined_plane
+        expect(classifyMountPlaneFromNormal([0.707, 0.707, 0])).toBe('inclined_plane');
+
+        // Open literal mount plane types (Alien Planet / Custom test)
+        const alienMount: SurfaceMountPlane = {
+            id: 'mount_alien_1',
+            name: 'Plasma Conduit Dock',
+            planeType: 'plasma_conduit_dock', // arbitrary string & {} open literal
+            planeEquation: [0, 1, 0, -2.5],
+            normal: [0, 1, 0],
+            center: [0, 2.5, 0],
+            dimensions: [1.2, 0.8]
+        };
+        expect(alienMount.planeType).toBe('plasma_conduit_dock');
     });
 });

@@ -453,16 +453,20 @@ export class Universal3DObjectSeparationService {
       case 'foliage_trees':
         return 'sb-veggie';
       case 'monument':
+      case 'ruin':
         return 'sb-archi';
       case 'architecture':
       case 'colosseum_architecture':
+      case 'urban_infrastructure':
         return 'archie-building';
       case 'terrain':
         return 'sb-terrain';
-      case 'ruin':
-        return 'sb-archi';
-      default:
+      case 'prop':
+        // Discrete props can optionally use neural mesh diffusion if an asset model is needed
         return 'trellis';
+      default:
+        // Default to native architectural engine in codebase for all scene structures
+        return 'sb-archi';
     }
   }
 
