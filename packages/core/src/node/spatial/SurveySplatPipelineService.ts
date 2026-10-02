@@ -22,6 +22,7 @@ import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import type { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { decodePng, calibrateStoneAlbedoRgba, type StoneAlbedoPreset } from '../texture-processing';
 import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
+import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 const execAsync = promisify(exec);
 
@@ -476,6 +477,121 @@ export class SurveySplatPipelineService {
         for (let i = 0; i < splats.length; i += step) for (let k = 0; k < 3; k++) { const v = splats[i].position[k]; if (v < min[k]) min[k] = v; if (v > max[k]) max[k] = v; }
         for (let k = 0; k < 3; k++) { min[k] = Math.max(min[k] - 0.5, meshBounds.min[k] - 0.5); max[k] = Math.min(max[k] + 0.5, meshBounds.max[k] + 0.5); }
         return { min, max };
+    }
+
+    /**
+     * Converts a local file path to a web URL serving from public or file://
+     */
+    public static toWebUrl(filePath: string): string {
+        if (!filePath) return '';
+        if (filePath.startsWith('http://') || filePath.startsWith('https://') || filePath.startsWith('/')) {
+            return filePath;
+        }
+        const rel = path.relative(path.resolve(process.cwd(), 'public'), filePath);
+        if (!rel.startsWith('..')) {
+            return `/${rel.replace(/\\/g, '/')}`;
+        }
+        return `file://${filePath}`;
+    }
+
+    /**
+     * Converts a SurveySplatPipelineResult into standard Canvas Scene3DData and Media4DObject contracts.
+     */
+    public static toScene3DData(
+        result: SurveySplatPipelineResult,
+        anchor: GeodeticAnchor,
+        locationName: string = 'Location',
+        options: {
+            splatScale?: number;
+            contactShadow?: boolean;
+            enableSoftZ?: boolean;
+        } = {}
+    ): { scene3DData: Scene3DData; splatMediaObject: Media4DObject } {
+        const splatUrl = SurveySplatPipelineService.toWebUrl(result.fusedSplatPath);
+        const tilesetUrl = SurveySplatPipelineService.toWebUrl(result.tilesetPath);
+        const sceneSlug = locationName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+        const splatMediaObject: Media4DObject = {
+            id: `${sceneSlug}-3dgs`,
+            content: {
+                type: 'gaussian-splat',
+                durableUri: splatUrl,
+                mimeType: splatUrl.endsWith('.spz') ? 'application/x-spz' : 'application/octet-stream',
+                metadata: {
+                    dims: {
+                        width: Math.abs(result.cropBox.max[0] - result.cropBox.min[0]) || 120,
+                        height: Math.abs(result.cropBox.max[1] - result.cropBox.min[1]) || 120,
+                        depth: Math.abs(result.cropBox.max[2] - result.cropBox.min[2]) || 120
+                    }
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 },
+                geoAnchor: {
+                    lat: anchor.lat,
+                    lng: anchor.lng,
+                    alt: anchor.elevationMeters || 0,
+                    heading: anchor.headingDeg || 0,
+                    pitch: 0
+                }
+            },
+            lineage: {
+                version: 1,
+                generation: {
+                    model: 'nano-banana-survey-3dgs',
+                    prompt: `Location 3D Gaussian Splatting of ${locationName}`,
+                    params: { pipeline: 'SurveySplatPipelineService', restyleModel: 'nano-banana-2' }
+                },
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        const scene3DData: Scene3DData = {
+            title: `${locationName} — 3D Gaussian Splat`,
+            subtitle: `Photorealistic 3DGS radiance field at Lat ${anchor.lat.toFixed(4)}°, Lng ${anchor.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
+            worldBranch: `splat-world/${sceneSlug}`,
+            sceneType: 'gaussian_splat',
+            renderMode: 'pbr',
+            cameraMode: 'orbit',
+            animation: 'orbit',
+            splatUrl,
+            splatTilesetUrl: tilesetUrl,
+            splatOptions: {
+                splatScale: options.splatScale ?? 1.0,
+                contactShadow: options.contactShadow ?? true,
+                enableSoftZ: options.enableSoftZ ?? true,
+                cropBox: result.cropBox
+            },
+            timeline: {
+                currentTimeMs: 0,
+                durationMs: 20000,
+                isPlaying: true,
+                speed: 1.0,
+                playbackSpeed: 1.0,
+                isLooping: true
+            },
+            camera: {
+                position: [0, 20, 45],
+                target: [0, 2, 0],
+                fov: 45
+            },
+            environment: {
+                skybox: 'golden_hour',
+                lighting: 'golden_hour',
+                ground: false
+            },
+            geoAnchor: {
+                lat: anchor.lat,
+                lng: anchor.lng,
+                elevation: anchor.elevationMeters,
+                active: true,
+                landmarkName: locationName
+            },
+            customMeshes: [],
+            objects: [splatMediaObject]
+        };
+
+        return { scene3DData, splatMediaObject };
     }
 }
 

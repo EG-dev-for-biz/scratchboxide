@@ -105,12 +105,7 @@ export class Location3DGaussianSplatService {
      * Resolves an absolute path within workspace to a public web URL.
      */
     private toWebUrl(filePath: string): string {
-        const publicDir = path.resolve(this.workspaceRoot, 'public');
-        const relative = path.relative(publicDir, filePath);
-        if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
-            return `/${relative.replace(/\\/g, '/')}`;
-        }
-        return filePath;
+        return SurveySplatPipelineService.toWebUrl(filePath);
     }
 
     /**
@@ -317,89 +312,11 @@ export class Location3DGaussianSplatService {
             draft: isDraft
         }, progressReporter);
 
-        const splatUrl = this.toWebUrl(pipelineResult.fusedSplatPath);
-        const tilesetUrl = this.toWebUrl(pipelineResult.tilesetPath);
-
-        const sceneSlug = beautifyContext.locationName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        const splatMediaObject: Media4DObject = {
-            id: `${sceneSlug}-3dgs`,
-            content: {
-                type: 'gaussian-splat',
-                durableUri: splatUrl,
-                mimeType: splatUrl.endsWith('.spz') ? 'application/x-spz' : 'application/octet-stream',
-                metadata: {
-                    dims: {
-                        width: Math.abs(pipelineResult.cropBox.max[0] - pipelineResult.cropBox.min[0]) || 120,
-                        height: Math.abs(pipelineResult.cropBox.max[1] - pipelineResult.cropBox.min[1]) || 120,
-                        depth: Math.abs(pipelineResult.cropBox.max[2] - pipelineResult.cropBox.min[2]) || 120
-                    }
-                }
-            },
-            space: {
-                spatial3d: { x: 0, y: 0, z: 0 },
-                geoAnchor: {
-                    lat: anchor.lat,
-                    lng: anchor.lng,
-                    alt: anchor.elevationMeters || 0,
-                    heading: anchor.headingDeg || 0,
-                    pitch: 0
-                }
-            },
-            lineage: {
-                version: 1,
-                generation: {
-                    model: 'nano-banana-survey-3dgs',
-                    prompt: `Location 3D Gaussian Splatting of ${beautifyContext.locationName}`,
-                    params: { pipeline: 'Location3DGaussianSplatService', restyleModel: 'nano-banana-2' }
-                },
-                timestamp: new Date().toISOString()
-            }
-        };
-
-        const scene3DData: Scene3DData = {
-            title: `${beautifyContext.locationName} — 3D Gaussian Splat`,
-            subtitle: `Photorealistic 3DGS radiance field at Lat ${anchor.lat.toFixed(4)}°, Lng ${anchor.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
-            worldBranch: `splat-world/${sceneSlug}`,
-            sceneType: 'gaussian_splat',
-            renderMode: 'pbr',
-            cameraMode: 'orbit',
-            animation: 'orbit',
-            splatUrl,
-            splatTilesetUrl: tilesetUrl,
-            splatOptions: {
-                splatScale: 1.0,
-                contactShadow: true,
-                enableSoftZ: true,
-                cropBox: pipelineResult.cropBox
-            },
-            timeline: {
-                currentTimeMs: 0,
-                durationMs: 20000,
-                isPlaying: true,
-                speed: 1.0,
-                playbackSpeed: 1.0,
-                isLooping: true
-            },
-            camera: {
-                position: [0, 20, 45],
-                target: [0, 2, 0],
-                fov: 45
-            },
-            environment: {
-                skybox: 'golden_hour',
-                lighting: 'golden_hour',
-                ground: false
-            },
-            geoAnchor: {
-                lat: anchor.lat,
-                lng: anchor.lng,
-                elevation: anchor.elevationMeters,
-                active: true,
-                landmarkName: beautifyContext.locationName
-            },
-            customMeshes: [],
-            objects: [splatMediaObject]
-        };
+        const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
+            pipelineResult,
+            anchor,
+            beautifyContext.locationName
+        );
 
         progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
 
