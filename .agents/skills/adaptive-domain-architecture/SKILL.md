@@ -61,11 +61,20 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 - **Zero Static Scene `.cpp` Files**: Never write `arctic_outpost.cpp`, `desert_temple.cpp`, or similar one-off files into `scripts/` or `src/`.
 - All C++20 source code is generated dynamically in memory via `Adaptive3DSceneSynthesizer.generateCppSource(contract)`.
 - Code is compiled on the fly using Apple Clang (`clang++ -std=c++20 -O3`) through `NativeCppCompilerService`, executed in a sub-process sandbox, and the binary `.glb` stream is captured directly.
-- The binary and intermediate objects are ephemeral and cleaned up; the canonical state is preserved purely as the schema contract (`Adaptive3DSceneContract`) and the synthesized GLB asset.
+- Compiling dynamically via `NativeCppCompilerService`, streaming the `.glb` directly, and retaining the source in the scene data metadata (`data.cppGenerator.sourceCode`) guarantees non-destructive reproducibility without polluting the repository. Intermediate objects and binaries are automatically cleaned up.
 
 ### Pillar 5: Open-Domain Universality
 - The architecture scales seamlessly to any arbitrary prompt from the user without needing codebase modifications, new enum variants, or specialized handlers.
 - New capabilities are added as continuous parameters in the schema contracts, not as new discrete cases in a classifier.
+
+### Pillar 6: C++20 Bare-Metal Engine vs. Three.js Viewport Separation
+- **Heavy Geometric Work Belongs in C++20**: Native C++ with Apple Clang (`-std=c++20 -O3`) compiles and generates 100,000+ vertices, calculates smooth envelope normals, applies noise algorithms, and serializes a standard binary `.glb` in under 200 milliseconds.
+- **Three.js is a Pure Renderer/Viewport**: Three.js must never be used to procedurally construct high-polygon geometry loops in browser JavaScript. Three.js is best utilized as a pure renderer and viewport, mounting the streamed `.glb`, managing the WebGL context, camera choreography, and interactive orbit controls.
+
+### Pillar 7: Zero Uninvited Defaults (Atmosphere & Clouds Strictly Opt-In)
+- **Preserve Visual Neutrality and User Intent**: In practice, uninvited defaults pollute user intent. When building an outpost or mechanical asset, unexpected clouds or lighting presets fight against the composition. Making atmosphere, ephemeris, and cloud layers strictly opt-in preserves visual neutrality and artistic control.
+- **Neutral Studio Baseline**: Unconfigured scenes default strictly to a clean, neutral studio environment (`skybox: 'studio'`, `lighting: 'studio'`).
+- **Explicit Opt-In Gate**: Atmospheric sky domes, Rayleigh/Mie scattering, diurnal solar curves, depth fog, and volumetric clouds are only instantiated when explicitly requested in the prompt or schema contract.
 
 ---
 

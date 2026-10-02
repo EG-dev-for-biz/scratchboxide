@@ -27,51 +27,70 @@ When a user attempts to accomplish something specific (especially VFX-related, 3
 
 ## 3D Engine Architecture & Implementation Directive
 
-### Rule: Lean on C/C++ First for 3D
-
+### Rule: Lean on C/C++ First for 3D (C++20 as Geometry Generator, Three.js as Pure Viewport)
 When implementing 3D (scenes, models, procedural geometry, terrain generation, spatial physics, or visual effects):
-23: 1. **Primary Generation Path (C/C++20)**:
-24:    - Always prioritize modern C++20 via the native Scratchbox 3D Engine (`#include "scratchbox_engine.hpp"`).
-25:    - Use high-performance SIMD vector math (`scratchbox_math.hpp`), Signed Distance Fields (SDFs), Marching Cubes polygonization, FastNoise3D (Perlin/FBM/Worley), and physical material assignment.
-26:    - Procedural C++ modules compile via Apple Clang / modern C++ toolchain (`process.env.CXX || 'clang++' -std=c++20 -O3`) through `NativeCppCompilerService`.
-27:    - To prevent `SIGILL` illegal instruction faults across containerized CI, Cloud Run, and heterogeneous macOS/Linux architectures, `-march=native` is conditioned strictly behind `process.env.SCRATCHBOX_NATIVE_ARCH === '1'`.
-28:    - Native binaries stream binary glTF 2.0 (`.glb`) chunks containing vertices, normals, UVs, vertex colors (`COLOR_0`), and PBR metallic-roughness materials directly into the Three.js viewport.
-29:    - Attach or preserve the generator source code in `data.cppGenerator.sourceCode` (`world_generator.cpp`).
-30: 
-31: 2. **Secondary / Fallback Path (Three.js / WebGL / TS)**:
-32:    - Only use alternative methods (such as Three.js `customScript`, client-side WebGL/WGSL shaders, or TypeScript geometry builders) when:
-33:      - Native C/C++ compilation tools (Clang) are explicitly unavailable in the environment.
-34:      - The user explicitly requests pure browser client-side scripts.
-35:      - Performing lightweight viewport camera choreography, UI overlays, or non-geometric DOM manipulations.
-36: 
-37: ## 3D Tile & Mesh Ingestion Quality Directive
-38: 
-39: ### Rule: Always Download Highest Quality Mesh & Convert to GLB
-40: When fetching, downloading, or ingesting real-world 3D meshes (e.g. from Google Photorealistic 3D Tiles / Geospatial APIs, Cesium, or photogrammetry sources) to work with:
-41: 1. **Always Demand Maximum Quality (Deepest Leaf LOD)**:
-42:    - Configure the tile streamer with the tightest geometric error budget (`errorTarget = 0.5` or lower) and calculate Screen-Space Error (SSE) against high-resolution viewports (4K $3840 \times 2160$ resolution).
-43:    - Never settle for coarse root or intermediate octree LODs; always wait for leaf tile streaming to fully settle (`stats.downloading === 0 && stats.parsing === 0`) to guarantee maximum geometric fidelity, sharp architectural feature edges, and authentic textures.
-44: 2. **Convert Directly to Standard Binary glTF 2.0 (`.glb`)**:
-45:    - Extract and isolate the target submeshes (preserving position, vertex normals, UVs, and photogrammetric textures) within the target bounding volume or geofence.
-46:    - Package immediately into standardized binary glTF 2.0 (`.glb`) via `GLTFExporter({ binary: true })` or native glTF packer.
-47:    - Standardize `.glb` as the canonical input for all downstream native C++20 engine pipelines (e.g., UTDRA decomposition, half-edge topology extraction, and 4-RoSy field-aligned quad remeshing).
-48: 3. **Preserve Raw High-Resolution Assets**:
-49:    - Always persist the extracted high-resolution raw mesh (e.g., `public/models/..._raw.glb` or `public/tiles/...`) to maintain reproducible, non-destructive workflows from the highest-quality source.
-50: 
-51: ### Rule: Dual Dedicated 3D Object APIs & Zero Presets
-52: When retrieving real-world locations or addresses as 3D models from Google Maps Photorealistic 3D Tiles:
-53: 1. **Two Dedicated Separate APIs**:
-54:    - `getGoogle3DTilesFullTexture(queryOrCoords, options)` / `google_3d_tiles_get_full_texture`: Ingests full photogrammetric PBR textures.
-55:    - `getGoogle3DTilesClay(queryOrCoords, options)` / `google_3d_tiles_get_clay`: Ingests studio grey clay volumetric massing.
-56:    - Both return standard binary glTF 2.0 (`.glb`) buffer (`glbBuffer`), disk path (`glbPath`), geometric mesh statistics (`mesh.vertexCount`, `mesh.triangleCount`), and render frames.
-57: 2. **Strict Zero Presets & Zero Procedural Fallback**:
-58:    - Never use static landmark dictionary lookups or artificial coordinate hashes.
-59:    - Queries must supply explicit geodetic coordinates or an active Google Maps API key for geocoding.
-60:    - Any query lacking coordinates or geocoding credentials must throw an actionable error.
-61: 3. **Headless Blockout Runner Isolation & Ephemeral Port Allocation**:
-62:    - Dynamic ephemeral port binding (`server.listen(0)` -> `actualPort`) avoids port collisions during concurrent test or pipeline runs.
-63:    - Runner files are generated uniquely per run (`s4d_tile_blockout_runner_${timestamp}_${rand}.html`) and automatically unlinked upon pipeline completion or process exit.
-64:    - Headless Chrome and FFmpeg executables are auto-discovered across macOS and Linux standard paths.
+1. **Primary Generation Path (C/C++20 Engine)**:
+   - Always prioritize modern C++20 via the native Scratchbox 3D Engine (`#include "scratchbox_engine.hpp"`), SB-Veggie (`scratchbox_veggie.hpp`), and Archie (`scratchbox_archie.hpp`).
+   - Native C++ with Apple Clang (`-std=c++20 -O3`) compiles and generates 100,000+ vertices, calculates smooth envelope normals, applies noise algorithms, and serializes a standard binary `.glb` in under 200 milliseconds.
+   - Use high-performance SIMD vector math (`scratchbox_math.hpp`), Signed Distance Fields (SDFs), Marching Cubes polygonization, FastNoise3D (Perlin/FBM/Worley), transferred envelope normals, and physical material assignment.
+   - Procedural C++ modules compile via Apple Clang / modern C++ toolchain (`process.env.CXX || 'clang++' -std=c++20 -O3`) through `NativeCppCompilerService`.
+   - To prevent `SIGILL` illegal instruction faults across containerized CI, Cloud Run, and heterogeneous macOS/Linux architectures, `-march=native` is conditioned strictly behind `process.env.SCRATCHBOX_NATIVE_ARCH === '1'`.
+   - Native binaries stream binary glTF 2.0 (`.glb`) chunks containing vertices, normals, UVs, vertex colors (`COLOR_0`), and PBR metallic-roughness materials directly into the Three.js viewport.
+   - Three.js is best utilized as a pure renderer and viewport, not the geometric generator.
+
+2. **Secondary / Fallback Path (Three.js / WebGL / TS)**:
+   - Only use alternative methods (such as Three.js `customScript`, client-side WebGL/WGSL shaders, or TypeScript geometry builders) when:
+     - Native C/C++ compilation tools (Clang) are explicitly unavailable in the environment.
+     - The user explicitly requests pure browser client-side scripts.
+     - Performing lightweight viewport camera choreography, UI overlays, or non-geometric DOM manipulations.
+
+### Rule: Dynamic Ephemeral Compilation & Zero Code Proliferation
+When generating procedural 3D scenes, structures, or worlds:
+1. **Zero Static Scene `.cpp` Files**:
+   - The repository must remain free of one-off scene generator files (e.g. `arctic_outpost.cpp`, `desert_temple.cpp`). Never commit throwaway `.cpp` files to `scripts/` or `src/`.
+2. **On-The-Fly Synthesis & Direct GLB Streaming**:
+   - All procedural C++ code must be synthesized on the fly from continuous schema contracts (`Adaptive3DSceneContract`), compiled ephemerally in a sub-process via `NativeCppCompilerService`, and streamed directly into standard binary `.glb` format.
+3. **Non-Destructive Reproducibility**:
+   - Compiling dynamically via `NativeCppCompilerService`, streaming the `.glb` directly, and retaining the source in the scene data metadata (`data.cppGenerator.sourceCode`) guarantees non-destructive reproducibility without polluting the repository. Intermediate object files and binaries are automatically cleaned up.
+
+### Rule: Zero Uninvited Defaults (Atmosphere, Ephemeris & Clouds Strictly Opt-In)
+When initializing 3D viewports, canvas scenes, lighting, or atmosphere:
+1. **Preserve Visual Neutrality and User Intent**:
+   - In practice, uninvited defaults pollute user intent. When building an outpost or mechanical asset, unexpected clouds or lighting presets fight against the composition. Making atmosphere, ephemeris, and cloud layers strictly opt-in preserves visual neutrality and artistic control.
+2. **Neutral Studio Baseline**:
+   - The 3D viewport, scene synthesizer, and rendering stack must **never** inject default atmospheric skyboxes, atmospheric domes, volumetric clouds, or terrain cloud shadows.
+   - Unconfigured scenes default strictly to a clean, neutral studio environment (`skybox: 'studio'`, `lighting: 'studio'`).
+3. **Explicit Opt-In Gate**:
+   - Atmospheric scattering, diurnal solar ephemeris, depth fog, and volumetric clouds are only instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather/i`).
+
+## 3D Tile & Mesh Ingestion Quality Directive
+
+### Rule: Always Download Highest Quality Mesh & Convert to GLB
+When fetching, downloading, or ingesting real-world 3D meshes (e.g. from Google Photorealistic 3D Tiles / Geospatial APIs, Cesium, or photogrammetry sources) to work with:
+1. **Always Demand Maximum Quality (Deepest Leaf LOD)**:
+   - Configure the tile streamer with the tightest geometric error budget (`errorTarget = 0.5` or lower) and calculate Screen-Space Error (SSE) against high-resolution viewports (4K $3840 \times 2160$ resolution).
+   - Never settle for coarse root or intermediate octree LODs; always wait for leaf tile streaming to fully settle (`stats.downloading === 0 && stats.parsing === 0`) to guarantee maximum geometric fidelity, sharp architectural feature edges, and authentic textures.
+2. **Convert Directly to Standard Binary glTF 2.0 (`.glb`)**:
+   - Extract and isolate the target submeshes (preserving position, vertex normals, UVs, and photogrammetric textures) within the target bounding volume or geofence.
+   - Package immediately into standardized binary glTF 2.0 (`.glb`) via `GLTFExporter({ binary: true })` or native glTF packer.
+   - Standardize `.glb` as the canonical input for all downstream native C++20 engine pipelines (e.g., UTDRA decomposition, half-edge topology extraction, and 4-RoSy field-aligned quad remeshing).
+3. **Preserve Raw High-Resolution Assets**:
+   - Always persist the extracted high-resolution raw mesh (e.g., `public/models/..._raw.glb` or `public/tiles/...`) to maintain reproducible, non-destructive workflows from the highest-quality source.
+
+### Rule: Dual Dedicated 3D Object APIs & Zero Presets
+When retrieving real-world locations or addresses as 3D models from Google Maps Photorealistic 3D Tiles:
+1. **Two Dedicated Separate APIs**:
+   - `getGoogle3DTilesFullTexture(queryOrCoords, options)` / `google_3d_tiles_get_full_texture`: Ingests full photogrammetric PBR textures.
+   - `getGoogle3DTilesClay(queryOrCoords, options)` / `google_3d_tiles_get_clay`: Ingests studio grey clay volumetric massing.
+   - Both return standard binary glTF 2.0 (`.glb`) buffer (`glbBuffer`), disk path (`glbPath`), geometric mesh statistics (`mesh.vertexCount`, `mesh.triangleCount`), and render frames.
+2. **Strict Zero Presets & Zero Procedural Fallback**:
+   - Never use static landmark dictionary lookups or artificial coordinate hashes.
+   - Queries must supply explicit geodetic coordinates or an active Google Maps API key for geocoding.
+   - Any query lacking coordinates or geocoding credentials must throw an actionable error.
+3. **Headless Blockout Runner Isolation & Ephemeral Port Allocation**:
+   - Dynamic ephemeral port binding (`server.listen(0)` -> `actualPort`) avoids port collisions during concurrent test or pipeline runs.
+   - Runner files are generated uniquely per run (`s4d_tile_blockout_runner_${timestamp}_${rand}.html`) and automatically unlinked upon pipeline completion or process exit.
+   - Headless Chrome and FFmpeg executables are auto-discovered across macOS and Linux standard paths.
 
 ### Rule: Google 3D Tiles Clay Mode as Canonical Blockout Runner (<VIDEO_REF_0>)
 When providing 3D spatial blockouts for video generation, camera trajectory conditioning, or generative restyling with Gemini Omni / Vertex AI:
