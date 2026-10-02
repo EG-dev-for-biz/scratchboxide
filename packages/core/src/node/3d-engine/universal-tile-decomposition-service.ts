@@ -1,10 +1,12 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
+ * U.S. PATENT APPLICATION NO. 64/168,583 (PATENT PENDING)
+ *
  * This software and associated documentation files are proprietary and confidential
- * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
- * of this file, via any medium, is strictly prohibited without explicit written
- * permission from Scratchbox LLC.
+ * to Scratchbox LLC and Elias John Green. Unauthorized copying, modification,
+ * distribution, or use of this file, via any medium, is strictly prohibited
+ * without explicit written permission.
  ********************************************************************************/
 
 import * as fs from 'fs';

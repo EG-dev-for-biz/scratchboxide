@@ -3,6 +3,10 @@
     <img src="./ScratchboxIDE%20logo/ScratchboxIDE.png" alt="Scratchbox IDE Logo" width="120" />
     <h1>Scratchbox IDE</h1>
     <p><strong>Autonomous AI Generative Canvas Studio, Visual Primitives & 3D Geospatial Engine</strong></p>
+    <p>
+        <a href="#intellectual-property--patents"><img src="https://img.shields.io/badge/USPTO-Patent%20Pending-blue.svg" alt="USPTO Patent Pending" /></a>
+        <a href="#intellectual-property--patents"><img src="https://img.shields.io/badge/Application-64%2F168%2C583-informational.svg" alt="U.S. Application 64/168,583" /></a>
+    </p>
 </div>
 
 ---
@@ -175,6 +179,13 @@ Never commit `secrets.json`, `service-account.json` or `.env`; they are ignored 
 - **Electron**: `sandbox: true`, `contextIsolation`, a strict CSP, and an IPC channel allowlist in `preload.ts`.
 - **Errors**: API handlers return generic messages to clients and log details server-side;
   `unhandledRejection` / `uncaughtException` terminate the process instead of continuing half-initialised.
+
+## Intellectual property & patents
+
+The core 3D photogrammetric mesh decomposition, void excision, and non-destructive elevation slicing algorithms in Scratchbox IDE (UTDRA / ULDRA) are proprietary and patent pending under United States patent law:
+- **U.S. Patent Application No. 64/168,583 (Patent Pending)**.
+- Title: *SYSTEM, METHOD, AND NON-TRANSITORY COMPUTER-READABLE MEDIUM FOR UNSUPERVISED MACRO-GEOGRAPHIC TELEMETRY PROBING, TOPOLOGICAL VOID EXCISION, AND NON-DESTRUCTIVE ELEVATION SLICING IN PHOTOGRAMMETRIC THREE-DIMENSIONAL MESHES*.
+- For licensing inquiries, contact Elias John Green (`ejohngreen@gmail.com`).
 
 ## License
 
