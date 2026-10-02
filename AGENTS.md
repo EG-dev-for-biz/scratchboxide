@@ -307,6 +307,22 @@ When synthesizing, managing, or rendering 3D scenes:
      - `features`: PBR and rendering pipeline flags.
    - Structured types must **never** be intercepted or overridden by legacy presets or keyword regexes.
 
+### Rule: Dimensional vs. Taxonomic Typing in Adaptive Domain Architecture (The Canonical Type Invariant)
+When writing, auditing, or refactoring types, interfaces, schemas, and contracts across the Scratchbox codebase:
+1. **Types Must Define Dimensions, Never Domains (The Core Distinction)**:
+   - **Taxonomic Types (Strictly Prohibited)**: Categorize semantic identities, genres, or themes into closed sets (e.g. `type Theme = 'arctic' | 'desert'`, `enum Style { BRUTALIST, GOTHIC }`). Closed taxonomies reject unpredicted prompts, force codebase edits for novel concepts, and directly violate ADA Pillar 2.
+   - **Dimensional Types (Mandatory)**: Define continuous coordinate spaces, physical quantities, and hardware execution invariants (`Vec3`, `Bounds3D`, `PbrMaterialAttributes`, `elevationProfile: { peakReliefMeters: number, areteSharpnessExponent: number }`). They provide the geometric manifold in which any arbitrary domain can exist.
+2. **The 3 Adversarial Stress Tests for Any Type**:
+   - **The Alien Planet Test**: Can a concept the developer never conceived of (e.g. *"bioluminescent geothermal mycelium forest inside a hollow asteroid with liquid methane geysers"*) be represented by this type without modifying a single line of code? If it requires adding an enum variant or union branch, the type fails and must be refactored into continuous physical parameters.
+   - **The Continuous vs. Discrete Test**: Can states in this type space be linearly interpolated ($\operatorname{lerp}$)? Strings and discrete enum cases cannot be blended; physical dimensions (temperatures, roughness, ratios, dimensions, simplex weights) can morph smoothly in latent and geometric space.
+   - **The What vs. How Test**: Does the type constrain the semantic *meaning* of the scene, or does it enforce *memory layout and computational invariants* for the hardware (SIMD alignment, IEEE 754 float32, glTF 2.0 contiguous buffer packing)? Types must constrain the *how* (execution safety), never the *what* (generative imagination).
+3. **Open-Ended Type Extension Idiom**:
+   - When string descriptors are used for diagnostic labeling or IDE tooling, never restrict them to closed unions. Always permit open-ended extension via the open literal pattern:
+     ```typescript
+     type TerrainTopology = 'alpine_massif' | 'canyon' | 'plateau' | (string & {});
+     ```
+   - Execution logic must NEVER branch on string matches (e.g. `if (topology === 'alpine_massif')`). Execution must read the continuous mathematical fields (`peakHeight`, `sharpnessExponent`, `screeNoiseAmplitude`).
+
 ## Video Pipeline & Multi-District Gallery Directives
 
 ### Rule: Strict District Asset Isolation & Semantic Coherence

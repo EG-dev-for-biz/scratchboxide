@@ -76,6 +76,21 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 - **Neutral Studio Baseline**: Unconfigured scenes default strictly to a clean, neutral studio environment (`skybox: 'studio'`, `lighting: 'studio'`).
 - **Explicit Opt-In Gate**: Atmospheric sky domes, Rayleigh/Mie scattering, diurnal solar curves, depth fog, and volumetric clouds are only instantiated when explicitly requested in the prompt or schema contract.
 
+### Pillar 8: Dimensional vs. Taxonomic Typing (The Canonical Type Invariant)
+- **Types Must Define Dimensions, Never Domains**:
+  - **Taxonomic Types (Strictly Prohibited)**: Nominal categories, genre enums, and closed string unions (e.g. `type Theme = 'arctic' | 'desert'`). They force codebase edits for novel concepts, fail on unpredicted prompts, and create brittle switch-case classifiers.
+  - **Dimensional Types (Mandatory)**: Continuous coordinate spaces, physical quantities, and hardware execution invariants (`Vec3`, `Bounds3D`, `PbrMaterialAttributes`, `elevationProfile: { peakReliefMeters: number, areteSharpnessExponent: number }`). They provide the physical manifold in which any arbitrary domain can exist.
+- **The 3 Adversarial Stress Tests for Any Type**:
+  1. *The Alien Planet Test*: Can an entity the developer never conceived of (e.g. *"bioluminescent geothermal mycelium forest inside a hollow asteroid with liquid methane geysers"*) be represented without editing TypeScript or C++ source? If it requires adding an enum variant, the type fails.
+  2. *The Continuous vs. Discrete Test*: Can states in this type space be linearly interpolated ($\operatorname{lerp}$)? Strings and discrete cases cannot be blended; physical dimensions (temperatures, roughness, ratios, dimensions, simplex weights) morph smoothly.
+  3. *The What vs. How Test*: Does the type constrain the semantic *meaning* of the scene, or does it enforce *memory layout and computational invariants* for hardware (SIMD alignment, IEEE 754 float32, glTF 2.0 contiguous buffer packing)? Types must constrain the *how* (execution safety), never the *what* (generative imagination).
+- **Open-Ended Type Extension Idiom**:
+  - For diagnostic strings and tooling autocomplete, use open literal types:
+    ```typescript
+    type TerrainTopology = 'alpine_massif' | 'canyon' | 'plateau' | (string & {});
+    ```
+  - Execution logic must **never** branch on string matches (e.g. `if (topology === 'alpine_massif')`). Execution must read the continuous mathematical fields (`peakHeight`, `sharpnessExponent`, `screeNoiseAmplitude`).
+
 ---
 
 ## 2. Canonical Contracts & APIs
@@ -117,7 +132,7 @@ console.log(`Generated ${result.meshMetrics?.vertexCount} vertices in ${result.c
 
 ---
 
-## 3. The 5 Red Lines: Anti-Patterns to Reject
+## 3. The 6 Red Lines: Anti-Patterns to Reject
 
 | # | Anti-Pattern | Violation | ADA Remedy |
 | :--- | :--- | :--- | :--- |
@@ -126,6 +141,7 @@ console.log(`Generated ${result.meshMetrics?.vertexCount} vertices in ${result.c
 | **3** | `if (/arctic/i.test(prompt))` | Fragile Regex Routing | Infer parameters via latent semantic reasoning |
 | **4** | Three.js fallback for procedural meshes | Quality / Performance Regression | Enforce modern C++20 SIMD / SDF / Marching Cubes via Apple Clang |
 | **5** | Hardcoded titles ("Executive Summary") | Preset Infiltration | Compose all headers, narratives, and labels dynamically |
+| **6** | Closed taxonomic unions (`'arctic' \| 'desert'`) | Taxonomic Choking of LLM | Use continuous dimensional schemas & open literals `(string & {})` (Pillar 8) |
 
 ---
 

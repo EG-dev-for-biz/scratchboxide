@@ -102,6 +102,7 @@ export class Adaptive3DSceneSynthesizer {
                 height: 1.2,
                 copingWidth: 0.35
             },
+            rooftopMechanicals: true,
             features: [
                 {
                     type: 'plinth',
@@ -122,11 +123,16 @@ export class Adaptive3DSceneSynthesizer {
                     type: 'radar_dish',
                     position: [10.5, 20.4, -6.5],
                     scale: [0.3, 1.8, 1.8]
+                },
+                {
+                    type: 'hvac_chiller',
+                    position: [-4.5, 17.2, -3.5],
+                    scale: [2.6, 1.8, 2.2]
                 }
             ]
         };
 
-        // 3. Botany & Foliage Ecosystem Inference
+        // 3. Botany & Foliage Ecosystem Inference (70-20-10 Biome Rule)
         const hasTrees = !/no trees|barren|wasteland/i.test(lower);
         const forestPatches: AdaptiveBotanyField[] = [];
 
@@ -134,14 +140,19 @@ export class Adaptive3DSceneSynthesizer {
             forestPatches.push({
                 species: isArctic || isAlpine ? 'picea_abies' : 'pinus_pinea',
                 archetype: 'conifer',
-                density: 24,
+                density: 32,
                 elevationMin: 0.0,
-                elevationMax: 12.0,
-                maxSlopeDeg: 28.0,
+                elevationMax: 14.0,
+                maxSlopeDeg: 35.0,
                 exclusionRadius: 18.0,
                 exclusionCenter: [0, 0],
                 envelopeNormalFactor: 0.85,
-                foliageColor: isArctic ? [0.18, 0.35, 0.24] : [0.22, 0.42, 0.25]
+                foliageColor: isArctic ? [0.18, 0.35, 0.24] : [0.22, 0.42, 0.25],
+                biomeStratification: {
+                    canopyRatio: 0.70,
+                    understoryRatio: 0.20,
+                    groundShrubRatio: 0.10
+                }
             });
         }
 
@@ -205,8 +216,8 @@ using namespace scratchbox::sb_veggie;
 using namespace scratchbox::architecture;
 using namespace scratchbox::io;
 
-// ============================================================================
-// 1. DYNAMIC TOPOGRAPHICAL ELEVATION & SLICING
+/// ============================================================================
+// 1. DYNAMIC TOPOGRAPHICAL ELEVATION, GRADIENT & SLICING (ELEVATION ORACLE)
 // ============================================================================
 
 static float getTerrainHeight(float x, float z) {
@@ -252,6 +263,15 @@ static float getTerrainHeight(float x, float z) {
     return std::max(valleyElev, hMassif + scree);
 }
 
+static Vec3 getTerrainNormal(float x, float z, float eps = 0.4f) {
+    float hL = getTerrainHeight(x - eps, z);
+    float hR = getTerrainHeight(x + eps, z);
+    float hD = getTerrainHeight(x, z - eps);
+    float hU = getTerrainHeight(x, z + eps);
+    Vec3 n(-(hR - hL) / (2.0f * eps), 1.0f, -(hU - hD) / (2.0f * eps));
+    return n.normalized();
+}
+
 static ScratchboxMesh buildTerrainMesh() {
     ScratchboxMesh mesh("Adaptive_Topography");
 
@@ -277,30 +297,39 @@ static ScratchboxMesh buildTerrainMesh() {
         for (int j = 0; j < gridSize; ++j) {
             float x = positions[i][j].x;
             float z = positions[i][j].z;
-            float eps = 0.4f;
-            float hL = getTerrainHeight(x - eps, z);
-            float hR = getTerrainHeight(x + eps, z);
-            float hD = getTerrainHeight(x, z - eps);
-            float hU = getTerrainHeight(x, z + eps);
-
-            Vec3 n(-(hR - hL) / (2.0f * eps), 1.0f, -(hU - hD) / (2.0f * eps));
-            normals[i][j] = n.normalized();
+            normals[i][j] = getTerrainNormal(x, z);
 
             float slope = 1.0f - normals[i][j].y;
             float elev = positions[i][j].y;
 
             Vec4 snowColor(${t.snowColor[0].toFixed(2)}f, ${t.snowColor[1].toFixed(2)}f, ${t.snowColor[2].toFixed(2)}f, 1.0f);
             Vec4 rockColor(${t.rockColor[0].toFixed(2)}f, ${t.rockColor[1].toFixed(2)}f, ${t.rockColor[2].toFixed(2)}f, 1.0f);
-            Vec4 iceColor(0.72f, 0.82f, 0.92f, 1.0f);
+            Vec4 iceColor(0.70f, 0.82f, 0.94f, 1.0f);
 
             Vec4 vColor;
-            if (slope > 0.45f) {
-                float rockFactor = std::clamp((slope - 0.45f) * 3.0f, 0.0f, 1.0f);
-                vColor = math::lerp(snowColor, rockColor, rockFactor);
+            if (slope > 0.38f) {
+                // Steeper slopes shed snow rapidly, exposing stratified bedrock
+                float rockFactor = std::clamp((slope - 0.38f) * 3.5f, 0.0f, 1.0f);
+                float strata = std::sin(elev * 1.6f + x * 0.25f) * 0.06f;
+                Vec4 stratifiedRock(
+                    std::clamp(rockColor.x + strata, 0.0f, 1.0f),
+                    std::clamp(rockColor.y + strata, 0.0f, 1.0f),
+                    std::clamp(rockColor.z + strata, 0.0f, 1.0f),
+                    1.0f
+                );
+                vColor = math::lerp(snowColor, stratifiedRock, rockFactor);
             } else if (elev < ${t.snowLineElevation.toFixed(2)}f && std::abs(x) < 22.0f) {
-                vColor = iceColor;
+                float iceBlend = std::clamp((22.0f - std::abs(x)) / 12.0f, 0.0f, 1.0f);
+                vColor = math::lerp(snowColor, iceColor, iceBlend);
             } else {
-                vColor = snowColor;
+                // Crisp windblown snow with ambient cool shadow
+                float shadowCool = std::clamp(-normals[i][j].x * 0.10f, -0.04f, 0.06f);
+                vColor = Vec4(
+                    std::clamp(snowColor.x + shadowCool * 0.5f, 0.0f, 1.0f),
+                    std::clamp(snowColor.y + shadowCool * 0.7f, 0.0f, 1.0f),
+                    std::clamp(snowColor.z + shadowCool, 0.0f, 1.0f),
+                    1.0f
+                );
             }
 
             colors[i][j] = vColor;
@@ -376,14 +405,31 @@ static void addBox(ScratchboxMesh& target, const Vec3& center, const Vec3& size,
 static ScratchboxMesh buildArchitecturalCompound() {
     ScratchboxMesh compound("Adaptive_Archie_Compound");
 
+    // Authoritative Ground-Snapping: Sample bedrock under building footprint
+    float groundCenter = getTerrainHeight(0, 0);
+    float minGround = groundCenter;
+    float maxGround = groundCenter;
+    for (float fx = -13.0f; fx <= 13.0f; fx += 6.5f) {
+        for (float fz = -11.0f; fz <= 11.0f; fz += 5.5f) {
+            float gh = getTerrainHeight(fx, fz);
+            minGround = std::min(minGround, gh);
+            maxGround = std::max(maxGround, gh);
+        }
+    }
+
+    const float baseY = maxGround + 0.35f;
+    const float plinthBottom = minGround - 3.5f; // Solid foundation skirt deep into bedrock
+    const float plinthHeight = (baseY + 1.6f) - plinthBottom;
+    const float plinthCenterY = plinthBottom + plinthHeight * 0.5f;
+
     BuildingConfig bldgCfg;
     bldgCfg.width = ${b.dimensions.width.toFixed(2)}f;
     bldgCfg.depth = ${b.dimensions.depth.toFixed(2)}f;
     bldgCfg.floorCount = ${b.dimensions.floorCount};
     bldgCfg.floorHeight = ${b.dimensions.floorHeight.toFixed(2)}f;
     bldgCfg.groundFloorHeight = ${(b.dimensions.floorHeight + 0.6).toFixed(2)}f;
-    bldgCfg.plinthHeight = 1.6f;
-    bldgCfg.plinthOffset = 0.5f;
+    bldgCfg.plinthHeight = 0.1f;
+    bldgCfg.plinthOffset = 0.1f;
     bldgCfg.bayWidth = ${b.fenestration.bayWidth.toFixed(2)}f;
     bldgCfg.windowWidth = ${(b.fenestration.bayWidth * 0.56).toFixed(2)}f;
     bldgCfg.windowHeight = 1.95f;
@@ -398,34 +444,49 @@ static ScratchboxMesh buildArchitecturalCompound() {
     bldgCfg.materials.foundation.baseColorFactor = Vec4(0.25f, 0.26f, 0.28f, 1.0f);
 
     ScratchboxMesh coreBuilding = ProceduralBuildingGenerator::generateBuilding(bldgCfg, "ArchieCitadelCore");
+    // Elevate Archie core building to sit seamlessly on top of foundation plinth
+    for (auto& v : coreBuilding.vertices) {
+        v.position.y += (baseY + 1.6f);
+    }
     appendMesh(compound, coreBuilding);
 
-    const float baseY = 0.0f;
-    const Vec4 darkConcrete(0.28f, 0.29f, 0.32f, 1.0f);
+    const Vec4 darkConcrete(0.26f, 0.27f, 0.30f, 1.0f);
     const Vec4 titanPylon(0.38f, 0.40f, 0.43f, 1.0f);
     const Vec4 warmGlow(${b.glazing.emissiveColor[0].toFixed(2)}f, ${b.glazing.emissiveColor[1].toFixed(2)}f, ${b.glazing.emissiveColor[2].toFixed(2)}f, 1.0f);
     const Vec4 snowDrift(0.88f, 0.90f, 0.94f, 1.0f);
 
-    // Foundation Base Plinth
-    addBox(compound, Vec3(0, baseY + 0.8f, 0), Vec3(23.0f, 1.6f, 19.0f), darkConcrete);
+    // 1. Massive Grounded Foundation Plinth & Skirt (Zero levitation, zero clipping)
+    addBox(compound, Vec3(0, plinthCenterY, 0), Vec3(24.0f, plinthHeight, 20.0f), darkConcrete);
 
-    // Structural Buttress Pylons
+    // 2. Structural Corner Buttress Pylons
     float cornerX = bldgCfg.width * 0.5f + 1.2f;
     float cornerZ = bldgCfg.depth * 0.5f + 1.2f;
-    addBox(compound, Vec3(-cornerX, baseY + 4.2f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3( cornerX, baseY + 4.2f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3(-cornerX, baseY + 4.2f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3( cornerX, baseY + 4.2f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
+    addBox(compound, Vec3(-cornerX, baseY + 5.8f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
+    addBox(compound, Vec3( cornerX, baseY + 5.8f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
+    addBox(compound, Vec3(-cornerX, baseY + 5.8f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
+    addBox(compound, Vec3( cornerX, baseY + 5.8f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
 
-    // Cantilevered Observation Bridge with Amber Emissive Glazing
-    float obsY = baseY + 11.6f;
+    // 3. Cantilevered Observation Bridge with Recessed Glazing & Warm Amber Glow
+    float obsY = baseY + 13.2f;
     addBox(compound, Vec3(0, obsY, 0), Vec3(11.0f, 2.8f, 9.0f), titanPylon);
-    addBox(compound, Vec3(0, obsY, 4.6f), Vec3(8.5f, 1.2f, 0.25f), warmGlow);
-    addBox(compound, Vec3(0, obsY, -4.6f), Vec3(8.5f, 1.2f, 0.25f), warmGlow);
-    addBox(compound, Vec3(5.6f, obsY, 0), Vec3(0.25f, 1.2f, 7.2f), warmGlow);
-    addBox(compound, Vec3(-5.6f, obsY, 0), Vec3(0.25f, 1.2f, 7.2f), warmGlow);
+    // Recessed glazing panels (0.35m deep reveal behind mullion frame)
+    addBox(compound, Vec3(0, obsY, 4.45f), Vec3(8.5f, 1.2f, 0.15f), warmGlow);
+    addBox(compound, Vec3(0, obsY, -4.45f), Vec3(8.5f, 1.2f, 0.15f), warmGlow);
+    addBox(compound, Vec3(5.35f, obsY, 0), Vec3(0.15f, 1.2f, 7.2f), warmGlow);
+    addBox(compound, Vec3(-5.35f, obsY, 0), Vec3(0.15f, 1.2f, 7.2f), warmGlow);
+    // Drainage sills below glazing
+    addBox(compound, Vec3(0, obsY - 0.7f, 4.65f), Vec3(9.2f, 0.25f, 0.5f), darkConcrete);
+    addBox(compound, Vec3(0, obsY - 0.7f, -4.65f), Vec3(9.2f, 0.25f, 0.5f), darkConcrete);
 
-    // Roof Deck Communications Spire & Radar Array
+    // 4. Rooftop Mechanical Penthouse: Dual HVAC Condenser Chillers & Manifold
+    float roofY = obsY + 4.8f;
+    addBox(compound, Vec3(-3.5f, roofY + 1.1f, -2.5f), Vec3(2.6f, 1.8f, 2.2f), titanPylon);
+    addBox(compound, Vec3(-3.5f, roofY + 2.05f, -2.5f), Vec3(1.8f, 0.25f, 1.8f), darkConcrete); // Fan intake grille
+    addBox(compound, Vec3( 3.5f, roofY + 1.1f, -2.5f), Vec3(2.6f, 1.8f, 2.2f), titanPylon);
+    addBox(compound, Vec3( 3.5f, roofY + 2.05f, -2.5f), Vec3(1.8f, 0.25f, 1.8f), darkConcrete); // Fan intake grille
+    addBox(compound, Vec3(0, roofY + 0.6f, -2.5f), Vec3(4.4f, 0.6f, 0.8f), darkConcrete); // Exhaust duct run
+
+    // 5. Communications Spire & Parabolic Radar Array
     Vec3 commPos(cornerX, obsY + 4.5f, -cornerZ);
     addBox(compound, commPos, Vec3(1.4f, 12.0f, 1.4f), titanPylon);
     addBox(compound, commPos + Vec3(0, 4.0f, 0), Vec3(5.2f, 0.45f, 0.9f), titanPylon);
@@ -433,10 +494,12 @@ static ScratchboxMesh buildArchitecturalCompound() {
     addBox(compound, commPos + Vec3(-2.0f, 4.4f, 0), Vec3(0.3f, 1.8f, 1.8f), snowDrift);
     addBox(compound, commPos + Vec3(0, 7.0f, 0), Vec3(0.3f, 3.2f, 0.3f), warmGlow);
 
-    // Access Bridge
-    addBox(compound, Vec3(0, baseY + 0.2f, 17.5f), Vec3(4.2f, 0.85f, 11.0f), darkConcrete);
-    addBox(compound, Vec3(-2.0f, baseY + 0.85f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
-    addBox(compound, Vec3(2.0f, baseY + 0.85f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
+    // 6. Access Ramp / Bridge from Plinth to Valley
+    float bridgeGroundY = getTerrainHeight(0, 23.0f);
+    float bridgeY = (baseY + 1.6f + bridgeGroundY) * 0.5f;
+    addBox(compound, Vec3(0, bridgeY, 17.5f), Vec3(4.2f, 0.85f, 11.0f), darkConcrete);
+    addBox(compound, Vec3(-2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
+    addBox(compound, Vec3( 2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
 
     compound.recomputeBounds();
     return compound;
@@ -505,39 +568,59 @@ int main(int argc, char** argv) {
     paramsCompact.branchCurvature = 0.75f;
     auto decompCompact = SbVeggieEvaluator::evaluateDecomposed(baseTmpl, paramsCompact, true);
 
-    // 4. Tree Stand Layout
+    // 4. Tree Stand Layout with 70-20-10 Biome Stratification
+    // Tier 1: Dominant Canopy (70%): Mature tall conifers (scale 1.0 - 1.25)
+    // Tier 2: Understory (20%): Adolescent saplings (scale 0.55 - 0.75) clustered around canopy
+    // Tier 3: Groundcover (10%): Compact dwarf subalpine shrubs (scale 0.28 - 0.42)
     std::vector<TreeInstance> treeStands = {
-        {Vec3(-12.5f, 0, 18.0f), 1.15f, 0.42f, 0},
-        {Vec3(-16.0f, 0, 14.5f), 0.95f, 1.15f, 1},
-        {Vec3(-9.5f, 0, 22.0f), 0.82f, 2.30f, 2},
-        {Vec3(-20.0f, 0, 21.0f), 1.05f, 0.88f, 0},
-        {Vec3(-14.0f, 0, 25.5f), 0.75f, 1.75f, 2},
-        {Vec3(-7.5f, 0, 17.0f), 0.90f, 2.95f, 1},
-
-        {Vec3(12.5f, 0, 19.0f), 1.10f, 0.55f, 0},
-        {Vec3(16.5f, 0, 15.0f), 0.92f, 1.45f, 1},
-        {Vec3(10.0f, 0, 23.5f), 0.80f, 2.55f, 2},
-        {Vec3(19.0f, 0, 21.0f), 1.02f, 0.25f, 0},
-        {Vec3(14.5f, 0, 26.0f), 0.72f, 1.85f, 2},
-        {Vec3(8.0f, 0, 16.5f), 0.88f, 3.10f, 1},
-
-        {Vec3(-18.5f, 0, -4.0f), 1.18f, 0.20f, 0},
-        {Vec3(-21.0f, 0,  2.0f), 0.94f, 1.30f, 1},
-        {Vec3(-15.5f, 0, -8.0f), 0.85f, 2.10f, 2},
+        // --- TIER 1: DOMINANT CANOPY CONIFERS (70%) ---
+        {Vec3(-12.5f, 0, 18.0f), 1.18f, 0.42f, 0},
+        {Vec3(-16.5f, 0, 14.5f), 1.10f, 1.15f, 0},
+        {Vec3(-20.5f, 0, 21.0f), 1.05f, 0.88f, 0},
+        {Vec3(12.5f,  0, 19.0f), 1.15f, 0.55f, 0},
+        {Vec3(17.0f,  0, 15.0f), 1.08f, 1.45f, 0},
+        {Vec3(19.5f,  0, 21.5f), 1.02f, 0.25f, 0},
+        {Vec3(-18.5f, 0, -4.0f), 1.20f, 0.20f, 0},
+        {Vec3(-21.5f, 0,  2.0f), 1.08f, 1.30f, 0},
         {Vec3(-24.5f, 0, -3.0f), 1.00f, 0.70f, 0},
-        {Vec3(-19.0f, 0,  7.5f), 0.78f, 1.60f, 2},
-        {Vec3(-13.0f, 0,  1.0f), 0.86f, 2.80f, 1},
+        {Vec3(19.5f,  0, -5.0f), 1.16f, 0.35f, 0},
+        {Vec3(22.5f,  0,  1.5f), 1.05f, 1.50f, 0},
+        {Vec3(16.0f,  0, -9.5f), 1.10f, 2.40f, 0},
+        {Vec3(-9.0f,  0, 26.0f), 1.02f, 1.80f, 0},
+        {Vec3(9.5f,   0, 26.5f), 1.06f, 0.95f, 0},
 
-        {Vec3(19.5f, 0, -5.0f), 1.12f, 0.35f, 0},
-        {Vec3(22.5f, 0,  1.5f), 0.88f, 1.50f, 1},
-        {Vec3(16.0f, 0, -9.5f), 0.96f, 2.40f, 1},
-        {Vec3(25.0f, 0, -4.5f), 0.74f, 0.95f, 2},
-        {Vec3(20.0f, 0,  8.0f), 0.82f, 1.45f, 2},
-        {Vec3(14.0f, 0,  0.5f), 0.70f, 2.75f, 2}
+        // --- TIER 2: UNDERSTORY ADOLESCENT SAPLINGS (20%) ---
+        {Vec3(-14.5f, 0, 19.5f), 0.68f, 2.10f, 1},
+        {Vec3(-18.5f, 0, 16.0f), 0.62f, 0.50f, 1},
+        {Vec3(14.5f,  0, 20.5f), 0.72f, 1.90f, 1},
+        {Vec3(18.5f,  0, 17.0f), 0.58f, 2.80f, 1},
+        {Vec3(-20.0f, 0, -2.0f), 0.65f, 1.10f, 1},
+        {Vec3(-23.0f, 0,  4.0f), 0.60f, 2.40f, 1},
+        {Vec3(21.0f,  0, -3.0f), 0.66f, 0.85f, 1},
+        {Vec3(24.0f,  0,  3.0f), 0.59f, 2.15f, 1},
+
+        // --- TIER 3: ALPINE GROUNDCOVER SHRUBS & DWARF CLUSTERS (10%) ---
+        {Vec3(-11.0f, 0, 16.5f), 0.35f, 1.40f, 2},
+        {Vec3(-15.5f, 0, 22.5f), 0.32f, 2.70f, 2},
+        {Vec3(11.0f,  0, 17.5f), 0.38f, 0.60f, 2},
+        {Vec3(16.0f,  0, 23.5f), 0.30f, 3.05f, 2},
+        {Vec3(-17.0f, 0, -6.0f), 0.34f, 1.95f, 2},
+        {Vec3(18.0f,  0, -7.0f), 0.36f, 0.40f, 2}
     };
 
+    // Ground-snapping & slope-aware vegetation survival
+    std::vector<TreeInstance> activeStands;
     for (auto& tree : treeStands) {
-        tree.pos.y = getTerrainHeight(tree.pos.x, tree.pos.z);
+        Vec3 norm = getTerrainNormal(tree.pos.x, tree.pos.z);
+        // Exclude trees on sheer vertical cliffs (slope > 36 deg)
+        if (norm.y >= 0.80f) {
+            tree.pos.y = getTerrainHeight(tree.pos.x, tree.pos.z);
+            activeStands.push_back(tree);
+        } else if (norm.y >= 0.65f && tree.templateVariant == 2) {
+            // Dwarf shrubs can cling to moderately steep rocky ledges
+            tree.pos.y = getTerrainHeight(tree.pos.x, tree.pos.z);
+            activeStands.push_back(tree);
+        }
     }
 
     ScratchboxMesh woodCompound("SB_Veggie_Wood_Compound");
@@ -545,7 +628,7 @@ int main(int argc, char** argv) {
     ScratchboxMesh foliageCompound("SB_Veggie_Foliage_Compound");
     foliageCompound.material = decompTall.foliageMesh.material;
 
-    for (const auto& inst : treeStands) {
+    for (const auto& inst : activeStands) {
         const auto& treeData = (inst.templateVariant == 0) ? decompTall :
                                (inst.templateVariant == 1) ? decompMed : decompCompact;
 
@@ -574,6 +657,8 @@ int main(int argc, char** argv) {
     foliageCompound.recomputeBounds();
 
     // 5. Serialize Multi-Mesh Binary glTF 2.0 (.glb)
+    // Blender-Grade Contiguous Memory: Packing the world into 4 unified compound buffers
+    // guarantees minimal JavaScript object allocation in Three.js (0 GC stutter on update).
     std::vector<ScratchboxMesh> multiMeshes = {
         terrainMesh,
         citadelMesh,
@@ -599,7 +684,6 @@ int main(int argc, char** argv) {
     std::cout << "SUCCESS: Wrote " << glbData.size() << " bytes to " << outGlbPath << std::endl;
     std::cout << "TOTAL_VERTS:" << totalVerts << std::endl;
     std::cout << "TOTAL_TRIS:" << totalTris << std::endl;
-
     return 0;
 }
 `;

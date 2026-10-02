@@ -9,7 +9,7 @@
  ********************************************************************************/
 
 export interface AdaptiveTerrainField {
-    topology: 'alpine_massif' | 'canyon' | 'plateau' | 'rolling_hills' | 'flat_plinth' | 'custom_sdf';
+    topology: 'alpine_massif' | 'canyon' | 'plateau' | 'rolling_hills' | 'flat_plinth' | 'custom_sdf' | (string & {});
     peakHeight: number;
     peakPosition: [number, number];
     sharpnessExponent: number;
@@ -52,8 +52,9 @@ export interface AdaptiveArchitecturalStructure {
         height: number;
         copingWidth: number;
     };
+    rooftopMechanicals?: boolean;
     features?: Array<{
-        type: 'mast' | 'radar_dish' | 'plinth' | 'access_bridge';
+        type: 'mast' | 'radar_dish' | 'plinth' | 'access_bridge' | 'hvac_chiller' | (string & {});
         position: [number, number, number];
         scale: [number, number, number];
         rotationYDeg?: number;
@@ -62,7 +63,7 @@ export interface AdaptiveArchitecturalStructure {
 
 export interface AdaptiveBotanyField {
     species: string;
-    archetype: 'conifer' | 'decurrent' | 'columnar' | 'shrub';
+    archetype: 'conifer' | 'decurrent' | 'columnar' | 'shrub' | (string & {});
     density: number;
     elevationMin: number;
     elevationMax: number;
@@ -71,6 +72,11 @@ export interface AdaptiveBotanyField {
     exclusionCenter: [number, number];
     envelopeNormalFactor: number;
     foliageColor?: [number, number, number];
+    biomeStratification?: {
+        canopyRatio: number;
+        understoryRatio: number;
+        groundShrubRatio: number;
+    };
 }
 
 export interface AdaptiveAtmosphereEphemeris {
