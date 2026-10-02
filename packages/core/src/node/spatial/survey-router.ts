@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as fs from 'fs-extra';
 import { SurveySynthesisEngine } from '../../common/spatial/SurveySynthesisEngine';
 import type { ColmapCameraPose, GeodeticAnchor, SurveyPatternConfig } from '../../common/spatial/colmap-vector-reference-types';
+import { AdaptiveSurveyRigService } from './AdaptiveSurveyRigService';
 import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { BeautifyStationService, type StationImageGenerator } from './BeautifyStationService';
 import { SurveySplatPipelineService } from './SurveySplatPipelineService';
@@ -92,42 +93,58 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
             ? args.cameraCount
             : (args?.surveyPreset === 'watertight-112' ? 112 : (args?.surveyPreset === 'interior-pilot-40' ? 40 : 24));
 
-        const stations = isGeoSurvey
-            ? engine.synthesize(anchor, {
-                type: 'geographic-3dtiles-survey',
-                cameraCount,
-                targetRadiusMeters: 130,
-                focalLengthMm: 35,
-                lookAtOffsetLocalENU: lookAt
-            })
-            : isCompleteAmphitheatre
-            ? engine.synthesize(anchor, {
-                type: 'amphitheatre-complete',
-                cameraCount,
-                targetRadiusMeters: 150,
-                aspectRatioXZ: 1.18,
-                lookAtOffsetLocalENU: lookAt
-            })
-            : engine.synthesize(anchor, {
-                type: 'foveated-multi-tier',
-                cameraCount: 24,
-                targetRadiusMeters: 150,
-                tierRadiiMeters: [110, 130, 180],
-                altitudeTiersMeters: [
-                    anchor.elevationMeters + 3.0,
-                    anchor.elevationMeters + 30.0,
-                    anchor.elevationMeters + 75.0
-                ],
-                lookAtOffsetLocalENU: lookAt,
-                lookAtTiersOffsetLocalENU: [
-                    [lookAt[0], 6.0 + (lookAt[1] - 20.0), lookAt[2]],
-                    [lookAt[0], 28.0 + (lookAt[1] - 20.0), lookAt[2]],
-                    [lookAt[0], 20.0 + (lookAt[1] - 20.0), lookAt[2]]
-                ]
-            });
         const glb = fs.existsSync(path.resolve(workspaceRoot, 'public/models/colosseum_grounded.glb'))
             ? 'public/models/colosseum_grounded.glb'
             : 'public/models/colosseum_clay.glb';
+        const glbAbs = path.resolve(workspaceRoot, args?.glbPath || glb);
+
+        let stations: ColmapCameraPose[];
+        if (args?.stations && args.stations.length) {
+            stations = args.stations;
+        } else if (args?.useAdaptiveRig !== false && fs.existsSync(glbAbs) && (args?.surveyPattern === 'adaptive-scene-aware' || isCompleteAmphitheatre)) {
+            const adaptiveResult = AdaptiveSurveyRigService.planRig(glbAbs, {
+                anchor,
+                cameraBudget: cameraCount,
+                mode: 'multitier-complete',
+                focalLengthMm: 35,
+                targetResolutionMm: 2.5
+            });
+            stations = adaptiveResult.poses;
+        } else {
+            stations = isGeoSurvey
+                ? engine.synthesize(anchor, {
+                    type: 'geographic-3dtiles-survey',
+                    cameraCount,
+                    targetRadiusMeters: 130,
+                    focalLengthMm: 35,
+                    lookAtOffsetLocalENU: lookAt
+                })
+                : isCompleteAmphitheatre
+                ? engine.synthesize(anchor, {
+                    type: 'amphitheatre-complete',
+                    cameraCount,
+                    targetRadiusMeters: 150,
+                    aspectRatioXZ: 1.18,
+                    lookAtOffsetLocalENU: lookAt
+                })
+                : engine.synthesize(anchor, {
+                    type: 'foveated-multi-tier',
+                    cameraCount: 24,
+                    targetRadiusMeters: 150,
+                    tierRadiiMeters: [110, 130, 180],
+                    altitudeTiersMeters: [
+                        anchor.elevationMeters + 3.0,
+                        anchor.elevationMeters + 30.0,
+                        anchor.elevationMeters + 75.0
+                    ],
+                    lookAtOffsetLocalENU: lookAt,
+                    lookAtTiersOffsetLocalENU: [
+                        [lookAt[0], 6.0 + (lookAt[1] - 20.0), lookAt[2]],
+                        [lookAt[0], 28.0 + (lookAt[1] - 20.0), lookAt[2]],
+                        [lookAt[0], 20.0 + (lookAt[1] - 20.0), lookAt[2]]
+                    ]
+                });
+        }
         return {
             glbPath: args?.glbPath || glb,
             outDir: args?.outDir || 'public/tilesets/colosseum',
@@ -471,6 +488,32 @@ export class SurveyApi {
         };
     }
 
+    /** POST /plan-adaptive { glbPath, anchor?, cameraBudget?, mode?, focalLengthMm?, targetResolutionMm?, standoffMeters?, minGroundClearanceMeters? } */
+    async planAdaptive(body: any) {
+        if (!body?.glbPath) throw new Error('glbPath is required for adaptive survey rig planning');
+        const absGlb = this.resolveGlb(body.glbPath);
+        const anchor = body?.anchor ? SurveyApi.anchorFrom(body) : undefined;
+        const result = AdaptiveSurveyRigService.planRig(absGlb, {
+            anchor,
+            cameraBudget: body?.cameraBudget,
+            mode: body?.mode,
+            focalLengthMm: body?.focalLengthMm,
+            targetResolutionMm: body?.targetResolutionMm,
+            standoffMeters: body?.standoffMeters,
+            minGroundClearanceMeters: body?.minGroundClearanceMeters,
+            renderWidth: body?.renderWidth,
+            renderHeight: body?.renderHeight,
+            focusCentroid: body?.focusCentroid
+        });
+        const safeAnchor = (result.poses[0] as any)?.metadata?.anchor || anchor || { lat: 0, lng: 0, elevationMeters: 0, headingDeg: 0 };
+        const geoJson = this.engine.toGeoJson(result.poses, safeAnchor);
+        return {
+            success: true,
+            ...result,
+            geoJson
+        };
+    }
+
     /** POST /enrich { poses, glbPath, isoDate? } */
     async enrich(body: any) {
         const poses: ColmapCameraPose[] = body?.poses;
@@ -562,6 +605,7 @@ export function createSurveyRouter(express: any, api: SurveyApi) {
     };
     router.get('/status', (_req: any, res: any) => res.json({ success: true, service: 'survey-synthesis', clay: !!(api as any).deps?.fetchClayGlb, beautify: !!(api as any).deps?.beautifyStation }));
     router.post('/synthesize', wrap(b => api.synthesize(b)));
+    router.post('/plan-adaptive', wrap(b => api.planAdaptive(b)));
     router.post('/enrich', wrap(b => api.enrich(b)));
     router.post('/rank', wrap(b => api.rank(b)));
     router.post('/export-colmap', wrap(b => api.exportColmap(b)));
@@ -602,6 +646,7 @@ export function createNodeHttpHandler(api: SurveyApi, prefix = '/api/3d/survey')
             if (req.method === 'POST') {
                 switch (route) {
                     case '/synthesize': return send(res, 200, await api.synthesize(body));
+                    case '/plan-adaptive': return send(res, 200, await api.planAdaptive(body));
                     case '/enrich': return send(res, 200, await api.enrich(body));
                     case '/rank': return send(res, 200, api.rank(body));
                     case '/export-colmap': return send(res, 200, api.exportColmap(body));
