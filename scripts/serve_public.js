@@ -356,10 +356,20 @@ const server = http.createServer((req, res) => {
                 const listPath = path.resolve('/tmp', `fuse_list_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.txt`);
                 fs.writeFileSync(listPath, stationEntries.join('\n'));
 
+                const landmarkCenters = {
+                    colosseum: [-43.43, 62.53],
+                    red_rocks: [5.0, 0.0],
+                    esb: [0.0, 0.0],
+                    arch_constantine: [-139.6, -45.3]
+                };
+                const center = landmarkCenters[landmark] || [0.0, 0.0];
+
                 const args = [
                     '--fuse-list', listPath,
                     '--voxel-size', String(voxelSize),
                     '--crop-radius', String(cropRadius),
+                    '--crop-center-x', String(center[0]),
+                    '--crop-center-z', String(center[1]),
                     '--normal-prune-cos', String(normalPruneCos),
                     '--out-splat', outSplatPath,
                     '--json'

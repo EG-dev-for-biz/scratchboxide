@@ -256,13 +256,13 @@ export function syncAtmosphere(
                     turbidity: atmoConfig.turbidity ?? 1.5,
                     mieDirectionalG: atmoConfig.mieDirectionalG ?? 0.82,
                     albedoScale: atmoConfig.albedoScale ?? 1.1,
-                    cloudShadowsEnabled: atmoConfig.cloudShadowsEnabled ?? true,
+                    cloudShadowsEnabled: atmoConfig.cloudShadowsEnabled === true,
                     cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                     cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
                     atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
                     cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
-                    cloudCoverage: atmoConfig.cloudCoverage ?? 0.35,
-                    cloudDensity: atmoConfig.cloudDensity ?? 0.45,
+                    cloudCoverage: atmoConfig.cloudCoverage ?? (atmoConfig.volumetricClouds === true ? 0.35 : 0.0),
+                    cloudDensity: atmoConfig.cloudDensity ?? (atmoConfig.volumetricClouds === true ? 0.45 : 0.0),
                     windVector: atmoConfig.windVector ?? [0.05, 0.02]
                 }, width, height);
             } catch (e) {
@@ -270,15 +270,15 @@ export function syncAtmosphere(
             }
         }
 
-        if (atmoConfig.cloudShadowsEnabled !== false) {
+        if (atmoConfig.cloudShadowsEnabled === true) {
             terrainCloudShadows = createTerrainCloudShadows({
                 cloudShadowsEnabled: true,
                 cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                 cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
                 atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
                 cloudAltitude: atmoConfig.cloudAltitude ?? 1200.0,
-                cloudCoverage: atmoConfig.cloudCoverage ?? 0.35,
-                cloudDensity: atmoConfig.cloudDensity ?? 0.45,
+                cloudCoverage: atmoConfig.cloudCoverage ?? (atmoConfig.volumetricClouds === true ? 0.35 : 0.0),
+                cloudDensity: atmoConfig.cloudDensity ?? (atmoConfig.volumetricClouds === true ? 0.45 : 0.0),
                 windVector: atmoConfig.windVector ?? [0.05, 0.02]
             });
         }

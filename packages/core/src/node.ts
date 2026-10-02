@@ -948,6 +948,19 @@ export {
     AdaptiveDomainParticleService
 } from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
 
+// Adaptive Domain 3D Scene Architecture (Zero-Preset & Schema-Guided)
+export type {
+    Adaptive3DSceneContract,
+    AdaptiveTerrainField,
+    AdaptiveArchitecturalStructure,
+    AdaptiveBotanyField,
+    AdaptiveAtmosphereEphemeris
+} from './common/spatial/adaptive-3d-scene-contract';
+export {
+    Adaptive3DSceneSynthesizer,
+    type Adaptive3DSceneExecutionResult
+} from './node/spatial/Adaptive3DSceneSynthesizer';
+
 // Universal 3D Structure Foundation & Scene Packaging
 export {
     Universal3DStructureFoundation

@@ -356,6 +356,19 @@ export {
     AdaptiveDomainParticleService
 } from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
 
+// Adaptive Domain 3D Scene Architecture (Zero-Preset & Schema-Guided)
+export type {
+    Adaptive3DSceneContract,
+    AdaptiveTerrainField,
+    AdaptiveArchitecturalStructure,
+    AdaptiveBotanyField,
+    AdaptiveAtmosphereEphemeris
+} from './common/spatial/adaptive-3d-scene-contract';
+export type {
+    Adaptive3DSceneSynthesizer,
+    Adaptive3DSceneExecutionResult
+} from './node/spatial/Adaptive3DSceneSynthesizer';
+
 // AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) Postprocessing
 export {
     FidelityFXSuperResolution,

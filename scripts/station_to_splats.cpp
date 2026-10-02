@@ -63,7 +63,7 @@ static bool jsonVec3(const std::string& s, const std::string& key, Vec3& out) {
     return true;
 }
 
-static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, bool adaptiveVoxel, int minVoxelNeighbors, int minViews, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
+static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, float cropCenterX, float cropCenterZ, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, bool adaptiveVoxel, int minVoxelNeighbors, int minViews, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
     auto t0 = std::chrono::high_resolution_clock::now();
     std::ifstream listFile(listPath);
     if (!listFile.is_open()) {
@@ -152,7 +152,7 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         double sumR = 0.0, sumG = 0.0, sumB = 0.0;
         size_t sampleCount = 0;
         for (const auto& s : st.splats) {
-            float distH = std::hypot(s.position.x, s.position.z);
+            float distH = std::hypot(s.position.x - cropCenterX, s.position.z - cropCenterZ);
             if (cropRadius > 0.0f && distH > cropRadius) continue;
             float lum = 0.299f * s.color.x + 0.587f * s.color.y + 0.114f * s.color.z;
             if (lum < 0.05f || lum > 0.98f) continue;
@@ -199,7 +199,7 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
             s.color.y = std::clamp(s.color.y * exposureGain, 0.0f, 1.0f);
             s.color.z = std::clamp(s.color.z * exposureGain, 0.0f, 1.0f);
 
-            float distH = std::hypot(s.position.x, s.position.z);
+            float distH = std::hypot(s.position.x - cropCenterX, s.position.z - cropCenterZ);
             if (cropRadius > 0.0f) {
                 if (distH > cropRadius) continue;
                 // Soft radial distance feathering: gradual alpha falloff on outer 10% of crop volume
@@ -647,6 +647,7 @@ int main(int argc, char** argv) {
     std::string rgbPath, depthPath, posePath, outSplat, outSpz, fuseListPath, neuralDepthPath;
     int W = 0, H = 0, stride = 1, smoothRadius = 15;
     float sigmaScale = -1.0f, tau = 0.08f, maxDepth = 400.0f, minCosIncidence = 0.20f, voxelSize = 0.05f, cropRadius = 0.0f, minGroundY = -0.05f;
+    float cropCenterX = 0.0f, cropCenterZ = 0.0f;
     float cavityDepth = 0.0f, cavityLum = 0.18f;
     float cameraAltitude = -1.0f;
     float neuralDepthWeight = 1.0f, maxDeltaZ = 3.5f, normalPruneCos = 0.0f;
@@ -680,6 +681,8 @@ int main(int argc, char** argv) {
         else if (a == "--fuse-list") next(fuseListPath);
         else if (a == "--voxel-size" && i + 1 < argc) voxelSize = std::stof(argv[++i]);
         else if (a == "--crop-radius" && i + 1 < argc) cropRadius = std::stof(argv[++i]);
+        else if (a == "--crop-center-x" && i + 1 < argc) cropCenterX = std::stof(argv[++i]);
+        else if (a == "--crop-center-z" && i + 1 < argc) cropCenterZ = std::stof(argv[++i]);
         else if (a == "--cavity-depth" && i + 1 < argc) cavityDepth = std::stof(argv[++i]);
         else if (a == "--cavity-lum" && i + 1 < argc) cavityLum = std::stof(argv[++i]);
         else if (a == "--station-altitude" && i + 1 < argc) cameraAltitude = std::stof(argv[++i]);
@@ -712,7 +715,7 @@ int main(int argc, char** argv) {
     }
 
     if (!fuseListPath.empty()) {
-        return runFuse(fuseListPath, voxelSize, cropRadius, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, adaptiveVoxel, minVoxelNeighbors, minViews, outSplat, outSpz, emitJson);
+        return runFuse(fuseListPath, voxelSize, cropRadius, cropCenterX, cropCenterZ, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, adaptiveVoxel, minVoxelNeighbors, minViews, outSplat, outSpz, emitJson);
     }
 
     if (rgbPath.empty() || depthPath.empty() || posePath.empty() || (outSplat.empty() && outSpz.empty()) || W <= 0 || H <= 0) {
@@ -721,8 +724,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if ((enablePhotometricMicroDepth || enableHybridMicroDepth) && cavityDepth <= 0.0f) {
-        cavityDepth = 3.5f;
+    // If cavityDepth is not explicitly provided, default to 0.0f for strict surface lock to the 3D tile mesh
+    if ((enablePhotometricMicroDepth || enableHybridMicroDepth) && cavityDepth < 0.0f) {
+        cavityDepth = 0.0f;
     }
 
     auto t0 = std::chrono::high_resolution_clock::now();

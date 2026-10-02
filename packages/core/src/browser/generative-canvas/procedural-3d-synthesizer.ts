@@ -143,7 +143,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // -0.975. Alpine Matterhorn Peak / Glacial Valley / Mountain Horn / Swiss Chalets
-        if (/\b(?:matterhorn|alpine|glacial\s*valley|pyramidal\s*horn|chalets?|swiss\s*alps?|mountain\s*horn)\b/i.test(text)) {
+        if (/\b(?:matterhorn|glacial\s*valley|pyramidal\s*horn|chalets?|swiss\s*alps?|mountain\s*horn)\b/i.test(text)) {
             return 'alpine_valley';
         }
 

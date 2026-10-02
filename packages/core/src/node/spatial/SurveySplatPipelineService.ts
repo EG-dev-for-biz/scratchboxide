@@ -68,7 +68,9 @@ export interface SurveySplatPipelineRequest {
     normalPruneCos?: number;
     /** Crop box override for landmark bounds */
     cropBox?: { min: [number, number, number]; max: [number, number, number] };
-    /** Horizontal radius crop in meters around origin (default 115m) */
+    /** Center [x, z] for horizontal crop circle (default: center of cropBox or [0, 0]) */
+    cropCenter?: [number, number];
+    /** Horizontal radius crop in meters around cropCenter (default 115m) */
     cropRadius?: number;
     /** Silhouette mask erosion pixels (default 2px) to eliminate sky bleed */
     erodeSilhouettePx?: number;
@@ -299,9 +301,19 @@ export class SurveySplatPipelineService {
             const normalPruneArg = `--normal-prune-cos ${req.normalPruneCos ?? 0.0}`;
             const consistencyArg = req.dropInconsistent ? `--drop-inconsistent --color-consistency-thresh ${req.colorConsistencyThresh ?? 40.0}` : '';
             const minViewsArg = (req.minViews && req.minViews > 1) ? `--min-views ${req.minViews}` : '';
-            const cropRadiusVal = req.cropRadius ?? (req.cropBox ? Math.max(Math.abs(req.cropBox.max[0]), Math.abs(req.cropBox.max[2])) : 115.0);
+            const cropCenter = req.cropCenter ?? (req.cropBox ? [
+                (req.cropBox.min[0] + req.cropBox.max[0]) * 0.5,
+                (req.cropBox.min[2] + req.cropBox.max[2]) * 0.5
+            ] : [0.0, 0.0]);
+            const cropCenterArg = (cropCenter[0] !== 0 || cropCenter[1] !== 0) ? `--crop-center-x ${cropCenter[0]} --crop-center-z ${cropCenter[1]}` : '';
+            const cropRadiusVal = req.cropRadius ?? (req.cropBox ? Math.max(
+                Math.abs(req.cropBox.max[0] - cropCenter[0]),
+                Math.abs(req.cropBox.max[2] - cropCenter[1]),
+                Math.abs(req.cropBox.min[0] - cropCenter[0]),
+                Math.abs(req.cropBox.min[2] - cropCenter[1])
+            ) : 115.0);
             const cropRadiusArg = cropRadiusVal > 0 ? `--crop-radius ${cropRadiusVal}` : '';
-            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
+            const fuseCmd = `"${baker}" --fuse-list "${listPath}" --voxel-size ${voxel} ${cropRadiusArg} ${cropCenterArg} ${dropFoliageArg} ${normalPruneArg} ${consistencyArg} ${minViewsArg} --exclude-underside --out-splat "${fusedSplatPath}" --json`;
             const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 16 * 1024 * 1024 });
             const fuseRes = JSON.parse(fuseStdout.trim());
             await fs.remove(listPath).catch(() => {});
@@ -393,7 +405,7 @@ export class SurveySplatPipelineService {
         const dropFoliageArg = req.dropFoliage !== false ? '--drop-foliage' : '';
         const foliageModeArg = req.foliageMode ? `--foliage-mode ${req.foliageMode}` : '';
         const enablePhoto = (req.enablePhotometricMicroDepth !== false && req.enableHybridMicroDepth !== false);
-        const hybridArg = enablePhoto ? `--photometric-micro-depth --cavity-depth ${req.cavityDepth ?? 3.5} --cavity-lum ${req.cavityLum ?? 0.18}` : '';
+        const hybridArg = enablePhoto ? `--photometric-micro-depth --cavity-depth ${req.cavityDepth ?? 0.0} --cavity-lum ${req.cavityLum ?? 0.18}` : '';
         const neuralDepthArg = req.neuralDepthPath ? `--neural-depth "${req.neuralDepthPath}"` : '';
         const neuralWeightArg = req.neuralDepthWeight !== undefined ? `--neural-depth-weight ${req.neuralDepthWeight}` : '';
         const maxDeltaZArg = req.maxDeltaZ !== undefined ? `--max-delta-z ${req.maxDeltaZ}` : '';

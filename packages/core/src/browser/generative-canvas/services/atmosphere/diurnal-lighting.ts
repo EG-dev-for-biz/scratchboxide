@@ -350,13 +350,25 @@ export function getPresetLightingState(preset: TimeOfDayPreset | string): Diurna
             skyboxName = 'golden_hour';
             break;
         case 'studio':
+            elevationDeg = 65.0;
+            azimuthDeg = 180.0;
+            colorHex = '#ffffff';
+            kelvin = 6500;
+            skyboxName = 'studio';
+            break;
         case 'midday':
-        default:
             elevationDeg = 65.0;
             azimuthDeg = 180.0;
             colorHex = '#fffdf0';
             kelvin = 6500;
             skyboxName = 'realistic-sky';
+            break;
+        default:
+            elevationDeg = 65.0;
+            azimuthDeg = 180.0;
+            colorHex = '#ffffff';
+            kelvin = 6500;
+            skyboxName = 'studio';
             break;
     }
 

@@ -444,8 +444,9 @@ export function createAtmosphericSkyDome(
         uMieCoefficient: { value: config.mie ?? 0.002 },
         uMieDirectionalG: { value: config.mieDirectionalG ?? 0.82 },
 
-        uCloudCoverage: { value: config.cloudCoverage ?? (config.volumetricClouds === false ? 0.0 : 0.35) },
-        uCloudDensity: { value: config.cloudDensity ?? 0.45 },
+        // Zero Default Clouds: Only render clouds if explicitly enabled or coverage is passed
+        uCloudCoverage: { value: config.cloudCoverage ?? (config.volumetricClouds === true ? 0.35 : 0.0) },
+        uCloudDensity: { value: config.cloudDensity ?? (config.volumetricClouds === true ? 0.45 : 0.0) },
         uCloudAltitude: { value: config.cloudAltitude ?? 1200.0 },
         uTime: { value: 0.0 },
 

@@ -1142,7 +1142,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         subtitle: data?.subtitle || 'Interactive 4D spatial viewport with temporal simulation solver',
         objects: data?.objects || [],
         camera: data?.camera || { position: [15, 12, 15], target: [0, 0, 0] },
-        environment: data?.environment || { skybox: 'cyberpunk', lighting: 'shaded', ground: true },
+        environment: data?.environment || { skybox: 'studio', lighting: 'studio', ground: true },
         features: data?.features,
         customScript: data?.customScript || data?.code,
         cppGenerator: data?.cppGenerator || {
@@ -1630,7 +1630,7 @@ int main(int argc, char** argv) {
                 sceneType: isVehicleTheme ? 'custom' : data.sceneType,
                 worldBranch: effectiveWorldBranch,
                 camera: effectiveCamera || { position: [15, 12, 15], target: [0, 0, 0] },
-                environment: effectiveEnvironment || { skybox: isVehicleTheme ? 'studio' : 'cyberpunk', lighting: isVehicleTheme ? 'studio' : 'shaded', ground: true },
+                environment: effectiveEnvironment || { skybox: 'studio', lighting: 'studio', ground: true },
                 features: data.features,
                 customScript: data.customScript || data.code,
                 cppGenerator: data.cppGenerator,
@@ -2033,8 +2033,8 @@ int main(int argc, char** argv) {
         }
         stackRef.current = stack;
         const { scene, camera, renderer } = stack;
-        // Baseline depth fog for the very first frame; syncAtmosphere replaces it with the skybox-specific FogExp2.
-        scene.fog = new THREE.FogExp2(0x0a0a0f, 0.015);
+        // Zero Default Fog: Atmosphere and fog are only applied when explicitly configured.
+        scene.fog = null;
         threeSceneRef.current = scene;
         threeCameraRef.current = camera;
         threeRendererRef.current = renderer;
