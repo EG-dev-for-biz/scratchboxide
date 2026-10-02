@@ -133,4 +133,69 @@ describe('Calibrated3DGSReconstructionService: 1:1 Metric Matrix Lock 3DGS Recon
 
         expect(progressLog.length).toBeGreaterThan(5);
     }, 120000);
+
+    it('verifies free-space ray clearance repels camera away from masonry walls', () => {
+        // Construct a vertical wall at x = 10, y in [-5, 5], z in [-5, 5]
+        const wallVerts: number[] = [];
+        for (let y = -5; y <= 5; y += 1) {
+            for (let z = -5; z <= 5; z += 1) {
+                wallVerts.push(10.0, y, z);
+            }
+        }
+        const centroid: [number, number, number] = [0, 0, 0];
+
+        // Candidate station at x = 10.3 (only 0.3m from wall, requires min 1.50m clearance)
+        const candidate: [number, number, number] = [10.3, 0.0, 0.0];
+        const res = AdaptiveSurveyRigService.verifyStationClearance(wallVerts, candidate, centroid, 1.50);
+
+        expect(res.valid).toBe(true);
+        // Adjusted position should be repelled away from the wall (x > 10.3)
+        expect(res.adjustedPos[0]).toBeGreaterThan(10.3);
+        expect(res.minDistance).toBeGreaterThanOrEqual(1.05); // 0.70 * minClearance threshold
+    });
+
+    it('reconstructs with adaptive curvature dual-voxel fusion and emits hierarchical 3D Tiles', async () => {
+        expect(fs.existsSync(GLB_PATH)).toBe(true);
+
+        const outDirCurv = path.resolve(process.cwd(), 'build/test_calibrated_3dgs_recon_curv');
+        await fs.emptyDir(outDirCurv);
+
+        const options: Calibrated3DGSReconstructionOptions = {
+            glbPath: GLB_PATH,
+            outDir: outDirCurv,
+            cameraBudget: 4,
+            densityPreset: 'draft',
+            renderWidth: 320,
+            renderHeight: 180,
+            surfaceModel: 'planar-2dgs',
+            includeUnderside: true,
+            adaptiveCurvature: true,
+            enable3DTilesStreaming: true,
+            octreeOptions: {
+                maxDepth: 3,
+                leafCapacity: 4096,
+                interiorBudget: 2048,
+                geometricErrorScale: 0.25
+            }
+        };
+
+        const result = await service.reconstruct(options);
+
+        expect(result).toBeDefined();
+        expect(result.splatCount).toBeGreaterThan(0);
+        expect(result.tilesetPath).toBeDefined();
+        expect(fs.existsSync(result.tilesetPath!)).toBe(true);
+        expect(result.tilesetResult).toBeDefined();
+        expect(result.tilesetResult!.success).toBe(true);
+        expect(result.tilesetResult!.tileCount).toBeGreaterThan(0);
+
+        // Verify tileset.json structure
+        const tilesetJson = await fs.readJson(result.tilesetPath!);
+        expect(tilesetJson.asset).toBeDefined();
+        expect(tilesetJson.asset.version).toBe('1.1');
+        expect(tilesetJson.root).toBeDefined();
+        expect(tilesetJson.root.boundingVolume).toBeDefined();
+
+        await fs.remove(outDirCurv).catch(() => {});
+    }, 180000);
 });

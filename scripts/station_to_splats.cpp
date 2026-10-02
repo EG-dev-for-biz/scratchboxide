@@ -63,7 +63,7 @@ static bool jsonVec3(const std::string& s, const std::string& key, Vec3& out) {
     return true;
 }
 
-static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, float cropCenterX, float cropCenterZ, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, bool adaptiveVoxel, int minVoxelNeighbors, int minViews, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
+static int runFuse(const std::string& listPath, float voxelSize, float cropRadius, float cropCenterX, float cropCenterZ, bool dropFoliage, bool excludeUnderside, float minGroundY, float normalPruneCos, bool dropInconsistent, float colorConsistencyThresh, bool adaptiveVoxel, bool adaptiveCurvature, int minVoxelNeighbors, int minViews, const std::string& outSplat, const std::string& outSpz, bool emitJson) {
     auto t0 = std::chrono::high_resolution_clock::now();
     std::ifstream listFile(listPath);
     if (!listFile.is_open()) {
@@ -102,7 +102,10 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
         int shell;
         int normalDir; // +1 upward facing (roof/ground), -1 downward facing (ceiling/soffit), 0 vertical
         int64_t x, y, z;
-        bool operator==(const VoxelKey& o) const { return shell == o.shell && normalDir == o.normalDir && x == o.x && y == o.y && z == o.z; }
+        int detailTier = 0; // 0 standard, 1 fine architectural detail/curvature
+        bool operator==(const VoxelKey& o) const {
+            return shell == o.shell && normalDir == o.normalDir && x == o.x && y == o.y && z == o.z && detailTier == o.detailTier;
+        }
     };
     struct VoxelKeyHash {
         size_t operator()(const VoxelKey& k) const {
@@ -112,6 +115,7 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
             h = (h ^ static_cast<size_t>(k.x * 73856093)) * 1099511628211ULL;
             h = (h ^ static_cast<size_t>(k.y * 19349663)) * 1099511628211ULL;
             h = (h ^ static_cast<size_t>(k.z * 83492791)) * 1099511628211ULL;
+            h = (h ^ static_cast<size_t>((k.detailTier + 3) * 534731ULL)) * 1099511628211ULL;
             return h;
         }
     };
@@ -258,15 +262,30 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
             const bool isGround = (std::fabs(ny) > 0.65f);
             const int normalDir = (ny >= 0.20f) ? 1 : ((ny <= -0.20f) ? -1 : 0);
 
+            float sSigma = std::max(s.scale.x, s.scale.y);
+            int detailTier = 0;
+            if (adaptiveCurvature) {
+                // Dual-Voxel Curvature Guidance:
+                // High-curvature architectural detail (flutings, capitols, arch borders, fine cornices):
+                // 1. Non-ground surfels with small footprint (sSigma < curVoxel * 0.75f)
+                // 2. Or explicit curvature / relief marker in s.scale.z
+                const bool isFineRelief = (s.scale.z > 0.001f) || (!isGround && sSigma < curVoxel * 0.75f);
+                if (isFineRelief) {
+                    detailTier = 1;
+                    curVoxel = curVoxel * 0.35f; // Subdivide to fine voxel (e.g. 1.25cm)
+                } else if (isGround) {
+                    curVoxel = curVoxel * 1.5f;  // Consolidate flat ground pavers (e.g. 7.5cm)
+                }
+            }
+
             float curInvVoxel = 1.0f / std::max(0.001f, curVoxel);
             float curInvVoxelY = isGround ? (1.0f / (curVoxel * 1.6f)) : curInvVoxel;
             int64_t vx = static_cast<int64_t>(std::floor(s.position.x * curInvVoxel));
             int64_t vy = static_cast<int64_t>(std::floor(s.position.y * curInvVoxelY));
             int64_t vz = static_cast<int64_t>(std::floor(s.position.z * curInvVoxel));
-            VoxelKey key{shell, normalDir, vx, vy, vz};
+            VoxelKey key{shell, normalDir, vx, vy, vz, detailTier};
 
             float sa = std::max(s.scale.x, s.scale.y) / std::max(1e-6f, std::min(s.scale.x, s.scale.y));
-            float sSigma = std::max(s.scale.x, s.scale.y);
 
             auto it = grid.find(key);
             if (it == grid.end()) {
@@ -343,7 +362,7 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
                 for (int dy = -1; dy <= 1 && neighbors < minVoxelNeighbors; ++dy) {
                     for (int dz = -1; dz <= 1 && neighbors < minVoxelNeighbors; ++dz) {
                         if (dx == 0 && dy == 0 && dz == 0) continue;
-                        if (grid.find(VoxelKey{pair.first.shell, pair.first.normalDir, pair.first.x + dx, pair.first.y + dy, pair.first.z + dz}) != grid.end()) {
+                        if (grid.find(VoxelKey{pair.first.shell, pair.first.normalDir, pair.first.x + dx, pair.first.y + dy, pair.first.z + dz, pair.first.detailTier}) != grid.end()) {
                             neighbors++;
                         }
                     }
@@ -658,6 +677,7 @@ int main(int argc, char** argv) {
     bool emitJson = false, dropFoliage = false, excludeUnderside = true, enableHybridMicroDepth = false, enablePhotometricMicroDepth = false;
     bool use2dgsPlanarSurfel = false;
     bool adaptiveVoxel = false;
+    bool adaptiveCurvature = false;
     int minVoxelNeighbors = 0;
     int minViews = 1;
     bool dropBoundaryFloaters = false;
@@ -691,6 +711,7 @@ int main(int argc, char** argv) {
         else if (a == "--drop-inconsistent") dropInconsistent = true;
         else if (a == "--color-consistency-thresh" && i + 1 < argc) colorConsistencyThresh = std::stof(argv[++i]);
         else if (a == "--adaptive-voxel") adaptiveVoxel = true;
+        else if (a == "--adaptive-curvature") adaptiveCurvature = true;
         else if (a == "--min-voxel-neighbors" && i + 1 < argc) minVoxelNeighbors = std::stoi(argv[++i]);
         else if (a == "--min-views" && i + 1 < argc) minViews = std::stoi(argv[++i]);
         else if (a == "--drop-boundary-floaters") dropBoundaryFloaters = true;
@@ -715,12 +736,12 @@ int main(int argc, char** argv) {
     }
 
     if (!fuseListPath.empty()) {
-        return runFuse(fuseListPath, voxelSize, cropRadius, cropCenterX, cropCenterZ, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, adaptiveVoxel, minVoxelNeighbors, minViews, outSplat, outSpz, emitJson);
+        return runFuse(fuseListPath, voxelSize, cropRadius, cropCenterX, cropCenterZ, dropFoliage, excludeUnderside, minGroundY, normalPruneCos, dropInconsistent, colorConsistencyThresh, adaptiveVoxel, adaptiveCurvature, minVoxelNeighbors, minViews, outSplat, outSpz, emitJson);
     }
 
     if (rgbPath.empty() || depthPath.empty() || posePath.empty() || (outSplat.empty() && outSpz.empty()) || W <= 0 || H <= 0) {
         std::cerr << "Usage: station_to_splats --rgb rgb24.raw --depth depth.f32 --width W --height H --pose pose.json --out-splat out.splat [--out-spz out.spz] [--stride 1] [--sigma-scale 0.35] [--tau 0.08] [--min-cos-incidence 0.15] [--cavity-depth 3.5] [--station-altitude 3.5] [--drop-foliage] [--photometric-micro-depth] [--json]" << std::endl;
-        std::cerr << "   or: station_to_splats --fuse-list list.txt --voxel-size 0.20 [--crop-radius 115.0] [--normal-prune-cos 0.35] [--drop-foliage] --out-splat fused.splat [--out-spz fused.spz] [--json]" << std::endl;
+        std::cerr << "   or: station_to_splats --fuse-list list.txt --voxel-size 0.20 [--adaptive-curvature] [--crop-radius 115.0] [--normal-prune-cos 0.35] [--drop-foliage] --out-splat fused.splat [--out-spz fused.spz] [--json]" << std::endl;
         return 1;
     }
 

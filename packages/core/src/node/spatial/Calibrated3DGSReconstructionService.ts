@@ -19,6 +19,7 @@ import { OrientedBoundingBoxSolver, type DualBoundingBoxResult } from './Oriente
 import { SurveyStationRenderService } from './SurveyStationRenderService';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import { encodeGaussianPly, type EncodableGaussian } from '../../common/gaussian-ply-codec';
+import { Splat3DTilesService, type Splat3DTilesResult, type Splat3DTilesOptions } from './Splat3DTilesService';
 
 const execAsync = promisify(exec);
 
@@ -69,6 +70,19 @@ export interface Calibrated3DGSReconstructionOptions {
     dropFoliage?: boolean;
     /** Minimum camera view count consensus required to retain a voxel (default: 1) */
     minViews?: number;
+    /** If true, enables dual-voxel curvature-guided densification for fine architectural relief */
+    adaptiveCurvature?: boolean;
+    /** If true, generates hierarchical OGC 3D Tiles 1.1 tileset with SPZ v2 compression */
+    enable3DTilesStreaming?: boolean;
+    /** Output directory or sub-path for 3D Tiles (defaults to path.join(outDir, '3dtiles')) */
+    tilesetOutDir?: string;
+    /** Octree options for 3D Tiles streaming */
+    octreeOptions?: {
+        maxDepth?: number;
+        leafCapacity?: number;
+        interiorBudget?: number;
+        geometricErrorScale?: number;
+    };
 }
 
 export interface Calibrated3DGSReconstructionResult {
@@ -87,6 +101,8 @@ export interface Calibrated3DGSReconstructionResult {
         executionTimeMs: number;
     };
     rigResult?: AdaptiveSurveyRigResult;
+    tilesetPath?: string;
+    tilesetResult?: Splat3DTilesResult;
 }
 
 /**
@@ -415,6 +431,9 @@ export class Calibrated3DGSReconstructionService {
         if (options.minViews && options.minViews > 1) {
             fuseArgs.push(`--min-views ${options.minViews}`);
         }
+        if (options.adaptiveCurvature) {
+            fuseArgs.push('--adaptive-curvature');
+        }
 
         const fuseCmd = `"${baker}" ${fuseArgs.join(' ')}`;
         const { stdout: fuseStdout } = await execAsync(fuseCmd, { maxBuffer: 32 * 1024 * 1024 });
@@ -425,6 +444,25 @@ export class Calibrated3DGSReconstructionService {
 
         report(0.92, 'Generating standard 3DGS PLY format');
         await this.convertSplatToPly(outSplatPath, outPlyPath);
+
+        let tilesetPath: string | undefined;
+        let tilesetResult: Splat3DTilesResult | undefined;
+
+        if (options.enable3DTilesStreaming) {
+            report(0.95, 'Generating hierarchical OGC 3D Tiles 1.1 (SPZ v2 Octree)');
+            const tilesDir = options.tilesetOutDir ?? path.join(options.outDir, '3dtiles');
+            const tilesService = new Splat3DTilesService();
+            tilesetResult = await tilesService.convert({
+                inputPath: outSplatPath,
+                outDir: tilesDir,
+                origin: options.anchor ? { lat: options.anchor.lat, lng: options.anchor.lng, alt: options.anchor.elevation } : undefined,
+                maxDepth: options.octreeOptions?.maxDepth ?? 5,
+                leafCapacity: options.octreeOptions?.leafCapacity ?? 65536,
+                interiorBudget: options.octreeOptions?.interiorBudget ?? 32768,
+                geometricErrorScale: options.octreeOptions?.geometricErrorScale ?? 0.25
+            });
+            tilesetPath = tilesetResult.tilesetPath;
+        }
 
         const executionTimeMs = Date.now() - t0;
         report(1.0, 'Calibrated reconstruction complete');
@@ -444,7 +482,9 @@ export class Calibrated3DGSReconstructionService {
                 maxCenterDriftPx: congruence.maxCenterDriftPx,
                 executionTimeMs
             },
-            rigResult
+            rigResult,
+            tilesetPath,
+            tilesetResult
         };
     }
 }

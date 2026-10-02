@@ -56,7 +56,12 @@ export interface AdaptiveSurveyRigOptions {
     renderWidth?: number;
     /** Render resolution height for GSD calculation (default 1080). */
     renderHeight?: number;
+    /** Minimum free-space clearance in meters (default 1.5m). Probes surrounding geometry to prevent embedding cameras inside columns or solid masonry. */
+    minFreeSpaceClearanceMeters?: number;
+    /** If true (default true), performs free-space ray verification to adjust or discard colliding stations. */
+    verifyFreeSpaceClearance?: boolean;
 }
+
 
 export interface AdaptiveTierInfo {
     name: string;
@@ -316,7 +321,25 @@ export class AdaptiveSurveyRigService {
                     targetZ = centroid[2];
                 }
 
-                const eye: [number, number, number] = [eyeX, eyeY, eyeZ];
+                let eye: [number, number, number] = [eyeX, eyeY, eyeZ];
+                let clearanceDistance = 999.0;
+
+                // Additive Phase 1: Free-Space Ray Clearance Probe
+                if (options.verifyFreeSpaceClearance !== false && vertices && vertices.length > 30) {
+                    const clearanceResult = AdaptiveSurveyRigService.verifyStationClearance(
+                        vertices,
+                        eye,
+                        centroid,
+                        options.minFreeSpaceClearanceMeters ?? 1.50
+                    );
+                    if (!clearanceResult.valid) {
+                        // Candidate station could not achieve safe clearance inside solid masonry
+                        continue;
+                    }
+                    eye = clearanceResult.adjustedPos;
+                    clearanceDistance = clearanceResult.minDistance;
+                }
+
                 const target: [number, number, number] = [targetX, targetY, targetZ];
 
                 const fwd: [number, number, number] = [
@@ -328,8 +351,8 @@ export class AdaptiveSurveyRigService {
 
                 const stationPose = stationFromLookAt(stationId, eye, target, optics, safeAnchor, {
                     name: `ADAPTIVE_${tier.name}_STATION_${String(stationId).padStart(2, '0')}`,
-                    cameraAltitude: Number(eyeY.toFixed(3)),
-                    cameraHeightAboveGround: Number((eyeY - groundDatumY).toFixed(3))
+                    cameraAltitude: Number(eye[1].toFixed(3)),
+                    cameraHeightAboveGround: Number((eye[1] - groundDatumY).toFixed(3))
                 });
 
                 // Attach ADA adaptive guarantees
@@ -339,6 +362,7 @@ export class AdaptiveSurveyRigService {
                 (stationPose as any).dropSky = true;
                 (stationPose as any).targetDistance = Number(distToTarget.toFixed(2));
                 (stationPose as any).groundDatumY = Number(groundDatumY.toFixed(2));
+                (stationPose as any).freeSpaceClearanceMeters = clearanceDistance;
 
                 poses.push(stationPose);
                 stationId++;
@@ -417,6 +441,102 @@ export class AdaptiveSurveyRigService {
             }
         }
         return maxY;
+    }
+
+    /**
+     * Verifies that a candidate camera station has sufficient free-space clearance (min 1.5m).
+     * If too close to masonry (e.g. inside an arcade pillar or wall), nudges the station
+     * along the repulsion gradient into open void space. If no clearance is possible, marks invalid.
+     */
+    public static verifyStationClearance(
+        vertices: Float32Array | number[],
+        candidatePos: [number, number, number],
+        centroid: [number, number, number],
+        minClearance: number = 1.50
+    ): { valid: boolean; adjustedPos: [number, number, number]; minDistance: number } {
+        const numVerts = vertices.length / 3;
+        if (numVerts < 10) {
+            return { valid: true, adjustedPos: candidatePos, minDistance: 999.0 };
+        }
+
+        let curPos: [number, number, number] = [candidatePos[0], candidatePos[1], candidatePos[2]];
+        const minClearanceSq = minClearance * minClearance;
+        const stride = numVerts > 50000 ? 6 : 3;
+
+        for (let iter = 0; iter < 3; iter++) {
+            let minDistSq = Infinity;
+            let repulseX = 0;
+            let repulseY = 0;
+            let repulseZ = 0;
+
+            for (let i = 0; i < vertices.length; i += stride) {
+                const vx = vertices[i];
+                const vy = vertices[i + 1];
+                const vz = vertices[i + 2];
+
+                const dx = curPos[0] - vx;
+                const dy = curPos[1] - vy;
+                const dz = curPos[2] - vz;
+                const distSq = dx * dx + dy * dy + dz * dz;
+
+                if (distSq < minDistSq) {
+                    minDistSq = distSq;
+                }
+
+                // If within clearance bubble, accumulate repulsion gradient
+                if (distSq < minClearanceSq && distSq > 1e-4) {
+                    const invDist = 1.0 / Math.sqrt(distSq);
+                    repulseX += dx * invDist;
+                    repulseY += dy * invDist;
+                    repulseZ += dz * invDist;
+                }
+            }
+
+            if (minDistSq >= minClearanceSq) {
+                // Sits safely in free space
+                return {
+                    valid: true,
+                    adjustedPos: [Number(curPos[0].toFixed(3)), Number(curPos[1].toFixed(3)), Number(curPos[2].toFixed(3))],
+                    minDistance: Number(Math.sqrt(minDistSq).toFixed(3))
+                };
+            }
+
+            // If repulsion vector is valid, push camera out along the gradient of open space
+            const repulseLen = Math.hypot(repulseX, repulseY, repulseZ);
+            if (repulseLen > 1e-4) {
+                const step = (minClearance - Math.sqrt(minDistSq)) + 0.35;
+                curPos[0] += (repulseX / repulseLen) * step;
+                curPos[1] += (repulseY / repulseLen) * step * 0.5;
+                curPos[2] += (repulseZ / repulseLen) * step;
+            } else {
+                // If symmetric pinch (inside column center), push radially away from structure centroid
+                const outX = curPos[0] - centroid[0];
+                const outZ = curPos[2] - centroid[2];
+                const outLen = Math.hypot(outX, outZ);
+                if (outLen > 1e-4) {
+                    curPos[0] += (outX / outLen) * minClearance;
+                    curPos[2] += (outZ / outLen) * minClearance;
+                }
+            }
+        }
+
+        // Final distance check after iterations
+        let finalMinDistSq = Infinity;
+        for (let i = 0; i < vertices.length; i += stride) {
+            const dx = curPos[0] - vertices[i];
+            const dy = curPos[1] - vertices[i + 1];
+            const dz = curPos[2] - vertices[i + 2];
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < finalMinDistSq) finalMinDistSq = d2;
+        }
+
+        const finalDist = Math.sqrt(finalMinDistSq);
+        const valid = finalDist >= (minClearance * 0.70); // allow tolerance after pushing into void
+        return {
+            valid,
+            adjustedPos: [Number(curPos[0].toFixed(3)), Number(curPos[1].toFixed(3)), Number(curPos[2].toFixed(3))],
+            minDistance: Number(finalDist.toFixed(3))
+        };
     }
 
     /**
