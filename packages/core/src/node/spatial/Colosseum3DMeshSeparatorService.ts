@@ -19,6 +19,7 @@ import {
   BotanicalTreeRecord,
   BotanicalSummary
 } from './ColosseumTreeIdentificationEngine';
+import { Universal3DObjectSeparationService } from './Universal3DObjectSeparationService';
 
 export type SpatialCategory =
   | 'monument'
@@ -1196,7 +1197,8 @@ export function generateTotalIdentifiableEntities(): SpatialEntityDefinition[] {
 export const COLOSSEUM_TOTAL_IDENTIFIABLE_ENTITIES: SpatialEntityDefinition[] = generateTotalIdentifiableEntities();
 
 export interface Separate3DMeshOptions {
-  mode?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
+  mode?: 'macro' | 'detailed' | 'total' | 'trees' | 'all' | 'universal';
+  clusterDistance?: number;
 }
 
 /**
@@ -1225,6 +1227,50 @@ export class Colosseum3DMeshSeparatorService {
     glbInput: Buffer | string,
     options?: Separate3DMeshOptions
   ): Separated3DScene {
+    // If requesting universal mode or non-colosseum mode, delegate directly to Universal3DObjectSeparationService
+    if (options?.mode === 'universal' || (options?.mode && !['macro', 'detailed', 'total', 'trees', 'all'].includes(options.mode))) {
+      const universal = Universal3DObjectSeparationService.separate3DMesh(glbInput, {
+        clusterDistance: options?.clusterDistance,
+        glbPath: typeof glbInput === 'string' ? glbInput : undefined
+      });
+      return {
+        modelName: 'Universal_3D_Separated_Model',
+        totalVertices: universal.overallVertexCount,
+        totalSubmeshes: universal.objects.reduce((acc, o) => acc + o.submeshIndices.length, 0),
+        overallBoundingBox: universal.overallBoundingBox,
+        overallOrientedBoundingBox: universal.overallOrientedBoundingBox,
+        objects: universal.objects.map(o => ({
+          id: o.id,
+          name: o.name,
+          category: o.semanticCategory as any,
+          boundingBox: o.boundingBox,
+          orientedBoundingBox: o.orientedBoundingBox,
+          tightnessGainPercent: o.orientedBoundingBox.tightnessGainPercent,
+          vertexCount: o.vertexCount,
+          triangleCount: o.triangleCount,
+          submeshIndices: o.submeshIndices,
+          gemini3DScaleDiscrepancyPercent: 0,
+          colorHex: o.colorHex,
+          trellisPrompt: o.trellisPrompt,
+          material: o.materialPreset
+        })),
+        granularityMode: 'all',
+        timestamp: new Date().toISOString(),
+        sourceAssetPath: typeof glbInput === 'string' ? glbInput : undefined,
+        objectCounts: {
+          total: universal.totalEntities,
+          monuments: universal.categoryCounts.monument || 0,
+          ruins: universal.categoryCounts.ruin || 0,
+          foliage: universal.categoryCounts.foliage || 0,
+          terrain: universal.categoryCounts.terrain || 0,
+          colosseum_architecture: universal.categoryCounts.architecture || 0,
+          monuments_temples: universal.categoryCounts.monument || 0,
+          foliage_trees: universal.categoryCounts.foliage || 0,
+          archaeology_ruins: universal.categoryCounts.ruin || 0,
+          urban_infrastructure: universal.categoryCounts.urban_infrastructure || 0
+        }
+      };
+    }
     const glbBuffer = typeof glbInput === 'string' ? fs.readFileSync(glbInput) : glbInput;
     if (glbBuffer.length < 20) {
       throw new Error('Invalid GLB: buffer too small');

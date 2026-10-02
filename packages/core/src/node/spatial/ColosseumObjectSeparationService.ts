@@ -11,6 +11,7 @@ import * as fs from 'fs-extra';
 import * as path from 'path';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { GeminiClient } from '../gemini/gemini-client';
+import { Universal3DObjectSeparationService } from './Universal3DObjectSeparationService';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 export interface GeocodedPlaceEntity {
@@ -557,4 +558,12 @@ For each object, output its 2D bounding box normalized [ymin, xmin, ymax, xmax] 
       populatedScene
     };
   }
+
+  /**
+   * Delegates mesh-level separation to Universal3DObjectSeparationService for open-domain workflows.
+   */
+  public static separate3DMesh(glbInput: Buffer | string, options?: any) {
+    return Universal3DObjectSeparationService.separate3DMesh(glbInput, options);
+  }
 }
+
