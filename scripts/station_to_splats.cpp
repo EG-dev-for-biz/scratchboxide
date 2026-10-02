@@ -211,7 +211,7 @@ static int runFuse(const std::string& listPath, float voxelSize, float cropRadiu
                     if (s.opacity < 0.04f) continue;
                 }
             }
-            if (excludeUnderside && s.position.y < minGroundY) continue;
+            if (s.position.y < minGroundY) continue;
 
             if (dropFoliage) {
                 const float rVal = s.color.x;
@@ -873,10 +873,10 @@ int main(int argc, char** argv) {
             const float dotCam = n.dot(toCam);
             if (dotCam < 0.08f) continue;
 
-            // Strict Invariant: Exclude the underside of the model, subsurface ground floor, and inverted tile boundary caps
-            // In the ENU tangent plane, +Y is up. A geometric normal pointing downward (n.y < -0.22f)
-            // represents the bottom cap / baseplate / subterranean skirt of the 3D tiles mesh.
-            if (excludeUnderside && (n.y < -0.22f || p.y < minGroundY)) continue;
+            // Strict Invariant: Always clip subsurface points below ground floor datum
+            if (p.y < minGroundY) continue;
+            // Optional underside exclusion: drops downward normals (e.g. bottom tile baseplate caps)
+            if (excludeUnderside && n.y < -0.22f) continue;
 
             bool isolated = !(hr || hl) || !(hd || hu);
             // Drop boundary filaments: needles lacking orthogonal depth continuity

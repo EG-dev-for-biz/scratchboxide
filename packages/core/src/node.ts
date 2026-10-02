@@ -427,6 +427,12 @@ export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplat
 export { AdaptiveSurveyRigService } from './node/spatial/AdaptiveSurveyRigService';
 export type { AdaptiveSurveyRigOptions, AdaptiveSurveyRigResult, AdaptiveTierInfo } from './node/spatial/AdaptiveSurveyRigService';
 export {
+    Calibrated3DGSReconstructionService,
+    type SplatDensityPreset,
+    type Calibrated3DGSReconstructionOptions,
+    type Calibrated3DGSReconstructionResult
+} from './node/spatial/Calibrated3DGSReconstructionService';
+export {
     Location3DGaussianSplatService,
     Location3DGSService,
     generateLocation3DGS,
@@ -981,6 +987,14 @@ export {
     type ProceduralDatasetOptions,
     type ProceduralSfMBundle
 } from './node/spatial/ProceduralSfMDatasetService';
+
+// Living World Graph & Spatial Relationship Engine
+export {
+    LivingWorldGraphService,
+    type CreateDistrictOptions,
+    type RegisterStructureParams,
+    type GroundProbeResult
+} from './node/spatial/LivingWorldGraphService';
 
 
 

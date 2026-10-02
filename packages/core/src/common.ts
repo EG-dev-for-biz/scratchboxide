@@ -91,3 +91,6 @@ export * from './common/spatial/sb-archi-protocol';
 
 // Photometric Units & Photographic Stop Radiometry
 export * from './common/spatial/photometric-units';
+
+// Living World Graph & Spatial Entity Contracts
+export * from './common/spatial/living-world-graph-types';

@@ -28,8 +28,12 @@ export interface AdaptiveSurveyRigOptions {
     cameraBudget?: number;
     /** Desired Ground Sampling Distance in mm/pixel (e.g. 2.0 mm for travertine pore detail). Auto-calculates optimal standoff. */
     targetResolutionMm?: number;
-    /** Survey mode: 'facade-perimeter' (default), 'interior-cavity', 'multitier-complete', or 'inspection-macro'. */
-    mode?: 'facade-perimeter' | 'interior-cavity' | 'multitier-complete' | 'inspection-macro';
+    /** Survey mode: 'facade-perimeter' (default), 'interior-cavity', 'multitier-complete', 'inspection-macro', or 'nooks-and-crannies'. */
+    mode?: 'facade-perimeter' | 'interior-cavity' | 'multitier-complete' | 'inspection-macro' | 'nooks-and-crannies';
+    /** If true, provisions specialized penetrative stations (soffit-upward, ambulacrum corridors, hypogeum trenches) to capture recessed cavities. */
+    penetrativeInteriorRigs?: boolean;
+    /** Coverage density preset (default 'standard'). 'nooks-and-crannies' enables high-density penetrative tiers. */
+    coverageDensity?: 'standard' | 'high' | 'ultra-dense' | 'nooks-and-crannies';
     /** Base camera focal length in mm (default 35mm). */
     focalLengthMm?: number;
     /** Sensor width in mm (default 36mm full frame). */
@@ -61,7 +65,7 @@ export interface AdaptiveTierInfo {
     stationCount: number;
     standoffMeters: number;
     focalLengthMm: number;
-    mode: 'inward' | 'outward-up' | 'across-down' | 'rim-down';
+    mode: 'inward' | 'outward-up' | 'across-down' | 'rim-down' | 'soffit-upward' | 'ambulacrum-corridor' | 'hypogeum-trench';
 }
 
 export interface AdaptiveSurveyRigResult {
@@ -190,7 +194,7 @@ export class AdaptiveSurveyRigService {
         standoff = Math.max(6.0, standoff);
 
         // 4. Configure Adaptive Survey Tiers based on Mode and Structure Height
-        const mode = options.mode ?? 'facade-perimeter';
+        const mode = options.mode ?? ((options.penetrativeInteriorRigs || options.coverageDensity === 'nooks-and-crannies') ? 'nooks-and-crannies' : 'facade-perimeter');
         const tierConfigs = this.allocateTiers(budget, mode, groundDatumY, structureHeight, standoff, baseFocalLength, minClearance);
 
         // 5. Synthesize Camera Stations along the Oriented Envelope
@@ -242,8 +246,25 @@ export class AdaptiveSurveyRigService {
                 nz /= nLen;
 
                 // Dilate along normal by tier standoff
-                const localEyeX = localSurfX + tier.standoffMeters * nx;
-                const localEyeZ = localSurfZ + tier.standoffMeters * nz;
+                let localEyeX = localSurfX + tier.standoffMeters * nx;
+                let localEyeZ = localSurfZ + tier.standoffMeters * nz;
+
+                if (tier.mode === 'soffit-upward') {
+                    // Positioned close to exterior facade base (4-8m) looking upward into arch soffits / ceilings
+                    const closeStandoff = Math.min(Math.max(4.0, tier.standoffMeters * 0.25), 8.0);
+                    localEyeX = localSurfX + closeStandoff * nx;
+                    localEyeZ = localSurfZ + closeStandoff * nz;
+                } else if (tier.mode === 'ambulacrum-corridor') {
+                    // Positioned inside the internal annular ring gallery (76% of outer perimeter)
+                    const ringRatio = 0.76;
+                    localEyeX = halfWidth * ringRatio * cosT;
+                    localEyeZ = halfDepth * ringRatio * sinT;
+                } else if (tier.mode === 'hypogeum-trench') {
+                    // Sunken central arena / trench
+                    const trenchRatio = 0.35;
+                    localEyeX = halfWidth * trenchRatio * cosT;
+                    localEyeZ = halfDepth * trenchRatio * sinT;
+                }
 
                 // Rotate into world local ENU by OBB yaw
                 const cosYaw = Math.cos(yawRad);
@@ -276,6 +297,23 @@ export class AdaptiveSurveyRigService {
                     targetX = surfX;
                     targetY = groundDatumY + structureHeight * 0.25;
                     targetZ = surfZ;
+                } else if (tier.mode === 'soffit-upward') {
+                    // Aiming upward into arch intrados (+45° to +65° pitch)
+                    targetX = surfX;
+                    targetY = eyeY + Math.max(12.0, structureHeight * 0.40);
+                    targetZ = surfZ;
+                } else if (tier.mode === 'ambulacrum-corridor') {
+                    // Looking along the curve of the annular gallery with +20° upward tilt into vaults
+                    const tanX = -sinT;
+                    const tanZ = cosT;
+                    targetX = eyeX + 16.0 * (tanX * cosYaw - tanZ * sinYaw);
+                    targetY = eyeY + 5.5;
+                    targetZ = eyeZ + 16.0 * (tanX * sinYaw + tanZ * cosYaw);
+                } else if (tier.mode === 'hypogeum-trench') {
+                    // Looking across sunken hypogeum floor
+                    targetX = centroid[0];
+                    targetY = groundDatumY + 1.5;
+                    targetZ = centroid[2];
                 }
 
                 const eye: [number, number, number] = [eyeX, eyeY, eyeZ];
@@ -295,7 +333,9 @@ export class AdaptiveSurveyRigService {
                 });
 
                 // Attach ADA adaptive guarantees
-                (stationPose as any).maxDepth = Math.max(40.0, Number((tier.standoffMeters * 2.8).toFixed(1)));
+                (stationPose as any).maxDepth = (tier.mode === 'soffit-upward' || tier.mode === 'ambulacrum-corridor')
+                    ? Math.max(25.0, Number((structureHeight * 0.8).toFixed(1)))
+                    : Math.max(40.0, Number((tier.standoffMeters * 2.8).toFixed(1)));
                 (stationPose as any).dropSky = true;
                 (stationPose as any).targetDistance = Number(distToTarget.toFixed(2));
                 (stationPose as any).groundDatumY = Number(groundDatumY.toFixed(2));
@@ -471,6 +511,63 @@ export class AdaptiveSurveyRigService {
                     standoffMeters: baseStandoff * 1.8,
                     focalLengthMm: 24,
                     mode: 'rim-down'
+                }
+            ];
+        }
+
+        if (mode === 'nooks-and-crannies') {
+            // Specialized 5-Tier penetrative coverage targeting soffits, inner corridors, and hypogeum
+            const countSoffit = Math.max(2, Math.round(budget * 0.25));
+            const countCorridor = Math.max(2, Math.round(budget * 0.20));
+            const countStreet = Math.max(2, Math.round(budget * 0.25));
+            const countMid = Math.max(2, Math.round(budget * 0.15));
+            const countHypogeum = Math.max(1, budget - countSoffit - countCorridor - countStreet - countMid);
+
+            return [
+                {
+                    name: 'SOFFIT_UPWARD',
+                    altitudeENU: groundDatumY + minClearance,
+                    heightAboveGround: minClearance,
+                    stationCount: countSoffit,
+                    standoffMeters: Math.max(5.0, baseStandoff * 0.25),
+                    focalLengthMm: 24,
+                    mode: 'soffit-upward'
+                },
+                {
+                    name: 'AMBULACRUM_CORRIDOR',
+                    altitudeENU: groundDatumY + minClearance + 0.5,
+                    heightAboveGround: minClearance + 0.5,
+                    stationCount: countCorridor,
+                    standoffMeters: Math.max(8.0, baseStandoff * 0.4),
+                    focalLengthMm: 28,
+                    mode: 'ambulacrum-corridor'
+                },
+                {
+                    name: 'STREET_PEDESTRIAN',
+                    altitudeENU: groundDatumY + minClearance,
+                    heightAboveGround: minClearance,
+                    stationCount: countStreet,
+                    standoffMeters: baseStandoff,
+                    focalLengthMm: baseFocalLength,
+                    mode: 'inward'
+                },
+                {
+                    name: 'MID_FACADE',
+                    altitudeENU: groundDatumY + structureHeight * 0.40,
+                    heightAboveGround: structureHeight * 0.40,
+                    stationCount: countMid,
+                    standoffMeters: baseStandoff * 1.25,
+                    focalLengthMm: baseFocalLength,
+                    mode: 'inward'
+                },
+                {
+                    name: 'INTERIOR_HYPOGEUM',
+                    altitudeENU: groundDatumY + 1.2,
+                    heightAboveGround: 1.2,
+                    stationCount: countHypogeum,
+                    standoffMeters: Math.max(8.0, baseStandoff * 0.35),
+                    focalLengthMm: 24,
+                    mode: 'hypogeum-trench'
                 }
             ];
         }
