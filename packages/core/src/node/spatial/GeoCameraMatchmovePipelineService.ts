@@ -59,9 +59,9 @@ import {
   MultiModalOptimizationMetrics
 } from './MultiModalCameraPoseOptimizer';
 import {
-  DynamicVideoTrajectorySolver,
-  TrajectoryBoundaryPose
-} from './DynamicVideoTrajectorySolver';
+  ContinuousSplineMatchmoveService,
+  type TrajectoryBoundaryPose
+} from './ContinuousSplineMatchmoveService';
 
 const execAsync = promisify(exec);
 

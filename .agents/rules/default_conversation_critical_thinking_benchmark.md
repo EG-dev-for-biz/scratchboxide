@@ -49,8 +49,17 @@ Every technical discussion, design proposal, or architectural response must incl
 
 ---
 
-### 3. Competitor Benchmarking Directive
-
-- Never design in a vacuum. Always anchor engineering decisions against how the world's best production systems, commercial tools, and open-source foundations have solved the problem.
-- Select 3 distinct competitors or established frameworks directly relevant to the current domain (e.g., Photogrammetry/3DGS: CapturingReality/RealityCapture, Cesium 3D Tiles / Nanite, Nerfstudio / Luma AI; VFX/Video: Foundry Nuke, Blackmagic DaVinci Resolve / Fusion, Runway Gen-3 / Sora; Web/Spatial: Three.js / Babylon.js, WebGPU WGSL compute, Google Earth / Immersive View).
 - Dissect real engineering compromises rather than marketing claims.
+
+---
+
+### 4. Shared-Logic Affinity & Strictly Additive / Non-Destructive Invariant
+
+- **Prioritize Closest Logic Affinity**: Always benchmark and review based on examples we share the most logic with (e.g., Nerfstudio/splatfacto for 3DGS, Cesium for 3D Tiles, RealityCapture for optical ray bundle adjustment, Three.js for WebGL instancing). Investigate:
+  1. *How far can that shared logic take us?* (Explore the theoretical limits and mathematical headroom of our shared foundation).
+  2. *How much have we yet to use?* (Identify underutilized native C++ kernels, dormant SIMD routines, and uncalled API capabilities already present in our codebase before creating new abstractions).
+- **Strictly Additive & Non-Destructive**:
+  - Any logic examined from competitors or new developments MUST be **strictly complementary or non-destructive — it MUST BE ADDITIVE**.
+  - It must never break, replace, regress, or contradict existing working primitives, mathematical invariants (e.g., 1:1 metric matrix lock, 0.000 px drift, sub-millisecond compilation, or WebGL 60 FPS stability).
+  - External innovations must compose synergistically on top of our existing foundation as modular, opt-in capabilities.
+

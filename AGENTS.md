@@ -16,6 +16,18 @@ When conversing, brainstorming, reviewing, or planning features, architectures, 
 4. **The Unassailable Path Forward**:
    - Ground the solution in the simplest, highest-leverage engineering path that outperforms competition without inheriting their bloat or fragility.
 
+### Rule: Shared-Logic Affinity & Strictly Additive / Non-Destructive Evolution
+When reviewing architectures, planning enhancements, or evaluating competitor solutions:
+1. **Prioritize Closest Logic Affinity (How Far Can That Logic Take Us?)**:
+   - Always anchor evaluations against the frameworks, engines, and competitors that share the deepest architectural and mathematical DNA with Scratchbox (e.g., Nerfstudio/splatfacto for Gaussian splatting optimization; Cesium/3D Tiles for octree spatial streaming; RealityCapture for optical ray bundle adjustment; Three.js/WebGPU for instanced rasterization).
+   - Audit:
+     - *How far can our shared logic take us?* (Identify the theoretical ceiling of our existing mathematical foundation).
+     - *How much have we yet to use?* (Identify underutilized native primitives, dormant SIMD/C++ kernels, uncalled API options, or latent mathematical headroom already present in our codebase before inventing new abstractions).
+2. **Strictly Additive & Non-Destructive Invariant**:
+   - Any logic, pattern, or technique examined or adapted from competitors must be **strictly complementary and non-destructive — it MUST BE ADDITIVE**.
+   - Under no circumstances may an external pattern break, regress, replace, or dilute existing working primitives, mathematical invariants (e.g., 1:1 metric matrix lock, 0.000 px drift, C++20 sub-millisecond compilation, or WebGL 60 FPS viewport stability).
+   - If an idea from a competitor requires rewriting or discarding working foundations, it must be rejected or redesigned to layer cleanly as an additive, opt-in capability or progressive enhancement.
+
 
 ## Two-Tier Problem-Solving Directive (VFX, 3D & Generative Tasks)
 
