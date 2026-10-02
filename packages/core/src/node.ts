@@ -424,6 +424,8 @@ export type { StationImageGenerator, BeautifyStationOptions, BeautifyStationResu
 export { ColosseumObjectSeparationService, type GeocodedPlaceEntity, type GeminiVisionBoundingBox, type SeparatedSceneObject, type ColosseumSeparationResult } from './node/spatial/ColosseumObjectSeparationService';
 export { SurveySplatPipelineService } from './node/spatial/SurveySplatPipelineService';
 export type { SurveySplatPipelineRequest, SurveySplatPipelineResult, SurveySplatStationReport } from './node/spatial/SurveySplatPipelineService';
+export { AdaptiveSurveyRigService } from './node/spatial/AdaptiveSurveyRigService';
+export type { AdaptiveSurveyRigOptions, AdaptiveSurveyRigResult, AdaptiveTierInfo } from './node/spatial/AdaptiveSurveyRigService';
 export {
     Location3DGaussianSplatService,
     Location3DGSService,
