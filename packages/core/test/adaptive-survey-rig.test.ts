@@ -15,6 +15,7 @@ import {
     type AdaptiveSurveyRigOptions
 } from '../src/node/spatial/AdaptiveSurveyRigService';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
+import { OrientedBoundingBoxSolver } from '../src/node/spatial/OrientedBoundingBoxSolver';
 
 describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () => {
     it('plans an adaptive rig for a synthetic rectangular structure', () => {
@@ -83,6 +84,31 @@ describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () =>
             obb: result.obb
         }, null, 2));
 
+        // Let's inspect the distribution of vertices in the GLB
+        const m = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(glbPath);
+        const v = m.vertices;
+        let elevXMin = Infinity, elevXMax = -Infinity;
+        let elevZMin = Infinity, elevZMax = -Infinity;
+        let elevCount = 0;
+        for (let i = 0; i < v.length; i += 3) {
+            const vy = v[i + 1];
+            if (vy > result.groundDatumY + 5.0) {
+                elevCount++;
+                const vx = v[i];
+                const vz = v[i + 2];
+                if (vx < elevXMin) elevXMin = vx;
+                if (vx > elevXMax) elevXMax = vx;
+                if (vz < elevZMin) elevZMin = vz;
+                if (vz > elevZMax) elevZMax = vz;
+            }
+        }
+        console.log('STRUCTURE ELEVATED VERTICES (> ground + 5m):', {
+            elevCount,
+            elevXSpan: [elevXMin, elevXMax, elevXMax - elevXMin],
+            elevZSpan: [elevZMin, elevZMax, elevZMax - elevZMin],
+            center: [(elevXMin + elevXMax) / 2, (elevZMin + elevZMax) / 2]
+        });
+
         expect(result.stats.structureCentroid[0]).toBeLessThan(0.0);
         expect(result.stats.structureCentroid[2]).toBeGreaterThan(0.0);
 
@@ -102,5 +128,36 @@ describe('AdaptiveSurveyRigService: Scene-Conformal Survey Rig Synthesis', () =>
 
         // Tiers must cover street, mid, attic, and overview
         expect(result.tiers.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('plans an adaptive rig with focusCentroid and cropRadius isolating target landmark', () => {
+        const glbPath = path.resolve(process.cwd(), 'public/models/colosseum_grounded.glb');
+        if (!fs.existsSync(glbPath)) return;
+
+        const result = AdaptiveSurveyRigService.planRig(glbPath, {
+            cameraBudget: 40,
+            mode: 'multitier-complete',
+            focusCentroid: [-43.42, 24.0, 62.54],
+            cropRadius: 110.0,
+            targetResolutionMm: 2.5
+        });
+
+        expect(result.poses).toHaveLength(40);
+        // OBB must tightly enclose the Colosseum structure (~216m), not the entire 750m tile chunk
+        expect(result.obb.dimensions[0]).toBeGreaterThan(150.0);
+        expect(result.obb.dimensions[0]).toBeLessThan(260.0);
+        expect(result.obb.dimensions[2]).toBeGreaterThan(150.0);
+        expect(result.obb.dimensions[2]).toBeLessThan(260.0);
+
+        // Ground datum must be plausible
+        expect(result.groundDatumY).toBeGreaterThan(20.0);
+        expect(result.groundDatumY).toBeLessThan(36.0);
+
+        // Zero underground cameras
+        for (const pose of result.poses) {
+            expect(pose.positionLocalENU[1]).toBeGreaterThanOrEqual(result.groundDatumY + 1.8);
+            expect(pose.cameraHeightAboveGround).toBeGreaterThanOrEqual(1.8);
+            expect((pose as any).dropSky).toBe(true);
+        }
     });
 });

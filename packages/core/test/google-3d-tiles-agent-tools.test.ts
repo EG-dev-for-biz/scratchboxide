@@ -97,4 +97,47 @@ describe('Google 3D Tiles Agent Tools & Capability Resolution', () => {
         expect(resolution.tier1Assessment.suggestedNativeAction?.serviceOrTool).toMatch(/getGoogle3DTilesFullTexture|getGoogle3DTilesClay/);
         expect(resolution.tier1Assessment.suggestedNativeAction?.primitiveType).toBe('3d-scene');
     });
+
+    it('exposes plan_adaptive_survey_rig in tool declarations and dispatches with real GLB', async () => {
+        const geminiService = new GeminiService();
+        const request: GeminiGenerateRequest = {
+            prompt: 'Plan an adaptive photogrammetric survey rig for the Colosseum 3D model',
+            enableWorkspaceTools: true
+        };
+
+        const toolDeclarations = (geminiService as any).buildToolDeclarations(request);
+        const fnDeclsContainer = toolDeclarations.find((t: any) => t.functionDeclarations);
+        const fnDecls: any[] = fnDeclsContainer.functionDeclarations;
+        const adaptiveRigTool = fnDecls.find((d: any) => d.name === 'plan_adaptive_survey_rig');
+        expect(adaptiveRigTool).toBeDefined();
+        expect(adaptiveRigTool.parameters.required).toContain('glbPath');
+        expect(adaptiveRigTool.description).toMatch(/Adaptive Scene-Aware Survey Rig Planning/i);
+
+        const registry = createDefaultToolRegistry();
+        const glbPath = 'public/models/colosseum_grounded.glb';
+        const outcome = await registry.dispatch(
+            'plan_adaptive_survey_rig',
+            {
+                glbPath,
+                cameraBudget: 12,
+                mode: 'multitier-complete',
+                focusCentroid: [-43.42, 24.0, 62.54],
+                cropRadius: 120.0
+            },
+            {} as any
+        );
+
+        expect(outcome.exec.status).toBe('completed');
+        const payload: any = outcome.resultPayload;
+        expect(payload.success).toBe(true);
+        expect(payload.stationCount).toBe(12);
+        expect(payload.obb).toBeDefined();
+        expect(payload.groundDatumY).toBeGreaterThan(20.0);
+        expect(payload.stations).toHaveLength(12);
+        for (const stn of payload.stations) {
+            expect(stn.positionLocalENU[1]).toBeGreaterThanOrEqual(payload.groundDatumY + 1.8);
+            expect(stn.dropSky).toBe(true);
+        }
+    });
 });
+

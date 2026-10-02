@@ -42,6 +42,10 @@ export interface AdaptiveSurveyRigOptions {
     standoffMeters?: number;
     /** Focus region centroid override [x, y, z] in local ENU (if unset, extracted from OBB centroid). */
     focusCentroid?: [number, number, number];
+    /** Radius in meters around focusCentroid to isolate the target structure from surrounding terrain. */
+    cropRadius?: number;
+    /** Bounding box [min, max] to isolate the target structure from surrounding terrain. */
+    cropBox?: { min: [number, number, number]; max: [number, number, number] };
     /** Geodetic anchor (lat, lng, elevation). */
     anchor?: GeodeticAnchor;
     /** Render resolution width for GSD calculation (default 1920). */
@@ -107,13 +111,45 @@ export class AdaptiveSurveyRigService {
             mesh = meshOrGlb;
         }
 
-        const vertices = mesh.vertices;
-        if (!vertices || vertices.length < 9) {
+        const rawVerts = mesh.vertices;
+        if (!rawVerts || rawVerts.length < 9) {
             throw new Error('Mesh contains insufficient vertices for adaptive survey rig planning');
         }
+        const vertices = rawVerts instanceof Float32Array ? rawVerts : new Float32Array(rawVerts);
 
-        // 1. Compute Dual Bounding Box (AABB + OBB)
-        const bbox = OrientedBoundingBoxSolver.compute(vertices);
+        // Filter vertices to isolate target structure from wide environmental terrain if specified
+        let activeVertices = vertices;
+        if (options.cropBox) {
+            const { min, max } = options.cropBox;
+            const filtered: number[] = [];
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i], y = vertices[i + 1], z = vertices[i + 2];
+                if (x >= min[0] && x <= max[0] && y >= min[1] && y <= max[1] && z >= min[2] && z <= max[2]) {
+                    filtered.push(x, y, z);
+                }
+            }
+            if (filtered.length >= 9) {
+                activeVertices = new Float32Array(filtered);
+            }
+        } else if (options.focusCentroid && (options.cropRadius || options.cropRadius === undefined)) {
+            const [cx, , cz] = options.focusCentroid;
+            const radius = options.cropRadius ?? 140.0;
+            const r2 = radius * radius;
+            const filtered: number[] = [];
+            for (let i = 0; i < vertices.length; i += 3) {
+                const x = vertices[i], z = vertices[i + 2];
+                const dx = x - cx, dz = z - cz;
+                if (dx * dx + dz * dz <= r2) {
+                    filtered.push(x, vertices[i + 1], z);
+                }
+            }
+            if (filtered.length >= 9) {
+                activeVertices = new Float32Array(filtered);
+            }
+        }
+
+        // 1. Compute Dual Bounding Box (AABB + OBB) on structure vertices
+        const bbox = OrientedBoundingBoxSolver.compute(activeVertices);
         const { aabb, obb } = bbox;
 
         const centroid: [number, number, number] = options.focusCentroid ?? [
@@ -123,8 +159,8 @@ export class AdaptiveSurveyRigService {
         ];
 
         // 2. Compute true Ground Datum Y
-        // Sample the lowest 5% of vertices or perimeter vertices to find surrounding ground elevation
-        const groundDatumY = this.estimateGroundDatum(vertices, aabb);
+        // Sample the 10th-percentile of active structure vertices to find surrounding ground datum
+        const groundDatumY = this.estimateGroundDatum(activeVertices, aabb);
 
         const structureHeight = Math.max(1.0, aabb.max[1] - groundDatumY);
         const halfWidth = Math.max(1.0, obb.dimensions[0] * 0.5);

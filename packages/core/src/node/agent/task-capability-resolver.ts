@@ -202,13 +202,14 @@ export class TaskCapabilityResolver {
             canSolveNatively = true;
             primaryNativeEngine = 'cpp-3d-engine';
             nativeCapabilities.push('Closed-Loop Survey-to-Splat Reconstruction Pipeline (SurveySplatPipelineService)');
+            nativeCapabilities.push('Adaptive Scene-Aware Rig & Station Placement (AdaptiveSurveyRigService / plan_adaptive_survey_rig)');
             nativeCapabilities.push('Google 3D Tiles Grounded Mesh Ingestion & Camera Station Synthesis (SurveySynthesisEngine)');
             nativeCapabilities.push('AI Beautify Location Pipeline & Nano Banana Multi-View Restyling (BeautifyStationService)');
             nativeCapabilities.push('Native C++20 Depth-to-Gaussian Unprojection & Spatial Voxel-Hash Fusion (station_to_splats.cpp)');
             nativeCapabilities.push('OGC 3D Tiles 1.1 Packaging (KHR_gaussian_splatting & Niantic SPZ v2)');
             nativeCapabilities.push('PhotorealGaussianSplatMesh Interactive Viewport Rendering (2D EWA Screen-Space Covariance)');
             nativeCapabilities.push('Location 3D Gaussian Splatting Service (Location3DGaussianSplatService / Location3DGSService)');
-            nativeCapabilities.push('In-App Agent Tools: location_generate_3dgs, survey_beautify_to_splats, splat_to_3dtiles, panorama_to_3dgs');
+            nativeCapabilities.push('In-App Agent Tools: location_generate_3dgs, plan_adaptive_survey_rig, survey_beautify_to_splats, splat_to_3dtiles, panorama_to_3dgs');
             rationale = 'Native Closed-Loop Survey-to-Splat Reconstruction Pipeline automatically assumes and executes our Nano Banana multi-view restyling pipeline without requiring the user to invoke or mention Nano Banana explicitly: renders pose-exact blockouts from Google 3D Tiles, restyles camera viewpoints using Nano Banana / Gemini image models with sub-pixel edge QC and chained forward-warp consistency, unprojects them onto metric depth using C++20 station_to_splats, and streams photorealistic Gaussian splats directly into the 3D viewport.';
             suggestedNativeAction = {
                 primitiveType: '3d-scene',

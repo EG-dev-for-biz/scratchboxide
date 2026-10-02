@@ -89,6 +89,25 @@ describe('Survey Synthesis HTTP API (/api/3d/survey)', () => {
         expect(bad.status).toBe(400);
     });
 
+    it('POST /plan-adaptive synthesizes scene-conformal poses grounded on GLB geometry', async () => {
+        if (!fs.existsSync(GLB)) return;
+        const res = await post('/plan-adaptive', {
+            glbPath: GLB,
+            anchor: ANCHOR,
+            cameraBudget: 12,
+            targetResolutionMm: 5.0
+        });
+        expect(res.status).toBe(200);
+        expect(res.json.success).toBe(true);
+        expect(res.json.poses).toHaveLength(12);
+        expect(res.json.geoJson.type).toBe('FeatureCollection');
+        expect(res.json.tiers.length).toBeGreaterThanOrEqual(1);
+        for (const pose of res.json.poses) {
+            expect(pose.positionLocalENU[1]).toBeGreaterThanOrEqual(res.json.groundDatumY + 1.8);
+            expect(pose.maxDepth).toBeLessThan(150.0);
+        }
+    });
+
     it('beautify endpoints report unavailable until later phases register them', async () => {
         const r = await post('/beautify-station', { stationId: 1 });
         expect(r.status).toBe(400);

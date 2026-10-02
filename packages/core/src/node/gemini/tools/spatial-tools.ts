@@ -1243,6 +1243,26 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         }
     },
     {
+        name: 'plan_adaptive_survey_rig',
+        description: 'Adaptive Scene-Aware Survey Rig Planning (ADA): derives photogrammetric camera station placements directly from real 3D mesh geometry (OBB, surface normals, ground elevation, and architectural dimensions). Eliminates hardcoded presets and underground cameras. Enforces ground clearance (Y >= terrain + 1.8m), optimal GSD standoff, facade normal targeting, and strict depth bounding to eliminate floating sky splats.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: { type: 'STRING', description: 'Path to target 3D model (.glb) to analyze and survey.' },
+                cameraBudget: { type: 'NUMBER', description: 'Maximum number of camera stations to synthesize (default: 40).' },
+                targetResolutionMm: { type: 'NUMBER', description: 'Desired Ground Sampling Distance in mm/pixel (e.g. 2.0 mm for tactile travertine pores). Auto-calculates optimal standoff.' },
+                mode: { type: 'STRING', description: "Survey mode: 'facade-perimeter' (default), 'interior-cavity', 'multitier-complete', or 'inspection-macro'." },
+                focalLengthMm: { type: 'NUMBER', description: 'Base camera focal length in mm (default: 35mm full frame).' },
+                minGroundClearanceMeters: { type: 'NUMBER', description: 'Minimum ground clearance in meters (default: 1.8m). Stations will NEVER be placed lower than local terrain + clearance.' },
+                standoffMeters: { type: 'NUMBER', description: 'Explicit camera standoff override in meters (if omitted, derived from targetResolutionMm and sensor optics).' },
+                focusCentroid: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Target structure centroid [x, y, z] in local ENU to isolate from wide urban terrain.' },
+                cropRadius: { type: 'NUMBER', description: 'Radius in meters around focusCentroid to isolate target structure (default: 120-140m).' },
+                outJsonPath: { type: 'STRING', description: 'Optional path to persist the synthesized stations JSON.' }
+            },
+            required: ['glbPath']
+        }
+    },
+    {
         name: 'survey_synthesize_stations',
         description: 'Survey Synthesis: procedurally place 6-DoF camera stations around a geodetic anchor (orbital-multi-tier, facade-lawnmower, street-corridor, nadir-grid) in the local ENU frame with WGS-84 coordinates, lens fov and frustum footprints. Optionally enrich each station against a GLB (standoff, horizon row, sky fraction, mesh coverage, sun azimuth/elevation) and rank the best stations for AI Beautify. These stations are the single camera truth for blockout rendering, buildBeautifyPrompt and depth-to-splat baking.',
         parameters: {
@@ -2194,6 +2214,49 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 durationMs: res.durationMs
             } as unknown as ToolResultPayload,
             summaryResult: `Tiled ${res.numSplats.toLocaleString()} splats into ${res.tileCount} KHR_gaussian_splatting tiles (${res.levels} LOD levels, ${(res.tileBytes / 1048576).toFixed(1)} MB) in ${res.durationMs} ms${res.rootTransform ? ', placed on WGS-84' : ' (local metres)'}. tileset.json: ${res.tilesetPath}`
+        };
+    },
+
+    plan_adaptive_survey_rig: async (args, _ctx) => {
+        const api = new SurveyApi({ workspaceRoot: process.cwd() });
+        const res = await api.planAdaptive({
+            glbPath: asString(args.glbPath),
+            cameraBudget: typeof args.cameraBudget === 'number' ? args.cameraBudget : undefined,
+            targetResolutionMm: typeof args.targetResolutionMm === 'number' ? args.targetResolutionMm : undefined,
+            mode: asString(args.mode) as any,
+            focalLengthMm: typeof args.focalLengthMm === 'number' ? args.focalLengthMm : undefined,
+            minGroundClearanceMeters: typeof args.minGroundClearanceMeters === 'number' ? args.minGroundClearanceMeters : undefined,
+            standoffMeters: typeof args.standoffMeters === 'number' ? args.standoffMeters : undefined,
+            focusCentroid: Array.isArray(args.focusCentroid) && args.focusCentroid.length === 3 ? (args.focusCentroid as [number, number, number]) : undefined,
+            cropRadius: typeof args.cropRadius === 'number' ? args.cropRadius : undefined
+        });
+        const outJsonPath = asString(args.outJsonPath);
+        if (outJsonPath) {
+            const fsMod = await import('fs-extra');
+            await fsMod.outputJson(outJsonPath, res.poses, { spaces: 2 });
+        }
+        return {
+            resultPayload: {
+                success: true,
+                stationCount: res.poses.length,
+                obb: res.obb,
+                groundDatumY: res.groundDatumY,
+                standoffMeters: res.standoffMeters,
+                tiers: res.tiers,
+                summary: res.summary,
+                outJsonPath: outJsonPath || undefined,
+                stations: res.poses.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    yaw: p.yawDegrees,
+                    pitch: p.pitchDegrees,
+                    fov: p.fovDegrees,
+                    positionLocalENU: p.positionLocalENU,
+                    maxDepth: (p as any).maxDepth,
+                    dropSky: (p as any).dropSky
+                }))
+            } as unknown as ToolResultPayload,
+            summaryResult: `Adaptive Rig planned ${res.poses.length} stations across ${res.tiers.length} tiers. Ground datum: ${res.groundDatumY.toFixed(1)}m. Structure size: [${res.obb.dimensions.map(d => d.toFixed(1)).join(' x ')}]m. Standoff: ${res.standoffMeters.toFixed(1)}m${outJsonPath ? ` -> ${outJsonPath}` : ''}`
         };
     },
 

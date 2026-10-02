@@ -107,7 +107,9 @@ export function resolveSurveyPreset(args: any, workspaceRoot: string): {
                 cameraBudget: cameraCount,
                 mode: 'multitier-complete',
                 focalLengthMm: 35,
-                targetResolutionMm: 2.5
+                targetResolutionMm: 2.5,
+                focusCentroid: lookAt,
+                cropRadius: args?.cropRadius ?? 120.0
             });
             stations = adaptiveResult.poses;
         } else {

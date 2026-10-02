@@ -15,6 +15,7 @@ import {
 } from '../src/common/spatial/SurveySynthesisEngine';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
+import { AdaptiveSurveyRigService } from '../src/node/spatial/AdaptiveSurveyRigService';
 
 const OPERA: GeodeticAnchor = { lat: -33.8568, lng: 151.2153, elevationMeters: 12.0, headingDeg: 0, formattedAddress: 'Sydney Opera House' };
 
@@ -103,12 +104,22 @@ describe('SurveySynthesisEngine: station synthesis', () => {
             const geoJson112 = engine.toGeoJson(stns112, colosseumAnchor);
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_112.geojson'), JSON.stringify(geoJson112, null, 2));
 
-            const stns40 = engine.synthesize(colosseumAnchor, {
-                type: 'amphitheatre-complete',
-                targetRadiusMeters: 150,
-                aspectRatioXZ: 1.18,
-                cameraCount: 40
-            });
+            const glbPath = path.resolve(process.cwd(), 'public/models/colosseum_grounded.glb');
+            const stns40 = fs.existsSync(glbPath)
+                ? AdaptiveSurveyRigService.planRig(glbPath, {
+                    anchor: colosseumAnchor,
+                    cameraBudget: 40,
+                    mode: 'multitier-complete',
+                    targetResolutionMm: 2.5,
+                    focusCentroid: [-43.42, 24.0, 62.54],
+                    cropRadius: 120.0
+                }).poses
+                : engine.synthesize(colosseumAnchor, {
+                    type: 'amphitheatre-complete',
+                    targetRadiusMeters: 150,
+                    aspectRatioXZ: 1.18,
+                    cameraCount: 40
+                });
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_40_stations.json'), JSON.stringify(stns40, null, 2));
             const geoJson40 = engine.toGeoJson(stns40, colosseumAnchor);
             fs.writeFileSync(path.join(outDir, 'colosseum_survey_40.geojson'), JSON.stringify(geoJson40, null, 2));
