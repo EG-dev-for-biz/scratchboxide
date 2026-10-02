@@ -1,5 +1,22 @@
 # Scratchbox IDE Agent Directives
 
+## Default Conversation, Planning & Architectural Reasoning Directive
+
+### Rule: Mandatory Critical Thinking & 3-Competitor Benchmark in All Technical Conversations & Planning
+When conversing, brainstorming, reviewing, or planning features, architectures, pipelines, or solutions in Scratchbox IDE with Antigravity, all technical responses MUST incorporate the **Critical Thinking framework** and an **Adversarial 3-Competitor Comparative Benchmark**:
+1. **Mandatory Executive Verdict**:
+   - Begin technical design responses with an explicit `## Executive Verdict: [SOUND | VIABLE WITH CAVEATS | FRAGILE | UNSOUND]`.
+2. **First-Principles & Adversarial Stress-Test**:
+   - Audit physical, mathematical, and information-theoretic realities.
+   - Unearth hidden premises and expose failure modes (memory limits, coordinate clashes, edge cases).
+3. **Mandatory 3-Competitor Comparative Benchmark**:
+   - Every technical proposal must include: `### This is how competition has solved it — 3 examples`.
+   - Contrast 3 state-of-the-art competitors or open-source industry leaders tackling the identical or closest challenge.
+   - For each competitor, dissect: **Mechanism** (how they architecturally solve it), **Trade-off / Compromise** (where they cut corners), and **Insight for Scratchbox** (what we must adopt, improve, or avoid).
+4. **The Unassailable Path Forward**:
+   - Ground the solution in the simplest, highest-leverage engineering path that outperforms competition without inheriting their bloat or fragility.
+
+
 ## Two-Tier Problem-Solving Directive (VFX, 3D & Generative Tasks)
 
 ### Rule: App Capabilities First -> ComfyUI Service Fallback
