@@ -114,14 +114,17 @@ export const BOTANICAL_TREE_TOOL_DECLARATIONS: ToolDeclaration[] = [
 export const botanicalTreeHandlers: Record<string, ToolHandler> = {
     botanical_synthesize_tree: async (args: Record<string, any>) => {
         const bridge = new UniversalBotanicalBridgeService();
+        const adapter = UniversalBotanicalBridgeService.resolveSpecies(args.species, args.name);
 
-        // Check if treeId corresponds to a known tree in the Colosseum dataset if no dimensions provided
+        const defaultHeight = 12.0;
+        const defaultSpread = defaultHeight * adapter.typicalAspectSpread;
+
         let entity: SpatialTreeEntity = {
             id: args.treeId || `tree_${Date.now()}`,
-            name: args.name,
-            species: args.species,
-            canopyHeightMeters: args.canopyHeightMeters,
-            crownDiameterMeters: args.crownDiameterMeters,
+            name: args.name || adapter.commonName,
+            species: (args.species as SupportedTreeSpecies) || adapter.species,
+            canopyHeightMeters: args.canopyHeightMeters || defaultHeight,
+            crownDiameterMeters: args.crownDiameterMeters || defaultSpread,
             boundingBox: args.boundingBox,
             orientedBoundingBox: args.orientedBoundingBox,
             rawScanGlbPath: args.rawScanGlbPath
@@ -171,12 +174,40 @@ export const botanicalTreeHandlers: Record<string, ToolHandler> = {
     },
 
     botanical_query_separator_trees: async (args: Record<string, any>) => {
-        const trees = ColosseumTreeIdentificationEngine.filterTrees({
+        let trees = ColosseumTreeIdentificationEngine.filterTrees({
             zone: args.zone as BotanicalZone,
             species: args.species as BotanicalSpecies,
             minHeight: args.minHeight ? Number(args.minHeight) : undefined,
             maxHeight: args.maxHeight ? Number(args.maxHeight) : undefined
         });
+
+        // If no local trees match or query is generic, provide available species catalog from UniversalBotanicalBridgeService
+        if (trees.length === 0) {
+            const adapters = Object.values(SPECIES_ADAPTERS);
+            const filteredAdapters = args.species 
+                ? adapters.filter(a => a.species === args.species || a.commonName.toLowerCase().includes(String(args.species).toLowerCase()))
+                : adapters;
+
+            return {
+                resultPayload: {
+                    success: true,
+                    totalFound: filteredAdapters.length,
+                    returnedCount: filteredAdapters.length,
+                    mode: 'universal_archetypes',
+                    trees: filteredAdapters.map(a => ({
+                        id: `archetype-${a.species}`,
+                        name: a.commonName,
+                        species: a.species,
+                        commonName: a.commonName,
+                        zone: 'global',
+                        canopyHeightMeters: 12.0,
+                        crownDiameterMeters: 12.0 * a.typicalAspectSpread,
+                        centroid: [0, 6.0, 0],
+                        dimensions: [12.0 * a.typicalAspectSpread, 12.0, 12.0 * a.typicalAspectSpread]
+                    }))
+                }
+            };
+        }
 
         const limit = args.limit ? Number(args.limit) : 20;
         const sliced = trees.slice(0, limit);
