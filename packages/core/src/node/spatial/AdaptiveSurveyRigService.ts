@@ -337,6 +337,10 @@ export class AdaptiveSurveyRigService {
                         continue;
                     }
                     eye = clearanceResult.adjustedPos;
+                    const minAltitude = groundDatumY + (options.minGroundClearanceMeters ?? 1.8);
+                    if (eye[1] < minAltitude) {
+                        eye[1] = minAltitude;
+                    }
                     clearanceDistance = clearanceResult.minDistance;
                 }
 
@@ -496,7 +500,7 @@ export class AdaptiveSurveyRigService {
                 // Sits safely in free space
                 return {
                     valid: true,
-                    adjustedPos: [Number(curPos[0].toFixed(3)), Number(curPos[1].toFixed(3)), Number(curPos[2].toFixed(3))],
+                    adjustedPos: [curPos[0], curPos[1], curPos[2]],
                     minDistance: Number(Math.sqrt(minDistSq).toFixed(3))
                 };
             }
@@ -534,7 +538,7 @@ export class AdaptiveSurveyRigService {
         const valid = finalDist >= (minClearance * 0.70); // allow tolerance after pushing into void
         return {
             valid,
-            adjustedPos: [Number(curPos[0].toFixed(3)), Number(curPos[1].toFixed(3)), Number(curPos[2].toFixed(3))],
+            adjustedPos: [curPos[0], curPos[1], curPos[2]],
             minDistance: Number(finalDist.toFixed(3))
         };
     }
