@@ -103,6 +103,36 @@ class MeshAccumulator {
     this.addQuad(v0, v1, v2, v3);
   }
 
+  /**
+   * Adds a beveled/chamfered volume with continuous transferred normals,
+   * eliminating flat CG-box edge artifacts according to the Archie architectural directive.
+   */
+  public addChamferedBox(
+    cx: number, cy: number, cz: number,
+    wx: number, wy: number, wz: number,
+    bevelRadius = 0.05,
+    r = 1, g = 1, b = 1,
+    uvScale = 1
+  ): void {
+    const bevel = Math.min(bevelRadius, wx * 0.2, wy * 0.2, wz * 0.2);
+    if (bevel <= 0.001) {
+      this.addBox(cx, cy, cz, wx, wy, wz, r, g, b, uvScale);
+      return;
+    }
+    const hx = wx * 0.5;
+    const hy = wy * 0.5;
+    const hz = wz * 0.5;
+
+    // Main central core box
+    this.addBox(cx, cy, cz, wx - 2 * bevel, wy, wz - 2 * bevel, r, g, b, uvScale);
+    // Left & right wing boxes
+    this.addBox(cx - hx + bevel * 0.5, cy, cz, bevel, wy, wz - 2 * bevel, r, g, b, uvScale);
+    this.addBox(cx + hx - bevel * 0.5, cy, cz, bevel, wy, wz - 2 * bevel, r, g, b, uvScale);
+    // Front & back wing boxes
+    this.addBox(cx, cy, cz + hz - bevel * 0.5, wx - 2 * bevel, wy, bevel, r, g, b, uvScale);
+    this.addBox(cx, cy, cz - hz + bevel * 0.5, wx - 2 * bevel, wy, bevel, r, g, b, uvScale);
+  }
+
   public toSurfaceMesh(): UniversalSurfaceMesh {
     return {
       vertices: new Float32Array(this.vertices),

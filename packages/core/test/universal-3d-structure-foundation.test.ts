@@ -661,5 +661,27 @@ describe('Universal3DStructureFoundation', () => {
     expect(fs.existsSync(path.join(outDir, 'transforms.json'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'sparse_pcd.ply'))).toBe(true);
   });
+
+  it('synthesizes watertight classical architectural structure via createArchieStructure', async () => {
+    const struct = await Universal3DStructureFoundation.createArchieStructure({
+      typology: 'triumphal_arch',
+      name: 'RomanTriumphalMonument',
+      widthMeters: 22.0,
+      heightMeters: 18.0,
+      depthMeters: 7.0,
+      pointDensity: 200,
+      numViews: 12
+    });
+
+    expect(struct.name).toBe('RomanTriumphalMonument');
+    expect(struct.mesh.vertexCount).toBeGreaterThan(50);
+    expect(struct.mesh.triangleCount).toBeGreaterThan(50);
+    expect(struct.points.length).toBeGreaterThanOrEqual(150);
+    expect(struct.boundingBox.extents[0]).toBeGreaterThan(15.0);
+
+    const glbBuffer = struct.toGlbBuffer();
+    expect(glbBuffer.length).toBeGreaterThan(1000);
+    expect(glbBuffer.readUInt32LE(0)).toBe(0x46546C67);
+  });
 });
 

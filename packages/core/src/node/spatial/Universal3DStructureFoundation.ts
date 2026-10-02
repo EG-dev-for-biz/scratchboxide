@@ -46,6 +46,11 @@ import {
   buildBabylonianZigguratStructure,
   buildAlpineMatterhornStructure
 } from './ComplexProcedural3DGenerator';
+import {
+  UniversalArchiBridgeService,
+  SupportedArchiTypology,
+  ARCHI_TYPOLOGY_ADAPTERS
+} from './UniversalArchiBridgeService';
 import * as THREE from 'three';
 import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
 
@@ -2002,6 +2007,62 @@ export class Universal3DStructureFoundation {
     });
     struct.resynchronizePoints(options?.pointDensity ?? 6000);
     return struct;
+  }
+
+  /**
+   * Factory: Synthesizes a watertight, metric classical architectural structure using
+   * the native C++20 Archie Engine (scratchbox_sb_archi.hpp / UniversalArchiBridgeService).
+   */
+  public static async createArchieStructure(options?: {
+    typology?: SupportedArchiTypology;
+    name?: string;
+    widthMeters?: number;
+    heightMeters?: number;
+    depthMeters?: number;
+    anchor?: GeodeticAnchor;
+    pointDensity?: number;
+    numViews?: number;
+  }): Promise<Universal3DStructureFoundation> {
+    const typology = options?.typology || 'triumphal_arch';
+    const adapter = ARCHI_TYPOLOGY_ADAPTERS[typology] || ARCHI_TYPOLOGY_ADAPTERS.triumphal_arch;
+    const width = options?.widthMeters ?? 25.0;
+    const height = options?.heightMeters ?? 21.0;
+    const depth = options?.depthMeters ?? 7.5;
+    const dimensions: [number, number, number] = [width, height, depth];
+
+    const bridge = new UniversalArchiBridgeService();
+    const tempDir = path.resolve(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    const tempGlb = path.join(tempDir, `archi_${typology}_${Date.now()}.glb`);
+
+    const result = await bridge.synthesizeStructureFromEntity({
+      id: `archi_${typology}_${Date.now()}`,
+      name: options?.name || adapter.commonName,
+      typology,
+      nominalDimensions: dimensions,
+      nominalCentroid: [0, height * 0.5, 0]
+    }, {
+      typologyOverride: typology,
+      outputGlbPath: tempGlb
+    });
+
+    const glbBuffer = result.glbBuffer || (fs.existsSync(tempGlb) ? fs.readFileSync(tempGlb) : undefined);
+    if (fs.existsSync(tempGlb)) {
+      try { fs.unlinkSync(tempGlb); } catch {}
+    }
+
+    if (glbBuffer) {
+      return Universal3DStructureFoundation.createFromGlb(glbBuffer, {
+        name: options?.name || adapter.commonName,
+        anchor: options?.anchor,
+        pointDensity: options?.pointDensity ?? 4000,
+        numViews: options?.numViews ?? 24
+      });
+    }
+
+    throw new Error(`Universal3DStructureFoundation: Failed to synthesize Archie structure for typology '${typology}'`);
   }
 
   /**
