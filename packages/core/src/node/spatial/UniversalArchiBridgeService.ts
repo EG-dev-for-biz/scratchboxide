@@ -20,6 +20,7 @@ import {
 } from '../3d-engine/sb-archi-service';
 import type {
     ClassicalOrder,
+    StructuralFramingSystem,
     TectonicStructureClass,
     TectonicAnalysisReport
 } from '../../common/spatial/sb-archi-protocol';
@@ -47,13 +48,15 @@ export type SupportedArchiTypology =
     | 'residential_multifamily'
     | 'residential_brownstone'
     | 'industrial_warehouse'
-    | 'street_corridor';
+    | 'street_corridor'
+    | (string & {});
 
 export interface ArchiTypologyAdapter {
     typology: SupportedArchiTypology;
     commonName: string;
     tectonicClass: TectonicStructureClass;
-    order: ClassicalOrder;
+    framingSystem?: StructuralFramingSystem;
+    order?: ClassicalOrder;
     typicalBaySpacing: number;
     typicalAspectSpread: number;     // width / height
     typicalPierWidthRatio: number;
@@ -82,6 +85,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'triumphal_arch',
         commonName: 'Triumphal Arch Monument',
         tectonicClass: 'TriumphalArch',
+        framingSystem: 'load_bearing_masonry',
         order: 'composite',
         typicalBaySpacing: 6.8,
         typicalAspectSpread: 1.25,
@@ -99,6 +103,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'amphitheater',
         commonName: 'Classical Flavian Amphitheater',
         tectonicClass: 'Amphitheater',
+        framingSystem: 'load_bearing_masonry',
         order: 'mixed_superimposed',
         typicalBaySpacing: 6.2,
         typicalAspectSpread: 3.88,
@@ -116,6 +121,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'peripteral_temple',
         commonName: 'Peripteral Classical Temple',
         tectonicClass: 'PeripteralTemple',
+        framingSystem: 'load_bearing_masonry',
         order: 'corinthian',
         typicalBaySpacing: 4.5,
         typicalAspectSpread: 2.2,
@@ -133,6 +139,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'colonnade',
         commonName: 'Classical Colonnade / Porticus',
         tectonicClass: 'Colonnade',
+        framingSystem: 'load_bearing_masonry',
         order: 'ionic',
         typicalBaySpacing: 3.8,
         typicalAspectSpread: 4.5,
@@ -150,6 +157,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'aqueduct_arcade',
         commonName: 'Monumental Aqueduct Arcade',
         tectonicClass: 'AqueductArcade',
+        framingSystem: 'load_bearing_masonry',
         order: 'tuscan',
         typicalBaySpacing: 7.5,
         typicalAspectSpread: 5.0,
@@ -167,6 +175,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'rotunda',
         commonName: 'Classical Rotunda / Tholos Monument',
         tectonicClass: 'Rotunda',
+        framingSystem: 'load_bearing_masonry',
         order: 'corinthian',
         typicalBaySpacing: 4.2,
         typicalAspectSpread: 1.0,
@@ -184,6 +193,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'basilica_hall',
         commonName: 'Monumental Basilica Aula',
         tectonicClass: 'BasilicaHall',
+        framingSystem: 'load_bearing_masonry',
         order: 'corinthian',
         typicalBaySpacing: 18.0,
         typicalAspectSpread: 1.8,
@@ -201,6 +211,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'campanile_tower',
         commonName: 'Romanesque Brick Campanile Bell Tower',
         tectonicClass: 'CampanileTower',
+        framingSystem: 'load_bearing_masonry',
         order: 'tuscan',
         typicalBaySpacing: 6.8,
         typicalAspectSpread: 0.18,
@@ -218,7 +229,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'commercial_skyscraper',
         commonName: 'Commercial High-Rise Skyscraper Tower',
         tectonicClass: 'SkyscraperTower',
-        order: 'modernist',
+        framingSystem: 'curtain_wall_core',
         typicalBaySpacing: 3.6,
         typicalAspectSpread: 0.25,
         typicalPierWidthRatio: 0.15,
@@ -235,7 +246,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'commercial_podium',
         commonName: 'Commercial Street Podium & Retail Block',
         tectonicClass: 'CommercialPodium',
-        order: 'modernist',
+        framingSystem: 'frame_and_slab',
         typicalBaySpacing: 4.8,
         typicalAspectSpread: 1.8,
         typicalPierWidthRatio: 0.20,
@@ -252,7 +263,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'residential_multifamily',
         commonName: 'Multi-Family Residential Apartment Building',
         tectonicClass: 'MultiFamilyResidential',
-        order: 'modernist',
+        framingSystem: 'frame_and_slab',
         typicalBaySpacing: 3.2,
         typicalAspectSpread: 1.2,
         typicalPierWidthRatio: 0.28,
@@ -269,7 +280,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'residential_brownstone',
         commonName: 'Historic Urban Brownstone Townhouse',
         tectonicClass: 'BrownstoneRow',
-        order: 'modernist',
+        framingSystem: 'load_bearing_masonry',
         typicalBaySpacing: 2.8,
         typicalAspectSpread: 0.65,
         typicalPierWidthRatio: 0.35,
@@ -286,7 +297,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'industrial_warehouse',
         commonName: 'Industrial Warehouse & Logistics Facility',
         tectonicClass: 'IndustrialWarehouse',
-        order: 'utilitarian',
+        framingSystem: 'steel_portal_frame',
         typicalBaySpacing: 9.0,
         typicalAspectSpread: 3.5,
         typicalPierWidthRatio: 0.12,
@@ -303,7 +314,7 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         typology: 'street_corridor',
         commonName: 'Waymo Multi-Lane Street Corridor & Hardscape',
         tectonicClass: 'StreetCorridor',
-        order: 'utilitarian',
+        framingSystem: 'infrastructure_pavement',
         typicalBaySpacing: 10.0,
         typicalAspectSpread: 6.0,
         typicalPierWidthRatio: 0.05,
@@ -383,6 +394,9 @@ export interface SpatialArchiEntity {
 
     /** Structural wall thickness separating exterior mass from interior cavities (nominally >= 0.15m) */
     wallThickness?: number;
+
+    /** Structural framing and tectonic system (ADA continuous dimensional schema parameter) */
+    framingSystem?: StructuralFramingSystem;
 }
 
 export interface ArchiSynthesisBridgeOptions {
@@ -400,7 +414,8 @@ export interface ArchiSynthesisBridgeResult {
     entityId: string;
     typology: SupportedArchiTypology;
     tectonicClass: TectonicStructureClass;
-    order: ClassicalOrder;
+    framingSystem?: StructuralFramingSystem;
+    order?: ClassicalOrder;
     worldPosition: [number, number, number];
     worldRotationYawRad: number;
     fittedDimensionsMeters: [number, number, number];
@@ -1380,8 +1395,7 @@ export function generateProceduralArchiGlb(
             break;
         }
 
-        case 'basilica_hall':
-        default: {
+        case 'basilica_hall': {
             // Monumental central nave and side aisles
             const naveW = w * 0.55;
             const aisleW = (w - naveW) * 0.5;
@@ -1574,6 +1588,21 @@ export function generateProceduralArchiGlb(
                 sidewalkWidthMeters: entity?.roadCorridor?.sidewalkWidthMeters ?? 2.5,
                 camberSlope: entity?.roadCorridor?.camberSlope ?? 0.02
             });
+            break;
+        }
+
+        default: {
+            // Adaptive Domain Open Volumetric Generator (Alien Planet Test compliant)
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+            builder.addExtrudedPolygon(footprint, 0, h, { chamferBaseHeight: 0.2, chamferParapetHeight: 0.4 });
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(footprint, entity.solarRoofSegments, h);
+            }
             break;
         }
     }
@@ -2055,16 +2084,54 @@ export class UniversalArchiBridgeService {
         const dimensions: [number, number, number] = [width, height, depth];
 
         // 2. Resolve typology
-        const adapter = options.typologyOverride
-            ? ARCHI_TYPOLOGY_ADAPTERS[options.typologyOverride]
-            : entity.typology
-            ? ARCHI_TYPOLOGY_ADAPTERS[entity.typology]
-            : UniversalArchiBridgeService.resolveTypology(
-                  entity.category,
-                  entity.name,
-                  entity.trellisPrompt,
-                  dimensions
-              );
+        let adapter: ArchiTypologyAdapter;
+        if (options.typologyOverride) {
+            adapter = ARCHI_TYPOLOGY_ADAPTERS[options.typologyOverride] || {
+                typology: options.typologyOverride,
+                commonName: options.typologyOverride,
+                tectonicClass: 'ModernCivic' as TectonicStructureClass,
+                framingSystem: 'frame_and_slab',
+                typicalBaySpacing: 4.0,
+                typicalAspectSpread: 1.0,
+                typicalPierWidthRatio: 0.20,
+                typicalAshlarHeight: 3.5,
+                hasPediment: false,
+                hasAttic: false,
+                vaultType: 'flat_slab',
+                roughness: 0.65,
+                metalness: 0.20,
+                baseColor: '#5c6470',
+                description: `Dynamic typology override: ${options.typologyOverride}`
+            };
+        } else if (entity.typology && ARCHI_TYPOLOGY_ADAPTERS[entity.typology]) {
+            adapter = ARCHI_TYPOLOGY_ADAPTERS[entity.typology];
+        } else if (entity.typology) {
+            // ADA Open-Domain / Alien Planet Test: dynamically synthesize adapter for novel typology
+            adapter = {
+                typology: entity.typology,
+                commonName: entity.name || `Open-Domain Structure (${entity.typology})`,
+                tectonicClass: (entity.category || 'OpenDomainStructure') as TectonicStructureClass,
+                framingSystem: entity.framingSystem || 'frame_and_slab',
+                typicalBaySpacing: 4.0,
+                typicalAspectSpread: 1.0,
+                typicalPierWidthRatio: 0.20,
+                typicalAshlarHeight: 3.5,
+                hasPediment: false,
+                hasAttic: false,
+                vaultType: 'flat_slab',
+                roughness: 0.65,
+                metalness: 0.20,
+                baseColor: '#5c6470',
+                description: `Dynamically synthesized open-domain tectonic structure (${entity.typology}).`
+            };
+        } else {
+            adapter = UniversalArchiBridgeService.resolveTypology(
+                entity.category,
+                entity.name,
+                entity.trellisPrompt,
+                dimensions
+            );
+        }
 
         // 3. Output Path
         const artifactsDir = path.resolve(process.cwd(), '.scratchbox', 'architectural_structures');
@@ -2160,6 +2227,7 @@ export class UniversalArchiBridgeService {
             tags: [adapter.typology, adapter.tectonicClass, 'architectural_mass'],
             metadata: {
                 typology: adapter.typology,
+                framingSystem: entity.framingSystem || adapter.framingSystem,
                 order: adapter.order,
                 levels: floorCount,
                 hasSolarPlanes: Boolean(entity.solarRoofSegments?.length),
@@ -2172,6 +2240,7 @@ export class UniversalArchiBridgeService {
             entityId: entity.id,
             typology: adapter.typology,
             tectonicClass: adapter.tectonicClass,
+            framingSystem: entity.framingSystem || adapter.framingSystem,
             order: adapter.order,
             worldPosition,
             worldRotationYawRad: yawRad,

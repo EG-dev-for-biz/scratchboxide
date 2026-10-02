@@ -91,9 +91,15 @@ export type ClassicalOrder =
     | 'ionic'
     | 'corinthian'
     | 'composite'
-    | 'mixed_superimposed'
-    | 'modernist'
-    | 'utilitarian';
+    | 'mixed_superimposed';
+
+export type StructuralFramingSystem =
+    | 'load_bearing_masonry'
+    | 'frame_and_slab'
+    | 'curtain_wall_core'
+    | 'steel_portal_frame'
+    | 'infrastructure_pavement'
+    | (string & {});
 
 export interface CofferConfig {
     rows: number;
@@ -132,7 +138,8 @@ export type TectonicStructureClass =
     | 'BrownstoneRow'
     | 'IndustrialWarehouse'
     | 'StreetCorridor'
-    | 'Unknown';
+    | 'Unknown'
+    | (string & {});
 
 export interface TectonicAnalysisReport {
     classification: string;

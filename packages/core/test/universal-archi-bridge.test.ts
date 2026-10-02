@@ -452,4 +452,32 @@ describe('UniversalArchiBridgeService (Spatial Separator to SB-Archi)', () => {
         expect(result.telemetry.outputTriangles).toBeGreaterThan(100);
         expect(result.spatialNode?.children.length).toBe(4);
     });
+
+    it('satisfies ADA Alien Planet Test: accepts arbitrary open literal tectonic classes and framing systems without rejection', async () => {
+        // Novel unpredicted entity from the "Alien Planet Test"
+        const alienEntity: SpatialArchiEntity = {
+            id: 'asteroid-biodome-42',
+            name: 'Subterranean Geothermal Research Biodome',
+            category: 'exoplanetary_habitat',
+            typology: 'subterranean_vault',
+            framingSystem: 'composite_carbon_hexgrid',
+            nominalDimensions: [30.0, 15.0, 30.0],
+            nominalCentroid: [0, 7.5, 0],
+            levels: 3,
+            vectorFootprint: [
+                [-15, -15],
+                [15, -15],
+                [15, 15],
+                [-15, 15]
+            ]
+        };
+
+        const result = await bridge.synthesizeStructureFromEntity(alienEntity);
+        expect(result.entityId).toBe('asteroid-biodome-42');
+        expect(result.framingSystem).toBe('composite_carbon_hexgrid');
+        expect(result.glbBuffer).toBeDefined();
+        expect(result.spatialNode).toBeDefined();
+        expect(result.spatialNode?.children.length).toBe(3);
+    });
 });
+

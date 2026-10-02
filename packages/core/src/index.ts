@@ -247,6 +247,7 @@ export type {
     SbArchiTelemetry,
     SbArchiInversionResult,
     ClassicalOrder,
+    StructuralFramingSystem,
     TectonicStructureClass,
     TectonicAnalysisReport
 } from './common/spatial/sb-archi-protocol';
