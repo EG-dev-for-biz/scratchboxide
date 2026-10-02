@@ -895,6 +895,20 @@ export {
     generateProceduralArchiGlb
 } from './node/spatial/UniversalArchiBridgeService';
 
+export {
+    type UniversalSpatialNode,
+    type SpatialPolarity,
+    type MetricOBB,
+    type SurfaceMountPlane,
+    createSpatialNode,
+    findSpatialNodeById,
+    flattenSpatialTree,
+    transformSpatialNode,
+    multiplyMatrices4x4,
+    createIdentityMatrix,
+    createTranslationMatrix
+} from './common/spatial/universal-spatial-node';
+
 // Universal 3D Object Separation & Visual Alignment Verification Services
 export {
     Universal3DObjectSeparationService,

@@ -91,7 +91,9 @@ export type ClassicalOrder =
     | 'ionic'
     | 'corinthian'
     | 'composite'
-    | 'mixed_superimposed';
+    | 'mixed_superimposed'
+    | 'modernist'
+    | 'utilitarian';
 
 export interface CofferConfig {
     rows: number;
@@ -124,6 +126,12 @@ export type TectonicStructureClass =
     | 'Rotunda'
     | 'Colonnade'
     | 'CampanileTower'
+    | 'SkyscraperTower'
+    | 'CommercialPodium'
+    | 'MultiFamilyResidential'
+    | 'BrownstoneRow'
+    | 'IndustrialWarehouse'
+    | 'StreetCorridor'
     | 'Unknown';
 
 export interface TectonicAnalysisReport {

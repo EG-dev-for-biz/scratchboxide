@@ -439,3 +439,18 @@ export {
     toTimelineElement
 } from './common/spatial/universal-animation-types';
 
+// Universal Spatial Node & Tectonic Hierarchy
+export {
+    type UniversalSpatialNode,
+    type SpatialPolarity,
+    type MetricOBB,
+    type SurfaceMountPlane,
+    createSpatialNode,
+    findSpatialNodeById,
+    flattenSpatialTree,
+    transformSpatialNode,
+    multiplyMatrices4x4,
+    createIdentityMatrix,
+    createTranslationMatrix
+} from './common/spatial/universal-spatial-node';
+

@@ -338,4 +338,118 @@ describe('UniversalArchiBridgeService (Spatial Separator to SB-Archi)', () => {
         expect(buf.readUInt32LE(0)).toBe(0x46546C67);
         expect(buf.readUInt32LE(4)).toBe(2);
     });
+
+    it('resolves contemporary architectural typologies and street corridors', () => {
+        expect(UniversalArchiBridgeService.resolveTypology('commercial', 'Midtown Office Skyscraper').typology).toBe('commercial_skyscraper');
+        expect(UniversalArchiBridgeService.resolveTypology('retail', 'Ground Floor Podium Storefront').typology).toBe('commercial_podium');
+        expect(UniversalArchiBridgeService.resolveTypology('residential', 'Brooklyn Brownstone Rowhouse').typology).toBe('residential_brownstone');
+        expect(UniversalArchiBridgeService.resolveTypology('housing', 'Multi-Family Apartment Complex').typology).toBe('residential_multifamily');
+        expect(UniversalArchiBridgeService.resolveTypology('industrial', 'Logistics Warehouse Distribution Center').typology).toBe('industrial_warehouse');
+        expect(UniversalArchiBridgeService.resolveTypology('transit', 'Waymo HD Road Corridor 4-Lane').typology).toBe('street_corridor');
+    });
+
+    it('synthesizes contemporary skyscraper with vector footprint, recessed windows, solar roof, and spatial tree', async () => {
+        const skyscraperEntity: SpatialArchiEntity = {
+            id: 'skyscraper-midtown-test',
+            name: 'Midtown High-Rise Commercial Tower',
+            category: 'commercial_tower',
+            vectorFootprint: [
+                [-15, -15],
+                [15, -15],
+                [15, 15],
+                [-15, 15]
+            ],
+            levels: 18,
+            facadeRevealDepth: 0.28,
+            solarRoofSegments: [
+                {
+                    planeEquation: [0, 1, 0, -64.8], // horizontal roof plane at y = 64.8
+                    azimuthDegrees: 180,
+                    pitchDegrees: 0,
+                    yearlyEnergyDcKwh: 45000,
+                    segmentIndex: 0
+                }
+            ],
+            nominalDimensions: [30.0, 64.8, 30.0],
+            nominalCentroid: [0, 32.4, 0]
+        };
+
+        const result = await bridge.synthesizeStructureFromEntity(skyscraperEntity);
+        expect(result.typology).toBe('commercial_skyscraper');
+        expect(result.glbBuffer).toBeDefined();
+        expect(result.telemetry.outputVertices).toBeGreaterThan(100);
+        expect(result.telemetry.outputTriangles).toBeGreaterThan(100);
+        expect(result.telemetry.floorCount).toBe(18);
+        expect(result.telemetry.roofPlaneCount).toBe(1);
+        expect(result.telemetry.hasSolarGrounding).toBe(true);
+        expect(result.telemetry.hasVectorGrounding).toBe(true);
+
+        // Verify UniversalSpatialNode hierarchy
+        expect(result.spatialNode).toBeDefined();
+        const root = result.spatialNode!;
+        expect(root.polarity).toBe('positive_mass');
+        expect(root.children.length).toBe(18); // 18 negative cavity floors
+
+        const firstFloor = root.children[0];
+        expect(firstFloor.polarity).toBe('negative_cavity');
+        expect(firstFloor.mountPlanes.length).toBe(2); // floor and ceiling anchor planes
+        expect(firstFloor.mountPlanes[0].planeType).toBe('floor');
+        expect(firstFloor.mountPlanes[1].planeType).toBe('ceiling');
+    });
+
+    it('synthesizes Waymo HD road corridor with curb and camber cross-section', async () => {
+        const roadEntity: SpatialArchiEntity = {
+            id: 'waymo-boulevard-test',
+            name: 'Autonomous Vehicle Road Corridor',
+            category: 'transit',
+            roadCorridor: {
+                centerline: [
+                    [-50, 0, 0],
+                    [0, 0, 0],
+                    [50, 0, 0]
+                ],
+                laneCount: 4,
+                laneWidthMeters: 3.5,
+                curbHeightMeters: 0.15,
+                sidewalkWidthMeters: 3.0,
+                camberSlope: 0.02
+            },
+            nominalDimensions: [100.0, 1.0, 20.0],
+            nominalCentroid: [0, 0.5, 0]
+        };
+
+        const result = await bridge.synthesizeStructureFromEntity(roadEntity);
+        expect(result.typology).toBe('street_corridor');
+        expect(result.glbBuffer).toBeDefined();
+        expect(result.telemetry.outputVertices).toBeGreaterThanOrEqual(21);
+        expect(result.telemetry.outputTriangles).toBeGreaterThanOrEqual(24);
+        expect(result.spatialNode).toBeDefined();
+        expect(result.spatialNode?.metadata.hasRoadCorridor).toBe(true);
+    });
+
+    it('synthesizes brownstone with street stoop stairs and recessed window reveals >= 0.20m', async () => {
+        const brownstoneEntity: SpatialArchiEntity = {
+            id: 'brownstone-row-test',
+            name: 'Historic Rowhouse Brownstone',
+            category: 'residential',
+            trellisPrompt: 'Victorian brownstone rowhouse with high stoop stairs',
+            vectorFootprint: [
+                [-4, -7.5],
+                [4, -7.5],
+                [4, 7.5],
+                [-4, 7.5]
+            ],
+            levels: 4,
+            facadeRevealDepth: 0.25,
+            nominalDimensions: [8.0, 13.2, 15.0],
+            nominalCentroid: [0, 6.6, 0]
+        };
+
+        const result = await bridge.synthesizeStructureFromEntity(brownstoneEntity);
+        expect(result.typology).toBe('residential_brownstone');
+        expect(result.glbBuffer).toBeDefined();
+        expect(result.telemetry.outputVertices).toBeGreaterThan(100);
+        expect(result.telemetry.outputTriangles).toBeGreaterThan(100);
+        expect(result.spatialNode?.children.length).toBe(4);
+    });
 });

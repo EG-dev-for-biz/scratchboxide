@@ -23,8 +23,16 @@ import type {
     TectonicStructureClass,
     TectonicAnalysisReport
 } from '../../common/spatial/sb-archi-protocol';
+import {
+    type UniversalSpatialNode,
+    type MetricOBB,
+    type SurfaceMountPlane,
+    createSpatialNode,
+    createIdentityMatrix
+} from '../../common/spatial/universal-spatial-node';
 
 export type SupportedArchiTypology =
+    // Classical Stereotomic Heritage (Preserved 1:1)
     | 'triumphal_arch'
     | 'amphitheater'
     | 'peripteral_temple'
@@ -32,7 +40,14 @@ export type SupportedArchiTypology =
     | 'aqueduct_arcade'
     | 'rotunda'
     | 'basilica_hall'
-    | 'campanile_tower';
+    | 'campanile_tower'
+    // Open-Domain Contemporary Architecture & Hardscape
+    | 'commercial_skyscraper'
+    | 'commercial_podium'
+    | 'residential_multifamily'
+    | 'residential_brownstone'
+    | 'industrial_warehouse'
+    | 'street_corridor';
 
 export interface ArchiTypologyAdapter {
     typology: SupportedArchiTypology;
@@ -45,7 +60,17 @@ export interface ArchiTypologyAdapter {
     typicalAshlarHeight: number;
     hasPediment: boolean;
     hasAttic: boolean;
-    vaultType: 'semicircular' | 'coffered_barrel' | 'annular_barrel' | 'groin' | 'conical_core' | 'pyramid_spire';
+    vaultType:
+        | 'semicircular'
+        | 'coffered_barrel'
+        | 'annular_barrel'
+        | 'groin'
+        | 'conical_core'
+        | 'pyramid_spire'
+        | 'flat_slab'
+        | 'curtain_crown'
+        | 'sawtooth'
+        | 'street_surface';
     roughness: number;
     metalness: number;
     baseColor: string;
@@ -188,6 +213,108 @@ export const ARCHI_TYPOLOGY_ADAPTERS: Record<SupportedArchiTypology, ArchiTypolo
         metalness: 0.01,
         baseColor: '#b46d4e',
         description: 'Multi-tiered Romanesque brick bell tower with marble stringcourses, paired arched bifora belfry windows, and a 4-sided pyramid spire.'
+    },
+    commercial_skyscraper: {
+        typology: 'commercial_skyscraper',
+        commonName: 'Commercial High-Rise Skyscraper Tower',
+        tectonicClass: 'SkyscraperTower',
+        order: 'modernist',
+        typicalBaySpacing: 3.6,
+        typicalAspectSpread: 0.25,
+        typicalPierWidthRatio: 0.15,
+        typicalAshlarHeight: 3.6,
+        hasPediment: false,
+        hasAttic: true,
+        vaultType: 'curtain_crown',
+        roughness: 0.25,
+        metalness: 0.75,
+        baseColor: '#2b394a',
+        description: 'Multi-tiered commercial skyscraper tower with setback podium, curtain wall grid, recessed mechanical crown, and structural core.'
+    },
+    commercial_podium: {
+        typology: 'commercial_podium',
+        commonName: 'Commercial Street Podium & Retail Block',
+        tectonicClass: 'CommercialPodium',
+        order: 'modernist',
+        typicalBaySpacing: 4.8,
+        typicalAspectSpread: 1.8,
+        typicalPierWidthRatio: 0.20,
+        typicalAshlarHeight: 4.2,
+        hasPediment: false,
+        hasAttic: false,
+        vaultType: 'flat_slab',
+        roughness: 0.50,
+        metalness: 0.35,
+        baseColor: '#4a5568',
+        description: 'Street-level urban commercial block with storefront display glazing, high ceilings, chamfered corner entrances, and accessible rooftop terrace.'
+    },
+    residential_multifamily: {
+        typology: 'residential_multifamily',
+        commonName: 'Multi-Family Residential Apartment Building',
+        tectonicClass: 'MultiFamilyResidential',
+        order: 'modernist',
+        typicalBaySpacing: 3.2,
+        typicalAspectSpread: 1.2,
+        typicalPierWidthRatio: 0.28,
+        typicalAshlarHeight: 3.0,
+        hasPediment: false,
+        hasAttic: true,
+        vaultType: 'flat_slab',
+        roughness: 0.75,
+        metalness: 0.05,
+        baseColor: '#d2c8be',
+        description: 'Urban multi-family residential building with rhythmic punched window bays, cantilevered balconies, structural floor slabs, and rooftop parapet.'
+    },
+    residential_brownstone: {
+        typology: 'residential_brownstone',
+        commonName: 'Historic Urban Brownstone Townhouse',
+        tectonicClass: 'BrownstoneRow',
+        order: 'modernist',
+        typicalBaySpacing: 2.8,
+        typicalAspectSpread: 0.65,
+        typicalPierWidthRatio: 0.35,
+        typicalAshlarHeight: 3.3,
+        hasPediment: false,
+        hasAttic: true,
+        vaultType: 'flat_slab',
+        roughness: 0.85,
+        metalness: 0.02,
+        baseColor: '#8a4b38',
+        description: 'Traditional brownstone rowhouse with rusticated English basement, entrance stoop, tall parlor floor window reveals, and projecting bracketed roof cornice.'
+    },
+    industrial_warehouse: {
+        typology: 'industrial_warehouse',
+        commonName: 'Industrial Warehouse & Logistics Facility',
+        tectonicClass: 'IndustrialWarehouse',
+        order: 'utilitarian',
+        typicalBaySpacing: 9.0,
+        typicalAspectSpread: 3.5,
+        typicalPierWidthRatio: 0.12,
+        typicalAshlarHeight: 6.0,
+        hasPediment: true,
+        hasAttic: false,
+        vaultType: 'sawtooth',
+        roughness: 0.70,
+        metalness: 0.30,
+        baseColor: '#78828a',
+        description: 'Large-span industrial distribution facility with structural steel frames, loading dock bays, clerestory daylighting, and solar roof planes.'
+    },
+    street_corridor: {
+        typology: 'street_corridor',
+        commonName: 'Waymo Multi-Lane Street Corridor & Hardscape',
+        tectonicClass: 'StreetCorridor',
+        order: 'utilitarian',
+        typicalBaySpacing: 10.0,
+        typicalAspectSpread: 6.0,
+        typicalPierWidthRatio: 0.05,
+        typicalAshlarHeight: 0.15,
+        hasPediment: false,
+        hasAttic: false,
+        vaultType: 'street_surface',
+        roughness: 0.90,
+        metalness: 0.01,
+        baseColor: '#3d3f44',
+        description: 'Waymo map.proto-aligned transit corridor featuring parabolic road camber, 0.15m curb lips, crosswalk zones, and pedestrian sidewalk slabs.'
     }
 };
 
@@ -223,6 +350,39 @@ export interface SpatialArchiEntity {
         metalness?: number;
         baseColor?: string;
     };
+
+    /** Google 2.5D Vector Map Tiles local boundary polygon [x, z] */
+    vectorFootprint?: Array<[number, number]>;
+    baseElevationMeters?: number;
+    roofElevationMeters?: number;
+
+    /** Google Solar API rooftop planar segments (ax + by + cz + d = 0) */
+    solarRoofSegments?: Array<{
+        planeEquation: [number, number, number, number];
+        pitchDegrees?: number;
+        azimuthDegrees?: number;
+        centerElevationMeters?: number;
+        boundaryPolygon?: Array<[number, number]>;
+    }>;
+
+    /** Waymo map.proto centerline polyline and curb specification */
+    roadCorridor?: {
+        centerline: Array<[number, number, number]>;
+        laneCount?: number;
+        laneWidthMeters?: number;
+        curbHeightMeters?: number;
+        sidewalkWidthMeters?: number;
+        camberSlope?: number;
+    };
+
+    /** Number of interior floor levels */
+    levels?: number;
+
+    /** Facade window aperture recess reveal depth into wall slab (nominally >= 0.20m) */
+    facadeRevealDepth?: number;
+
+    /** Structural wall thickness separating exterior mass from interior cavities (nominally >= 0.15m) */
+    wallThickness?: number;
 }
 
 export interface ArchiSynthesisBridgeOptions {
@@ -247,6 +407,7 @@ export interface ArchiSynthesisBridgeResult {
     outputGlbPath: string;
     glbBuffer?: Buffer;
     glbBase64?: string;
+    spatialNode?: UniversalSpatialNode;
     telemetry: {
         buildTimeMs: number;
         outputVertices: number;
@@ -255,6 +416,10 @@ export interface ArchiSynthesisBridgeResult {
         inversionRan: boolean;
         detectedDatumsCount?: number;
         classificationConfidencePct?: number;
+        floorCount?: number;
+        roofPlaneCount?: number;
+        hasSolarGrounding?: boolean;
+        hasVectorGrounding?: boolean;
     };
 }
 
@@ -548,6 +713,445 @@ class ProceduralArchiMeshBuilder {
         const r2 = this.addVertex(cx, yApex, cz, rnx, rny, 0, 0.5, 1);
         this.indices.push(r0, r1, r2);
     }
+
+    addExtrudedPolygon(
+        polygon: Array<[number, number]>,
+        yBottom: number,
+        yTop: number,
+        options: {
+            chamferBaseHeight?: number;
+            chamferParapetHeight?: number;
+            chamferOffset?: number;
+        } = {}
+    ) {
+        if (!polygon || polygon.length < 3) return;
+        const n = polygon.length;
+        const baseH = options.chamferBaseHeight ?? 0;
+        const parapetH = options.chamferParapetHeight ?? 0;
+        const offset = options.chamferOffset ?? 0.15;
+
+        // Side wall segments
+        for (let i = 0; i < n; i++) {
+            const p0 = polygon[i];
+            const p1 = polygon[(i + 1) % n];
+            const dx = p1[0] - p0[0];
+            const dz = p1[1] - p0[1];
+            const len = Math.hypot(dx, dz);
+            if (len < 1e-4) continue;
+            const nx = dz / len;
+            const nz = -dx / len;
+
+            // Base plinth if requested
+            if (baseH > 0) {
+                const b0 = this.addVertex(p0[0] + nx * offset, yBottom, p0[1] + nz * offset, nx, 0, nz, 0, 0);
+                const b1 = this.addVertex(p1[0] + nx * offset, yBottom, p1[1] + nz * offset, nx, 0, nz, 1, 0);
+                const b2 = this.addVertex(p1[0], yBottom + baseH, p1[1], nx, 0.2, nz, 1, 1);
+                const b3 = this.addVertex(p0[0], yBottom + baseH, p0[0], nx, 0.2, nz, 0, 1);
+                this.addQuad(b0, b1, b2, b3);
+            }
+
+            // Main vertical shaft
+            const yShaftBot = baseH > 0 ? yBottom + baseH : yBottom;
+            const v0 = this.addVertex(p0[0], yShaftBot, p0[1], nx, 0, nz, 0, 0);
+            const v1 = this.addVertex(p1[0], yShaftBot, p1[1], nx, 0, nz, 1, 0);
+            const v2 = this.addVertex(p1[0], yTop, p1[1], nx, 0, nz, 1, 1);
+            const v3 = this.addVertex(p0[0], yTop, p0[1], nx, 0, nz, 0, 1);
+            this.addQuad(v0, v1, v2, v3);
+
+            // Parapet if requested
+            if (parapetH > 0) {
+                const pr0 = this.addVertex(p0[0], yTop, p0[1], nx, 0, nz, 0, 0);
+                const pr1 = this.addVertex(p1[0], yTop, p1[1], nx, 0, nz, 1, 0);
+                const pr2 = this.addVertex(p1[0] + nx * (offset * 0.5), yTop + parapetH, p1[1] + nz * (offset * 0.5), nx, 0, nz, 1, 1);
+                const pr3 = this.addVertex(p0[0] + nx * (offset * 0.5), yTop + parapetH, p0[1] + nz * (offset * 0.5), nx, 0, nz, 0, 1);
+                this.addQuad(pr0, pr1, pr2, pr3);
+            }
+        }
+
+        // Centroid for caps
+        let cx = 0, cz = 0;
+        for (const p of polygon) {
+            cx += p[0];
+            cz += p[1];
+        }
+        cx /= n;
+        cz /= n;
+
+        // Bottom Cap (-Y)
+        const bCenter = this.addVertex(cx, yBottom, cz, 0, -1, 0, 0.5, 0.5);
+        for (let i = 0; i < n; i++) {
+            const p0 = polygon[i];
+            const p1 = polygon[(i + 1) % n];
+            const b0 = this.addVertex(p0[0], yBottom, p0[1], 0, -1, 0, 0, 0);
+            const b1 = this.addVertex(p1[0], yBottom, p1[1], 0, -1, 0, 1, 0);
+            this.indices.push(bCenter, b1, b0);
+        }
+
+        // Top Cap (+Y)
+        const yCap = parapetH > 0 ? yTop + parapetH : yTop;
+        const tCenter = this.addVertex(cx, yCap, cz, 0, 1, 0, 0.5, 0.5);
+        for (let i = 0; i < n; i++) {
+            const p0 = polygon[i];
+            const p1 = polygon[(i + 1) % n];
+            const t0 = this.addVertex(p0[0], yCap, p0[1], 0, 1, 0, 0, 0);
+            const t1 = this.addVertex(p1[0], yCap, p1[1], 0, 1, 0, 1, 0);
+            this.indices.push(tCenter, t0, t1);
+        }
+    }
+
+    addSolarRectifiedRoof(
+        polygon: Array<[number, number]>,
+        solarPlanes: Array<{ planeEquation: [number, number, number, number]; pitchDegrees?: number; azimuthDegrees?: number }>,
+        yBaseRoof: number
+    ) {
+        if (!polygon || polygon.length < 3) return;
+        if (!solarPlanes || solarPlanes.length === 0) return;
+
+        let cx = 0, cz = 0;
+        for (const p of polygon) {
+            cx += p[0];
+            cz += p[1];
+        }
+        cx /= polygon.length;
+        cz /= polygon.length;
+
+        for (const segment of solarPlanes) {
+            const [a, b, c, d] = segment.planeEquation;
+            const normLen = Math.hypot(a, b, c) || 1.0;
+            const nx = a / normLen;
+            const ny = b / normLen;
+            const nz = c / normLen;
+
+            const evalY = (x: number, z: number) => {
+                if (Math.abs(b) < 1e-4) return yBaseRoof;
+                const computed = -(a * x + c * z + d) / b;
+                return Math.max(yBaseRoof, Math.min(yBaseRoof + 35.0, computed));
+            };
+
+            const apexY = evalY(cx, cz);
+            const apexIdx = this.addVertex(cx, apexY, cz, nx, ny, nz, 0.5, 0.5);
+
+            for (let i = 0; i < polygon.length; i++) {
+                const p0 = polygon[i];
+                const p1 = polygon[(i + 1) % polygon.length];
+                const y0 = evalY(p0[0], p0[1]);
+                const y1 = evalY(p1[0], p1[1]);
+
+                const v0 = this.addVertex(p0[0], y0, p0[1], nx, ny, nz, 0, 0);
+                const v1 = this.addVertex(p1[0], y1, p1[1], nx, ny, nz, 1, 0);
+                this.indices.push(apexIdx, v0, v1);
+            }
+        }
+    }
+
+    addFacadeBaysWithRecessedWindows(
+        p0: [number, number],
+        p1: [number, number],
+        yBottom: number,
+        yTop: number,
+        options: {
+            floorHeight?: number;
+            bayWidth?: number;
+            recessDepth?: number;
+            sillDrainageAngleDeg?: number;
+        } = {}
+    ) {
+        const dx = p1[0] - p0[0];
+        const dz = p1[1] - p0[1];
+        const wallLen = Math.hypot(dx, dz);
+        if (wallLen < 1.0) return;
+
+        const wallHeight = yTop - yBottom;
+        const nx = dz / wallLen;
+        const nz = -dx / wallLen;
+        const tx = dx / wallLen;
+        const tz = dz / wallLen;
+
+        const floorH = options.floorHeight ?? 3.5;
+        const bayW = options.bayWidth ?? 3.2;
+        const recessDepth = Math.max(0.20, options.recessDepth ?? 0.25); // Invariant: recess >= 0.20m
+        const sillTiltRad = ((options.sillDrainageAngleDeg ?? 14.0) * Math.PI) / 180.0;
+
+        const numFloors = Math.max(1, Math.floor(wallHeight / floorH));
+        const numBays = Math.max(1, Math.floor(wallLen / bayW));
+        const actualBayW = wallLen / numBays;
+        const actualFloorH = wallHeight / numFloors;
+
+        const pierRatio = 0.25;
+        const spandrelRatio = 0.28;
+
+        for (let f = 0; f < numFloors; f++) {
+            const fBot = yBottom + f * actualFloorH;
+            const fTop = fBot + actualFloorH;
+            const spandrelH = actualFloorH * spandrelRatio;
+            const windowBot = fBot + spandrelH;
+            const windowTop = fTop - (spandrelH * 0.3);
+
+            for (let b = 0; b < numBays; b++) {
+                const bayStart = b * actualBayW;
+                const pierW = actualBayW * pierRatio;
+                const winW = actualBayW - pierW * 2.0;
+
+                const xLeft = p0[0] + tx * (bayStart + pierW);
+                const zLeft = p0[1] + tz * (bayStart + pierW);
+                const xRight = xLeft + tx * winW;
+                const zRight = zLeft + tz * winW;
+
+                // Recessed window glazing plane (inset along -normal by recessDepth)
+                const rxLeft = xLeft - nx * recessDepth;
+                const rzLeft = zLeft - nz * recessDepth;
+                const rxRight = xRight - nx * recessDepth;
+                const rzRight = zRight - nz * recessDepth;
+
+                // 1. Recessed Glazing pane
+                const g0 = this.addVertex(rxLeft, windowBot, rzLeft, nx, 0, nz, 0, 0);
+                const g1 = this.addVertex(rxRight, windowBot, rzRight, nx, 0, nz, 1, 0);
+                const g2 = this.addVertex(rxRight, windowTop, rzRight, nx, 0, nz, 1, 1);
+                const g3 = this.addVertex(rxLeft, windowTop, rzLeft, nx, 0, nz, 0, 1);
+                this.addQuad(g0, g1, g2, g3);
+
+                // 2. Left window reveal jamb (facing +T)
+                const jL0 = this.addVertex(xLeft, windowBot, zLeft, tx, 0, tz, 0, 0);
+                const jL1 = this.addVertex(rxLeft, windowBot, rzLeft, tx, 0, tz, 1, 0);
+                const jL2 = this.addVertex(rxLeft, windowTop, rzLeft, tx, 0, tz, 1, 1);
+                const jL3 = this.addVertex(xLeft, windowTop, zLeft, tx, 0, tz, 0, 1);
+                this.addQuad(jL0, jL1, jL2, jL3);
+
+                // 3. Right window reveal jamb (facing -T)
+                const jR0 = this.addVertex(rxRight, windowBot, rzRight, -tx, 0, -tz, 0, 0);
+                const jR1 = this.addVertex(xRight, windowBot, zRight, -tx, 0, -tz, 1, 0);
+                const jR2 = this.addVertex(xRight, windowTop, zRight, -tx, 0, -tz, 1, 1);
+                const jR3 = this.addVertex(rxRight, windowTop, rzRight, -tx, 0, -tz, 0, 1);
+                this.addQuad(jR0, jR1, jR2, jR3);
+
+                // 4. Lintel Soffit ceiling (facing -Y)
+                const s0 = this.addVertex(rxLeft, windowTop, rzLeft, 0, -1, 0, 0, 0);
+                const s1 = this.addVertex(rxRight, windowTop, rzRight, 0, -1, 0, 1, 0);
+                const s2 = this.addVertex(xRight, windowTop, zRight, 0, -1, 0, 1, 1);
+                const s3 = this.addVertex(xLeft, windowTop, zLeft, 0, -1, 0, 0, 1);
+                this.addQuad(s0, s1, s2, s3);
+
+                // 5. Drainage Window Sill (facing upward & outward with tilt)
+                const sillDrop = recessDepth * Math.tan(sillTiltRad);
+                const sillNx = nx * Math.cos(sillTiltRad);
+                const sillNy = Math.sin(sillTiltRad);
+                const sillNz = nz * Math.cos(sillTiltRad);
+
+                const sil0 = this.addVertex(xLeft, windowBot - sillDrop, zLeft, sillNx, sillNy, sillNz, 0, 0);
+                const sil1 = this.addVertex(xRight, windowBot - sillDrop, zRight, sillNx, sillNy, sillNz, 1, 0);
+                const sil2 = this.addVertex(rxRight, windowBot, rzRight, sillNx, sillNy, sillNz, 1, 1);
+                const sil3 = this.addVertex(rxLeft, windowBot, rzLeft, sillNx, sillNy, sillNz, 0, 1);
+                this.addQuad(sil0, sil1, sil2, sil3);
+            }
+        }
+    }
+
+    addRoadCorridor(
+        centerline: Array<[number, number, number]>,
+        options: {
+            laneCount?: number;
+            laneWidthMeters?: number;
+            curbHeightMeters?: number;
+            sidewalkWidthMeters?: number;
+            camberSlope?: number;
+        } = {}
+    ) {
+        if (!centerline || centerline.length < 2) return;
+        const laneCount = options.laneCount ?? 2;
+        const laneWidth = options.laneWidthMeters ?? 3.5;
+        const curbH = options.curbHeightMeters ?? 0.15; // Invariant: 0.15m Waymo curb
+        const sidewalkW = options.sidewalkWidthMeters ?? 2.5;
+        const camber = options.camberSlope ?? 0.02;
+
+        const halfRoadW = (laneCount * laneWidth) * 0.5;
+        const camberPeak = halfRoadW * camber;
+
+        interface ProfileSlice {
+            leftSidewalkOuter: number;
+            leftCurbTop: number;
+            leftGutter: number;
+            crown: number;
+            rightGutter: number;
+            rightCurbTop: number;
+            rightSidewalkOuter: number;
+        }
+
+        const slices: ProfileSlice[] = [];
+
+        for (let i = 0; i < centerline.length; i++) {
+            const pt = centerline[i];
+            let tx = 0, tz = 0;
+            if (i < centerline.length - 1) {
+                tx = centerline[i + 1][0] - pt[0];
+                tz = centerline[i + 1][2] - pt[2];
+            } else {
+                tx = pt[0] - centerline[i - 1][0];
+                tz = pt[2] - centerline[i - 1][2];
+            }
+            const tLen = Math.hypot(tx, tz) || 1.0;
+            tx /= tLen;
+            tz /= tLen;
+
+            // Right normal vector
+            const rx = -tz;
+            const rz = tx;
+
+            const y0 = pt[1];
+            const yCrown = y0 + camberPeak;
+            const yCurb = y0 + curbH;
+            const yWalk = yCurb + sidewalkW * 0.01;
+
+            // 1. Left Sidewalk Outer (-R)
+            const lsx = pt[0] - rx * (halfRoadW + sidewalkW);
+            const lsz = pt[2] - rz * (halfRoadW + sidewalkW);
+            const lsIdx = this.addVertex(lsx, yWalk, lsz, 0, 1, 0, 0, 0);
+
+            // 2. Left Curb Top
+            const lcx = pt[0] - rx * halfRoadW;
+            const lcz = pt[2] - rz * halfRoadW;
+            const lcIdx = this.addVertex(lcx, yCurb, lcz, 0, 1, 0, 0.15, 0);
+
+            // 3. Left Gutter
+            const lgIdx = this.addVertex(lcx, y0, lcz, rx, 0, rz, 0.20, 0);
+
+            // 4. Crown
+            const crIdx = this.addVertex(pt[0], yCrown, pt[2], 0, 1, 0, 0.50, 0);
+
+            // 5. Right Gutter
+            const rcx = pt[0] + rx * halfRoadW;
+            const rcz = pt[2] + rz * halfRoadW;
+            const rgIdx = this.addVertex(rcx, y0, rcz, -rx, 0, -rz, 0.80, 0);
+
+            // 6. Right Curb Top
+            const rcTopIdx = this.addVertex(rcx, yCurb, rcz, 0, 1, 0, 0.85, 0);
+
+            // 7. Right Sidewalk Outer (+R)
+            const rsx = pt[0] + rx * (halfRoadW + sidewalkW);
+            const rsz = pt[2] + rz * (halfRoadW + sidewalkW);
+            const rsIdx = this.addVertex(rsx, yWalk, rsz, 0, 1, 0, 1.0, 0);
+
+            slices.push({
+                leftSidewalkOuter: lsIdx,
+                leftCurbTop: lcIdx,
+                leftGutter: lgIdx,
+                crown: crIdx,
+                rightGutter: rgIdx,
+                rightCurbTop: rcTopIdx,
+                rightSidewalkOuter: rsIdx
+            });
+        }
+
+        for (let i = 0; i < slices.length - 1; i++) {
+            const s0 = slices[i];
+            const s1 = slices[i + 1];
+
+            // Left Sidewalk: outer -> curb top
+            this.addQuad(s0.leftSidewalkOuter, s1.leftSidewalkOuter, s1.leftCurbTop, s0.leftCurbTop);
+
+            // Left Curb riser: curb top -> gutter
+            this.addQuad(s0.leftCurbTop, s1.leftCurbTop, s1.leftGutter, s0.leftGutter);
+
+            // Left Road lane: gutter -> crown
+            this.addQuad(s0.leftGutter, s1.leftGutter, s1.crown, s0.crown);
+
+            // Right Road lane: crown -> gutter
+            this.addQuad(s0.crown, s1.crown, s1.rightGutter, s0.rightGutter);
+
+            // Right Curb riser: gutter -> curb top
+            this.addQuad(s0.rightGutter, s1.rightGutter, s1.rightCurbTop, s0.rightCurbTop);
+
+            // Right Sidewalk: curb top -> outer
+            this.addQuad(s0.rightCurbTop, s1.rightCurbTop, s1.rightSidewalkOuter, s0.rightSidewalkOuter);
+        }
+    }
+
+    carveFloorplateCavities(
+        polygon: Array<[number, number]>,
+        yBottom: number,
+        yTop: number,
+        options: {
+            floorCount?: number;
+            wallThickness?: number;
+            slabThickness?: number;
+        } = {}
+    ): UniversalSpatialNode[] {
+        const floorNodes: UniversalSpatialNode[] = [];
+        const floorCount = Math.max(1, options.floorCount ?? 3);
+        const wallThickness = Math.max(0.15, options.wallThickness ?? 0.25); // Invariant: wall >= 0.15m
+        const slabThickness = options.slabThickness ?? 0.30;
+        const totalHeight = yTop - yBottom;
+        const floorH = totalHeight / floorCount;
+
+        let minX = Infinity, maxX = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        let cx = 0, cz = 0;
+        for (const p of polygon) {
+            if (p[0] < minX) minX = p[0];
+            if (p[0] > maxX) maxX = p[0];
+            if (p[1] < minZ) minZ = p[1];
+            if (p[1] > maxZ) maxZ = p[1];
+            cx += p[0];
+            cz += p[1];
+        }
+        cx /= polygon.length;
+        cz /= polygon.length;
+
+        const interiorW = Math.max(1.0, (maxX - minX) - wallThickness * 2.0);
+        const interiorD = Math.max(1.0, (maxZ - minZ) - wallThickness * 2.0);
+
+        for (let k = 0; k < floorCount; k++) {
+            const floorBaseY = yBottom + k * floorH;
+            const ceilingY = floorBaseY + floorH - slabThickness;
+            const cavityCenterY = (floorBaseY + ceilingY) * 0.5;
+            const cavityHeight = ceilingY - floorBaseY;
+
+            // Structural concrete floor slab
+            this.addBox(cx, floorBaseY + slabThickness * 0.5, cz, interiorW, slabThickness, interiorD);
+
+            // Surface mount planes for interior furnishing anchors
+            const floorMount: SurfaceMountPlane = {
+                id: `mount_floor_${k + 1}`,
+                name: `Level ${k + 1} Floor Anchor`,
+                planeType: 'floor',
+                planeEquation: [0, 1, 0, -(floorBaseY + slabThickness)],
+                normal: [0, 1, 0],
+                center: [cx, floorBaseY + slabThickness, cz],
+                dimensions: [interiorW, interiorD]
+            };
+
+            const ceilingMount: SurfaceMountPlane = {
+                id: `mount_ceiling_${k + 1}`,
+                name: `Level ${k + 1} Ceiling Anchor`,
+                planeType: 'ceiling',
+                planeEquation: [0, -1, 0, ceilingY],
+                normal: [0, -1, 0],
+                center: [cx, ceilingY, cz],
+                dimensions: [interiorW, interiorD]
+            };
+
+            const floorNode = createSpatialNode({
+                id: `node_floor_${k + 1}`,
+                name: `Level ${k + 1} Interior Cavity`,
+                polarity: 'negative_cavity',
+                localBounds: {
+                    center: [cx, cavityCenterY, cz],
+                    halfExtents: [interiorW * 0.5, cavityHeight * 0.5, interiorD * 0.5]
+                },
+                mountPlanes: [floorMount, ceilingMount],
+                tags: ['interior', 'cavity', `floor_${k + 1}`],
+                metadata: {
+                    floorIndex: k + 1,
+                    elevationBaseMeters: floorBaseY,
+                    clearHeightMeters: cavityHeight,
+                    wallThicknessMeters: wallThickness
+                }
+            });
+
+            floorNodes.push(floorNode);
+        }
+
+        return floorNodes;
+    }
 }
 
 /**
@@ -558,7 +1162,8 @@ export function generateProceduralArchiGlb(
     adapter: ArchiTypologyAdapter,
     dimensions: [number, number, number],
     materialProps: { roughness: number; metalness: number; baseColor: string },
-    outputGlbPath: string
+    outputGlbPath: string,
+    entity?: SpatialArchiEntity
 ): { glbBuffer: Buffer; vertexCount: number; triangleCount: number } {
     const [dimX, dimY, dimZ] = dimensions;
     const builder = new ProceduralArchiMeshBuilder();
@@ -797,6 +1402,178 @@ export function generateProceduralArchiGlb(
             // Semicircular apse at end (+Z)
             const apseR = naveW * 0.5;
             builder.addCylinder(0, baseH + naveH * 0.45, d * 0.5, apseR, apseR * 0.95, naveH * 0.9, 16);
+            break;
+        }
+
+        case 'commercial_skyscraper': {
+            const baseH = Math.min(15.0, h * 0.18);
+            const shaftH = h * 0.72;
+
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+
+            // 1. Street Podium
+            builder.addExtrudedPolygon(footprint, 0, baseH, { chamferBaseHeight: 0.6, chamferParapetHeight: 0.8 });
+
+            // 2. Tower Shaft (recessed footprint)
+            const shaftFootprint = footprint.map(([x, z]) => [x * 0.82, z * 0.82] as [number, number]);
+            builder.addExtrudedPolygon(shaftFootprint, baseH, baseH + shaftH);
+
+            // Facade window reveals on shaft
+            for (let i = 0; i < shaftFootprint.length; i++) {
+                const p0 = shaftFootprint[i];
+                const p1 = shaftFootprint[(i + 1) % shaftFootprint.length];
+                builder.addFacadeBaysWithRecessedWindows(p0, p1, baseH, baseH + shaftH, {
+                    floorHeight: 3.6,
+                    recessDepth: entity?.facadeRevealDepth ?? 0.25
+                });
+            }
+
+            // 3. Mechanical Penthouse & Spire
+            const crownFootprint = shaftFootprint.map(([x, z]) => [x * 0.65, z * 0.65] as [number, number]);
+            builder.addExtrudedPolygon(crownFootprint, baseH + shaftH, h, { chamferParapetHeight: 1.2 });
+            builder.addCylinder(0, h + 6.0, 0, 0.4, 0.05, 12.0, 8);
+
+            // Solar planes if provided
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(crownFootprint, entity.solarRoofSegments, h);
+            }
+            break;
+        }
+
+        case 'commercial_podium': {
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+            builder.addExtrudedPolygon(footprint, 0, h, { chamferBaseHeight: 0.8, chamferParapetHeight: 1.0 });
+
+            for (let i = 0; i < footprint.length; i++) {
+                const p0 = footprint[i];
+                const p1 = footprint[(i + 1) % footprint.length];
+                builder.addFacadeBaysWithRecessedWindows(p0, p1, 0, h, {
+                    floorHeight: 4.2,
+                    recessDepth: entity?.facadeRevealDepth ?? 0.30
+                });
+            }
+
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(footprint, entity.solarRoofSegments, h);
+            }
+            break;
+        }
+
+        case 'residential_multifamily': {
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+            builder.addExtrudedPolygon(footprint, 0, h, { chamferBaseHeight: 0.4, chamferParapetHeight: 1.1 });
+
+            for (let i = 0; i < footprint.length; i++) {
+                const p0 = footprint[i];
+                const p1 = footprint[(i + 1) % footprint.length];
+                builder.addFacadeBaysWithRecessedWindows(p0, p1, 0, h, {
+                    floorHeight: 3.0,
+                    recessDepth: entity?.facadeRevealDepth ?? 0.22
+                });
+            }
+
+            const balconyCount = Math.max(1, Math.floor(h / 3.0) - 1);
+            for (let fl = 1; fl <= balconyCount; fl++) {
+                const by = fl * 3.0;
+                builder.addBox(0, by + 0.15, d * 0.5 + 0.8, w * 0.4, 0.3, 1.6);
+            }
+
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(footprint, entity.solarRoofSegments, h);
+            }
+            break;
+        }
+
+        case 'residential_brownstone': {
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+            const baseH = h * 0.22;
+            builder.addExtrudedPolygon(footprint, 0, baseH, { chamferBaseHeight: 0.3 });
+            builder.addExtrudedPolygon(footprint, baseH, h, { chamferParapetHeight: 0.9, chamferOffset: 0.35 });
+
+            for (let i = 0; i < footprint.length; i++) {
+                const p0 = footprint[i];
+                const p1 = footprint[(i + 1) % footprint.length];
+                builder.addFacadeBaysWithRecessedWindows(p0, p1, baseH, h, {
+                    floorHeight: 3.3,
+                    bayWidth: 2.6,
+                    recessDepth: entity?.facadeRevealDepth ?? 0.28
+                });
+            }
+
+            // Entrance stoop stairs
+            const stoopSteps = 7;
+            const stoopW = w * 0.28;
+            for (let st = 0; st < stoopSteps; st++) {
+                const sy = (st / stoopSteps) * baseH;
+                const sz = d * 0.5 + (1.0 - st / stoopSteps) * 2.2;
+                builder.addBox(-w * 0.25, sy + 0.1, sz, stoopW, 0.2, 0.35);
+            }
+
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(footprint, entity.solarRoofSegments, h);
+            }
+            break;
+        }
+
+        case 'industrial_warehouse': {
+            const footprint = entity?.vectorFootprint ?? [
+                [-w * 0.5, -d * 0.5],
+                [w * 0.5, -d * 0.5],
+                [w * 0.5, d * 0.5],
+                [-w * 0.5, d * 0.5]
+            ];
+            const eaveH = h * 0.75;
+            builder.addExtrudedPolygon(footprint, 0, eaveH, { chamferBaseHeight: 0.4 });
+
+            if (entity?.solarRoofSegments?.length) {
+                builder.addSolarRectifiedRoof(footprint, entity.solarRoofSegments, eaveH);
+            } else {
+                builder.addPediment(0, eaveH + (h - eaveH) * 0.5, 0, w, h - eaveH, d);
+            }
+
+            // Loading dock bays
+            const dockWidth = 3.6;
+            const dockHeight = 4.2;
+            const dockCount = Math.max(1, Math.floor(w / 7.0));
+            for (let dk = 0; dk < dockCount; dk++) {
+                const dxPos = -w * 0.5 + (dk + 1) * (w / (dockCount + 1));
+                builder.addBox(dxPos, dockHeight * 0.5, d * 0.5 - 0.2, dockWidth, dockHeight, 0.4);
+            }
+            break;
+        }
+
+        case 'street_corridor': {
+            const centerline = entity?.roadCorridor?.centerline ?? [
+                [-w * 0.5, 0, 0],
+                [w * 0.5, 0, 0]
+            ];
+            builder.addRoadCorridor(centerline, {
+                laneCount: entity?.roadCorridor?.laneCount ?? 2,
+                laneWidthMeters: entity?.roadCorridor?.laneWidthMeters ?? 3.5,
+                curbHeightMeters: entity?.roadCorridor?.curbHeightMeters ?? 0.15,
+                sidewalkWidthMeters: entity?.roadCorridor?.sidewalkWidthMeters ?? 2.5,
+                camberSlope: entity?.roadCorridor?.camberSlope ?? 0.02
+            });
             break;
         }
     }
@@ -1106,8 +1883,7 @@ export class UniversalArchiBridgeService {
             text.includes('venus') ||
             text.includes('roma') ||
             text.includes('peripteral') ||
-            text.includes('parthenon') ||
-            text.includes('podium')
+            text.includes('parthenon')
         ) {
             return ARCHI_TYPOLOGY_ADAPTERS.peripteral_temple;
         }
@@ -1137,6 +1913,78 @@ export class UniversalArchiBridgeService {
             return ARCHI_TYPOLOGY_ADAPTERS.aqueduct_arcade;
         }
 
+        // 9. Street & Transit Corridor (Waymo / HD vector roads)
+        if (
+            text.includes('street') ||
+            text.includes('road') ||
+            text.includes('roadway') ||
+            text.includes('street corridor') ||
+            text.includes('road corridor') ||
+            text.includes('transit corridor') ||
+            text.includes('highway') ||
+            text.includes('boulevard') ||
+            text.includes('avenue') ||
+            text.includes('waymo')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.street_corridor;
+        }
+
+        // 10. Commercial Skyscraper
+        if (
+            text.includes('skyscraper') ||
+            text.includes('high rise') ||
+            text.includes('high-rise') ||
+            text.includes('curtain wall') ||
+            text.includes('office tower') ||
+            text.includes('commercial tower')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.commercial_skyscraper;
+        }
+
+        // 11. Commercial Podium
+        if (
+            text.includes('podium') ||
+            text.includes('storefront') ||
+            text.includes('retail') ||
+            text.includes('commercial block') ||
+            text.includes('plaza level')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.commercial_podium;
+        }
+
+        // 12. Residential Brownstone
+        if (
+            text.includes('brownstone') ||
+            text.includes('townhouse') ||
+            text.includes('rowhouse') ||
+            text.includes('stoop')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.residential_brownstone;
+        }
+
+        // 13. Residential Multi-Family
+        if (
+            text.includes('apartment') ||
+            text.includes('multifamily') ||
+            text.includes('multi-family') ||
+            text.includes('residential') ||
+            text.includes('condo') ||
+            text.includes('housing')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.residential_multifamily;
+        }
+
+        // 14. Industrial Warehouse
+        if (
+            text.includes('warehouse') ||
+            text.includes('industrial') ||
+            text.includes('logistics') ||
+            text.includes('distribution') ||
+            text.includes('factory') ||
+            text.includes('shed')
+        ) {
+            return ARCHI_TYPOLOGY_ADAPTERS.industrial_warehouse;
+        }
 
         // Dimensional aspect ratio fallback heuristics
         if (dimensions) {
@@ -1269,7 +2117,8 @@ export class UniversalArchiBridgeService {
                 adapter,
                 dimensions,
                 { roughness, metalness, baseColor },
-                outputGlb
+                outputGlb,
+                entity
             );
             glbBuffer = proceduralRes.glbBuffer;
             outputVertices = proceduralRes.vertexCount;
@@ -1279,6 +2128,45 @@ export class UniversalArchiBridgeService {
         const buildTimeMs = Date.now() - startTime;
         const worldY = centroid[1] - height * 0.5; // ground contact datum
         const worldPosition: [number, number, number] = [centroid[0], worldY, centroid[2]];
+
+        // 5. Construct UniversalSpatialNode hierarchy with negative floor cavities
+        const footprint: [number, number][] = entity.vectorFootprint && entity.vectorFootprint.length >= 3
+            ? entity.vectorFootprint
+            : [
+                [-width * 0.5, -depth * 0.5],
+                [width * 0.5, -depth * 0.5],
+                [width * 0.5, depth * 0.5],
+                [-width * 0.5, depth * 0.5]
+            ];
+
+        const floorCount = entity.levels ?? Math.max(1, Math.floor(height / 3.5));
+        const floorNodes = new ProceduralArchiMeshBuilder().carveFloorplateCavities(
+            footprint,
+            0,
+            height,
+            { floorCount, wallThickness: entity.wallThickness ?? 0.25 }
+        );
+
+        const rootNode = createSpatialNode({
+            id: `spatial_node_${entity.id || 'archi'}`,
+            name: entity.name || adapter.commonName,
+            polarity: 'positive_mass',
+            localBounds: {
+                center: [0, height * 0.5, 0],
+                halfExtents: [width * 0.5, height * 0.5, depth * 0.5],
+                yawRad
+            },
+            children: floorNodes,
+            tags: [adapter.typology, adapter.tectonicClass, 'architectural_mass'],
+            metadata: {
+                typology: adapter.typology,
+                order: adapter.order,
+                levels: floorCount,
+                hasSolarPlanes: Boolean(entity.solarRoofSegments?.length),
+                hasVectorFootprint: Boolean(entity.vectorFootprint?.length),
+                hasRoadCorridor: Boolean(entity.roadCorridor)
+            }
+        });
 
         return {
             entityId: entity.id,
@@ -1291,6 +2179,7 @@ export class UniversalArchiBridgeService {
             outputGlbPath: outputGlb,
             glbBuffer,
             glbBase64: glbBuffer ? glbBuffer.toString('base64') : undefined,
+            spatialNode: rootNode,
             telemetry: {
                 buildTimeMs,
                 outputVertices,
@@ -1298,7 +2187,11 @@ export class UniversalArchiBridgeService {
                 isManifold: outputVertices > 0,
                 inversionRan,
                 detectedDatumsCount,
-                classificationConfidencePct
+                classificationConfidencePct,
+                floorCount,
+                roofPlaneCount: entity.solarRoofSegments?.length ?? 0,
+                hasSolarGrounding: Boolean(entity.solarRoofSegments?.length),
+                hasVectorGrounding: Boolean(entity.vectorFootprint?.length)
             }
         };
     }
