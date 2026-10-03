@@ -359,11 +359,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     >
                                         Dismiss
                                     </button>
-                                    <button
-                                        type="button"
-                                        className="sb-cursor-banner-open-btn"
-                                        onClick={() => setActiveTab('workspace')}
-                                    >
+                                    <button type="button" className="sb-cursor-banner-open-btn" onClick={() => setActiveTab('workspace')}>
                                         Open Customize →
                                     </button>
                                 </div>
