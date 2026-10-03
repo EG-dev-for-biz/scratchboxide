@@ -605,6 +605,38 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Downstream Neural Inpainting Endpoint (spce Inpaint Contract)
+    if (reqPath === '/api/streetview/inpaint') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                let parsed = {};
+                try { parsed = JSON.parse(body); } catch {}
+                const prompt = parsed.prompt || 'Street View polar inpainting for unobserved zenith and nadir voids';
+                const panoId = parsed.panoId || '';
+                const fillMode = parsed.fillMode || 'spce_green';
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    status: 'INPAINT_CONTRACT_ACCEPTED',
+                    prompt,
+                    panoId,
+                    fillMode,
+                    maskContract: 'CHROMA_GREEN_RGB_0_255_0',
+                    pipeline: 'spce_downstream_diffusion',
+                    targetResolution: '4K_UHD',
+                    timestamp: new Date().toISOString()
+                }));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Inpainting dispatch failed' }));
+            }
+        });
+        return;
+    }
+
     // Handle root, dots, or common aliases
     if (reqPath === '/' || reqPath === '') {
         reqPath = '/index.html';

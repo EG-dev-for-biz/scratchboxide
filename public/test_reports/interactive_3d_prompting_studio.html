@@ -6,6 +6,7 @@
   <title>Scratchbox IDE — Interactive 3D Prompting & Scene Synthesis Studio</title>
   <script src="/libs/r128/three.min.js"></script>
   <script src="/libs/r128/OrbitControls.js"></script>
+  <script src="/libs/r128/GLTFLoader.js"></script>
   <style>
     :root {
       --bg: #090d16;
@@ -588,6 +589,7 @@
       } else if (/city|metropolis|skyline|skyscraper|urban|cyberpunk/i.test(text)) {
         theme = 'city';
         title = 'Cyberpunk Metropolis & Skyline Corridor';
+        const glbUrl = '/test_output/procedural_city_skyline.glb';
         meshes = [
           { id: 'city-tower-1', name: 'Neo-Tokyo Mega Corporate Spire', type: 'box', pos: [-8, 15, -6], scale: [8, 30, 8], color: 0x1e293b, rough: 0.3, metal: 0.85, tier: 'primary' },
           { id: 'city-tower-2', name: 'Holographic Broadcast Citadel', type: 'box', pos: [7, 18, -4], scale: [10, 36, 10], color: 0x0f172a, rough: 0.25, metal: 0.9, tier: 'primary' },
@@ -596,6 +598,7 @@
           { id: 'city-pod-1', name: 'Autonomous Transit Vehicle', type: 'box', pos: [-2, 19, -5], scale: [2.5, 1.2, 1.5], color: 0xf43f5e, rough: 0.3, metal: 0.8, tier: 'tertiary' },
           { id: 'city-pod-2', name: 'Hover Cargo Freighter', type: 'box', pos: [4, 24, 2], scale: [4.5, 1.8, 2.2], color: 0xa855f7, rough: 0.2, metal: 0.85, tier: 'tertiary' }
         ];
+        return { theme, title, meshes, glbUrl };
       } else if (/car|vehicle|automobile|truck|sports\s*car|sedan|roadster|hypercar/i.test(text)) {
         theme = 'vehicle';
         title = 'High-Performance 3D Vehicle Simulation';
@@ -638,6 +641,7 @@
         // Architecture (Default & Primary PBR Synthesis)
         theme = 'architecture';
         title = 'Modern Municipal Palais & Architectural Promenade';
+        const glbUrl = '/test_output/monumental_civic_plaza.glb';
         meshes = [
           { id: 'arch-promenade', name: 'Limestone Promenade Pedestal', type: 'cylinder', pos: [0, 0.35, 0], scale: [30.0, 0.7, 30.0], color: 0xdcd6cd, rough: 0.82, metal: 0.05, tier: 'primary' },
           { id: 'arch-central-hall', name: 'Central Palais Complex', type: 'box', pos: [0, 8.0, -5.0], scale: [22.0, 14.6, 14.0], color: 0xefede8, rough: 0.65, metal: 0.12, tier: 'primary' },
@@ -648,6 +652,7 @@
           { id: 'arch-tree-east', name: 'Botanical Promenade Shade Tree', type: 'sphere', pos: [-8.0, 4.5, 9.0], scale: [3.2, 4.0, 3.2], color: 0x22c55e, rough: 0.8, metal: 0.0, tier: 'tertiary' },
           { id: 'arch-tree-west', name: 'Botanical Promenade Shade Tree', type: 'sphere', pos: [8.0, 4.5, 9.0], scale: [3.2, 4.0, 3.2], color: 0x16a34a, rough: 0.8, metal: 0.0, tier: 'tertiary' }
         ];
+        return { theme, title, meshes, glbUrl };
       }
 
       return { theme, title, meshes };
@@ -731,15 +736,10 @@
       document.getElementById('tel-triangles').textContent = `${Math.round(totalTris).toLocaleString()} Tris`;
     }
 
-    function synthesizeFromPrompt() {
-      const prompt = document.getElementById('prompt-input').value.trim();
-      if (!prompt) return;
+    let activeGltfModel = null;
 
-      const contract = synthesizeSceneContract(prompt);
-      buildThreeMeshes(contract);
-
-      // Auto-compute bounding sphere and position camera standoff
-      const bbox = new THREE.Box3().setFromObject(sceneMeshGroup);
+    function frameCameraToObject(obj) {
+      const bbox = new THREE.Box3().setFromObject(obj);
       const center = new THREE.Vector3();
       bbox.getCenter(center);
       const size = new THREE.Vector3();
@@ -749,12 +749,103 @@
       const fovRad = (camera.fov * Math.PI) / 180;
       const cameraDist = (maxDim / 2) / Math.tan(fovRad / 2) * 1.5;
 
-      camera.position.set(0, Math.max(cameraDist * 0.45, 12), cameraDist);
+      camera.position.set(center.x, Math.max(center.y + cameraDist * 0.45, 12), center.z + cameraDist);
       camera.lookAt(center.x, center.y + 2, center.z);
       controls.target.set(center.x, center.y + 2, center.z);
       controls.update();
 
       document.getElementById('tel-camera').textContent = `Auto-Framed (${cameraDist.toFixed(1)}m)`;
+    }
+
+    function applyShading(mode) {
+      if (activeGltfModel) {
+        activeGltfModel.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            if (mode === 'clay') {
+              child.material = new THREE.MeshStandardMaterial({
+                color: 0xdcd6cd,
+                roughness: 0.82,
+                metalness: 0.02
+              });
+            } else if (mode === 'wireframe') {
+              child.material = new THREE.MeshBasicMaterial({
+                color: 0x38bdf8,
+                wireframe: true
+              });
+            } else {
+              if (child.userData.origMaterial) {
+                child.material = child.userData.origMaterial;
+              }
+            }
+          }
+        });
+      }
+    }
+
+    function synthesizeFromPrompt() {
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) return;
+
+      const contract = synthesizeSceneContract(prompt);
+
+      if (contract.glbUrl && THREE.GLTFLoader) {
+        const loader = new THREE.GLTFLoader();
+        loader.load(contract.glbUrl, (gltf) => {
+          while (sceneMeshGroup.children.length > 0) {
+            const obj = sceneMeshGroup.children[0];
+            if (obj.geometry) obj.geometry.dispose();
+            sceneMeshGroup.remove(obj);
+          }
+
+          activeGltfModel = gltf.scene;
+          let totalVerts = 0;
+          let totalTris = 0;
+          const hierarchyEl = document.getElementById('mesh-hierarchy');
+          hierarchyEl.innerHTML = '';
+
+          activeGltfModel.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.userData.origMaterial = child.material;
+              const vCount = child.geometry.attributes.position ? child.geometry.attributes.position.count : 0;
+              const tCount = child.geometry.index ? child.geometry.index.count / 3 : vCount / 3;
+              totalVerts += vCount;
+              totalTris += tCount;
+
+              const row = document.createElement('div');
+              row.className = 'mesh-tree-item';
+              row.innerHTML = `
+                <span>${child.name || 'Procedural Mesh'}</span>
+                <span class="tier-tag tier-primary">${Math.round(vCount).toLocaleString()}v</span>
+              `;
+              hierarchyEl.appendChild(row);
+            }
+          });
+
+          applyShading(currentShadingMode);
+          sceneMeshGroup.add(activeGltfModel);
+
+          document.getElementById('theme-pill').textContent = `Theme: ${contract.theme.toUpperCase()}`;
+          document.getElementById('tel-theme').textContent = `${contract.theme} (C++20/Python GLB)`;
+          document.getElementById('tel-mesh-count').textContent = `High-Fidelity GLB`;
+          document.getElementById('tel-vertices').textContent = `${totalVerts.toLocaleString()} Verts`;
+          document.getElementById('tel-triangles').textContent = `${Math.round(totalTris).toLocaleString()} Tris`;
+
+          frameCameraToObject(sceneMeshGroup);
+        }, undefined, (err) => {
+          console.warn('GLB load error, fallback to primitives', err);
+          activeGltfModel = null;
+          buildThreeMeshes(contract);
+          frameCameraToObject(sceneMeshGroup);
+        });
+      } else {
+        activeGltfModel = null;
+        buildThreeMeshes(contract);
+        frameCameraToObject(sceneMeshGroup);
+      }
     }
 
     function loadPreset(key) {
@@ -770,10 +861,13 @@
       document.getElementById('btn-mode-wire').className = `hud-btn ${mode === 'wireframe' ? 'active' : ''}`;
       document.getElementById('btn-mode-clay').className = `hud-btn ${mode === 'clay' ? 'active' : ''}`;
 
-      // Refresh current meshes with new materials
-      const prompt = document.getElementById('prompt-input').value.trim();
-      const contract = synthesizeSceneContract(prompt);
-      buildThreeMeshes(contract);
+      if (activeGltfModel) {
+        applyShading(mode);
+      } else {
+        const prompt = document.getElementById('prompt-input').value.trim();
+        const contract = synthesizeSceneContract(prompt);
+        buildThreeMeshes(contract);
+      }
     }
 
     function resetCamera() {

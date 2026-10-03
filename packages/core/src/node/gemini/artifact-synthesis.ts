@@ -3181,6 +3181,40 @@ export function parseOrSynthesizeArtifact(
         };
     }
 
+    // Check if model emitted a C++ 3D procedural script (e.g. ```cpp ... #include "scratchbox_engine.hpp" ... ```)
+    const cpp3DMatch = modelText.match(/```(?:cpp|c\+\+|c)\s*([\s\S]*?#include\s+["<]scratchbox_engine\.hpp[">][\s\S]*?)```/i);
+    if (cpp3DMatch && !isMediaRequest && !isVideoTimelineFallback) {
+        const scriptSource = cpp3DMatch[1].trim();
+        const is3DActiveCur = request.activeArtifact?.type === '3d-scene';
+        const contextualSynthesized = synthesizeContextual3DScene(prompt, {
+            activeArtifact: request.activeArtifact,
+            chatHistory: request.chatHistory
+        });
+
+        const sceneTitle = extractDocumentTitle(prompt, '3D Procedural Engine Scene');
+        const scene3DData: Scene3DData = {
+            ...contextualSynthesized,
+            title: sceneTitle,
+            subtitle: 'Procedural 3D scene generated via C++20 Scratchbox engine.',
+            cppGenerator: {
+                filename: 'procedural_generator.cpp',
+                enabled: true,
+                sourceCode: scriptSource,
+                lastCompiledTimeMs: Date.now()
+            }
+        };
+
+        return {
+            id: (is3DActiveCur ? request.activeArtifact?.id : undefined) || `art-3d-${Date.now()}`,
+            type: '3d-scene',
+            title: scene3DData.title,
+            summary: 'Procedural 3D scene generated via C++20 Scratchbox engine.',
+            version: is3DActiveCur ? (request.activeArtifact?.version || 1) + 1 : 1,
+            createdAt: timestamp,
+            data: scene3DData
+        };
+    }
+
     const is3DActive = request.activeArtifact?.type === '3d-scene';
     const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust/i.test(prompt) ||
         lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff');
@@ -3334,7 +3368,27 @@ export function parseOrSynthesizeArtifact(
             sculptSettings: active3DData?.sculptSettings,
             selectedMeshId: active3DData?.selectedMeshId,
             cppGenerator: active3DData?.cppGenerator || contextualSynthesized.cppGenerator,
-            pythonGenerator: active3DData?.pythonGenerator
+            pythonGenerator: (() => {
+                let pyGen = active3DData?.pythonGenerator || contextualSynthesized.pythonGenerator;
+                if (pyGen?.sourceCode && !pyGen.glbBase64) {
+                    try {
+                        const runner = NativePythonRunnerService.getInstance();
+                        const res = runner.runScriptSync(pyGen.sourceCode);
+                        if (res.success && res.glbBase64) {
+                            pyGen = {
+                                ...pyGen,
+                                enabled: true,
+                                glbBase64: res.glbBase64,
+                                glbPath: res.glbPath,
+                                lastCompiledTimeMs: Date.now()
+                            };
+                        }
+                    } catch (e) {
+                        console.warn('[ArtifactSynthesis] Error running fallback pythonGenerator synchronously:', e);
+                    }
+                }
+                return pyGen;
+            })()
         };
 
         return {

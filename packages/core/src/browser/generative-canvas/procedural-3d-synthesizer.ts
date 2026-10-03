@@ -216,7 +216,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // 2. City / Metropolis / Cyberpunk / Architecture Skyline / Urban
-        if (/city|metropolis|skyline|skyscraper|urban|cyberpunk city|downtown|traffic|street|futuristic city|highway/i.test(text)) {
+        if (/city|metropol|skyline|skyscraper|urban|cyberpunk city|downtown|traffic|street|futuristic city|highway/i.test(text)) {
             return 'city';
         }
 
@@ -3193,7 +3193,7 @@ scene = sb.geometry.Mesh("${(title || 'CityMetropolis').replace(/[^a-zA-Z0-9]/g,
 
 # 1. Base promenade & street grid
 grid_base = sb.geometry.create_studio_pedestal(radius=50.0, height=0.5, bevel=0.06, segments=64)
-grid_base.material = sb.geometry.PbrMaterial.bitumen_asphalt()
+grid_base.material = sb.geometry.PbrMaterial.asphalt_street()
 scene.merge(grid_base)
 
 # 2. Central Financial Spire with flat parapet and deep window reveals
