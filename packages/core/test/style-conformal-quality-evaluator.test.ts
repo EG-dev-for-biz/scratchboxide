@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
 import { StyleConformalQualityEvaluator } from '../src/node/3d-engine/style-conformal-quality-evaluator';
+import { rasterizeGlbToTestScreenshot } from './helpers/test-screenshot-helper';
 
 /**
  * Helper to build a valid minimal binary GLB buffer in memory for testing.
@@ -218,6 +220,11 @@ describe('StyleConformalQualityEvaluator (Universal Multi-Style 3D Quality Contr
         expect(report.invariantChecks.consistentWinding).toBe(true);
         expect(report.boundingDimensions.x).toBeCloseTo(2.0, 1);
         expect(report.boundingDimensions.y).toBeCloseTo(1.5, 1);
+
+        // Mandatory Visual Proof: Screenshot test result
+        const shotPath = rasterizeGlbToTestScreenshot('style_conformal_sound_pyramid', glb);
+        expect(fs.existsSync(shotPath)).toBe(true);
+        expect(fs.statSync(shotPath).size).toBeGreaterThan(0);
     });
 
     it('rewards low-poly styling and does NOT penalize small vertex count', () => {
@@ -240,6 +247,11 @@ describe('StyleConformalQualityEvaluator (Universal Multi-Style 3D Quality Contr
         expect(lowPolyReport.styleAudit.conformsToMaterial).toBe(true);
         expect(lowPolyReport.densityScore).toBe(25); // Rewarded for low vertex count!
         expect(lowPolyReport.passed).toBe(true);
+
+        // Mandatory Visual Proof: Screenshot test result
+        const shotPath = rasterizeGlbToTestScreenshot('style_conformal_low_poly_tree', glb);
+        expect(fs.existsSync(shotPath)).toBe(true);
+        expect(fs.statSync(shotPath).size).toBeGreaterThan(0);
     });
 
     it('evaluates anime / cel-shaded aesthetic criteria', () => {
@@ -260,6 +272,11 @@ describe('StyleConformalQualityEvaluator (Universal Multi-Style 3D Quality Contr
         expect(celReport.styleAudit.conformsToMaterial).toBe(true);
         expect(celReport.pbrMaterialScore).toBe(25);
         expect(celReport.passed).toBe(true);
+
+        // Mandatory Visual Proof: Screenshot test result
+        const shotPath = rasterizeGlbToTestScreenshot('style_conformal_cel_shaded_prop', glb);
+        expect(fs.existsSync(shotPath)).toBe(true);
+        expect(fs.statSync(shotPath).size).toBeGreaterThan(0);
     });
 
     it('evaluates clay-miniature style with high diffuse roughness requirement', () => {
@@ -279,6 +296,11 @@ describe('StyleConformalQualityEvaluator (Universal Multi-Style 3D Quality Contr
         expect(clayReport.targetStyle).toBe('clay-miniature');
         expect(clayReport.styleAudit.conformsToMaterial).toBe(true);
         expect(clayReport.pbrMaterialScore).toBe(25);
+
+        // Mandatory Visual Proof: Screenshot test result
+        const shotPath = rasterizeGlbToTestScreenshot('style_conformal_clay_pot', glb);
+        expect(fs.existsSync(shotPath)).toBe(true);
+        expect(fs.statSync(shotPath).size).toBeGreaterThan(0);
     });
 
     it('catches and flags corrupted geometry containing NaN coordinates', () => {
@@ -297,5 +319,10 @@ describe('StyleConformalQualityEvaluator (Universal Multi-Style 3D Quality Contr
         expect(report.invariantChecks.noNaNOrInf).toBe(false);
         expect(report.passed).toBe(false);
         expect(report.diagnostics.some(d => d.includes('NaN'))).toBe(true);
+
+        // Mandatory Visual Proof: Screenshot test result (verifies safe rasterization even with NaN)
+        const shotPath = rasterizeGlbToTestScreenshot('style_conformal_corrupt_asset', glb);
+        expect(fs.existsSync(shotPath)).toBe(true);
+        expect(fs.statSync(shotPath).size).toBeGreaterThan(0);
     });
 });

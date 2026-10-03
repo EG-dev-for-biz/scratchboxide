@@ -82,9 +82,23 @@ public/**/*.mp4
 public/**/*.webm
 public/**/*.mov
 public/tiles/
-public/uploads/
+# Test execution outputs, visual verification screenshots, and test artifacts
+test-results/
+**/test-results/
+test-artifacts/
+**/test-artifacts/
+test-output/
+**/test-output/
+test/screenshots/
+tests/screenshots/
+**/screenshots/
 public/screenshots/
 docs/screenshots/
+*.test.png
+*_screenshot.png
+*screenshot*.png
+.vitest/
+
 public/flight_frames/
 public/visual_proof_locations/
 public/visual_proof_real_tile/

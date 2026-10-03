@@ -275,8 +275,13 @@ When conditioning video generation for performer avatars or generating multi-vie
 
 ## Visual Progress & Verification Directive
 
-### Rule: Always Take Screenshots to Check Progress
+### Rule: Always Take Screenshots to Check Progress & All Tests Must Screenshot Results (.gitignore Compliant)
 - **Mandatory Visual Feedback Loop**: Whenever developing, generating, modifying, or testing UI components, interactive web views, 2D canvases, or 3D scenes/viewports, always capture screenshots at key milestones, stage completions, and verification phases to check and demonstrate progress.
+- **Mandatory Test Result Screenshots**:
+  - All test suites (unit, integration, visual regression, 3D procedural geometry, canvas primitives, and UI suites) must capture and persist a visual verification screenshot of the test outcome.
+  - Assertions verifying numbers, counts, or booleans alone are necessary but insufficient; saving visual screenshots prevents invisible passes where tests assert true on blank/black viewports, degenerate coordinates, or unrendered canvas buffers.
+  - Standard screenshot output locations: `docs/screenshots/` and `test-results/screenshots/` using descriptive names (`<suite_name>_<case_name>.png`).
+  - **100% .gitignore Compliance**: All test screenshots, test result dumps, and test artifacts are strictly `.gitignore`'d (`test-results/`, `docs/screenshots/`, `public/screenshots/`, `*.test.png`, `*_screenshot.png`) so they never clutter git commit trees while remaining instantly inspectable locally.
 - **Visual Critic & Photorealistic Quality Gate**:
   - Activate the `visual-critic` skill (`.agents/skills/visual-critic/SKILL.md`) for all 3D scenes, Gaussian splats, WebGL viewports, and generative media.
   - Never declare victory or claim photorealism based on technical checklists, compiling shaders, or passing unit tests alone. The final rendered pixel buffer is the only truth.

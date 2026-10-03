@@ -8,8 +8,10 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
 import { PhotorealismExerciseRunner } from '../src/node/3d-engine/photorealism-exercise-runner';
 import { PhotorealismEvaluator, inspectGlbBuffer } from '../src/node/3d-engine/photorealism-evaluator';
+import { rasterizeGlbToTestScreenshot } from './helpers/test-screenshot-helper';
 
 describe('Photorealism 3D Object Creation Exercises (C++20 Engine)', () => {
     const runner = new PhotorealismExerciseRunner();
@@ -34,7 +36,13 @@ describe('Photorealism 3D Object Creation Exercises (C++20 Engine)', () => {
         expect(result.report.materialSummary.name).toBe('brushed_titanium');
         expect(result.report.materialSummary.hasVertexColors).toBe(true);
 
+        // Mandatory Visual Proof: Screenshot test result
+        const glbBytes = Buffer.from(result.glbBase64, 'base64');
+        const shotPath = rasterizeGlbToTestScreenshot('photorealism_aerospace_turbine', glbBytes);
+        expect(fs.existsSync(shotPath)).toBe(true);
+
         console.log(`\n✅ Exercise 1 Score: ${result.report.totalScore}/100 (${result.report.vertexCount.toLocaleString()} vertices, ${result.executionTimeMs}ms)`);
+        console.log(`   📸 Screenshot: ${shotPath}`);
         for (const diag of result.report.diagnostics) {
             console.log(`   - ${diag}`);
         }
@@ -58,7 +66,13 @@ describe('Photorealism 3D Object Creation Exercises (C++20 Engine)', () => {
         expect(result.report.isPhotorealistic).toBe(true);
         expect(result.report.materialSummary.name).toBe('volcanic_basalt');
 
+        // Mandatory Visual Proof: Screenshot test result
+        const glbBytes = Buffer.from(result.glbBase64, 'base64');
+        const shotPath = rasterizeGlbToTestScreenshot('photorealism_volcanic_geode', glbBytes);
+        expect(fs.existsSync(shotPath)).toBe(true);
+
         console.log(`\n✅ Exercise 2 Score: ${result.report.totalScore}/100 (${result.report.vertexCount.toLocaleString()} vertices, ${result.executionTimeMs}ms)`);
+        console.log(`   📸 Screenshot: ${shotPath}`);
         for (const diag of result.report.diagnostics) {
             console.log(`   - ${diag}`);
         }
@@ -82,7 +96,13 @@ describe('Photorealism 3D Object Creation Exercises (C++20 Engine)', () => {
         expect(result.report.isPhotorealistic).toBe(true);
         expect(result.report.materialSummary.name).toBe('carbon_composite');
 
+        // Mandatory Visual Proof: Screenshot test result
+        const glbBytes = Buffer.from(result.glbBase64, 'base64');
+        const shotPath = rasterizeGlbToTestScreenshot('photorealism_sky_citadel_spire', glbBytes);
+        expect(fs.existsSync(shotPath)).toBe(true);
+
         console.log(`\n✅ Exercise 3 Score: ${result.report.totalScore}/100 (${result.report.vertexCount.toLocaleString()} vertices, ${result.executionTimeMs}ms)`);
+        console.log(`   📸 Screenshot: ${shotPath}`);
         for (const diag of result.report.diagnostics) {
             console.log(`   - ${diag}`);
         }
@@ -106,11 +126,18 @@ describe('Photorealism 3D Object Creation Exercises (C++20 Engine)', () => {
         expect(result.report.isPhotorealistic).toBe(true);
         expect(result.report.materialSummary.hasVertexColors).toBe(true);
 
+        // Mandatory Visual Proof: Screenshot test result
+        const glbBytes = Buffer.from(result.glbBase64, 'base64');
+        const shotPath = rasterizeGlbToTestScreenshot('photorealism_biomechanical_rover', glbBytes);
+        expect(fs.existsSync(shotPath)).toBe(true);
+
         console.log(`\n✅ Exercise 4 Score: ${result.report.totalScore}/100 (${result.report.vertexCount.toLocaleString()} vertices, ${result.executionTimeMs}ms)`);
+        console.log(`   📸 Screenshot: ${shotPath}`);
         for (const diag of result.report.diagnostics) {
             console.log(`   - ${diag}`);
         }
     }, 45000);
+
 
     it('should correctly parse and inspect binary glTF 2.0 with COLOR_0 and PBR attributes', () => {
         // Construct a synthetic GLB with COLOR_0
