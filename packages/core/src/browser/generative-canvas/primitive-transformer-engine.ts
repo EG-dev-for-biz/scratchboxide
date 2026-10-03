@@ -25,6 +25,7 @@ import {
     MetricItem,
     NodeGraphData,
     PrimitiveType,
+    SandboxLanguage,
     Scene3DData
 } from './canvas-types';
 import { stableProjectArtifactId } from '../../common/project-artifact-graph-protocol';
