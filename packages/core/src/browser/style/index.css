@@ -560,11 +560,10 @@ body.sb-light .sb-doc-section-streaming {
     border-left: 2px solid #007aff !important;
     background: rgba(0, 122, 255, 0.04) !important;
 }
-
-
-
-
-
+/* Sidebar Profile Footer Non-interactive Token */
+.sb-profile-avatar-info {
+    cursor: default;
+}
 
 
 

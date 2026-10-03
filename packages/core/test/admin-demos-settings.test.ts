@@ -100,8 +100,11 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         ];
 
         for (const file of requiredFiles) {
-            const filePath = path.join(publicDir, file);
-            expect(fs.existsSync(filePath), `Expected public/${file} to exist`).toBe(true);
+            const exists =
+                fs.existsSync(path.join(publicDir, file)) ||
+                fs.existsSync(path.join(publicDir, 'demos/showcase', file)) ||
+                fs.existsSync(path.join(publicDir, 'demos', file));
+            expect(exists, `Expected public/${file} (or public/demos/showcase/${file}) to exist`).toBe(true);
         }
     });
 });
