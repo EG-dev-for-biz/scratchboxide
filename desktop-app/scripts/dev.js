@@ -15,6 +15,7 @@ const { spawn } = require('child_process');
 
 const token = process.env.SCRATCHBOX_LAUNCH_TOKEN || crypto.randomBytes(32).toString('hex');
 const webPort = process.env.SCRATCHBOX_WEB_PORT || '3030';
+const apiPort = process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001';
 const host = '127.0.0.1';
 
 const env = {
@@ -73,7 +74,12 @@ const shouldLaunchElectron = process.env.SCRATCHBOX_NO_ELECTRON !== 'true' &&
 
 if (shouldLaunchElectron) {
     const rendererUrl = `http://${host}:${webPort}/`;
-    waitForHttp(rendererUrl, 30000).then(() => {
+    const apiUrl = `http://${host}:${apiPort}/`;
+    console.log(`[Dev] Waiting for Vite (${rendererUrl}) and API server (${apiUrl}) before opening Electron...`);
+    Promise.all([
+        waitForHttp(rendererUrl, 90000),
+        waitForHttp(apiUrl, 90000)
+    ]).then(() => {
         console.log(`\n🖥️  Launching Electron window connecting to ${rendererUrl}...\n`);
         const electronBin = path.join(appDir, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
         electronProcess = spawn(
@@ -92,7 +98,7 @@ if (shouldLaunchElectron) {
             console.error('[Electron] Failed to start Electron:', err);
         });
     }).catch((err) => {
-        console.warn(`[Electron] Could not reach dev server within timeout (${err.message}). Electron not launched.`);
+        console.warn(`[Electron] Could not reach dev servers within timeout (${err.message}). Electron not launched.`);
     });
 }
 
