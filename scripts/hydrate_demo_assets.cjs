@@ -392,6 +392,11 @@ async function hydrateAssets() {
     }
   }
 
+  // Step C: Connect Demo Studios & Peripheral Assets
+  if (!IS_CHECK_ONLY) {
+    connectDemoStudiosAndAssets();
+  }
+
   log(`\n📊 Hydration Summary:`);
   log(`   Total Manifest Assets: ${totalAssets}`);
   log(`   Existing Intact:       ${existingCount}`);
@@ -403,6 +408,97 @@ async function hydrateAssets() {
   if (IS_CHECK_ONLY && missingCount > 0) {
     process.exit(1);
   }
+}
+
+// ==============================================================================
+// 7. Demo Studios & Standalone Asset Connector
+// ==============================================================================
+function connectDemoStudiosAndAssets() {
+  log(`\n🔗 Connecting Demo Studios and Peripheral Assets...`);
+
+  const publicDir = path.join(REPO_ROOT, 'public');
+  let linkedCount = 0;
+
+  // 1. Link HTML files from public/demos/showcase and public/demos/experiments to public/
+  const demoDirs = [
+    { dir: path.join(publicDir, 'demos', 'showcase'), relPrefix: 'demos/showcase' },
+    { dir: path.join(publicDir, 'demos', 'experiments'), relPrefix: 'demos/experiments' }
+  ];
+
+  for (const { dir, relPrefix } of demoDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      if (!file.endsWith('.html')) continue;
+      const targetPublicPath = path.join(publicDir, file);
+      const relTarget = path.join(relPrefix, file);
+
+      if (!fs.existsSync(targetPublicPath)) {
+        try {
+          fs.symlinkSync(relTarget, targetPublicPath);
+          linkedCount++;
+          log(`   🔗 Connected studio: ${file} -> ${relTarget}`);
+        } catch {
+          try {
+            fs.copyFileSync(path.join(dir, file), targetPublicPath);
+            linkedCount++;
+            log(`   📋 Copied studio: ${file} (fallback)`);
+          } catch {}
+        }
+      }
+    }
+  }
+
+  // 2. Connect performer_4dgs demos
+  const canonicalPerformerDir = path.join(REPO_ROOT, 'models', 'performer_4dgs', 'demos');
+  const publicPerformerDir = path.join(publicDir, 'models', 'performer_4dgs', 'demos');
+  if (fs.existsSync(canonicalPerformerDir)) {
+    let needsLink = false;
+    if (!fs.existsSync(publicPerformerDir)) {
+      needsLink = true;
+    } else {
+      const stat = fs.lstatSync(publicPerformerDir);
+      if (!stat.isSymbolicLink()) {
+        const entries = fs.readdirSync(publicPerformerDir);
+        if (entries.length <= 1) {
+          try {
+            fs.rmSync(publicPerformerDir, { recursive: true, force: true });
+            needsLink = true;
+          } catch {}
+        }
+      }
+    }
+    if (needsLink) {
+      try {
+        const relPath = path.relative(path.dirname(publicPerformerDir), canonicalPerformerDir);
+        fs.symlinkSync(relPath, publicPerformerDir, 'junction');
+        linkedCount++;
+        log(`   🔗 Connected 4D performer demos -> ${relPath}`);
+      } catch {}
+    }
+  }
+
+  // 3. Connect scripts/models/*.glb to public/models/
+  const scriptsModelsDir = path.join(REPO_ROOT, 'scripts', 'models');
+  const publicModelsDir = path.join(publicDir, 'models');
+  if (fs.existsSync(scriptsModelsDir) && fs.existsSync(publicModelsDir)) {
+    const modelFiles = fs.readdirSync(scriptsModelsDir);
+    for (const mFile of modelFiles) {
+      if (!mFile.endsWith('.glb')) continue;
+      const targetPath = path.join(publicModelsDir, mFile);
+      if (!fs.existsSync(targetPath)) {
+        try {
+          const relPath = path.relative(publicModelsDir, path.join(scriptsModelsDir, mFile));
+          fs.symlinkSync(relPath, targetPath);
+          linkedCount++;
+          log(`   🔗 Connected model: ${mFile} -> ${relPath}`);
+        } catch {}
+      }
+    }
+  }
+
+  log(`   ✅ Connected ${linkedCount} demo studios & assets.`);
+  return linkedCount;
 }
 
 hydrateAssets().catch(err => {

@@ -877,10 +877,32 @@ const server = http.createServer(async (req, res) => {
 
     // Static File Serving
     let filePath = path.join(PUBLIC_DIR, reqPath === '/' || reqPath === '' ? 'index.html' : reqPath);
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
         const rootPath = path.join(REPO_ROOT, reqPath);
         if (fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()) {
             filePath = rootPath;
+        } else {
+            const withHtml = filePath.endsWith('.html') ? filePath : filePath + '.html';
+            if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
+                filePath = withHtml;
+            } else {
+                const baseName = path.basename(reqPath);
+                const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
+                const candidates = [
+                    path.join(PUBLIC_DIR, 'demos/showcase', baseName),
+                    path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
+                    path.join(PUBLIC_DIR, 'demos/experiments', baseName),
+                    path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
+                    path.join(PUBLIC_DIR, 'demos', baseName),
+                    path.join(PUBLIC_DIR, 'demos', htmlName)
+                ];
+                for (const cand of candidates) {
+                    if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+                        filePath = cand;
+                        break;
+                    }
+                }
+            }
         }
     }
 

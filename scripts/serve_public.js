@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 5173;
+const PORT = parseInt(process.env.PORT || process.argv[2] || '5173', 10);
 const PUBLIC_DIR = path.resolve(__dirname, '../public');
 
 const MIME_TYPES = {
@@ -467,25 +467,27 @@ const server = http.createServer((req, res) => {
     }
 
     // Handle /demos or /demos/ root request
+    let targetPath = filePath;
     if (reqPath === '/demos' || reqPath === '/demos/') {
         targetPath = path.join(PUBLIC_DIR, 'demos/index.html');
     }
 
     // Check if direct file exists, or if appending .html matches a clean URL
     if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
-        const withHtml = filePath + '.html';
+        const withHtml = filePath.endsWith('.html') ? filePath : filePath + '.html';
         if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
             targetPath = withHtml;
         } else {
             // Check fallback demo directories (demos/showcase and demos/experiments)
             const baseName = path.basename(reqPath);
+            const htmlName = baseName.endsWith('.html') ? baseName : baseName + '.html';
             const candidates = [
                 path.join(PUBLIC_DIR, 'demos/showcase', baseName),
-                path.join(PUBLIC_DIR, 'demos/showcase', baseName + '.html'),
+                path.join(PUBLIC_DIR, 'demos/showcase', htmlName),
                 path.join(PUBLIC_DIR, 'demos/experiments', baseName),
-                path.join(PUBLIC_DIR, 'demos/experiments', baseName + '.html'),
+                path.join(PUBLIC_DIR, 'demos/experiments', htmlName),
                 path.join(PUBLIC_DIR, 'demos', baseName),
-                path.join(PUBLIC_DIR, 'demos', baseName + '.html')
+                path.join(PUBLIC_DIR, 'demos', htmlName)
             ];
             for (const cand of candidates) {
                 if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
