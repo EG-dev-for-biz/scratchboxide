@@ -824,6 +824,8 @@ export interface Scene3DData {
         lat: number;
         lng: number;
         elevation?: number;
+        elevationSource?: 'google_elevation' | 'offline_verified' | 'procedural' | string;
+        datum?: 'MSL_EGM96' | string;
         active?: boolean;
         landmarkName?: string;
         castingRationale?: string;
@@ -1167,27 +1169,15 @@ export interface InteractiveBrowserData {
 // ==========================================
 export type StudioSettingsTab =
     | 'general'
-    | 'profile'
     | 'appearance'
-    | 'plan'
-    | 'agents'
-    | 'cloud-agents'
     | 'models'
-    | 'git-prs'
-    | 'worktrees'
-    | 'browser-network'
-    | 'tab'
-    | 'code-intelligence'
-    | 'beta'
-    | 'docs'
-    | 'guide'
     | 'workspace'
     | 'skills'
     | 'mcp'
     | 'memories'
     | 'shortcuts'
-    | 'about'
-    | 'admin';
+    | 'admin'
+    | 'about';
 export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser' | 'video';
 
 export interface StudioAppearanceConfig {

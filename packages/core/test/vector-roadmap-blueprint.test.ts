@@ -25,11 +25,14 @@ describe('syncVectorRoadmapBlueprint', () => {
         expect(handle.blueprintMesh?.name).toBe('sb-vector-roadmap-blueprint');
         expect(scene.getObjectByName('sb-vector-roadmap-blueprint')).toBe(handle.blueprintMesh);
 
-        // Verify orientation & positioning (geometry rotated flat to ground plane, position.y adjusted)
+        // Verify orientation & positioning (geometry rotated flat to ground plane, position.y adjusted to local ground datum)
         const posAttr = (handle.blueprintMesh?.geometry as THREE.BufferGeometry).getAttribute('position');
         expect(posAttr.getY(0)).toBeCloseTo(0); // Y is flat across all vertices in local geometry
-        // y should be elevation (3.5) + offset (-0.1) = 3.4
-        expect(handle.blueprintMesh?.position.y).toBeCloseTo(3.4);
+        // Local ground surface in Three.js is Y = 0.0m + offset (-0.1) = -0.1m
+        expect(handle.blueprintMesh?.position.y).toBeCloseTo(-0.1);
+        // Real-world elevation (MSL) is stored in userData
+        expect(handle.blueprintMesh?.userData.elevation).toBeCloseTo(3.5);
+        expect(handle.blueprintMesh?.userData.elevationSource).toBe('google_elevation');
 
         // Verify material polygon offset & depth config
         const mat = handle.blueprintMesh?.material as THREE.MeshStandardMaterial;

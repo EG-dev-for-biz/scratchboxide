@@ -16,25 +16,14 @@ import { SettingsProvider, SettingsContextValue, SettingsNavSection } from './se
 import { useSettingsStore } from './settings/settingsReducer';
 import { useSettingsHandlers } from './settings/useSettingsHandlers';
 import { GeneralTab } from './settings/tabs/GeneralTab';
-import { ProfileTab } from './settings/tabs/ProfileTab';
 import { AppearanceTab } from './settings/tabs/AppearanceTab';
-import { PlanTab } from './settings/tabs/PlanTab';
 import { ModelsTab } from './settings/tabs/ModelsTab';
-import { AgentsTab } from './settings/tabs/AgentsTab';
-import { CloudAgentsTab } from './settings/tabs/CloudAgentsTab';
-import { GitPrsTab } from './settings/tabs/GitPrsTab';
-import { WorktreesTab } from './settings/tabs/WorktreesTab';
-import { BrowserNetworkTab } from './settings/tabs/BrowserNetworkTab';
-import { TabTab } from './settings/tabs/TabTab';
-import { CodeIntelligenceTab } from './settings/tabs/CodeIntelligenceTab';
-import { BetaTab } from './settings/tabs/BetaTab';
 import { WorkspaceTab } from './settings/tabs/WorkspaceTab';
 import { SkillsTab } from './settings/tabs/SkillsTab';
 import { McpTab } from './settings/tabs/McpTab';
 import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
 import { AboutTab } from './settings/tabs/AboutTab';
 import { MemoriesTab } from './settings/tabs/MemoriesTab';
-import { DocsTab } from './settings/tabs/DocsTab';
 import { AdminTab } from './settings/tabs/AdminTab';
 import { ShowcaseDemoItem } from './demos/preloadedDemos';
 
@@ -65,26 +54,15 @@ export interface SettingsModalProps {
 
 const ACTIVE_TAB_IDS = new Set<StudioSettingsTab>([
     'general',
-    'profile',
     'appearance',
-    'plan',
     'models',
-    'agents',
-    'cloud-agents',
-    'git-prs',
-    'worktrees',
-    'browser-network',
-    'tab',
-    'code-intelligence',
-    'beta',
     'workspace',
     'skills',
     'mcp',
     'memories',
     'shortcuts',
-    'about',
-    'docs',
-    'admin'
+    'admin',
+    'about'
 ]);
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -201,26 +179,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     // Active Scratchbox Settings Navigation Items — clean typography
     const sidebarNavSections: { id: StudioSettingsTab; label: string; isExternal?: boolean }[] = [
         { id: 'general', label: 'General' },
-        { id: 'profile', label: 'Profile' },
         { id: 'appearance', label: 'Appearance' },
-        { id: 'plan', label: 'Plan & Usage' },
         { id: 'models', label: 'Models & AI' },
-        { id: 'agents', label: 'Agents' },
-        { id: 'cloud-agents', label: 'Cloud Agents' },
-        { id: 'git-prs', label: 'Git & PRs' },
-        { id: 'worktrees', label: 'Worktrees' },
-        { id: 'browser-network', label: 'Browser & Network' },
-        { id: 'tab', label: 'Tab' },
-        { id: 'code-intelligence', label: 'Code Intelligence' },
-        { id: 'beta', label: 'Beta' },
         { id: 'workspace', label: 'Workspace Rules' },
         { id: 'skills', label: 'Skills' },
         { id: 'mcp', label: 'MCP Tools' },
         { id: 'memories', label: 'Memories' },
         { id: 'shortcuts', label: 'Shortcuts' },
         { id: 'admin', label: 'Admin & Demos' },
-        { id: 'about', label: 'About' },
-        { id: 'docs', label: 'Docs', isExternal: true }
+        { id: 'about', label: 'About' }
     ];
 
     const filteredNavSections = searchQuery.trim()
@@ -366,27 +333,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </div>
                         )}
 
-                        {(activeTab === 'general' || activeTab === 'guide') && <GeneralTab />}
-                        {activeTab === 'profile' && <ProfileTab />}
+                        {activeTab === 'general' && <GeneralTab />}
                         {activeTab === 'appearance' && <AppearanceTab />}
-                        {activeTab === 'plan' && <PlanTab />}
                         {activeTab === 'models' && <ModelsTab />}
-                        {activeTab === 'agents' && <AgentsTab />}
-                        {activeTab === 'cloud-agents' && <CloudAgentsTab />}
-                        {activeTab === 'git-prs' && <GitPrsTab />}
-                        {activeTab === 'worktrees' && <WorktreesTab />}
-                        {activeTab === 'browser-network' && <BrowserNetworkTab />}
-                        {activeTab === 'tab' && <TabTab />}
-                        {activeTab === 'code-intelligence' && <CodeIntelligenceTab />}
-                        {activeTab === 'beta' && <BetaTab />}
                         {activeTab === 'workspace' && <WorkspaceTab />}
                         {activeTab === 'skills' && <SkillsTab />}
                         {activeTab === 'mcp' && <McpTab />}
+                        {activeTab === 'memories' && <MemoriesTab />}
                         {activeTab === 'shortcuts' && <ShortcutsTab />}
                         {activeTab === 'admin' && <AdminTab />}
                         {activeTab === 'about' && <AboutTab />}
-                        {activeTab === 'memories' && <MemoriesTab />}
-                        {activeTab === 'docs' && <DocsTab />}
                     </div>
                 </div>
             </div>

@@ -17,10 +17,12 @@ export const ModelsTab: React.FC = () => {
         credentialsInput,
         credsFeedback,
         geminiStatus,
+        googleSearchGrounding,
         handleSaveCredentials,
         handleSaveMapsKey,
         handleSaveWorkspaceSettings,
         handleTestMapsKey,
+        handleToggleGoogleSearchGrounding,
         isSavingCreds,
         isSavingWorkspace,
         isTestingMapsKey,
@@ -100,6 +102,36 @@ export const ModelsTab: React.FC = () => {
                             disabled={isSavingWorkspace}
                         >
                             {isSavingWorkspace ? 'Saving...' : 'Save Config'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Live Search Grounding */}
+            <div className="sb-cursor-section-block">
+                <div className="sb-cursor-section-header">Live Knowledge &amp; Search Grounding</div>
+                <div className="sb-cursor-group-card">
+                    <div className="sb-cursor-row-item">
+                        <div className="sb-cursor-row-info">
+                            <div className="flex items-center gap-2">
+                                <IconGlobe size={14} className="text-blue-400" />
+                                <span className="sb-cursor-row-title">Google Search Grounding</span>
+                                <span className={`sb-badge-unified ${googleSearchGrounding ? 'sb-badge-emerald' : 'sb-badge-zinc'}`}>
+                                    {googleSearchGrounding ? 'Enabled' : 'Disabled'}
+                                </span>
+                            </div>
+                            <div className="sb-cursor-row-desc">
+                                Ground model reasoning with real-time Google Search citations, web verification, and live external documentation.
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={googleSearchGrounding}
+                            className={`sb-cursor-toggle ${googleSearchGrounding ? 'sb-cursor-toggle-on' : ''}`}
+                            onClick={() => handleToggleGoogleSearchGrounding(!googleSearchGrounding)}
+                        >
+                            <span className="sb-cursor-toggle-thumb" />
                         </button>
                     </div>
                 </div>

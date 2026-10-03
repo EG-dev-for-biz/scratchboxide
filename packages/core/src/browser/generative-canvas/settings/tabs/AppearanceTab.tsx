@@ -7,71 +7,94 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-/** Appearance settings tab. Extracted verbatim from SettingsModal.tsx. */
 import * as React from 'react';
+import { StudioAppearanceConfig } from '../../canvas-types';
 import { useSettingsContext } from '../SettingsContext';
 
 export const AppearanceTab: React.FC = () => {
-    const { codeBlockWordWrap, codeFontFamily, codeFontSize, colorHue, colorIntensity, followSystemHighContrast, fontSmoothing, reduceMotionSetting, reduceTransparency, selectedTheme, setCodeBlockWordWrap, setCodeFontFamily, setCodeFontSize, setColorHue, setColorIntensity, setFollowSystemHighContrast, setFontSmoothing, setReduceMotionSetting, setReduceTransparency, setSelectedTheme, setThemedDiffBackgrounds, setToolCallDensity, setUiFontFamily, setUiFontSize, themedDiffBackgrounds, toolCallDensity, uiFontFamily, uiFontSize } = useSettingsContext();
+    const { appearanceConfig, onAppearanceConfigChange } = useSettingsContext();
+
+    const updateConfig = (patch: Partial<StudioAppearanceConfig>) => {
+        if (onAppearanceConfigChange && appearanceConfig) {
+            onAppearanceConfigChange({
+                ...appearanceConfig,
+                ...patch
+            });
+        }
+    };
+
+    if (!appearanceConfig) {
+        return null;
+    }
+
     return (
-        <div className="sb-cursor-settings-content animate-fadeIn">
-            <h2 className="sb-cursor-content-title">Appearance</h2>
-
-            {/* Theme */}
-            <div className="sb-cursor-group-card">
-                <div className="sb-cursor-row-item">
-                    <div className="sb-cursor-row-info">
-                        <div className="sb-cursor-row-title">Theme</div>
-                        <div className="sb-cursor-row-desc">Choose between light, dark, or high contrast themes</div>
-                    </div>
-                    <select
-                        className="sb-cursor-select-dropdown"
-                        value={selectedTheme}
-                        onChange={e => setSelectedTheme(e.target.value as any)}
-                    >
-                        <option value="system">System</option>
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                        <option value="high-contrast">High Contrast</option>
-                    </select>
-                </div>
+        <div className="sb-cursor-settings-content animate-fadeIn space-y-4">
+            <div>
+                <h2 className="sb-cursor-content-title">Appearance &amp; Canvas Display</h2>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                    Customize the studio layout density, glass surface blur, editor typography, and tactile motion.
+                </p>
             </div>
 
-            {/* Agent Conversations */}
+            {/* Layout Density */}
             <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">Agent Conversations</div>
+                <div className="sb-cursor-section-header">Canvas Layout &amp; Surface</div>
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Tool Call Density</div>
-                            <div className="sb-cursor-row-desc">Adjust how much detail is shown for tool calls</div>
+                            <div className="sb-cursor-row-title">Canvas Density</div>
+                            <div className="sb-cursor-row-desc">Adjust the compact spacing of canvas stages, toolbars, and cards</div>
                         </div>
-                        <div className="flex items-center gap-3">
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                className="sb-cursor-slider"
-                                value={toolCallDensity}
-                                onChange={e => setToolCallDensity(Number(e.target.value))}
-                            />
-                            <span className="text-xs text-zinc-600 dark:text-zinc-400 font-medium w-14 text-right">
-                                {toolCallDensity <= 33 ? 'Compact' : toolCallDensity <= 66 ? 'Normal' : 'Detailed'}
-                            </span>
+                        <div className="flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-900/80 p-1 rounded-xl border border-zinc-200 dark:border-zinc-800/80">
+                            {(['spacious', 'standard', 'compact'] as const).map(density => (
+                                <button
+                                    key={density}
+                                    type="button"
+                                    className={`sb-segment-btn capitalize ${appearanceConfig.canvasDensity === density ? 'sb-segment-active' : ''}`}
+                                    onClick={() => updateConfig({ canvasDensity: density })}
+                                >
+                                    {density}
+                                </button>
+                            ))}
                         </div>
                     </div>
 
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Code Block Word Wrap</div>
-                            <div className="sb-cursor-row-desc">Wrap long lines in Agent conversation code blocks</div>
+                            <div className="sb-cursor-row-title">Glass Surface Blur</div>
+                            <div className="sb-cursor-row-desc">Intensity of translucent Apple Liquid Glass backdrop blur filters</div>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-900/80 p-1 rounded-xl border border-zinc-200 dark:border-zinc-800/80">
+                            {(['subtle', 'standard', 'vibrant'] as const).map(blur => (
+                                <button
+                                    key={blur}
+                                    type="button"
+                                    className={`sb-segment-btn capitalize ${appearanceConfig.glassBlur === blur ? 'sb-segment-active' : ''}`}
+                                    onClick={() => updateConfig({ glassBlur: blur })}
+                                >
+                                    {blur}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Motion & Interaction */}
+            <div className="sb-cursor-section-block">
+                <div className="sb-cursor-section-header">Motion &amp; Interaction</div>
+                <div className="sb-cursor-group-card">
+                    <div className="sb-cursor-row-item">
+                        <div className="sb-cursor-row-info">
+                            <div className="sb-cursor-row-title">Spring Animations &amp; Physics Motion</div>
+                            <div className="sb-cursor-row-desc">Fluid elastic transitions for canvas popovers, modals, and panel drawer state</div>
                         </div>
                         <button
                             type="button"
                             role="switch"
-                            aria-checked={codeBlockWordWrap}
-                            className={`sb-cursor-toggle ${codeBlockWordWrap ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setCodeBlockWordWrap(!codeBlockWordWrap)}
+                            aria-checked={appearanceConfig.enableSpringMotion}
+                            className={`sb-cursor-toggle ${appearanceConfig.enableSpringMotion ? 'sb-cursor-toggle-on' : ''}`}
+                            onClick={() => updateConfig({ enableSpringMotion: !appearanceConfig.enableSpringMotion })}
                         >
                             <span className="sb-cursor-toggle-thumb" />
                         </button>
@@ -79,15 +102,15 @@ export const AppearanceTab: React.FC = () => {
 
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Themed Diff Backgrounds</div>
-                            <div className="sb-cursor-row-desc">Use themed background colors for inline code diffs</div>
+                            <div className="sb-cursor-row-title">Haptic &amp; Tactile Feedback</div>
+                            <div className="sb-cursor-row-desc">Subtle vibration or audio pulse cues during canvas actions and node connections</div>
                         </div>
                         <button
                             type="button"
                             role="switch"
-                            aria-checked={themedDiffBackgrounds}
-                            className={`sb-cursor-toggle ${themedDiffBackgrounds ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setThemedDiffBackgrounds(!themedDiffBackgrounds)}
+                            aria-checked={appearanceConfig.hapticFeedback}
+                            className={`sb-cursor-toggle ${appearanceConfig.hapticFeedback ? 'sb-cursor-toggle-on' : ''}`}
+                            onClick={() => updateConfig({ hapticFeedback: !appearanceConfig.hapticFeedback })}
                         >
                             <span className="sb-cursor-toggle-thumb" />
                         </button>
@@ -95,210 +118,40 @@ export const AppearanceTab: React.FC = () => {
                 </div>
             </div>
 
-            {/* Colors */}
+            {/* Code & Superpowers Display */}
             <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">Colors</div>
+                <div className="sb-cursor-section-header">Code Editor &amp; Superpowers</div>
                 <div className="sb-cursor-group-card">
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Hue</div>
-                            <div className="sb-cursor-row-desc">Choose a tint color</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="range"
-                                min="0"
-                                max="360"
-                                className="sb-cursor-slider"
-                                value={colorHue}
-                                onChange={e => setColorHue(Number(e.target.value))}
-                            />
-                            <span className="w-4 h-4 rounded-full border border-zinc-700" style={{ background: `hsl(${colorHue}, 80%, 50%)` }} />
-                        </div>
-                    </div>
-
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Intensity</div>
-                            <div className="sb-cursor-row-desc">Control how strongly the tint is applied</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                className="sb-cursor-slider"
-                                value={colorIntensity}
-                                onChange={e => setColorIntensity(Number(e.target.value))}
-                            />
-                            <span className="text-xs text-zinc-400 font-mono w-8 text-right">{colorIntensity}%</span>
-                        </div>
-                    </div>
-
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Reduce Transparency</div>
-                            <div className="sb-cursor-row-desc">Replace translucent surfaces with opaque backgrounds</div>
+                            <div className="sb-cursor-row-title">Show Line Numbers in Code Views</div>
+                            <div className="sb-cursor-row-desc">Display line numbering gutter in live sandboxes, code diffs, and artifact viewers</div>
                         </div>
                         <button
                             type="button"
                             role="switch"
-                            aria-checked={reduceTransparency}
-                            className={`sb-cursor-toggle ${reduceTransparency ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setReduceTransparency(!reduceTransparency)}
+                            aria-checked={appearanceConfig.showLineNumbersInCode}
+                            className={`sb-cursor-toggle ${appearanceConfig.showLineNumbersInCode ? 'sb-cursor-toggle-on' : ''}`}
+                            onClick={() => updateConfig({ showLineNumbersInCode: !appearanceConfig.showLineNumbersInCode })}
                         >
                             <span className="sb-cursor-toggle-thumb" />
                         </button>
                     </div>
-                </div>
-            </div>
-
-            {/* Typography */}
-            <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">Typography</div>
-                <div className="sb-cursor-group-card">
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">UI Font Size</div>
-                            <div className="sb-cursor-row-desc">Font size for the Scratchbox user interface</div>
-                        </div>
-                        <div className="sb-cursor-stepper">
-                            <button type="button" className="sb-stepper-btn" onClick={() => setUiFontSize(Math.max(10, uiFontSize - 1))}>−</button>
-                            <span className="sb-stepper-val">{uiFontSize}</span>
-                            <button type="button" className="sb-stepper-btn" onClick={() => setUiFontSize(Math.min(24, uiFontSize + 1))}>+</button>
-                        </div>
-                    </div>
 
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Code Font Size</div>
-                            <div className="sb-cursor-row-desc">Font size for code editors and diffs</div>
-                        </div>
-                        <div className="sb-cursor-stepper">
-                            <button type="button" className="sb-stepper-btn" onClick={() => setCodeFontSize(Math.max(10, codeFontSize - 1))}>−</button>
-                            <span className="sb-stepper-val">{codeFontSize}</span>
-                            <button type="button" className="sb-stepper-btn" onClick={() => setCodeFontSize(Math.min(24, codeFontSize + 1))}>+</button>
-                        </div>
-                    </div>
-
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">UI Font Family</div>
-                            <div className="sb-cursor-row-desc">Override the Scratchbox user interface typeface</div>
-                        </div>
-                        <select
-                            className="sb-cursor-select-dropdown"
-                            value={uiFontFamily}
-                            onChange={e => setUiFontFamily(e.target.value)}
-                        >
-                            <option value="system">System font</option>
-                            <option value="sf-pro">SF Pro</option>
-                            <option value="inter">Inter</option>
-                            <option value="geist">Geist</option>
-                        </select>
-                    </div>
-
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Code Font Family</div>
-                            <div className="sb-cursor-row-desc">Override the font for code editors and diffs</div>
-                        </div>
-                        <select
-                            className="sb-cursor-select-dropdown"
-                            value={codeFontFamily}
-                            onChange={e => setCodeFontFamily(e.target.value)}
-                        >
-                            <option value="system-mono">System monospace</option>
-                            <option value="menlo">Menlo</option>
-                            <option value="fira-code">Fira Code</option>
-                            <option value="jetbrains-mono">JetBrains Mono</option>
-                        </select>
-                    </div>
-
-                    {/* Live Code Diff Preview Box */}
-                    <div className="p-3 bg-zinc-950/60 border-t border-zinc-800/80">
-                        <div
-                            className="sb-cursor-diff-preview"
-                            style={{
-                                fontSize: `${codeFontSize}px`,
-                                fontFamily: codeFontFamily === 'system-mono'
-                                    ? 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                    : codeFontFamily
-                            }}
-                        >
-                            <div className="sb-diff-line sb-diff-del">
-                                <span className="sb-diff-num">1</span>
-                                <span className="sb-diff-content">return a + b;</span>
-                            </div>
-                            <div className="sb-diff-line sb-diff-add">
-                                <span className="sb-diff-num">1</span>
-                                <span className="sb-diff-content">const result = a + b;</span>
-                            </div>
-                            <div className="sb-diff-line sb-diff-add">
-                                <span className="sb-diff-num">2</span>
-                                <span className="sb-diff-content">return result;</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Font Smoothing</div>
-                            <div className="sb-cursor-row-desc">Use native macOS font anti-aliasing</div>
+                            <div className="sb-cursor-row-title">Auto-Attach Recommended Superpowers</div>
+                            <div className="sb-cursor-row-desc">Automatically suggest and mount relevant domain skills based on your chat prompt intent</div>
                         </div>
                         <button
                             type="button"
                             role="switch"
-                            aria-checked={fontSmoothing}
-                            className={`sb-cursor-toggle ${fontSmoothing ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setFontSmoothing(!fontSmoothing)}
+                            aria-checked={appearanceConfig.autoAttachSuperpowers}
+                            className={`sb-cursor-toggle ${appearanceConfig.autoAttachSuperpowers ? 'sb-cursor-toggle-on' : ''}`}
+                            onClick={() => updateConfig({ autoAttachSuperpowers: !appearanceConfig.autoAttachSuperpowers })}
                         >
                             <span className="sb-cursor-toggle-thumb" />
                         </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* High Contrast */}
-            <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">High Contrast</div>
-                <div className="sb-cursor-group-card">
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Follow System High Contrast</div>
-                            <div className="sb-cursor-row-desc">Switch to a high contrast theme when your OS is in a high contrast mode</div>
-                        </div>
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={followSystemHighContrast}
-                            className={`sb-cursor-toggle ${followSystemHighContrast ? 'sb-cursor-toggle-on' : ''}`}
-                            onClick={() => setFollowSystemHighContrast(!followSystemHighContrast)}
-                        >
-                            <span className="sb-cursor-toggle-thumb" />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* Motion */}
-            <div className="sb-cursor-section-block">
-                <div className="sb-cursor-section-header">Motion</div>
-                <div className="sb-cursor-group-card">
-                    <div className="sb-cursor-row-item">
-                        <div className="sb-cursor-row-info">
-                            <div className="sb-cursor-row-title">Reduce Motion</div>
-                            <div className="sb-cursor-row-desc">Minimize interface animations. System follows your OS preference.</div>
-                        </div>
-                        <select
-                            className="sb-cursor-select-dropdown"
-                            value={reduceMotionSetting}
-                            onChange={e => setReduceMotionSetting(e.target.value)}
-                        >
-                            <option value="system">System</option>
-                            <option value="always">Always Reduce</option>
-                            <option value="never">Full Motion</option>
-                        </select>
                     </div>
                 </div>
             </div>

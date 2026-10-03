@@ -159,7 +159,7 @@ async function handleSlashCommands(d: SendMessageDeps, text: string): Promise<bo
     if (lowerText === '/settings' || lowerText.startsWith('/settings ')) {
         setInputValue('');
         const tabRaw = lowerText.replace(/^\/settings\s*/, '').trim();
-        const validTab = ['general', 'models', 'beta', 'git-prs', 'about', 'appearance', 'skills', 'mcp', 'memories', 'shortcuts'].includes(tabRaw) ? (tabRaw as StudioSettingsTab) : 'general';
+        const validTab = ['general', 'appearance', 'models', 'workspace', 'skills', 'mcp', 'memories', 'shortcuts', 'admin', 'about'].includes(tabRaw) ? (tabRaw as StudioSettingsTab) : 'general';
         if (openSettingsToTab) {
             openSettingsToTab(validTab);
         } else {

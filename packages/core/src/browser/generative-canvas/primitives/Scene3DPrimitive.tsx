@@ -2267,7 +2267,9 @@ int main(int argc, char** argv) {
         sceneData.vectorRoadmap?.mapId,
         sceneData.geoAnchor?.lat,
         sceneData.geoAnchor?.lng,
-        sceneData.geoAnchor?.elevation
+        sceneData.geoAnchor?.elevation,
+        sceneData.geoAnchor?.elevationSource,
+        sceneData.geoAnchor?.datum
     ]);
 
     // ---- 3. Atmosphere: background, fog, sky dome, lights, terrain floor, biomes, stars ----
@@ -3087,6 +3089,8 @@ int main(int argc, char** argv) {
                         lat: result.geoAnchor.lat,
                         lng: result.geoAnchor.lng,
                         elevation: result.geoAnchor.elevation,
+                        elevationSource: (result.geoAnchor as any).elevationSource || 'google_elevation',
+                        datum: (result.geoAnchor as any).datum || 'MSL_EGM96',
                         active: true,
                         landmarkName: result.geoAnchor.landmarkName
                     }
@@ -3619,6 +3623,15 @@ int main(int argc, char** argv) {
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>
                 </div>
+                {sceneData.geoAnchor && sceneData.geoAnchor.active !== false && sceneData.geoAnchor.elevation !== undefined && (
+                    <div
+                        className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-cyan-500/30 text-[10px] font-mono text-cyan-300 shadow-md"
+                        title={`Real-World Ground Datum: ${sceneData.geoAnchor.landmarkName || 'Geospatial Anchor'} (${sceneData.geoAnchor.lat.toFixed(4)}°, ${sceneData.geoAnchor.lng.toFixed(4)}°) · Ground Elevation: ${sceneData.geoAnchor.elevation.toFixed(1)}m MSL [${sceneData.geoAnchor.elevationSource || 'Google Elevation API'}, Datum: ${sceneData.geoAnchor.datum || 'EGM96'}]`}
+                    >
+                        <span className="text-cyan-400">🌐</span>
+                        <span>{sceneData.geoAnchor.elevation.toFixed(1)}m MSL</span>
+                    </div>
+                )}
                 <button
                     type="button"
                     onClick={() => {

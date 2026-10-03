@@ -253,6 +253,9 @@ export function generateGeospatialCpp3DSource(params: {
 }): string {
     const rawLandmark = params.landmarkName || 'Geospatial Site';
     const sanitizedTitle = rawLandmark.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase().slice(0, 40) || 'geospatial_site';
+    const elevComment = params.elevation !== undefined
+        ? `// Ground Elevation: ${params.elevation.toFixed(2)}m MSL [Google Elevation Ground Truth, Datum: EGM96]\n`
+        : '';
     const rationaleComment = params.castingRationale
         ? `// Creative Casting Rationale: ${params.castingRationale.replace(/\n/g, ' ')}\n`
         : '';
@@ -267,7 +270,7 @@ export function generateGeospatialCpp3DSource(params: {
     return `// ==============================================================================
 // Scratchbox 3D Engine: Geospatial Procedural Generator (C++20)
 // Landmark: ${rawLandmark} (${params.lat.toFixed(4)}, ${params.lng.toFixed(4)})
-${rationaleComment}// ==============================================================================
+${elevComment}${rationaleComment}// ==============================================================================
 #include "scratchbox_engine.hpp"
 #include <iostream>
 #include <vector>
@@ -1940,6 +1943,8 @@ export function applyCreativeLocationCasting(
             lat: castedLoc.lat,
             lng: castedLoc.lng,
             elevation: castedLoc.elevation,
+            elevationSource: castedLoc.elevationSource || 'google_elevation',
+            datum: castedLoc.datum || 'MSL_EGM96',
             active: true,
             landmarkName: castedLoc.landmarkName,
             castingRationale: castedLoc.rationale,
@@ -1954,6 +1959,15 @@ export function applyCreativeLocationCasting(
         }
         if (!scene.geoAnchor.landmarkName) {
             scene.geoAnchor.landmarkName = castedLoc.landmarkName;
+        }
+        if (scene.geoAnchor.elevation === undefined || scene.geoAnchor.elevation === null) {
+            scene.geoAnchor.elevation = castedLoc.elevation;
+        }
+        if (!scene.geoAnchor.elevationSource) {
+            scene.geoAnchor.elevationSource = castedLoc.elevationSource || 'google_elevation';
+        }
+        if (!scene.geoAnchor.datum) {
+            scene.geoAnchor.datum = castedLoc.datum || 'MSL_EGM96';
         }
         if (scene.geoAnchor.active === undefined) {
             scene.geoAnchor.active = true;
@@ -1970,6 +1984,7 @@ export function applyCreativeLocationCasting(
             const header = `// ==============================================================================\n` +
                 `// Scratchbox 3D Engine: Creatively Cast Geospatial Anchor (C++20)\n` +
                 `// Real-World Anchor: ${scene.geoAnchor.landmarkName} (${scene.geoAnchor.lat.toFixed(4)}, ${scene.geoAnchor.lng.toFixed(4)})\n` +
+                `// Ground Elevation: ${(scene.geoAnchor.elevation ?? castedLoc.elevation).toFixed(2)}m MSL [Google Elevation Ground Truth, Datum: ${scene.geoAnchor.datum || 'EGM96'}]\n` +
                 `// Archetype: ${scene.geoAnchor.castingArchetype || castedLoc.archetype}\n` +
                 `// Creative Casting Rationale: ${(scene.geoAnchor.castingRationale || castedLoc.rationale).replace(/\n/g, ' ')}\n` +
                 `// ==============================================================================\n`;

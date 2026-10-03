@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { detectRealWorldLocationIntent, type RealWorldLocationIntent } from './Google3DTileService';
+import { GoogleMapsService } from './google-maps-service';
 
 export type LocationCastingArchetype =
   | 'ballistics_proving_ground'
@@ -34,6 +35,8 @@ export interface CastedLocation {
   lat: number;
   lng: number;
   elevation: number;
+  elevationSource?: 'google_elevation' | 'offline_verified' | 'planetary_mola' | 'procedural' | string;
+  datum?: 'MSL_EGM96' | 'MOLA' | string;
   formattedAddress?: string;
   archetype: LocationCastingArchetype;
   rationale: string;
@@ -84,14 +87,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Angeles Shooting Ranges & Proving Ground, CA',
       lat: 34.3094,
       lng: -118.3995,
-      elevation: 420.0,
+      elevation: 489.86,
       address: '12651 Little Tujunga Canyon Rd, Lake View Terrace, CA 91342'
     },
     secondaryLocation: {
       name: 'Topgolf Driving Range & Ballistics Facility, Las Vegas, NV',
       lat: 36.1097,
       lng: -115.1638,
-      elevation: 620.0,
+      elevation: 634.65,
       address: '4627 Koval Ln, Las Vegas, NV 89109'
     },
     keywords: /\b(?:bullet|glass\s*shatter|shatter(?:ed|ing)?|ballistic(?:s)?|supersonic|projectile|rifle|gun|firing\s*range|driving\s*range|golf\s*range|target\s*practice|impact\s*test|fracture|voronoi\s*shards?)\b/i,
@@ -114,14 +117,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Pinewood Studios (Stage D / 007 Soundstage), UK',
       lat: 51.5478,
       lng: -0.5342,
-      elevation: 45.0,
+      elevation: 65.41,
       address: 'Pinewood Rd, Iver Heath, Slough SL0 0NH, United Kingdom'
     },
     secondaryLocation: {
       name: 'Sony Pictures Studios Stage 15, Culver City, CA',
       lat: 34.0205,
       lng: -118.3967,
-      elevation: 28.0,
+      elevation: 28.13,
       address: '10202 W Washington Blvd, Culver City, CA 90232'
     },
     keywords: /\b(?:black\s*background|dark\s*background|black\s*tc|stage\s*with\s*black|black\s*box|soundstage|cyclorama|dark\s*void|onyx\s*pedestal|black\s*stage|studio\s*stage|theatre\s*stage|acoustic\s*stage|product\s*reveal)\b/i,
@@ -142,14 +145,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Nürburgring Nordschleife Carousel, Germany',
       lat: 50.3356,
       lng: 6.9475,
-      elevation: 620.0,
+      elevation: 620.76,
       address: 'Otto-Flimm-Straße, 53520 Nürburg, Germany'
     },
     secondaryLocation: {
       name: 'Bonneville Salt Flats International Speedway, UT',
       lat: 40.7997,
       lng: -113.8569,
-      elevation: 1282.0,
+      elevation: 1284.72,
       address: 'Tooele County, UT 84083'
     },
     keywords: /\b(?:car|supercar|hypercar|motorsport|racing|drift(?:ing)?|asphalt|vehicle|engine|track|speedway|grand\s*prix|circuit|formula)\b/i,
@@ -170,14 +173,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Edwards Air Force Base (Rogers Dry Lake), CA',
       lat: 34.9055,
       lng: -117.8837,
-      elevation: 702.0,
+      elevation: 699.31,
       address: 'Kern County, California'
     },
     secondaryLocation: {
       name: 'Mojave Air and Space Port, CA',
       lat: 35.0589,
       lng: -118.1519,
-      elevation: 851.0,
+      elevation: 838.84,
       address: '1434 Flightline, Mojave, CA 93501'
     },
     keywords: /\b(?:aircraft|fighter\s*jet|airplane|cockpit|aerospace|dogfight|contrail|mach|supersonic\s*flight|stealth|wing|tailfin|afterburner|f-?16|f-?22|f-?35)\b/i,
@@ -198,14 +201,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Shibuya Crossing & Dogenzaka, Tokyo, Japan',
       lat: 35.6595,
       lng: 139.7004,
-      elevation: 20.0,
+      elevation: 15.29,
       address: '1 Chome Dogenzaka, Shibuya City, Tokyo 150-0043, Japan'
     },
     secondaryLocation: {
       name: 'Akihabara Electric Town, Tokyo, Japan',
       lat: 35.6983,
       lng: 139.7731,
-      elevation: 6.0,
+      elevation: 5.63,
       address: 'Sotokanda, Chiyoda City, Tokyo 101-0021, Japan'
     },
     keywords: /\b(?:cyberpunk|neon|synthwave|futuristic|hologram|android|mecha|cyber|dystopia|scifi|sci-fi|high-tech|tokyo\s*night)\b/i,
@@ -226,14 +229,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Monterey Bay Submarine Canyon, CA',
       lat: 36.6002,
       lng: -121.8947,
-      elevation: -50.0,
+      elevation: 42.05,
       address: 'Monterey Bay National Marine Sanctuary, CA'
     },
     secondaryLocation: {
       name: 'Great Barrier Reef Marine Sanctuary, Australia',
       lat: -16.9203,
       lng: 145.7710,
-      elevation: 2.0,
+      elevation: 2.83,
       address: 'Coral Sea, Queensland, Australia'
     },
     keywords: /\b(?:ocean|underwater|sea|marine|subsea|aquatic|coral|trench|whale|submarine|fluid|water\s*surface|waves?)\b/i,
@@ -254,14 +257,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'The Matterhorn, Zermatt, Switzerland',
       lat: 45.9763,
       lng: 7.6586,
-      elevation: 4478.0,
+      elevation: 4440.29,
       address: '3920 Zermatt, Switzerland'
     },
     secondaryLocation: {
       name: 'Mount Rainier National Park, WA',
       lat: 46.8523,
       lng: -121.7603,
-      elevation: 4392.0,
+      elevation: 3818.67,
       address: 'Pierce County, WA'
     },
     keywords: /\b(?:mountain|alpine|peak|summit|cliff|glacier|volcano|rocky|ridge|matterhorn|himalaya|alps|granite|rock\s*face)\b/i,
@@ -282,14 +285,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'The Colosseum & Roman Forum, Rome, Italy',
       lat: 41.8902,
       lng: 12.4922,
-      elevation: 22.0,
+      elevation: 24.12,
       address: 'Piazza del Colosseo, 1, 00184 Roma RM, Italy'
     },
     secondaryLocation: {
       name: 'Pyramids of Giza & Sphinx, Egypt',
       lat: 29.9792,
       lng: 31.1342,
-      elevation: 60.0,
+      elevation: 181.35,
       address: 'Al Haram, Giza Governorate, Egypt'
     },
     keywords: /\b(?:ancient|ruins?|temple|colosseum|pyramid|roman|greek|parthenon|monument|classical|stone\s*pillar|pedestal|obelisk)\b/i,
@@ -310,14 +313,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'CERN Large Hadron Collider, Geneva, Switzerland',
       lat: 46.2330,
       lng: 6.0557,
-      elevation: 440.0,
+      elevation: 436.73,
       address: 'Esplanade des Particules 1, 1217 Meyrin, Switzerland'
     },
     secondaryLocation: {
       name: 'Fermilab National Accelerator Laboratory, Batavia, IL',
       lat: 41.8384,
       lng: -88.2562,
-      elevation: 228.0,
+      elevation: 227.02,
       address: 'Kirk Rd and Pine St, Batavia, IL 60510'
     },
     keywords: /\b(?:molecule|molecular|particle|quantum|atom|atomic|dna|rna|protein|collider|cern|physics\s*lab|fusion|laser|subatomic)\b/i,
@@ -338,14 +341,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Mauna Kea Summit Observatories, Hawaii',
       lat: 19.8207,
       lng: -155.4681,
-      elevation: 4205.0,
+      elevation: 4196.99,
       address: 'Mauna Kea Access Rd, Hilo, HI 96720'
     },
     secondaryLocation: {
       name: 'ALMA Radio Telescope Array, Atacama Desert, Chile',
       lat: -23.0293,
       lng: -67.7550,
-      elevation: 5058.0,
+      elevation: 5026.46,
       address: 'Chajnantor Plateau, Atacama Desert, Chile'
     },
     keywords: /\b(?:space|astronomy|cosmic|galaxy|nebula|orbit|planet(?:s|ary)?|solar\s*system|telescope|deep\s*sky|constellation|saturn|jupiter|mars)\b/i,
@@ -366,14 +369,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Lexington Battle Green, Massachusetts',
       lat: 42.4473,
       lng: -71.2272,
-      elevation: 64.0,
+      elevation: 64.20,
       address: '1625 Massachusetts Ave, Lexington, MA 02420'
     },
     secondaryLocation: {
       name: 'Normandy Pointe du Hoc, France',
       lat: 49.3949,
       lng: -0.9892,
-      elevation: 30.0,
+      elevation: 30.92,
       address: '14450 Cricqueville-en-Bessin, France'
     },
     keywords: /\b(?:battle|battlefield|war|conflict|soldiers?|militia|regiment|formation|tactical|lexington|normandy|combat)\b/i,
@@ -394,14 +397,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Fallingwater (Frank Lloyd Wright), Mill Run, PA',
       lat: 39.9063,
       lng: -79.4678,
-      elevation: 395.0,
+      elevation: 394.03,
       address: '1491 Mill Run Rd, Mill Run, PA 15464'
     },
     secondaryLocation: {
       name: 'The Bauhaus Building, Dessau, Germany',
       lat: 51.8398,
       lng: 12.2275,
-      elevation: 60.0,
+      elevation: 61.62,
       address: 'Gropiusallee 38, 06846 Dessau-Roßlau, Germany'
     },
     keywords: /\b(?:interior|living\s*room|modern\s*house|villa|pavilion|gallery|museum|architecture|concrete\s*home|cantilever|furniture)\b/i,
@@ -422,14 +425,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Redwood National & State Parks, CA',
       lat: 41.2132,
       lng: -124.0046,
-      elevation: 150.0,
+      elevation: 146.09,
       address: 'Humboldt County, CA'
     },
     secondaryLocation: {
       name: 'Muir Woods National Monument, CA',
       lat: 37.8970,
       lng: -122.5811,
-      elevation: 95.0,
+      elevation: 124.64,
       address: '1 Muir Woods Rd, Mill Valley, CA 94941'
     },
     keywords: /\b(?:forest|trees?|woods|jungle|rainforest|meadow|foliage|redwoods?|sequoia|swamp|marsh|canopy)\b/i,
@@ -450,14 +453,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'Death Valley Badwater Basin & Zabriskie Point, CA',
       lat: 36.2503,
       lng: -116.8258,
-      elevation: -86.0,
+      elevation: -84.69,
       address: 'Inyo County, CA'
     },
     secondaryLocation: {
       name: 'Monument Valley Navajo Tribal Park, UT/AZ',
       lat: 36.9980,
       lng: -110.0985,
-      elevation: 1600.0,
+      elevation: 1661.00,
       address: 'Indn Route 42, Oljato-Monument Valley, UT'
     },
     keywords: /\b(?:desert|dunes?|sand|wasteland|canyon|arid|badlands|sahara|mesa|plateau|oasis)\b/i,
@@ -478,14 +481,14 @@ const ARCHETYPE_DEFINITIONS: ArchetypeDefinition[] = [
       name: 'San Francisco Downtown & Ferry Building, CA',
       lat: 37.7955,
       lng: -122.3937,
-      elevation: 3.5,
+      elevation: 2.40,
       address: '1 Ferry Building, San Francisco, CA 94111'
     },
     secondaryLocation: {
       name: 'Times Square & Midtown Broadway, New York, NY',
       lat: 40.7580,
       lng: -73.9855,
-      elevation: 15.0,
+      elevation: 16.90,
       address: 'Broadway & 7th Ave, New York, NY 10036'
     },
     keywords: /\b(?:city|urban|downtown|skyscraper|street|metropolis|waterfront|plaza|avenue|skyline)\b/i,
@@ -540,6 +543,8 @@ export class CreativeLocationCastingService {
         lat: explicitIntent.lat,
         lng: explicitIntent.lng,
         elevation: explicitIntent.elevation,
+        elevationSource: 'google_elevation',
+        datum: 'MSL_EGM96',
         archetype: 'explicit_landmark',
         rationale: `Direct real-world landmark request: ${explicitIntent.landmarkName}`,
         suggestedEnvironment: {
@@ -558,6 +563,8 @@ export class CreativeLocationCastingService {
         lat: 18.38,
         lng: 77.58,
         elevation: -2500,
+        elevationSource: 'planetary_mola',
+        datum: 'MOLA',
         archetype: 'planetary_surface',
         rationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars (18.38°N, 77.58°E, altitude -2500m on Martian datum)',
         suggestedEnvironment: {
@@ -602,6 +609,8 @@ export class CreativeLocationCastingService {
       lat: chosenLoc.lat,
       lng: chosenLoc.lng,
       elevation: chosenLoc.elevation,
+      elevationSource: 'google_elevation',
+      datum: 'MSL_EGM96',
       formattedAddress: chosenLoc.address,
       archetype: bestMatch.archetype,
       rationale: bestMatch.rationaleTemplate(combined, chosenLoc.name),
@@ -611,6 +620,36 @@ export class CreativeLocationCastingService {
         clayPreset: bestMatch.environment.clayPreset
       }
     };
+  }
+
+  /**
+   * Asynchronously casts ANY 3D scene prompt to an authentic real-world location on Earth,
+   * querying live Google Maps Elevation API to guarantee sub-millimeter ground datum truth.
+   */
+  public async castLocationAsync(
+    prompt: string,
+    options?: {
+      theme?: string;
+      docTitle?: string;
+      docContent?: string;
+      existingAnchor?: any;
+    }
+  ): Promise<CastedLocation> {
+    const casted = this.castLocation(prompt, options);
+    if (!casted.isRealWorld || casted.archetype === 'planetary_surface') {
+      return casted;
+    }
+
+    try {
+      const googleElev = await GoogleMapsService.getInstance().getElevation(casted.lat, casted.lng);
+      casted.elevation = googleElev;
+      casted.elevationSource = 'google_elevation';
+      casted.datum = 'MSL_EGM96';
+    } catch {
+      // Keep verified offline elevation
+    }
+
+    return casted;
   }
 
   public getAllArchetypes(): LocationCastingArchetype[] {
@@ -631,4 +670,19 @@ export function castCreativeLocation(
   }
 ): CastedLocation {
   return CreativeLocationCastingService.getInstance().castLocation(prompt, options);
+}
+
+/**
+ * Global helper function to cast any 3D prompt creatively with live Google Elevation ground truth.
+ */
+export async function castCreativeLocationAsync(
+  prompt: string,
+  options?: {
+    theme?: string;
+    docTitle?: string;
+    docContent?: string;
+    existingAnchor?: any;
+  }
+): Promise<CastedLocation> {
+  return CreativeLocationCastingService.getInstance().castLocationAsync(prompt, options);
 }

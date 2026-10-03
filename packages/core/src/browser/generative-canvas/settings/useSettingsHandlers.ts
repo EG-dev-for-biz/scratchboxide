@@ -126,7 +126,7 @@ export function useSettingsHandlers(deps: UseSettingsHandlersDeps) {
 
     React.useEffect(() => {
         if (isOpen) {
-            setActiveTab(initialTab === 'guide' || !initialTab ? 'general' : initialTab);
+            setActiveTab(initialTab || 'general');
             // Load workspace rules & config
             WorkspaceConfigClient.getInstance().fetchWorkspaceConfig().then(cfg => {
                 if (cfg.rules) setWorkspaceRules(cfg.rules);

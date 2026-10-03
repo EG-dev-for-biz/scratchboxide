@@ -10,11 +10,19 @@
 import * as THREE from 'three';
 import type { VectorRoadmapConfig } from '../../canvas-types';
 import { GoogleMapsService } from '../../services/google-maps-service';
+import { LocalTangentPlane } from '../../../../common/coordinate/LocalTangentPlane';
 import { removeAndDispose, type VectorRoadmapHandle } from './types';
 
 export interface VectorRoadmapBlueprintInput {
     config?: VectorRoadmapConfig;
-    geoAnchor?: { lat: number; lng: number; elevation?: number; active?: boolean } | null;
+    geoAnchor?: {
+        lat: number;
+        lng: number;
+        elevation?: number;
+        elevationSource?: string;
+        datum?: string;
+        active?: boolean;
+    } | null;
 }
 
 export function syncVectorRoadmapBlueprint(
@@ -47,6 +55,9 @@ export function syncVectorRoadmapBlueprint(
     const size = config?.groundBlueprintSize ?? 500;
     const opacity = config?.groundBlueprintOpacity ?? 0.85;
 
+    // Ground position in local Three.js metric space is strictly Y = 0.0m (LocalTangentPlane.GROUND_SURFACE_LOCAL_Y)
+    const localGroundY = LocalTangentPlane.GROUND_SURFACE_LOCAL_Y + elevationOffset;
+
     // Check if we can reuse the existing mesh and simply adjust opacity / position
     const existingMesh = currentHandle?.blueprintMesh;
     const lastUserData = existingMesh?.userData as {
@@ -69,7 +80,7 @@ export function syncVectorRoadmapBlueprint(
             mat.opacity = opacity;
             mat.transparent = opacity < 1.0;
         }
-        existingMesh.position.set(0, elevation + elevationOffset, 0);
+        existingMesh.position.set(0, localGroundY, 0);
         return currentHandle!;
     }
 
@@ -108,11 +119,14 @@ export function syncVectorRoadmapBlueprint(
 
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = 'sb-vector-roadmap-blueprint';
-    mesh.position.set(0, elevation + elevationOffset, 0);
+    mesh.position.set(0, localGroundY, 0);
     mesh.receiveShadow = true;
     mesh.userData = {
         lat,
         lng,
+        elevation,
+        elevationSource: geoAnchor?.elevationSource || 'google_elevation',
+        datum: geoAnchor?.datum || 'MSL_EGM96',
         size,
         mapId: config?.mapId
     };

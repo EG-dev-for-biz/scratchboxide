@@ -17,6 +17,8 @@ export interface VectorRoadmapHUDProps {
         lat: number;
         lng: number;
         elevation?: number;
+        elevationSource?: string;
+        datum?: string;
         landmarkName?: string;
         active?: boolean;
     } | null;
@@ -56,6 +58,7 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
 
     const lat = geoAnchor?.lat ?? 37.7955;
     const lng = geoAnchor?.lng ?? -122.3937;
+    const elevation = geoAnchor?.elevation;
 
     // Generate static preview image for the minimap
     const previewUrl = useMemo(() => {
@@ -172,9 +175,14 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
                     </button>
                 </div>
 
-                {/* Coordinate Badge */}
-                <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/75 backdrop-blur-md border border-white/10 text-[9px] font-mono text-zinc-300">
-                    {lat.toFixed(4)}°, {lng.toFixed(4)}°
+                {/* Coordinate & Ground Elevation Badge */}
+                <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-black/75 backdrop-blur-md border border-white/10 text-[9px] font-mono text-zinc-300 flex items-center gap-1.5">
+                    <span>{lat.toFixed(4)}°, {lng.toFixed(4)}°</span>
+                    {elevation !== undefined && (
+                        <span className="text-cyan-400 font-semibold border-l border-white/20 pl-1.5" title="Authoritative Google Ground Surface Elevation (MSL EGM96)">
+                            {elevation.toFixed(1)}m MSL
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -214,7 +222,9 @@ export const VectorRoadmapHUD: React.FC<VectorRoadmapHUDProps> = ({
                         />
                         <span>Ground Blueprint Mesh</span>
                     </label>
-                    <span className="text-[10px] text-zinc-400 font-mono">y = {elevationOffset.toFixed(2)}m</span>
+                    <span className="text-[10px] text-zinc-400 font-mono">
+                        {elevation !== undefined ? `${elevation.toFixed(1)}m MSL (y = ${elevationOffset.toFixed(2)}m)` : `y = ${elevationOffset.toFixed(2)}m`}
+                    </span>
                 </div>
 
                 {groundEnabled && (
