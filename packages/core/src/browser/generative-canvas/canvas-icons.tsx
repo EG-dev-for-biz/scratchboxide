@@ -798,7 +798,7 @@ export const getPrimitiveSvgIcon = (type: string, size = 15, strokeWidth = 1.8):
 
 export const IconScratchbox: React.FC<IconProps> = ({ size = 16, className = '' }) => (
     <img
-        src="/icons/ScratchboxIDE.png"
+        src="/icons/ScratchboxIDE-icon.svg"
         width={size}
         height={size}
         alt="Scratchbox"

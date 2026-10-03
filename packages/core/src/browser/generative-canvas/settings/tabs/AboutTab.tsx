@@ -20,7 +20,7 @@ export const AboutTab: React.FC = () => {
             </p>
             <div className="sb-cursor-group-card p-6 space-y-4 text-center">
                 <div style={{ width: '64px', height: '64px', borderRadius: '18px', background: 'linear-gradient(135deg, #27272a 0%, #09090b 100%)', border: '1px solid rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto', padding: '10px', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.35)', backdropFilter: 'blur(12px)' }}>
-                    <img src="/icons/ScratchboxIDE.png" alt="Scratchbox IDE Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'drop-shadow(0 2px 8px rgba(255,255,255,0.2))' }} />
+                    <img src="/icons/ScratchboxIDE-icon.svg" alt="Scratchbox IDE Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', filter: 'drop-shadow(0 2px 8px rgba(255,255,255,0.2))' }} />
                 </div>
                 <div>
                     <h3 className="text-base font-bold text-zinc-900 dark:text-white">Scratchbox IDE</h3>
