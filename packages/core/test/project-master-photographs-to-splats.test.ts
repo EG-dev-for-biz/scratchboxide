@@ -13,8 +13,10 @@ describe('Project Master Photographs to Gaussian Splats', () => {
     it('unprojects master beautified photographs into 3D Gaussian Splats and fuses tileset', async () => {
         const rootDir = path.resolve(__dirname, '../../../');
         const glbPath = path.join(rootDir, 'public/models/colosseum_grounded.glb');
-        const outDir = path.join(rootDir, 'public/tilesets/colosseum');
+        const sourceStationsDir = path.join(rootDir, 'public/tilesets/colosseum/stations');
+        const outDir = path.join(rootDir, 'build/test_colosseum_splats');
         const stationsDir = path.join(outDir, 'stations');
+        await fs.ensureDir(stationsDir);
         const baker = path.join(rootDir, 'build/station_to_splats');
 
         const anchor = {
@@ -44,7 +46,7 @@ describe('Project Master Photographs to Gaussian Splats', () => {
 
         for (const st of stations) {
             const sidStr = String(st.id).padStart(3, '0');
-            const beautifiedPng = path.join(stationsDir, `station_${sidStr}_beautified.png`);
+            const beautifiedPng = path.join(sourceStationsDir, `station_${sidStr}_beautified.png`);
             const splatPath = path.join(stationsDir, `station_${sidStr}.splat`);
 
             if (!fs.existsSync(beautifiedPng)) {
@@ -63,9 +65,24 @@ describe('Project Master Photographs to Gaussian Splats', () => {
 
             const depthPath = path.join(stationsDir, `temp_station_${sidStr}.depth.f32`);
             const rgbPath = path.join(stationsDir, `temp_station_${sidStr}.rgb`);
-            const posePath = path.join(stationsDir, `station_${sidStr}.pose.json`);
+            const posePath = path.join(stationsDir, `temp_station_${sidStr}.pose.json`);
 
             await fs.writeFile(depthPath, depthBuffer);
+
+            // Write matching 960x540 camera intrinsics to temporary pose file
+            const { right, up, forward } = cameraBasis(st.forwardVector, st.upVector || [0, 1, 0]);
+            await fs.writeJson(posePath, {
+                fx: blockout.intrinsics.fx,
+                fy: blockout.intrinsics.fy,
+                cx: blockout.intrinsics.cx,
+                cy: blockout.intrinsics.cy,
+                eye: st.positionLocalENU,
+                right,
+                up,
+                forward,
+                cameraAltitude: st.positionLocalENU[1],
+                depthKind: 'camera-z'
+            });
 
             // 2. Decode beautified image to 960x540 RGB raw using ffmpeg
             const decodeCmd = `ffmpeg -y -v error -i "${beautifiedPng}" -vf "scale=960:540" -f rawvideo -pix_fmt rgb24 "${rgbPath}"`;
@@ -112,6 +129,7 @@ describe('Project Master Photographs to Gaussian Splats', () => {
             // Clean up temporary buffers
             await fs.remove(depthPath);
             await fs.remove(rgbPath);
+            await fs.remove(posePath);
 
             bakedSplats.push(splatPath);
         }

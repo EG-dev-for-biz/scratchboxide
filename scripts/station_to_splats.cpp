@@ -767,6 +767,19 @@ int main(int argc, char** argv) {
         std::cerr << "ERROR: pose json needs fx, fy, cx, cy, eye[3], right[3], up[3], forward[3]" << std::endl;
         return 1;
     }
+
+    // Auto-scale camera intrinsics if buffer resolution differs from pose intrinsics
+    float poseW = cx * 2.0f;
+    float poseH = cy * 2.0f;
+    if (poseW > 1.0f && poseH > 1.0f && (std::abs(poseW - static_cast<float>(W)) > 1.0f || std::abs(poseH - static_cast<float>(H)) > 1.0f)) {
+        float sx = static_cast<float>(W) / poseW;
+        float sy = static_cast<float>(H) / poseH;
+        fx *= sx;
+        fy *= sy;
+        cx *= sx;
+        cy *= sy;
+    }
+
     if (cameraAltitude < 0.0f) {
         if (!jsonNumber(pose, "cameraAltitude", cameraAltitude)) {
             cameraAltitude = eye.y;
