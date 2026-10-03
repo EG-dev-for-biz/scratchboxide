@@ -8,6 +8,7 @@
       "DOM.Iterable"
     ],
     "skipLibCheck": true,
+    "incremental": true,
     "strict": true,
     "outDir": "dist-electron",
     "esModuleInterop": true,
