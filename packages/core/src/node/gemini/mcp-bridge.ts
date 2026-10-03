@@ -160,7 +160,7 @@ export class McpBridge {
                 timestamp,
                 steps: [
                     { id: 's1', title: `Dispatch ${toolName} to GitHub MCP Bridge`, status: 'done', durationMs: 12 },
-                    { id: 's2', title: 'Check GitHub OAuth connection status', status: 'error', durationMs: 8 }
+                    { id: 's2', title: 'Check GitHub OAuth connection status', status: 'failed', durationMs: 8 }
                 ],
                 summaryResult: 'GitHub MCP server is not connected. Use native workspace tools (git status, git diff) or connect GitHub OAuth in Settings.',
                 humanFriendlyOutput: {
