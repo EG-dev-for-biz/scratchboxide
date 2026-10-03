@@ -119,12 +119,14 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name.startsWith('lighting_')) return `Photometric Lighting: ${name.replace('lighting_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('archie_')) return `Archie Architecture: ${name.replace('archie_', '').replace(/_/g, ' ')}`;
             if (name.startsWith('sb_terrain_')) return `SB-Terrain Engine: ${name.replace('sb_terrain_', '').replace(/_/g, ' ')}`;
+            if (name === 'execute_3d_python_script') return 'Python 3D Engine: Execute Procedural Script';
             return `Workspace Action: ${name}`;
         },
         cardTitle: (name, _status) => {
             if (name === 'mount_canvas_primitive') return 'Canvas: Mount Primitive';
             if (name === 'ask_user_question') return 'User: Clarify Choice';
             if (name === 'present_execution_plan') return 'Plan: Review & Confirm';
+            if (name === 'execute_3d_python_script') return 'Python 3D: Execute Script';
             if (name.startsWith('location_')) return `Location 3DGS: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return '3D Tiles: Recolor & PBR';
             if (name.startsWith('google_3d_tiles_')) return `3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -144,6 +146,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
             if (name === 'mount_canvas_primitive') return 'Mount canvas primitive on stage';
             if (name === 'ask_user_question') return 'Ask user clarifying question with structured choices';
             if (name === 'present_execution_plan') return 'Present execution plan card for confirmation';
+            if (name === 'execute_3d_python_script') return 'Execute procedural 3D Python script with Scratchbox C++20 engine';
             if (name.startsWith('location_')) return `Synthesize real-world location 3D Gaussian Splats: ${name.replace('location_', '').replace(/_/g, ' ')}`;
             if (name === 'google_3d_tiles_recolor_glb') return 'Recolor 3D tile GLB with material segmentation and PBR normal/roughness synthesis';
             if (name.startsWith('google_3d_tiles_')) return `Ingest Google 3D Tiles: ${name.replace('google_3d_tiles_', '').replace(/_/g, ' ')}`;
@@ -225,6 +228,7 @@ export function inferToolGroup(name: string): ToolGroup {
         name === 'invoke_subagent' ||
         name === 'send_message' ||
         name === 'mount_canvas_primitive' ||
+        name === 'execute_3d_python_script' ||
         name === 'ask_user_question' ||
         name === 'present_execution_plan' ||
         name.startsWith('workspace_') ||

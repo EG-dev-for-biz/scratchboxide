@@ -620,7 +620,19 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan/i.test(request.prompt || '')) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Descriptive Dynamic Title>", ... }) or output JSON with type: "3d-scene". NEVER output "markdown-document" or "live-code-sandbox" for this request.
-- DO NOT execute Python scripts via google:python_interpreter to simulate or build 3D scenes. Python cannot render onto the Scratchbox WebGL canvas. You must call mount_canvas_primitive.
+- PROCEDURAL PYTHON 3 SCRIPTING (BLENDER MENTAL MODEL): Scratchbox IDE natively supports procedural Python 3 scripting using the Scratchbox 3D Engine (\`import scratchbox as sb\`), following the mental model of Blender's procedural scene scripting. You can execute procedural scripts via the \`execute_3d_python_script({ script: "..." })\` tool OR mount a "3d-scene" with \`pythonGenerator: { sourceCode: "..." }\`. The engine compiles native C++20 geometry via nanobind bindings and streams the resulting binary .glb directly into the Three.js viewport on the stage!
+  Blender-style workflow:
+  \`\`\`python
+  import scratchbox as sb
+  mesh = sb.geometry.Mesh("SceneRoot")
+  pedestal = sb.geometry.create_studio_pedestal(radius=6.0, height=0.4, bevel=0.05, segments=48)
+  mesh.merge(pedestal)
+  cfg = sb.architecture.BuildingConfig()
+  cfg.width = 12.0; cfg.depth = 10.0; cfg.stories = 3; cfg.roof = sb.architecture.RoofType.MANSARD
+  building = sb.architecture.generate_building(cfg, "Townhouse")
+  mesh.merge(building)
+  sb.io.write_glb(OUTPUT_GLB_PATH, mesh)
+  \`\`\`
 - CRITICAL THINKING & ALGORITHMIC REFINEMENT: Do not rush to emit crude, toy primitive boxes or single-shot shapes. Reason carefully through physical dimensions, metric scale, hierarchy, and geological/architectural/botanical authenticity.
 - BOTANICAL & ORGANIC ASSETS: When tasked with botanical objects (flowers, plants, trees, gardens), construct anatomical plant geometry (rich soil bed, curved tapering stem, organic foliage leaves, sepal calyx, pollen receptacle, and radial petals) with authentic PBR material properties (roughness, velvet albedo, translucency). Never output generic abstract cylinders or boxes.
 - GOOGLE ELEVATION & 3D TILES GROUND TRUTH: For any landscape, terrain, outdoor, or environmental scene, the ground and elevation MUST be physically dictated by authentic Google Elevation data (EGM96 MSL) and Google 3D Tiles via real-world archetype casting (CreativeLocationCastingService / Google3DTileService). Never create fake sine-wave cloth or floating ground meshes.

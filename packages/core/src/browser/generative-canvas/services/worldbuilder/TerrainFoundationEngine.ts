@@ -108,6 +108,14 @@ export function generateCompositeHeightfield(
             // Constrain inside planned bounds
             h = Math.max(spec.terrain.elevationMin, Math.min(spec.terrain.elevationMax, h));
 
+            // 5. Perimeter boundary falloff (fade outer 15% smoothly to ground 0.0)
+            // Eliminates floating wavy cloth artifacts around ungrounded terrain edges
+            const edgeDistX = Math.min(u, 1.0 - u);
+            const edgeDistZ = Math.min(v, 1.0 - v);
+            const edgeDist = Math.min(edgeDistX, edgeDistZ);
+            const edgeFade = Math.min(1.0, edgeDist / 0.15);
+            h = h * edgeFade;
+
             const idx = c + r * resolution;
             elevations[idx] = h;
 

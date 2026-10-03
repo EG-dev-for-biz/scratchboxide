@@ -35,6 +35,7 @@ import {
     synthesizeAdaptiveMetrics,
     synthesizeAdaptiveSandbox
 } from '../../browser/generative-canvas/services/adaptive-domain-engine';
+import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
@@ -350,85 +351,93 @@ export function is3DStudioIntent(prompt: string, title: string): boolean {
  * Generates modern C++20 procedural world generator code adhering to AGENTS.md directives.
  */
 export function generateNativeCppGenerator(title: string): string {
-    return `// ==============================================================================
-// Scratchbox Native 3D Engine — Procedural World Generator (C++20)
+    const isTerrainExplicit = /terrain|mountain|landscape|canyon|hills|valley|biome/i.test(title);
+    if (isTerrainExplicit) {
+        return `// ==============================================================================
+// Scratchbox Native 3D Engine — Grounded Geological Terrain Generator (C++20)
 // Module: ${title}
-// Compiler: Apple Clang (-std=c++20 -O3 -march=native -ffast-math)
+// Compiler: Apple Clang (-std=c++20 -O3 -ffast-math)
 // Target: Binary glTF 2.0 (.glb) direct streaming to Three.js viewport
 // ==============================================================================
 
 #include "scratchbox_engine.hpp"
-#include "scratchbox_math.hpp"
 #include <iostream>
 #include <vector>
 #include <cmath>
 
 using namespace scratchbox;
 
-// Signed Distance Field (SDF) definition combining smooth noise and geometry primitives
-struct ProceduralTerrainSDF {
-    float frequency = 0.08f;
-    float amplitude = 4.5f;
-    int octaves = 5;
-    float roughness = 0.45f;
-    float lacunarity = 2.0f;
+int main(int argc, char** argv) {
+    std::cout << "[Scratchbox Engine] Initializing Grounded Geological Terrain..." << std::endl;
 
-    // Evaluates Signed Distance Function at world coordinate p (SIMD Vec3f)
-    inline float evaluate(const Vec3f& p) const {
-        // Base planar distance: y = 0
-        float baseDist = p.y;
-        
-        // Fractal Brownian Motion (FBM) with SIMD vector evaluation
-        float noiseVal = 0.0f;
-        float freq = frequency;
-        float amp = amplitude;
-        for (int i = 0; i < octaves; ++i) {
-            noiseVal += FastNoise3D::Simplex(p.x * freq, p.z * freq, 0.42f) * amp;
-            freq *= lacunarity;
-            amp *= 0.5f;
+    ScratchboxMesh terrain("${title}");
+    terrain.material = PbrMaterial::basaltRock();
+
+    const int gridRes = 48;
+    const float worldSize = 36.0f;
+    FastNoise3D noise(4242);
+
+    for (int z = 0; z < gridRes; ++z) {
+        for (int x = 0; x < gridRes; ++x) {
+            float u = static_cast<float>(x) / (gridRes - 1);
+            float v = static_cast<float>(z) / (gridRes - 1);
+            float wx = (u - 0.5f) * worldSize;
+            float wz = (v - 0.5f) * worldSize;
+
+            // Edge damping ensures perimeter touches ground plane at y = 0
+            float edgeDist = 1.0f - std::max(std::abs(wx) / (worldSize * 0.5f), std::abs(wz) / (worldSize * 0.5f));
+            float edgeFade = std::max(0.0f, std::min(1.0f, edgeDist * 3.5f));
+
+            float elevation = noise.fBm(wx * 0.08f, 0.0f, wz * 0.08f, 4, 0.5f, 2.0f) * 3.5f * edgeFade;
+            float heightNorm = std::max(0.0f, std::min(1.0f, elevation / 4.0f));
+            Vec4 vertexColor(0.35f + heightNorm * 0.35f, 0.38f + heightNorm * 0.30f, 0.30f + heightNorm * 0.15f, 1.0f);
+
+            terrain.addVertex({Vec3(wx, elevation, wz), Vec3(0, 1, 0), Vec2(u, v), vertexColor});
         }
-
-        // Combine SDF terrain displacement with smooth sphere bounds
-        float sphereBound = SDF::Sphere(p - Vec3f(0.0f, 0.0f, 0.0f), 24.0f);
-        float terrainSurface = baseDist - noiseVal;
-        return SDF::SmoothUnion(terrainSurface, sphereBound * 0.15f, 1.2f);
     }
-};
+
+    for (int z = 0; z < gridRes - 1; ++z) {
+        for (int x = 0; x < gridRes - 1; ++x) {
+            uint32_t i0 = z * gridRes + x;
+            uint32_t i1 = z * gridRes + (x + 1);
+            uint32_t i2 = (z + 1) * gridRes + x;
+            uint32_t i3 = (z + 1) * gridRes + (x + 1);
+
+            terrain.addTriangle(i0, i2, i1);
+            terrain.addTriangle(i1, i2, i3);
+        }
+    }
+
+    terrain.recomputeSmoothNormals();
+    scratchbox::io::GlbWriter::streamChunk(terrain, "${title}");
+    return 0;
+}
+`;
+    }
+
+    return `// ==============================================================================
+// Scratchbox Native 3D Engine — Grounded Studio Pedestal Generator (C++20)
+// Module: ${title}
+// Compiler: Apple Clang (-std=c++20 -O3 -ffast-math)
+// Target: Binary glTF 2.0 (.glb) direct streaming to Three.js viewport
+// ==============================================================================
+
+#include "scratchbox_engine.hpp"
+#include <iostream>
+
+using namespace scratchbox;
 
 int main(int argc, char** argv) {
-    std::cout << "[Scratchbox Engine] Initializing Native C++20 Mesh Studio..." << std::endl;
+    std::cout << "[Scratchbox Engine] Initializing Studio Baseline Generator..." << std::endl;
 
-    ProceduralTerrainSDF terrain;
-    MarchingCubesVolume volume(Vec3i(48, 32, 48), Vec3f(-12.0f, -4.0f, -12.0f), Vec3f(12.0f, 12.0f, 12.0f));
+    // Grounded studio showcase pedestal adhering to Zero Uninvited Defaults
+    ScratchboxMesh pedestal = generateStudioPedestal(5.0f, 0.35f, 0.05f, 64);
+    pedestal.material = PbrMaterial::studioMatteGrey();
 
-    // Polygonize volumetric SDF with SIMD Marching Cubes
-    MeshGeometry mesh = volume.Polygonize([&](const Vec3f& pos) {
-        return terrain.evaluate(pos);
-    });
-
-    // Compute analytic surface normals & vertex colors (COLOR_0)
-    mesh.ComputeSmoothNormals();
-    mesh.GenerateProceduralColors([](const Vec3f& pos, const Vec3f& normal) {
-        // Biome gradient: grass / rock / snow based on elevation and slope
-        float slope = 1.0f - normal.y;
-        if (pos.y > 6.0f) return Vec4f(0.95f, 0.95f, 0.98f, 1.0f); // Snow
-        if (slope > 0.45f) return Vec4f(0.45f, 0.42f, 0.38f, 1.0f); // Cliff Rock
-        return Vec4f(0.18f, 0.55f, 0.24f, 1.0f); // Lush Meadow
-    });
-
-    // Setup PBR Metallic-Roughness Material
-    PBRMaterial material;
-    material.metallic = 0.1f;
-    material.roughness = terrain.roughness;
-    material.name = "Scratchbox_PBR_Terrain";
-
-    // Encode and stream binary glTF 2.0 (.glb) to stdout / output buffer
-    GLBOutputStream glbStream;
-    glbStream.AppendMesh("ProceduralMesh", mesh, material);
-    glbStream.Emit();
+    scratchbox::io::GlbWriter::streamChunk(pedestal, "${title}");
 
     std::cout << "[Scratchbox Engine] glTF 2.0 streaming complete. Triangles: " 
-              << mesh.triangleCount() << std::endl;
+              << pedestal.triangleCount() << std::endl;
     return 0;
 }
 `;
@@ -2199,10 +2208,14 @@ export function extractCodeSandboxArtifact(
         }
     }
 
-    const runnableMatches = matches.filter(m => 
-        ['tsx', 'jsx', 'react', 'html', 'htm', 'svg', 'javascript', 'js', 'typescript', 'ts', 'css', 'python', 'py'].includes(m.language) ||
-        /import\s+React|export\s+default\s+function|<\w+[\s>]|<!DOCTYPE\s+html|<svg/i.test(m.content)
-    );
+    const runnableMatches = matches.filter(m => {
+        // Exclude Python 3D scripts intended for the native Scratchbox 3D engine (e.g., import scratchbox as sb)
+        const isScratchboxPython = ['python', 'py'].includes(m.language) && (m.content.includes('scratchbox') || m.content.includes('import scratchbox') || m.content.includes('from scratchbox'));
+        if (isScratchboxPython) return false;
+
+        return ['tsx', 'jsx', 'react', 'html', 'htm', 'svg', 'javascript', 'js', 'typescript', 'ts', 'css', 'python', 'py'].includes(m.language) ||
+            /import\s+React|export\s+default\s+function|<\w+[\s>]|<!DOCTYPE\s+html|<svg/i.test(m.content);
+    });
 
     const isSandboxExplicit = /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator|timeline/i.test(prompt);
 
@@ -2815,7 +2828,28 @@ export function parseOrSynthesizeArtifact(
                         wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || contextualSynthesized.wasmPhysics,
                         geoAnchor: data?.geoAnchor || (isTopicChange ? undefined : active3DData?.geoAnchor) || contextualSynthesized.geoAnchor,
                         droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || contextualSynthesized.droneRoute,
-                        cppGenerator: data?.cppGenerator || (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator))
+                        cppGenerator: data?.cppGenerator || (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator)),
+                        pythonGenerator: (() => {
+                            let pyGen = data?.pythonGenerator || (isTopicChange ? undefined : active3DData?.pythonGenerator);
+                            if (pyGen?.sourceCode && !pyGen.glbBase64) {
+                                try {
+                                    const runner = NativePythonRunnerService.getInstance();
+                                    const res = runner.runScriptSync(pyGen.sourceCode);
+                                    if (res.success && res.glbBase64) {
+                                        pyGen = {
+                                            ...pyGen,
+                                            enabled: true,
+                                            glbBase64: res.glbBase64,
+                                            glbPath: res.glbPath,
+                                            compiledAt: new Date().toISOString()
+                                        };
+                                    }
+                                } catch (e) {
+                                    console.warn('[ArtifactSynthesis] Error running pythonGenerator synchronously:', e);
+                                }
+                            }
+                            return pyGen;
+                        })()
                     };
                     data = scene3DData;
                     parsed.title = effectiveTitle;
@@ -3088,6 +3122,56 @@ export function parseOrSynthesizeArtifact(
         };
     }
 
+    // Check if model emitted a Python 3D procedural script (e.g. ```python ... import scratchbox as sb ... ```)
+    const python3DMatch = modelText.match(/```(?:python|py)\s*([\s\S]*?import\s+scratchbox[\s\S]*?)```/i) ||
+                          modelText.match(/```(?:python|py)\s*([\s\S]*?from\s+scratchbox[\s\S]*?)```/i);
+
+    if (python3DMatch && !isMediaRequest && !isVideoTimelineFallback) {
+        const scriptSource = python3DMatch[1].trim();
+        let glbBase64: string | undefined;
+        let glbPath: string | undefined;
+        try {
+            const runner = NativePythonRunnerService.getInstance();
+            const res = runner.runScriptSync(scriptSource);
+            if (res.success && res.glbBase64) {
+                glbBase64 = res.glbBase64;
+                glbPath = res.glbPath;
+            }
+        } catch (e) {
+            console.warn('[ArtifactSynthesis] Error running 3D python script synchronously:', e);
+        }
+
+        const is3DActiveCur = request.activeArtifact?.type === '3d-scene';
+        const contextualSynthesized = synthesizeContextual3DScene(prompt, {
+            activeArtifact: request.activeArtifact,
+            chatHistory: request.chatHistory
+        });
+
+        const sceneTitle = extractDocumentTitle(prompt, '3D Procedural Scene');
+        const scene3DData: Scene3DData = {
+            ...contextualSynthesized,
+            title: sceneTitle,
+            subtitle: 'Procedural 3D scene generated via Python Scratchbox engine.',
+            pythonGenerator: {
+                enabled: true,
+                sourceCode: scriptSource,
+                glbBase64,
+                glbPath,
+                compiledAt: new Date().toISOString()
+            }
+        };
+
+        return {
+            id: (is3DActiveCur ? request.activeArtifact?.id : undefined) || `art-3d-${Date.now()}`,
+            type: '3d-scene',
+            title: scene3DData.title,
+            summary: 'Procedural 3D scene generated via Python Scratchbox engine and streamed to GLB.',
+            version: is3DActiveCur ? (request.activeArtifact?.version || 1) + 1 : 1,
+            createdAt: timestamp,
+            data: scene3DData
+        };
+    }
+
     const is3DActive = request.activeArtifact?.type === '3d-scene';
     const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust/i.test(prompt) ||
         lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff');
@@ -3240,7 +3324,8 @@ export function parseOrSynthesizeArtifact(
             actionLog: active3DData?.actionLog || [],
             sculptSettings: active3DData?.sculptSettings,
             selectedMeshId: active3DData?.selectedMeshId,
-            cppGenerator: active3DData?.cppGenerator || contextualSynthesized.cppGenerator
+            cppGenerator: active3DData?.cppGenerator || contextualSynthesized.cppGenerator,
+            pythonGenerator: active3DData?.pythonGenerator
         };
 
         return {

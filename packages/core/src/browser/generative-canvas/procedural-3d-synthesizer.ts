@@ -1638,6 +1638,11 @@ int main() {
             float elevation = noise.fBm(wx * 0.08f, 0.0f, wz * 0.08f, 4, 0.5f, 2.0f) * 4.5f;
             elevation += std::sin(wx * 0.2f) * std::cos(wz * 0.2f) * 1.2f;
 
+            // Edge damping ensures perimeter touches ground plane at y = 0 (prevents floating cloth artifact)
+            float edgeDist = 1.0f - std::max(std::abs(wx) / (worldSize * 0.5f), std::abs(wz) / (worldSize * 0.5f));
+            float edgeFade = std::max(0.0f, std::min(1.0f, edgeDist * 3.5f));
+            elevation *= edgeFade;
+
             float heightNorm = std::max(0.0f, std::min(1.0f, (elevation + 4.0f) / 8.0f));
             Vec4 vertexColor(0.25f + heightNorm * 0.45f, 0.30f + heightNorm * 0.40f, 0.22f + heightNorm * 0.20f, 1.0f);
 
