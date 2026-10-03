@@ -622,6 +622,7 @@ export function synthesizeAdaptive3DScene(
     const isGeology = effectiveDomain === 'geology' || /alpine|mountain|valley|matterhorn|canyon|glacier|rock|strata|terrain|geology|cliff|volcano/i.test(rawText);
     const isHistory = effectiveDomain === 'history' || /ziggurat|temple|ancient|monument|pyramid|mesopotamia|babylon|ruins|excavation|relic/i.test(rawText);
     const isInfrastructure = effectiveDomain === 'infrastructure' || /highway|overpass|viaduct|bridge|tower|skyline|building|architecture|interchange|flyover/i.test(rawText);
+    const isBotanical = /flower|garden|plant|flora|botan|tree|foliage|petal|leaf|leaves|blossom|bloom|sprout|nature|meadow|rose/i.test(rawText);
 
     let skybox = 'studio';
     let lighting = 'cinematic_3point_studio';
@@ -901,54 +902,329 @@ export function synthesizeAdaptive3DScene(
                 material: { color: 0x1e293b, roughness: 0.90, metalness: 0.05, preset: 'bitumen_asphalt' }
             }
         ];
-    } else {
-        // Universal Open-Ended Adaptive Domain Architecture
+    } else if (isBotanical) {
         skybox = 'studio';
         lighting = 'cinematic_3point_studio';
         ground = true;
-        cameraPos = [12, 9, 14];
-        cameraTarget = [0, 1.8, 0];
-        cameraFov = 45;
+        cameraPos = [2.6, 2.0, 2.8];
+        cameraTarget = [0, 1.2, 0];
+        cameraFov = 38;
+
+        const isRose = /rose/i.test(rawText);
+        const petalColor = isRose ? 0xe11d48 : (/sunflower/i.test(rawText) ? 0xfacc15 : 0xf43f5e);
+
         customMeshes = [
             {
-                id: 'adaptive-primary-core',
-                name: `${subject} Core Assembly`,
+                id: 'botanical-soil-bed',
+                name: 'Organic Garden Soil Bed',
                 type: 'cylinder',
-                position: [0, 1.8, 0],
-                scale: [2.8, 3.6, 2.8],
+                position: [0, -0.08, 0],
+                scale: [3.2, 0.16, 3.2],
                 tier: 'primary',
-                material: { color: 0x2563eb, roughness: 0.25, metalness: 0.80 }
+                material: { color: 0x3d2817, roughness: 0.95, metalness: 0.05, preset: 'dark_soil' }
             },
             {
-                id: 'adaptive-secondary-node',
-                name: `${keywords[0] || 'Subsystem'} Functional Node`,
-                parentId: 'adaptive-primary-core',
+                id: 'botanical-stem-primary',
+                name: `${subject} Central Stem`,
+                type: 'cylinder',
+                position: [0, 0.85, 0],
+                scale: [0.08, 1.7, 0.08],
+                tier: 'primary',
+                material: { color: 0x2e7d32, roughness: 0.65, metalness: 0.08 }
+            },
+            {
+                id: 'botanical-leaf-left',
+                name: 'Lower Foliage Leaf',
+                parentId: 'botanical-stem-primary',
                 type: 'box',
-                position: [2.6, 1.4, 0],
-                scale: [1.4, 2.0, 1.4],
+                position: [0.38, 0.55, 0],
+                scale: [0.65, 0.04, 0.28],
+                rotation: [0, 0, 0.3],
                 tier: 'secondary',
-                material: { color: 0xf59e0b, roughness: 0.35, metalness: 0.60 }
+                material: { color: 0x388e3c, roughness: 0.55, metalness: 0.05 }
             },
             {
-                id: 'adaptive-tertiary-sensor',
-                name: `${keywords[1] || 'Optical'} Feedback Sensor`,
-                parentId: 'adaptive-primary-core',
-                type: 'sphere',
-                position: [0, 3.8, 0],
-                scale: [0.6, 0.6, 0.6],
-                tier: 'tertiary',
-                material: { color: 0x10b981, emissive: 0x059669, emissiveIntensity: 2.5, roughness: 0.10 }
+                id: 'botanical-leaf-right',
+                name: 'Upper Foliage Leaf',
+                parentId: 'botanical-stem-primary',
+                type: 'box',
+                position: [-0.34, 0.95, 0.12],
+                scale: [0.58, 0.04, 0.24],
+                rotation: [0, 0.6, -0.35],
+                tier: 'secondary',
+                material: { color: 0x2e7d32, roughness: 0.55, metalness: 0.05 }
             },
             {
-                id: 'adaptive-ground-pedestal',
-                name: 'Chamfered Studio Pedestal',
+                id: 'botanical-calyx',
+                name: 'Botanical Sepal & Calyx',
+                parentId: 'botanical-stem-primary',
                 type: 'cylinder',
-                position: [0, -0.15, 0],
-                scale: [7.0, 0.3, 7.0],
-                tier: 'primary',
-                material: { color: 0x1e293b, roughness: 0.80, metalness: 0.15, preset: 'black_onyx' }
+                position: [0, 1.7, 0],
+                scale: [0.26, 0.12, 0.26],
+                tier: 'secondary',
+                material: { color: 0x1b5e20, roughness: 0.70, metalness: 0.05 }
+            },
+            {
+                id: 'botanical-pollen-core',
+                name: 'Stamen & Pollen Receptacle',
+                parentId: 'botanical-stem-primary',
+                type: 'sphere',
+                position: [0, 1.78, 0],
+                scale: [0.36, 0.22, 0.36],
+                tier: 'tertiary',
+                material: { color: 0xf59e0b, roughness: 0.80, metalness: 0.10, emissive: 0xd97706, emissiveIntensity: 0.35 }
             }
         ];
+
+        // 6 radial petals arranged symmetrically around the calyx
+        const petalCount = 6;
+        for (let i = 0; i < petalCount; ++i) {
+            const rad = (i * Math.PI * 2) / petalCount;
+            const px = Math.cos(rad) * 0.42;
+            const pz = Math.sin(rad) * 0.42;
+            customMeshes.push({
+                id: `botanical-petal-${i + 1}`,
+                name: `${subject} Petal ${i + 1}`,
+                parentId: 'botanical-stem-primary',
+                type: 'box',
+                position: [px, 1.76, pz],
+                rotation: [0, -rad, 0.15],
+                scale: [0.26, 0.04, 0.52],
+                tier: 'secondary',
+                material: { color: petalColor, roughness: 0.35, metalness: 0.05 }
+            });
+        }
+    } else {
+        // Universal Open-Ended Adaptive Domain Architecture
+        // Dynamically inferred form, scale, and material hierarchy from prompt semantics
+        skybox = 'studio';
+        lighting = 'cinematic_3point_studio';
+        ground = true;
+
+        const isVertical = /\b(?:column|tower|pillar|tank|silo|vessel|reactor|tube|cylinder|bottle|pole|chimney|flue|standpipe)\b/i.test(rawText);
+        const isPlanar = /\b(?:desk|table|bench|board|chassis|vehicle|car|platform|stage|deck|shelf|rack|bed)\b/i.test(rawText);
+        const isSpherical = /\b(?:orb|sphere|ball|globe|planet|core|bubble|droplet|head|bead|sensor)\b/i.test(rawText);
+
+        // Infer material cues
+        const isWood = /\b(?:wood|timber|oak|teak|walnut|birch|pine)\b/i.test(rawText);
+        const isGold = /\b(?:gold|brass|bronze|gilded)\b/i.test(rawText);
+        const isGlass = /\b(?:glass|crystal|lens|transparent|optic)\b/i.test(rawText);
+        const isMetal = /\b(?:metal|steel|iron|titanium|chrome|aluminum|alloy)\b/i.test(rawText) || (!isWood && !isGlass && !isGold);
+
+        const primaryMat = isWood
+            ? { color: 0x8b5a2b, roughness: 0.75, metalness: 0.05, preset: 'polished_wood' }
+            : isGold
+            ? { color: 0xf59e0b, roughness: 0.25, metalness: 0.95, preset: 'polished_gold_24k' }
+            : isGlass
+            ? { color: 0xe0f2fe, roughness: 0.10, metalness: 0.10, transmission: 0.88, opacity: 0.65 }
+            : isMetal
+            ? { color: 0x334155, roughness: 0.32, metalness: 0.85, preset: 'titanium_grade5' }
+            : { color: 0x475569, roughness: 0.40, metalness: 0.30 };
+
+        const secondaryMat = isGold
+            ? { color: 0x1e293b, roughness: 0.40, metalness: 0.50 }
+            : isWood
+            ? { color: 0x3e2723, roughness: 0.60, metalness: 0.10 }
+            : { color: 0x0284c7, roughness: 0.30, metalness: 0.70 };
+
+        const tertiaryMat = {
+            color: 0x10b981,
+            emissive: 0x059669,
+            emissiveIntensity: 1.8,
+            roughness: 0.20,
+            metalness: 0.60
+        };
+
+        const primaryId = 'adaptive-primary-core';
+
+        if (isVertical) {
+            cameraPos = [6.0, 4.5, 7.5];
+            cameraTarget = [0, 1.8, 0];
+            cameraFov = 42;
+            customMeshes = [
+                {
+                    id: primaryId,
+                    name: `${subject} Primary Column`,
+                    type: 'cylinder',
+                    position: [0, 1.8, 0],
+                    scale: [1.4, 3.6, 1.4],
+                    tier: 'primary',
+                    material: primaryMat
+                },
+                {
+                    id: 'adaptive-secondary-collar',
+                    name: `${keywords[0] || 'Reinforcement'} Flange Collar`,
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [0, 2.8, 0],
+                    scale: [1.8, 0.25, 1.8],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-secondary-manifold',
+                    name: `${keywords[1] || 'Flow'} Manifold Port`,
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0.85, 1.4, 0],
+                    scale: [0.45, 0.6, 0.45],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-tertiary-gauge',
+                    name: `${keywords[2] || 'Telemetry'} Digital Gauge`,
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [0.88, 2.2, 0],
+                    scale: [0.35, 0.12, 0.35],
+                    rotation: [0, 0, Math.PI / 2],
+                    tier: 'tertiary',
+                    material: tertiaryMat
+                },
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Structural Base Pedestal',
+                    type: 'cylinder',
+                    position: [0, -0.1, 0],
+                    scale: [3.4, 0.2, 3.4],
+                    tier: 'primary',
+                    material: { color: 0x1e293b, roughness: 0.85, metalness: 0.15, preset: 'dark_slate' }
+                }
+            ];
+        } else if (isPlanar) {
+            cameraPos = [5.5, 4.0, 6.5];
+            cameraTarget = [0, 1.0, 0];
+            cameraFov = 45;
+            customMeshes = [
+                {
+                    id: primaryId,
+                    name: `${subject} Main Chassis Platform`,
+                    type: 'box',
+                    position: [0, 1.0, 0],
+                    scale: [3.6, 0.3, 2.2],
+                    tier: 'primary',
+                    material: primaryMat
+                },
+                {
+                    id: 'adaptive-secondary-subframe',
+                    name: `${keywords[0] || 'Structural'} Subframe Support`,
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 0.45, 0],
+                    scale: [3.2, 0.8, 1.8],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-tertiary-module',
+                    name: `${keywords[1] || 'Control'} Terminal Interface`,
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0.8, 1.3, 0.4],
+                    scale: [0.8, 0.3, 0.6],
+                    tier: 'tertiary',
+                    material: tertiaryMat
+                },
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Level Floor Surface',
+                    type: 'box',
+                    position: [0, -0.05, 0],
+                    scale: [6.0, 0.1, 5.0],
+                    tier: 'primary',
+                    material: { color: 0x1e293b, roughness: 0.85, metalness: 0.15 }
+                }
+            ];
+        } else if (isSpherical) {
+            cameraPos = [4.5, 3.2, 5.5];
+            cameraTarget = [0, 1.4, 0];
+            cameraFov = 45;
+            customMeshes = [
+                {
+                    id: primaryId,
+                    name: `${subject} Spherical Core`,
+                    type: 'sphere',
+                    position: [0, 1.4, 0],
+                    scale: [1.8, 1.8, 1.8],
+                    tier: 'primary',
+                    material: primaryMat
+                },
+                {
+                    id: 'adaptive-secondary-ring',
+                    name: `${keywords[0] || 'Equatorial'} Gimbal Ring`,
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [0, 1.4, 0],
+                    scale: [2.5, 0.12, 2.5],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-tertiary-beacon',
+                    name: `${keywords[1] || 'Optical'} Feedback Sensor`,
+                    parentId: primaryId,
+                    type: 'sphere',
+                    position: [0, 2.45, 0],
+                    scale: [0.35, 0.35, 0.35],
+                    tier: 'tertiary',
+                    material: tertiaryMat
+                },
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Magnetic Standoff Mount',
+                    type: 'cylinder',
+                    position: [0, -0.05, 0],
+                    scale: [2.8, 0.15, 2.8],
+                    tier: 'primary',
+                    material: { color: 0x0f172a, roughness: 0.80, metalness: 0.20 }
+                }
+            ];
+        } else {
+            cameraPos = [5.0, 3.8, 6.2];
+            cameraTarget = [0, 1.2, 0];
+            cameraFov = 45;
+            customMeshes = [
+                {
+                    id: primaryId,
+                    name: `${subject} Primary Body`,
+                    type: 'box',
+                    position: [0, 1.2, 0],
+                    scale: [2.0, 2.0, 2.0],
+                    tier: 'primary',
+                    material: primaryMat
+                },
+                {
+                    id: 'adaptive-secondary-articulation',
+                    name: `${keywords[0] || 'Secondary'} Articulation Node`,
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [1.3, 1.2, 0],
+                    scale: [0.6, 1.5, 0.6],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-tertiary-indicator',
+                    name: `${keywords[1] || 'System'} Telemetry Emitter`,
+                    parentId: primaryId,
+                    type: 'sphere',
+                    position: [0, 2.35, 0],
+                    scale: [0.4, 0.4, 0.4],
+                    tier: 'tertiary',
+                    material: tertiaryMat
+                },
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Chamfered Studio Pedestal',
+                    type: 'cylinder',
+                    position: [0, -0.08, 0],
+                    scale: [4.2, 0.16, 4.2],
+                    tier: 'primary',
+                    material: { color: 0x1e293b, roughness: 0.80, metalness: 0.15, preset: 'dark_slate' }
+                }
+            ];
+        }
     }
 
     return {

@@ -488,7 +488,8 @@ export function buildToolDeclarations(
     if (request.enableGoogleSearch !== false) {
         tools.push({ googleSearch: {} });
     }
-    if (request.enableCodeExecution) {
+    const is3DSceneRequest = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|mesh\s*shaping|sculpt|flower|garden|plant|flora|botan/i.test(request.prompt || '');
+    if (request.enableCodeExecution && !is3DSceneRequest) {
         tools.push({ codeExecution: {} });
     }
     if (allFunctionDeclarations.length > 0) {
