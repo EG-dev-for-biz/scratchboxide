@@ -526,7 +526,12 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     React.useEffect(() => {
         if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            const parent = messagesEndRef.current.parentElement;
+            if (parent) {
+                parent.scrollTop = parent.scrollHeight;
+            } else {
+                messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         }
     }, [messages, isGenerating, liveStreamedText]);
 
@@ -1499,7 +1504,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                         </div>
                     ) : (
                         /* Unified Workspace Surface with Unified AI Side Chat across all non-chat file types */
-                        <div className="sb-fullwindow-canvas-container">
+                        <div className="sb-fullwindow-canvas-container" style={{ display: 'flex', flexDirection: 'column', flex: 1, width: '100%', height: '100%', minHeight: 0, overflow: 'hidden', position: 'relative' }}>
                             <div className="sb-surface-with-chat-container" style={{ display: 'flex', flexDirection: 'row', width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}>
                                 {/* Unified Side-by-Side Split View for all Canvas Primitives */}
                                 <div

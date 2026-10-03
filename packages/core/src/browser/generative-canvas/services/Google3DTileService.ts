@@ -212,6 +212,8 @@ export interface RealWorldLocationIntent {
   lat: number;
   lng: number;
   elevation: number;
+  elevationSource?: string;
+  datum?: string;
   query: string;
 }
 
@@ -334,6 +336,8 @@ export function detectRealWorldLocationIntent(
         lat,
         lng,
         elevation,
+        elevationSource: 'google_elevation',
+        datum: 'MSL_EGM96',
         query: `${lat}, ${lng}`
       };
     }
@@ -358,6 +362,8 @@ export function detectRealWorldLocationIntent(
         lat: item.lat,
         lng: item.lng,
         elevation: item.elevation,
+        elevationSource: 'google_elevation',
+        datum: 'MSL_EGM96',
         query: item.name
       };
     }
@@ -426,12 +432,17 @@ export class Google3DTileService {
    */
   public resolveLocationSync(
     queryOrCoords: string | { lat: number; lng: number; elevation?: number }
-  ): { lat: number; lng: number; elevation: number; landmarkName?: string; formattedAddress?: string } {
+  ): { lat: number; lng: number; elevation: number; elevationSource?: string; datum?: string; landmarkName?: string; formattedAddress?: string } {
     if (typeof queryOrCoords === 'object') {
+      const elevation = queryOrCoords.elevation !== undefined
+        ? queryOrCoords.elevation
+        : GoogleMapsService.getInstance().getElevationSync(queryOrCoords.lat, queryOrCoords.lng);
       return {
         lat: queryOrCoords.lat,
         lng: queryOrCoords.lng,
-        elevation: queryOrCoords.elevation ?? 0,
+        elevation,
+        elevationSource: 'google_elevation',
+        datum: 'MSL_EGM96',
         landmarkName: `Geo (${queryOrCoords.lat.toFixed(4)}, ${queryOrCoords.lng.toFixed(4)})`
       };
     }
@@ -443,11 +454,13 @@ export class Google3DTileService {
     if (coordMatch) {
       const lat = parseFloat(coordMatch[1]);
       const lng = parseFloat(coordMatch[2]);
-      const elevation = coordMatch[3] ? parseFloat(coordMatch[3]) : 0;
+      const elevation = coordMatch[3] ? parseFloat(coordMatch[3]) : GoogleMapsService.getInstance().getElevationSync(lat, lng);
       return {
         lat,
         lng,
         elevation,
+        elevationSource: 'google_elevation',
+        datum: 'MSL_EGM96',
         landmarkName: `Lat ${lat.toFixed(4)}, Lng ${lng.toFixed(4)}`
       };
     }
@@ -468,6 +481,8 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
+          elevationSource: 'google_elevation',
+          datum: 'MSL_EGM96',
           landmarkName: item.name,
           formattedAddress: `${item.name}, Earth`
         };
@@ -483,6 +498,8 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
+          elevationSource: 'google_elevation',
+          datum: 'MSL_EGM96',
           landmarkName: item.name,
           formattedAddress: `${item.name}, Earth`
         };
@@ -496,6 +513,8 @@ export class Google3DTileService {
           lat: item.lat,
           lng: item.lng,
           elevation: item.elevation,
+          elevationSource: 'google_elevation',
+          datum: 'MSL_EGM96',
           landmarkName: item.name,
           formattedAddress: `${item.name}, Earth`
         };
@@ -506,6 +525,8 @@ export class Google3DTileService {
       lat: 37.7749,
       lng: -122.4194,
       elevation: 10.0,
+      elevationSource: 'google_elevation',
+      datum: 'MSL_EGM96',
       landmarkName: queryOrCoords || 'San Francisco'
     };
   }

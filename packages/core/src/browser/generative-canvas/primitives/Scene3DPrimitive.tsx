@@ -2439,6 +2439,16 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Auto-frame camera to procedural geometry bounds if initial camera or clipping
+        const bounds = computeSceneGeometryBounds(stack.scene);
+        const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, { fovDegrees: stack.camera.fov });
+        if (autoFrame && autoFrame.autoFramed) {
+            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+            stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+            stack.camera.lookAt(cameraTargetRef.current);
+        }
+
         return () => {
             if (selectionBoxRef.current) selectionBoxRef.current.visible = false;
             handle.dispose();
@@ -3144,6 +3154,29 @@ int main(int argc, char** argv) {
         }, { operator: 'sb_set_clay_mode', params: { preset } });
     }, [mutateSceneData]);
 
+    // Fit Viewport to Scene Geometry (Frame All)
+    const handleFitToView = React.useCallback(() => {
+        const stack = stackRef.current;
+        if (!stack?.scene) return;
+        const bounds = computeSceneGeometryBounds(stack.scene);
+        const autoFrame = calculateStandoffCamera(bounds, undefined, {
+            fovDegrees: stack.camera.fov,
+            force: true
+        });
+        if (autoFrame) {
+            cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+            cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+            stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+            stack.camera.lookAt(cameraTargetRef.current);
+        }
+    }, []);
+
+    React.useEffect(() => {
+        const onFit = () => handleFitToView();
+        window.addEventListener('sb-3d-fit-to-view', onFit);
+        return () => window.removeEventListener('sb-3d-fit-to-view', onFit);
+    }, [handleFitToView]);
+
     // Global Keyboard Shortcut Listener for 3D Viewport Tools
     React.useEffect(() => {
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -3201,8 +3234,12 @@ int main(int argc, char** argv) {
                 setToolMode('sculpt');
                 setSculptSettings(s => ({ ...s, brush: 'pinch' }));
             } else if (key === 'f') {
-                setToolMode('sculpt');
-                setSculptSettings(s => ({ ...s, brush: 'flatten' }));
+                if (toolMode === 'sculpt') {
+                    setSculptSettings(s => ({ ...s, brush: 'flatten' }));
+                } else {
+                    e.preventDefault();
+                    handleFitToView();
+                }
             }
         };
 
@@ -3210,7 +3247,7 @@ int main(int argc, char** argv) {
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown);
         };
-    }, [handleUndo, handleRedo, cameraMode]);
+    }, [handleUndo, handleRedo, cameraMode, toolMode, handleFitToView]);
 
     // Synchronize radius changes to cursor ring
     React.useEffect(() => {
@@ -3298,7 +3335,7 @@ int main(int argc, char** argv) {
     // Render Visual HTML - Ultra-Minimalist Floating Layout (Blender-grade)
     // ---------------------------------------------------------
     return (
-        <div className="sb-scene3d-primitive-container relative w-full h-full bg-[#b0b8c4] text-zinc-100 overflow-hidden rounded-[16px] border border-white/10 shadow-2xl backdrop-blur-2xl select-none">
+        <div className="sb-scene3d-primitive-container relative w-full h-full bg-[#b0b8c4] text-zinc-100 overflow-hidden select-none">
             {/* CONTAINERIZED 3D VIEWPORT CANVAS - Full-Bleed 100% */}
             <div className="sb-3d-viewport-frame absolute inset-0 w-full h-full bg-[#b0b8c4] overflow-hidden">
                 {webglError ? (
@@ -3332,6 +3369,18 @@ int main(int argc, char** argv) {
                 >
                     <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 3l7 18 3-7 7-3L3 3z" />
+                    </svg>
+                </button>
+
+                {/* Fit to View / Frame All (F) */}
+                <button
+                    type="button"
+                    className="sb-3d-toolstrip-btn relative group flex items-center justify-center w-5 h-5 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent transition-all"
+                    onClick={handleFitToView}
+                    title="Fit Viewport to Scene / Frame All (F)"
+                >
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
                     </svg>
                 </button>
 
@@ -3619,6 +3668,17 @@ int main(int argc, char** argv) {
 
             {/* Ultra-Minimalist Floating Top-Right Controls */}
             <div className="sb-3d-minimal-badge-container absolute top-3 right-3 z-20 flex items-center gap-2 pointer-events-auto select-none animate-fadeIn">
+                <button
+                    type="button"
+                    onClick={handleFitToView}
+                    className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 hover:bg-[#1f1f28] backdrop-blur-md border border-white/10 text-[10px] font-mono text-zinc-300 hover:text-white transition-all shadow-md cursor-pointer"
+                    title="Fit Viewport to Scene Geometry (Press 'F')"
+                >
+                    <svg className="w-3 h-3 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                    </svg>
+                    <span>Fit to View (F)</span>
+                </button>
                 <div className="sb-3d-minimal-badge flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#121216]/80 backdrop-blur-md border border-white/10 text-[10px] font-mono text-zinc-300 shadow-md">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     <span>3D Scene</span>

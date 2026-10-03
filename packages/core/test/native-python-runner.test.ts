@@ -89,3 +89,22 @@ print("GLB export complete.")
 
     console.log(`[Test] Verified valid glTF 2.0 binary (${glbBuffer.length} bytes, version: ${version})`);
 });
+
+test('5. Synchronously executes Python script via runScriptSync and returns valid GLB', () => {
+    const runner = NativePythonRunnerService.getInstance();
+    const script = `
+import scratchbox as sb
+
+pedestal = sb.geometry.create_studio_pedestal(5.0, 0.25, 0.05, 32)
+scene = sb.geometry.Mesh("PedestalScene")
+scene.append(pedestal)
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+    const result = runner.runScriptSync(script);
+    expect(result.success).toBe(true);
+    expect(result.glbPath).toBeDefined();
+    expect(fs.existsSync(result.glbPath!)).toBe(true);
+    expect(result.glbBase64).toBeDefined();
+    const buf = fs.readFileSync(result.glbPath!);
+    expect(buf.toString('utf8', 0, 4)).toBe('glTF');
+});

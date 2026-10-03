@@ -1133,6 +1133,8 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
                 lat: result.geoAnchor.lat,
                 lng: result.geoAnchor.lng,
                 elevation: result.geoAnchor.elevation,
+                elevationSource: (result.geoAnchor as any).elevationSource || 'google_elevation',
+                datum: (result.geoAnchor as any).datum || 'MSL_EGM96',
                 active: true,
                 landmarkName: result.geoAnchor.landmarkName,
                 castingRationale,

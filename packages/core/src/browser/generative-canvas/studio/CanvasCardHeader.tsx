@@ -405,6 +405,21 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
                 )}
             </button>
 
+            {(layoutMode === '3d' || activeArtifact?.type === '3d-scene') && (
+                <button
+                    type="button"
+                    className="sb-canvas-icon-btn"
+                    onClick={() => {
+                        window.dispatchEvent(new CustomEvent('sb-3d-fit-to-view'));
+                    }}
+                    title="Fit Viewport to Scene Geometry (F)"
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                    </svg>
+                </button>
+            )}
+
             {/* More Actions Overflow Dropdown (⋮) */}
             <div style={{ position: 'relative' }} ref={overflowMenuRef}>
                 <button
@@ -432,17 +447,30 @@ export const CanvasHeaderControls: React.FC<ArtifactStageProps> = props => {
 
                         {/* Export 3D Scene (.glb) */}
                         {(layoutMode === '3d' || activeArtifact?.type === '3d-scene') && (
-                            <button
-                                type="button"
-                                className="sb-canvas-menu-item"
-                                onClick={() => {
-                                    setIsOverflowOpen(false);
-                                    window.dispatchEvent(new CustomEvent('sb-export-glb'));
-                                }}
-                            >
-                                <span style={{ fontSize: '13px' }}>📦</span>
-                                <span>Export 3D Scene (.glb)</span>
-                            </button>
+                            <>
+                                <button
+                                    type="button"
+                                    className="sb-canvas-menu-item"
+                                    onClick={() => {
+                                        setIsOverflowOpen(false);
+                                        window.dispatchEvent(new CustomEvent('sb-3d-fit-to-view'));
+                                    }}
+                                >
+                                    <span style={{ fontSize: '13px' }}>🎯</span>
+                                    <span>Fit to View (F)</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="sb-canvas-menu-item"
+                                    onClick={() => {
+                                        setIsOverflowOpen(false);
+                                        window.dispatchEvent(new CustomEvent('sb-export-glb'));
+                                    }}
+                                >
+                                    <span style={{ fontSize: '13px' }}>📦</span>
+                                    <span>Export 3D Scene (.glb)</span>
+                                </button>
+                            </>
                         )}
 
                         {/* Download Markdown */}

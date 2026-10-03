@@ -106,16 +106,29 @@ export function calculateStandoffCamera(
             const dy = camPos.y - ty;
             const dz = camPos.z - tz;
             const dist = Math.max(0.1, Math.hypot(dx, dy, dz));
-            return {
-                position: [camPos.x, camPos.y, camPos.z],
-                target: [tx, ty, tz],
-                distance: dist,
-                phi: Math.acos(Math.max(-1, Math.min(1, dy / dist))),
-                theta: Math.atan2(dx, dz),
-                radius,
-                center: [center.x, center.y, center.z],
-                autoFramed: false
-            };
+
+            // Detect generic boilerplate camera position [15, 12, 15] or [15, ty + 12, 15]
+            const isBoilerplateDefault =
+                Math.abs(camPos.x - 15) < 0.1 &&
+                Math.abs(camPos.z - 15) < 0.1 &&
+                Math.abs(camPos.y - 12) < 5.0;
+
+            // Detect if camera is clipping inside geometry or dangerously close to bounds
+            const isInsideGeometry = bounds.box.containsPoint(camPos) || dist < radius * 1.15;
+
+            // Only retain cameraDef if it is an intentional, valid camera safely outside geometry
+            if (!isBoilerplateDefault && !isInsideGeometry) {
+                return {
+                    position: [camPos.x, camPos.y, camPos.z],
+                    target: [tx, ty, tz],
+                    distance: dist,
+                    phi: Math.acos(Math.max(-1, Math.min(1, dy / dist))),
+                    theta: Math.atan2(dx, dz),
+                    radius,
+                    center: [center.x, center.y, center.z],
+                    autoFramed: false
+                };
+            }
         }
     }
 

@@ -2156,7 +2156,9 @@ function _synthesizeRawContextual3DSceneInner(
                     landmarkName: casted.landmarkName,
                     lat: casted.lat,
                     lng: casted.lng,
-                    elevation: casted.elevation
+                    elevation: casted.elevation,
+                    elevationSource: casted.elevationSource || 'google_elevation',
+                    datum: casted.datum || 'MSL_EGM96'
                 };
             }
         }
@@ -2254,6 +2256,8 @@ function _synthesizeRawContextual3DSceneInner(
                     lat: realWorldLoc.lat,
                     lng: realWorldLoc.lng,
                     elevation: realWorldLoc.elevation,
+                    elevationSource: (realWorldLoc as any).elevationSource || 'google_elevation',
+                    datum: (realWorldLoc as any).datum || 'MSL_EGM96',
                     active: true,
                     landmarkName: locName
                 },
@@ -2336,6 +2340,8 @@ function _synthesizeRawContextual3DSceneInner(
                 lat: realWorldLoc.lat,
                 lng: realWorldLoc.lng,
                 elevation: realWorldLoc.elevation,
+                elevationSource: 'google_elevation',
+                datum: 'MSL_EGM96',
                 active: true,
                 landmarkName: realWorldLoc.landmarkName
             },

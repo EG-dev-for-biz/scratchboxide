@@ -9,7 +9,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -276,6 +276,116 @@ export class NativePythonRunnerService {
                 stderr: err.stderr || err.message || '',
                 executionTimeMs: Date.now() - startTime,
                 errorDetails: err.stderr || err.message
+            };
+        }
+    }
+
+    /**
+     * Execute a Python script string synchronously and return the generated GLB and output.
+     */
+    public runScriptSync(
+        scriptSource: string,
+        options: PythonExecutionOptions = {}
+    ): PythonExecutionResult {
+        const startTime = Date.now();
+        const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-python');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const randSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const scriptFile = path.join(outputDir, `scene_${randSuffix}.py`);
+        const expectedGlbPath = options.outputGlbPath || path.join(outputDir, `scene_${randSuffix}.glb`);
+
+        let preparedScript = scriptSource;
+        if (!preparedScript.match(/^\s*OUTPUT_GLB_PATH\s*=/m)) {
+            preparedScript = `OUTPUT_GLB_PATH = r"${expectedGlbPath}"\n` + preparedScript;
+        }
+
+        fs.writeFileSync(scriptFile, preparedScript, 'utf8');
+
+        return this.runScriptFileSync(scriptFile, {
+            ...options,
+            outputGlbPath: expectedGlbPath,
+            cwd: options.cwd || outputDir
+        }, startTime);
+    }
+
+    /**
+     * Execute a Python script from file synchronously.
+     */
+    public runScriptFileSync(
+        scriptPath: string,
+        options: PythonExecutionOptions = {},
+        startTime: number = Date.now()
+    ): PythonExecutionResult {
+        const cwd = options.cwd || path.dirname(scriptPath);
+        const timeout = options.timeoutMs || 60000;
+
+        // Build PYTHONPATH
+        const pythonPaths = [
+            this.moduleDirectory,
+            path.dirname(this.moduleDirectory),
+            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine'),
+            process.env.PYTHONPATH
+        ].filter(Boolean).join(':');
+
+        const env = {
+            ...process.env,
+            ...options.env,
+            PYTHONPATH: pythonPaths,
+            PYTHONUNBUFFERED: '1'
+        };
+
+        const argsStr = (options.args || []).map(a => `"${a}"`).join(' ');
+        const cmd = `"${this.pythonExecutable}" "${scriptPath}" ${argsStr}`.trim();
+
+        try {
+            const stdout = execSync(cmd, {
+                cwd,
+                timeout,
+                maxBuffer: 64 * 1024 * 1024,
+                env,
+                encoding: 'utf8'
+            });
+
+            // Inspect output for generated GLB
+            let glbPath: string | undefined;
+            let glbBase64: string | undefined;
+
+            if (options.outputGlbPath && fs.existsSync(options.outputGlbPath)) {
+                glbPath = options.outputGlbPath;
+                glbBase64 = fs.readFileSync(glbPath).toString('base64');
+            } else {
+                const scriptBaseGlb = path.join(cwd, `${path.basename(scriptPath, '.py')}.glb`);
+                const genericGlb = path.join(cwd, 'output.glb');
+
+                if (fs.existsSync(scriptBaseGlb)) {
+                    glbPath = scriptBaseGlb;
+                    glbBase64 = fs.readFileSync(glbPath).toString('base64');
+                } else if (fs.existsSync(genericGlb)) {
+                    glbPath = genericGlb;
+                    glbBase64 = fs.readFileSync(genericGlb).toString('base64');
+                }
+            }
+
+            return {
+                success: true,
+                exitCode: 0,
+                stdout: String(stdout || ''),
+                stderr: '',
+                executionTimeMs: Date.now() - startTime,
+                glbPath,
+                glbBase64
+            };
+        } catch (err: any) {
+            return {
+                success: false,
+                exitCode: err.status || err.code || 1,
+                stdout: err.stdout ? String(err.stdout) : '',
+                stderr: err.stderr ? String(err.stderr) : (err.message || ''),
+                executionTimeMs: Date.now() - startTime,
+                errorDetails: err.stderr ? String(err.stderr) : err.message
             };
         }
     }
