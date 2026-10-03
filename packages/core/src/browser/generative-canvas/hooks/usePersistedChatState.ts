@@ -208,16 +208,38 @@ export function usePersistedChatState(
                         try {
                             localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(updated));
                         } catch (err) {
-                            // ignore quota error
+                            try {
+                                localStorage.removeItem(LS_VERSIONS_KEY);
+                                const minimal = updated.slice(-3);
+                                localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(minimal));
+                            } catch {}
                         }
                         return updated;
                     });
                     localStorage.setItem(LS_CURRENT_SESSION_KEY, currentSessionId);
                 } else {
-                    localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(sessions));
+                    try {
+                        localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(sessions));
+                    } catch {
+                        try {
+                            localStorage.removeItem(LS_VERSIONS_KEY);
+                            localStorage.setItem(LS_SESSIONS_KEY, JSON.stringify(sessions.slice(-3)));
+                        } catch {}
+                    }
                 }
-                localStorage.setItem(LS_VERSIONS_KEY, JSON.stringify(artifactVersions));
-                localStorage.setItem(LS_APPEARANCE_KEY, JSON.stringify(appearanceConfig));
+                try {
+                    // Cap versions to 2 per artifact to prevent quota exhaustion
+                    const prunedVersions: Record<string, CanvasArtifact[]> = {};
+                    for (const [k, v] of Object.entries(artifactVersions || {})) {
+                        prunedVersions[k] = (v || []).slice(-2);
+                    }
+                    localStorage.setItem(LS_VERSIONS_KEY, JSON.stringify(prunedVersions));
+                } catch {
+                    localStorage.removeItem(LS_VERSIONS_KEY);
+                }
+                try {
+                    localStorage.setItem(LS_APPEARANCE_KEY, JSON.stringify(appearanceConfig));
+                } catch {}
             } catch (e) {
                 console.warn('Failed to persist studio session state', e);
             }

@@ -477,9 +477,15 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     const is3DPrompt = hasExplicit3DDirective(promptText) || d.layoutMode === '3d' || d.activeArtifact?.type === '3d-scene' || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
                     if (is3DPrompt && !isVideoTimelinePrompt) {
                         const sceneData = art.data as Scene3DData;
-                        const isMutation = hasExplicit3DDirective(promptText) || d.layoutMode === '3d' || d.activeArtifact?.type === '3d-scene';
-                        const isMissing3DMeshes = art.type !== '3d-scene' || !sceneData?.customMeshes?.length;
-                        if (isMissing3DMeshes || isMutation) {
+                        const hasGeometry = !!(sceneData?.customMeshes?.length ||
+                            sceneData?.pythonGenerator?.glbBase64 ||
+                            sceneData?.pythonGenerator?.sourceCode ||
+                            sceneData?.cppGenerator?.glbBase64 ||
+                            sceneData?.cppGenerator?.sourceCode ||
+                            sceneData?.splatUrl ||
+                            sceneData?.objects?.length);
+                        // Only synthesize a fallback if the artifact is not a 3D scene or has no geometry whatsoever
+                        if (art.type !== '3d-scene' || !hasGeometry) {
                             const fallbackResult = synthesize3DFallback(promptText, lowerPromptText, activeArtifact, updatedMessages, undefined);
                             if (fallbackResult.artifact) {
                                 art = fallbackResult.artifact;
@@ -1098,9 +1104,16 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             if (is3DDirective && !isVideoTimelinePrompt) {
                 const currentArt = backend.generatedArtifact || depsRef.current.activeArtifact;
                 const sceneData = currentArt?.data as Scene3DData | undefined;
-                const isMutationDirective = hasExplicit3DDirective(promptText) || depsRef.current.layoutMode === '3d' || currentArt?.type === '3d-scene';
-                const isMissing3DMeshes = !currentArt || currentArt.type !== '3d-scene' || (!sceneData?.customMeshes?.length && !sceneData?.splatUrl && !sceneData?.objects?.some(o => o.content?.type === 'gaussian-splat'));
-                if (isMissing3DMeshes || isMutationDirective) {
+                const hasGeometry = !!(sceneData?.customMeshes?.length ||
+                    sceneData?.pythonGenerator?.glbBase64 ||
+                    sceneData?.pythonGenerator?.sourceCode ||
+                    sceneData?.cppGenerator?.glbBase64 ||
+                    sceneData?.cppGenerator?.sourceCode ||
+                    sceneData?.splatUrl ||
+                    sceneData?.objects?.length);
+
+                // Only synthesize a client-side fallback if NO valid 3d scene with geometry was generated
+                if (!currentArt || currentArt.type !== '3d-scene' || !hasGeometry) {
                     const fb = synthesize3DFallback(promptText, lowerPromptText, depsRef.current.activeArtifact, ctx.updatedMessages, undefined);
                     if (fb.artifact) {
                         backend.generatedArtifact = fb.artifact;
