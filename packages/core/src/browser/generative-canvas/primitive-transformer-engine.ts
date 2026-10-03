@@ -890,15 +890,15 @@ ${isFlight ? `- \`aircraft.ts\`: High-fidelity aircraft with articulated aileron
 `;
 
     const files: CodeFileTab[] = [
-        { id: 'tab-app', name: 'App.tsx', path: 'App.tsx', language: 'react', content: appContent, isEntry: true },
-        { id: 'tab-scene', name: 'scene.ts', path: 'scene.ts', language: 'typescript', content: sceneContent },
+        { id: 'tab-app', name: 'App.tsx', path: 'App.tsx', language: 'react' as SandboxLanguage, content: appContent, isEntry: true },
+        { id: 'tab-scene', name: 'scene.ts', path: 'scene.ts', language: 'typescript' as SandboxLanguage, content: sceneContent },
         ...(isFlight ? [
-            { id: 'tab-aircraft', name: 'aircraft.ts', path: 'aircraft.ts', language: 'typescript', content: aircraftContent },
-            { id: 'tab-physics', name: 'physics.ts', path: 'physics.ts', language: 'typescript', content: physicsContent },
+            { id: 'tab-aircraft', name: 'aircraft.ts', path: 'aircraft.ts', language: 'typescript' as SandboxLanguage, content: aircraftContent },
+            { id: 'tab-physics', name: 'physics.ts', path: 'physics.ts', language: 'typescript' as SandboxLanguage, content: physicsContent },
         ] : []),
-        { id: 'tab-shaders', name: 'shaders.ts', path: 'shaders.ts', language: 'typescript', content: shadersContent },
-        { id: 'tab-custom', name: 'customScript.ts', path: 'customScript.ts', language: 'typescript', content: customScriptContent },
-        { id: 'tab-readme', name: 'README.md', path: 'README.md', language: 'markdown', content: readmeContent }
+        { id: 'tab-shaders', name: 'shaders.ts', path: 'shaders.ts', language: 'typescript' as SandboxLanguage, content: shadersContent },
+        { id: 'tab-custom', name: 'customScript.ts', path: 'customScript.ts', language: 'typescript' as SandboxLanguage, content: customScriptContent },
+        { id: 'tab-readme', name: 'README.md', path: 'README.md', language: 'markdown' as SandboxLanguage, content: readmeContent }
     ];
 
     return {
