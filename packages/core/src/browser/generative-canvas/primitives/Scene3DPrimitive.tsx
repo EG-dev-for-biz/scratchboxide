@@ -1126,6 +1126,30 @@ export function extractSceneOutlinerItems(scene: THREE.Scene): Array<{ id: strin
     return items;
 }
 
+/**
+ * Checks whether the incoming Scene3DData already possesses real geometry (meshes,
+ * compiled/synthesized C++ or Python GLB buffers, source generators, splats, or 3D object URIs).
+ * If false, the viewport universally auto-synthesizes rich contextual PBR meshes to guarantee
+ * a fully populated, usable 3D scene artifact.
+ */
+export function hasRealSceneGeometry(scene: Scene3DData | undefined): boolean {
+    if (!scene) return false;
+    if (scene.customMeshes && scene.customMeshes.length > 0) return true;
+    if (scene.cppGenerator?.glbBase64 || (scene.cppGenerator?.sourceCode && scene.cppGenerator.sourceCode.trim().length > 0)) return true;
+    if (scene.pythonGenerator?.glbBase64 || (scene.pythonGenerator?.sourceCode && scene.pythonGenerator.sourceCode.trim().length > 0)) return true;
+    if (scene.splatUrl) return true;
+    if (scene.customScript || scene.code) return true;
+    if (scene.objects && scene.objects.some(o => {
+        const uri = o.content?.durableUri;
+        if (!uri) return false;
+        if (uri.startsWith('internal:')) return false;
+        return o.content?.type === 'gaussian-splat' || /\.(glb|gltf|splat|spz)($|\?)/i.test(uri);
+    })) {
+        return true;
+    }
+    return false;
+}
+
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
     onUpdate,
@@ -1179,10 +1203,8 @@ int main(int argc, char** argv) {
         shaders: data?.shaders,
         customMeshes: (() => {
             if (data?.customMeshes && data.customMeshes.length > 0) return data.customMeshes;
-            const isVehicle = /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data?.title || '') ||
-                /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(data?.worldBranch || '');
-            if (isVehicle) {
-                return synthesizeContextual3DScene(data?.title || '3D Car Visualization').customMeshes;
+            if (!hasRealSceneGeometry(data)) {
+                return synthesizeContextual3DScene(data?.title || 'Interactive 3D Scene').customMeshes;
             }
             return data?.customMeshes;
         })()
@@ -1647,16 +1669,15 @@ int main(int argc, char** argv) {
             let effectiveEnvironment = data.environment;
             let effectiveWorldBranch = data.worldBranch;
 
-            if (isVehicleTheme) {
-                if (!effectiveCustomMeshes || effectiveCustomMeshes.length === 0) {
-                    const synthesized = synthesizeContextual3DScene(data.title || '3D Car Visualization');
-                    effectiveCustomMeshes = synthesized.customMeshes;
-                    if (!effectiveCamera) effectiveCamera = synthesized.camera;
-                    if (!effectiveEnvironment) effectiveEnvironment = synthesized.environment;
-                }
-                if (effectiveWorldBranch && /city|urban|street/i.test(effectiveWorldBranch)) {
-                    effectiveWorldBranch = 'studio/showroom';
-                }
+            if (!hasRealSceneGeometry(data)) {
+                const synthesized = synthesizeContextual3DScene(data.title || 'Interactive 3D Scene');
+                effectiveCustomMeshes = synthesized.customMeshes;
+                if (!effectiveCamera) effectiveCamera = synthesized.camera;
+                if (!effectiveEnvironment) effectiveEnvironment = synthesized.environment;
+            }
+
+            if (isVehicleTheme && effectiveWorldBranch && /city|urban|street/i.test(effectiveWorldBranch)) {
+                effectiveWorldBranch = 'studio/showroom';
             }
 
             setSceneData({

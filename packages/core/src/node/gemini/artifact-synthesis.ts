@@ -36,6 +36,7 @@ import {
     synthesizeAdaptiveSandbox
 } from '../../browser/generative-canvas/services/adaptive-domain-engine';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
+import { TaskCapabilityResolver } from '../agent/task-capability-resolver';
 export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
@@ -2647,7 +2648,14 @@ export function parseOrSynthesizeArtifact(
 
                 const is3DFollowUp = !isMediaRequest && !isDocExplicitRequest && !isVideoTimelineRequest && is3DActive && is3DFollowUpKeywords;
 
+                const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(prompt);
+                const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(prompt);
+                const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(prompt);
+                const isOpenDomainSpatialSynthesis = (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) || (hasSpatialEntity && hasPhysicalMaterial);
+
                 const isExplicit3DIntent = !isVideoTimelineRequest && !isMediaRequest && (
+                    isOpenDomainSpatialSynthesis ||
+                    TaskCapabilityResolver.classifyTaskDomain(prompt) === '3d' ||
                     /\b3d\s+(?:car|vehicle|automobile|truck|sports\s*car|plane|scene|model|world|building|robot|character|mesh|room|furniture|object|simulation|asset)\b/i.test(prompt) ||
                     /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?3d\b/i.test(prompt) ||
                     /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+)?scene\b/i.test(prompt) ||
@@ -2682,7 +2690,8 @@ export function parseOrSynthesizeArtifact(
                     const isExplicitDestruction = /\b(?:clear\s*scene|reset\s*scene|start\s*over|rebuild\s*from\s*scratch|wipe\s*(?:all|scene)|delete\s*all)\b/i.test(prompt);
                     const isExplicitNewScene = /\b(?:new\s*scene|different\s*scene|from\s*scratch|completely\s*new)\b/i.test(prompt);
                     const isVehicleSwitch = !!(active3DData && !/car|vehicle|automobile|truck|sports\s*car|sedan/i.test(active3DData.title || '') && /car|vehicle|automobile|truck|sports\s*car|sedan/i.test(prompt));
-                    const isTopicChange = !is3DFollowUp || isExplicitDestruction || isExplicitNewScene || isVehicleSwitch;
+                    const isExplicitFabricationNewScene = isOpenDomainSpatialSynthesis && /\b(model|sculpt|extrude|carve|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*)\b/i.test(prompt);
+                    const isTopicChange = !is3DFollowUp || isExplicitDestruction || isExplicitNewScene || isVehicleSwitch || isExplicitFabricationNewScene;
 
                     // Synthesize procedural scene baseline based on prompt & active context
                     const docContent = request.activeArtifact?.type === 'markdown-document'

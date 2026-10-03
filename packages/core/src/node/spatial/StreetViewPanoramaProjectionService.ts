@@ -16,6 +16,10 @@
  *    (spce/StreetViewDepthUnprojector.ts).
  ********************************************************************************/
 
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import * as cp from 'child_process';
 import { decodePng, encodePng } from '../texture-processing';
 
 export interface HistoricalPanoRecord {
@@ -661,3 +665,194 @@ export function unprojectCubicFacesToPointCloud(
         splatBuffer
     };
 }
+
+export interface StreetViewTactileGridOptions {
+    panoId?: string;
+    lat?: number;
+    lng?: number;
+    zoom?: number; // default 2 (2048x1024)
+    apiKey?: string;
+    fetchImpl?: typeof fetch;
+}
+
+export interface StreetViewTactileGridResult {
+    panoId: string;
+    metadata: {
+        panoId: string;
+        lat: number;
+        lng: number;
+        heading?: number;
+        tilt?: number;
+        roll?: number;
+        date?: string;
+        copyright?: string;
+        imageWidth: number;
+        imageHeight: number;
+    };
+    width: number;
+    height: number;
+    imageBuffer: Buffer;
+    format: 'jpeg';
+    isTactile360: true;
+}
+
+function findFfmpeg(): string {
+    if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+    const candidates = ['ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg'];
+    for (const c of candidates) {
+        try {
+            cp.execSync(`${c} -version`, { stdio: 'ignore' });
+            return c;
+        } catch {
+            // continue
+        }
+    }
+    return 'ffmpeg';
+}
+
+/**
+ * Tactile 360 Tile Mode: Ingests the full 360 tactile equirectangular tile grid
+ * directly from Google Street View Map Tiles API pyramid.
+ *
+ * Guarantees:
+ * - 100% photogrammetric zenith dome (clouds, sun, ceiling, spires) up to +90° pitch
+ * - 100% photogrammetric nadir ground (asphalt, pavement, crosswalks, floor) down to -90° pitch
+ * - Zero artificial square cutout boxes or synthetic color fills
+ */
+export async function fetchStreetViewTactileGrid(
+    options: StreetViewTactileGridOptions = {}
+): Promise<StreetViewTactileGridResult> {
+    const key = options.apiKey || process.env.GOOGLE_MAPS_API_KEY || DEFAULT_GOOGLE_MAPS_API_KEY;
+    const fetchImpl = options.fetchImpl || globalThis.fetch;
+    const zoom = options.zoom ?? 2;
+
+    // 1. Create Street View session
+    const sessionRes = await fetchImpl(`https://tile.googleapis.com/v1/createSession?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapType: 'streetview', language: 'en-US', region: 'US' })
+    });
+    if (!sessionRes.ok) {
+        throw new Error(`Failed to create Street View session: ${sessionRes.statusText}`);
+    }
+    const sessionData = await sessionRes.json();
+    const session = sessionData.session;
+
+    let panoId = options.panoId;
+    if (!panoId && options.lat !== undefined && options.lng !== undefined) {
+        const panoIdsRes = await fetchImpl(`https://tile.googleapis.com/v1/streetview/panoIds?session=${encodeURIComponent(session)}&key=${key}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                locations: [{ lat: options.lat, lng: options.lng }],
+                radius: 50
+            })
+        });
+        if (panoIdsRes.ok) {
+            const data = await panoIdsRes.json();
+            if (data.panoIds && data.panoIds.length > 0) {
+                panoId = data.panoIds[0];
+            }
+        }
+    }
+
+    if (!panoId) {
+        throw new Error('No panoId found or provided for Tactile 360 Grid fetch');
+    }
+
+    // 2. Fetch Metadata
+    const metaRes = await fetchImpl(`https://tile.googleapis.com/v1/streetview/metadata?session=${encodeURIComponent(session)}&key=${key}&panoId=${encodeURIComponent(panoId)}`);
+    const metadata = metaRes.ok ? await metaRes.json() : { panoId, lat: options.lat ?? 0, lng: options.lng ?? 0, imageWidth: 2048, imageHeight: 1024 };
+
+    // 3. Discover and download tile grid
+    const tmpDir = path.join(os.tmpdir(), `sv_tactile_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    try {
+        let numCols = 0;
+        // Probe row 0 to discover width (max 8 columns at zoom 2)
+        for (let x = 0; x < 8; x++) {
+            const url = `https://tile.googleapis.com/v1/streetview/tiles/${zoom}/${x}/0?session=${encodeURIComponent(session)}&key=${key}&panoId=${encodeURIComponent(panoId)}`;
+            const res = await fetchImpl(url);
+            if (res.ok) {
+                const buf = Buffer.from(await res.arrayBuffer());
+                fs.writeFileSync(path.join(tmpDir, `tile_0_${x}.jpg`), buf);
+                numCols++;
+            } else {
+                break;
+            }
+        }
+
+        if (numCols === 0) {
+            throw new Error(`Failed to fetch any Street View tiles for panoId: ${panoId}`);
+        }
+
+        // Fetch remaining row 1 concurrently
+        const row1Tasks = [];
+        for (let x = 0; x < numCols; x++) {
+            row1Tasks.push((async () => {
+                const url = `https://tile.googleapis.com/v1/streetview/tiles/${zoom}/${x}/1?session=${encodeURIComponent(session)}&key=${key}&panoId=${encodeURIComponent(panoId)}`;
+                const res = await fetchImpl(url);
+                if (res.ok) {
+                    const buf = Buffer.from(await res.arrayBuffer());
+                    fs.writeFileSync(path.join(tmpDir, `tile_1_${x}.jpg`), buf);
+                }
+            })());
+        }
+        await Promise.all(row1Tasks);
+
+        // 4. Assemble into seamless 2:1 ERP with FFmpeg
+        const ffmpeg = findFfmpeg();
+        const outFile = path.join(tmpDir, 'stitched.jpg');
+        const inputs: string[] = [];
+        for (let y = 0; y < 2; y++) {
+            for (let x = 0; x < numCols; x++) {
+                inputs.push(`-i "${path.join(tmpDir, `tile_${y}_${x}.jpg`)}"`);
+            }
+        }
+
+        let filter = '';
+        let topInputs = '';
+        for (let x = 0; x < numCols; x++) topInputs += `[${x}:v]`;
+        filter += `${topInputs}hstack=inputs=${numCols}[top];`;
+
+        let botInputs = '';
+        for (let x = 0; x < numCols; x++) botInputs += `[${numCols + x}:v]`;
+        filter += `${botInputs}hstack=inputs=${numCols}[bot];`;
+
+        filter += `[top][bot]vstack=inputs=2,scale=2048:1024[out]`;
+
+        const ffmpegCmd = `"${ffmpeg}" -y ${inputs.join(' ')} -filter_complex "${filter}" -map "[out]" "${outFile}"`;
+        cp.execSync(ffmpegCmd, { stdio: 'pipe' });
+
+        const imageBuffer = fs.readFileSync(outFile);
+
+        return {
+            panoId,
+            metadata: {
+                panoId,
+                lat: metadata.lat ?? options.lat ?? 0,
+                lng: metadata.lng ?? options.lng ?? 0,
+                heading: metadata.heading,
+                tilt: metadata.tilt,
+                roll: metadata.roll,
+                date: metadata.date,
+                copyright: metadata.copyright,
+                imageWidth: metadata.imageWidth || 2048,
+                imageHeight: metadata.imageHeight || 1024
+            },
+            width: 2048,
+            height: 1024,
+            imageBuffer,
+            format: 'jpeg',
+            isTactile360: true
+        };
+    } finally {
+        try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+            // ignore
+        }
+    }
+}
+

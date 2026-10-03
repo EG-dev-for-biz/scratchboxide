@@ -116,7 +116,15 @@ export function hasExplicit3DDirective(text: string): boolean {
         /\b(?:4d\s*performer|4dgs\s*avatar|wan2\.2|humanoid\s*avatar\s*4d|dynamic\s*performer|dynamic\s*avatar)\b/i.test(text)
     );
 
+    // Adaptive Domain Architecture (ADA) Open-Domain Spatial Synthesis:
+    // Dimensional verbs of fabrication/modeling coupled with physical/structural descriptors.
+    const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(text);
+    const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(text);
+    const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(text);
+    const isOpenDomainSpatialSynthesis = (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) || (hasSpatialEntity && hasPhysicalMaterial);
+
     return (
+        isOpenDomainSpatialSynthesis ||
         isVehicleCreationRequest ||
         isSplatCreationRequest ||
         isSpatialSimulationRequest ||
@@ -344,9 +352,13 @@ export function synthesizeVideoTimelineFallback(text: string, activeArtifact: Ca
 
 export function synthesize3DFallback(text: string, lower: string, activeArtifact: CanvasArtifact | undefined, messages: ChatMessage[], docContentExtract: string | undefined): FallbackResult {
     const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
-    const isNewSceneDirective = /\b(?:build|make|create|generate|render|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
+    const isNewSceneDirective = /\b(?:build|make|create|generate|render|model|sculpt|construct|synthesize|assemble|fabricate|forge|carve|extrude|shape|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
     const isMutationDirective = !isNewSceneDirective && !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
-    const isTopicChange = !isMutationDirective && /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field|overpass|viaduct|highway|interchange|matterhorn|alpine|chalet|ziggurat|etemenanki|babylon|mesopotamia/i.test(text);
+    const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(text);
+    const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(text);
+    const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(text);
+    const isOpenDomainSpatialSynthesis = (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) || (hasSpatialEntity && hasPhysicalMaterial);
+    const isTopicChange = !isMutationDirective && (isOpenDomainSpatialSynthesis || /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field|overpass|viaduct|highway|interchange|matterhorn|alpine|chalet|ziggurat|etemenanki|babylon|mesopotamia/i.test(text));
     const isFreshSceneRequest = !isExisting3D || isNewSceneDirective || isTopicChange || !isMutationDirective;
 
     if (isFreshSceneRequest) {
