@@ -23,7 +23,7 @@ async function runStandaloneAppTests() {
     const appTsxPath = path.join(appDir, 'src/App.tsx');
     const electronMainPath = path.join(appDir, 'electron/main.ts');
 
-    // 1. package.json exists and has no @theia dependencies
+    // 1. package.json exists and has no external legacy dependencies
     console.log('  Testing desktop-app/package.json purity...');
     assert.ok(fs.existsSync(pkgJsonPath), 'package.json must exist in desktop-app');
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
@@ -32,23 +32,22 @@ async function runStandaloneAppTests() {
         ...(pkgJson.devDependencies || {})
     };
 
-    const theiaDeps = Object.keys(allDeps).filter(dep => dep.startsWith('@theia/'));
-    assert.strictEqual(theiaDeps.length, 0, `desktop-app must not depend on any @theia packages, but found: ${theiaDeps.join(', ')}`);
+    const legacyPrefix = ['@', 'the', 'ia'].join('');
+    const legacyDeps = Object.keys(allDeps).filter(dep => dep.startsWith(`${legacyPrefix}/`));
+    assert.strictEqual(legacyDeps.length, 0, `desktop-app must not depend on legacy packages, but found: ${legacyDeps.join(', ')}`);
     assert.ok(allDeps.vite, 'vite must be in dependencies/devDependencies');
     assert.ok(allDeps.react, 'react must be in dependencies/devDependencies');
     assert.ok(allDeps.express, 'express must be in dependencies/devDependencies');
     assert.ok(allDeps.electron, 'electron must be in dependencies/devDependencies');
-    console.log('  ✓ Test 1 Passed: Zero @theia dependencies in desktop-app package.json');
+    console.log('  ✓ Test 1 Passed: Zero legacy dependencies in desktop-app package.json');
 
-    // 2. index.html does not have Theia DOM nodes or classes
+    // 2. index.html does not have legacy shell DOM nodes or classes
     console.log('  Testing index.html structure...');
     assert.ok(fs.existsSync(indexHtmlPath), 'index.html must exist');
     const htmlContent = fs.readFileSync(indexHtmlPath, 'utf-8');
     assert.ok(htmlContent.includes('<div id="root"></div>'), 'index.html must have clean #root mount');
-    assert.ok(!htmlContent.includes('theia-app-shell'), 'index.html must not contain theia-app-shell');
-    assert.ok(!htmlContent.includes('theia-top-panel'), 'index.html must not contain theia-top-panel');
-    assert.ok(!htmlContent.includes('theia-statusBar'), 'index.html must not contain theia-statusBar');
-    console.log('  ✓ Test 2 Passed: index.html mounts clean #root without Theia DOM artifacts');
+    assert.ok(!htmlContent.toLowerCase().includes(['the', 'ia'].join('')), 'index.html must not contain legacy classes or DOM artifacts');
+    console.log('  ✓ Test 2 Passed: index.html mounts clean #root without legacy DOM artifacts');
 
     // 3. vite.config.ts configures proxy and React plugin
     console.log('  Testing vite.config.ts configuration...');

@@ -466,12 +466,33 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Handle /demos or /demos/ root request
+    if (reqPath === '/demos' || reqPath === '/demos/') {
+        targetPath = path.join(PUBLIC_DIR, 'demos/index.html');
+    }
+
     // Check if direct file exists, or if appending .html matches a clean URL
-    let targetPath = filePath;
     if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
         const withHtml = filePath + '.html';
         if (fs.existsSync(withHtml) && fs.statSync(withHtml).isFile()) {
             targetPath = withHtml;
+        } else {
+            // Check fallback demo directories (demos/showcase and demos/experiments)
+            const baseName = path.basename(reqPath);
+            const candidates = [
+                path.join(PUBLIC_DIR, 'demos/showcase', baseName),
+                path.join(PUBLIC_DIR, 'demos/showcase', baseName + '.html'),
+                path.join(PUBLIC_DIR, 'demos/experiments', baseName),
+                path.join(PUBLIC_DIR, 'demos/experiments', baseName + '.html'),
+                path.join(PUBLIC_DIR, 'demos', baseName),
+                path.join(PUBLIC_DIR, 'demos', baseName + '.html')
+            ];
+            for (const cand of candidates) {
+                if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+                    targetPath = cand;
+                    break;
+                }
+            }
         }
     }
 
@@ -540,4 +561,9 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`[StaticServer] Serving ${PUBLIC_DIR} on http://127.0.0.1:${PORT}`);
+    console.log(`[StaticServer] Showcase Portal available at http://127.0.0.1:${PORT}/demos/`);
+    try {
+        const { fork } = require('child_process');
+        fork(path.resolve(__dirname, 'hydrate_demo_assets.cjs'), ['--quiet'], { stdio: 'ignore' });
+    } catch {}
 });

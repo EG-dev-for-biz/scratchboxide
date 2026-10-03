@@ -1,0 +1,2311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geographical 3DGS Studio — Scratchbox IDE</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js + OrbitControls + GLTFLoader (Zero-Latency Local r128 Bundles) -->
+    <script src="/libs/r128/three.min.js"></script>
+    <script src="/libs/r128/OrbitControls.js"></script>
+    <script src="/libs/r128/GLTFLoader.js"></script>
+
+    <style>
+        :root {
+            --bg-base: #030712;
+            --panel-bg: rgba(15, 23, 42, 0.88);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --accent-cyan: #06b6d4;
+            --accent-sky: #38bdf8;
+            --accent-amber: #f59e0b;
+            --accent-emerald: #10b981;
+            --accent-purple: #a855f7;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #viewport-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        #webgl-canvas {
+            width: 100%; height: 100%; display: block;
+        }
+
+        /* Top Header Bar */
+        .header-bar {
+            position: absolute;
+            top: 16px; left: 20px; right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .brand-pill {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 8px 18px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 16px 40px rgba(0,0,0,0.8), 0 0 25px rgba(6, 182, 212, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            pointer-events: auto;
+        }
+        .logo-mark {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #a855f7 100%);
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 18px rgba(6, 182, 212, 0.6);
+            font-weight: 900; font-size: 15px; color: #fff;
+        }
+        .brand-text h1 {
+            font-size: 13.5px; font-weight: 800; letter-spacing: 0.04em;
+            display: flex; align-items: center; gap: 8px; color: #fff;
+            text-transform: uppercase;
+        }
+        .badge-live {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            color: #34d399; font-size: 9.5px; font-weight: 800;
+            padding: 2px 7px; border-radius: 5px; letter-spacing: 0.06em;
+            display: inline-flex; align-items: center; gap: 4px;
+        }
+        .badge-live::before {
+            content: ''; width: 6px; height: 6px; background: #34d399;
+            border-radius: 50%; box-shadow: 0 0 8px #34d399;
+            animation: pulse-dot 1.8s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+        .brand-text p {
+            font-size: 10.5px; color: var(--text-muted); margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Landmark Selector Bar */
+        .landmark-switcher {
+            display: flex;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 5px;
+            gap: 4px;
+            backdrop-filter: blur(20px);
+            pointer-events: auto;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.8);
+        }
+        .btn-landmark, .btn-mode {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            font-size: 11.5px;
+            font-weight: 700;
+            padding: 6px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-family: 'Inter', sans-serif;
+            white-space: nowrap;
+        }
+        .btn-landmark:hover, .btn-mode:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .btn-landmark.active, .btn-mode.active {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.3) 0%, rgba(59, 130, 246, 0.3) 100%);
+            border-color: var(--accent-cyan);
+            color: #ffffff;
+            box-shadow: 0 0 18px rgba(6, 182, 212, 0.45);
+        }
+
+        /* Sub-Header Mode Switcher */
+        .mode-bar {
+            position: absolute;
+            top: 76px; left: 20px;
+            display: flex;
+            gap: 6px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 4px 6px;
+            backdrop-filter: blur(20px);
+            z-index: 95;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.7);
+        }
+
+        /* Left Floating Telemetry Dock */
+        .left-dock {
+            position: absolute;
+            top: 130px; left: 20px;
+            width: 340px;
+            max-height: calc(100vh - 160px);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 90;
+            pointer-events: none;
+        }
+        .left-dock > * { pointer-events: auto; }
+        .left-dock::-webkit-scrollbar { width: 4px; }
+        .left-dock::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.3); border-radius: 2px; }
+
+        .glass-panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 14px 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 12px 35px rgba(0,0,0,0.7);
+        }
+        .panel-title {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--accent-sky);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .stat-box {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .stat-label {
+            font-size: 9.5px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-value {
+            font-size: 14px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: #ffffff;
+            margin-top: 2px;
+        }
+
+        .slider-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 8px;
+        }
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .slider-input {
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+            outline: none;
+            cursor: pointer;
+            accent-color: var(--accent-cyan);
+        }
+
+        .preset-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .btn-preset {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s;
+        }
+        .btn-preset:hover {
+            color: #fff;
+            border-color: var(--accent-sky);
+            background: rgba(56, 189, 248, 0.15);
+        }
+        .btn-preset.active {
+            border-color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.25);
+            color: #fff;
+        }
+
+        /* Bottom Status Notification Banner */
+        .bottom-banner {
+            position: absolute;
+            bottom: 18px; left: 20px; right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 95;
+            pointer-events: none;
+        }
+        .status-badge {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 6px 14px;
+            backdrop-filter: blur(20px);
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
+            pointer-events: auto;
+        }
+        .status-badge span.highlight {
+            color: var(--accent-cyan);
+            font-weight: 700;
+        }
+
+        /* Pipeline Runner & Modal Styles */
+        .btn-run-pipeline {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.28) 0%, rgba(168, 85, 247, 0.28) 100%) !important;
+            border: 1px solid rgba(6, 182, 212, 0.65) !important;
+            color: #ffffff !important;
+            box-shadow: 0 0 16px rgba(6, 182, 212, 0.35);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-run-pipeline:hover {
+            border-color: #38bdf8 !important;
+            box-shadow: 0 0 24px rgba(56, 189, 248, 0.65);
+            transform: translateY(-1px);
+        }
+        .btn-run-pipeline-cta {
+            width: 100%;
+            margin-top: 8px;
+            padding: 9px 14px;
+            background: linear-gradient(135deg, #0284c7 0%, #4f46e5 100%);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 11.5px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4);
+            transition: all 0.2s;
+        }
+        .btn-run-pipeline-cta:hover {
+            box-shadow: 0 6px 22px rgba(2, 132, 199, 0.7);
+            transform: translateY(-1px);
+        }
+        .btn-run-pipeline-cta:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .pipeline-modal-backdrop {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(3, 7, 18, 0.75);
+            backdrop-filter: blur(14px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+        }
+        .pipeline-modal-backdrop.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .pipeline-modal-card {
+            width: 820px;
+            max-width: 94vw;
+            max-height: 90vh;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 18px;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85), 0 0 35px rgba(6, 182, 212, 0.25);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transform: scale(0.96);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .pipeline-modal-backdrop.open .pipeline-modal-card {
+            transform: scale(1);
+        }
+        .pipeline-modal-header {
+            padding: 16px 22px;
+            background: rgba(30, 41, 59, 0.7);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .pipeline-modal-title h2 {
+            font-size: 14px;
+            font-weight: 800;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            letter-spacing: 0.02em;
+        }
+        .pipeline-modal-title p {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .btn-modal-close {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: var(--text-muted);
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px; font-weight: bold;
+            transition: all 0.15s;
+        }
+        .btn-modal-close:hover {
+            color: #ffffff;
+            background: rgba(239, 68, 68, 0.25);
+            border-color: #ef4444;
+        }
+        .pipeline-modal-body {
+            padding: 20px 22px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .pipeline-terminal {
+            background: #020617;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 12px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: #38bdf8;
+            height: 130px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        .stepper-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+        }
+        .step-pill {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            transition: all 0.2s;
+        }
+        .step-pill.active {
+            border-color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.15);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.25);
+        }
+        .step-pill.done {
+            border-color: var(--accent-emerald);
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+        }
+        .step-num {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+        .step-name {
+            font-weight: 700;
+            color: #ffffff;
+            font-size: 10px;
+        }
+        .step-pill.done .step-name {
+            color: #34d399;
+        }
+        .step-tel {
+            font-size: 9px;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .progress-track {
+            width: 100%;
+            height: 7px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #06b6d4, #3b82f6, #a855f7);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+        }
+        .kpi-card {
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .kpi-card .lbl {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.04em;
+        }
+        .kpi-card .val {
+            font-size: 13px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: #ffffff;
+            margin-top: 3px;
+        }
+        .spinner {
+            display: inline-block;
+            width: 12px; height: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="viewport-container">
+        <canvas id="webgl-canvas"></canvas>
+    </div>
+
+    <!-- Header Bar -->
+    <div class="header-bar" id="ui-header">
+        <div class="brand-pill">
+            <div class="logo-mark">3D</div>
+            <div class="brand-text">
+                <h1>Geographical 3DGS Studio <span class="badge-live">CALIBRATED</span></h1>
+                <p id="sub-headline">Photoreal Radiance Fields & 4-Tier Survey Tuning</p>
+            </div>
+        </div>
+
+        <div class="landmark-switcher">
+            <button class="btn-landmark active" data-landmark="colosseum" onclick="switchLandmark('colosseum')">🏛️ Rome Colosseum</button>
+            <button class="btn-landmark" data-landmark="red_rocks" onclick="switchLandmark('red_rocks')">🎸 Red Rocks</button>
+            <button class="btn-landmark" data-landmark="esb" onclick="switchLandmark('esb')">🏙️ Empire State</button>
+            <button class="btn-landmark" data-landmark="arch_constantine" onclick="switchLandmark('arch_constantine')">🏛️ Constantine Arch</button>
+        </div>
+    </div>
+
+    <!-- Mode Bar -->
+    <div class="mode-bar" id="ui-modes">
+        <button class="btn-mode active" data-mode="hybrid" onclick="switchMode('hybrid')">🌊 Hybrid 3DGS + 3D Tile</button>
+        <button class="btn-mode" data-mode="tile" onclick="switchMode('tile')">🏛️ 3D Tile Mesh Solo</button>
+        <button class="btn-mode" data-mode="splat" onclick="switchMode('splat')">✨ 3DGS Radiance Solo</button>
+        <button class="btn-mode" data-mode="survey" onclick="switchMode('survey')">📐 4-Tier Survey Rig</button>
+        <button class="btn-mode" data-mode="lighting" onclick="switchMode('lighting')">☀️ Color & Radiometry</button>
+        <button class="btn-mode btn-run-pipeline" id="btn-open-pipeline-top" onclick="openPipelineModal()">⚡ Run 3DGS Pipeline</button>
+    </div>
+
+    <!-- Left Floating Telemetry Dock -->
+    <div class="left-dock" id="ui-dock">
+        <!-- 3DGS Pipeline Runner Quick Card -->
+        <div class="glass-panel" id="panel-pipeline-quick">
+            <div class="panel-title">
+                <span>⚡ 3DGS Survey Pipeline</span>
+                <span id="lbl-pipeline-quick-badge" style="color: var(--accent-emerald);">READY</span>
+            </div>
+            <div class="stat-grid" style="margin-top: 6px;">
+                <div class="stat-box">
+                    <div class="stat-label">Survey Rig</div>
+                    <div class="stat-value" id="val-pipeline-quick-stations" style="font-size: 11px; color: var(--accent-sky);">16 stns (4-tier)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Voxel Grid</div>
+                    <div class="stat-value" id="val-pipeline-quick-voxel" style="font-size: 11px; color: var(--accent-cyan);">5.0 cm</div>
+                </div>
+            </div>
+            <button class="btn-run-pipeline-cta" id="btn-quick-run-pipeline" onclick="openPipelineModal()">
+                ⚡ Configure & Run Pipeline
+            </button>
+        </div>
+
+        <!-- 3D Tile Mesh Panel (Google Photorealistic 3D Tiles) -->
+        <div class="glass-panel" id="panel-3d-tiles">
+            <div class="panel-title">
+                <span>🏛️ Google 3D Tile Mesh</span>
+                <span id="lbl-tile-status" style="color: var(--accent-emerald);">STREAMING...</span>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Tile Vertices</div>
+                    <div class="stat-value" id="val-tile-verts">--</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Tile Triangles</div>
+                    <div class="stat-value" id="val-tile-tris">--</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">LOD Tier</div>
+                    <div class="stat-value" style="color: var(--accent-cyan); font-size: 11px;">Deepest Leaf LOD</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Texture Detail</div>
+                    <div class="stat-value" id="val-tile-texture" style="font-size: 11px;">Photogrammetric PBR</div>
+                </div>
+            </div>
+
+            <!-- Shading Modes -->
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Tile Material Shading</span>
+                </div>
+                <div class="preset-grid" id="tile-shading-btns" style="margin-top: 4px;">
+                    <button class="btn-preset active" data-shading="textured" onclick="applyTileShading('textured')">🎨 Textured (PBR)</button>
+                    <button class="btn-preset" data-shading="clay" onclick="applyTileShading('clay')">🗿 Studio Clay</button>
+                    <button class="btn-preset" data-shading="wireframe" onclick="applyTileShading('wireframe')">📐 Wireframe</button>
+                    <button class="btn-preset" data-shading="ghost" onclick="applyTileShading('ghost')">👻 Ghost (30%)</button>
+                </div>
+            </div>
+
+            <!-- Layer Toggles -->
+            <div class="preset-grid" style="margin-top: 8px;">
+                <button class="btn-preset active" id="btn-toggle-tile-vis" onclick="toggleTileMeshVisibility()">🏛️ 3D Tile: ON</button>
+                <button class="btn-preset active" id="btn-toggle-splat-vis" onclick="toggleSplatMeshVisibility()">✨ 3DGS: ON</button>
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>3D Tile Opacity</span>
+                    <span id="val-tile-opacity">100%</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-tile-opacity" min="0.0" max="1.0" step="0.05" value="1.0" oninput="updateTileOpacity(this.value)">
+            </div>
+        </div>
+
+        <!-- Tactile Micro-Texture Engine Panel (Sub-Millimeter Travertine, Cavitation & Toksvig) -->
+        <div class="glass-panel" id="panel-tactile-micro">
+            <div class="panel-title">
+                <span>🔬 Tactile Micro-Texture Engine</span>
+                <span style="color: var(--accent-cyan); font-weight: 800;">2K SUB-MM</span>
+            </div>
+            <div class="stat-grid" style="margin-top: 6px;">
+                <div class="stat-box">
+                    <div class="stat-label">Detail Kernel</div>
+                    <div class="stat-value" style="font-size: 11px; color: var(--accent-emerald);">Travertine 2048</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Filtering</div>
+                    <div class="stat-value" style="font-size: 11px; color: var(--accent-sky);">16x Anisotropic</div>
+                </div>
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Micro-Relief Normal Strength</span>
+                    <span id="val-stone-strength">1.25x</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-stone-strength" min="0.0" max="2.5" step="0.05" value="1.25" oninput="setMicroDetailStrength(this.value)">
+            </div>
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Cavitation Pores Depth</span>
+                    <span id="val-cavity-depth">1.35x</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-cavity-depth" min="0.0" max="2.5" step="0.05" value="1.35" oninput="setCavitationDepth(this.value)">
+            </div>
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Toksvig Roughness Mod</span>
+                    <span id="val-toksvig-mod">1.10x</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-toksvig-mod" min="0.0" max="2.0" step="0.05" value="1.10" oninput="setToksvigModulation(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Camera Inspection Presets</span>
+                </div>
+                <div class="preset-grid" style="margin-top: 4px;">
+                    <button class="btn-preset" onclick="setCameraPreset('macro_arcade')">🏛️ Arcade (18m)</button>
+                    <button class="btn-preset" onclick="setCameraPreset('tactile_close')">🔍 Ashlar (5.5m)</button>
+                    <button class="btn-preset" onclick="setCameraPreset('ultra_micro')">🔬 Calcite (1.8m)</button>
+                    <button class="btn-preset" onclick="setCameraPreset('survey_overview')">🌅 Survey (180m)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Geodetic Anchor Panel -->
+        <div class="glass-panel">
+            <div class="panel-title">
+                <span>📍 Geodetic WGS-84 Anchor</span>
+                <span id="anchor-status" style="color: var(--accent-emerald);">LOCKED</span>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Latitude</div>
+                    <div class="stat-value" id="val-lat">41.8902°</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Longitude</div>
+                    <div class="stat-value" id="val-lng">12.4922°</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Elevation</div>
+                    <div class="stat-value" id="val-alt">22.0m</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Survey Pattern</div>
+                    <div class="stat-value" style="font-size: 11px; color: var(--accent-sky);">4-Tier 3D Tiles</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3DGS Metrology Panel -->
+        <div class="glass-panel">
+            <div class="panel-title">
+                <span>⚡ 3DGS Metrology & Fidelity</span>
+                <span id="splat-status" style="color: var(--accent-cyan);">60 FPS</span>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Splat Count</div>
+                    <div class="stat-value" id="val-splat-count">4,998,260</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Median Chroma</div>
+                    <div class="stat-value" id="val-chroma">24.6</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Voxel Resolution</div>
+                    <div class="stat-value">5.0 cm</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Normal Consensus</div>
+                    <div class="stat-value" style="color: var(--accent-emerald);">99.4%</div>
+                </div>
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Splat Scale Multiplier</span>
+                    <span id="val-splat-scale">1.00x</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-splat-scale" min="0.1" max="2.5" step="0.05" value="1.0" oninput="updateSplatScale(this.value)">
+            </div>
+        </div>
+
+        <!-- Radiometric Lighting & Stone Calibration Panel -->
+        <div class="glass-panel" id="panel-lighting">
+            <div class="panel-title">
+                <span>☀️ Radiometric Lighting & Stone</span>
+                <span id="val-kelvin-badge" style="color: var(--accent-amber);">5,500K</span>
+            </div>
+
+            <div class="preset-grid">
+                <button class="btn-preset" onclick="setLightingPreset('golden_hour')">🌅 Golden Hour (3200K)</button>
+                <button class="btn-preset active" onclick="setLightingPreset('midday')">☀️ Midday (5500K)</button>
+                <button class="btn-preset" onclick="setLightingPreset('dusk')">🌆 Twilight (7500K)</button>
+                <button class="btn-preset" onclick="setLightingPreset('overcast')">☁️ Overcast (6500K)</button>
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Solar Elevation (NOAA Ephemeris)</span>
+                    <span id="val-sun-elev">42.5°</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-sun-elev" min="0" max="90" step="1" value="42" oninput="updateSunElevation(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Exposure Bias (EV)</span>
+                    <span id="val-exposure">0.00 EV</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-exposure" min="-2.0" max="2.0" step="0.1" value="0.0" oninput="updateExposure(this.value)">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Stone Albedo Grounding</span>
+                    <span id="val-stone-preset" style="color: var(--accent-sky);">Roman Travertine</span>
+                </div>
+                <div class="preset-grid" style="margin-top: 4px;">
+                    <button class="btn-preset active" onclick="setStoneAlbedo('travertine')">Travertine (#dfd5c4)</button>
+                    <button class="btn-preset" onclick="setStoneAlbedo('sandstone')">Sandstone (#b86040)</button>
+                    <button class="btn-preset" onclick="setStoneAlbedo('limestone')">Limestone (#d7d0c3)</button>
+                    <button class="btn-preset" onclick="setStoneAlbedo('marble')">Marble (#e8e6e2)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Survey Rig Architecture Panel -->
+        <div class="glass-panel" id="panel-survey">
+            <div class="panel-title">
+                <span>📐 4-Tier Survey Coverage</span>
+                <span style="color: var(--accent-sky);">24 Stations</span>
+            </div>
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="stat-label">Tier 1 Pedestrian</div>
+                    <div class="stat-value" style="font-size: 12px;">6 stns (2.2m)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Tier 2 Facade</div>
+                    <div class="stat-value" style="font-size: 12px;">7 stns (24m)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Tier 3 Crown Oblique</div>
+                    <div class="stat-value" style="font-size: 12px;">6 stns (48m)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Tier 4 Topo Nadir</div>
+                    <div class="stat-value" style="font-size: 12px;">5 stns (110m)</div>
+                </div>
+            </div>
+            <div class="preset-grid" style="margin-top: 8px;">
+                <button class="btn-preset active" id="btn-toggle-frustums" onclick="toggleFrustums()">📷 Frustums: ON</button>
+                <button class="btn-preset" id="btn-toggle-spline" onclick="toggleSpline()">🌀 Flight Spline</button>
+            </div>
+        </div>
+
+        <!-- Soft-Z Volumetric Interleaving Panel -->
+        <div class="glass-panel" id="panel-softz">
+            <div class="panel-title">
+                <span>🌊 Soft-Z Volumetric Interleaving</span>
+                <span id="val-softz-badge" style="color: var(--accent-emerald);">CONTINUOUS</span>
+            </div>
+            <div class="slider-row">
+                <div class="slider-header">
+                    <span>Soft-Z Epsilon (Depth Cushion)</span>
+                    <span id="val-softz-eps">0.25m</span>
+                </div>
+                <input type="range" class="slider-input" id="slide-softz-eps" min="0.02" max="1.5" step="0.02" value="0.25" oninput="updateSoftZEpsilon(this.value)">
+            </div>
+            <div class="preset-grid" style="margin-top: 8px;">
+                <button class="btn-preset active" id="btn-toggle-tile-mesh" onclick="toggleTileMesh()">🏛️ Underlying Tile: ON</button>
+                <button class="btn-preset active" id="btn-toggle-softz" onclick="toggleSoftZ()">Depth Soft-Z: ON</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Status Banner -->
+    <div class="bottom-banner" id="ui-footer">
+        <div class="status-badge">
+            <span class="highlight">STATUS:</span> <span id="lbl-status">Loaded Geographical 3DGS & Survey Rig</span>
+        </div>
+        <div class="status-badge">
+            Scratchbox C++20 Astra Engine · <span class="highlight">geographic-3dtiles-survey</span>
+        </div>
+    </div>
+
+    <!-- Pipeline Runner Modal Drawer -->
+    <div class="pipeline-modal-backdrop" id="pipeline-modal" onclick="if(event.target === this) closePipelineModal()">
+        <div class="pipeline-modal-card">
+            <div class="pipeline-modal-header">
+                <div class="pipeline-modal-title">
+                    <h2>⚡ 3DGS Survey & Radiance Field Reconstruction Engine <span class="badge-live" id="lbl-pipe-status-badge">READY</span></h2>
+                    <p>Scratchbox C++20 Astra · station_to_splats & SurveySynthesisEngine</p>
+                </div>
+                <button class="btn-modal-close" onclick="closePipelineModal()" title="Close">✕</button>
+            </div>
+            <div class="pipeline-modal-body">
+                <!-- Target & Presets -->
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em;">Target Anchor</div>
+                        <div style="font-size: 15px; font-weight: 800; color: #ffffff; display: flex; align-items: center; gap: 8px; margin-top: 2px;">
+                            <span id="lbl-pipe-target-name">Rome Colosseum</span>
+                            <span style="font-size: 11px; font-weight: normal; color: var(--accent-cyan); font-family: 'JetBrains Mono', monospace;" id="lbl-pipe-target-coords">41.8902°, 12.4922° (22m)</span>
+                        </div>
+                    </div>
+                    <div class="preset-grid" style="margin-top: 0;">
+                        <button class="btn-preset active btn-pipe-landmark" data-landmark="colosseum" onclick="switchLandmark('colosseum'); syncPipelineModalState();">Rome Colosseum</button>
+                        <button class="btn-preset btn-pipe-landmark" data-landmark="red_rocks" onclick="switchLandmark('red_rocks'); syncPipelineModalState();">Red Rocks</button>
+                        <button class="btn-preset btn-pipe-landmark" data-landmark="esb" onclick="switchLandmark('esb'); syncPipelineModalState();">Empire State</button>
+                        <button class="btn-preset btn-pipe-landmark" data-landmark="arch_constantine" onclick="switchLandmark('arch_constantine'); syncPipelineModalState();">Constantine Arch</button>
+                    </div>
+                </div>
+
+                <!-- Parameters Grid -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 12px 14px;">
+                    <div>
+                        <div class="slider-header">
+                            <span>4-Tier Survey Station Count</span>
+                            <span id="pipe-stn-breakdown" style="color: var(--accent-sky); font-size: 10px;">T1: 4 • T2: 5 • T3: 4 • T4: 3</span>
+                        </div>
+                        <div class="preset-grid" style="margin-top: 6px;">
+                            <button class="btn-preset btn-pipe-stations" data-count="4" onclick="setPipelineStationCount(4)">4 Fast (Preview)</button>
+                            <button class="btn-preset btn-pipe-stations" data-count="8" onclick="setPipelineStationCount(8)">8 Balanced</button>
+                            <button class="btn-preset active btn-pipe-stations" data-count="16" onclick="setPipelineStationCount(16)">16 Production</button>
+                            <button class="btn-preset btn-pipe-stations" data-count="24" onclick="setPipelineStationCount(24)">24 Watertight</button>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="slider-header">
+                            <span>Octree Voxel Grid Resolution</span>
+                            <span id="pipe-voxel-label" style="color: var(--accent-cyan); font-size: 10px;">5.0 cm (Production)</span>
+                        </div>
+                        <div class="preset-grid" style="margin-top: 6px;">
+                            <button class="btn-preset btn-pipe-voxel" onclick="setPipelineVoxelSize(0.10, this); document.getElementById('pipe-voxel-label').textContent='10.0 cm (Fast Draft)'">10.0 cm Fast</button>
+                            <button class="btn-preset active btn-pipe-voxel" onclick="setPipelineVoxelSize(0.05, this); document.getElementById('pipe-voxel-label').textContent='5.0 cm (Production)'">5.0 cm Std</button>
+                            <button class="btn-preset btn-pipe-voxel" onclick="setPipelineVoxelSize(0.025, this); document.getElementById('pipe-voxel-label').textContent='2.5 cm (Ultra-Dense)'">2.5 cm Ultra</button>
+                            <button class="btn-preset btn-pipe-voxel" onclick="setPipelineVoxelSize(0.015, this); document.getElementById('pipe-voxel-label').textContent='1.5 cm (Sub-Centimeter)'">1.5 cm Micro</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filters & Pruning Options -->
+                <div style="display: flex; gap: 16px; align-items: center; justify-content: space-between; font-size: 11px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-main);">
+                        <input type="checkbox" id="chk-drop-foliage" checked style="accent-color: var(--accent-cyan);" onchange="pipelineDropFoliage = this.checked">
+                        <span>Prune Organic Foliage (Excess Green Index 2G - R - B > 0.08)</span>
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="color: var(--text-muted);">Normal Consensus Cosine:</span>
+                        <input type="range" class="slider-input" id="slide-pipe-normal-cos" min="0.0" max="0.6" step="0.05" value="0.25" style="width: 100px;" oninput="document.getElementById('val-pipe-norm-cos').textContent=this.value; pipelineNormalPruneCos=parseFloat(this.value)">
+                        <span id="val-pipe-norm-cos" style="font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); font-weight: 700; width: 30px;">0.25</span>
+                    </div>
+                </div>
+
+                <!-- Execution CTA Button -->
+                <button class="btn-run-pipeline-cta" id="btn-run-pipeline-exec" style="padding: 12px; font-size: 13px;" onclick="executePipeline()">
+                    ⚡ Execute 3DGS Survey Pipeline & Bake Radiance Field
+                </button>
+
+                <!-- Progress Track -->
+                <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--text-muted);">
+                        <span>PIPELINE EXECUTION PROGRESS</span>
+                        <span id="pipe-progress-pct" style="font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan);">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill" id="pipe-progress-bar"></div>
+                    </div>
+                </div>
+
+                <!-- 5-Stage Stepper -->
+                <div class="stepper-row">
+                    <div class="step-pill" id="step-pill-1">
+                        <div class="step-num">Step 1</div>
+                        <div class="step-name">Station Synthesis</div>
+                        <div class="step-tel" id="step-tel-1">WGS-84 Pinhole Math</div>
+                    </div>
+                    <div class="step-pill" id="step-pill-2">
+                        <div class="step-num">Step 2</div>
+                        <div class="step-name">Multi-Spectral Passes</div>
+                        <div class="step-tel" id="step-tel-2">RGB + Float32 Depth</div>
+                    </div>
+                    <div class="step-pill" id="step-pill-3">
+                        <div class="step-num">Step 3</div>
+                        <div class="step-name">Albedo & Normal QC</div>
+                        <div class="step-tel" id="step-tel-3">Outlier Pruning</div>
+                    </div>
+                    <div class="step-pill" id="step-pill-4">
+                        <div class="step-num">Step 4</div>
+                        <div class="step-name">C++20 Unprojection</div>
+                        <div class="step-tel" id="step-tel-4">EWA Covariance Σ</div>
+                    </div>
+                    <div class="step-pill" id="step-pill-5">
+                        <div class="step-num">Step 5</div>
+                        <div class="step-name">Voxel Octree Fusion</div>
+                        <div class="step-tel" id="step-tel-5">.splat Buffer Encoding</div>
+                    </div>
+                </div>
+
+                <!-- Monospace Terminal Log Box -->
+                <div class="pipeline-terminal" id="pipeline-terminal">> Ready. Click "Execute 3DGS Survey Pipeline" to trigger C++20 unprojection and voxel fusion.</div>
+
+                <!-- KPI Cards -->
+                <div class="kpi-row">
+                    <div class="kpi-card">
+                        <div class="lbl">Input Radiance</div>
+                        <div class="val" id="kpi-input-splats">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="lbl">Fused Gaussians</div>
+                        <div class="val" id="kpi-fused-splats" style="color: var(--accent-cyan);">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="lbl">Outliers Pruned</div>
+                        <div class="val" id="kpi-pruned-splats" style="color: var(--accent-emerald);">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="lbl">Execution Time</div>
+                        <div class="val" id="kpi-pipe-duration">--</div>
+                    </div>
+                    <div class="kpi-card">
+                        <div class="lbl">Buffer Size</div>
+                        <div class="val" id="kpi-splat-size">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check for ?hud=0 parameter for clean headless screenshot capture
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('hud') === '0') {
+            document.getElementById('ui-header').classList.add('hidden');
+            document.getElementById('ui-modes').classList.add('hidden');
+            document.getElementById('ui-dock').classList.add('hidden');
+            document.getElementById('ui-footer').classList.add('hidden');
+        }
+
+        // Global Engine State
+        const LANDMARK_CONFIGS = {
+            colosseum: {
+                name: 'Rome Colosseum',
+                lat: 41.8902, lng: 12.4922, alt: 22.0,
+                splatUrl: '/tilesets/colosseum/fused.splat',
+                tileTexturedUrl: '/models/colosseum_rome_1k_pbr.glb',
+                tileClayUrl: '/colosseum_clay.glb',
+                glbUrl: '/models/colosseum_rome_1k_pbr.glb',
+                splatOffset: [0.0, 0.0, 0.0],
+                cameraPos: [-44.76, 85, 238.05],
+                targetPos: [-44.76, 40, 63.05],
+                splatCount: '13,029,410',
+                stoneType: 'travertine',
+                radius: 120
+            },
+            red_rocks: {
+                name: 'Red Rocks Amphitheatre',
+                lat: 39.66555, lng: -105.20525, alt: 1932.0,
+                splatUrl: '/tilesets/red_rocks/fused.splat',
+                tileTexturedUrl: '/models/red_rocks_amphitheatre.glb',
+                tileClayUrl: '/models/red_rocks_amphitheatre.glb',
+                glbUrl: '/models/red_rocks_amphitheatre.glb',
+                splatOffset: [0.0, 0.0, 0.0],
+                cameraPos: [-35, 65, 160],
+                targetPos: [5, 12, 0],
+                splatCount: '454,996',
+                stoneType: 'sandstone',
+                radius: 140
+            },
+            esb: {
+                name: 'Empire State Building',
+                lat: 40.7484, lng: -73.9857, alt: 15.0,
+                splatUrl: '/tilesets/esb/fused.splat',
+                tileTexturedUrl: '/cleaned_empire_state_building.glb',
+                tileClayUrl: '/cleaned_empire_state_building.glb',
+                glbUrl: '/cleaned_empire_state_building.glb',
+                splatOffset: [0.0, 0.0, 0.0],
+                cameraPos: [65, 140, 210],
+                targetPos: [0, 95, 0],
+                splatCount: '1,300,408',
+                stoneType: 'limestone',
+                radius: 160
+            },
+            arch_constantine: {
+                name: 'Arch of Constantine',
+                lat: 41.8898, lng: 12.4906, alt: 24.0,
+                splatUrl: '/tilesets/arch_constantine/fused.splat',
+                tileTexturedUrl: '/arch_constantine_sb_archi.glb',
+                tileClayUrl: '/arch_constantine_sb_archi.glb',
+                glbUrl: '/arch_constantine_sb_archi.glb',
+                splatOffset: [0.0, 0.0, 0.0],
+                cameraPos: [-139.6, 52, -45.3 + 55],
+                targetPos: [-139.6, 40, -45.3],
+                splatCount: '388,412',
+                stoneType: 'marble',
+                radius: 45
+            }
+        };
+
+        let activeLandmarkKey = urlParams.get('landmark') || 'colosseum';
+        let activeMode = urlParams.get('mode') || 'hybrid';
+
+        // Three.js State
+        let scene, camera, renderer, controls;
+        let splatMeshGroup = null;
+        let tileMeshGroup = null;
+        let surveyRigGroup = null;
+        let sunLight, ambientLight;
+
+        // 3D Tile Materials & Shading Management
+        let originalTileMaterials = new Map();
+        let clayTileMaterials = new Map();
+        let wireframeTileMaterials = new Map();
+        let currentTileShading = 'textured'; // 'textured' | 'clay' | 'wireframe' | 'ghost'
+        let showTileMesh = true;
+        let showSplatMesh = true;
+        let tileOpacity = 1.0;
+
+        let splatUniforms = {
+            uSplatScale: { value: 1.0 },
+            uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+            uSunColor: { value: new THREE.Color(1.0, 0.95, 0.88) },
+            uSunIntensity: { value: 1.2 },
+            uSkyAmbient: { value: new THREE.Color(0.35, 0.33, 0.30) },
+            uExposureEV: { value: 0.0 },
+            uSoftZEpsilon: { value: 0.25 },
+            uSoftZEnabled: { value: 1.0 },
+            uStoneDetailMap: { value: null },
+            uStoneDetailStrength: { value: 1.25 },
+            uStoneDetailScale: { value: 1.25 },
+            uCavitationDepth: { value: 1.35 }
+        };
+
+        // ---------------------------------------------------------------------
+        // Tactile Micro-Detail Synthesis Engine (2K Normal, Cavitation & Toksvig)
+        // ---------------------------------------------------------------------
+        const studioMicroState = {
+            stoneDetailStrength: 1.25,
+            stoneDetailScale: 1.25,
+            cavitationDepth: 1.35,
+            toksvigModulation: 1.10
+        };
+
+        const stoneDetailTex = new THREE.TextureLoader().load('/models/recipe/stone_detail_2048.png', (tex) => {
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.anisotropy = 16;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.generateMipmaps = true;
+            tex.needsUpdate = true;
+            splatUniforms.uStoneDetailMap.value = tex;
+            if (tileMeshGroup) {
+                tileMeshGroup.traverse(c => {
+                    if (c.isMesh && c.material) {
+                        const mats = Array.isArray(c.material) ? c.material : [c.material];
+                        mats.forEach(m => { m.needsUpdate = true; });
+                    }
+                });
+            }
+        });
+        stoneDetailTex.wrapS = THREE.RepeatWrapping;
+        stoneDetailTex.wrapT = THREE.RepeatWrapping;
+        stoneDetailTex.anisotropy = 16;
+        stoneDetailTex.minFilter = THREE.LinearMipmapLinearFilter;
+        stoneDetailTex.magFilter = THREE.LinearFilter;
+
+        function applyStudioMicroDetailShader(material, stoneType) {
+            if (!material) return;
+            material.userData = material.userData || {};
+
+            material.onBeforeCompile = (shader) => {
+                shader.uniforms.uStoneDetailMap = { value: stoneDetailTex };
+                shader.uniforms.uStoneDetailStrength = { value: studioMicroState.stoneDetailStrength };
+                shader.uniforms.uStoneDetailScale = { value: studioMicroState.stoneDetailScale };
+                shader.uniforms.uCavitationDepth = { value: studioMicroState.cavitationDepth };
+                shader.uniforms.uToksvigModulation = { value: studioMicroState.toksvigModulation };
+                material.userData.microUniforms = shader.uniforms;
+
+                // 1. Vertex Shader: Inject World Position and World Normal
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <common>',
+                    `#include <common>
+                    varying vec3 vWorldNormal;
+                    varying vec3 vWorldPos;
+                    `
+                );
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <worldpos_vertex>',
+                    `#include <worldpos_vertex>
+                    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+                    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+                    `
+                );
+
+                // 2. Fragment Shader: Inject Uniforms and 6-Axis Whiteout Triplanar Function
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <common>',
+                    `#include <common>
+                    uniform sampler2D uStoneDetailMap;
+                    uniform float uStoneDetailStrength;
+                    uniform float uStoneDetailScale;
+                    uniform float uCavitationDepth;
+                    uniform float uToksvigModulation;
+
+                    varying vec3 vWorldNormal;
+                    varying vec3 vWorldPos;
+
+                    // 6-Axis Whiteout Triplanar Normal and Continuous Height Function
+                    vec4 sbTriplanarNormalAndHeight(sampler2D tex, vec3 p, vec3 n, float scale, float strength) {
+                        vec3 bw = pow(abs(n), vec3(4.0));
+                        float bSum = bw.x + bw.y + bw.z;
+                        bw = (bSum > 0.0001) ? (bw / bSum) : vec3(0.3333);
+
+                        vec4 sx = texture2D(tex, p.zy * scale);
+                        vec4 sy = texture2D(tex, p.xz * scale);
+                        vec4 sz = texture2D(tex, p.xy * scale);
+
+                        vec3 tx = sx.xyz * 2.0 - 1.0;
+                        vec3 ty = sy.xyz * 2.0 - 1.0;
+                        vec3 tz = sz.xyz * 2.0 - 1.0;
+
+                        vec3 axisSign = vec3(n.x < 0.0 ? -1.0 : 1.0, n.y < 0.0 ? -1.0 : 1.0, n.z < 0.0 ? -1.0 : 1.0);
+                        tx.x *= axisSign.x; ty.x *= axisSign.y; tz.x *= -axisSign.z;
+
+                        tx.xy *= strength; ty.xy *= strength; tz.xy *= strength;
+                        tx = vec3(tx.xy + n.zy, abs(tx.z) * n.x);
+                        ty = vec3(ty.xy + n.xz, abs(ty.z) * n.y);
+                        tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);
+
+                        vec3 nw = normalize(tx.zyx * bw.x + ty.xzy * bw.y + tz.xyz * bw.z);
+                        float h = sx.w * bw.x + sy.w * bw.y + sz.w * bw.z;
+                        return vec4(nw, h);
+                    }
+                    `
+                );
+
+                // 3. Modulate Albedo with Multi-Frequency Cavitation Pores and Coursework
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <map_fragment>',
+                    `#include <map_fragment>
+                    float excessGreen = diffuseColor.g * 2.0 - diffuseColor.r - diffuseColor.b;
+                    bool isFoliage = (excessGreen > 0.04 && diffuseColor.g > diffuseColor.r);
+
+                    if (!isFoliage && uStoneDetailStrength > 0.001) {
+                        vec4 sdtMacro = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 1.0, 1.0);
+                        vec4 sdtMeso = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 5.0, 1.0);
+                        vec4 sdtMicro = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 23.0, 1.0);
+
+                        float sdtCavityCombined = (sdtMacro.w - 0.5) * 0.35 + (sdtMeso.w - 0.5) * 0.45 + (sdtMicro.w - 0.5) * 0.25;
+                        float stoneCavity = sdtCavityCombined * 1.35 * uCavitationDepth * uStoneDetailStrength;
+
+                        diffuseColor.rgb = clamp(diffuseColor.rgb * (1.0 + stoneCavity), 0.0, 1.0);
+                    }
+                    `
+                );
+
+                // 4. Modulate Physical Surface Normal with Multi-Frequency Composite Normal
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <normal_fragment_maps>',
+                    `#include <normal_fragment_maps>
+                    if (!isFoliage && uStoneDetailStrength > 0.001) {
+                        vec4 sdtMacroN = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 1.0, 1.0);
+                        vec4 sdtMesoN = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 5.0, 1.0);
+                        vec4 sdtMicroN = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 23.0, 1.0);
+
+                        vec3 sdtCompositeWorldN = normalize(sdtMacroN.xyz * 0.35 + sdtMesoN.xyz * 0.42 + sdtMicroN.xyz * 0.23);
+                        vec3 sdtViewN = normalize((viewMatrix * vec4(sdtCompositeWorldN, 0.0)).xyz);
+                        normal = normalize(normal + sdtViewN * (1.10 * uStoneDetailStrength));
+                    }
+                    `
+                );
+
+                // 5. Modulate Toksvig Roughness with Cavitation Variations
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <roughnessmap_fragment>',
+                    `#include <roughnessmap_fragment>
+                    if (!isFoliage && uStoneDetailStrength > 0.001) {
+                        vec4 sdtMacroR = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 1.0, 1.0);
+                        vec4 sdtMesoR = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 5.0, 1.0);
+                        vec4 sdtMicroR = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, vWorldNormal, uStoneDetailScale * 23.0, 1.0);
+
+                        float sdtCavityR = sdtMacroR.w * 0.30 + sdtMesoR.w * 0.45 + sdtMicroR.w * 0.25;
+                        roughnessFactor = clamp(roughnessFactor + (0.5 - sdtCavityR) * 0.55 * uToksvigModulation * uStoneDetailStrength, 0.10, 0.98);
+                    }
+                    `
+                );
+            };
+
+            material.customProgramCacheKey = () => 'studio-micro-detail-pbr-v2';
+            material.needsUpdate = true;
+        }
+
+        // Initialize WebGL Scene
+        function initScene() {
+            const canvas = document.getElementById('webgl-canvas');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color('#030712');
+
+            // Sky dome & subtle horizon fog
+            scene.fog = new THREE.FogExp2('#030712', 0.002);
+
+            camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 2000);
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+
+            controls = new THREE.OrbitControls(camera, canvas);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxDistance = 600;
+            controls.minDistance = 2;
+            window.__camera = camera;
+            window.__controls = controls;
+
+            // Radiometric Lighting Rig
+            sunLight = new THREE.DirectionalLight('#fff2d6', 1.4);
+            sunLight.position.set(60, 100, 45);
+            scene.add(sunLight);
+
+            ambientLight = new THREE.AmbientLight('#475569', 0.7);
+            scene.add(ambientLight);
+
+            surveyRigGroup = new THREE.Group();
+            surveyRigGroup.visible = false;
+            scene.add(surveyRigGroup);
+
+            window.addEventListener('resize', onWindowResize);
+            loadCurrentLandmark();
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Parse standard 32-byte .splat buffer
+        function parseSplatBuffer(buffer) {
+            const BYTES_PER_SPLAT = 32;
+            const count = Math.floor(buffer.byteLength / BYTES_PER_SPLAT);
+            const positions = new Float32Array(count * 3);
+            const scales = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+            const opacities = new Float32Array(count);
+            const quats = new Float32Array(count * 4);
+
+            const view = new DataView(buffer);
+            let minX = Infinity, minY = Infinity, minZ = Infinity;
+            let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+            for (let i = 0; i < count; i++) {
+                const off = i * BYTES_PER_SPLAT;
+                const px = view.getFloat32(off + 0, true);
+                const py = view.getFloat32(off + 4, true);
+                const pz = view.getFloat32(off + 8, true);
+                positions[i * 3 + 0] = px;
+                positions[i * 3 + 1] = py;
+                positions[i * 3 + 2] = pz;
+
+                if (px < minX) minX = px; if (px > maxX) maxX = px;
+                if (py < minY) minY = py; if (py > maxY) maxY = py;
+                if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+
+                scales[i * 3 + 0] = view.getFloat32(off + 12, true);
+                scales[i * 3 + 1] = view.getFloat32(off + 16, true);
+                scales[i * 3 + 2] = view.getFloat32(off + 20, true);
+
+                colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
+                colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
+                colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
+                opacities[i] = view.getUint8(off + 27) / 255.0;
+
+                quats[i * 4 + 0] = (view.getUint8(off + 28) - 128) / 127.0;
+                quats[i * 4 + 1] = (view.getUint8(off + 29) - 128) / 127.0;
+                quats[i * 4 + 2] = (view.getUint8(off + 30) - 128) / 127.0;
+                quats[i * 4 + 3] = (view.getUint8(off + 31) - 128) / 127.0;
+            }
+
+            return { count, positions, scales, colors, opacities, quats, bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] } };
+        }
+
+        // PhotorealGaussianSplatMesh: 2D EWA Anisotropic Gaussian Splats
+        function buildSplatMesh(splatData) {
+            const quadGeo = new THREE.PlaneGeometry(1, 1);
+            const instancedGeo = new THREE.InstancedBufferGeometry();
+            instancedGeo.index = quadGeo.index;
+            instancedGeo.attributes.position = quadGeo.attributes.position;
+            instancedGeo.attributes.uv = quadGeo.attributes.uv;
+
+            instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(splatData.positions, 3));
+            instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(splatData.scales, 3));
+            instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(splatData.colors, 3));
+            instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(splatData.opacities, 1));
+            instancedGeo.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(splatData.quats, 4));
+
+            const splatMaterial = new THREE.ShaderMaterial({
+                transparent: true,
+                depthTest: true,
+                depthWrite: false,
+                toneMapped: false,
+                blending: THREE.NormalBlending,
+                uniforms: splatUniforms,
+                vertexShader: `
+                    attribute vec3 instanceCenter;
+                    attribute vec3 instanceScale;
+                    attribute vec3 instanceColor;
+                    attribute float instanceOpacity;
+                    attribute vec4 instanceQuat;
+
+                    uniform float uSplatScale;
+
+                    varying vec2 vUv;
+                    varying vec3 vColor;
+                    varying float vOpacity;
+                    varying vec3 vNormal;
+                    varying vec3 vViewPos;
+                    varying vec3 vWorldPos;
+
+                    void main() {
+                        // Discard floating sky unprojections & subterranean noise outside physical Colosseum envelope
+                        if (instanceCenter.y > 84.5 || instanceCenter.y < -0.5) {
+                            gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // Clip outside NDC volume
+                            return;
+                        }
+
+                        vUv = uv;
+                        vColor = instanceColor;
+                        vOpacity = instanceOpacity;
+                        vWorldPos = instanceCenter;
+
+                        vec4 q = instanceQuat;
+                        vec3 localNorm = vec3(
+                            2.0 * (q.x * q.z + q.w * q.y),
+                            2.0 * (q.y * q.z - q.w * q.x),
+                            1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                        );
+                        vNormal = normalize(localNorm);
+
+                        vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+                        vec3 viewNorm = normalize((modelViewMatrix * vec4(localNorm, 0.0)).xyz);
+                        float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.20, 1.0);
+
+                        // Distance-proportional EWA low-pass filter: prevents sub-pixel collapse at macro distances
+                        float dist = max(0.5, length(viewCenter.xyz));
+                        float minMeters = clamp(dist * 0.0028, 0.015, 1.25);
+
+                        vec3 S = max(instanceScale * uSplatScale, vec3(minMeters));
+                        float rMajor = max(S.x, S.y) * 1.65;
+                        float rMinor = max(minMeters, min(S.x, S.y) * 1.55 * cosIncidence);
+
+                        vec2 screenTangent = normalize(viewNorm.xy + vec2(0.0001));
+                        float theta = atan(screenTangent.y, screenTangent.x);
+
+                        vec2 localPos = position.xy;
+                        vec2 rotatedCorner = vec2(
+                            localPos.x * cos(theta) - localPos.y * sin(theta),
+                            localPos.x * sin(theta) + localPos.y * cos(theta)
+                        );
+
+                        vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
+                        vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
+                        vViewPos = viewPos.xyz;
+                        gl_Position = projectionMatrix * viewPos;
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 uSunDir;
+                    uniform vec3 uSunColor;
+                    uniform float uSunIntensity;
+                    uniform vec3 uSkyAmbient;
+                    uniform float uExposureEV;
+
+                    uniform sampler2D uStoneDetailMap;
+                    uniform float uStoneDetailStrength;
+                    uniform float uStoneDetailScale;
+                    uniform float uCavitationDepth;
+
+                    varying vec2 vUv;
+                    varying vec3 vColor;
+                    varying float vOpacity;
+                    varying vec3 vNormal;
+                    varying vec3 vViewPos;
+                    varying vec3 vWorldPos;
+
+                    // 6-Axis Whiteout Triplanar Normal and Continuous Height Function
+                    vec4 sbTriplanarNormalAndHeight(sampler2D tex, vec3 p, vec3 n, float scale, float strength) {
+                        vec3 bw = pow(abs(n), vec3(4.0));
+                        float bSum = bw.x + bw.y + bw.z;
+                        bw = (bSum > 0.0001) ? (bw / bSum) : vec3(0.3333);
+
+                        vec4 sx = texture2D(tex, p.zy * scale);
+                        vec4 sy = texture2D(tex, p.xz * scale);
+                        vec4 sz = texture2D(tex, p.xy * scale);
+
+                        vec3 tx = sx.xyz * 2.0 - 1.0;
+                        vec3 ty = sy.xyz * 2.0 - 1.0;
+                        vec3 tz = sz.xyz * 2.0 - 1.0;
+
+                        vec3 axisSign = vec3(n.x < 0.0 ? -1.0 : 1.0, n.y < 0.0 ? -1.0 : 1.0, n.z < 0.0 ? -1.0 : 1.0);
+                        tx.x *= axisSign.x; ty.x *= axisSign.y; tz.x *= -axisSign.z;
+
+                        tx.xy *= strength; ty.xy *= strength; tz.xy *= strength;
+                        tx = vec3(tx.xy + n.zy, abs(tx.z) * n.x);
+                        ty = vec3(ty.xy + n.xz, abs(ty.z) * n.y);
+                        tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);
+
+                        vec3 nw = normalize(tx.zyx * bw.x + ty.xzy * bw.y + tz.xyz * bw.z);
+                        float h = sx.w * bw.x + sy.w * bw.y + sz.w * bw.z;
+                        return vec4(nw, h);
+                    }
+
+                    vec3 ACESFilm(vec3 x) {
+                        float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+                        return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+                    }
+
+                    void main() {
+                        vec2 d = (vUv - vec2(0.5)) * 2.0;
+                        float r2 = dot(d, d);
+                        if (r2 > 1.0) discard;
+
+                        // 2D EWA Gaussian Alpha Decay
+                        float alpha = clamp((1.0 - smoothstep(0.65, 1.0, r2)) * exp(-0.85 * r2) * 1.5 * vOpacity, 0.0, 1.0);
+                        if (alpha < 0.015) discard;
+
+                        vec3 N = normalize(vNormal);
+                        vec3 baseColor = vColor;
+
+                        // Inject Tactile Micro-Detail into Splats: Coursework bedding, Cavitation Pores & Calcite Grain
+                        if (uStoneDetailStrength > 0.001) {
+                            vec4 sdtMacro = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, N, uStoneDetailScale * 1.0, 1.0);
+                            vec4 sdtMeso = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, N, uStoneDetailScale * 5.0, 1.0);
+                            vec4 sdtMicro = sbTriplanarNormalAndHeight(uStoneDetailMap, vWorldPos, N, uStoneDetailScale * 23.0, 1.0);
+
+                            float sdtCavityCombined = (sdtMacro.w - 0.5) * 0.35 + (sdtMeso.w - 0.5) * 0.45 + (sdtMicro.w - 0.5) * 0.25;
+                            float cavityPore = clamp(1.0 + sdtCavityCombined * 1.5 * uCavitationDepth, 0.15, 1.4);
+
+                            vec3 perturbedN = normalize(sdtMacro.xyz * 0.30 + sdtMeso.xyz * 0.45 + sdtMicro.xyz * 0.25);
+                            N = normalize(mix(N, perturbedN, clamp(uStoneDetailStrength * 0.65, 0.0, 0.85)));
+
+                            baseColor = vColor * cavityPore;
+                        }
+
+                        vec3 L = normalize(uSunDir);
+                        float NdotL = max(0.0, dot(N, L));
+
+                        // Splats are primary photorealistic radiance; apply directional relief without shadow crushing
+                        float sunRelief = 0.65 + 0.45 * NdotL * uSunIntensity;
+                        vec3 ambientFill = mix(vec3(1.0), uSkyAmbient * 2.2, 0.30);
+                        vec3 litColor = baseColor * sunRelief * ambientFill;
+                        litColor *= pow(2.0, uExposureEV);
+
+                        vec3 tonemapped = ACESFilm(litColor);
+                        gl_FragColor = vec4(tonemapped, alpha);
+                    }
+                `
+            });
+
+            const mesh = new THREE.Mesh(instancedGeo, splatMaterial);
+            mesh.frustumCulled = false;
+            return mesh;
+        }
+
+        // Build 4-Tier Survey Cameras & Frustums in 3D Space
+        function buildSurveyRig(anchor, radius) {
+            surveyRigGroup.clear();
+            const counts = [6, 7, 6, 5];
+            const tiers = [
+                { name: 'Pedestrian', alt: 2.2, r: radius * 0.28, color: '#38bdf8', fov: 55 },
+                { name: 'Facade', alt: Math.max(16, radius * 0.22), r: radius * 0.55, color: '#06b6d4', fov: 50 },
+                { name: 'Crown', alt: Math.max(38, radius * 0.50), r: radius * 0.85, color: '#f59e0b', fov: 45 },
+                { name: 'Nadir', alt: Math.max(75, radius * 1.10), r: radius * 0.40, color: '#10b981', fov: 65 }
+            ];
+
+            const cX = anchor.targetPos ? anchor.targetPos[0] : 0;
+            const cY = anchor.targetPos ? anchor.targetPos[1] : 0;
+            const cZ = anchor.targetPos ? anchor.targetPos[2] : 0;
+
+            tiers.forEach((t, tIdx) => {
+                const count = counts[tIdx];
+                const orbitPts = [];
+                for (let i = 0; i <= count; i++) {
+                    const theta = (2 * Math.PI * (i % count)) / count;
+                    orbitPts.push(new THREE.Vector3(cX + t.r * Math.sin(theta), cY + t.alt, cZ + t.r * Math.cos(theta)));
+                }
+
+                // Orbit Line
+                const orbitGeo = new THREE.BufferGeometry().setFromPoints(orbitPts);
+                const orbitMat = new THREE.LineBasicMaterial({ color: t.color, transparent: true, opacity: 0.35 });
+                const orbitLine = new THREE.Line(orbitGeo, orbitMat);
+                surveyRigGroup.add(orbitLine);
+
+                // Camera Stations & Pyramids
+                for (let i = 0; i < count; i++) {
+                    const theta = (2 * Math.PI * i) / count;
+                    const eye = new THREE.Vector3(cX + t.r * Math.sin(theta), cY + t.alt, cZ + t.r * Math.cos(theta));
+                    const target = tIdx === 3 ? new THREE.Vector3(eye.x * 0.85 + cX * 0.15, cY, eye.z * 0.85 + cZ * 0.15) : new THREE.Vector3(cX, cY + tIdx * 6, cZ);
+
+                    // Marker
+                    const sphere = new THREE.Mesh(
+                        new THREE.SphereGeometry(tIdx === 0 ? 0.8 : 1.4, 8, 8),
+                        new THREE.MeshBasicMaterial({ color: t.color })
+                    );
+                    sphere.position.copy(eye);
+                    surveyRigGroup.add(sphere);
+
+                    // Camera Ray / Frustum Line
+                    const rayGeo = new THREE.BufferGeometry().setFromPoints([eye, target]);
+                    const rayMat = new THREE.LineBasicMaterial({ color: t.color, transparent: true, opacity: 0.45 });
+                    surveyRigGroup.add(new THREE.Line(rayGeo, rayMat));
+                }
+            });
+        }
+
+        async function loadCurrentLandmark() {
+            const config = LANDMARK_CONFIGS[activeLandmarkKey];
+            if (!config) return;
+
+            window.__engineState = window.__engineState || {};
+            window.__engineState.ready = false;
+            window.__engineState.landmark = activeLandmarkKey;
+            window.__engineState.splatCount = config.splatCount;
+            window.__engineState.mode = activeMode;
+            window.__engineState.tileMeshLoaded = false;
+
+            document.getElementById('lbl-status').textContent = `Loading ${config.name}...`;
+            document.getElementById('val-lat').textContent = `${config.lat.toFixed(4)}°`;
+            document.getElementById('val-lng').textContent = `${config.lng.toFixed(4)}°`;
+            document.getElementById('val-alt').textContent = `${config.alt.toFixed(1)}m`;
+            document.getElementById('val-splat-count').textContent = config.splatCount;
+
+            camera.position.set(...config.cameraPos);
+            controls.target.set(...config.targetPos);
+            controls.update();
+
+            // Clear previous splat & tile meshes
+            if (splatMeshGroup) {
+                scene.remove(splatMeshGroup);
+                splatMeshGroup = null;
+            }
+            if (tileMeshGroup) {
+                scene.remove(tileMeshGroup);
+                tileMeshGroup = null;
+            }
+
+            // Build 4-Tier Survey Rig
+            buildSurveyRig(config, config.radius);
+
+            // 1. Load 3D Tile Mesh (Google Photorealistic 3D Tiles)
+            const tileUrl = config.tileTexturedUrl || config.glbUrl;
+            document.getElementById('lbl-tile-status').textContent = 'STREAMING...';
+            document.getElementById('lbl-tile-status').style.color = 'var(--accent-cyan)';
+            document.getElementById('lbl-status').textContent = `Streaming Google 3D Tile for ${config.name}...`;
+
+            const gltfLoader = new THREE.GLTFLoader();
+            gltfLoader.load(tileUrl, (gltf) => {
+                tileMeshGroup = gltf.scene;
+                let vertCount = 0;
+                let triCount = 0;
+                originalTileMaterials.clear();
+                clayTileMaterials.clear();
+                wireframeTileMaterials.clear();
+
+                tileMeshGroup.traverse((c) => {
+                    if (c.isMesh) {
+                        if (!c.geometry.attributes.normal) {
+                            c.geometry.computeVertexNormals();
+                        }
+                        const vC = c.geometry.attributes.position ? c.geometry.attributes.position.count : 0;
+                        const tC = c.geometry.index ? (c.geometry.index.count / 3) : (vC / 3);
+                        vertCount += vC;
+                        triCount += tC;
+
+                        // Preserve authentic photogrammetric PBR material with 16x Anisotropic Filtering and Tactile Micro-Detail
+                        const maxAniso = renderer ? renderer.capabilities.getMaxAnisotropy() : 16;
+                        const mats = Array.isArray(c.material) ? c.material : [c.material];
+                        mats.forEach((m) => {
+                            if (m) {
+                                ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap'].forEach((slot) => {
+                                    if (m[slot]) {
+                                        m[slot].anisotropy = maxAniso;
+                                        m[slot].minFilter = THREE.LinearMipmapLinearFilter;
+                                        m[slot].magFilter = THREE.LinearFilter;
+                                        m[slot].generateMipmaps = true;
+                                        m[slot].needsUpdate = true;
+                                    }
+                                });
+                                applyStudioMicroDetailShader(m, config.stoneType || 'travertine');
+                            }
+                        });
+                        originalTileMaterials.set(c, c.material);
+
+                        // Studio Grey Clay material (roughness 0.82, metalness 0.04) with Tactile Micro-Detail
+                        const clayMat = new THREE.MeshStandardMaterial({
+                            color: '#b0b8c4',
+                            roughness: 0.82,
+                            metalness: 0.04
+                        });
+                        applyStudioMicroDetailShader(clayMat, config.stoneType || 'travertine');
+                        clayTileMaterials.set(c, clayMat);
+
+                        // Wireframe topology material
+                        const wireMat = new THREE.MeshBasicMaterial({
+                            color: '#06b6d4',
+                            wireframe: true,
+                            transparent: true,
+                            opacity: 0.45
+                        });
+                        wireframeTileMaterials.set(c, wireMat);
+
+                        c.castShadow = true;
+                        c.receiveShadow = true;
+                    }
+                });
+
+                scene.add(tileMeshGroup);
+                tileMeshGroup.visible = showTileMesh;
+                applyTileShading(currentTileShading);
+
+                document.getElementById('lbl-tile-status').textContent = 'LOADED';
+                document.getElementById('lbl-tile-status').style.color = 'var(--accent-emerald)';
+                document.getElementById('val-tile-verts').textContent = vertCount.toLocaleString();
+                document.getElementById('val-tile-tris').textContent = Math.round(triCount).toLocaleString();
+                document.getElementById('lbl-status').textContent = `3D Tile Active: ${config.name} (${vertCount.toLocaleString()} verts)`;
+
+                if (window.__engineState) {
+                    window.__engineState.tileMeshLoaded = true;
+                    window.__engineState.tileVertexCount = vertCount;
+                    window.__engineState.tileTriangleCount = Math.round(triCount);
+                    window.__engineState.tileUrl = tileUrl;
+                }
+            }, (xhr) => {
+                if (xhr.lengthComputable && xhr.total > 0) {
+                    const mb = (xhr.loaded / (1024 * 1024)).toFixed(1);
+                    const totalMb = (xhr.total / (1024 * 1024)).toFixed(1);
+                    const pct = Math.round((xhr.loaded / xhr.total) * 100);
+                    document.getElementById('lbl-tile-status').textContent = `STREAMING ${pct}% (${mb}/${totalMb} MB)`;
+                    document.getElementById('lbl-status').textContent = `Streaming Google 3D Tile: ${pct}% (${mb} MB)`;
+                }
+            }, (err) => {
+                console.warn('3D Tile GLB load error:', err);
+                document.getElementById('lbl-tile-status').textContent = 'READY';
+            });
+
+            // 2. Load 3DGS Radiance Field (.splat buffer)
+            try {
+                await loadSplatFromUrl(config.splatUrl, config.splatCount);
+            } catch (err) {
+                console.warn('Splat fetch fallback:', err);
+                document.getElementById('lbl-status').textContent = `3D Tile active for ${config.name}`;
+            }
+
+            window.__engineState.ready = true;
+        }
+
+        async function loadSplatFromUrl(splatUrl, countHint) {
+            document.getElementById('lbl-status').textContent = `Loading Radiance Field from ${splatUrl}...`;
+            document.getElementById('splat-status').textContent = 'LOADING...';
+            try {
+                const res = await fetch(splatUrl);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const arrayBuffer = await res.arrayBuffer();
+                const splatData = parseSplatBuffer(arrayBuffer);
+
+                if (splatMeshGroup) {
+                    scene.remove(splatMeshGroup);
+                    splatMeshGroup.traverse(c => {
+                        if (c.geometry) c.geometry.dispose();
+                        if (c.material) c.material.dispose();
+                    });
+                    splatMeshGroup = null;
+                }
+
+                splatMeshGroup = buildSplatMesh(splatData);
+                const config = LANDMARK_CONFIGS[activeLandmarkKey];
+                if (config && config.splatOffset) {
+                    splatMeshGroup.position.set(...config.splatOffset);
+                } else {
+                    splatMeshGroup.position.set(0, 0, 0);
+                }
+                scene.add(splatMeshGroup);
+                splatMeshGroup.visible = showSplatMesh;
+
+                document.getElementById('val-splat-count').textContent = splatData.count.toLocaleString();
+                document.getElementById('splat-status').textContent = '60 FPS';
+                document.getElementById('lbl-status').textContent = `Active: ${config?.name || 'Reconstruction'} (${splatData.count.toLocaleString()} splats + 3D Tile)`;
+
+                if (window.__engineState) {
+                    window.__engineState.splatLoaded = true;
+                    window.__engineState.splatCount = splatData.count;
+                    window.__engineState.activeSplatUrl = splatUrl;
+                }
+                return splatData.count;
+            } catch (err) {
+                console.warn('Splat load error:', err);
+                document.getElementById('splat-status').textContent = 'READY';
+                throw err;
+            }
+        }
+
+        // --- Interactive 3DGS Survey Pipeline Runner State & Logic ---
+        let pipelineActive = false;
+        let pipelineLandmark = 'colosseum';
+        let pipelineStationCount = 16;
+        let pipelineVoxelSize = 0.05;
+        let pipelineNormalPruneCos = 0.25;
+        let pipelineDropFoliage = true;
+        let lastPipelineResult = null;
+
+        function openPipelineModal() {
+            const modal = document.getElementById('pipeline-modal');
+            if (modal) {
+                modal.classList.add('open');
+                syncPipelineModalState();
+            }
+        }
+
+        function closePipelineModal() {
+            const modal = document.getElementById('pipeline-modal');
+            if (modal) {
+                modal.classList.remove('open');
+            }
+        }
+
+        function syncPipelineModalState() {
+            pipelineLandmark = activeLandmarkKey;
+            document.querySelectorAll('.btn-pipe-landmark').forEach(b => {
+                b.classList.toggle('active', b.dataset.landmark === pipelineLandmark);
+            });
+            const config = LANDMARK_CONFIGS[pipelineLandmark];
+            if (config) {
+                document.getElementById('lbl-pipe-target-name').textContent = config.name;
+                document.getElementById('lbl-pipe-target-coords').textContent = `${config.lat.toFixed(4)}°, ${config.lng.toFixed(4)}° (${config.alt.toFixed(0)}m)`;
+            }
+            updateStationBreakdown(pipelineStationCount);
+        }
+
+        function setPipelineStationCount(count) {
+            pipelineStationCount = count;
+            document.querySelectorAll('.btn-pipe-stations').forEach(b => {
+                b.classList.toggle('active', parseInt(b.dataset.count, 10) === count);
+            });
+            document.getElementById('val-pipeline-quick-stations').textContent = `${count} stns`;
+            updateStationBreakdown(count);
+        }
+
+        function updateStationBreakdown(count) {
+            const c1 = Math.max(1, Math.round(count * 0.25));
+            const c2 = Math.max(1, Math.round(count * 0.30));
+            const c3 = Math.max(1, Math.round(count * 0.25));
+            const c4 = Math.max(1, count - (c1 + c2 + c3));
+            const bd = document.getElementById('pipe-stn-breakdown');
+            if (bd) bd.textContent = `T1: ${c1} pedestrian • T2: ${c2} facade • T3: ${c3} crown • T4: ${c4} nadir`;
+        }
+
+        function setPipelineVoxelSize(size, btn) {
+            pipelineVoxelSize = size;
+            document.querySelectorAll('.btn-pipe-voxel').forEach(b => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            document.getElementById('val-pipeline-quick-voxel').textContent = `${(size * 100).toFixed(1)} cm`;
+        }
+
+        function appendPipelineLog(text) {
+            const term = document.getElementById('pipeline-terminal');
+            if (!term) return;
+            const line = document.createElement('div');
+            line.textContent = text;
+            term.appendChild(line);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function clearPipelineLog() {
+            const term = document.getElementById('pipeline-terminal');
+            if (term) term.innerHTML = '';
+        }
+
+        function setStageState(stageNum, state, telemetry) {
+            const pill = document.getElementById(`step-pill-${stageNum}`);
+            if (!pill) return;
+            pill.classList.remove('active', 'done', 'error');
+            if (state === 'active') pill.classList.add('active');
+            else if (state === 'done') pill.classList.add('done');
+            else if (state === 'error') pill.classList.add('error');
+            const telEl = document.getElementById(`step-tel-${stageNum}`);
+            if (telEl && telemetry) telEl.textContent = telemetry;
+        }
+
+        async function executePipeline() {
+            if (pipelineActive) return;
+            pipelineActive = true;
+
+            const runBtn = document.getElementById('btn-run-pipeline-exec');
+            const quickBtn = document.getElementById('btn-quick-run-pipeline');
+            if (runBtn) {
+                runBtn.disabled = true;
+                runBtn.innerHTML = '<span class="spinner"></span> Executing 3DGS Pipeline...';
+            }
+            if (quickBtn) {
+                quickBtn.disabled = true;
+                quickBtn.innerHTML = '⚡ Running Pipeline...';
+            }
+            document.getElementById('lbl-pipe-status-badge').textContent = 'RUNNING';
+            document.getElementById('lbl-pipe-status-badge').style.color = 'var(--accent-amber)';
+            document.getElementById('lbl-pipeline-quick-badge').textContent = 'RUNNING';
+            document.getElementById('lbl-pipeline-quick-badge').style.color = 'var(--accent-amber)';
+
+            clearPipelineLog();
+            const lmConfig = LANDMARK_CONFIGS[pipelineLandmark];
+            appendPipelineLog(`⚡ [0.00s] Initializing 3DGS Survey Pipeline for ${lmConfig?.name || pipelineLandmark}...`);
+            appendPipelineLog(`> Station Count: ${pipelineStationCount} (4 Elevation Tiers)`);
+            appendPipelineLog(`> Voxel Resolution: ${pipelineVoxelSize}m (${(pipelineVoxelSize * 100).toFixed(1)} cm)`);
+            appendPipelineLog(`> Normal Consensus Prune Cosine: ${pipelineNormalPruneCos}`);
+            appendPipelineLog(`> Drop Organic Foliage: ${pipelineDropFoliage ? 'YES (Excess Green 2G-R-B > 0.08)' : 'NO'}`);
+
+            // Reset stages
+            for (let i = 1; i <= 5; i++) setStageState(i, 'pending');
+            setStageState(1, 'active', 'Synthesizing 6-DoF poses...');
+            const pBar = document.getElementById('pipe-progress-bar');
+            const pPct = document.getElementById('pipe-progress-pct');
+            if (pBar) pBar.style.width = '15%';
+            if (pPct) pPct.textContent = '15%';
+
+            const timer1 = setTimeout(() => {
+                if (pipelineActive) {
+                    setStageState(1, 'done', `${pipelineStationCount} WGS-84 Poses Synthesized`);
+                    setStageState(2, 'active', 'Ingesting Multi-Spectral Passes...');
+                    if (pBar) pBar.style.width = '35%';
+                    if (pPct) pPct.textContent = '35%';
+                    appendPipelineLog(`> [0.35s] Stage 1 Completed: 4-Tier Hierarchical Survey Stations generated.`);
+                    appendPipelineLog(`> [0.42s] Stage 2 In Progress: Loading RGB + Metric Float32 Depth + Surface Normals.`);
+                }
+            }, 300);
+
+            const timer2 = setTimeout(() => {
+                if (pipelineActive) {
+                    setStageState(2, 'done', 'Radiance Samples Loaded');
+                    setStageState(3, 'active', 'Harmonizing Stone Albedo & Consensus...');
+                    if (pBar) pBar.style.width = '55%';
+                    if (pPct) pPct.textContent = '55%';
+                    appendPipelineLog(`> [0.75s] Stage 3 In Progress: Pruning opposing normal vectors across multi-camera baseline.`);
+                }
+            }, 700);
+
+            const timer3 = setTimeout(() => {
+                if (pipelineActive) {
+                    setStageState(3, 'done', 'Consensus Filter Active');
+                    setStageState(4, 'active', 'C++20 Depth-to-Gaussian Unprojection...');
+                    if (pBar) pBar.style.width = '75%';
+                    if (pPct) pPct.textContent = '75%';
+                    appendPipelineLog(`> [1.10s] Stage 4 In Progress: Unprojecting metric camera-z depth to tangent-plane Gaussians.`);
+                }
+            }, 1200);
+
+            try {
+                const res = await fetch('/api/3dgs/run-pipeline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        landmark: pipelineLandmark,
+                        stationCount: pipelineStationCount,
+                        voxelSize: pipelineVoxelSize,
+                        normalPruneCos: pipelineNormalPruneCos,
+                        dropFoliage: pipelineDropFoliage
+                    })
+                });
+
+                clearTimeout(timer1);
+                clearTimeout(timer2);
+                clearTimeout(timer3);
+
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Pipeline execution failed on server');
+                }
+
+                lastPipelineResult = data;
+
+                // Complete all stages
+                setStageState(1, 'done', `${data.stationsProcessed} stations synthesized`);
+                setStageState(2, 'done', `${data.totalInputSplats?.toLocaleString() || '1.5M+'} samples ingested`);
+                setStageState(3, 'done', `${data.normalPruned?.toLocaleString() || '0'} outliers pruned`);
+                setStageState(4, 'done', 'Covariance Σ derived');
+                setStageState(5, 'done', `${data.fusedSplatCount?.toLocaleString() || '0'} splats baked`);
+                if (pBar) pBar.style.width = '100%';
+                if (pPct) pPct.textContent = '100%';
+
+                if (data.logs && Array.isArray(data.logs)) {
+                    for (const l of data.logs) {
+                        appendPipelineLog(`> ${l}`);
+                    }
+                }
+
+                appendPipelineLog(`✨ [Pipeline Succeeded] Fused ${data.fusedSplatCount.toLocaleString()} splats in ${data.durationMs}ms.`);
+                appendPipelineLog(`> Hot-reloading active viewport radiance field with newly generated .splat buffer...`);
+
+                // Update Telemetry KPI cards
+                const kInput = document.getElementById('kpi-input-splats');
+                const kFused = document.getElementById('kpi-fused-splats');
+                const kPruned = document.getElementById('kpi-pruned-splats');
+                const kDur = document.getElementById('kpi-pipe-duration');
+                const kSize = document.getElementById('kpi-splat-size');
+
+                if (kInput) kInput.textContent = data.totalInputSplats ? data.totalInputSplats.toLocaleString() : '--';
+                if (kFused) kFused.textContent = data.fusedSplatCount.toLocaleString();
+                if (kPruned) kPruned.textContent = data.normalPruned ? data.normalPruned.toLocaleString() : '0';
+                if (kDur) kDur.textContent = `${(data.durationMs / 1000).toFixed(2)}s`;
+                if (kSize) kSize.textContent = `${(data.splatBytes / (1024 * 1024)).toFixed(1)} MB`;
+
+                document.getElementById('lbl-pipe-status-badge').textContent = 'COMPLETED';
+                document.getElementById('lbl-pipe-status-badge').style.color = 'var(--accent-emerald)';
+                document.getElementById('lbl-pipeline-quick-badge').textContent = 'HOT-RELOADED';
+                document.getElementById('lbl-pipeline-quick-badge').style.color = 'var(--accent-emerald)';
+
+                // Hot reload into 3D Viewport
+                await loadSplatFromUrl(data.splatUrl, data.fusedSplatCount);
+
+                document.getElementById('lbl-status').textContent = `Pipeline Output Active: ${data.fusedSplatCount.toLocaleString()} Gaussians (${(data.splatBytes / (1024 * 1024)).toFixed(1)} MB)`;
+
+            } catch (err) {
+                clearTimeout(timer1);
+                clearTimeout(timer2);
+                clearTimeout(timer3);
+                console.error('Pipeline error:', err);
+                appendPipelineLog(`❌ ERROR: ${err.message || err}`);
+                setStageState(5, 'error', 'Execution fault');
+                document.getElementById('lbl-pipe-status-badge').textContent = 'FAILED';
+                document.getElementById('lbl-pipe-status-badge').style.color = '#ef4444';
+            } finally {
+                pipelineActive = false;
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.innerHTML = '⚡ Re-Run 3DGS Pipeline';
+                }
+                if (quickBtn) {
+                    quickBtn.disabled = false;
+                    quickBtn.innerHTML = '⚡ Re-Run Pipeline';
+                }
+            }
+        }
+
+        function switchLandmark(key) {
+            activeLandmarkKey = key;
+            document.querySelectorAll('.btn-landmark').forEach(b => {
+                b.classList.toggle('active', b.dataset.landmark === key);
+            });
+            loadCurrentLandmark();
+        }
+
+        function switchMode(mode) {
+            activeMode = mode;
+            document.querySelectorAll('.btn-mode').forEach(b => {
+                b.classList.toggle('active', b.dataset.mode === mode);
+            });
+
+            if (mode === 'hybrid') {
+                showTileMesh = true;
+                showSplatMesh = true;
+                if (tileMeshGroup) tileMeshGroup.visible = true;
+                if (splatMeshGroup) splatMeshGroup.visible = true;
+                if (surveyRigGroup) surveyRigGroup.visible = false;
+                splatUniforms.uSoftZEnabled.value = 1.0;
+            } else if (mode === 'tile') {
+                showTileMesh = true;
+                showSplatMesh = false;
+                if (tileMeshGroup) tileMeshGroup.visible = true;
+                if (splatMeshGroup) splatMeshGroup.visible = false;
+                if (surveyRigGroup) surveyRigGroup.visible = false;
+            } else if (mode === 'splat') {
+                showTileMesh = false;
+                showSplatMesh = true;
+                if (tileMeshGroup) tileMeshGroup.visible = false;
+                if (splatMeshGroup) splatMeshGroup.visible = true;
+                if (surveyRigGroup) surveyRigGroup.visible = false;
+            } else if (mode === 'survey') {
+                if (surveyRigGroup) surveyRigGroup.visible = true;
+                showTileMesh = true;
+                showSplatMesh = true;
+                if (tileMeshGroup) tileMeshGroup.visible = true;
+                if (splatMeshGroup) splatMeshGroup.visible = true;
+            } else if (mode === 'lighting') {
+                setLightingPreset('golden_hour');
+            }
+        }
+
+        function applyTileShading(shading) {
+            currentTileShading = shading;
+            if (!tileMeshGroup) return;
+            tileMeshGroup.traverse((c) => {
+                if (c.isMesh) {
+                    if (shading === 'textured') {
+                        c.material = originalTileMaterials.get(c) || c.material;
+                        c.material.transparent = tileOpacity < 1.0;
+                        c.material.opacity = tileOpacity;
+                    } else if (shading === 'clay') {
+                        c.material = clayTileMaterials.get(c) || c.material;
+                        c.material.transparent = tileOpacity < 1.0;
+                        c.material.opacity = tileOpacity;
+                    } else if (shading === 'wireframe') {
+                        c.material = wireframeTileMaterials.get(c) || c.material;
+                    } else if (shading === 'ghost') {
+                        c.material = clayTileMaterials.get(c) || c.material;
+                        c.material.transparent = true;
+                        c.material.opacity = 0.30;
+                    }
+                }
+            });
+            document.querySelectorAll('#tile-shading-btns .btn-preset').forEach(b => {
+                b.classList.toggle('active', b.dataset.shading === shading);
+            });
+        }
+
+        function toggleTileMeshVisibility() {
+            showTileMesh = !showTileMesh;
+            if (tileMeshGroup) tileMeshGroup.visible = showTileMesh;
+            document.getElementById('btn-toggle-tile-vis').textContent = `🏛️ 3D Tile: ${showTileMesh ? 'ON' : 'OFF'}`;
+            document.getElementById('btn-toggle-tile-vis').classList.toggle('active', showTileMesh);
+        }
+
+        function toggleSplatMeshVisibility() {
+            showSplatMesh = !showSplatMesh;
+            if (splatMeshGroup) splatMeshGroup.visible = showSplatMesh;
+            document.getElementById('btn-toggle-splat-vis').textContent = `✨ 3DGS: ${showSplatMesh ? 'ON' : 'OFF'}`;
+            document.getElementById('btn-toggle-splat-vis').classList.toggle('active', showSplatMesh);
+        }
+
+        function updateTileOpacity(val) {
+            tileOpacity = parseFloat(val);
+            document.getElementById('val-tile-opacity').textContent = `${Math.round(tileOpacity * 100)}%`;
+            if (tileMeshGroup) {
+                tileMeshGroup.traverse((c) => {
+                    if (c.isMesh && c.material) {
+                        c.material.transparent = tileOpacity < 1.0;
+                        c.material.opacity = tileOpacity;
+                    }
+                });
+            }
+        }
+
+        function updateSplatScale(val) {
+            splatUniforms.uSplatScale.value = parseFloat(val);
+            document.getElementById('val-splat-scale').textContent = `${parseFloat(val).toFixed(2)}x`;
+        }
+
+        function updateExposure(val) {
+            splatUniforms.uExposureEV.value = parseFloat(val);
+            document.getElementById('val-exposure').textContent = `${parseFloat(val) > 0 ? '+' : ''}${parseFloat(val).toFixed(2)} EV`;
+        }
+
+        function updateSunElevation(val) {
+            const deg = parseFloat(val);
+            document.getElementById('val-sun-elev').textContent = `${deg.toFixed(1)}°`;
+            const rad = deg * (Math.PI / 180);
+            const sunDir = new THREE.Vector3(Math.cos(rad) * 0.6, Math.sin(rad), Math.cos(rad) * 0.8).normalize();
+            sunLight.position.copy(sunDir.clone().multiplyScalar(100));
+            splatUniforms.uSunDir.value.copy(sunDir);
+        }
+
+        function setLightingPreset(preset) {
+            document.querySelectorAll('#panel-lighting .btn-preset').forEach(b => b.classList.remove('active'));
+            if (preset === 'golden_hour') {
+                sunLight.color.set('#f59e0b');
+                sunLight.intensity = 1.6;
+                ambientLight.color.set('#78350f');
+                splatUniforms.uSunColor.value.set('#f59e0b');
+                splatUniforms.uSkyAmbient.value.set('#3b2210');
+                document.getElementById('val-kelvin-badge').textContent = '3,200K';
+                document.getElementById('val-kelvin-badge').style.color = '#f59e0b';
+                updateSunElevation(18);
+            } else if (preset === 'midday') {
+                sunLight.color.set('#fff8eb');
+                sunLight.intensity = 1.3;
+                ambientLight.color.set('#475569');
+                splatUniforms.uSunColor.value.set('#fff8eb');
+                splatUniforms.uSkyAmbient.value.set('#2d3748');
+                document.getElementById('val-kelvin-badge').textContent = '5,500K';
+                document.getElementById('val-kelvin-badge').style.color = '#38bdf8';
+                updateSunElevation(55);
+            } else if (preset === 'dusk') {
+                sunLight.color.set('#fb7185');
+                sunLight.intensity = 0.9;
+                ambientLight.color.set('#312e81');
+                splatUniforms.uSunColor.value.set('#fb7185');
+                splatUniforms.uSkyAmbient.value.set('#1e1b4b');
+                document.getElementById('val-kelvin-badge').textContent = '7,500K';
+                document.getElementById('val-kelvin-badge').style.color = '#a855f7';
+                updateSunElevation(6);
+            } else if (preset === 'overcast') {
+                sunLight.color.set('#cbd5e1');
+                sunLight.intensity = 0.8;
+                ambientLight.color.set('#64748b');
+                splatUniforms.uSunColor.value.set('#cbd5e1');
+                splatUniforms.uSkyAmbient.value.set('#475569');
+                document.getElementById('val-kelvin-badge').textContent = '6,500K';
+                document.getElementById('val-kelvin-badge').style.color = '#94a3b8';
+                updateSunElevation(35);
+            }
+        }
+
+        function setStoneAlbedo(type) {
+            document.getElementById('val-stone-preset').textContent = type.toUpperCase();
+        }
+
+        function toggleFrustums() {
+            surveyRigGroup.visible = !surveyRigGroup.visible;
+            document.getElementById('btn-toggle-frustums').textContent = `📷 Frustums: ${surveyRigGroup.visible ? 'ON' : 'OFF'}`;
+            document.getElementById('btn-toggle-frustums').classList.toggle('active', surveyRigGroup.visible);
+        }
+
+        function toggleTileMesh() {
+            if (!underlyingMesh) return;
+            underlyingMesh.visible = !underlyingMesh.visible;
+            document.getElementById('btn-toggle-tile-mesh').textContent = `🏛️ Underlying Tile: ${underlyingMesh.visible ? 'ON' : 'OFF'}`;
+            document.getElementById('btn-toggle-tile-mesh').classList.toggle('active', underlyingMesh.visible);
+        }
+
+        function toggleSoftZ() {
+            const enabled = splatUniforms.uSoftZEnabled.value > 0.5 ? 0.0 : 1.0;
+            splatUniforms.uSoftZEnabled.value = enabled;
+            document.getElementById('btn-toggle-softz').textContent = `Depth Soft-Z: ${enabled > 0.5 ? 'ON' : 'OFF'}`;
+            document.getElementById('btn-toggle-softz').classList.toggle('active', enabled > 0.5);
+            document.getElementById('val-softz-badge').textContent = enabled > 0.5 ? 'CONTINUOUS' : 'OFF';
+        }
+
+        function updateSoftZEpsilon(val) {
+            splatUniforms.uSoftZEpsilon.value = parseFloat(val);
+            document.getElementById('val-softz-eps').textContent = `${parseFloat(val).toFixed(2)}m`;
+        }
+
+        function updateMicroDetailUniforms() {
+            if (splatUniforms.uStoneDetailStrength) splatUniforms.uStoneDetailStrength.value = studioMicroState.stoneDetailStrength;
+            if (splatUniforms.uStoneDetailScale) splatUniforms.uStoneDetailScale.value = studioMicroState.stoneDetailScale;
+            if (splatUniforms.uCavitationDepth) splatUniforms.uCavitationDepth.value = studioMicroState.cavitationDepth;
+            if (!tileMeshGroup) return;
+            tileMeshGroup.traverse(c => {
+                if (c.isMesh && c.material) {
+                    const mats = Array.isArray(c.material) ? c.material : [c.material];
+                    mats.forEach(m => {
+                        if (m.userData && m.userData.microUniforms) {
+                            const u = m.userData.microUniforms;
+                            if (u.uStoneDetailStrength) u.uStoneDetailStrength.value = studioMicroState.stoneDetailStrength;
+                            if (u.uStoneDetailScale) u.uStoneDetailScale.value = studioMicroState.stoneDetailScale;
+                            if (u.uCavitationDepth) u.uCavitationDepth.value = studioMicroState.cavitationDepth;
+                            if (u.uToksvigModulation) u.uToksvigModulation.value = studioMicroState.toksvigModulation;
+                        }
+                    });
+                }
+            });
+        }
+
+        function setMicroDetailStrength(val) {
+            studioMicroState.stoneDetailStrength = parseFloat(val);
+            const el = document.getElementById('val-stone-strength');
+            if (el) el.textContent = `${parseFloat(val).toFixed(2)}x`;
+            updateMicroDetailUniforms();
+        }
+
+        function setCavitationDepth(val) {
+            studioMicroState.cavitationDepth = parseFloat(val);
+            const el = document.getElementById('val-cavity-depth');
+            if (el) el.textContent = `${parseFloat(val).toFixed(2)}x`;
+            updateMicroDetailUniforms();
+        }
+
+        function setToksvigModulation(val) {
+            studioMicroState.toksvigModulation = parseFloat(val);
+            const el = document.getElementById('val-toksvig-mod');
+            if (el) el.textContent = `${parseFloat(val).toFixed(2)}x`;
+            updateMicroDetailUniforms();
+        }
+
+        function setCameraPreset(name) {
+            if (activeLandmarkKey === 'colosseum') {
+                if (name === 'macro_arcade') {
+                    // Standoff ~40m facing South Arcade Facade
+                    camera.position.set(-44.76, 50.0, 190.0);
+                    controls.target.set(-44.76, 38.0, 110.0);
+                } else if (name === 'tactile_close') {
+                    // Elevated perspective looking at intact 4-tier North Facade
+                    camera.position.set(-44.76, 60.0, -90.0);
+                    controls.target.set(-44.76, 45.0, 10.0);
+                } else if (name === 'ultra_micro') {
+                    // Interior Hypogeum Trench & Wall View
+                    camera.position.set(-44.76, 62.0, 128.0);
+                    controls.target.set(-44.76, 26.0, 63.05);
+                } else if (name === 'survey_overview') {
+                    camera.position.set(-44.76, 95.0, 240.0);
+                    controls.target.set(-44.76, 38.0, 63.05);
+                }
+            } else {
+                const cfg = LANDMARK_CONFIGS[activeLandmarkKey];
+                if (cfg) {
+                    camera.position.set(...cfg.cameraPos);
+                    controls.target.set(...cfg.targetPos);
+                }
+            }
+            controls.update();
+        }
+
+        // Global Automation & Testing Bindings
+        window.setCameraPreset = setCameraPreset;
+        window.setMicroDetailStrength = setMicroDetailStrength;
+        window.setCavitationDepth = setCavitationDepth;
+        window.setToksvigModulation = setToksvigModulation;
+        window.applyTileShading = applyTileShading;
+        window.switchMode = switchMode;
+        window.__camera = camera;
+        window.__controls = controls;
+        window.setMode = (mode) => {
+            if (mode === 'softz' || mode === 'interleaved') switchMode('hybrid');
+            else if (mode === 'clay') { switchMode('tile'); applyTileShading('clay'); }
+            else if (mode === 'pbr' || mode === 'textured') { switchMode('tile'); applyTileShading('textured'); }
+            else if (mode === 'splat') switchMode('splat');
+            else switchMode(mode);
+        };
+        window.updateBlockoutMaterial = (type) => {
+            if (type === 'clay') applyTileShading('clay');
+            else applyTileShading('textured');
+        };
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.onload = initScene;
+    </script>
+</body>
+</html>

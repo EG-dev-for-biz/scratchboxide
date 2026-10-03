@@ -250,22 +250,5 @@ export class SpatialAssetVaultService {
       10.0
     );
 
-    // 5b. Backward compatibility alias pointing to native SB-Human assets
-    this.storeAsset(
-      'body_models/smplx',
-      { lat: 0.0, lng: 0.0, alt: 0.0 },
-      {
-        type: 'mesh-glb',
-        durableUri: 'vault://body_models/smplx/neutral',
-        metadata: {
-          title: 'SB-Human Body Model (Legacy Alias)',
-          neutralUri: '/models/sbhuman_neutral.sbhuman',
-          maleUri: '/models/sbhuman_male.sbhuman',
-          femaleUri: '/models/sbhuman_female.sbhuman',
-          numVertices: 10475
-        }
-      },
-      10.0
-    );
   }
 }

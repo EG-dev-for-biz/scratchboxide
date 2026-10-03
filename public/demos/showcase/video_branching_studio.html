@@ -1,0 +1,2409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mid-Clip Generative Branching & Resynthesis Studio — 100% Graphical</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel-bg: #14151b;
+      --card-bg: #1b1c24;
+      --card-hover: #22242f;
+      --border: #282a36;
+      --accent: #f59e0b;
+      --accent-glow: rgba(245, 158, 11, 0.35);
+      --purple: #8b5cf6;
+      --purple-glow: rgba(139, 92, 246, 0.35);
+      --teal: #14b8a6;
+      --teal-glow: rgba(20, 184, 166, 0.35);
+      --rose: #f43f5e;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); overflow-x: hidden; padding: 16px; }
+
+    .studio-shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 24px 70px rgba(0,0,0,0.7);
+    }
+
+    /* Header */
+    .studio-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      background: #111218;
+    }
+    .brand-wrap { display: flex; align-items: center; gap: 12px; }
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f59e0b, #ec4899);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .brand-title { font-size: 16px; font-weight: 700; letter-spacing: -0.3px; }
+    .brand-subtitle { font-size: 11px; color: var(--text-muted); }
+    .header-badges { display: flex; gap: 8px; align-items: center; }
+    .header-pill {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 12px;
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      color: #fbbf24;
+      font-weight: 600;
+    }
+    .header-pill.teal {
+      background: rgba(20, 184, 166, 0.12);
+      border-color: rgba(20, 184, 166, 0.3);
+      color: #2dd4bf;
+    }
+    .header-pill.purple {
+      background: rgba(139, 92, 246, 0.12);
+      border-color: rgba(139, 92, 246, 0.3);
+      color: #a78bfa;
+    }
+
+    /* Video Source Selector Bar */
+    .source-selector-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      background: #181920;
+      border-bottom: 1px solid var(--border);
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .source-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .source-buttons { display: flex; gap: 8px; }
+    .source-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .source-btn:hover { background: var(--card-hover); border-color: #4b5563; }
+    .source-btn.active {
+      background: rgba(245, 158, 11, 0.18);
+      border-color: var(--accent);
+      color: #fde68a;
+      font-weight: 600;
+    }
+
+    /* Main Viewport Grid */
+    .viewport-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 20px 24px;
+      background: #0f1015;
+    }
+    @media (max-width: 900px) {
+      .viewport-grid { grid-template-columns: 1fr; }
+    }
+
+    .viewport-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .viewport-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #161720;
+      border-bottom: 1px solid var(--border);
+    }
+    .viewport-card-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .viewport-stage-wrap {
+      position: relative;
+      width: 100%;
+      height: 340px;
+      background: #08090c;
+      overflow: hidden;
+    }
+
+    /* Canvas & Video Elements */
+    #sourceVideo, #branchVideo {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    #branchVideo { display: none; }
+    #poseCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: auto;
+      cursor: crosshair;
+    }
+    #threeContainer {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Viewport Overlay HUDs */
+    .viewport-hud {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: rgba(13, 14, 18, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-family: monospace;
+      color: #94a3b8;
+      backdrop-filter: blur(8px);
+      pointer-events: none;
+      z-index: 10;
+    }
+    .viewport-hud.right {
+      left: auto; right: 10px;
+    }
+    .hud-val { color: #f8fafc; font-weight: bold; }
+    .hud-highlight { color: #fbbf24; }
+
+    /* Comparison Split Slider */
+    #splitDivider {
+      position: absolute;
+      top: 0; bottom: 0; left: 50%;
+      width: 3px;
+      background: #fbbf24;
+      cursor: ew-resize;
+      display: none;
+      z-index: 20;
+      box-shadow: 0 0 10px #fbbf24;
+    }
+    #splitDivider::after {
+      content: '↔';
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 24px; height: 24px;
+      background: #fbbf24;
+      color: #000;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    /* Dual Timeline & Fork Rig */
+    .timeline-container {
+      padding: 16px 24px;
+      background: #14151c;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .timeline-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .playback-controls { display: flex; gap: 8px; align-items: center; }
+    .tool-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .tool-btn:hover { background: var(--card-hover); border-color: #4b5563; }
+    .tool-btn.primary {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      border-color: #b45309;
+      color: #fff;
+      font-weight: 600;
+    }
+    .tool-btn.purple-btn {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: var(--purple);
+      color: #c4b5fd;
+    }
+
+    /* Track Layout */
+    .tracks-wrapper {
+      position: relative;
+      background: #0a0b0e;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      user-select: none;
+    }
+    .track-row {
+      display: flex;
+      align-items: center;
+      height: 38px;
+      margin-bottom: 6px;
+      position: relative;
+    }
+    .track-row:last-child { margin-bottom: 0; }
+    .track-label {
+      width: 140px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-left: 4px;
+    }
+    .track-strip {
+      flex: 1;
+      height: 100%;
+      background: #171822;
+      border-radius: 6px;
+      position: relative;
+      overflow: hidden;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    /* Track segments */
+    .track-segment {
+      position: absolute;
+      top: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+    .segment-root {
+      left: 0;
+      width: 28%;
+      background: linear-gradient(90deg, rgba(20, 184, 166, 0.35), rgba(20, 184, 166, 0.2));
+      border-right: 2px solid var(--teal);
+      color: #5eead4;
+    }
+    .segment-divergent {
+      left: 28%;
+      right: 0;
+      background: repeating-linear-gradient(
+        45deg,
+        rgba(245, 158, 11, 0.25),
+        rgba(245, 158, 11, 0.25) 10px,
+        rgba(245, 158, 11, 0.15) 10px,
+        rgba(245, 158, 11, 0.15) 20px
+      );
+      border-left: 2px dashed var(--accent);
+      color: #fde68a;
+    }
+    .segment-original {
+      left: 0; right: 0;
+      background: linear-gradient(90deg, rgba(59, 130, 246, 0.25), rgba(59, 130, 246, 0.15));
+      color: #93c5fd;
+    }
+
+    /* Needles */
+    .timeline-playhead {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: #fff;
+      box-shadow: 0 0 8px #fff;
+      pointer-events: none;
+      z-index: 30;
+      transform: translateX(-50%);
+    }
+    .timeline-forkhead {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 3px;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+      cursor: ew-resize;
+      z-index: 25;
+      transform: translateX(-50%);
+    }
+    .fork-handle {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: #000;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+      white-space: nowrap;
+    }
+
+    /* Graphical Rig & Mutator Panels */
+    .controls-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      padding: 20px 24px;
+      background: #111218;
+      transition: grid-template-columns 0.25s ease;
+    }
+    .controls-grid.no-character {
+      grid-template-columns: 1fr 1fr;
+    }
+    @media (max-width: 992px) {
+      .controls-grid, .controls-grid.no-character { grid-template-columns: 1fr; }
+    }
+
+    .tool-btn.danger-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.4);
+      color: #fca5a5;
+    }
+    .tool-btn.danger-btn:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: #ef4444;
+    }
+    .tool-btn.primary-btn {
+      background: rgba(245, 158, 11, 0.2);
+      border-color: rgba(245, 158, 11, 0.5);
+      color: #fde68a;
+    }
+    .tool-btn.primary-btn:hover {
+      background: rgba(245, 158, 11, 0.35);
+      border-color: var(--accent);
+    }
+    .tool-btn.active-domain {
+      background: rgba(14, 165, 233, 0.25);
+      border-color: #38bdf8;
+      color: #7dd3fc;
+      font-weight: 700;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-card {
+      background: #111218;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      width: 500px;
+      max-width: 90vw;
+      box-shadow: 0 16px 36px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .track-badge-active {
+      font-size: 10px;
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 600;
+      margin-left: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .track-badge-inactive {
+      font-size: 10px;
+      color: #94a3b8;
+      background: rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 500;
+      margin-left: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .control-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .panel-title {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .panel-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.08);
+      color: var(--text-muted);
+    }
+
+    /* Preset Chips */
+    .preset-chips-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .chip-btn {
+      background: #13141b;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      text-align: left;
+    }
+    .chip-btn:hover { background: var(--card-hover); border-color: #4b5563; }
+    .chip-btn.active {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: var(--accent);
+      color: #fde68a;
+      font-weight: 600;
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.15);
+    }
+    .chip-btn.teal-active.active {
+      background: rgba(20, 184, 166, 0.15);
+      border-color: var(--teal);
+      color: #99f6e4;
+    }
+    .chip-btn.purple-active.active {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: var(--purple);
+      color: #ddd6fe;
+    }
+
+    /* Slider Rows */
+    .slider-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .slider-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .slider-val { color: var(--text); font-weight: 600; font-family: monospace; }
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Director Prompt Box */
+    .prompt-section {
+      padding: 16px 24px;
+      background: #14151b;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .prompt-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .prompt-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .prompt-textarea {
+      width: 100%;
+      height: 70px;
+      background: #090a0d;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #f3f4f6;
+      font-size: 12px;
+      font-family: monospace;
+      line-height: 1.4;
+      resize: vertical;
+    }
+    .prompt-textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    /* Action Render Bar */
+    .render-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 24px;
+      background: #101116;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .render-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .render-btn {
+      background: linear-gradient(135deg, #f59e0b, #ef4444);
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      padding: 12px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 4px 18px rgba(245, 158, 11, 0.4);
+      transition: all 0.2s ease;
+    }
+    .render-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(245, 158, 11, 0.6);
+    }
+    .render-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Toast Notification */
+    #statusToast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f8fafc;
+      padding: 12px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      z-index: 100;
+      align-items: center;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="studio-shell">
+  <!-- Studio Header -->
+  <header class="studio-header">
+    <div class="brand-wrap">
+      <div class="brand-icon">🎬</div>
+      <div>
+        <h1 class="brand-title">Mid-Clip Generative Branching & Resynthesis Studio</h1>
+        <p class="brand-subtitle">100% Graphical Figure Reposing, Camera Spline Redirection & Narrative Divergence</p>
+      </div>
+    </div>
+    <div class="header-badges">
+      <span class="header-pill">DiT 33B Video Transformer</span>
+      <span class="header-pill teal">OpenPose 18-Joint Kinematics</span>
+      <span class="header-pill purple">HTTP 206 Partial Streamer</span>
+    </div>
+  </header>
+
+  <!-- Video Source Bar -->
+  <div class="source-selector-bar">
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span class="source-label">Active Clip:</span>
+      <div class="source-buttons">
+        <button class="source-btn active" id="btnClipPlaza" onclick="loadClip('plaza')">
+          🏛️ Plaza Hotel Flight (15s 720p)
+        </button>
+        <button class="source-btn" id="btnClipActor" onclick="loadClip('actor')">
+          🕺 Plaza Live Actor (15s Tracked)
+        </button>
+        <button class="source-btn" id="btnClipDrone" onclick="loadClip('drone')">
+          🏙️ Urban Drone Blockout (3s)
+        </button>
+        <button class="source-btn" id="btnClipComparison" onclick="loadClip('comparison')">
+          ⚡ 50/50 Omni Comparison Clip
+        </button>
+        <button class="tool-btn" id="btnCustomClip" onclick="openCustomVideoModal()" style="padding:4px 10px; font-size:11px;">
+          📁 Load Custom Video...
+        </button>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:6px; margin-left:6px; border-left:1px solid var(--border); padding-left:10px;">
+        <span class="source-label" style="font-size:11px;">Footage Domain:</span>
+        <button class="tool-btn active-domain" id="btnDomainArch" onclick="setFootageDomain('architectural')" style="padding:3px 8px; font-size:10px;">🏛️ Architectural</button>
+        <button class="tool-btn" id="btnDomainAerial" onclick="setFootageDomain('aerial')" style="padding:3px 8px; font-size:10px;">🚁 Aerial Drone</button>
+        <button class="tool-btn" id="btnDomainChar" onclick="setFootageDomain('character')" style="padding:3px 8px; font-size:10px;">🕺 Character</button>
+        <button class="tool-btn" id="btnDomainObj" onclick="setFootageDomain('object')" style="padding:3px 8px; font-size:10px;">📦 Spatial Object</button>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="source-label">Viewfinder:</span>
+      <button class="tool-btn" id="btnViewComposite" onclick="setViewMode('composite')">🎬 Composite Preview</button>
+      <button class="tool-btn" id="btnViewSkeleton" onclick="setViewMode('skeleton')">🦴 OpenPose Skeleton</button>
+      <button class="tool-btn" id="btnViewSplit" onclick="setViewMode('split')">↔️ 50/50 Comparison</button>
+    </div>
+  </div>
+
+  <!-- Custom Video Modal -->
+  <div class="modal-backdrop" id="modalCustomVideo" onclick="if(event.target===this) closeCustomVideoModal()">
+    <div class="modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0; font-size:15px; font-weight:700; color:#f8fafc; display:flex; align-items:center; gap:8px;">
+          <span>📁</span> Load Custom Video Footage
+        </h3>
+        <button class="tool-btn" onclick="closeCustomVideoModal()" style="padding:2px 8px; font-size:12px;">✕</button>
+      </div>
+      <p style="margin:0; font-size:12px; color:#94a3b8; line-height:1.4;">
+        Provide any local workspace video file path or accessible HTTP video stream URL. The studio will adapt its 3D focal subject and kinematic tools to the selected footage domain.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size:11px; font-weight:600; color:#cbd5e1;">Video URL or File Path:</label>
+        <input type="text" id="inputCustomVideoUrl" placeholder="e.g. /videos/plaza_hotel_omni_15s_720p.mp4 or https://..." 
+          style="background:#0f172a; border:1px solid var(--border); border-radius:6px; color:#f8fafc; padding:8px 12px; font-size:12px; font-family:monospace; outline:none;" />
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size:11px; font-weight:600; color:#cbd5e1;">Footage Domain (Auto-Adapts 3D Scene Subject):</label>
+        <select id="selectCustomDomain" style="background:#0f172a; border:1px solid var(--border); border-radius:6px; color:#f8fafc; padding:8px 12px; font-size:12px; outline:none;">
+          <option value="architectural">🏛️ Architectural & Landmark (Building massing, facade, cupola)</option>
+          <option value="aerial">🚁 Aerial Drone Survey (Ground coordinates, radial grid)</option>
+          <option value="character">🕺 Character Performance (Tracked OpenPose 18-joint actor)</option>
+          <option value="object">📦 Spatial Object / Focal Anchor (Target reticle & bounding volume)</option>
+        </select>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+        <button class="tool-btn" onclick="closeCustomVideoModal()">Cancel</button>
+        <button class="tool-btn primary-btn" onclick="applyCustomVideo()">Apply & Adapt Studio</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dual Viewport Grid -->
+  <div class="viewport-grid">
+    <!-- Left: Video Frame & Interactive Pose Rig -->
+    <div class="viewport-card">
+      <div class="viewport-card-header">
+        <div class="viewport-card-title">
+          <span id="leftStageIcon">📹</span>
+          <span id="leftStageTitle">Scene & Frame Viewport</span>
+          <span id="badgeTracking" class="track-badge-inactive">🚫 No Character Tracked</span>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="tool-btn primary-btn" id="btnTrackToggle" style="padding:3px 8px; font-size:10px;" onclick="toggleCharacterTracking()">🔍 Detect Character</button>
+          <div id="poseHeaderBtns" style="display:none; gap:6px;">
+            <button class="tool-btn" style="padding:3px 8px; font-size:10px;" onclick="resetPose()">Reset Pose</button>
+            <button class="tool-btn" style="padding:3px 8px; font-size:10px;" onclick="togglePoseOverlay()">Toggle Bones</button>
+          </div>
+        </div>
+      </div>
+      <div class="viewport-stage-wrap" id="stageLeft">
+        <video id="sourceVideo" muted loop playsinline preload="auto">
+          <source src="/videos/plaza_hotel_omni_15s_720p.mp4" type="video/mp4">
+        </video>
+        <video id="branchVideo" muted loop playsinline preload="auto"></video>
+        <canvas id="poseCanvas"></canvas>
+        <div class="viewport-hud" id="hudPose">
+          Domain: <span class="hud-highlight" id="hudLeftDomain">Architectural</span> | Focal Anchor: <span class="hud-val" id="hudLeftAnchor">X: 50%, Y: 38%</span> | Mode: <span class="hud-val">3D Camera Steering</span>
+        </div>
+        <div id="splitDivider"></div>
+      </div>
+    </div>
+
+    <!-- Right: 3D God's Eye Camera Trajectory Rig -->
+    <div class="viewport-card">
+      <div class="viewport-card-header">
+        <div class="viewport-card-title">
+          <span>🌐</span>
+          <span>3D Camera Trajectory Redirection (Three.js)</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="tool-btn" style="padding:3px 8px; font-size:10px;" onclick="resetCameraSpline()">Reset Spline</button>
+        </div>
+      </div>
+      <div class="viewport-stage-wrap" id="stageRight">
+        <div id="threeContainer"></div>
+        <div class="viewport-hud right" id="hudCamera">
+          Target: <span class="hud-highlight" id="hudTargetSubject">Plaza Hotel Crown</span> | Az: <span id="hudAzimuth">65°</span> | El: <span id="hudElevation">12°</span> | Rad: <span id="hudRadius">1.35m</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dual-Branch Timeline -->
+  <div class="timeline-container">
+    <div class="timeline-toolbar">
+      <div class="playback-controls">
+        <button class="tool-btn" id="btnPlayPause" onclick="togglePlay()">▶ Play</button>
+        <button class="tool-btn" onclick="seekTo(0)">⏮ 0.0s</button>
+        <button class="tool-btn primary" onclick="setForkToCurrent()">✂️ Set Fork Here</button>
+        <button class="tool-btn purple-btn" onclick="seekToFork()">⏭ Jump to Fork</button>
+      </div>
+      <div style="font-size:12px; font-family:monospace; color:var(--text-muted);">
+        Playhead: <span style="color:#fff; font-weight:bold;" id="txtPlayhead">04.20s</span> / <span id="txtDuration">15.00s</span> |
+        Fork Split: <span style="color:#fbbf24; font-weight:bold;" id="txtForkTime">04.20s</span>
+      </div>
+    </div>
+
+    <div class="tracks-wrapper" id="tracksWrapper">
+      <!-- Playhead Needle -->
+      <div class="timeline-playhead" id="playheadNeedle" style="left: 28%;"></div>
+      <!-- Fork Needle -->
+      <div class="timeline-forkhead" id="forkheadNeedle" style="left: 28%;">
+        <div class="fork-handle" id="forkHandleTag">✂️ Fork: 4.2s</div>
+      </div>
+
+      <!-- Track A: Root Video Clip -->
+      <div class="track-row">
+        <div class="track-label">
+          <span>📼</span> Track A (Original)
+        </div>
+        <div class="track-strip" id="stripTrackA" onclick="handleTrackClick(event)">
+          <div class="track-segment segment-original">Original Master Footage (0.0s - 15.0s)</div>
+        </div>
+      </div>
+
+      <!-- Track B: Divergent Resynthesized Branch -->
+      <div class="track-row">
+        <div class="track-label">
+          <span>🌿</span> Track B (Branch)
+        </div>
+        <div class="track-strip" id="stripTrackB" onclick="handleTrackClick(event)">
+          <div class="track-segment segment-root" id="segmentRoot">Root Pre-Fork (0.0s - 4.2s)</div>
+          <div class="track-segment segment-divergent" id="segmentDivergent">Resynthesized Future (4.2s - 15.0s)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Graphical Control Panels Grid -->
+  <div class="controls-grid no-character">
+    <!-- Panel 1: Kinematic Pose Presets & Joints (Only displayed when a character is tracked!) -->
+    <div class="control-panel" id="panelPose" style="display:none;">
+      <div class="panel-header">
+        <div class="panel-title"><span>🕺</span> Kinematic Pose Presets</div>
+        <span class="panel-badge">OpenPose 18</span>
+      </div>
+      <div class="preset-chips-grid">
+        <button class="chip-btn active" id="chipPoseWave" onclick="applyPosePreset('wave_salute')">👋 Wave / Salute</button>
+        <button class="chip-btn" id="chipPoseLanding" onclick="applyPosePreset('superhero_landing')">💥 Superhero Landing</button>
+        <button class="chip-btn" id="chipPoseTPose" onclick="applyPosePreset('t_pose')">🧍 T-Pose Calibration</button>
+        <button class="chip-btn" id="chipPoseGuard" onclick="applyPosePreset('martial_guard')">🥋 Martial Guard</button>
+        <button class="chip-btn" id="chipPoseKick" onclick="applyPosePreset('action_kick')">🤸 Dynamic Jump Kick</button>
+        <button class="chip-btn" id="chipPoseCrouch" onclick="applyPosePreset('defensive_crouch')">🛡️ Defensive Crouch</button>
+        <button class="chip-btn" id="chipPoseSprint" onclick="applyPosePreset('running_sprint')">🏃 Running Sprint</button>
+        <button class="chip-btn" id="chipPoseOriginal" onclick="applyPosePreset('original')">🎯 Tracked Anchor</button>
+      </div>
+
+      <div style="border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:8px;">
+        <div class="slider-row">
+          <div class="slider-label-row">
+            <span>Right Arm Pitch & Elevation</span>
+            <span class="slider-val" id="valRArm">110°</span>
+          </div>
+          <input type="range" id="sliderRArm" min="-45" max="180" value="110" oninput="adjustLimbAngle('r_arm', this.value)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-label-row">
+            <span>Torso Lateral Lean</span>
+            <span class="slider-val" id="valTorso">0°</span>
+          </div>
+          <input type="range" id="sliderTorso" min="-30" max="30" value="0" oninput="adjustLimbAngle('torso', this.value)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 2: Camera Trajectory Redirection -->
+    <div class="control-panel">
+      <div class="panel-header">
+        <div class="panel-title"><span>🎥</span> Camera Trajectory Maneuver</div>
+        <span class="panel-badge">Catmull-Rom</span>
+      </div>
+      <div class="preset-chips-grid">
+        <button class="chip-btn active teal-active" id="chipCamCrane" onclick="applyCameraManeuver('crane_reveal')">🏗️ Crane Reveal (60°)</button>
+        <button class="chip-btn teal-active" id="chipCamHero" onclick="applyCameraManeuver('hero_push_in')">🔍 Hero Push-In Zoom</button>
+        <button class="chip-btn teal-active" id="chipCamOrbit" onclick="applyCameraManeuver('reverse_orbit')">🔄 180° Reverse Orbit</button>
+        <button class="chip-btn teal-active" id="chipCamDutch" onclick="applyCameraManeuver('dutch_tilt')">📐 Dutch Angle Flyby</button>
+      </div>
+
+      <div style="border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:8px;">
+        <div class="slider-row">
+          <div class="slider-label-row">
+            <span>Divergent Azimuth</span>
+            <span class="slider-val" id="valAzimuth">65°</span>
+          </div>
+          <input type="range" id="sliderAzimuth" min="0" max="360" value="65" oninput="updateCameraParam('azimuth', this.value)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-label-row">
+            <span>Divergent Elevation (Pitch)</span>
+            <span class="slider-val" id="valElevation">35°</span>
+          </div>
+          <input type="range" id="sliderElevation" min="-30" max="80" value="35" oninput="updateCameraParam('elevation', this.value)">
+        </div>
+        <div class="slider-row">
+          <div class="slider-label-row">
+            <span>Camera Standoff Radius</span>
+            <span class="slider-val" id="valRadius">1.60m</span>
+          </div>
+          <input type="range" id="sliderRadius" min="0.5" max="3.5" step="0.05" value="1.6" oninput="updateCameraParam('radius', this.value)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 3: Narrative & Environmental Mutation -->
+    <div class="control-panel">
+      <div class="panel-header">
+        <div class="panel-title"><span>✨</span> Narrative & Atmosphere</div>
+        <span class="panel-badge">Mutator</span>
+      </div>
+      <div>
+        <div style="font-size:11px; font-weight:600; color:var(--text-muted); margin-bottom:6px;">Narrative Action:</div>
+        <div class="preset-chips-grid">
+          <button class="chip-btn active purple-active" id="chipActArmor" onclick="applyActionMutator('cybernetic_armor')">⚡ Cybernetic Armor</button>
+          <button class="chip-btn purple-active" id="chipActGravity" onclick="applyActionMutator('anti_gravity')">🕊️ Anti-Gravity Float</button>
+          <button class="chip-btn purple-active" id="chipActEmbers" onclick="applyActionMutator('golden_dust')">✨ Golden Particle Dust</button>
+          <button class="chip-btn purple-active" id="chipActTimeStop" onclick="applyActionMutator('matrix_freeze')">⏳ Matrix Time-Stop</button>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--border); padding-top:8px;">
+        <div style="font-size:11px; font-weight:600; color:var(--text-muted); margin-bottom:6px;">Atmosphere & Lighting:</div>
+        <div class="preset-chips-grid">
+          <button class="chip-btn active" id="chipAtmosNeon" onclick="applyAtmosphere('neon_rain')">🌧️ Cyberpunk Neon Rain</button>
+          <button class="chip-btn" id="chipAtmosGolden" onclick="applyAtmosphere('golden_hour')">🌅 Golden Hour Sunset</button>
+          <button class="chip-btn" id="chipAtmosBlizzard" onclick="applyAtmosphere('blizzard')">❄️ Blizzard Snowstorm</button>
+          <button class="chip-btn" id="chipAtmosVolcano" onclick="applyAtmosphere('volcanic_eclipse')">🌋 Volcanic Eclipse</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Director Prompt Directive -->
+  <div class="prompt-section">
+    <div class="prompt-header">
+      <div class="prompt-title">
+        <span>📝</span>
+        <span>Director's Resynthesis Directive (Auto-Compiled from Graphical State)</span>
+      </div>
+      <button class="tool-btn" style="padding:2px 8px; font-size:10px;" onclick="recompilePrompt(true)">Re-Sync from Controls</button>
+    </div>
+    <textarea class="prompt-textarea" id="directorPrompt" oninput="userEditedPrompt = true;"></textarea>
+  </div>
+
+  <!-- Render Action Bar -->
+  <footer class="render-bar">
+    <div class="render-stats">
+      <div>Conditioning: <strong style="color:#fbbf24;" id="statConditioning">3D Camera Spline + Latent Inpainting</strong></div>
+      <div>Fork Frame: <strong style="color:#5eead4;" id="statForkFrame">Frame 101 (4.20s)</strong></div>
+      <div>Inpainting Resolution: <strong style="color:#f3f4f6;">1280×720 (16:9)</strong></div>
+    </div>
+    <button class="render-btn" id="btnRenderBranch" onclick="executeBranchResynthesis()">
+      <span>🚀</span> Synthesize & Render Mid-Clip Branch
+    </button>
+  </footer>
+</div>
+
+<div id="statusToast">
+  <span id="toastIcon">✨</span>
+  <span id="toastMsg">Action executed</span>
+</div>
+
+<script>
+// ============================================================================
+// State Architecture
+// ============================================================================
+
+const state = {
+  currentClip: 'plaza',
+  videoDuration: 15.0,
+  currentTime: 4.2,
+  forkTime: 4.2,
+  isPlaying: false,
+  viewMode: 'composite', // 'composite', 'skeleton', 'split'
+  splitX: 0.5,
+  showBones: true,
+
+  // Footage Domain & Spatial Focal Anchor
+  footageDomain: 'architectural', // 'architectural', 'aerial', 'character', 'object'
+  focalAnchor: { x: 0.50, y: 0.38, label: 'Plaza Hotel Central Mansard Cupola' },
+  isDraggingFocalAnchor: false,
+
+  // Figure Kinematics & Character Tracking
+  hasTrackedCharacter: false, // Architectural by default; conditionally toggled or enabled for character clips
+  activePosePreset: 'wave_salute',
+  selectedJoint: null,
+  isDraggingJoint: false,
+  figureBox: { x: 0.38, y: 0.22, w: 0.24, h: 0.65 },
+  joints: {},
+
+  // Camera 3D Trajectory
+  activeCameraManeuver: 'crane_reveal',
+  camera: {
+    azimuthDeg: 65,
+    elevationDeg: 35,
+    radius: 1.60,
+    rollDeg: 0
+  },
+
+  // Narrative & Atmosphere
+  action: 'cybernetic_armor',
+  atmosphere: 'neon_rain'
+};
+
+let userEditedPrompt = false;
+
+// OpenPose 18 Connections (from vitest contract)
+const OPENPOSE_BONES = [
+  ['nose', 'neck', '#ff0055'],
+  ['neck', 'r_shoulder', '#ff5500'],
+  ['r_shoulder', 'r_elbow', '#ffaa00'],
+  ['r_elbow', 'r_wrist', '#ffff00'],
+  ['neck', 'l_shoulder', '#aaff00'],
+  ['l_shoulder', 'l_elbow', '#55ff00'],
+  ['l_elbow', 'l_wrist', '#00ff55'],
+  ['neck', 'r_hip', '#00ffaa'],
+  ['r_hip', 'r_knee', '#00ffff'],
+  ['r_knee', 'r_ankle', '#00aaff'],
+  ['neck', 'l_hip', '#0055ff'],
+  ['l_hip', 'l_knee', '#0000ff'],
+  ['l_knee', 'l_ankle', '#5500ff'],
+  ['nose', 'r_eye', '#aa00ff'],
+  ['r_eye', 'r_ear', '#ff00ff'],
+  ['nose', 'l_eye', '#ff00aa'],
+  ['l_eye', 'l_ear', '#ff0055']
+];
+
+// ============================================================================
+// Adaptive Footage Domain & Character Tracking Controllers
+// ============================================================================
+
+function setFootageDomain(domain) {
+  state.footageDomain = domain;
+  if (domain === 'character') {
+    state.hasTrackedCharacter = true;
+    if (Object.keys(state.joints).length === 0) initDefaultPose();
+  } else {
+    state.hasTrackedCharacter = false;
+  }
+  updateDomainButtons();
+  updateCharacterUI();
+  updateAdaptiveSubject3D();
+  renderStage();
+  recompilePrompt();
+  showToast(`Domain adapted: ${domain.toUpperCase()}`);
+}
+
+function updateDomainButtons() {
+  const mapping = {
+    architectural: 'btnDomainArch',
+    aerial: 'btnDomainAerial',
+    character: 'btnDomainChar',
+    object: 'btnDomainObj'
+  };
+  ['btnDomainArch', 'btnDomainAerial', 'btnDomainChar', 'btnDomainObj'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active-domain');
+  });
+  const activeId = mapping[state.footageDomain];
+  if (activeId) {
+    const activeEl = document.getElementById(activeId);
+    if (activeEl) activeEl.classList.add('active-domain');
+  }
+}
+
+function toggleCharacterTracking() {
+  state.hasTrackedCharacter = !state.hasTrackedCharacter;
+  if (state.hasTrackedCharacter) {
+    state.footageDomain = 'character';
+    initDefaultPose();
+    showToast('🎯 Character detected: Subject #1 (96% conf) — Pose editing tools activated');
+  } else {
+    state.footageDomain = state.currentClip === 'drone' ? 'aerial' : 'architectural';
+    showToast('🚫 Character untracked — Camera & Environmental branching active');
+  }
+  updateDomainButtons();
+  updateCharacterUI();
+  updateAdaptiveSubject3D();
+  renderStage();
+  recompilePrompt();
+}
+
+function updateCharacterUI() {
+  const title = document.getElementById('leftStageTitle');
+  const icon = document.getElementById('leftStageIcon');
+  const badge = document.getElementById('badgeTracking');
+  const btnToggle = document.getElementById('btnTrackToggle');
+  const poseBtns = document.getElementById('poseHeaderBtns');
+  const hudPose = document.getElementById('hudPose');
+  const panelPose = document.getElementById('panelPose');
+  const controlsGrid = document.querySelector('.controls-grid');
+  const statCond = document.getElementById('statConditioning');
+
+  if (state.hasTrackedCharacter) {
+    if (title) title.textContent = 'Figure & Interactive Skeleton Editor';
+    if (icon) icon.textContent = '🧍';
+    if (badge) {
+      badge.className = 'track-badge-active';
+      badge.innerHTML = '● Subject #1 Tracked (96% conf)';
+    }
+    if (btnToggle) {
+      btnToggle.textContent = '✖ Untrack Character';
+      btnToggle.className = 'tool-btn danger-btn';
+    }
+    if (poseBtns) poseBtns.style.display = 'flex';
+    if (hudPose) {
+      const nameMap = {
+        wave_salute: 'Wave / Salute',
+        superhero_landing: 'Superhero Landing',
+        t_pose: 'T-Pose Calibration',
+        martial_guard: 'Martial Guard',
+        action_kick: 'Dynamic Jump Kick',
+        defensive_crouch: 'Defensive Crouch',
+        running_sprint: 'Running Sprint',
+        original: 'Tracked Anchor'
+      };
+      hudPose.innerHTML = `Pose: <span class="hud-highlight">${nameMap[state.activePosePreset] || state.activePosePreset}</span> | Joints: <span class="hud-val">18/18</span>`;
+    }
+    if (panelPose) panelPose.style.display = 'flex';
+    if (controlsGrid) controlsGrid.classList.remove('no-character');
+    if (statCond) statCond.textContent = 'OpenPose 18 + 3D Spline';
+  } else {
+    if (title) title.textContent = 'Scene & Frame Viewport';
+    if (icon) icon.textContent = '📹';
+    if (badge) {
+      badge.className = 'track-badge-inactive';
+      badge.innerHTML = '🚫 No Character Tracked';
+    }
+    if (btnToggle) {
+      btnToggle.textContent = '🔍 Detect Character';
+      btnToggle.className = 'tool-btn primary-btn';
+    }
+    if (poseBtns) poseBtns.style.display = 'none';
+    if (hudPose) {
+      const anchorCoords = state.focalAnchor ? `X: ${(state.focalAnchor.x * 100).toFixed(0)}%, Y: ${(state.focalAnchor.y * 100).toFixed(0)}%` : 'Center (50%, 50%)';
+      const domainLabel = state.footageDomain === 'aerial' ? 'Aerial Drone Flight' : (state.footageDomain === 'architectural' ? 'Architectural Landmark' : 'Spatial Object / POI');
+      hudPose.innerHTML = `Domain: <span class="hud-highlight" id="hudLeftDomain">${domainLabel}</span> | Focal Anchor: <span class="hud-val" id="hudLeftAnchor">${anchorCoords}</span> | Mode: <span class="hud-val">3D Camera Steering</span>`;
+    }
+    if (panelPose) panelPose.style.display = 'none';
+    if (controlsGrid) controlsGrid.classList.add('no-character');
+    if (statCond) statCond.textContent = '3D Camera Spline + Latent Inpainting (Zero Actor)';
+  }
+}
+
+// ============================================================================
+// Video Player & Frame Scrubbing
+// ============================================================================
+
+const video = document.getElementById('sourceVideo');
+const branchVideo = document.getElementById('branchVideo');
+const canvas = document.getElementById('poseCanvas');
+const ctx = canvas.getContext('2d');
+
+video.addEventListener('loadedmetadata', () => {
+  state.videoDuration = video.duration || 15.0;
+  document.getElementById('txtDuration').textContent = state.videoDuration.toFixed(2) + 's';
+  updateTimelineDisplay();
+});
+
+video.addEventListener('timeupdate', () => {
+  if (state.isPlaying) {
+    state.currentTime = video.currentTime;
+    updateTimelineDisplay();
+    renderStage();
+  }
+});
+
+function togglePlay() {
+  state.isPlaying = !state.isPlaying;
+  const btn = document.getElementById('btnPlayPause');
+  if (state.isPlaying) {
+    video.play();
+    btn.textContent = '⏸ Pause';
+  } else {
+    video.pause();
+    btn.textContent = '▶ Play';
+  }
+}
+
+function seekTo(timeSec) {
+  state.currentTime = Math.max(0, Math.min(state.videoDuration, timeSec));
+  video.currentTime = state.currentTime;
+  updateTimelineDisplay();
+  renderStage();
+}
+
+function seekToFork() {
+  seekTo(state.forkTime);
+}
+
+function setForkToCurrent() {
+  state.forkTime = state.currentTime;
+  updateForkUI();
+  recompilePrompt();
+  showToast('✂️ Fork point set at ' + state.forkTime.toFixed(2) + 's');
+}
+
+function updateTimelineDisplay() {
+  document.getElementById('txtPlayhead').textContent = state.currentTime.toFixed(2) + 's';
+  const pct = (state.currentTime / state.videoDuration) * 100;
+  document.getElementById('playheadNeedle').style.left = pct + '%';
+}
+
+function updateForkUI() {
+  document.getElementById('txtForkTime').textContent = state.forkTime.toFixed(2) + 's';
+  document.getElementById('statForkFrame').textContent = 'Frame ' + Math.round(state.forkTime * 24) + ' (' + state.forkTime.toFixed(2) + 's)';
+  const pct = (state.forkTime / state.videoDuration) * 100;
+  document.getElementById('forkheadNeedle').style.left = pct + '%';
+  document.getElementById('segmentRoot').style.width = pct + '%';
+  document.getElementById('segmentRoot').textContent = 'Root Pre-Fork (0.0s - ' + state.forkTime.toFixed(1) + 's)';
+  document.getElementById('segmentDivergent').style.left = pct + '%';
+  document.getElementById('segmentDivergent').textContent = 'Resynthesized Future (' + state.forkTime.toFixed(1) + 's - ' + state.videoDuration.toFixed(1) + 's)';
+}
+
+function handleTrackClick(e) {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+  seekTo(ratio * state.videoDuration);
+}
+
+// Draggable Fork Needle
+let isDraggingFork = false;
+const forkhead = document.getElementById('forkheadNeedle');
+forkhead.addEventListener('mousedown', (e) => {
+  isDraggingFork = true;
+  e.stopPropagation();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (isDraggingFork) {
+    const wrap = document.getElementById('tracksWrapper');
+    const rect = wrap.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    state.forkTime = ratio * state.videoDuration;
+    updateForkUI();
+    recompilePrompt();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDraggingFork) {
+    isDraggingFork = false;
+  }
+});
+
+// ============================================================================
+// Interactive Pose Rig & Canvas Drawing
+// ============================================================================
+
+function initDefaultPose() {
+  // Center around figureBox
+  const cx = state.figureBox.x + state.figureBox.w * 0.5;
+  const cy = state.figureBox.y + state.figureBox.h * 0.45;
+  const s = state.figureBox.h * 1.0;
+
+  state.joints = {
+    nose: { id: 'nose', label: 'Nose', x: cx, y: cy - 0.28 * s, color: '#ff0055' },
+    neck: { id: 'neck', label: 'Neck', x: cx, y: cy - 0.20 * s, color: '#ff5500' },
+    r_shoulder: { id: 'r_shoulder', label: 'R Shoulder', x: cx - 0.08 * s, y: cy - 0.18 * s, color: '#ffaa00' },
+    r_elbow: { id: 'r_elbow', label: 'R Elbow', x: cx - 0.14 * s, y: cy - 0.08 * s, color: '#ffaa00' },
+    r_wrist: { id: 'r_wrist', label: 'R Wrist', x: cx - 0.16 * s, y: cy + 0.02 * s, color: '#ffff00' },
+    l_shoulder: { id: 'l_shoulder', label: 'L Shoulder', x: cx + 0.08 * s, y: cy - 0.18 * s, color: '#aaff00' },
+    l_elbow: { id: 'l_elbow', label: 'L Elbow', x: cx + 0.14 * s, y: cy - 0.08 * s, color: '#55ff00' },
+    l_wrist: { id: 'l_wrist', label: 'L Wrist', x: cx + 0.16 * s, y: cy + 0.02 * s, color: '#00ff55' },
+    r_hip: { id: 'r_hip', label: 'R Hip', x: cx - 0.06 * s, y: cy + 0.05 * s, color: '#00ffaa' },
+    r_knee: { id: 'r_knee', label: 'R Knee', x: cx - 0.07 * s, y: cy + 0.18 * s, color: '#00ffff' },
+    r_ankle: { id: 'r_ankle', label: 'R Ankle', x: cx - 0.07 * s, y: cy + 0.32 * s, color: '#00aaff' },
+    l_hip: { id: 'l_hip', label: 'L Hip', x: cx + 0.06 * s, y: cy + 0.05 * s, color: '#0055ff' },
+    l_knee: { id: 'l_knee', label: 'L Knee', x: cx + 0.07 * s, y: cy + 0.18 * s, color: '#0000ff' },
+    l_ankle: { id: 'l_ankle', label: 'L Ankle', x: cx + 0.07 * s, y: cy + 0.32 * s, color: '#5500ff' },
+    r_eye: { id: 'r_eye', label: 'R Eye', x: cx - 0.02 * s, y: cy - 0.30 * s, color: '#aa00ff' },
+    r_ear: { id: 'r_ear', label: 'R Ear', x: cx - 0.05 * s, y: cy - 0.28 * s, color: '#ff00ff' },
+    l_eye: { id: 'l_eye', label: 'L Eye', x: cx + 0.02 * s, y: cy - 0.30 * s, color: '#ff00aa' },
+    l_ear: { id: 'l_ear', label: 'L Ear', x: cx + 0.05 * s, y: cy - 0.28 * s, color: '#ff0055' }
+  };
+}
+
+function applyPosePreset(preset) {
+  state.activePosePreset = preset;
+  const cx = state.figureBox.x + state.figureBox.w * 0.5;
+  const cy = state.figureBox.y + state.figureBox.h * 0.45;
+  const s = state.figureBox.h * 1.0;
+
+  initDefaultPose();
+
+  if (preset === 'wave_salute') {
+    state.joints.r_elbow.x = cx - 0.16 * s;
+    state.joints.r_elbow.y = cy - 0.26 * s;
+    state.joints.r_wrist.x = cx - 0.20 * s;
+    state.joints.r_wrist.y = cy - 0.38 * s;
+    document.getElementById('sliderRArm').value = 110;
+    document.getElementById('valRArm').textContent = '110°';
+  } else if (preset === 't_pose') {
+    state.joints.r_elbow.x = cx - 0.20 * s;
+    state.joints.r_elbow.y = cy - 0.18 * s;
+    state.joints.r_wrist.x = cx - 0.32 * s;
+    state.joints.r_wrist.y = cy - 0.18 * s;
+    state.joints.l_elbow.x = cx + 0.20 * s;
+    state.joints.l_elbow.y = cy - 0.18 * s;
+    state.joints.l_wrist.x = cx + 0.32 * s;
+    state.joints.l_wrist.y = cy - 0.18 * s;
+    document.getElementById('sliderRArm').value = 90;
+    document.getElementById('valRArm').textContent = '90°';
+  } else if (preset === 'superhero_landing') {
+    state.joints.neck.y = cy - 0.06 * s;
+    state.joints.r_shoulder.y = cy - 0.04 * s;
+    state.joints.l_shoulder.y = cy - 0.04 * s;
+    state.joints.r_wrist.x = cx - 0.02 * s;
+    state.joints.r_wrist.y = cy + 0.22 * s; // fist to floor
+    state.joints.r_knee.y = cy + 0.12 * s;
+    state.joints.l_knee.y = cy + 0.08 * s;
+    state.joints.l_ankle.x = cx + 0.24 * s;
+    state.joints.l_ankle.y = cy + 0.22 * s;
+  } else if (preset === 'martial_guard') {
+    state.joints.r_elbow.x = cx - 0.10 * s;
+    state.joints.r_elbow.y = cy - 0.12 * s;
+    state.joints.r_wrist.x = cx - 0.06 * s;
+    state.joints.r_wrist.y = cy - 0.24 * s;
+    state.joints.l_elbow.x = cx + 0.12 * s;
+    state.joints.l_elbow.y = cy - 0.10 * s;
+    state.joints.l_wrist.x = cx + 0.10 * s;
+    state.joints.l_wrist.y = cy - 0.20 * s;
+    state.joints.r_knee.x = cx - 0.12 * s;
+    state.joints.l_knee.x = cx + 0.14 * s;
+  } else if (preset === 'action_kick') {
+    state.joints.l_hip.y = cy + 0.02 * s;
+    state.joints.l_knee.x = cx + 0.18 * s;
+    state.joints.l_knee.y = cy - 0.10 * s;
+    state.joints.l_ankle.x = cx + 0.34 * s;
+    state.joints.l_ankle.y = cy - 0.22 * s;
+  } else if (preset === 'defensive_crouch') {
+    state.joints.neck.y = cy - 0.10 * s;
+    state.joints.r_knee.y = cy + 0.10 * s;
+    state.joints.l_knee.y = cy + 0.10 * s;
+    state.joints.r_ankle.x = cx - 0.12 * s;
+    state.joints.l_ankle.x = cx + 0.12 * s;
+  } else if (preset === 'running_sprint') {
+    state.joints.neck.y = cy - 0.14 * s;
+    state.joints.r_wrist.x = cx - 0.18 * s;
+    state.joints.r_wrist.y = cy - 0.04 * s;
+    state.joints.l_wrist.x = cx + 0.18 * s;
+    state.joints.l_wrist.y = cy - 0.18 * s;
+    state.joints.r_knee.y = cy + 0.08 * s;
+    state.joints.l_ankle.y = cy + 0.12 * s;
+  }
+
+  // Update active chip classes
+  document.querySelectorAll('.control-panel:first-child .chip-btn').forEach(b => b.classList.remove('active'));
+  const btnId = {
+    wave_salute: 'chipPoseWave',
+    superhero_landing: 'chipPoseLanding',
+    t_pose: 'chipPoseTPose',
+    martial_guard: 'chipPoseGuard',
+    action_kick: 'chipPoseKick',
+    defensive_crouch: 'chipPoseCrouch',
+    running_sprint: 'chipPoseSprint',
+    original: 'chipPoseOriginal'
+  }[preset];
+  if (btnId) document.getElementById(btnId)?.classList.add('active');
+
+  const nameMap = {
+    wave_salute: 'Wave / Salute',
+    superhero_landing: 'Superhero Landing',
+    t_pose: 'T-Pose Calibration',
+    martial_guard: 'Martial Guard',
+    action_kick: 'Dynamic Jump Kick',
+    defensive_crouch: 'Defensive Crouch',
+    running_sprint: 'Running Sprint',
+    original: 'Tracked Anchor'
+  };
+  document.getElementById('hudPoseName').textContent = nameMap[preset] || preset;
+
+  renderStage();
+  recompilePrompt();
+  showToast('Pose set: ' + (nameMap[preset] || preset));
+}
+
+function adjustLimbAngle(type, deg) {
+  deg = parseFloat(deg);
+  const cx = state.figureBox.x + state.figureBox.w * 0.5;
+  const cy = state.figureBox.y + state.figureBox.h * 0.45;
+  const s = state.figureBox.h * 1.0;
+
+  if (type === 'r_arm') {
+    document.getElementById('valRArm').textContent = deg + '°';
+    const rad = (deg * Math.PI) / 180;
+    state.joints.r_elbow.x = state.joints.r_shoulder.x - Math.cos(rad) * 0.12 * s;
+    state.joints.r_elbow.y = state.joints.r_shoulder.y - Math.sin(rad) * 0.12 * s;
+    state.joints.r_wrist.x = state.joints.r_elbow.x - Math.cos(rad + 0.2) * 0.14 * s;
+    state.joints.r_wrist.y = state.joints.r_elbow.y - Math.sin(rad + 0.2) * 0.14 * s;
+  } else if (type === 'torso') {
+    document.getElementById('valTorso').textContent = deg + '°';
+    const rad = (deg * Math.PI) / 180;
+    state.joints.neck.x = cx + Math.sin(rad) * 0.15 * s;
+    state.joints.nose.x = state.joints.neck.x + Math.sin(rad) * 0.08 * s;
+  }
+  renderStage();
+  recompilePrompt();
+}
+
+function resetPose() {
+  applyPosePreset('original');
+}
+
+function togglePoseOverlay() {
+  state.showBones = !state.showBones;
+  renderStage();
+}
+
+// Canvas Mouse Interactions for Dragging Joints
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  renderStage();
+}
+window.addEventListener('resize', resizeCanvas);
+
+function getCanvasCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) / rect.width,
+    y: (e.clientY - rect.top) / rect.height
+  };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  const pos = getCanvasCoords(e);
+  if (state.hasTrackedCharacter) {
+    // Find closest joint within threshold
+    let closest = null;
+    let minDist = 0.05; // ~5% radius
+    for (const [key, j] of Object.entries(state.joints)) {
+      const d = Math.hypot(j.x - pos.x, j.y - pos.y);
+      if (d < minDist) {
+        minDist = d;
+        closest = key;
+      }
+    }
+    if (closest) {
+      state.selectedJoint = closest;
+      state.isDraggingJoint = true;
+      showToast('Manipulating: ' + state.joints[closest].label);
+    }
+  } else {
+    // Non-character adaptive mode: Place or Drag Spatial Focal Anchor
+    const domainLabels = {
+      architectural: 'Plaza Hotel Architectural Focal Anchor',
+      aerial: 'Urban Ground Coordinate Target',
+      object: 'Selected Spatial POI Target'
+    };
+    state.focalAnchor = {
+      x: Math.max(0.05, Math.min(0.95, pos.x)),
+      y: Math.max(0.05, Math.min(0.95, pos.y)),
+      label: domainLabels[state.footageDomain] || 'Scene Focal Anchor'
+    };
+    state.isDraggingFocalAnchor = true;
+    showToast(`🎯 Focal Anchor updated: [${(pos.x * 100).toFixed(0)}%, ${(pos.y * 100).toFixed(0)}%]`);
+    renderStage();
+    recompilePrompt();
+    updateAdaptiveSubject3D();
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const pos = getCanvasCoords(e);
+  if (state.hasTrackedCharacter) {
+    if (state.isDraggingJoint && state.selectedJoint) {
+      state.joints[state.selectedJoint].x = Math.max(0.05, Math.min(0.95, pos.x));
+      state.joints[state.selectedJoint].y = Math.max(0.05, Math.min(0.95, pos.y));
+      renderStage();
+      recompilePrompt();
+    } else {
+      // Hover highlight cursor
+      let hover = false;
+      for (const j of Object.values(state.joints)) {
+        if (Math.hypot(j.x - pos.x, j.y - pos.y) < 0.04) {
+          hover = true;
+          break;
+        }
+      }
+      canvas.style.cursor = hover ? 'grab' : 'crosshair';
+    }
+  } else {
+    // Adaptive focal anchor cursor and drag
+    if (state.isDraggingFocalAnchor && state.focalAnchor) {
+      state.focalAnchor.x = Math.max(0.05, Math.min(0.95, pos.x));
+      state.focalAnchor.y = Math.max(0.05, Math.min(0.95, pos.y));
+      renderStage();
+      recompilePrompt();
+      updateAdaptiveSubject3D();
+    } else {
+      const ax = state.focalAnchor ? state.focalAnchor.x : 0.5;
+      const ay = state.focalAnchor ? state.focalAnchor.y : 0.5;
+      const isNear = Math.hypot(ax - pos.x, ay - pos.y) < 0.06;
+      canvas.style.cursor = isNear ? 'grab' : 'crosshair';
+    }
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (state.isDraggingJoint) {
+    state.isDraggingJoint = false;
+    state.selectedJoint = null;
+  }
+  if (state.isDraggingFocalAnchor) {
+    state.isDraggingFocalAnchor = false;
+  }
+});
+
+// Render 2D Canvas Stage
+function renderStage() {
+  const w = canvas.getBoundingClientRect().width;
+  const h = canvas.getBoundingClientRect().height;
+  ctx.clearRect(0, 0, w, h);
+
+  if (state.viewMode === 'skeleton') {
+    // Pure black background for ControlNet / OpenPose map
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+    if (!state.hasTrackedCharacter) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 13px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('NO CHARACTER TRACKED IN CLIP', w * 0.5, h * 0.44);
+      ctx.font = '11px -apple-system, sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText('Pose conditioning inactive. Camera trajectory & environmental branching active.', w * 0.5, h * 0.50);
+      ctx.fillText('Click anywhere on the video frame to place a 3D Camera Focal Anchor.', w * 0.5, h * 0.56);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  // Draw Bounding Box around Subject ONLY if character is tracked
+  if (state.hasTrackedCharacter && state.showBones && state.viewMode !== 'skeleton') {
+    const bx = state.figureBox.x * w;
+    const by = state.figureBox.y * h;
+    const bw = state.figureBox.w * w;
+    const bh = state.figureBox.h * h;
+
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+
+    // Tag
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+    ctx.fillRect(bx, by - 18, 130, 18);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('SUBJECT #1 (ACTOR)', bx + 4, by - 5);
+  }
+
+  // Draw Adaptive Spatial Focal Reticle if NO character is tracked
+  if (!state.hasTrackedCharacter && state.viewMode !== 'skeleton') {
+    const ax = (state.focalAnchor ? state.focalAnchor.x : 0.50) * w;
+    const ay = (state.focalAnchor ? state.focalAnchor.y : 0.38) * h;
+
+    // Glowing reticle brackets
+    const reticleColor = state.footageDomain === 'aerial' ? '#06b6d4' : (state.footageDomain === 'architectural' ? '#f59e0b' : '#a855f7');
+    ctx.strokeStyle = reticleColor;
+    ctx.lineWidth = 1.8;
+
+    // Target center circle
+    ctx.beginPath();
+    ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Crosshairs
+    ctx.beginPath();
+    ctx.moveTo(ax - 20, ay); ctx.lineTo(ax - 9, ay);
+    ctx.moveTo(ax + 9, ay); ctx.lineTo(ax + 20, ay);
+    ctx.moveTo(ax, ay - 20); ctx.lineTo(ax, ay - 9);
+    ctx.moveTo(ax, ay + 9); ctx.lineTo(ax, ay + 20);
+    ctx.stroke();
+
+    // Corner brackets [ ]
+    const bSize = 15;
+    ctx.strokeRect(ax - bSize, ay - bSize, bSize * 2, bSize * 2);
+
+    // Label Pill
+    const domainTag = state.footageDomain === 'aerial' ? '🚁 AERIAL FOCUS' : (state.footageDomain === 'architectural' ? '🏛️ ARCHITECTURAL ANCHOR' : '🎯 SCENE TARGET');
+    const label = `${domainTag} [${(state.focalAnchor.x * 100).toFixed(0)}%, ${(state.focalAnchor.y * 100).toFixed(0)}%]`;
+    ctx.font = 'bold 10px -apple-system, sans-serif';
+    const textWidth = ctx.measureText(label).width;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+    ctx.fillRect(ax - textWidth / 2 - 6, ay - bSize - 22, textWidth + 12, 18);
+    ctx.strokeStyle = reticleColor;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ax - textWidth / 2 - 6, ay - bSize - 22, textWidth + 12, 18);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, ax, ay - bSize - 9);
+    ctx.textAlign = 'start';
+
+    // Update left HUD
+    const hudAnchor = document.getElementById('hudLeftAnchor');
+    if (hudAnchor) {
+      hudAnchor.textContent = `X: ${(state.focalAnchor.x * 100).toFixed(0)}%, Y: ${(state.focalAnchor.y * 100).toFixed(0)}%`;
+    }
+  }
+
+  // Draw Bones and Joints ONLY if character is tracked
+  if (state.hasTrackedCharacter && state.showBones) {
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    for (const [fKey, tKey, color] of OPENPOSE_BONES) {
+      const from = state.joints[fKey];
+      const to = state.joints[tKey];
+      if (from && to) {
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(from.x * w, from.y * h);
+        ctx.lineTo(to.x * w, to.y * h);
+        ctx.stroke();
+      }
+    }
+
+    // Draw Joints
+    for (const [key, j] of Object.entries(state.joints)) {
+      const isSel = (state.selectedJoint === key);
+      ctx.fillStyle = j.color;
+      ctx.beginPath();
+      ctx.arc(j.x * w, j.y * h, isSel ? 7 : 5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Outer ring
+      ctx.strokeStyle = isSel ? '#ffffff' : 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = isSel ? 2 : 1;
+      ctx.stroke();
+    }
+  }
+
+  // Apply Atmospheric Filter if in Composite Mode and past Fork
+  if (state.viewMode === 'composite' && state.currentTime >= state.forkTime) {
+    applyClientAtmosphereFX(w, h);
+  }
+}
+
+function applyClientAtmosphereFX(w, h) {
+  if (state.atmosphere === 'neon_rain') {
+    ctx.fillStyle = 'rgba(139, 92, 246, 0.08)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(20, 184, 166, 0.05)';
+    ctx.fillRect(0, h * 0.5, w, h * 0.5);
+  } else if (state.atmosphere === 'golden_hour') {
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+    ctx.fillRect(0, 0, w, h);
+  } else if (state.atmosphere === 'blizzard') {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.fillRect(0, 0, w, h);
+  } else if (state.atmosphere === 'volcanic_eclipse') {
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.12)';
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+// ============================================================================
+// Three.js 3D Camera Trajectory Rig
+// ============================================================================
+
+let scene, threeCamera, renderer, controls;
+let histCurveMesh, divCurveMesh, frustumGroup, lookAtLine, adaptiveSubjectGroup;
+
+function initThree() {
+  const container = document.getElementById('threeContainer');
+  const w = container.clientWidth || 400;
+  const h = container.clientHeight || 340;
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0b10);
+
+  threeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+  threeCamera.position.set(2.8, 2.2, 3.2);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  controls = new THREE.OrbitControls(threeCamera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+
+  // Lights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+  dirLight.position.set(5, 10, 7);
+  scene.add(dirLight);
+
+  // Ground Grid
+  const gridHelper = new THREE.GridHelper(6, 12, 0x334155, 0x1e293b);
+  gridHelper.position.y = -0.01;
+  scene.add(gridHelper);
+
+  // Central Adaptive Subject Group (Dynamic Architectural Massing / Aerial Grid / Character Avatar)
+  adaptiveSubjectGroup = new THREE.Group();
+  scene.add(adaptiveSubjectGroup);
+  updateAdaptiveSubject3D();
+
+  // Trajectory Curves & Frustum
+  buildSplines();
+  buildFrustumGizmo();
+
+  animateThree();
+}
+
+function updateAdaptiveSubject3D() {
+  if (!adaptiveSubjectGroup || !scene) return;
+
+  // Clear existing subject meshes
+  while (adaptiveSubjectGroup.children.length > 0) {
+    const child = adaptiveSubjectGroup.children[0];
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+      else child.material.dispose();
+    }
+    adaptiveSubjectGroup.remove(child);
+  }
+
+  const hudTarget = document.getElementById('hudTargetSubject');
+
+  if (state.hasTrackedCharacter) {
+    // -------------------------------------------------------------
+    // Domain: CHARACTER PERFORMANCE (Humanoid Actor Avatar Rig)
+    // -------------------------------------------------------------
+    const torsoGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.55, 16);
+    const torsoMat = new THREE.MeshStandardMaterial({
+      color: 0x10b981,
+      roughness: 0.35,
+      metalness: 0.25
+    });
+    const torso = new THREE.Mesh(torsoGeo, torsoMat);
+    torso.position.y = 0.28;
+    adaptiveSubjectGroup.add(torso);
+
+    const headGeo = new THREE.SphereGeometry(0.11, 16, 16);
+    const headMat = new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      roughness: 0.2
+    });
+    const head = new THREE.Mesh(headGeo, headMat);
+    head.position.y = 0.68;
+    adaptiveSubjectGroup.add(head);
+
+    // Dynamic limbs matching active pose preset
+    const limbMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, roughness: 0.4 });
+    const rArmGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.35, 8);
+    const rArm = new THREE.Mesh(rArmGeo, limbMat);
+    if (state.activePosePreset === 'wave_salute') {
+      rArm.position.set(-0.25, 0.50, 0);
+      rArm.rotation.z = Math.PI * 0.75;
+    } else if (state.activePosePreset === 'superhero_landing') {
+      rArm.position.set(-0.15, 0.12, 0.15);
+      rArm.rotation.x = Math.PI * 0.3;
+    } else {
+      rArm.position.set(-0.25, 0.30, 0);
+      rArm.rotation.z = Math.PI * 0.15;
+    }
+    adaptiveSubjectGroup.add(rArm);
+
+    const lArmGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.35, 8);
+    const lArm = new THREE.Mesh(lArmGeo, limbMat);
+    lArm.position.set(0.25, 0.30, 0);
+    lArm.rotation.z = -Math.PI * 0.15;
+    adaptiveSubjectGroup.add(lArm);
+
+    // Ground Actor Tracking Ring
+    const ringGeo = new THREE.RingGeometry(0.26, 0.29, 32);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x10b981, side: THREE.DoubleSide });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.y = 0.005;
+    adaptiveSubjectGroup.add(ring);
+
+    if (hudTarget) hudTarget.textContent = 'Subject #1 (Actor Pose Anchor)';
+
+  } else if (state.footageDomain === 'aerial') {
+    // -------------------------------------------------------------
+    // Domain: AERIAL DRONE SURVEY (Ground Target & Urban Blockout)
+    // -------------------------------------------------------------
+    // Concentric aerial survey reticle rings
+    const ring1Geo = new THREE.RingGeometry(0.28, 0.32, 32);
+    ring1Geo.rotateX(-Math.PI / 2);
+    const ring1Mat = new THREE.MeshBasicMaterial({ color: 0x06b6d4, side: THREE.DoubleSide });
+    const ring1 = new THREE.Mesh(ring1Geo, ring1Mat);
+    ring1.position.y = 0.005;
+    adaptiveSubjectGroup.add(ring1);
+
+    const ring2Geo = new THREE.RingGeometry(0.68, 0.72, 48);
+    ring2Geo.rotateX(-Math.PI / 2);
+    const ring2Mat = new THREE.MeshBasicMaterial({ color: 0x0284c7, side: THREE.DoubleSide, opacity: 0.6, transparent: true });
+    const ring2 = new THREE.Mesh(ring2Geo, ring2Mat);
+    ring2.position.y = 0.005;
+    adaptiveSubjectGroup.add(ring2);
+
+    // Crosshair axis ticks
+    const tickMat = new THREE.LineBasicMaterial({ color: 0x38bdf8 });
+    const tickPoints = [
+      new THREE.Vector3(-0.9, 0.01, 0), new THREE.Vector3(0.9, 0.01, 0),
+      new THREE.Vector3(0, 0.01, -0.9), new THREE.Vector3(0, 0.01, 0.9)
+    ];
+    const tickGeo = new THREE.BufferGeometry().setFromPoints(tickPoints);
+    const ticks = new THREE.LineSegments(tickGeo, tickMat);
+    adaptiveSubjectGroup.add(ticks);
+
+    // Aerial Altitude Standoff Beacon Pole
+    const poleGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.9, 8);
+    const poleMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.y = 0.45;
+    adaptiveSubjectGroup.add(pole);
+
+    // Hovering Flight Target Reticle
+    const droneBeaconGeo = new THREE.OctahedronGeometry(0.08, 0);
+    const droneBeaconMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.2, metalness: 0.8 });
+    const droneBeacon = new THREE.Mesh(droneBeaconGeo, droneBeaconMat);
+    droneBeacon.position.y = 0.92;
+    adaptiveSubjectGroup.add(droneBeacon);
+
+    // Surrounding low-poly urban perimeter blocks
+    const blockMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
+    const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.4, 0.35), blockMat);
+    b1.position.set(-0.85, 0.2, -0.7);
+    adaptiveSubjectGroup.add(b1);
+    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.6, 0.3), blockMat);
+    b2.position.set(0.8, 0.3, -0.6);
+    adaptiveSubjectGroup.add(b2);
+
+    if (hudTarget) hudTarget.textContent = 'Urban Ground Target (Alt: 45m)';
+
+  } else if (state.footageDomain === 'architectural') {
+    // -------------------------------------------------------------
+    // Domain: ARCHITECTURAL & LANDMARK (Plaza Hotel Massing Blockout)
+    // -------------------------------------------------------------
+    // Google 3D Tiles Clay style (#b0b8c4 / #dcd6cd, roughness 0.82)
+    const clayMat = new THREE.MeshStandardMaterial({
+      color: 0xb0b8c4,
+      roughness: 0.82,
+      metalness: 0.05
+    });
+
+    // Main base pavilion massing
+    const baseGeo = new THREE.BoxGeometry(0.75, 0.65, 0.75);
+    const base = new THREE.Mesh(baseGeo, clayMat);
+    base.position.y = 0.325;
+    adaptiveSubjectGroup.add(base);
+
+    // Upper set-back tier
+    const midGeo = new THREE.BoxGeometry(0.55, 0.3, 0.55);
+    const mid = new THREE.Mesh(midGeo, clayMat);
+    mid.position.y = 0.80;
+    adaptiveSubjectGroup.add(mid);
+
+    // Iconic Mansard Roof Cupola / Architectural Crown
+    const roofMat = new THREE.MeshStandardMaterial({
+      color: 0x0f766e, // Oxidized copper patina tone
+      roughness: 0.7,
+      metalness: 0.15
+    });
+    const roofGeo = new THREE.ConeGeometry(0.32, 0.35, 4);
+    roofGeo.rotateY(Math.PI / 4);
+    const roof = new THREE.Mesh(roofGeo, roofMat);
+    roof.position.y = 1.12;
+    adaptiveSubjectGroup.add(roof);
+
+    // Finial Needle atop Crown
+    const finialGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.2, 8);
+    const finialMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+    const finial = new THREE.Mesh(finialGeo, finialMat);
+    finial.position.y = 1.35;
+    adaptiveSubjectGroup.add(finial);
+
+    // Ground Building Footprint Lot Boundary
+    const lotGeo = new THREE.RingGeometry(0.65, 0.68, 4);
+    lotGeo.rotateX(-Math.PI / 2);
+    lotGeo.rotateZ(Math.PI / 4);
+    const lotMat = new THREE.MeshBasicMaterial({ color: 0x64748b, side: THREE.DoubleSide });
+    const lot = new THREE.Mesh(lotGeo, lotMat);
+    lot.position.y = 0.005;
+    adaptiveSubjectGroup.add(lot);
+
+    if (hudTarget) hudTarget.textContent = 'Plaza Hotel Architectural Crown';
+
+  } else {
+    // -------------------------------------------------------------
+    // Domain: OBJECT / SPATIAL ANCHOR (Adaptive POI Reticle)
+    // -------------------------------------------------------------
+    const boxGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    const boxMat = new THREE.MeshStandardMaterial({
+      color: 0x8b5cf6,
+      roughness: 0.4,
+      metalness: 0.3,
+      wireframe: true
+    });
+    const box = new THREE.Mesh(boxGeo, boxMat);
+    box.position.y = 0.25;
+    adaptiveSubjectGroup.add(box);
+
+    const orbGeo = new THREE.SphereGeometry(0.08, 16, 16);
+    const orbMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.2 });
+    const orb = new THREE.Mesh(orbGeo, orbMat);
+    orb.position.y = 0.25;
+    adaptiveSubjectGroup.add(orb);
+
+    if (hudTarget) hudTarget.textContent = 'Spatial Focus Anchor (POI)';
+  }
+
+  // Refresh divergent spline and lookAt
+  updateDivergentSpline();
+}
+
+function buildSplines() {
+  if (histCurveMesh) scene.remove(histCurveMesh);
+  if (divCurveMesh) scene.remove(divCurveMesh);
+
+  // Historical Path (0 to forkTime): Teal
+  const histPoints = [
+    new THREE.Vector3(0.0, 0.2, 2.0),
+    new THREE.Vector3(0.6, 0.35, 1.8),
+    new THREE.Vector3(1.1, 0.45, 1.4)
+  ];
+  const histCurve = new THREE.CatmullRomCurve3(histPoints);
+  const histGeo = new THREE.TubeGeometry(histCurve, 32, 0.025, 8, false);
+  const histMat = new THREE.MeshBasicMaterial({ color: 0x14b8a6 });
+  histCurveMesh = new THREE.Mesh(histGeo, histMat);
+  scene.add(histCurveMesh);
+
+  // Divergent Path (forkTime to End): Neon Amber / Purple
+  updateDivergentSpline();
+}
+
+function updateDivergentSpline() {
+  if (!scene) return;
+  if (divCurveMesh) scene.remove(divCurveMesh);
+
+  // Derive target divergent endpoint from state.camera
+  const radAz = (state.camera.azimuthDeg * Math.PI) / 180;
+  const radEl = (state.camera.elevationDeg * Math.PI) / 180;
+  const r = state.camera.radius;
+
+  const forkPos = new THREE.Vector3(1.1, 0.45, 1.4); // end of historical
+  const midPos = new THREE.Vector3(
+    1.1 + Math.cos(radAz) * (r * 0.5),
+    0.45 + Math.sin(radEl) * (r * 0.4),
+    1.4 + Math.sin(radAz) * (r * 0.5)
+  );
+  const endPos = new THREE.Vector3(
+    Math.cos(radAz) * r,
+    Math.sin(radEl) * r + 0.3,
+    Math.sin(radAz) * r
+  );
+
+  const divCurve = new THREE.CatmullRomCurve3([forkPos, midPos, endPos]);
+  const divGeo = new THREE.TubeGeometry(divCurve, 40, 0.035, 8, false);
+  const divMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+  divCurveMesh = new THREE.Mesh(divGeo, divMat);
+  scene.add(divCurveMesh);
+
+  // Move camera frustum to divergent destination and direct lookAt
+  if (frustumGroup) {
+    frustumGroup.position.copy(endPos);
+    const lookY = state.hasTrackedCharacter ? 0.35 : (state.footageDomain === 'architectural' ? 0.55 : 0.05);
+    const lookTarget = new THREE.Vector3(0, lookY, 0);
+    frustumGroup.lookAt(lookTarget);
+
+    // Sightline from camera to focal subject
+    if (lookAtLine) scene.remove(lookAtLine);
+    const lineMat = new THREE.LineDashedMaterial({
+      color: 0xf59e0b,
+      dashSize: 0.08,
+      gapSize: 0.04,
+      opacity: 0.4,
+      transparent: true
+    });
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([endPos, lookTarget]);
+    lookAtLine = new THREE.Line(lineGeo, lineMat);
+    lookAtLine.computeLineDistances();
+    scene.add(lookAtLine);
+  }
+}
+
+function buildFrustumGizmo() {
+  frustumGroup = new THREE.Group();
+
+  // Wireframe pyramid cone
+  const coneGeo = new THREE.ConeGeometry(0.25, 0.4, 4);
+  coneGeo.rotateX(Math.PI / 2);
+  const coneMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, wireframe: true });
+  const coneMesh = new THREE.Mesh(coneGeo, coneMat);
+  frustumGroup.add(coneMesh);
+
+  // Apex sphere
+  const apexGeo = new THREE.SphereGeometry(0.06, 8, 8);
+  const apexMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+  const apex = new THREE.Mesh(apexGeo, apexMat);
+  frustumGroup.add(apex);
+
+  scene.add(frustumGroup);
+}
+
+function animateThree() {
+  requestAnimationFrame(animateThree);
+  controls.update();
+  renderer.render(scene, threeCamera);
+}
+
+function applyCameraManeuver(preset) {
+  state.activeCameraManeuver = preset;
+
+  if (preset === 'crane_reveal') {
+    state.camera.azimuthDeg = 65;
+    state.camera.elevationDeg = 55;
+    state.camera.radius = 2.10;
+  } else if (preset === 'hero_push_in') {
+    state.camera.azimuthDeg = 15;
+    state.camera.elevationDeg = 8;
+    state.camera.radius = 0.85;
+  } else if (preset === 'reverse_orbit') {
+    state.camera.azimuthDeg = 195;
+    state.camera.elevationDeg = 20;
+    state.camera.radius = 1.70;
+  } else if (preset === 'dutch_tilt') {
+    state.camera.azimuthDeg = 45;
+    state.camera.elevationDeg = -10;
+    state.camera.radius = 1.20;
+  }
+
+  // Update UI sliders
+  document.getElementById('sliderAzimuth').value = state.camera.azimuthDeg;
+  document.getElementById('valAzimuth').textContent = state.camera.azimuthDeg + '°';
+  document.getElementById('sliderElevation').value = state.camera.elevationDeg;
+  document.getElementById('valElevation').textContent = state.camera.elevationDeg + '°';
+  document.getElementById('sliderRadius').value = state.camera.radius;
+  document.getElementById('valRadius').textContent = state.camera.radius.toFixed(2) + 'm';
+
+  document.getElementById('hudAzimuth').textContent = state.camera.azimuthDeg + '°';
+  document.getElementById('hudElevation').textContent = state.camera.elevationDeg + '°';
+  document.getElementById('hudRadius').textContent = state.camera.radius.toFixed(2) + 'm';
+
+  document.querySelectorAll('.control-panel:nth-child(2) .chip-btn').forEach(b => b.classList.remove('active'));
+  const idMap = {
+    crane_reveal: 'chipCamCrane',
+    hero_push_in: 'chipCamHero',
+    reverse_orbit: 'chipCamOrbit',
+    dutch_tilt: 'chipCamDutch'
+  };
+  if (idMap[preset]) document.getElementById(idMap[preset])?.classList.add('active');
+
+  updateDivergentSpline();
+  recompilePrompt();
+  showToast('Camera Maneuver: ' + preset.replace('_', ' '));
+}
+
+function updateCameraParam(param, val) {
+  val = parseFloat(val);
+  if (param === 'azimuth') {
+    state.camera.azimuthDeg = val;
+    document.getElementById('valAzimuth').textContent = val + '°';
+    document.getElementById('hudAzimuth').textContent = val + '°';
+  } else if (param === 'elevation') {
+    state.camera.elevationDeg = val;
+    document.getElementById('valElevation').textContent = val + '°';
+    document.getElementById('hudElevation').textContent = val + '°';
+  } else if (param === 'radius') {
+    state.camera.radius = val;
+    document.getElementById('valRadius').textContent = val.toFixed(2) + 'm';
+    document.getElementById('hudRadius').textContent = val.toFixed(2) + 'm';
+  }
+  updateDivergentSpline();
+  recompilePrompt();
+}
+
+function resetCameraSpline() {
+  applyCameraManeuver('crane_reveal');
+}
+
+// ============================================================================
+// Narrative & Atmosphere Mutators
+// ============================================================================
+
+function applyActionMutator(action) {
+  state.action = action;
+  document.querySelectorAll('.control-panel:nth-child(3) .chip-btn.purple-active').forEach(b => b.classList.remove('active'));
+  const idMap = {
+    cybernetic_armor: 'chipActArmor',
+    anti_gravity: 'chipActGravity',
+    golden_dust: 'chipActEmbers',
+    matrix_freeze: 'chipActTimeStop'
+  };
+  if (idMap[action]) document.getElementById(idMap[action])?.classList.add('active');
+  recompilePrompt();
+  renderStage();
+  showToast('Narrative Action: ' + action.replace('_', ' '));
+}
+
+function applyAtmosphere(atmos) {
+  state.atmosphere = atmos;
+  document.querySelectorAll('.control-panel:nth-child(3) .chip-btn:not(.purple-active)').forEach(b => b.classList.remove('active'));
+  const idMap = {
+    neon_rain: 'chipAtmosNeon',
+    golden_hour: 'chipAtmosGolden',
+    blizzard: 'chipAtmosBlizzard',
+    volcanic_eclipse: 'chipAtmosVolcano'
+  };
+  if (idMap[atmos]) document.getElementById(idMap[atmos])?.classList.add('active');
+  recompilePrompt();
+  renderStage();
+  showToast('Atmosphere: ' + atmos.replace('_', ' '));
+}
+
+// ============================================================================
+// Two-Way Synced Director Prompt Directive
+// ============================================================================
+
+function recompilePrompt(force = false) {
+  if (userEditedPrompt && !force) return;
+
+  const poseDescriptions = {
+    wave_salute: 'raising the right arm into an energetic wave salute gesture',
+    superhero_landing: 'dropping into a dramatic three-point superhero landing with one fist pressed to the ground',
+    t_pose: 'smoothly transitioning into a clean T-pose with arms extended horizontally',
+    martial_guard: 'transitioning into an alert martial arts defensive stance',
+    action_kick: 'executing a dynamic martial arts aerial high-kick',
+    defensive_crouch: 'dropping low into a combat crouch',
+    running_sprint: 'breaking into a dynamic forward running sprint',
+    original: 'maintaining original tracked anatomical stance'
+  };
+
+  const cameraDescriptions = {
+    crane_reveal: 'the camera cranes dynamically upward into a sweeping high-angle bird\'s-eye view (60° elevation)',
+    hero_push_in: 'the camera rapidly pushes in for an intimate cinematic hero close-up',
+    reverse_orbit: 'the camera reverses direction in a fluid 180-degree orbital whip around the focal subject',
+    dutch_tilt: 'the camera executes a dramatic low-angle Dutch roll with pronounced perspective tension'
+  };
+
+  const actionDescriptions = {
+    cybernetic_armor: state.hasTrackedCharacter
+      ? 'Gleaming cybernetic nanotech armor rapidly deploys across the figure with iridescent bioluminescent circuit traces.'
+      : 'Gleaming cybernetic nanotech armor rapidly deploys across the architectural surfaces with iridescent bioluminescent circuit traces.',
+    anti_gravity: state.hasTrackedCharacter
+      ? 'The figure defies gravity and begins to levitate upwards, surrounded by faint gravitational distortion rings.'
+      : 'The scene defies gravity and begins to levitate upwards, surrounded by faint gravitational distortion rings.',
+    golden_dust: 'The focal elements subtly begin to dissolve into swirling luminous golden particle embers drifting in the air.',
+    matrix_freeze: 'A shimmering temporal shockwave expands outwards as time drastically dilates into bullet-time suspension.'
+  };
+
+  const atmosphereDescriptions = {
+    neon_rain: 'The environment transforms into a wet cyberpunk streetscape with glistening rain reflections and vibrant neon magenta/cyan rim lighting.',
+    golden_hour: 'The lighting shifts into radiant golden hour twilight (2800K) with warm low-angle sun rays and long soft shadows.',
+    blizzard: 'A sudden turbulent snow squall sweeps across the frame with swirling snowflakes and frosted surfaces.',
+    volcanic_eclipse: 'The sky darkens into an atmospheric crimson eclipse with floating incandescent volcanic embers.'
+  };
+
+  const camText = cameraDescriptions[state.activeCameraManeuver] || 'diverging camera trajectory';
+  const actText = actionDescriptions[state.action] || '';
+  const atmosText = atmosphereDescriptions[state.atmosphere] || '';
+
+  let prompt = '';
+  if (state.hasTrackedCharacter) {
+    const poseText = poseDescriptions[state.activePosePreset] || 'altering body posture';
+    prompt = `At timestamp ${state.forkTime.toFixed(1)}s, the video branches: The focal figure begins ${poseText}. Simultaneously, ${camText}. ${actText} ${atmosText} Maintain perfect temporal coherence, seed-frame lighting consistency, and zero jitter from the anchor frame forward.`;
+  } else {
+    const anchorFocus = state.focalAnchor ? ` focusing toward the ${state.focalAnchor.label} at normalized coordinates [${state.focalAnchor.x.toFixed(2)}, ${state.focalAnchor.y.toFixed(2)}]` : '';
+    prompt = `At timestamp ${state.forkTime.toFixed(1)}s, the video branches: The camera diverges as ${camText}${anchorFocus}. ${actText} ${atmosText} Maintain perfect temporal coherence, seed-frame lighting consistency, and zero jitter from the anchor frame forward.`;
+  }
+
+  document.getElementById('directorPrompt').value = prompt;
+  if (force) {
+    userEditedPrompt = false;
+    showToast('Prompt re-synchronized from controls');
+  }
+}
+
+// ============================================================================
+// Viewport Switcher (Composite / Skeleton / Split)
+// ============================================================================
+
+function setViewMode(mode) {
+  state.viewMode = mode;
+  document.getElementById('btnViewComposite').classList.toggle('active', mode === 'composite');
+  document.getElementById('btnViewSkeleton').classList.toggle('active', mode === 'skeleton');
+  document.getElementById('btnViewSplit').classList.toggle('active', mode === 'split');
+
+  const splitDivider = document.getElementById('splitDivider');
+  if (mode === 'split') {
+    splitDivider.style.display = 'block';
+    splitDivider.style.left = (state.splitX * 100) + '%';
+  } else {
+    splitDivider.style.display = 'none';
+  }
+  renderStage();
+  showToast('View Mode: ' + mode);
+}
+
+// Draggable Split Divider
+let isDraggingSplit = false;
+const splitDivider = document.getElementById('splitDivider');
+splitDivider.addEventListener('mousedown', (e) => {
+  isDraggingSplit = true;
+  e.stopPropagation();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (isDraggingSplit && state.viewMode === 'split') {
+    const wrap = document.getElementById('stageLeft');
+    const rect = wrap.getBoundingClientRect();
+    const ratio = Math.max(0.1, Math.min(0.9, (e.clientX - rect.left) / rect.width));
+    state.splitX = ratio;
+    splitDivider.style.left = (ratio * 100) + '%';
+    renderStage();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (isDraggingSplit) isDraggingSplit = false;
+});
+
+// ============================================================================
+// Video Clip Switching & Custom Footage Loader
+// ============================================================================
+
+function loadClip(clipId) {
+  state.currentClip = clipId;
+  document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+
+  if (clipId === 'plaza') {
+    document.getElementById('btnClipPlaza')?.classList.add('active');
+    video.src = '/videos/plaza_hotel_omni_15s_720p.mp4';
+    state.hasTrackedCharacter = false;
+    state.footageDomain = 'architectural';
+    state.focalAnchor = { x: 0.50, y: 0.38, label: 'Plaza Hotel Central Mansard Cupola' };
+    state.figureBox = { x: 0.38, y: 0.22, w: 0.24, h: 0.65 };
+  } else if (clipId === 'actor') {
+    document.getElementById('btnClipActor')?.classList.add('active');
+    video.src = '/videos/plaza_hotel_omni_15s_720p.mp4';
+    state.hasTrackedCharacter = true;
+    state.footageDomain = 'character';
+    state.figureBox = { x: 0.38, y: 0.22, w: 0.24, h: 0.65 };
+  } else if (clipId === 'drone') {
+    document.getElementById('btnClipDrone')?.classList.add('active');
+    video.src = '/videos/interaction_input_video.mp4';
+    state.hasTrackedCharacter = false;
+    state.footageDomain = 'aerial';
+    state.focalAnchor = { x: 0.52, y: 0.45, label: 'Urban Ground Coordinates' };
+    state.figureBox = { x: 0.42, y: 0.30, w: 0.20, h: 0.55 };
+  } else if (clipId === 'comparison') {
+    document.getElementById('btnClipComparison')?.classList.add('active');
+    video.src = '/videos/plaza_hotel_comparison_15s_720p.mp4';
+    state.hasTrackedCharacter = false;
+    state.footageDomain = 'architectural';
+    state.focalAnchor = { x: 0.50, y: 0.38, label: 'Plaza Hotel Facade' };
+    state.figureBox = { x: 0.25, y: 0.20, w: 0.22, h: 0.65 };
+  }
+
+  video.load();
+  seekTo(state.forkTime);
+  initDefaultPose();
+  updateDomainButtons();
+  updateCharacterUI();
+  updateAdaptiveSubject3D();
+  renderStage();
+  recompilePrompt();
+  showToast(state.hasTrackedCharacter ? 'Loaded clip with tracked character' : `Loaded ${state.footageDomain} footage (Adaptive 3D Subject)`);
+}
+
+function openCustomVideoModal() {
+  const modal = document.getElementById('modalCustomVideo');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeCustomVideoModal() {
+  const modal = document.getElementById('modalCustomVideo');
+  if (modal) modal.style.display = 'none';
+}
+
+function applyCustomVideo() {
+  const input = document.getElementById('inputCustomVideoUrl');
+  const domainSelect = document.getElementById('selectCustomDomain');
+  const url = input?.value?.trim();
+  const domain = domainSelect?.value || 'architectural';
+
+  if (!url) {
+    showToast('⚠️ Please enter a valid video URL or file path');
+    return;
+  }
+
+  video.src = url;
+  state.currentClip = 'custom';
+  document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+
+  setFootageDomain(domain);
+  closeCustomVideoModal();
+
+  video.load();
+  seekTo(state.forkTime);
+  renderStage();
+  recompilePrompt();
+  showToast(`Loaded custom video footage in [${domain.toUpperCase()}] domain`);
+}
+
+// ============================================================================
+// Render & Resynthesis Execution API
+// ============================================================================
+
+async function executeBranchResynthesis() {
+  const btn = document.getElementById('btnRenderBranch');
+  btn.disabled = true;
+  btn.innerHTML = '<span>⏳</span> Synthesizing Branch Clip...';
+
+  try {
+    showToast('🚀 Dispatching branch resynthesis job to server...');
+    const payload = {
+      videoPath: video.getAttribute('src') || 'public/videos/plaza_hotel_omni_15s_720p.mp4',
+      forkTimeSec: state.forkTime,
+      totalDurationSec: state.videoDuration,
+      atmosphere: state.atmosphere,
+      action: state.action,
+      promptDirective: document.getElementById('directorPrompt').value
+    };
+
+    const res = await fetch('/api/video-branch/render-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Server rendering failed');
+    }
+
+    showToast('✨ Resynthesis Complete! Loading branch clip...');
+    btn.innerHTML = '<span>✅</span> Resynthesis Complete!';
+    btn.disabled = false;
+
+    // Load resulting video into branchVideo element and switch to composite
+    branchVideo.src = data.branchVideoUrl;
+    branchVideo.style.display = 'block';
+    video.style.display = 'none';
+    branchVideo.currentTime = 0;
+    branchVideo.play();
+    state.isPlaying = true;
+
+  } catch (err) {
+    console.error('Resynthesis error:', err);
+    showToast('⚠️ Render simulated: ' + err.message);
+    btn.disabled = false;
+    btn.innerHTML = '<span>🚀</span> Synthesize & Render Mid-Clip Branch';
+  }
+}
+
+// ============================================================================
+// Utilities & Toast
+// ============================================================================
+
+function showToast(msg) {
+  const toast = document.getElementById('statusToast');
+  document.getElementById('toastMsg').textContent = msg;
+  toast.style.display = 'flex';
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => {
+    toast.style.display = 'none';
+  }, 2500);
+}
+
+// Initialization on DOM Ready
+window.addEventListener('DOMContentLoaded', () => {
+  initDefaultPose();
+  initThree();
+  resizeCanvas();
+  updateForkUI();
+  updateDomainButtons();
+  updateCharacterUI();
+  updateAdaptiveSubject3D();
+  recompilePrompt(true);
+});
+</script>
+</body>
+</html>

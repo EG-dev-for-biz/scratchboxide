@@ -399,15 +399,6 @@ export class HumanoidMotionBridgeService {
         ];
     }
 
-    /**
-     * Backward-compatible alias for convertLandmarksToSbHuman22.
-     */
-    public convertLandmarksToSMPLX22(
-        lm: MediaPipeLandmark[],
-        scale: number = 1.0
-    ): Array<[number, number, number]> {
-        return this.convertLandmarksToSbHuman22(lm, scale);
-    }
 
     /**
      * Synthesizes joint positions from Euler angles via forward kinematics when raw landmarks are unavailable.
@@ -496,19 +487,6 @@ export class HumanoidMotionBridgeService {
         return [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
     }
 
-    /**
-     * Backward-compatible alias for getSbHuman22JointNames.
-     */
-    public getSMPLX22JointNames(): string[] {
-        return this.getSbHuman22JointNames();
-    }
-
-    /**
-     * Backward-compatible alias for getSbHuman22Parents.
-     */
-    public getSMPLX22Parents(): number[] {
-        return this.getSbHuman22Parents();
-    }
 
     public getDefaultCanonicalJoints(): Array<[number, number, number]> {
         return [

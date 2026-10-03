@@ -1,0 +1,3890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DepthBox — 2D Image(s) to 3DGS Immersive Experience Studio</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #05070f;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            user-select: none;
+        }
+
+        /* Top Navigation Header */
+        .top-navbar {
+            position: absolute;
+            top: 12px;
+            left: 16px;
+            right: 16px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(10, 15, 29, 0.92);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            border-radius: 12px;
+            padding: 0 16px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 25px rgba(56, 189, 248, 0.15);
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #06b6d4, #6366f1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 900;
+            color: #ffffff;
+            box-shadow: 0 0 14px rgba(6, 182, 212, 0.6);
+        }
+        .brand-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .brand-badge {
+            background: rgba(6, 182, 212, 0.18);
+            border: 1px solid rgba(6, 182, 212, 0.5);
+            color: #22d3ee;
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-center {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-tab {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #94a3b8;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-tab:hover {
+            color: #f1f5f9;
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .btn-tab.active {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.3), rgba(99, 102, 241, 0.3));
+            border-color: #38bdf8;
+            color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+        }
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .action-btn {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #e2e8f0;
+            font-size: 11.5px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 7px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .action-btn:hover {
+            background: rgba(56, 189, 248, 0.2);
+            border-color: #38bdf8;
+            color: #38bdf8;
+        }
+        .action-btn.primary {
+            background: linear-gradient(135deg, #0284c7, #4f46e5);
+            border: none;
+            color: #ffffff;
+            box-shadow: 0 0 15px rgba(2, 132, 199, 0.5);
+        }
+        .action-btn.primary:hover {
+            box-shadow: 0 0 20px rgba(2, 132, 199, 0.8);
+            transform: translateY(-1px);
+        }
+
+        /* Workspace Grid Layout */
+        .workspace-container {
+            position: absolute;
+            top: 74px;
+            bottom: 12px;
+            left: 16px;
+            right: 16px;
+            display: grid;
+            grid-template-columns: 440px 1fr;
+            gap: 14px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        body.full-3d .workspace-container {
+            grid-template-columns: 0px 1fr;
+            gap: 0;
+        }
+        body.full-3d .left-deck {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-40px);
+        }
+        body.full-2d .workspace-container {
+            grid-template-columns: 1fr 0px;
+            gap: 0;
+        }
+        body.full-2d .right-viewport {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Left Deck: Ingestion & 2D Telemetry */
+        .left-deck {
+            background: rgba(10, 15, 29, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            backdrop-filter: blur(12px);
+            padding: 16px;
+            gap: 16px;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s ease;
+        }
+        .left-deck::-webkit-scrollbar { width: 4px; }
+        .left-deck::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.3); border-radius: 2px; }
+
+        .section-header {
+            font-size: 11.5px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Drag & Drop Zone */
+        .drop-zone {
+            border: 2px dashed rgba(56, 189, 248, 0.45);
+            border-radius: 10px;
+            padding: 22px 14px;
+            text-align: center;
+            cursor: pointer;
+            background: rgba(15, 23, 42, 0.6);
+            transition: all 0.25s ease;
+            position: relative;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.12);
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.25);
+        }
+        .drop-icon {
+            font-size: 26px;
+            margin-bottom: 6px;
+        }
+        .drop-text {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e2e8f0;
+        }
+        .drop-subtext {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+        #file-input {
+            display: none;
+        }
+
+        /* Preset Cards Grid */
+        .preset-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+        .preset-card {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .preset-card:hover {
+            border-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.15);
+            transform: translateY(-2px);
+        }
+        .preset-card.active {
+            border-color: #38bdf8;
+            background: rgba(56, 189, 248, 0.25);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        }
+        .preset-card-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-top: 4px;
+        }
+        .preset-card-sub {
+            font-size: 9.5px;
+            color: #94a3b8;
+        }
+
+        /* Preset Category Filter Tabs */
+        .preset-category-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 8px;
+            background: rgba(15, 23, 42, 0.6);
+            padding: 3px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .preset-cat-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 5px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .preset-cat-btn:hover {
+            color: #f1f5f9;
+        }
+        .preset-cat-btn.active {
+            background: rgba(56, 189, 248, 0.25);
+            color: #38bdf8;
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+        }
+
+        /* Video Filmstrip & Group Ingestion UI */
+        .filmstrip-container {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 6px 2px 10px 2px;
+            scrollbar-width: thin;
+        }
+        .filmstrip-container::-webkit-scrollbar {
+            height: 4px;
+        }
+        .filmstrip-container::-webkit-scrollbar-thumb {
+            background: rgba(56, 189, 248, 0.3);
+            border-radius: 4px;
+        }
+        .filmstrip-card {
+            min-width: 82px;
+            width: 82px;
+            height: 70px;
+            background: #090d16;
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .filmstrip-card:hover {
+            border-color: #38bdf8;
+            transform: translateY(-2px);
+        }
+        .filmstrip-card.active {
+            border: 2px solid #38bdf8;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+        }
+        .filmstrip-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .filmstrip-badge {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #38bdf8;
+            font-size: 8px;
+            font-weight: 700;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        .filmstrip-idx {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            background: rgba(0, 0, 0, 0.85);
+            color: #f1f5f9;
+            font-size: 8px;
+            font-weight: 700;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+        .modern-select {
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #f1f5f9;
+            font-size: 11px;
+            border-radius: 6px;
+            padding: 4px 8px;
+            outline: none;
+            width: 160px;
+            cursor: pointer;
+        }
+        .modern-select:focus {
+            border-color: #38bdf8;
+        }
+
+        /* 2D Canvas & Depth Inspector */
+        .preview-box {
+            background: #02040a;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .preview-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 10px;
+            background: rgba(15, 23, 42, 0.85);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .preview-modes {
+            display: flex;
+            gap: 4px;
+        }
+        .preview-mode-btn {
+            background: transparent;
+            border: none;
+            color: #64748b;
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .preview-mode-btn.active {
+            background: rgba(56, 189, 248, 0.2);
+            color: #38bdf8;
+        }
+        #preview-canvas {
+            width: 100%;
+            height: 220px;
+            object-fit: contain;
+            background: #000;
+            display: block;
+        }
+
+        /* Synthesis Parameters Controls */
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11.5px;
+        }
+        .control-label {
+            color: #94a3b8;
+            font-weight: 500;
+        }
+        .control-val {
+            color: #38bdf8;
+            font-family: monospace;
+            font-weight: 700;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #38bdf8;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 2px;
+            cursor: pointer;
+        }
+
+        /* Right Viewport: 3DGS WebGL Stage */
+        .right-viewport {
+            background: #02040a;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
+        }
+        #webgl-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* In-Viewport HUD Overlays */
+        .hud-top-left {
+            position: absolute;
+            top: 14px;
+            left: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            pointer-events: none;
+        }
+        .hud-badge {
+            background: rgba(10, 15, 29, 0.85);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            color: #38bdf8;
+            font-family: monospace;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            backdrop-filter: blur(8px);
+            width: fit-content;
+        }
+
+        .hud-top-right {
+            position: absolute;
+            top: 14px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            max-width: 720px;
+            gap: 8px;
+        }
+        .hud-btn {
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #cbd5e1;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s;
+        }
+        .hud-btn:hover {
+            border-color: #38bdf8;
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.15);
+        }
+        .hud-btn.active {
+            background: #0284c7;
+            border-color: #38bdf8;
+            color: #ffffff;
+            box-shadow: 0 0 12px rgba(2, 132, 199, 0.6);
+        }
+
+        .hud-bottom-bar {
+            position: absolute;
+            bottom: 14px;
+            left: 16px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(10, 15, 29, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            padding: 8px 16px;
+            backdrop-filter: blur(12px);
+            font-size: 11.5px;
+            color: #94a3b8;
+        }
+        .hud-stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .hud-stat-val {
+            color: #38bdf8;
+            font-family: monospace;
+            font-weight: 700;
+        }
+
+        /* Focus Reticle */
+        .focus-reticle {
+            position: absolute;
+            width: 44px;
+            height: 44px;
+            border: 1.5px dashed #38bdf8;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.2s;
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.6);
+        }
+        .focus-reticle.active {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.15);
+        }
+
+        /* Loading / Processing Spinner Modal */
+        .spinner-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(5, 7, 15, 0.88);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+            backdrop-filter: blur(8px);
+        }
+        .spinner-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .pulse-loader {
+            width: 48px;
+            height: 48px;
+            border: 3px solid rgba(56, 189, 248, 0.2);
+            border-top-color: #38bdf8;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner-title {
+            margin-top: 14px;
+            font-size: 13.5px;
+            font-weight: 700;
+            color: #e2e8f0;
+            letter-spacing: 0.05em;
+        }
+        .spinner-sub {
+            margin-top: 4px;
+            font-size: 11px;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Studio Navbar -->
+    <header class="top-navbar">
+        <div class="brand">
+            <div class="brand-icon">3D</div>
+            <div>
+                <div class="brand-title">DEPTHBOX STUDIO</div>
+            </div>
+            <div class="brand-badge">2D IMAGE(S) → 3DGS ENGINE</div>
+        </div>
+
+        <div class="nav-center">
+            <button class="btn-tab active" id="tab-single" onclick="setConversionMode('single')">
+                <span>📷 Single 2D Photo</span>
+            </button>
+            <button class="btn-tab" id="tab-multi" onclick="setConversionMode('multi')">
+                <span>📸 Related Images (Group)</span>
+            </button>
+            <button class="btn-tab" id="tab-video" onclick="setConversionMode('video')">
+                <span>🎬 Video (Keyframe Group)</span>
+            </button>
+            <button class="btn-tab" id="tab-pano360" onclick="setConversionMode('pano360')">
+                <span>🌐 360° Omnidirectional World</span>
+            </button>
+        </div>
+
+        <div class="nav-right">
+            <button class="action-btn" onclick="toggleLayout('split')" id="btn-layout-split" title="Split Screen">
+                <span>◫ Split Studio</span>
+            </button>
+            <button class="action-btn" onclick="toggleLayout('3d')" id="btn-layout-3d" title="Full 3DGS Viewport">
+                <span>⛶ Immersive 3DGS</span>
+            </button>
+            <button class="action-btn primary" onclick="exportSplatBinary()">
+                <span>💾 Export .SPLAT</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Workspace Grid -->
+    <main class="workspace-container" id="workspace">
+
+        <!-- Left Ingestion & Telemetry Deck -->
+        <aside class="left-deck">
+
+            <!-- Ingestion Drop Zone -->
+            <div class="drop-zone" id="drop-zone" onclick="triggerFilePicker()">
+                <div class="drop-icon" id="drop-icon">📤</div>
+                <div class="drop-text" id="drop-text">Drop 2D Photo Here to Convert</div>
+                <div class="drop-subtext" id="drop-subtext">JPG, PNG, WebP — Metric Depth-Ray Synthesis</div>
+                <input type="file" id="file-input" accept="image/*" onchange="handleFileSelect(event)" style="display:none;">
+                <input type="file" id="group-file-input" accept="image/*" multiple onchange="handleGroupFileSelect(event)" style="display:none;">
+                <input type="file" id="video-file-input" accept="video/*" onchange="handleVideoFileSelect(event)" style="display:none;">
+            </div>
+
+            <!-- Preset Photography & Public Sources Gallery -->
+            <div class="control-group">
+                <div class="section-header">
+                    <span>Public Sources Catalog</span>
+                    <span style="font-size: 10px; color: #38bdf8;">/PUBLIC/ SOURCES</span>
+                </div>
+                <div class="preset-category-tabs">
+                    <button class="preset-cat-btn active" id="pcat-single" onclick="filterPresetCategory('single')">📷 Single</button>
+                    <button class="preset-cat-btn" id="pcat-group" onclick="filterPresetCategory('group')">📸 Groups</button>
+                    <button class="preset-cat-btn" id="pcat-video" onclick="filterPresetCategory('video')">🎬 Videos</button>
+                    <button class="preset-cat-btn" id="pcat-pano" onclick="filterPresetCategory('pano')">🌐 360°</button>
+                </div>
+                <div class="preset-grid" id="preset-grid-container">
+                    <!-- Single Photographs -->
+                    <div class="preset-card active" data-category="single" onclick="loadPresetImage('models/esb_calibrated_3dgs.splat', 'Empire State (Calibrated 3DGS)', 55, 1.8, 12.0)">
+                        <div style="font-size: 18px;">🏛️</div>
+                        <div class="preset-card-title">Empire State</div>
+                        <div class="preset-card-sub">Calibrated 3DGS</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/manhattan_ai.png', 'Manhattan Skyline', 65, 3.0, 75.0)">
+                        <div style="font-size: 18px;">🏙️</div>
+                        <div class="preset-card-title">Manhattan</div>
+                        <div class="preset-card-sub">Urban Canyons</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/shibuya_ai.png', 'Shibuya Cyber', 70, 2.0, 60.0)">
+                        <div style="font-size: 18px;">🌆</div>
+                        <div class="preset-card-title">Shibuya</div>
+                        <div class="preset-card-sub">Cyber Crossing</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/alpine_ai.png', 'Alpine Glacier', 60, 4.0, 120.0)">
+                        <div style="font-size: 18px;">🏔️</div>
+                        <div class="preset-card-title">Alpine</div>
+                        <div class="preset-card-sub">Glacier Valley</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/dubai_ai.png', 'Dubai Marina', 65, 3.5, 90.0)">
+                        <div style="font-size: 18px;">✨</div>
+                        <div class="preset-card-title">Dubai</div>
+                        <div class="preset-card-sub">Glass Towers</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/plaza_hotel_frame_00.png', 'Plaza Colonnade', 65, 2.5, 45.0)">
+                        <div style="font-size: 18px;">🏛️</div>
+                        <div class="preset-card-title">Colonnade</div>
+                        <div class="preset-card-sub">Stone Facade</div>
+                    </div>
+                    <div class="preset-card" data-category="single" onclick="loadPresetImage('images/interaction_input_image.png', 'Drone Survey Photo', 70, 3.0, 80.0)">
+                        <div style="font-size: 18px;">🚁</div>
+                        <div class="preset-card-title">Drone Photo</div>
+                        <div class="preset-card-sub">Aerial Survey</div>
+                    </div>
+
+                    <!-- Related Image Groups -->
+                    <div class="preset-card" data-category="group" style="display:none;" onclick="loadRelatedImageGroupPreset('alpine_orbit_group')">
+                        <div style="font-size: 18px;">🏔️</div>
+                        <div class="preset-card-title">Alpine Orbit</div>
+                        <div class="preset-card-sub">6-Angle Group</div>
+                    </div>
+                    <div class="preset-card" data-category="group" style="display:none;" onclick="loadRelatedImageGroupPreset('plaza_colonnade_group')">
+                        <div style="font-size: 18px;">🏛️</div>
+                        <div class="preset-card-title">Plaza Colonnade</div>
+                        <div class="preset-card-sub">6-Angle Group</div>
+                    </div>
+                    <div class="preset-card" data-category="group" style="display:none;" onclick="loadRelatedImageGroupPreset('manhattan_skyline_group')">
+                        <div style="font-size: 18px;">🏙️</div>
+                        <div class="preset-card-title">Skyline Orbit</div>
+                        <div class="preset-card-sub">6-Angle Group</div>
+                    </div>
+                    <div class="preset-card" data-category="group" style="display:none;" onclick="loadRelatedImageGroupPreset('shibuya_transit_group')">
+                        <div style="font-size: 18px;">🌆</div>
+                        <div class="preset-card-title">Shibuya Transit</div>
+                        <div class="preset-card-sub">5-Angle Group</div>
+                    </div>
+
+                    <!-- Videos as a Group -->
+                    <div class="preset-card" data-category="video" style="display:none;" onclick="loadVideoPreset('drone_survey_video')">
+                        <div style="font-size: 18px;">🚁</div>
+                        <div class="preset-card-title">Drone Survey</div>
+                        <div class="preset-card-sub">Orbit Trajectory</div>
+                    </div>
+                    <div class="preset-card" data-category="video" style="display:none;" onclick="loadVideoPreset('alpine_orbit_video')">
+                        <div style="font-size: 18px;">🏔️</div>
+                        <div class="preset-card-title">Alpine Orbit</div>
+                        <div class="preset-card-sub">Turntable Arc</div>
+                    </div>
+                    <div class="preset-card" data-category="video" style="display:none;" onclick="loadVideoPreset('manhattan_orbit_video')">
+                        <div style="font-size: 18px;">🏙️</div>
+                        <div class="preset-card-title">Manhattan Orbit</div>
+                        <div class="preset-card-sub">Aerial Arc</div>
+                    </div>
+                    <div class="preset-card" data-category="video" style="display:none;" onclick="loadVideoPreset('shibuya_transit_video')">
+                        <div style="font-size: 18px;">🌆</div>
+                        <div class="preset-card-title">Shibuya Cyber</div>
+                        <div class="preset-card-sub">Forward Dolly</div>
+                    </div>
+                    <div class="preset-card" data-category="video" style="display:none;" onclick="loadVideoPreset('plaza_hotel_video')">
+                        <div style="font-size: 18px;">🏛️</div>
+                        <div class="preset-card-title">Plaza Hotel</div>
+                        <div class="preset-card-sub">Colonnade Orbit</div>
+                    </div>
+
+                    <!-- 360° Omnidirectional Worlds -->
+                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-sanmarco" onclick="load360Preset('san_marco')">
+                        <div style="font-size: 18px;">🏛️</div>
+                        <div class="preset-card-title">San Marco 360°</div>
+                        <div class="preset-card-sub">Venetian Plaza</div>
+                    </div>
+                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-shibuya" onclick="load360Preset('cyber_shibuya')">
+                        <div style="font-size: 18px;">🌆</div>
+                        <div class="preset-card-title">Shibuya 360°</div>
+                        <div class="preset-card-sub">Cyber Crossing</div>
+                    </div>
+                    <div class="preset-card" data-category="pano" style="display:none;" id="card-pano-alpine" onclick="load360Preset('alpine_basin')">
+                        <div style="font-size: 18px;">🏔️</div>
+                        <div class="preset-card-title">Alpine 360°</div>
+                        <div class="preset-card-sub">Glacier Basin</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2D Telemetry & Depth-Ray Inspector -->
+            <div class="preview-box">
+                <div class="preview-toolbar">
+                    <span style="font-size: 11px; font-weight: 700; color: #94a3b8;">2D TELEMETRY</span>
+                    <div class="preview-modes">
+                        <button class="preview-mode-btn active" id="btn-prev-rgb" onclick="set2DPreviewMode('rgb')">RGB Photo</button>
+                        <button class="preview-mode-btn" id="btn-prev-depth" onclick="set2DPreviewMode('depth')">Depth-Ray</button>
+                        <button class="preview-mode-btn" id="btn-prev-normals" onclick="set2DPreviewMode('normals')">Normals</button>
+                    </div>
+                </div>
+                <canvas id="preview-canvas" width="400" height="240"></canvas>
+            </div>
+
+            <!-- 3DGS Synthesis Controls -->
+            <div class="control-group">
+                <div class="section-header">
+                    <span>3DGS Synthesis Tuning</span>
+                </div>
+
+                <div class="control-row">
+                    <span class="control-label">Depth Estimation AI Engine</span>
+                    <select id="select-depth-engine" onchange="updateDepthEngine(this.value)" style="background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255, 255, 255, 0.15); color: #38bdf8; padding: 3px 8px; border-radius: 6px; font-size: 11px;">
+                        <option value="da3_metric">Depth Anything V3 (Metric Ray Spine)</option>
+                        <option value="da2_relative">Depth Anything V2 (Affinity Falloff)</option>
+                        <option value="marigold_diff">Marigold Diffusion (Micro-Relief)</option>
+                    </select>
+                </div>
+
+                <div class="control-row">
+                    <span class="control-label">Splat Resolution Stride</span>
+                    <span class="control-val" id="val-stride">1x (Ultra 320x320)</span>
+                </div>
+                <input type="range" id="slider-stride" min="1" max="4" step="1" value="1" oninput="updateStride(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Edge Severance Threshold (τ)</span>
+                    <span class="control-val" id="val-tau">0.080</span>
+                </div>
+                <input type="range" id="slider-tau" min="0.02" max="0.25" step="0.005" value="0.080" oninput="updateTau(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Depth Range (Near – Far)</span>
+                    <span class="control-val" id="val-depth">2.5m – 75.0m</span>
+                </div>
+                <input type="range" id="slider-far" min="20" max="150" step="5" value="75" oninput="updateDepthFar(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Lens Aperture (Bokeh DoF)</span>
+                    <span class="control-val" id="val-aperture">f/2.8</span>
+                </div>
+                <input type="range" id="slider-aperture" min="1.4" max="16.0" step="0.2" value="2.8" oninput="updateAperture(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Color Science / Film Stock</span>
+                    <select id="select-film" onchange="updateFilmStock(this.value)" style="background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(255, 255, 255, 0.15); color: #38bdf8; padding: 3px 8px; border-radius: 6px; font-size: 11px;">
+                        <option value="0">Kodak Portra 400</option>
+                        <option value="1">Fuji Velvia 50</option>
+                        <option value="2">Cine Kodak 500T</option>
+                        <option value="3">Leica Monochrom</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Physical Relighting & Atmosphere Controls -->
+            <div class="control-group">
+                <div class="section-header">
+                    <span>Physical Relighting & Atmosphere</span>
+                </div>
+
+                <div class="control-row">
+                    <span class="control-label">Relighting Blend</span>
+                    <span class="control-val" id="val-relight-mix">80%</span>
+                </div>
+                <input type="range" id="slider-relight-mix" min="0" max="100" step="5" value="80" oninput="updateRelightMix(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Sun / Sky Direct Intensity</span>
+                    <span class="control-val" id="val-sun-intensity">1.25x</span>
+                </div>
+                <input type="range" id="slider-sun-intensity" min="0.2" max="2.5" step="0.05" value="1.25" oninput="updateSunIntensity(this.value)">
+
+                <div class="control-row">
+                    <span class="control-label">Atmospheric Aerial Fog</span>
+                    <span class="control-val" id="val-fog-density">15%</span>
+                </div>
+                <input type="range" id="slider-fog-density" min="0" max="100" step="5" value="15" oninput="updateFogDensity(this.value)">
+            </div>
+
+            <!-- Multi-Image List (Visible in Related Images Group mode) -->
+            <div id="multi-view-panel" style="display: none;" class="control-group">
+                <div class="section-header">
+                    <span>Related Image Group</span>
+                    <span id="multi-view-count" style="color: #38bdf8;">0 Views Ingested</span>
+                </div>
+                <div class="filmstrip-container" id="multi-view-list"></div>
+
+                <div class="control-row">
+                    <label>Baseline Fan Angle</label>
+                    <input type="range" id="mv-fan-slider" min="5" max="45" step="1" value="18" oninput="document.getElementById('val-mv-fan').textContent = this.value + '°'">
+                    <span class="value-badge" id="val-mv-fan">18°</span>
+                </div>
+                <div class="control-row">
+                    <label>Voxel Decimation</label>
+                    <input type="range" id="mv-voxel-slider" min="0.02" max="0.15" step="0.01" value="0.05" oninput="document.getElementById('val-mv-voxel').textContent = this.value + 'm'">
+                    <span class="value-badge" id="val-mv-voxel">0.05m</span>
+                </div>
+
+                <button class="action-btn primary" style="width: 100%; justify-content: center; padding: 10px;" onclick="fuseMultiViewArray()">
+                    <span>⚡ Fuse Image Group into 3DGS</span>
+                </button>
+            </div>
+
+            <!-- Video Keyframe Group Deck (Visible in Video mode) -->
+            <div id="video-group-panel" style="display: none;" class="control-group">
+                <div class="section-header">
+                    <span>Video Trajectory Keyframes</span>
+                    <span id="video-keyframe-count" style="color: #38bdf8;">0 Frames</span>
+                </div>
+                <div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.4); padding: 5px 8px; border-radius: 4px;">
+                    <span id="video-status-text">Select video preset or drop video file</span>
+                    <span id="video-duration-text" style="font-family: monospace; color: #38bdf8;">--:--</span>
+                </div>
+
+                <!-- Filmstrip Inspector -->
+                <div class="filmstrip-container" id="video-filmstrip-strip">
+                    <div style="padding: 18px 10px; color: #64748b; font-size: 11px; text-align: center; width: 100%;">
+                        No keyframes extracted yet. Pick a video preset above or drop an MP4/WebM video.
+                    </div>
+                </div>
+
+                <!-- Trajectory Controls -->
+                <div class="control-row">
+                    <label>Camera Trajectory</label>
+                    <select id="video-trajectory-type" class="modern-select" onchange="updateVideoTrajectoryUI()">
+                        <option value="orbit">Turntable Orbit (Circular Arc)</option>
+                        <option value="dolly">Forward Dolly (In-Depth Pass)</option>
+                        <option value="pan">Lateral Pan (Stereo Baseline)</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>Keyframe Samples</label>
+                    <input type="range" id="video-sample-slider" min="4" max="16" step="1" value="8" oninput="document.getElementById('val-video-samples').textContent = this.value + ' frames'">
+                    <span class="value-badge" id="val-video-samples">8 frames</span>
+                </div>
+                <div class="control-row" id="row-video-sweep">
+                    <label id="lbl-video-sweep">Orbit Arc Sweep</label>
+                    <input type="range" id="video-sweep-slider" min="30" max="180" step="5" value="90" oninput="document.getElementById('val-video-sweep').textContent = this.value + '°'">
+                    <span class="value-badge" id="val-video-sweep">90°</span>
+                </div>
+                <div class="control-row">
+                    <label>Voxel Decimation</label>
+                    <input type="range" id="video-voxel-slider" min="0.02" max="0.15" step="0.01" value="0.04" oninput="document.getElementById('val-video-voxel').textContent = this.value + 'm'">
+                    <span class="value-badge" id="val-video-voxel">0.04m</span>
+                </div>
+
+                <button class="action-btn primary" style="width: 100%; justify-content: center; padding: 10px;" onclick="synthesizeSplatFromVideoGroup()">
+                    <span>⚡ Synthesize 3DGS from Video Keyframes</span>
+                </button>
+            </div>
+
+        </aside>
+
+        <!-- Right 3DGS Viewport -->
+        <section class="right-viewport" id="viewport-container">
+            <canvas id="webgl-canvas"></canvas>
+
+            <!-- Focus Reticle for Tap-to-Focus -->
+            <div class="focus-reticle" id="focus-reticle"></div>
+
+            <!-- Top Left Telemetry HUD -->
+            <div class="hud-top-left">
+                <div class="hud-badge" id="hud-status">STATUS // 3DGS STREAMING</div>
+                <div class="hud-badge" id="hud-optics">LENS: 35mm f/2.8 · ACES FILM</div>
+            </div>
+
+            <!-- Top Right Camera Switcher & Depthbox Controls HUD -->
+            <div class="hud-top-right">
+                <div style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
+                    <button class="hud-btn active" id="btn-tod-noon" onclick="setTimeOfDay('noon')">☀️ Noon</button>
+                    <button class="hud-btn" id="btn-tod-golden" onclick="setTimeOfDay('golden')">🌅 Golden</button>
+                    <button class="hud-btn" id="btn-tod-sunset" onclick="setTimeOfDay('sunset')">🌆 Sunset</button>
+                    <button class="hud-btn" id="btn-tod-midnight" onclick="setTimeOfDay('midnight')">🌙 Midnight</button>
+                    <button class="hud-btn" id="btn-audio-toggle" onclick="toggleAudio()">🔊 Audio: OFF</button>
+                </div>
+                <div style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; margin-top: 6px;">
+                    <button class="hud-btn" id="btn-inpaint-toggle" onclick="toggleDualLayerInpaint()">🌟 Inpaint: OFF</button>
+                    <button class="hud-btn" id="btn-collider-toggle" onclick="toggleColliders()">🛡️ Colliders: OFF</button>
+                    <button class="hud-btn" id="btn-export-glb" onclick="downloadColliderGlb()">📦 Export GLB</button>
+                    <button class="hud-btn" id="btn-tour-toggle" onclick="toggleCinematicTour()">🎬 Tour: OFF</button>
+                    <button class="hud-btn" id="btn-measure-toggle" onclick="toggleTapeMeasure()">📏 Measure: OFF</button>
+                    <button class="hud-btn" id="btn-record-toggle" onclick="toggleVideoRecording()">📹 Record</button>
+                    <button class="hud-btn active" id="btn-cam-drone" onclick="setFlightMode('drone')">🚁 Drone Flight</button>
+                    <button class="hud-btn" id="btn-cam-orbit" onclick="setFlightMode('orbit')">🪐 Orbit Turntable</button>
+                    <button class="hud-btn" id="btn-cam-walk" onclick="setFlightMode('walk')">🚶 Walk Mode</button>
+                    <button class="hud-btn" id="btn-cam-reset" onclick="resetCamera()">↺ Reset View</button>
+                </div>
+            </div>
+
+            <!-- Bottom Telemetry Bar -->
+            <div class="hud-bottom-bar">
+                <div class="hud-stat-item">
+                    <span>ACTIVE SPLATS:</span>
+                    <span class="hud-stat-val" id="stat-splat-count">100,000</span>
+                </div>
+                <div class="hud-stat-item">
+                    <span>VRAM FOOTPRINT:</span>
+                    <span class="hud-stat-val" id="stat-vram">3.2 MB</span>
+                </div>
+                <div class="hud-stat-item">
+                    <span>FOCAL DISTANCE:</span>
+                    <span class="hud-stat-val" id="stat-focus-dist">18.5 m</span>
+                </div>
+                <div class="hud-stat-item" id="hud-stat-measure" style="display:none; color: #38bdf8;">
+                    <span>TAPE MEASURE:</span>
+                    <span class="hud-stat-val" id="stat-measure-val">0.00 m (0.0 ft)</span>
+                </div>
+                <div class="hud-stat-item">
+                    <span>CONTROLS:</span>
+                    <span style="color: #e2e8f0;">[W,A,S,D] Fly · [Shift] Boost · [Click] Focus Reticle</span>
+                </div>
+            </div>
+
+            <!-- Processing Modal -->
+            <div class="spinner-overlay" id="spinner">
+                <div class="pulse-loader"></div>
+                <div class="spinner-title" id="spinner-title">SYNTHESIZING 3D GAUSSIAN SPLATS...</div>
+                <div class="spinner-sub" id="spinner-sub">Calculating analytical surface normals and covariance scales</div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <script>
+        // ====================================================================
+        // 1. Studio State & Variables
+        // ====================================================================
+        let currentMode = 'single'; // 'single' or 'multi'
+        let current2DView = 'rgb'; // 'rgb', 'depth', 'normals'
+        let currentStride = 1;
+        let currentEdgeTau = 0.080;
+        let currentNear = 2.5;
+        let currentFar = 75.0;
+        let currentFov = 65.0;
+        let currentAperture = 2.8;
+        let currentFilmStock = 0;
+        let currentFocusDist = 18.5;
+
+        let sourceImg = null;
+        let sourceRgba = null;
+        let currentWidth = 320;
+        let currentHeight = 320;
+        let metricDepths = null;
+        let surfaceNormals = null;
+
+        let multiViewItems = [];
+
+        let enableDualLayerInpaint = false;
+        let showColliders = false;
+        let colliderGroup = new THREE.Group();
+        let currentColliders = null;
+        let groundElevation = -1.65;
+        const walkPlayerHeight = 1.70;
+
+        // ====================================================================
+        // 2. Three.js Viewport & 2D EWA Billboard Instanced Shader
+        // ====================================================================
+        const container = document.getElementById('viewport-container');
+        const canvas = document.getElementById('webgl-canvas');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x05070f);
+        scene.add(colliderGroup);
+
+        const camera = new THREE.PerspectiveCamera(65, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        // 3DGS Instanced Billboard Shader with ACES Filmic Tone Mapping, Thin-Lens Bokeh, and Physical Relighting
+        const splatMaterial = new THREE.ShaderMaterial({
+            transparent: true,
+            depthWrite: false,
+            depthTest: true,
+            blending: THREE.NormalBlending,
+            uniforms: {
+                viewport: { value: new THREE.Vector2(container.clientWidth, container.clientHeight) },
+                focalLengthMm: { value: 35.0 },
+                aperture: { value: 2.8 },
+                focusDistance: { value: 18.5 },
+                uTonemap: { value: 1 },
+                uFilmStock: { value: 0 },
+                uSunDir: { value: new THREE.Vector3(0.3, 0.95, -0.2).normalize() },
+                uSunColor: { value: new THREE.Color(1.0, 0.98, 0.92) },
+                uSunIntensity: { value: 1.25 },
+                uSkyColor: { value: new THREE.Color(0.22, 0.38, 0.58) },
+                uGroundColor: { value: new THREE.Color(0.12, 0.11, 0.10) },
+                uFogColor: { value: new THREE.Color(0.68, 0.80, 0.95) },
+                uFogDensity: { value: 0.012 },
+                uRelightingMix: { value: 0.80 }
+            },
+            vertexShader: `
+                attribute vec3 instanceCenter;
+                attribute vec3 instanceScale;
+                attribute vec3 instanceColor;
+                attribute float instanceOpacity;
+                attribute vec4 instanceQuat;
+
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+                varying float vDist;
+                varying vec3 vWorldNormal;
+                varying vec3 vViewDir;
+
+                uniform float focalLengthMm;
+                uniform float aperture;
+                uniform float focusDistance;
+
+                vec3 rotateVecByQuat(vec3 v, vec4 q) {
+                    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+                }
+
+                void main() {
+                    vUv = position.xy * 2.0; // [-1, 1] quad
+                    vColor = instanceColor;
+                    vOpacity = instanceOpacity;
+
+                    vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+                    vDist = -viewCenter.z;
+
+                    // Physical Circle of Confusion (CoC) bokeh calculation
+                    float m = focalLengthMm / max(0.1, (focusDistance * 1000.0 - focalLengthMm));
+                    float cocMm = abs(vDist - focusDistance) / max(0.1, vDist) * (focalLengthMm * m / aperture);
+                    float cocWorld = cocMm * 0.0035;
+
+                    vec3 forward = normalize(-viewCenter.xyz);
+                    vec3 up = vec3(0.0, 1.0, 0.0);
+                    vec3 right = normalize(cross(up, forward));
+                    up = cross(forward, right);
+
+                    vec3 localNorm = rotateVecByQuat(vec3(0.0, 0.0, 1.0), instanceQuat);
+                    vWorldNormal = (modelMatrix * vec4(localNorm, 0.0)).xyz;
+                    vViewDir = normalize(cameraPosition - instanceCenter);
+
+                    // Anti-Aliasing Screen-Space Dilation Filter (Mip-Splatting) & Watertight Splat Footprint
+                    float minPixelSize = vDist * 0.0022; // Minimum ~2.0px screen footprint to prevent popping
+                    float radiusX = max(max(instanceScale.x * 1.55, cocWorld), minPixelSize);
+                    float radiusY = max(max(instanceScale.y * 1.55, cocWorld), minPixelSize);
+
+                    vec3 cornerPos = instanceCenter
+                                   + right * (position.x * radiusX)
+                                   + up    * (position.y * radiusY);
+
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(cornerPos, 1.0);
+                }
+            `,
+            fragmentShader: `
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+                varying float vDist;
+                varying vec3 vWorldNormal;
+                varying vec3 vViewDir;
+
+                uniform int uTonemap;
+                uniform int uFilmStock;
+                uniform vec3 uSunDir;
+                uniform vec3 uSunColor;
+                uniform float uSunIntensity;
+                uniform vec3 uSkyColor;
+                uniform vec3 uGroundColor;
+                uniform vec3 uFogColor;
+                uniform float uFogDensity;
+                uniform float uRelightingMix;
+
+                vec3 ACESFilm(vec3 x) {
+                    float a = 2.51;
+                    float b = 0.03;
+                    float c = 2.43;
+                    float d = 0.59;
+                    float e = 0.14;
+                    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+                }
+
+                void main() {
+                    float r2 = dot(vUv, vUv);
+                    if (r2 > 1.0) discard;
+
+                    // Continuous EWA Gaussian Splatting with Solid Optical Core
+                    // Central optical footprint (r2 <= 0.35) remains 100% opaque to eliminate halftone grid voids
+                    // Outer edge smoothly feathers to zero with cubic hermite interpolation
+                    float alpha = smoothstep(1.0, 0.35, r2) * vOpacity;
+                    if (alpha < 0.01) discard;
+
+                    vec3 color = vColor;
+
+                    // Physical Gaussian Relighting Pass
+                    if (uRelightingMix > 0.001) {
+                        vec3 N = normalize(vWorldNormal);
+                        vec3 L = normalize(uSunDir);
+                        float NdotL = max(0.0, dot(N, L));
+
+                        // Specular sheen & Schlick's Fresnel Grazing Sheen
+                        vec3 V = normalize(vViewDir);
+                        vec3 H = normalize(V + L);
+                        float NdotH = max(0.0, dot(N, H));
+                        float specular = pow(NdotH, 32.0) * 0.35;
+
+                        // View-dependent Fresnel Grazing Radiance
+                        float NdotV = max(0.0, dot(N, V));
+                        float fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
+                        vec3 grazingSheen = uSunColor * (fresnel * 0.30);
+
+                        // Hemisphere ambient
+                        float hemi = N.y * 0.5 + 0.5;
+                        vec3 ambient = mix(uGroundColor, uSkyColor, hemi);
+
+                        vec3 lit = color * (ambient + uSunColor * (NdotL * uSunIntensity)) + uSunColor * specular + grazingSheen;
+                        color = mix(color, lit, uRelightingMix);
+                    }
+
+                    // Atmospheric Aerial Perspective Fog
+                    if (uFogDensity > 0.0001) {
+                        float fogFactor = 1.0 - exp(-uFogDensity * vDist * 0.035);
+                        color = mix(color, uFogColor, clamp(fogFactor, 0.0, 0.95));
+                    }
+
+                    // Film Stock LUT Simulation
+                    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+                    if (uFilmStock == 0) { // Kodak Portra 400
+                        color = vec3(
+                            pow(color.r, 0.96) * 1.05 + 0.02,
+                            pow(color.g, 0.98) * 1.01 + 0.01,
+                            pow(color.b, 1.04) * 0.94
+                        );
+                    } else if (uFilmStock == 1) { // Fuji Velvia 50
+                        color = vec3(
+                            pow(color.r, 1.06) * 1.02,
+                            pow(color.g, 0.94) * 1.10,
+                            pow(color.b, 0.92) * 1.15
+                        );
+                    } else if (uFilmStock == 2) { // Cine Kodak 500T
+                        vec3 shadows = color * vec3(0.82, 1.02, 1.18);
+                        vec3 highlights = color * vec3(1.18, 1.02, 0.85);
+                        color = mix(shadows, highlights, smoothstep(0.15, 0.75, lum));
+                    } else if (uFilmStock == 3) { // Leica Monochrom
+                        color = vec3(smoothstep(0.02, 0.98, lum));
+                    }
+
+                    if (uTonemap == 1) {
+                        color = ACESFilm(color);
+                    } else {
+                        color = clamp(color, 0.0, 1.0);
+                    }
+
+                    gl_FragColor = vec4(color, alpha);
+                }
+            `
+        });
+
+        // ====================================================================
+        // Procedural Atmospheric Sky Dome & Dust Motes
+        // ====================================================================
+        const skyDomeGeo = new THREE.SphereGeometry(600, 32, 16);
+        const skyDomeMat = new THREE.ShaderMaterial({
+            side: THREE.BackSide,
+            depthWrite: false,
+            depthTest: false,
+            uniforms: {
+                uSunDir: splatMaterial.uniforms.uSunDir,
+                uZenithColor: { value: new THREE.Color(0.14, 0.32, 0.72) },
+                uHorizonColor: { value: new THREE.Color(0.72, 0.85, 0.98) },
+                uGroundColor: { value: new THREE.Color(0.10, 0.12, 0.14) },
+                uSunColor: splatMaterial.uniforms.uSunColor,
+                uStarTwinkle: { value: 0.0 }
+            },
+            vertexShader: `
+                varying vec3 vWorldPos;
+                void main() {
+                    vWorldPos = position;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vWorldPos;
+                uniform vec3 uSunDir;
+                uniform vec3 uZenithColor;
+                uniform vec3 uHorizonColor;
+                uniform vec3 uGroundColor;
+                uniform vec3 uSunColor;
+                uniform float uStarTwinkle;
+
+                float hash(vec2 p) {
+                    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+                }
+
+                void main() {
+                    vec3 dir = normalize(vWorldPos);
+                    float h = dir.y;
+
+                    vec3 sky;
+                    if (h >= 0.0) {
+                        sky = mix(uHorizonColor, uZenithColor, pow(h, 0.55));
+                    } else {
+                        sky = mix(uHorizonColor, uGroundColor, pow(-h, 0.45));
+                    }
+
+                    // Sun disc glow
+                    float sunCos = max(0.0, dot(dir, normalize(uSunDir)));
+                    float sunDisc = pow(sunCos, 450.0) * 2.5;
+                    float sunCorona = pow(sunCos, 12.0) * 0.45;
+                    sky += (sunDisc + sunCorona) * uSunColor;
+
+                    // Procedural night stars
+                    if (uStarTwinkle > 0.05 && h > 0.08) {
+                        vec2 starCoord = dir.xz / (dir.y + 0.1) * 350.0;
+                        vec2 ip = floor(starCoord);
+                        float rnd = hash(ip);
+                        if (rnd > 0.988) {
+                            float starIntensity = sin(uStarTwinkle * 3.0 + rnd * 6.28) * 0.5 + 0.5;
+                            sky += vec3(0.85, 0.95, 1.0) * starIntensity * uStarTwinkle;
+                        }
+                    }
+
+                    gl_FragColor = vec4(sky, 1.0);
+                }
+            `
+        });
+        const skyDomeMesh = new THREE.Mesh(skyDomeGeo, skyDomeMat);
+        scene.add(skyDomeMesh);
+
+        // Floating Atmospheric Dust Motes
+        const motesCount = 400;
+        const motesGeo = new THREE.BufferGeometry();
+        const motesPos = new Float32Array(motesCount * 3);
+        const motesVel = new Float32Array(motesCount * 3);
+        for (let i = 0; i < motesCount; i++) {
+            motesPos[i * 3 + 0] = (Math.random() - 0.5) * 30.0;
+            motesPos[i * 3 + 1] = Math.random() * 8.0 - 2.0;
+            motesPos[i * 3 + 2] = -Math.random() * 45.0 + 5.0;
+
+            motesVel[i * 3 + 0] = (Math.random() - 0.5) * 0.005;
+            motesVel[i * 3 + 1] = (Math.random() - 0.5) * 0.003;
+            motesVel[i * 3 + 2] = (Math.random() - 0.5) * 0.005;
+        }
+        motesGeo.setAttribute('position', new THREE.BufferAttribute(motesPos, 3));
+        const motesMat = new THREE.PointsMaterial({
+            size: 0.18,
+            color: 0xffeedd,
+            transparent: true,
+            opacity: 0.45,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const motesPoints = new THREE.Points(motesGeo, motesMat);
+        scene.add(motesPoints);
+
+        let currentSplatMesh = null;
+        let activeSplatsData = null;
+
+        function createInstancedSplatMesh(splatData) {
+            if (currentSplatMesh) {
+                scene.remove(currentSplatMesh);
+                currentSplatMesh.geometry.dispose();
+                currentSplatMesh = null;
+            }
+
+            const quadGeo = new THREE.PlaneGeometry(1, 1);
+            const instancedGeo = new THREE.InstancedBufferGeometry();
+            instancedGeo.index = quadGeo.index;
+            instancedGeo.attributes.position = quadGeo.attributes.position;
+            instancedGeo.attributes.uv = quadGeo.attributes.uv;
+
+            instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(splatData.positions, 3));
+            instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(splatData.scales, 3));
+            instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(splatData.colors, 3));
+            instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(splatData.opacities, 1));
+            instancedGeo.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(splatData.quats, 4));
+
+            const mesh = new THREE.Mesh(instancedGeo, splatMaterial);
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            currentSplatMesh = mesh;
+            activeSplatsData = splatData;
+
+            document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+            document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            document.getElementById('hud-status').textContent = 'ONLINE // 60 FPS';
+            return mesh;
+        }
+
+        // ====================================================================
+        // 3. Client-Side DepthBox Depth-Ray & Surface Normal Synthesis
+        // ====================================================================
+
+        function synthesizeSplatsFrom2DImage(img, targetStride = 1) {
+            // High-Resolution 640x480 photographic canvas synthesis (preserving aspect ratio)
+            const natW = img.naturalWidth || img.videoWidth || 640;
+            const natH = img.naturalHeight || img.videoHeight || 480;
+            const aspect = natW / Math.max(1, natH);
+            let W = 640;
+            let H = Math.round(W / aspect);
+            if (H > 480) {
+                H = 480;
+                W = Math.round(H * aspect);
+            }
+            // Ensure even dimensions
+            W = (W >> 1) << 1;
+            H = (H >> 1) << 1;
+            currentWidth = W;
+            currentHeight = H;
+
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = W;
+            offCanvas.height = H;
+            const ctx = offCanvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, W, H);
+            const imgData = ctx.getImageData(0, 0, W, H).data;
+            sourceRgba = imgData;
+
+            const fovRad = (currentFov * Math.PI) / 180.0;
+            const f = 0.5 * H / Math.tan(0.5 * fovRad);
+            const cx = W * 0.5;
+            const cy = H * 0.5;
+
+            // Generate metric depths & ray vectors
+            metricDepths = new Float32Array(W * H);
+            surfaceNormals = new Float32Array(W * H * 3);
+
+            for (let y = 0; y < H; ++y) {
+                const ny = y / H;
+                for (let x = 0; x < W; ++x) {
+                    const idx = y * W + x;
+                    const cIdx = idx * 4;
+                    const r = imgData[cIdx + 0] / 255.0;
+                    const g = imgData[cIdx + 1] / 255.0;
+                    const b = imgData[cIdx + 2] / 255.0;
+                    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+                    let d;
+                    if (ny >= 0.70) {
+                        const t = (ny - 0.70) / 0.30;
+                        d = currentNear + (1.0 - t) * (currentNear * 3.5);
+                    } else if (ny >= 0.35) {
+                        const t = (0.70 - ny) / 0.35;
+                        d = currentNear * 3.5 + t * (currentFar * 0.45);
+                        if (lum < 0.25) d += 1.2;
+                    } else {
+                        const isSky = (b > r + 0.12 && b > 0.45) || lum > 0.82;
+                        if (isSky) d = currentFar * 1.5;
+                        else d = currentFar * 0.45 + ((0.35 - ny) / 0.35) * (currentFar * 0.55);
+                    }
+                    metricDepths[idx] = Math.max(0.2, d);
+                }
+            }
+
+            const step = Math.max(1, targetStride);
+            const positions = [];
+            const scales = [];
+            const colors = [];
+            const opacities = [];
+            const quats = [];
+
+            for (let y = 0; y < H; y += step) {
+                for (let x = 0; x < W; x += step) {
+                    const idx = y * W + x;
+                    const d = metricDepths[idx];
+
+                    const rx = (x - cx) / f;
+                    const ry = -(y - cy) / f;
+                    const rz = -1.0;
+                    const invLen = 1.0 / Math.hypot(rx, ry, rz);
+                    const urx = rx * invLen;
+                    const ury = ry * invLen;
+                    const urz = rz * invLen;
+
+                    const px = urx * d;
+                    const py = ury * d;
+                    const pz = urz * d;
+
+                    const cIdx = idx * 4;
+                    const r = imgData[cIdx + 0] / 255.0;
+                    const g = imgData[cIdx + 1] / 255.0;
+                    const b = imgData[cIdx + 2] / 255.0;
+
+                    // 4-connected normal estimation & edge severance
+                    const xNext = Math.min(W - 1, x + step);
+                    const xPrev = Math.max(0, x - step);
+                    const yNext = Math.min(H - 1, y + step);
+                    const yPrev = Math.max(0, y - step);
+
+                    const dR = metricDepths[y * W + xNext];
+                    const dL = metricDepths[y * W + xPrev];
+                    const dD = metricDepths[yNext * W + x];
+                    const dU = metricDepths[yPrev * W + x];
+
+                    const deltaX = Math.abs(dR - dL) / Math.max(1e-4, Math.max(dR, dL));
+                    const deltaY = Math.abs(dD - dU) / Math.max(1e-4, Math.max(dD, dU));
+                    const isEdge = deltaX > currentEdgeTau || deltaY > currentEdgeTau;
+
+                    const tx = [ (xNext - xPrev) * d / f, 0, (dR - dL) ];
+                    const ty = [ 0, -(yNext - yPrev) * d / f, (dD - dU) ];
+
+                    let nx = tx[1] * ty[2] - tx[2] * ty[1];
+                    let ny = tx[2] * ty[0] - tx[0] * ty[2];
+                    let nz = tx[0] * ty[1] - tx[1] * ty[0];
+                    const nLen = Math.hypot(nx, ny, nz);
+                    if (nLen > 1e-6) { nx /= nLen; ny /= nLen; nz /= nLen; }
+                    else { nx = -urx; ny = -ury; nz = -urz; }
+
+                    if (nx * urx + ny * ury + nz * urz > 0) {
+                        nx = -nx; ny = -ny; nz = -nz;
+                    }
+
+                    surfaceNormals[idx * 3 + 0] = nx;
+                    surfaceNormals[idx * 3 + 1] = ny;
+                    surfaceNormals[idx * 3 + 2] = nz;
+
+                    let q = quaternionFromNormal(nx, ny, nz);
+
+                    // Continuous watertight splat footprint multiplier (2.10x)
+                    const pixelFootprint = (step * d / f) * 2.10;
+                    let sx = pixelFootprint;
+                    let sy = pixelFootprint;
+                    let sz = pixelFootprint * 0.25;
+                    let alpha = 0.99;
+
+                    if (isEdge) {
+                        sx *= 0.50;
+                        sy *= 0.50;
+                        alpha *= 0.85;
+                    }
+
+                    positions.push(px, py, pz);
+                    scales.push(sx, sy, sz);
+                    colors.push(r, g, b);
+                    opacities.push(alpha);
+                    quats.push(q[0], q[1], q[2], q[3]);
+                }
+            }
+
+            // Dual-Layer Occlusion Inpainting (Depthbox Silhouette Backside Infilling)
+            if (enableDualLayerInpaint) {
+                for (let y = 0; y < H; y += step) {
+                    for (let x = 0; x < W; x += step) {
+                        const idx = y * W + x;
+                        const d = metricDepths[idx];
+
+                        const xNext = Math.min(W - 1, x + step);
+                        const xPrev = Math.max(0, x - step);
+                        const yNext = Math.min(H - 1, y + step);
+                        const yPrev = Math.max(0, y - step);
+
+                        const dR = metricDepths[y * W + xNext];
+                        const dL = metricDepths[y * W + xPrev];
+                        const dD = metricDepths[yNext * W + x];
+                        const dU = metricDepths[yPrev * W + x];
+
+                        const fgBgRatio = 1.0 + currentEdgeTau * 1.5;
+                        let bgDepthSum = 0;
+                        let bgCount = 0;
+                        let rSum = 0, gSum = 0, bSum = 0;
+
+                        const sampleNeighbor = (nx, ny, nd) => {
+                            if (!isNaN(nd) && nd > d * fgBgRatio) {
+                                bgDepthSum += nd;
+                                const nIdx = (ny * W + nx) * 4;
+                                rSum += imgData[nIdx + 0] / 255.0;
+                                gSum += imgData[nIdx + 1] / 255.0;
+                                bSum += imgData[nIdx + 2] / 255.0;
+                                bgCount++;
+                            }
+                        };
+
+                        sampleNeighbor(xNext, y, dR);
+                        sampleNeighbor(xPrev, y, dL);
+                        sampleNeighbor(x, yNext, dD);
+                        sampleNeighbor(x, yPrev, dU);
+
+                        if (bgCount > 0) {
+                            const avgBgDepth = (bgDepthSum / bgCount) * 1.04;
+                            const rx = (x - cx) / f;
+                            const ry = -(y - cy) / f;
+                            const rz = -1.0;
+                            const invLen = 1.0 / Math.hypot(rx, ry, rz);
+                            const urx = rx * invLen;
+                            const ury = ry * invLen;
+                            const urz = rz * invLen;
+
+                            const px = urx * avgBgDepth;
+                            const py = ury * avgBgDepth;
+                            const pz = urz * avgBgDepth;
+
+                            const q = quaternionFromNormal(-urx, -ury, -urz);
+                            const pixelFootprint = (step * avgBgDepth / f) * 1.35 * 1.4;
+
+                            positions.push(px, py, pz);
+                            scales.push(pixelFootprint, pixelFootprint, pixelFootprint * 0.22);
+                            colors.push(rSum / bgCount, gSum / bgCount, bSum / bgCount);
+                            opacities.push(0.85);
+                            quats.push(q[0], q[1], q[2], q[3]);
+                        }
+                    }
+                }
+            }
+
+            // Extract Depthbox Physics Colliders & Ground Plane
+            buildPhysicsColliders(W, H, f, cx, cy);
+
+            const count = positions.length / 3;
+            draw2DInspector();
+
+            return {
+                count,
+                positions: new Float32Array(positions),
+                scales: new Float32Array(scales),
+                colors: new Float32Array(colors),
+                opacities: new Float32Array(opacities),
+                quats: new Float32Array(quats)
+            };
+        }
+
+        function quaternionFromNormal(nx, ny, nz) {
+            const dot = nz; // dot((0, 0, 1), n)
+            if (dot >= 0.999999) return [0, 0, 0, 1];
+            if (dot <= -0.999999) return [1, 0, 0, 0];
+
+            const cx = -ny;
+            const cy = nx;
+            const cz = 0;
+            const qw = 1.0 + dot;
+            const invLen = 1.0 / Math.hypot(cx, cy, cz, qw);
+            return [cx * invLen, cy * invLen, cz * invLen, qw * invLen];
+        }
+
+        // ====================================================================
+        // 4. 2D Telemetry & Preview Drawing
+        // ====================================================================
+        function draw2DInspector() {
+            const pCanvas = document.getElementById('preview-canvas');
+            const ctx = pCanvas.getContext('2d');
+            const W = pCanvas.width;
+            const H = pCanvas.height;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (!sourceRgba || !metricDepths) {
+                ctx.fillStyle = '#0f172a';
+                ctx.fillRect(0, 0, W, H);
+                ctx.fillStyle = '#64748b';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('No image loaded', W / 2, H / 2);
+                return;
+            }
+
+            const imgData = ctx.createImageData(W, H);
+            const scaleX = currentWidth / W;
+            const scaleY = currentHeight / H;
+
+            for (let py = 0; py < H; ++py) {
+                const sy = Math.min(currentHeight - 1, Math.floor(py * scaleY));
+                for (let px = 0; px < W; ++px) {
+                    const sx = Math.min(currentWidth - 1, Math.floor(px * scaleX));
+                    const sIdx = sy * currentWidth + sx;
+                    const dIdx = (py * W + px) * 4;
+
+                    if (current2DView === 'rgb') {
+                        imgData.data[dIdx + 0] = sourceRgba[sIdx * 4 + 0];
+                        imgData.data[dIdx + 1] = sourceRgba[sIdx * 4 + 1];
+                        imgData.data[dIdx + 2] = sourceRgba[sIdx * 4 + 2];
+                        imgData.data[dIdx + 3] = 255;
+                    } else if (current2DView === 'depth') {
+                        const d = metricDepths[sIdx];
+                        const normD = Math.min(1.0, Math.max(0.0, (d - currentNear) / (currentFar - currentNear)));
+                        // Inferno heatmap: cyan to magenta to yellow
+                        imgData.data[dIdx + 0] = Math.round(normD * 255);
+                        imgData.data[dIdx + 1] = Math.round(Math.sin(normD * Math.PI) * 220);
+                        imgData.data[dIdx + 2] = Math.round((1.0 - normD) * 255);
+                        imgData.data[dIdx + 3] = 255;
+                    } else if (current2DView === 'normals') {
+                        const nx = surfaceNormals[sIdx * 3 + 0];
+                        const ny = surfaceNormals[sIdx * 3 + 1];
+                        const nz = surfaceNormals[sIdx * 3 + 2];
+                        imgData.data[dIdx + 0] = Math.round((nx * 0.5 + 0.5) * 255);
+                        imgData.data[dIdx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+                        imgData.data[dIdx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+                        imgData.data[dIdx + 3] = 255;
+                    }
+                }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+        }
+
+        // ====================================================================
+        // 5. User Interaction & Camera Flight Physics
+        // ====================================================================
+        let flightMode = 'drone'; // 'drone' or 'orbit'
+        const flightState = {
+            velocity: new THREE.Vector3(),
+            keys: {},
+            speed: 15.0,
+            boost: 1.0,
+            isMouseDown: false,
+            lastX: 0,
+            lastY: 0,
+            orbitAngle: 0,
+            orbitRadius: 25.0
+        };
+
+        window.addEventListener('keydown', (e) => {
+            flightState.keys[e.key.toLowerCase()] = true;
+            if (e.shiftKey) flightState.boost = 2.8;
+        });
+        window.addEventListener('keyup', (e) => {
+            flightState.keys[e.key.toLowerCase()] = false;
+            if (!e.shiftKey) flightState.boost = 1.0;
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {
+                flightState.isMouseDown = true;
+                flightState.lastX = e.clientX;
+                flightState.lastY = e.clientY;
+            }
+        });
+        window.addEventListener('mouseup', () => { flightState.isMouseDown = false; });
+        window.addEventListener('mousemove', (e) => {
+            if (!flightState.isMouseDown) return;
+            const dx = (e.clientX - flightState.lastX) * 0.003;
+            const dy = (e.clientY - flightState.lastY) * 0.003;
+            flightState.lastX = e.clientX;
+            flightState.lastY = e.clientY;
+
+            if (flightMode === 'drone' || flightMode === 'walk') {
+                camera.rotation.y -= dx;
+                camera.rotation.x = Math.max(-1.4, Math.min(1.4, camera.rotation.x - dy));
+            } else if (flightMode === 'orbit') {
+                flightState.orbitAngle += dx;
+                camera.position.x = Math.sin(flightState.orbitAngle) * flightState.orbitRadius;
+                camera.position.z = -20.0 + Math.cos(flightState.orbitAngle) * flightState.orbitRadius;
+                camera.lookAt(0, 0, -20);
+            }
+        });
+
+        // Wheel Zoom
+        canvas.addEventListener('wheel', (e) => {
+            if (flightMode === 'orbit') {
+                flightState.orbitRadius = Math.max(5.0, Math.min(80.0, flightState.orbitRadius + e.deltaY * 0.04));
+                camera.position.x = Math.sin(flightState.orbitAngle) * flightState.orbitRadius;
+                camera.position.z = -20.0 + Math.cos(flightState.orbitAngle) * flightState.orbitRadius;
+                camera.lookAt(0, 0, -20);
+            }
+        });
+
+        // Tap-to-Focus Reticle & Metric Tape Measure Raycasting
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const reticle = document.getElementById('focus-reticle');
+            reticle.style.left = `${mouseX}px`;
+            reticle.style.top = `${mouseY}px`;
+            reticle.classList.add('active');
+            setTimeout(() => reticle.classList.remove('active'), 800);
+
+            // Compute focal ray via unprojection
+            const u = (mouseX / rect.width) * 2 - 1;
+            const v = -(mouseY / rect.height) * 2 + 1;
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(u, v), camera);
+
+            if (isTapeMeasureActive) {
+                // Intersect ground plane or default spatial distance
+                const ray = raycaster.ray;
+                let targetPos = null;
+                if (Math.abs(ray.direction.y) > 0.02) {
+                    const t = (groundElevation - ray.origin.y) / ray.direction.y;
+                    if (t > 0 && t < 150.0) {
+                        targetPos = ray.origin.clone().addScaledVector(ray.direction, t);
+                    }
+                }
+                if (!targetPos) {
+                    targetPos = ray.origin.clone().addScaledVector(ray.direction, 12.0);
+                }
+                addMeasurePoint(targetPos);
+                return;
+            }
+
+            // Approximate depth from ray intersection
+            currentFocusDist = Math.max(1.0, Math.min(60.0, 18.0 / Math.max(0.2, raycaster.ray.direction.length())));
+            splatMaterial.uniforms.focusDistance.value = currentFocusDist;
+            document.getElementById('stat-focus-dist').textContent = `${currentFocusDist.toFixed(1)} m`;
+        });
+
+        // --------------------------------------------------------------------
+        // Depthbox Cinematic Camera Tour Feature
+        // --------------------------------------------------------------------
+        let isTourPlaying = false;
+        let tourStartTime = 0;
+        const tourDuration = 22.0; // 22s smooth loop
+
+        function toggleCinematicTour() {
+            isTourPlaying = !isTourPlaying;
+            const btn = document.getElementById('btn-tour-toggle');
+            if (btn) {
+                btn.textContent = isTourPlaying ? '🎬 Tour: ON' : '🎬 Tour: OFF';
+                btn.classList.toggle('active', isTourPlaying);
+            }
+            if (isTourPlaying) {
+                tourStartTime = performance.now();
+                document.getElementById('hud-status').textContent = 'STATUS // CINEMATIC CAMERA FLIGHT ACTIVE';
+            } else {
+                document.getElementById('hud-status').textContent = 'STATUS // 3DGS STREAMING';
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // Depthbox Metric Tape Measure Feature
+        // --------------------------------------------------------------------
+        let isTapeMeasureActive = false;
+        let measurePoints = [];
+        let measureLine = null;
+        let measureMarkers = [];
+
+        function toggleTapeMeasure() {
+            isTapeMeasureActive = !isTapeMeasureActive;
+            const btn = document.getElementById('btn-measure-toggle');
+            const hudStat = document.getElementById('hud-stat-measure');
+            if (btn) {
+                btn.textContent = isTapeMeasureActive ? '📏 Measure: ON' : '📏 Measure: OFF';
+                btn.classList.toggle('active', isTapeMeasureActive);
+            }
+            if (hudStat) {
+                hudStat.style.display = isTapeMeasureActive ? 'flex' : 'none';
+            }
+            if (!isTapeMeasureActive) {
+                clearTapeMeasure();
+            } else {
+                document.getElementById('hud-status').textContent = 'STATUS // TAPE MEASURE: CLICK 2 POINTS';
+            }
+        }
+
+        function clearTapeMeasure() {
+            measurePoints = [];
+            if (measureLine) {
+                scene.remove(measureLine);
+                measureLine.geometry.dispose();
+                measureLine.material.dispose();
+                measureLine = null;
+            }
+            measureMarkers.forEach(m => {
+                scene.remove(m);
+                m.geometry.dispose();
+                m.material.dispose();
+            });
+            measureMarkers = [];
+            const statVal = document.getElementById('stat-measure-val');
+            if (statVal) statVal.textContent = '0.00 m (0.0 ft)';
+        }
+
+        function addMeasurePoint(pos) {
+            measurePoints.push(pos.clone());
+
+            const sphereGeo = new THREE.SphereGeometry(0.25, 16, 16);
+            const sphereMat = new THREE.MeshBasicMaterial({
+                color: measurePoints.length === 1 ? 0x38bdf8 : 0x10b981
+            });
+            const marker = new THREE.Mesh(sphereGeo, sphereMat);
+            marker.position.copy(pos);
+            scene.add(marker);
+            measureMarkers.push(marker);
+
+            if (measurePoints.length === 2) {
+                const p1 = measurePoints[0];
+                const p2 = measurePoints[1];
+                const distMeters = p1.distanceTo(p2);
+                const distFeet = distMeters * 3.28084;
+
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                const lineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 3 });
+                measureLine = new THREE.Line(lineGeo, lineMat);
+                scene.add(measureLine);
+
+                const statVal = document.getElementById('stat-measure-val');
+                if (statVal) {
+                    statVal.textContent = `${distMeters.toFixed(2)} m (${distFeet.toFixed(1)} ft)`;
+                }
+                document.getElementById('hud-status').textContent = `MEASURED // ${distMeters.toFixed(2)} METERS (${distFeet.toFixed(1)} FT)`;
+            } else if (measurePoints.length > 2) {
+                clearTapeMeasure();
+                addMeasurePoint(pos);
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // 60FPS Video Recording Feature
+        // --------------------------------------------------------------------
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+
+        function toggleVideoRecording() {
+            const btn = document.getElementById('btn-record-toggle');
+            if (!isRecording) {
+                try {
+                    const stream = canvas.captureStream(60);
+                    let options = { mimeType: 'video/webm; codecs=vp9' };
+                    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                        options = { mimeType: 'video/webm' };
+                    }
+                    mediaRecorder = new MediaRecorder(stream, options);
+                    recordedChunks = [];
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0) recordedChunks.push(e.data);
+                    };
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `depthbox_3dgs_${Date.now()}.webm`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    };
+                    mediaRecorder.start();
+                    isRecording = true;
+                    if (btn) {
+                        btn.textContent = '⏹️ Stop Rec';
+                        btn.classList.add('active');
+                        btn.style.background = '#ef4444';
+                    }
+                    document.getElementById('hud-status').textContent = 'STATUS // 60FPS WEBM RECORDING ACTIVE';
+                } catch (err) {
+                    console.warn('[DepthBox] MediaRecorder init error:', err);
+                    alert('Video Recording: ' + err.message);
+                }
+            } else {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                isRecording = false;
+                if (btn) {
+                    btn.textContent = '📹 Record';
+                    btn.classList.remove('active');
+                    btn.style.background = '';
+                }
+                document.getElementById('hud-status').textContent = 'STATUS // RECORDING SAVED';
+            }
+        }
+
+        // --------------------------------------------------------------------
+        // Depth AI Engine Selection
+        // --------------------------------------------------------------------
+        let activeDepthEngine = 'da3_metric';
+        function updateDepthEngine(engine) {
+            activeDepthEngine = engine;
+            if (engine === 'da3_metric') {
+                document.getElementById('val-tau').textContent = '0.080';
+                document.getElementById('slider-tau').value = 0.080;
+                edgeSeveranceTau = 0.080;
+                document.getElementById('hud-optics').textContent = 'ENGINE: DA3 METRIC RAY SPINE · 35mm f/2.8';
+            } else if (engine === 'da2_relative') {
+                document.getElementById('val-tau').textContent = '0.060';
+                document.getElementById('slider-tau').value = 0.060;
+                edgeSeveranceTau = 0.060;
+                document.getElementById('hud-optics').textContent = 'ENGINE: DA2 RELATIVE AFFINITY · 35mm f/2.8';
+            } else if (engine === 'marigold_diff') {
+                document.getElementById('val-tau').textContent = '0.120';
+                document.getElementById('slider-tau').value = 0.120;
+                edgeSeveranceTau = 0.120;
+                document.getElementById('hud-optics').textContent = 'ENGINE: MARIGOLD DIFFUSION · 35mm f/2.8';
+            }
+            if (sourceImg && currentMode === 'single') {
+                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
+                createInstancedSplatMesh(splatData);
+            }
+        }
+
+        function toggleDualLayerInpaint() {
+            enableDualLayerInpaint = !enableDualLayerInpaint;
+            const btn = document.getElementById('btn-inpaint-toggle');
+            if (btn) {
+                btn.textContent = enableDualLayerInpaint ? '🌟 Inpaint: ON' : '🌟 Inpaint: OFF';
+                btn.classList.toggle('active', enableDualLayerInpaint);
+            }
+            document.getElementById('hud-status').textContent = enableDualLayerInpaint
+                ? 'STATUS // DUAL-LAYER INPAINTING ACTIVE'
+                : 'STATUS // SINGLE-LAYER 3DGS';
+
+            if (sourceImg) {
+                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
+                createInstancedSplatMesh(splatData);
+            }
+        }
+
+        function toggleColliders() {
+            showColliders = !showColliders;
+            const btn = document.getElementById('btn-collider-toggle');
+            if (btn) {
+                btn.textContent = showColliders ? '🛡️ Colliders: ON' : '🛡️ Colliders: OFF';
+                btn.classList.toggle('active', showColliders);
+            }
+            if (colliderGroup) {
+                colliderGroup.visible = showColliders;
+            }
+            document.getElementById('hud-status').textContent = showColliders
+                ? 'STATUS // PHYSICS COLLIDERS VISIBLE'
+                : 'STATUS // 3DGS STREAMING';
+        }
+
+        function buildPhysicsColliders(W, H, f, cx, cy) {
+            while (colliderGroup.children.length > 0) {
+                const child = colliderGroup.children[0];
+                colliderGroup.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) child.material.dispose();
+            }
+
+            let groundYSum = 0, groundCount = 0;
+            let minZ = 1e6, maxZ = -1e6, minX = 1e6, maxX = -1e6;
+
+            for (let y = Math.floor(H * 0.75); y < H; y += 4) {
+                for (let x = 0; x < W; x += 4) {
+                    const idx = y * W + x;
+                    const d = metricDepths[idx];
+                    if (isNaN(d) || d < 0.2 || d > 120.0) continue;
+
+                    const rx = (x - cx) / f;
+                    const ry = -(y - cy) / f;
+                    const rz = -1.0;
+                    const inv = 1.0 / Math.hypot(rx, ry, rz);
+                    const px = rx * inv * d;
+                    const py = ry * inv * d;
+                    const pz = rz * inv * d;
+
+                    groundYSum += py;
+                    groundCount++;
+                    minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+                    minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
+                }
+            }
+
+            groundElevation = groundCount > 0 ? (groundYSum / groundCount) : -1.65;
+
+            // 1. Ground Plane Grid & Wireframe
+            const floorWidth = Math.max(40.0, (maxX - minX) * 1.5);
+            const floorDepth = Math.max(50.0, Math.abs(maxZ - minZ) * 1.5);
+            const floorCenterX = (minX + maxX) * 0.5;
+            const floorCenterZ = (minZ + maxZ) * 0.5;
+
+            const gridHelper = new THREE.GridHelper(Math.max(floorWidth, floorDepth), 20, 0x10b981, 0x065f46);
+            gridHelper.position.set(floorCenterX, groundElevation, floorCenterZ);
+            colliderGroup.add(gridHelper);
+
+            // 2. Obstacle Bounding Box Clusters (Left, Center, Right)
+            const boundingBoxes = [];
+            const obstacleMat = new THREE.MeshBasicMaterial({
+                color: 0x38bdf8,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.75
+            });
+            const obstacleFillMat = new THREE.MeshBasicMaterial({
+                color: 0x0284c7,
+                transparent: true,
+                opacity: 0.12,
+                depthWrite: false
+            });
+
+            const clusterBox = (xStart, xEnd, label) => {
+                let bMinX = 1e6, bMaxX = -1e6;
+                let bMinY = 1e6, bMaxY = -1e6;
+                let bMinZ = 1e6, bMaxZ = -1e6;
+                let count = 0;
+
+                for (let y = Math.floor(H * 0.15); y < Math.floor(H * 0.85); y += 4) {
+                    for (let x = xStart; x < xEnd; x += 4) {
+                        const idx = y * W + x;
+                        const d = metricDepths[idx];
+                        if (isNaN(d) || d < 0.5 || d > 90.0) continue;
+
+                        const rx = (x - cx) / f;
+                        const ry = -(y - cy) / f;
+                        const rz = -1.0;
+                        const inv = 1.0 / Math.hypot(rx, ry, rz);
+                        const px = rx * inv * d;
+                        const py = ry * inv * d;
+                        const pz = rz * inv * d;
+
+                        bMinX = Math.min(bMinX, px); bMaxX = Math.max(bMaxX, px);
+                        bMinY = Math.min(bMinY, py); bMaxY = Math.max(bMaxY, py);
+                        bMinZ = Math.min(bMinZ, pz); bMaxZ = Math.max(bMaxZ, pz);
+                        count++;
+                    }
+                }
+
+                if (count > 20 && bMaxX > bMinX && bMaxY > bMinY && bMaxZ > bMinZ) {
+                    const center = [(bMinX + bMaxX) * 0.5, (bMinY + bMaxY) * 0.5, (bMinZ + bMaxZ) * 0.5];
+                    const size = [bMaxX - bMinX, bMaxY - bMinY, bMaxZ - bMinZ];
+                    const extents = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+
+                    boundingBoxes.push({ name: label, center, extents });
+
+                    const geom = new THREE.BoxGeometry(size[0], size[1], size[2]);
+                    const wireMesh = new THREE.Mesh(geom, obstacleMat);
+                    wireMesh.position.set(center[0], center[1], center[2]);
+                    colliderGroup.add(wireMesh);
+
+                    const fillMesh = new THREE.Mesh(geom, obstacleFillMat);
+                    fillMesh.position.set(center[0], center[1], center[2]);
+                    colliderGroup.add(fillMesh);
+                }
+            };
+
+            clusterBox(0, Math.floor(W / 3), 'collider_left');
+            clusterBox(Math.floor(W / 3), Math.floor((2 * W) / 3), 'collider_center');
+            clusterBox(Math.floor((2 * W) / 3), W, 'collider_right');
+
+            currentColliders = {
+                groundElevation,
+                floorWidth,
+                floorDepth,
+                floorCenterX,
+                floorCenterZ,
+                boundingBoxes
+            };
+
+            colliderGroup.visible = showColliders;
+        }
+
+        function downloadColliderGlb() {
+            if (!currentColliders) {
+                alert('Please synthesize a scene first to generate physics colliders.');
+                return;
+            }
+
+            const positions = [];
+            const normals = [];
+            const indices = [];
+
+            // Ground Quad
+            const { groundElevation: gY, floorWidth: gW, floorDepth: gD, floorCenterX: gX, floorCenterZ: gZ, boundingBoxes } = currentColliders;
+            const bIdx = positions.length / 3;
+            positions.push(
+                gX - gW * 0.5, gY, gZ - gD * 0.5,
+                gX + gW * 0.5, gY, gZ - gD * 0.5,
+                gX + gW * 0.5, gY, gZ + gD * 0.5,
+                gX - gW * 0.5, gY, gZ + gD * 0.5
+            );
+            for (let i = 0; i < 4; i++) normals.push(0, 1, 0);
+            indices.push(bIdx + 0, bIdx + 1, bIdx + 2, bIdx + 0, bIdx + 2, bIdx + 3);
+
+            // Bounding Boxes
+            for (const b of boundingBoxes) {
+                const boxBase = positions.length / 3;
+                const c = b.center;
+                const e = b.extents;
+
+                positions.push(
+                    c[0] - e[0], c[1] - e[1], c[2] - e[2],
+                    c[0] + e[0], c[1] - e[1], c[2] - e[2],
+                    c[0] + e[0], c[1] + e[1], c[2] - e[2],
+                    c[0] - e[0], c[1] + e[1], c[2] - e[2],
+                    c[0] - e[0], c[1] - e[1], c[2] + e[2],
+                    c[0] + e[0], c[1] - e[1], c[2] + e[2],
+                    c[0] + e[0], c[1] + e[1], c[2] + e[2],
+                    c[0] - e[0], c[1] + e[1], c[2] + e[2]
+                );
+                for (let i = 0; i < 8; i++) normals.push(0, 1, 0);
+
+                const faceIndices = [
+                    0, 2, 1, 0, 3, 2,
+                    4, 5, 6, 4, 6, 7,
+                    0, 1, 5, 0, 5, 4,
+                    3, 6, 2, 3, 7, 6,
+                    0, 4, 7, 0, 7, 3,
+                    1, 2, 6, 1, 6, 5
+                ];
+                for (let i = 0; i < 36; i++) {
+                    indices.push(boxBase + faceIndices[i]);
+                }
+            }
+
+            const align4 = n => (n + 3) & ~3;
+            const posF32 = new Float32Array(positions);
+            const normF32 = new Float32Array(normals);
+            const idxU32 = new Uint32Array(indices);
+
+            const idxBytes = idxU32.byteLength;
+            const posBytes = posF32.byteLength;
+            const normBytes = normF32.byteLength;
+
+            const idxOff = 0;
+            const posOff = align4(idxOff + idxBytes);
+            const normOff = align4(posOff + posBytes);
+            const totalBin = align4(normOff + normBytes);
+
+            const binBuffer = new Uint8Array(totalBin);
+            binBuffer.set(new Uint8Array(idxU32.buffer), idxOff);
+            binBuffer.set(new Uint8Array(posF32.buffer), posOff);
+            binBuffer.set(new Uint8Array(normF32.buffer), normOff);
+
+            let minX = 1e9, minY = 1e9, minZ = 1e9, maxX = -1e9, maxY = -1e9, maxZ = -1e9;
+            for (let i = 0; i < positions.length; i += 3) {
+                minX = Math.min(minX, positions[i]); maxX = Math.max(maxX, positions[i]);
+                minY = Math.min(minY, positions[i+1]); maxY = Math.max(maxY, positions[i+1]);
+                minZ = Math.min(minZ, positions[i+2]); maxZ = Math.max(maxZ, positions[i+2]);
+            }
+
+            const gltfJson = {
+                asset: { version: '2.0', generator: 'DepthBox GLB Exporter' },
+                scene: 0,
+                scenes: [{ nodes: [0] }],
+                nodes: [{ mesh: 0, name: 'DepthBox_Physics_Collider' }],
+                meshes: [{
+                    name: 'PhysicsColliders',
+                    primitives: [{ attributes: { POSITION: 1, NORMAL: 2 }, indices: 0, material: 0 }]
+                }],
+                materials: [{
+                    name: 'ColliderMat',
+                    pbrMetallicRoughness: { baseColorFactor: [0.22, 0.74, 0.97, 0.8], metallicFactor: 0.1, roughnessFactor: 0.8 }
+                }],
+                accessors: [
+                    { bufferView: 0, byteOffset: 0, componentType: 5125, count: idxU32.length, type: 'SCALAR' },
+                    { bufferView: 1, byteOffset: 0, componentType: 5126, count: posF32.length / 3, type: 'VEC3', min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+                    { bufferView: 2, byteOffset: 0, componentType: 5126, count: normF32.length / 3, type: 'VEC3' }
+                ],
+                bufferViews: [
+                    { buffer: 0, byteOffset: idxOff, byteLength: idxBytes, target: 34963 },
+                    { buffer: 0, byteOffset: posOff, byteLength: posBytes, target: 34962 },
+                    { buffer: 0, byteOffset: normOff, byteLength: normBytes, target: 34962 }
+                ],
+                buffers: [{ byteLength: totalBin }]
+            };
+
+            const jsonBytes = new TextEncoder().encode(JSON.stringify(gltfJson));
+            const paddedJson = align4(jsonBytes.length);
+            const totalGlbLen = 12 + 8 + paddedJson + 8 + totalBin;
+            const glb = new Uint8Array(totalGlbLen);
+            const dv = new DataView(glb.buffer);
+
+            // Magic & Header
+            dv.setUint32(0, 0x46546C67, true);
+            dv.setUint32(4, 2, true);
+            dv.setUint32(8, totalGlbLen, true);
+
+            // JSON chunk
+            dv.setUint32(12, paddedJson, true);
+            dv.setUint32(16, 0x4E4F534A, true);
+            glb.set(jsonBytes, 20);
+            for (let i = 20 + jsonBytes.length; i < 20 + paddedJson; i++) glb[i] = 0x20;
+
+            // BIN chunk
+            const binStart = 20 + paddedJson;
+            dv.setUint32(binStart, totalBin, true);
+            dv.setUint32(binStart + 4, 0x004E4942, true);
+            glb.set(binBuffer, binStart + 8);
+
+            const blob = new Blob([glb], { type: 'model/gltf-binary' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'depthbox_world_colliders.glb';
+            a.click();
+            URL.revokeObjectURL(url);
+            document.getElementById('hud-status').textContent = 'STATUS // EXPORTED COLLIDER GLB CONTAINER';
+        }
+
+        function resetCamera() {
+            camera.position.set(0, 0, 0);
+            camera.rotation.set(0, 0, 0);
+            flightState.orbitAngle = 0;
+            flightState.orbitRadius = 25.0;
+        }
+
+        function setFlightMode(mode) {
+            flightMode = mode;
+            document.querySelectorAll('#btn-cam-drone, #btn-cam-orbit, #btn-cam-walk').forEach(b => b.classList.remove('active'));
+            const targetBtn = document.getElementById(`btn-cam-${mode}`);
+            if (targetBtn) targetBtn.classList.add('active');
+
+            if (mode === 'orbit') {
+                camera.position.set(0, 2, 5);
+                camera.lookAt(0, 0, -20);
+                document.getElementById('hud-status').textContent = 'STATUS // 3DGS ORBIT TURNTABLE';
+            } else if (mode === 'walk') {
+                camera.position.set(0, groundElevation + walkPlayerHeight, 5);
+                camera.rotation.set(0, 0, 0);
+                document.getElementById('hud-status').textContent = 'STATUS // WALK MODE (1.70m EYE LEVEL · COLLIDERS ON)';
+            } else {
+                resetCamera();
+                document.getElementById('hud-status').textContent = 'STATUS // 3DGS STREAMING';
+            }
+        }
+
+        // ====================================================================
+        // 6. Ingestion & File Handling
+        // ====================================================================
+        function triggerFilePicker() {
+            if (currentMode === 'video') {
+                const vi = document.getElementById('video-file-input');
+                if (vi) vi.click();
+            } else if (currentMode === 'multi') {
+                const gi = document.getElementById('group-file-input');
+                if (gi) gi.click();
+            } else {
+                const fi = document.getElementById('file-input');
+                if (fi) fi.click();
+            }
+        }
+
+        function filterPresetCategory(cat) {
+            document.querySelectorAll('.preset-cat-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.getElementById(`pcat-${cat}`);
+            if (btn) btn.classList.add('active');
+
+            document.querySelectorAll('#preset-grid-container .preset-card').forEach(card => {
+                const cardCat = card.getAttribute('data-category');
+                if (cardCat === cat) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+            if (cat === 'single' && currentMode !== 'single') setConversionMode('single');
+            else if (cat === 'group' && currentMode !== 'multi') setConversionMode('multi');
+            else if (cat === 'video' && currentMode !== 'video') setConversionMode('video');
+            else if (cat === 'pano' && currentMode !== 'pano360') setConversionMode('pano360');
+        }
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+
+            if (files.length === 1 && currentMode === 'single') {
+                loadLocalImageFile(files[0]);
+            } else {
+                setConversionMode('multi');
+                for (let i = 0; i < files.length; ++i) {
+                    addMultiViewFile(files[i]);
+                }
+            }
+        }
+
+        function handleGroupFileSelect(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+            setConversionMode('multi');
+            multiViewItems = [];
+            let loadedCount = 0;
+            for (let i = 0; i < files.length; ++i) {
+                const file = files[i];
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        multiViewItems.push({ name: file.name, img });
+                        loadedCount++;
+                        if (loadedCount === files.length) {
+                            renderMultiViewList();
+                            fuseMultiViewArray();
+                        }
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function handleVideoFileSelect(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+            const file = files[0];
+            const videoUrl = URL.createObjectURL(file);
+            setConversionMode('video');
+            loadVideoSource(videoUrl, file.name);
+        }
+
+        function loadLocalImageFile(file) {
+            showSpinner('INGESTING 2D PHOTOGRAPH...', file.name);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    sourceImg = img;
+                    document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+                    const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
+                    createInstancedSplatMesh(splatData);
+                    hideSpinner();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function loadPresetImage(url, title, fov, near, far) {
+            currentMode = 'single';
+            document.getElementById('tab-single').classList.add('active');
+            document.getElementById('tab-multi').classList.remove('active');
+            const tabVid = document.getElementById('tab-video');
+            if (tabVid) tabVid.classList.remove('active');
+            const tabPano = document.getElementById('tab-pano360');
+            if (tabPano) tabPano.classList.remove('active');
+            document.getElementById('multi-view-panel').style.display = 'none';
+            const vidPanel = document.getElementById('video-group-panel');
+            if (vidPanel) vidPanel.style.display = 'none';
+
+            showSpinner('SYNTHESIZING 3DGS SCENE...', title);
+            currentFov = fov;
+            currentNear = near;
+            currentFar = far;
+            document.getElementById('slider-far').value = far;
+            document.getElementById('val-depth').textContent = `${near.toFixed(1)}m – ${far.toFixed(1)}m`;
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = url;
+            sourceImg = img;
+
+            // Check if direct .splat or pre-baked 250k-300k photographic splat model exists
+            const isDirectSplat = url.endsWith('.splat');
+            const splatKey = isDirectSplat ? '' :
+                             url.includes('manhattan') ? 'manhattan_skyline' :
+                             url.includes('shibuya') ? 'shibuya_cyber' :
+                             url.includes('alpine') ? 'alpine_glacier' :
+                             url.includes('dubai') ? 'dubai_marina' : '';
+
+            if (isDirectSplat || splatKey) {
+                const targetSplatPath = isDirectSplat ? url : `models/${splatKey}.splat`;
+                fetch(targetSplatPath)
+                    .then(r => {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.arrayBuffer();
+                    })
+                    .then(buf => {
+                        const splatData = parseSplatArrayBuffer(buf);
+                        createInstancedSplatMesh(splatData);
+                        hideSpinner();
+                        document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
+                        document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+                        document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+                    })
+                    .catch(() => {
+                        img.onload = () => {
+                            const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
+                            createInstancedSplatMesh(splatData);
+                            hideSpinner();
+                            document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
+                            document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+                            document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+                        };
+                    });
+                return;
+            }
+
+            img.onload = () => {
+                const splatData = synthesizeSplatsFrom2DImage(img, currentStride);
+                createInstancedSplatMesh(splatData);
+                hideSpinner();
+                document.getElementById('hud-status').textContent = `STATUS // 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
+                document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+                document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            };
+        }
+
+        function loadNativeMultiViewPreset() {
+            showSpinner('LOADING NATIVE FUSED 3DGS MODEL...', 'public/models/image_to_3dgs_multiview.splat');
+            fetch('models/image_to_3dgs_multiview.splat')
+                .then(r => r.arrayBuffer())
+                .then(buf => {
+                    const splatData = parseSplatArrayBuffer(buf);
+                    createInstancedSplatMesh(splatData);
+                    hideSpinner();
+                })
+                .catch(err => {
+                    console.warn('[DepthBox] Fallback to synthetic multi-view:', err);
+                    loadPresetImage('images/plaza_hotel_frame_00.png', 'Colonnade Corner', 65, 2.5, 45.0);
+                });
+        }
+
+        function parseSplatArrayBuffer(buffer) {
+            const count = Math.floor(buffer.byteLength / 32);
+            const positions = new Float32Array(count * 3);
+            const scales = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+            const opacities = new Float32Array(count);
+            const quats = new Float32Array(count * 4);
+
+            const view = new DataView(buffer);
+            for (let i = 0; i < count; i++) {
+                const off = i * 32;
+                positions[i * 3 + 0] = view.getFloat32(off + 0, true);
+                positions[i * 3 + 1] = view.getFloat32(off + 4, true);
+                positions[i * 3 + 2] = view.getFloat32(off + 8, true);
+
+                scales[i * 3 + 0] = view.getFloat32(off + 12, true);
+                scales[i * 3 + 1] = view.getFloat32(off + 16, true);
+                scales[i * 3 + 2] = view.getFloat32(off + 20, true);
+
+                colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
+                colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
+                colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
+                opacities[i] = view.getUint8(off + 27) / 255.0;
+
+                quats[i * 4 + 0] = (view.getUint8(off + 28) - 128) / 127.0;
+                quats[i * 4 + 1] = (view.getUint8(off + 29) - 128) / 127.0;
+                quats[i * 4 + 2] = (view.getUint8(off + 30) - 128) / 127.0;
+                quats[i * 4 + 3] = (view.getUint8(off + 31) - 128) / 127.0;
+            }
+
+            return { count, positions, scales, colors, opacities, quats };
+        }
+
+        // ====================================================================
+        // 7. Multi-View & 360° Omnidirectional Handling
+        // ====================================================================
+        const PUBLIC_GROUPS = {
+            'alpine_orbit_group': {
+                title: 'Alpine Orbit (6-Angle Group)',
+                images: [
+                    'videos/frames_alpine/frame_0000.jpg',
+                    'videos/frames_alpine/frame_0012.jpg',
+                    'videos/frames_alpine/frame_0024.jpg',
+                    'videos/frames_alpine/frame_0036.jpg',
+                    'videos/frames_alpine/frame_0048.jpg',
+                    'videos/frames_alpine/frame_0060.jpg'
+                ],
+                fov: 65,
+                near: 4.0,
+                far: 120.0
+            },
+            'plaza_colonnade_group': {
+                title: 'Plaza Colonnade (6-Angle Group)',
+                images: [
+                    'videos/frames_plaza/frame_0000.jpg',
+                    'videos/frames_plaza/frame_0015.jpg',
+                    'videos/frames_plaza/frame_0030.jpg',
+                    'videos/frames_plaza/frame_0045.jpg',
+                    'videos/frames_plaza/frame_0060.jpg',
+                    'videos/frames_plaza/frame_0071.jpg'
+                ],
+                fov: 65,
+                near: 2.5,
+                far: 50.0
+            },
+            'manhattan_skyline_group': {
+                title: 'Skyline Orbit (6-Angle Group)',
+                images: [
+                    'videos/frames_textured/frame_0000.jpg',
+                    'videos/frames_textured/frame_0015.jpg',
+                    'videos/frames_textured/frame_0030.jpg',
+                    'videos/frames_textured/frame_0045.jpg',
+                    'videos/frames_textured/frame_0060.jpg',
+                    'videos/frames_textured/frame_0071.jpg'
+                ],
+                fov: 65,
+                near: 3.0,
+                far: 90.0
+            },
+            'shibuya_transit_group': {
+                title: 'Shibuya Transit (5-Angle Group)',
+                images: [
+                    'videos/frames_shibuya/frame_0000.jpg',
+                    'videos/frames_shibuya/frame_0015.jpg',
+                    'videos/frames_shibuya/frame_0030.jpg',
+                    'videos/frames_shibuya/frame_0045.jpg',
+                    'videos/frames_shibuya/frame_0060.jpg'
+                ],
+                fov: 70,
+                near: 2.0,
+                far: 65.0
+            }
+        };
+
+        const PUBLIC_VIDEOS = {
+            'drone_survey_video': {
+                title: 'Drone Survey Flight',
+                url: 'videos/interaction_input_video.mp4',
+                trajectory: 'orbit',
+                fov: 70,
+                near: 3.0,
+                far: 80.0,
+                sweep: 90
+            },
+            'alpine_orbit_video': {
+                title: 'Alpine Glacial Orbit',
+                url: 'videos/s4d_alpine_blockout_ref.mp4',
+                trajectory: 'orbit',
+                fov: 60,
+                near: 4.0,
+                far: 120.0,
+                sweep: 110
+            },
+            'manhattan_orbit_video': {
+                title: 'Manhattan Skyline Orbit',
+                url: 'videos/s4d_manhattan_blockout_ref.mp4',
+                trajectory: 'orbit',
+                fov: 65,
+                near: 3.0,
+                far: 90.0,
+                sweep: 80
+            },
+            'shibuya_transit_video': {
+                title: 'Shibuya Cyber Transit',
+                url: 'videos/s4d_shibuya_blockout_ref.mp4',
+                trajectory: 'dolly',
+                fov: 70,
+                near: 2.0,
+                far: 60.0,
+                sweep: 50
+            },
+            'plaza_hotel_video': {
+                title: 'Plaza Colonnade Orbit',
+                url: 'videos/plaza_hotel_blockout_camera.mp4',
+                trajectory: 'orbit',
+                fov: 65,
+                near: 2.5,
+                far: 50.0,
+                sweep: 90
+            }
+        };
+
+        let currentVideoKeyframes = [];
+
+        function setConversionMode(mode) {
+            currentMode = mode;
+            document.getElementById('tab-single').classList.toggle('active', mode === 'single');
+            document.getElementById('tab-multi').classList.toggle('active', mode === 'multi');
+            const tabVid = document.getElementById('tab-video');
+            if (tabVid) tabVid.classList.toggle('active', mode === 'video');
+            const tabPano = document.getElementById('tab-pano360');
+            if (tabPano) tabPano.classList.toggle('active', mode === 'pano360');
+
+            document.getElementById('multi-view-panel').style.display = mode === 'multi' ? 'flex' : 'none';
+            const vidPanel = document.getElementById('video-group-panel');
+            if (vidPanel) vidPanel.style.display = mode === 'video' ? 'flex' : 'none';
+
+            // Update drop zone messaging
+            const dropIcon = document.getElementById('drop-icon');
+            const dropText = document.getElementById('drop-text');
+            const dropSub = document.getElementById('drop-subtext');
+
+            if (mode === 'video') {
+                if (dropIcon) dropIcon.textContent = '🎬';
+                if (dropText) dropText.textContent = 'Drop Video File (MP4/WebM) Here';
+                if (dropSub) dropSub.textContent = 'Extracts 6-DOF camera keyframes into unified 3DGS';
+                filterPresetCategory('video');
+                document.getElementById('hud-status').textContent = 'STATUS // VIDEO KEYFRAME 3DGS';
+                loadVideoPreset('drone_survey_video');
+            } else if (mode === 'multi') {
+                if (dropIcon) dropIcon.textContent = '📸';
+                if (dropText) dropText.textContent = 'Drop Related Images Here';
+                if (dropSub) dropSub.textContent = 'Multi-view perspective fusion with voxel decimation';
+                filterPresetCategory('group');
+                document.getElementById('hud-status').textContent = 'STATUS // RELATED IMAGES GROUP 3DGS';
+                loadRelatedImageGroupPreset('alpine_orbit_group');
+            } else if (mode === 'pano360') {
+                if (dropIcon) dropIcon.textContent = '🌐';
+                if (dropText) dropText.textContent = 'Drop 360° Equirectangular Image Here';
+                if (dropSub) dropSub.textContent = 'Spherical projection with ground collider extraction';
+                filterPresetCategory('pano');
+                document.getElementById('hud-status').textContent = 'STATUS // 360° OMNIDIRECTIONAL RADIANCE FIELD';
+                load360Preset('san_marco');
+            } else {
+                if (dropIcon) dropIcon.textContent = '📷';
+                if (dropText) dropText.textContent = 'Drop 2D Photo Here to Convert';
+                if (dropSub) dropSub.textContent = 'Metric Depth-Ray Synthesis';
+                filterPresetCategory('single');
+                document.getElementById('hud-status').textContent = 'STATUS // 3DGS STREAMING';
+                loadPresetImage('images/manhattan_ai.png', 'Manhattan Skyline', 65, 3.0, 75.0);
+            }
+        }
+
+        function loadRelatedImageGroupPreset(groupId) {
+            const group = PUBLIC_GROUPS[groupId];
+            if (!group) return;
+            currentMode = 'multi';
+            document.getElementById('tab-single').classList.remove('active');
+            document.getElementById('tab-multi').classList.add('active');
+            const tabVid = document.getElementById('tab-video');
+            if (tabVid) tabVid.classList.remove('active');
+            const tabPano = document.getElementById('tab-pano360');
+            if (tabPano) tabPano.classList.remove('active');
+            document.getElementById('multi-view-panel').style.display = 'flex';
+            const vidPanel = document.getElementById('video-group-panel');
+            if (vidPanel) vidPanel.style.display = 'none';
+
+            showSpinner('INGESTING RELATED IMAGES GROUP...', group.title);
+            currentFov = group.fov;
+            currentNear = group.near;
+            currentFar = group.far;
+            document.getElementById('slider-far').value = group.far;
+            document.getElementById('val-depth').textContent = `${group.near.toFixed(1)}m – ${group.far.toFixed(1)}m`;
+
+            multiViewItems = [];
+            let loaded = 0;
+            const onAllThumbnailsLoaded = () => {
+                renderMultiViewList();
+                // Check if pre-baked 1M+ multi-view splat from ImageToSplatService exists
+                fetch(`models/${groupId}.splat`)
+                    .then(r => {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.arrayBuffer();
+                    })
+                    .then(buf => {
+                        const splatData = parseSplatArrayBuffer(buf);
+                        createInstancedSplatMesh(splatData);
+                        hideSpinner();
+                        document.getElementById('hud-status').textContent = `STATUS // MULTI-VIEW 3DGS (${splatData.count.toLocaleString()} SPLATS)`;
+                        document.getElementById('stat-splat-count').textContent = splatData.count.toLocaleString();
+                        document.getElementById('stat-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+                    })
+                    .catch(() => {
+                        fuseMultiViewArray();
+                        hideSpinner();
+                    });
+            };
+
+            group.images.forEach((imgUrl, idx) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    multiViewItems[idx] = { name: `View #${idx + 1}`, img };
+                    loaded++;
+                    if (loaded === group.images.length) onAllThumbnailsLoaded();
+                };
+                img.onerror = () => {
+                    loaded++;
+                    if (loaded === group.images.length) onAllThumbnailsLoaded();
+                };
+                img.src = imgUrl;
+            });
+        }
+
+        function loadVideoPreset(videoId) {
+            const preset = PUBLIC_VIDEOS[videoId];
+            if (!preset) return;
+            currentMode = 'video';
+            document.getElementById('tab-single').classList.remove('active');
+            document.getElementById('tab-multi').classList.remove('active');
+            const tabVid = document.getElementById('tab-video');
+            if (tabVid) tabVid.classList.add('active');
+            const tabPano = document.getElementById('tab-pano360');
+            if (tabPano) tabPano.classList.remove('active');
+            document.getElementById('multi-view-panel').style.display = 'none';
+            const vidPanel = document.getElementById('video-group-panel');
+            if (vidPanel) vidPanel.style.display = 'flex';
+
+            document.getElementById('video-trajectory-type').value = preset.trajectory;
+            updateVideoTrajectoryUI();
+            document.getElementById('video-sweep-slider').value = preset.sweep;
+            document.getElementById('val-video-sweep').textContent = preset.sweep + '°';
+            loadVideoSource(preset.url, preset.title);
+        }
+
+        function updateVideoTrajectoryUI() {
+            const traj = document.getElementById('video-trajectory-type').value;
+            const sweepRow = document.getElementById('row-video-sweep');
+            const sweepLbl = document.getElementById('lbl-video-sweep');
+            if (traj === 'orbit') {
+                sweepRow.style.display = 'flex';
+                sweepLbl.textContent = 'Orbit Arc Sweep';
+            } else if (traj === 'dolly') {
+                sweepRow.style.display = 'flex';
+                sweepLbl.textContent = 'Dolly Depth Distance (m)';
+            } else {
+                sweepRow.style.display = 'flex';
+                sweepLbl.textContent = 'Stereo Baseline (m)';
+            }
+        }
+
+        function loadVideoSource(url, title) {
+            showSpinner('EXTRACTING VIDEO KEYFRAMES...', title || 'Video Stream');
+            document.getElementById('video-status-text').textContent = `Loading ${title || 'video'}...`;
+            
+            const video = document.createElement('video');
+            video.crossOrigin = 'anonymous';
+            video.playsInline = true;
+            video.muted = true;
+            video.src = url;
+
+            video.onloadedmetadata = async () => {
+                const duration = video.duration || 5.0;
+                const mins = Math.floor(duration / 60);
+                const secs = Math.floor(duration % 60);
+                document.getElementById('video-duration-text').textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                
+                const sampleCount = parseInt(document.getElementById('video-sample-slider').value, 10) || 8;
+                currentVideoKeyframes = await extractVideoKeyframes(video, sampleCount, duration);
+                renderVideoFilmstrip();
+                hideSpinner();
+                synthesizeSplatFromVideoGroup();
+            };
+
+            video.onerror = (e) => {
+                console.error('Failed to load video:', e);
+                hideSpinner();
+                document.getElementById('video-status-text').textContent = 'Video failed to load (fallback simulation)';
+            };
+        }
+
+        async function extractVideoKeyframes(video, count, duration) {
+            const keyframes = [];
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 320;
+            canvas.height = 320;
+
+            const interval = duration / (count + 1);
+
+            for (let i = 0; i < count; ++i) {
+                const targetTime = Math.min((i + 0.5) * interval, duration - 0.05);
+                await seekVideoTo(video, targetTime);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                const keyImg = new Image();
+                keyImg.src = dataUrl;
+                await new Promise(r => { keyImg.onload = r; });
+
+                keyframes.push({
+                    index: i,
+                    time: targetTime,
+                    img: keyImg,
+                    dataUrl: dataUrl
+                });
+            }
+
+            return keyframes;
+        }
+
+        function seekVideoTo(video, time) {
+            return new Promise(resolve => {
+                const onSeeked = () => {
+                    video.removeEventListener('seeked', onSeeked);
+                    resolve();
+                };
+                video.addEventListener('seeked', onSeeked);
+                video.currentTime = time;
+            });
+        }
+
+        function renderVideoFilmstrip() {
+            const strip = document.getElementById('video-filmstrip-strip');
+            document.getElementById('video-keyframe-count').textContent = `${currentVideoKeyframes.length} Frames`;
+            document.getElementById('video-status-text').textContent = `${currentVideoKeyframes.length} Keyframes ready for 3DGS`;
+            strip.innerHTML = '';
+
+            currentVideoKeyframes.forEach((kf, idx) => {
+                const card = document.createElement('div');
+                card.className = 'filmstrip-card' + (idx === 0 ? ' active' : '');
+                card.onclick = () => {
+                    document.querySelectorAll('#video-filmstrip-strip .filmstrip-card').forEach(c => c.classList.remove('active'));
+                    card.classList.add('active');
+                    sourceImg = kf.img;
+                    draw2DInspector();
+                };
+
+                const img = document.createElement('img');
+                img.src = kf.dataUrl;
+                card.appendChild(img);
+
+                const badge = document.createElement('div');
+                badge.className = 'filmstrip-badge';
+                badge.textContent = kf.time.toFixed(1) + 's';
+                card.appendChild(badge);
+
+                const idxBadge = document.createElement('div');
+                idxBadge.className = 'filmstrip-idx';
+                idxBadge.textContent = `#${idx + 1}`;
+                card.appendChild(idxBadge);
+
+                strip.appendChild(card);
+            });
+
+            if (currentVideoKeyframes.length > 0) {
+                sourceImg = currentVideoKeyframes[0].img;
+                draw2DInspector();
+            }
+        }
+
+        function synthesizeSplatFromVideoGroup() {
+            if (!currentVideoKeyframes || currentVideoKeyframes.length === 0) return;
+
+            const trajectory = document.getElementById('video-trajectory-type').value;
+            const sweepDeg = parseFloat(document.getElementById('video-sweep-slider').value) || 90.0;
+            const sweepRad = (sweepDeg * Math.PI) / 180.0;
+            const voxelSize = parseFloat(document.getElementById('video-voxel-slider').value) || 0.04;
+
+            showSpinner('SYNTHESIZING 3DGS ENVIRONMENT FROM VIDEO...', `${currentVideoKeyframes.length} Trajectory Views`);
+
+            setTimeout(() => {
+                const count = currentVideoKeyframes.length;
+                let allPos = [];
+                let allScales = [];
+                let allCols = [];
+                let allOpacities = [];
+                let allQuats = [];
+
+                const voxelMap = new Map();
+
+                currentVideoKeyframes.forEach((kf, idx) => {
+                    const splatData = synthesizeSplatsFrom2DImage(kf.img, 2);
+                    const t = count > 1 ? idx / (count - 1) : 0.5;
+
+                    let camX = 0, camY = 0, camZ = 0, yaw = 0;
+                    if (trajectory === 'orbit') {
+                        const angle = -sweepRad * 0.5 + t * sweepRad;
+                        const r = 18.0;
+                        camX = Math.sin(angle) * r;
+                        camZ = (Math.cos(angle) - 1.0) * r;
+                        yaw = -angle;
+                    } else if (trajectory === 'dolly') {
+                        const dollyDist = 15.0;
+                        camZ = -t * dollyDist;
+                        camX = 0;
+                        yaw = 0;
+                    } else if (trajectory === 'pan') {
+                        const baseline = 10.0;
+                        camX = (t - 0.5) * baseline;
+                        camZ = 0;
+                        yaw = -(t - 0.5) * 0.2;
+                    }
+
+                    const cosY = Math.cos(yaw);
+                    const sinY = Math.sin(yaw);
+
+                    for (let i = 0; i < splatData.count; ++i) {
+                        const px = splatData.positions[i * 3 + 0];
+                        const py = splatData.positions[i * 3 + 1];
+                        const pz = splatData.positions[i * 3 + 2];
+
+                        const wx = px * cosY - pz * sinY + camX;
+                        const wy = py + camY;
+                        const wz = px * sinY + pz * cosY + camZ;
+
+                        const vx = Math.floor(wx / voxelSize);
+                        const vy = Math.floor(wy / voxelSize);
+                        const vz = Math.floor(wz / voxelSize);
+                        const key = `${vx}_${vy}_${vz}`;
+
+                        if (!voxelMap.has(key)) {
+                            voxelMap.set(key, true);
+                            allPos.push(wx, wy, wz);
+                            allScales.push(splatData.scales[i * 3 + 0], splatData.scales[i * 3 + 1], splatData.scales[i * 3 + 2]);
+                            allCols.push(splatData.colors[i * 3 + 0], splatData.colors[i * 3 + 1], splatData.colors[i * 3 + 2]);
+                            allOpacities.push(splatData.opacities[i]);
+                            allQuats.push(splatData.quats[i * 4 + 0], splatData.quats[i * 4 + 1], splatData.quats[i * 4 + 2], splatData.quats[i * 4 + 3]);
+                        }
+                    }
+                });
+
+                const fusedData = {
+                    count: allPos.length / 3,
+                    positions: new Float32Array(allPos),
+                    scales: new Float32Array(allScales),
+                    colors: new Float32Array(allCols),
+                    opacities: new Float32Array(allOpacities),
+                    quats: new Float32Array(allQuats)
+                };
+
+                createInstancedSplatMesh(fusedData);
+                hideSpinner();
+                document.getElementById('hud-status').textContent = `STATUS // VIDEO 3DGS FUSED (${(fusedData.count).toLocaleString()} SPLATS)`;
+                document.getElementById('stat-splat-count').textContent = fusedData.count.toLocaleString();
+                document.getElementById('stat-vram').textContent = `${(fusedData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            }, 100);
+        }
+
+        async function load360Preset(sceneName) {
+            const titles = {
+                'san_marco': 'San Marco Piazza 360° (Venice)',
+                'cyber_shibuya': 'Cyber Shibuya 360° (Tokyo)',
+                'alpine_basin': 'Alpine Mountain Basin 360° (Swiss Alps)'
+            };
+            const title = titles[sceneName] || sceneName;
+            showSpinner('SYNTHESIZING 360° DEPTHBOX RADIANCE FIELD...', title);
+
+            document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+            const cardId = sceneName === 'san_marco' ? 'card-pano-sanmarco' :
+                           sceneName === 'cyber_shibuya' ? 'card-pano-shibuya' : 'card-pano-alpine';
+            const activeCard = document.getElementById(cardId);
+            if (activeCard) activeCard.classList.add('active');
+
+            const presetKey = sceneName === 'alpine_basin' ? 'alpine_summit' : sceneName;
+
+            try {
+                const res = await fetch('/api/3d-engine/depthbox-360/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        preset: presetKey,
+                        samplesYaw: 240,
+                        samplesPitch: 120,
+                        enableDualLayerInpainting: true,
+                        atmospherePreset: typeof currentTimeOfDay !== 'undefined' && currentTimeOfDay === 'midnight' ? 'cyber' : ((typeof currentTimeOfDay !== 'undefined' && currentTimeOfDay) || 'golden')
+                    })
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!data.success || !data.splats) throw new Error('Depthbox 360 synthesis error');
+
+                const count = data.splats.length;
+                const positions = new Float32Array(count * 3);
+                const scales = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                const opacities = new Float32Array(count);
+                const quats = new Float32Array(count * 4);
+
+                for (let i = 0; i < count; i++) {
+                    const s = data.splats[i];
+                    positions[i * 3 + 0] = s.position[0];
+                    positions[i * 3 + 1] = s.position[1];
+                    positions[i * 3 + 2] = s.position[2];
+
+                    scales[i * 3 + 0] = s.scale[0];
+                    scales[i * 3 + 1] = s.scale[1];
+                    scales[i * 3 + 2] = s.scale[2];
+
+                    colors[i * 3 + 0] = s.colorRgb[0];
+                    colors[i * 3 + 1] = s.colorRgb[1];
+                    colors[i * 3 + 2] = s.colorRgb[2];
+
+                    opacities[i] = s.opacity;
+
+                    if (s.quaternion) {
+                        quats[i * 4 + 0] = s.quaternion[0];
+                        quats[i * 4 + 1] = s.quaternion[1];
+                        quats[i * 4 + 2] = s.quaternion[2];
+                        quats[i * 4 + 3] = s.quaternion[3];
+                    } else {
+                        quats[i * 4 + 0] = 0;
+                        quats[i * 4 + 1] = 0;
+                        quats[i * 4 + 2] = 0;
+                        quats[i * 4 + 3] = 1;
+                    }
+                }
+
+                createInstancedSplatMesh({ count, positions, scales, colors, opacities, quats });
+
+                // Build physics colliders from Depthbox result
+                while (colliderGroup.children.length > 0) {
+                    const child = colliderGroup.children[0];
+                    colliderGroup.remove(child);
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                }
+
+                const grid360 = new THREE.GridHelper(100, 50, 0x00f5d4, 0x1e293b);
+                grid360.position.set(0, 0, 0);
+                colliderGroup.add(grid360);
+                groundElevation = 0;
+
+                if (data.colliders && Array.isArray(data.colliders)) {
+                    const obstacleMat = new THREE.MeshBasicMaterial({ color: 0x00f5d4, wireframe: true, transparent: true, opacity: 0.65 });
+                    const obstacleFill = new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.12, depthWrite: false });
+                    data.colliders.forEach(c => {
+                        const geom = new THREE.BoxGeometry(c.extents[0] * 2, c.extents[1] * 2, c.extents[2] * 2);
+                        const mWire = new THREE.Mesh(geom, obstacleMat);
+                        mWire.position.set(c.center[0], c.center[1], c.center[2]);
+                        colliderGroup.add(mWire);
+                        const mFill = new THREE.Mesh(geom, obstacleFill);
+                        mFill.position.set(c.center[0], c.center[1], c.center[2]);
+                        colliderGroup.add(mFill);
+                    });
+                }
+
+                camera.position.set(data.cameraInitial.position[0], data.cameraInitial.position[1], data.cameraInitial.position[2]);
+                camera.lookAt(data.cameraInitial.lookAt[0], data.cameraInitial.lookAt[1], data.cameraInitial.lookAt[2]);
+
+                hideSpinner();
+                document.getElementById('hud-status').textContent = `STATUS // DEPTHBOX 360° ${sceneName.toUpperCase()}`;
+                document.getElementById('stat-splat-count').textContent = count.toLocaleString();
+                document.getElementById('stat-vram').textContent = `${(count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            } catch (err) {
+                console.warn('[DepthBox] API synthesis failed, falling back to client 5-strata synthesis:', err);
+                synthesizeDepthbox5StrataUniverse(presetKey);
+                hideSpinner();
+            }
+        }
+
+        function synthesizeDepthbox5StrataUniverse(presetKey) {
+            const positions = [];
+            const scales = [];
+            const colors = [];
+            const opacities = [];
+            const quats = [];
+
+            const eyeHeight = 1.70;
+            const samplesYaw = 240;
+            const samplesPitch = 120;
+
+            for (let pj = 0; pj < samplesPitch; pj++) {
+                const pitchNorm = (pj + 0.5) / samplesPitch;
+                const pitch = (pitchNorm - 0.5) * Math.PI; // [-pi/2, pi/2]
+                const cosPitch = Math.cos(pitch);
+                const sinPitch = Math.sin(pitch);
+
+                for (let yi = 0; yi < samplesYaw; yi++) {
+                    const yawNorm = (yi + 0.5) / samplesYaw;
+                    const yaw = (yawNorm - 0.5) * 2.0 * Math.PI; // [-pi, pi]
+                    const cosYaw = Math.cos(yaw);
+                    const sinYaw = Math.sin(yaw);
+
+                    const rx = sinYaw * cosPitch;
+                    const ry = sinPitch;
+                    const rz = -cosYaw * cosPitch;
+
+                    let hitDepth = 80.0;
+                    let baseScale = 0.5;
+                    let r = 0.5, g = 0.5, b = 0.5;
+                    let normal = [-rx, -ry, -rz];
+                    let isGround = false;
+                    let isStructure = false;
+
+                    // Ground Plane ray intersection
+                    if (ry < -0.035) {
+                        const groundDist = -eyeHeight / ry;
+                        if (groundDist < 120.0) {
+                            hitDepth = groundDist;
+                            baseScale = Math.max(0.04, groundDist * 0.016);
+                            normal = [0, 1, 0];
+                            isGround = true;
+
+                            if (presetKey === 'san_marco') {
+                                const gx = rx * groundDist;
+                                const gz = rz * groundDist;
+                                const checker = (Math.floor(gx * 0.3) + Math.floor(gz * 0.3)) % 2 === 0;
+                                r = checker ? 0.74 : 0.58;
+                                g = checker ? 0.70 : 0.54;
+                                b = checker ? 0.64 : 0.48;
+                            } else if (presetKey === 'cyber_shibuya') {
+                                const gx = rx * groundDist;
+                                const gz = rz * groundDist;
+                                const isCrosswalk = Math.abs(gz - 8.0) < 4.0 && (Math.floor(gx * 1.5) % 2 === 0);
+                                if (isCrosswalk) {
+                                    r = 0.95; g = 0.95; b = 0.95;
+                                } else {
+                                    r = 0.08; g = 0.10; b = 0.14; // wet asphalt
+                                }
+                            } else {
+                                r = 0.88; g = 0.92; b = 0.96; // snow
+                            }
+                        }
+                    } else if (ry < 0.45) {
+                        // Structures & Landmarks
+                        if (presetKey === 'san_marco') {
+                            const isBasilica = Math.abs(yaw) < 0.42;
+                            const isCampanile = Math.abs(yaw - 0.72) < 0.12 && ry < 0.65;
+                            const isProcuratie = Math.abs(yaw) > 1.15 && Math.abs(yaw) < 2.35;
+                            const isLionColumn = Math.abs(yaw + 0.58) < 0.07 && ry < 0.30;
+
+                            if (isLionColumn) {
+                                hitDepth = 8.5;
+                                baseScale = 0.12;
+                                normal = [-rx, 0, -rz];
+                                r = 0.88; g = 0.82; b = 0.72; // marble
+                                isStructure = true;
+                            } else if (isCampanile) {
+                                hitDepth = 26.0;
+                                baseScale = 0.28;
+                                normal = [-rx, 0, -rz];
+                                r = 0.72; g = 0.38; b = 0.28; // venetian red terracotta
+                                isStructure = true;
+                            } else if (isBasilica) {
+                                hitDepth = 38.0 + Math.sin(yaw * 12.0) * 3.5;
+                                baseScale = 0.42;
+                                normal = [0, 0, 1];
+                                r = 0.82; g = 0.74; b = 0.58; // golden mosaics & marble
+                                isStructure = true;
+                            } else if (isProcuratie) {
+                                hitDepth = 24.0 / Math.max(0.15, Math.abs(sinYaw));
+                                baseScale = Math.max(0.08, hitDepth * 0.014);
+                                normal = [sinYaw > 0 ? -1 : 1, 0, 0];
+                                r = 0.80; g = 0.76; b = 0.70; // arcade limestone
+                                isStructure = true;
+                            }
+                        } else if (presetKey === 'cyber_shibuya') {
+                            const isScrambleCrosswalk = Math.abs(yaw) < 0.35 && ry < 0.18;
+                            const isShibuya109 = Math.abs(yaw - 0.60) < 0.25;
+                            const isTowerBuildings = Math.abs(yaw) > 0.8;
+
+                            if (isScrambleCrosswalk) {
+                                hitDepth = 9.0;
+                                baseScale = 0.12;
+                                normal = [-rx, 0, -rz];
+                                r = 0.00; g = 0.96; b = 0.83; // cyan neon
+                                isStructure = true;
+                            } else if (isShibuya109) {
+                                hitDepth = 28.0;
+                                baseScale = 0.30;
+                                normal = [-rx, 0, -rz];
+                                r = 1.00; g = 0.00; b = 0.50; // magenta billboard
+                                isStructure = true;
+                            } else if (isTowerBuildings) {
+                                hitDepth = 32.0;
+                                baseScale = 0.35;
+                                normal = [-rx, 0, -rz];
+                                r = 0.12; g = 0.22; b = 0.38; // glass & steel
+                                isStructure = true;
+                            }
+                        } else {
+                            // Alpine Summit
+                            const ridge = 45.0 + Math.sin(yaw * 5.0) * 18.0 + Math.cos(yaw * 2.0) * 12.0;
+                            hitDepth = ridge;
+                            baseScale = Math.max(0.1, ridge * 0.015);
+                            normal = [-rx, 0.4, -rz];
+                            r = 0.42; g = 0.45; b = 0.52; // granite rock
+                            isStructure = true;
+                        }
+                    }
+
+                    if (!isGround && !isStructure) {
+                        hitDepth = 120.0;
+                        baseScale = 1.8;
+                        normal = [-rx, -ry, -rz];
+                        const skyGrad = Math.max(0.0, Math.min(1.0, (ry + 0.1) * 1.5));
+                        r = 0.15 + 0.15 * (1.0 - skyGrad);
+                        g = 0.35 + 0.35 * (1.0 - skyGrad);
+                        b = 0.85 + 0.15 * skyGrad;
+                    }
+
+                    const px = rx * hitDepth;
+                    const py = eyeHeight + ry * hitDepth;
+                    const pz = rz * hitDepth;
+
+                    positions.push(px, py, pz);
+                    scales.push(baseScale, baseScale, baseScale * 0.28);
+                    colors.push(r, g, b);
+                    opacities.push(isStructure ? 0.96 : (isGround ? 0.92 : 0.85));
+
+                    const q = quaternionFromNormal(normal[0], normal[1], normal[2]);
+                    quats.push(q[0], q[1], q[2], q[3]);
+
+                    // Occlusion Inpainting Layer for structures
+                    if (isStructure && hitDepth < 35.0) {
+                        const inpaintDepth = hitDepth * 1.55;
+                        const ipx = rx * inpaintDepth;
+                        const ipy = eyeHeight + ry * inpaintDepth;
+                        const ipz = rz * inpaintDepth;
+                        const ipScale = baseScale * 1.35;
+
+                        positions.push(ipx, ipy, ipz);
+                        scales.push(ipScale, ipScale, ipScale * 0.25);
+                        colors.push(r * 0.72, g * 0.72, b * 0.72);
+                        opacities.push(0.85);
+                        quats.push(q[0], q[1], q[2], q[3]);
+                    }
+                }
+            }
+
+            const count = positions.length / 3;
+            const splatData = {
+                count,
+                positions: new Float32Array(positions),
+                scales: new Float32Array(scales),
+                colors: new Float32Array(colors),
+                opacities: new Float32Array(opacities),
+                quats: new Float32Array(quats)
+            };
+
+            createInstancedSplatMesh(splatData);
+
+            // Colliders
+            while (colliderGroup.children.length > 0) {
+                const child = colliderGroup.children[0];
+                colliderGroup.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) child.material.dispose();
+            }
+            const grid360 = new THREE.GridHelper(100, 50, 0x00f5d4, 0x1e293b);
+            grid360.position.set(0, 0, 0);
+            colliderGroup.add(grid360);
+            groundElevation = 0;
+
+            camera.position.set(0, eyeHeight, 0);
+            camera.lookAt(0, eyeHeight, -10);
+
+            document.getElementById('hud-status').textContent = `STATUS // DEPTHBOX 360° ${presetKey.toUpperCase()}`;
+            document.getElementById('stat-splat-count').textContent = count.toLocaleString();
+            document.getElementById('stat-vram').textContent = `${(count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+        }
+
+        function addMultiViewFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    multiViewItems.push({ name: file.name, img });
+                    renderMultiViewList();
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderMultiViewList() {
+            const list = document.getElementById('multi-view-list');
+            document.getElementById('multi-view-count').textContent = `${multiViewItems.length} Views Ingested`;
+            list.innerHTML = '';
+            multiViewItems.forEach((item, idx) => {
+                if (!item || !item.img) return;
+                const card = document.createElement('div');
+                card.className = 'filmstrip-card' + (idx === 0 ? ' active' : '');
+                card.onclick = () => {
+                    document.querySelectorAll('#multi-view-list .filmstrip-card').forEach(c => c.classList.remove('active'));
+                    card.classList.add('active');
+                    sourceImg = item.img;
+                    draw2DInspector();
+                };
+
+                const imgEl = document.createElement('img');
+                imgEl.src = item.img.src;
+                card.appendChild(imgEl);
+
+                const badge = document.createElement('div');
+                badge.className = 'filmstrip-badge';
+                badge.textContent = `A-${idx + 1}`;
+                card.appendChild(badge);
+
+                const idxBadge = document.createElement('div');
+                idxBadge.className = 'filmstrip-idx';
+                idxBadge.textContent = `#${idx + 1}`;
+                card.appendChild(idxBadge);
+
+                list.appendChild(card);
+            });
+
+            if (multiViewItems.length > 0 && multiViewItems[0]?.img) {
+                sourceImg = multiViewItems[0].img;
+                draw2DInspector();
+            }
+        }
+
+        function fuseMultiViewArray() {
+            if (!multiViewItems || multiViewItems.length === 0) return;
+            const fanDeg = parseFloat(document.getElementById('mv-fan-slider')?.value || 18);
+            const fanRad = (fanDeg * Math.PI) / 180.0;
+            const voxelSize = parseFloat(document.getElementById('mv-voxel-slider')?.value || 0.05);
+
+            showSpinner('FUSING RELATED IMAGE GROUP INTO 3DGS...', `${multiViewItems.length} Perspective Cameras`);
+
+            setTimeout(() => {
+                let allPos = [];
+                let allScales = [];
+                let allCols = [];
+                let allOpacities = [];
+                let allQuats = [];
+                const voxelMap = new Map();
+
+                const N = multiViewItems.length;
+                multiViewItems.forEach((view, vIdx) => {
+                    if (!view || !view.img) return;
+                    const t = N > 1 ? (vIdx / (N - 1) - 0.5) : 0;
+                    const angle = t * fanRad;
+                    const splatData = synthesizeSplatsFrom2DImage(view.img, 1);
+
+                    const cosA = Math.cos(angle);
+                    const sinA = Math.sin(angle);
+                    const offsetX = t * 4.0;
+
+                    for (let i = 0; i < splatData.count; ++i) {
+                        const px = splatData.positions[i * 3 + 0];
+                        const py = splatData.positions[i * 3 + 1];
+                        const pz = splatData.positions[i * 3 + 2];
+
+                        const wx = px * cosA - pz * sinA + offsetX;
+                        const wy = py;
+                        const wz = px * sinA + pz * cosA;
+
+                        const vx = Math.floor(wx / voxelSize);
+                        const vy = Math.floor(wy / voxelSize);
+                        const vz = Math.floor(wz / voxelSize);
+                        const key = `${vx}_${vy}_${vz}`;
+
+                        if (!voxelMap.has(key)) {
+                            voxelMap.set(key, true);
+                            allPos.push(wx, wy, wz);
+                            allScales.push(splatData.scales[i * 3 + 0], splatData.scales[i * 3 + 1], splatData.scales[i * 3 + 2]);
+                            allCols.push(splatData.colors[i * 3 + 0], splatData.colors[i * 3 + 1], splatData.colors[i * 3 + 2]);
+                            allOpacities.push(splatData.opacities[i]);
+                            allQuats.push(splatData.quats[i * 4 + 0], splatData.quats[i * 4 + 1], splatData.quats[i * 4 + 2], splatData.quats[i * 4 + 3]);
+                        }
+                    }
+                });
+
+                const fusedData = {
+                    count: allPos.length / 3,
+                    positions: new Float32Array(allPos),
+                    scales: new Float32Array(allScales),
+                    colors: new Float32Array(allCols),
+                    opacities: new Float32Array(allOpacities),
+                    quats: new Float32Array(allQuats)
+                };
+
+                createInstancedSplatMesh(fusedData);
+                hideSpinner();
+                document.getElementById('hud-status').textContent = `STATUS // IMAGE GROUP FUSED (${fusedData.count.toLocaleString()} SPLATS)`;
+                document.getElementById('stat-splat-count').textContent = fusedData.count.toLocaleString();
+                document.getElementById('stat-vram').textContent = `${(fusedData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            }, 100);
+        }
+
+        // ====================================================================
+        // 8. Sliders & UI Updates
+        // ====================================================================
+        function updateStride(val) {
+            currentStride = parseInt(val, 10);
+            const labels = { 1: '1x (Full 320x320)', 2: '2x (160x160)', 3: '3x (106x106)', 4: '4x (80x80)' };
+            document.getElementById('val-stride').textContent = labels[currentStride] || currentStride + 'x';
+            if (sourceImg) {
+                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
+                createInstancedSplatMesh(splatData);
+            }
+        }
+
+        function updateTau(val) {
+            currentEdgeTau = parseFloat(val);
+            document.getElementById('val-tau').textContent = currentEdgeTau.toFixed(3);
+            if (sourceImg) {
+                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
+                createInstancedSplatMesh(splatData);
+            }
+        }
+
+        function updateDepthFar(val) {
+            currentFar = parseFloat(val);
+            document.getElementById('val-depth').textContent = `${currentNear.toFixed(1)}m – ${currentFar.toFixed(1)}m`;
+            if (sourceImg) {
+                const splatData = synthesizeSplatsFrom2DImage(sourceImg, currentStride);
+                createInstancedSplatMesh(splatData);
+            }
+        }
+
+        function updateAperture(val) {
+            currentAperture = parseFloat(val);
+            document.getElementById('val-aperture').textContent = `f/${currentAperture.toFixed(1)}`;
+            splatMaterial.uniforms.aperture.value = currentAperture;
+            document.getElementById('hud-optics').textContent = `LENS: 35mm f/${currentAperture.toFixed(1)} · ACES FILM`;
+        }
+
+        function updateFilmStock(val) {
+            currentFilmStock = parseInt(val, 10);
+            splatMaterial.uniforms.uFilmStock.value = currentFilmStock;
+        }
+
+        function set2DPreviewMode(mode) {
+            current2DView = mode;
+            document.querySelectorAll('#btn-prev-rgb, #btn-prev-depth, #btn-prev-normals').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-prev-${mode}`).classList.add('active');
+            draw2DInspector();
+        }
+
+        function toggleLayout(layout) {
+            document.body.className = '';
+            document.querySelectorAll('#btn-layout-split, #btn-layout-3d').forEach(b => b.classList.remove('active'));
+            if (layout === '3d') {
+                document.body.classList.add('full-3d');
+                document.getElementById('btn-layout-3d').classList.add('active');
+            } else {
+                document.getElementById('btn-layout-split').classList.add('active');
+            }
+            setTimeout(onWindowResize, 60);
+        }
+
+        function showSpinner(title, sub) {
+            document.getElementById('spinner-title').textContent = title;
+            document.getElementById('spinner-sub').textContent = sub;
+            document.getElementById('spinner').classList.add('active');
+        }
+        function hideSpinner() {
+            document.getElementById('spinner').classList.remove('active');
+        }
+
+        // Binary .splat Export
+        function exportSplatBinary() {
+            if (!activeSplatsData) return;
+            const count = activeSplatsData.count;
+            const buffer = new ArrayBuffer(count * 32);
+            const view = new DataView(buffer);
+
+            for (let i = 0; i < count; i++) {
+                const off = i * 32;
+                view.setFloat32(off + 0, activeSplatsData.positions[i * 3 + 0], true);
+                view.setFloat32(off + 4, activeSplatsData.positions[i * 3 + 1], true);
+                view.setFloat32(off + 8, activeSplatsData.positions[i * 3 + 2], true);
+
+                view.setFloat32(off + 12, activeSplatsData.scales[i * 3 + 0], true);
+                view.setFloat32(off + 16, activeSplatsData.scales[i * 3 + 1], true);
+                view.setFloat32(off + 20, activeSplatsData.scales[i * 3 + 2], true);
+
+                view.setUint8(off + 24, Math.round(activeSplatsData.colors[i * 3 + 0] * 255.0));
+                view.setUint8(off + 25, Math.round(activeSplatsData.colors[i * 3 + 1] * 255.0));
+                view.setUint8(off + 26, Math.round(activeSplatsData.colors[i * 3 + 2] * 255.0));
+                view.setUint8(off + 27, Math.round(activeSplatsData.opacities[i] * 255.0));
+
+                view.setUint8(off + 28, Math.round((activeSplatsData.quats[i * 4 + 0] * 0.5 + 0.5) * 255.0));
+                view.setUint8(off + 29, Math.round((activeSplatsData.quats[i * 4 + 1] * 0.5 + 0.5) * 255.0));
+                view.setUint8(off + 30, Math.round((activeSplatsData.quats[i * 4 + 2] * 0.5 + 0.5) * 255.0));
+                view.setUint8(off + 31, Math.round((activeSplatsData.quats[i * 4 + 3] * 0.5 + 0.5) * 255.0));
+            }
+
+            const blob = new Blob([buffer], { type: 'application/octet-stream' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'depthbox_synthesized_scene.splat';
+            a.click();
+        }
+
+        // Drag & Drop Listeners
+        const dropZone = document.getElementById('drop-zone');
+        ['dragenter', 'dragover'].forEach(name => {
+            dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        });
+        ['dragleave', 'drop'].forEach(name => {
+            dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+        });
+        dropZone.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                const first = files[0];
+                if (first.type.startsWith('video/') || first.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
+                    setConversionMode('video');
+                    const videoUrl = URL.createObjectURL(first);
+                    loadVideoSource(videoUrl, first.name);
+                } else if (files.length === 1 && currentMode === 'single') {
+                    loadLocalImageFile(files[0]);
+                } else {
+                    setConversionMode('multi');
+                    multiViewItems = [];
+                    let loadedCount = 0;
+                    for (let i = 0; i < files.length; ++i) {
+                        const file = files[i];
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                multiViewItems.push({ name: file.name, img });
+                                loadedCount++;
+                                if (loadedCount === files.length) {
+                                    renderMultiViewList();
+                                    fuseMultiViewArray();
+                                }
+                            };
+                            img.src = ev.target.result;
+                        };
+                        reader.readAsDataURL(file);
+                    }
+                }
+            }
+        });
+
+        // Window Resizing
+        function onWindowResize() {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+            splatMaterial.uniforms.viewport.value.set(w, h);
+        }
+        window.addEventListener('resize', onWindowResize);
+
+        // ====================================================================
+        // Atmosphere Presets & Physical Relighting Controls
+        // ====================================================================
+        let currentTimeOfDay = 'noon';
+
+        const atmospherePresets = {
+            noon: {
+                sunDir: new THREE.Vector3(0.3, 0.95, -0.2).normalize(),
+                sunColor: new THREE.Color(1.0, 0.98, 0.92),
+                sunIntensity: 1.25,
+                skyZenith: new THREE.Color(0.14, 0.32, 0.72),
+                skyHorizon: new THREE.Color(0.72, 0.85, 0.98),
+                skyGround: new THREE.Color(0.10, 0.12, 0.14),
+                fogColor: new THREE.Color(0.68, 0.80, 0.95),
+                fogDensity: 0.012,
+                starTwinkle: 0.0
+            },
+            golden: {
+                sunDir: new THREE.Vector3(0.75, 0.28, -0.58).normalize(),
+                sunColor: new THREE.Color(1.0, 0.62, 0.25),
+                sunIntensity: 1.45,
+                skyZenith: new THREE.Color(0.22, 0.18, 0.38),
+                skyHorizon: new THREE.Color(0.95, 0.58, 0.28),
+                skyGround: new THREE.Color(0.15, 0.08, 0.04),
+                fogColor: new THREE.Color(0.92, 0.65, 0.38),
+                fogDensity: 0.022,
+                starTwinkle: 0.0
+            },
+            sunset: {
+                sunDir: new THREE.Vector3(0.85, 0.08, -0.52).normalize(),
+                sunColor: new THREE.Color(0.98, 0.32, 0.18),
+                sunIntensity: 1.30,
+                skyZenith: new THREE.Color(0.16, 0.10, 0.28),
+                skyHorizon: new THREE.Color(0.85, 0.28, 0.22),
+                skyGround: new THREE.Color(0.08, 0.04, 0.06),
+                fogColor: new THREE.Color(0.68, 0.25, 0.32),
+                fogDensity: 0.028,
+                starTwinkle: 0.15
+            },
+            midnight: {
+                sunDir: new THREE.Vector3(-0.4, 0.85, 0.35).normalize(),
+                sunColor: new THREE.Color(0.25, 0.55, 0.85),
+                sunIntensity: 0.65,
+                skyZenith: new THREE.Color(0.015, 0.02, 0.06),
+                skyHorizon: new THREE.Color(0.04, 0.08, 0.18),
+                skyGround: new THREE.Color(0.01, 0.01, 0.02),
+                fogColor: new THREE.Color(0.04, 0.06, 0.14),
+                fogDensity: 0.035,
+                starTwinkle: 1.0
+            }
+        };
+
+        function setTimeOfDay(preset) {
+            currentTimeOfDay = preset;
+            const p = atmospherePresets[preset];
+            if (!p) return;
+
+            ['noon', 'golden', 'sunset', 'midnight'].forEach(id => {
+                const b = document.getElementById('btn-tod-' + id);
+                if (b) b.classList.toggle('active', id === preset);
+            });
+
+            splatMaterial.uniforms.uSunDir.value.copy(p.sunDir);
+            splatMaterial.uniforms.uSunColor.value.copy(p.sunColor);
+            splatMaterial.uniforms.uSunIntensity.value = p.sunIntensity;
+            splatMaterial.uniforms.uSkyColor.value.copy(p.skyHorizon);
+            splatMaterial.uniforms.uGroundColor.value.copy(p.skyGround);
+            splatMaterial.uniforms.uFogColor.value.copy(p.fogColor);
+            splatMaterial.uniforms.uFogDensity.value = p.fogDensity;
+
+            skyDomeMat.uniforms.uZenithColor.value.copy(p.skyZenith);
+            skyDomeMat.uniforms.uHorizonColor.value.copy(p.skyHorizon);
+            skyDomeMat.uniforms.uGroundColor.value.copy(p.skyGround);
+            skyDomeMat.uniforms.uSunColor.value.copy(p.sunColor);
+            skyDomeMat.uniforms.uStarTwinkle.value = p.starTwinkle;
+
+            document.getElementById('slider-sun-intensity').value = p.sunIntensity;
+            document.getElementById('val-sun-intensity').textContent = p.sunIntensity.toFixed(2) + 'x';
+            document.getElementById('slider-fog-density').value = Math.round(p.fogDensity * 1000);
+            document.getElementById('val-fog-density').textContent = Math.round(p.fogDensity * 1000) + '%';
+
+            const hudStatus = document.getElementById('hud-status');
+            if (hudStatus) hudStatus.textContent = `STATUS // ${preset.toUpperCase()} LIGHTING`;
+        }
+
+        function updateRelightMix(val) {
+            const mix = parseFloat(val) / 100.0;
+            splatMaterial.uniforms.uRelightingMix.value = mix;
+            document.getElementById('val-relight-mix').textContent = `${Math.round(mix * 100)}%`;
+        }
+
+        function updateSunIntensity(val) {
+            const intensity = parseFloat(val);
+            splatMaterial.uniforms.uSunIntensity.value = intensity;
+            document.getElementById('val-sun-intensity').textContent = `${intensity.toFixed(2)}x`;
+        }
+
+        function updateFogDensity(val) {
+            const dens = (parseFloat(val) / 1000.0);
+            splatMaterial.uniforms.uFogDensity.value = dens;
+            document.getElementById('val-fog-density').textContent = `${val}%`;
+        }
+
+        // ====================================================================
+        // Procedural 3D Web Audio Engine (Ambience + Footsteps)
+        // ====================================================================
+        let audioCtx = null;
+        let isAudioPlaying = false;
+        let ambientGainNode = null;
+        let ambientFilter = null;
+        let lastFootstepTime = 0;
+
+        function initAudioEngine() {
+            if (audioCtx) return;
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) return;
+            audioCtx = new AudioContextClass();
+
+            // 1. Procedural Ambient Wind / City rumble generator (Pink noise filter)
+            const bufferSize = audioCtx.sampleRate * 2;
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                b0 = 0.99886 * b0 + white * 0.0555179;
+                b1 = 0.99332 * b1 + white * 0.0750759;
+                b2 = 0.96900 * b2 + white * 0.1538520;
+                b3 = 0.86650 * b3 + white * 0.3104856;
+                b4 = 0.55000 * b4 + white * 0.5329522;
+                b5 = -0.7616 * b5 - white * 0.0168980;
+                output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+                output[i] *= 0.035;
+                b6 = white * 0.115926;
+            }
+
+            const whiteNoise = audioCtx.createBufferSource();
+            whiteNoise.buffer = noiseBuffer;
+            whiteNoise.loop = true;
+
+            ambientFilter = audioCtx.createBiquadFilter();
+            ambientFilter.type = 'lowpass';
+            ambientFilter.frequency.setValueAtTime(360, audioCtx.currentTime);
+            ambientFilter.Q.setValueAtTime(1.8, audioCtx.currentTime);
+
+            ambientGainNode = audioCtx.createGain();
+            ambientGainNode.gain.setValueAtTime(0.001, audioCtx.currentTime);
+
+            whiteNoise.connect(ambientFilter);
+            ambientFilter.connect(ambientGainNode);
+            ambientGainNode.connect(audioCtx.destination);
+            whiteNoise.start(0);
+        }
+
+        function playFootstep() {
+            if (!audioCtx || !isAudioPlaying) return;
+            const now = audioCtx.currentTime;
+            if (now - lastFootstepTime < 0.45) return;
+            lastFootstepTime = now;
+
+            // Low frequency ground thump
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(75, now);
+            osc.frequency.exponentialRampToValueAtTime(28, now + 0.09);
+            gain.gain.setValueAtTime(0.16, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.10);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now);
+            osc.stop(now + 0.11);
+
+            // High frequency surface scuff
+            const snapOsc = audioCtx.createOscillator();
+            const snapGain = audioCtx.createGain();
+            snapOsc.type = 'triangle';
+            snapOsc.frequency.setValueAtTime(380, now);
+            snapOsc.frequency.exponentialRampToValueAtTime(120, now + 0.05);
+            snapGain.gain.setValueAtTime(0.07, now);
+            snapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+
+            snapOsc.connect(snapGain);
+            snapGain.connect(audioCtx.destination);
+            snapOsc.start(now);
+            snapOsc.stop(now + 0.07);
+        }
+
+        function toggleAudio() {
+            initAudioEngine();
+            if (!audioCtx) return;
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            isAudioPlaying = !isAudioPlaying;
+            const btn = document.getElementById('btn-audio-toggle');
+            if (isAudioPlaying) {
+                ambientGainNode.gain.setTargetAtTime(0.22, audioCtx.currentTime, 0.1);
+                btn.classList.add('active');
+                btn.textContent = '🔊 Audio: ON';
+                const hudStatus = document.getElementById('hud-status');
+                if (hudStatus) hudStatus.textContent = 'STATUS // 3D SPATIAL AUDIO ACTIVE';
+            } else {
+                ambientGainNode.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.1);
+                btn.classList.remove('active');
+                btn.textContent = '🔇 Audio: OFF';
+            }
+        }
+
+        // ====================================================================
+        // 9. Main Render Loop
+        // ====================================================================
+        let lastTime = performance.now();
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+            const dt = Math.min(0.1, (now - lastTime) * 0.001);
+            lastTime = now;
+
+            // Keep sky dome centered at camera for infinite sky
+            if (skyDomeMesh) {
+                skyDomeMesh.position.copy(camera.position);
+            }
+
+            // Drift floating dust motes
+            if (motesPoints) {
+                const posAttr = motesPoints.geometry.attributes.position;
+                const arr = posAttr.array;
+                const t = now * 0.001;
+                for (let i = 0; i < motesCount; i++) {
+                    arr[i * 3 + 0] += Math.sin(t * 0.5 + i) * 0.003;
+                    arr[i * 3 + 1] += Math.cos(t * 0.3 + i) * 0.002;
+                    arr[i * 3 + 2] += motesVel[i * 3 + 2];
+                    if (arr[i * 3 + 2] > 10.0) arr[i * 3 + 2] = -45.0;
+                    if (arr[i * 3 + 2] < -45.0) arr[i * 3 + 2] = 10.0;
+                }
+                posAttr.needsUpdate = true;
+            }
+
+            // Cinematic Camera Tour Flight
+            if (isTourPlaying) {
+                const elapsed = (now - tourStartTime) * 0.001;
+                const progress = (elapsed % tourDuration) / tourDuration;
+                const angle = progress * Math.PI * 2.0;
+
+                const radius = 16.0 + Math.sin(angle * 2.0) * 4.0;
+                const altitude = 3.6 + Math.sin(angle * 3.0) * 2.0;
+
+                camera.position.x = Math.sin(angle) * radius;
+                camera.position.y = altitude;
+                camera.position.z = Math.cos(angle) * radius * 0.70 - 10.0;
+
+                camera.lookAt(0, 2.0, -18.0);
+            } else if (flightMode === 'drone') {
+                const move = new THREE.Vector3();
+                if (flightState.keys['w']) move.z -= 1;
+                if (flightState.keys['s']) move.z += 1;
+                if (flightState.keys['a']) move.x -= 1;
+                if (flightState.keys['d']) move.x += 1;
+                if (flightState.keys['q'] || flightState.keys[' ']) move.y += 1;
+                if (flightState.keys['e'] || flightState.keys['c']) move.y -= 1;
+
+                move.normalize();
+                move.applyEuler(camera.rotation);
+
+                const currentSpeed = flightState.speed * flightState.boost;
+                flightState.velocity.lerp(move.multiplyScalar(currentSpeed), 0.12);
+                camera.position.addScaledVector(flightState.velocity, dt);
+            } else if (flightMode === 'walk') {
+                const move = new THREE.Vector3();
+                if (flightState.keys['w']) move.z -= 1;
+                if (flightState.keys['s']) move.z += 1;
+                if (flightState.keys['a']) move.x -= 1;
+                if (flightState.keys['d']) move.x += 1;
+
+                move.normalize();
+                // Constrain motion to horizontal ground plane
+                const eulerYaw = new THREE.Euler(0, camera.rotation.y, 0, 'YXZ');
+                move.applyEuler(eulerYaw);
+
+                const currentSpeed = flightState.speed * 0.70 * flightState.boost;
+                flightState.velocity.lerp(move.multiplyScalar(currentSpeed), 0.15);
+
+                if (flightState.velocity.lengthSq() > 0.08) {
+                    playFootstep();
+                }
+
+                const nextPos = camera.position.clone().addScaledVector(flightState.velocity, dt);
+                nextPos.y = groundElevation + walkPlayerHeight; // Eye level lock
+
+                // Obstacle AABB Collision Resolution
+                if (currentColliders && currentColliders.boundingBoxes) {
+                    const playerRadius = 0.50;
+                    for (const box of currentColliders.boundingBoxes) {
+                        const minX = box.center[0] - box.extents[0] - playerRadius;
+                        const maxX = box.center[0] + box.extents[0] + playerRadius;
+                        const minZ = box.center[2] - box.extents[2] - playerRadius;
+                        const maxZ = box.center[2] + box.extents[2] + playerRadius;
+
+                        if (nextPos.x >= minX && nextPos.x <= maxX && nextPos.z >= minZ && nextPos.z <= maxZ) {
+                            const dxLeft = Math.abs(nextPos.x - minX);
+                            const dxRight = Math.abs(maxX - nextPos.x);
+                            const dzFront = Math.abs(nextPos.z - minZ);
+                            const dzBack = Math.abs(maxZ - nextPos.z);
+                            const minPen = Math.min(dxLeft, dxRight, dzFront, dzBack);
+
+                            if (minPen === dxLeft) nextPos.x = minX;
+                            else if (minPen === dxRight) nextPos.x = maxX;
+                            else if (minPen === dzFront) nextPos.z = minZ;
+                            else nextPos.z = maxZ;
+                        }
+                    }
+                }
+
+                camera.position.copy(nextPos);
+            }
+
+            // Audio wind resonance modulation with altitude
+            if (isAudioPlaying && ambientFilter) {
+                const altFactor = Math.max(0.0, Math.min(1.0, (camera.position.y - groundElevation) / 25.0));
+                ambientFilter.frequency.setValueAtTime(320 + altFactor * 450, audioCtx.currentTime);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Initialize with default preset
+        loadPresetImage('images/manhattan_ai.png', 'Manhattan Skyline', 65, 3.0, 75.0);
+        requestAnimationFrame(animate);
+
+    </script>
+</body>
+</html>

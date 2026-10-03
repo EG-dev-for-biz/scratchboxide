@@ -2,7 +2,7 @@
 
 > **Status**: Living Architectural Ledger & Completed API Index  
 > **Repository**: `scratchbox-ide` (`packages/core`, `desktop-app`, `packages/cli`)  
-> **Last Updated**: 2026-09-24
+> **Last Updated**: 2026-10-02
 
 This ledger provides an exhaustive index of all completed APIs, services, operators, agent tools, REST endpoints, CLI commands, and native C++ modules built across Scratchbox IDE, followed by an architectural blueprint for how they interlock as an end-to-end pipeline for Visual Effects (VFX), Virtual Production, and Generative Spatial Video.
 

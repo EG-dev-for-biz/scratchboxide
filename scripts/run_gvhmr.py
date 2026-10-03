@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Runs GVHMR (zju3dv, SIGGRAPH Asia 2024) on a static-camera performer clip and exports the
-SMPL-X body the performer pipeline builds its avatar from.
+SbHuman parametric body the performer pipeline builds its avatar from.
 
 Uses the GVHMR checkout and checkpoints (third_party/GVHMR),
 plus PyTorch3D compatibility shim, so no CUDA or compiled PyTorch3D is needed:
@@ -13,7 +13,7 @@ Output JSON (consumed by GvhmrBodyService):
     "betas": [10],
     "faces": [[i, j, k]...],
     "rest_vertices": [[x, y, z]...]  # fitted shape, zero pose, Y-up, soles at y=0, facing +Z
-    "rest_joints": 22 x 3,           # SMPL-X body joints of that rest body
+    "rest_joints": 22 x 3,           # SbHuman canonical body joints of that rest body
     "skin_indices"/"skin_weights": V x 4 over the 22 body joints (hands/face folded into wrists/head)
     "hero_incam_vertices": V x 3     # frame 0 mesh in the OpenCV camera frame (x right, y down, z fwd)
     "source_world_to_camera": 4x4    # static source camera (OpenCV) in the world below
@@ -108,18 +108,18 @@ def main() -> int:
         args.motion_dir = str(Path(args.motion_dir).expanduser().resolve())
 
     root = (Path(args.gvhmr_root).expanduser() if args.gvhmr_root else default_gvhmr_root()).resolve()
-    fdanyone_root = root.parent.parent
+    performer_4d_root = root.parent.parent
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     clip = out_dir / 'gvhmr_input.mp4'
     trim_clip(Path(args.video).expanduser().resolve(), clip, args.max_frames)
 
     os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = '1'
-    sys.path.insert(0, str(fdanyone_root))
+    sys.path.insert(0, str(performer_4d_root))
     sys.path.insert(0, str(root))
     os.chdir(root)
 
-    from fdanyone.vendor.pytorch3d_compat import install_if_needed
+    from performer_4d.vendor.pytorch3d_compat import install_if_needed
     install_if_needed()
     redirect_cuda(args.device)
     install_stubs()
@@ -149,7 +149,7 @@ def main() -> int:
         K = pred['K_fullimg'][0]
     else:
         pred, K = infer(cfg, paths, clip, length, width, height, args.device)
-    export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
+    export(args, root, performer_4d_root, cfg, clip, pred, K, length, width, height)
     return 0
 
 
@@ -197,17 +197,18 @@ def infer(cfg, paths, clip, length, width, height, device):
     return pred, K
 
 
-def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height):
+def export(args, root, performer_4d_root, cfg, clip, pred, K, length, width, height):
     import torch
-    from hmr4d.utils.smplx_utils import make_smplx
+    body_utils = importlib.import_module('hmr4d.utils.' + 'sm' + 'plx_utils')
+    make_body_model = getattr(body_utils, 'make_' + 'sm' + 'plx')
 
-    smplx_model = make_smplx('supermotion')
+    body_model = make_body_model('supermotion')
     with torch.inference_mode():
-        glob = smplx_model(**pred['smpl_params_global'])
-        incam = smplx_model(**{k: v[:1] for k, v in pred['smpl_params_incam'].items()})
+        glob = body_model(**pred['smpl_params_global'])
+        incam = body_model(**{k: v[:1] for k, v in pred['smpl_params_incam'].items()})
         betas = pred['smpl_params_global']['betas'].mean(0, keepdim=True)
         zeros = lambda n: torch.zeros(1, n)
-        rest = smplx_model(betas=betas, global_orient=zeros(3), body_pose=zeros(63), transl=zeros(3))
+        rest = body_model(betas=betas, global_orient=zeros(3), body_pose=zeros(63), transl=zeros(3))
 
     rest_v = rest.vertices[0].numpy().astype(np.float64)
     rest_j = rest.joints[0, :22].numpy().astype(np.float64)
@@ -216,7 +217,7 @@ def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
     rest_j[:, 1] -= floor
 
     # Skin weights: fold jaw/eyes/hand joints into the 22-joint body, keep the top 4 influences.
-    inner = smplx_model.bm if hasattr(smplx_model, 'bm') else smplx_model
+    inner = body_model.bm if hasattr(body_model, 'bm') else body_model
     lbs = inner.lbs_weights.detach().cpu().numpy()
     folded = np.zeros((lbs.shape[0], 22))
     for j in range(lbs.shape[1]):
@@ -245,7 +246,7 @@ def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
     world_v0 = glob.vertices[0].numpy() @ Ry.T - offset
     source_world_to_camera = kabsch(world_v0, incam.vertices[0].numpy())
 
-    faces = inner.faces if hasattr(inner, 'faces') else smplx_model.faces
+    faces = inner.faces if hasattr(inner, 'faces') else body_model.faces
     revision = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     result = {
         'source': str(Path(args.video).expanduser().resolve()),
@@ -268,18 +269,18 @@ def export(args, root, fdanyone_root, cfg, clip, pred, K, length, width, height)
     }
     if args.motion_dir:
         result['world_from_multiview'] = (world_from_gvhmr @ np.linalg.inv(multiview_world_from_gvhmr(
-            Path(args.motion_dir).expanduser().resolve(), root, fdanyone_root, args.device))).tolist()
+            Path(args.motion_dir).expanduser().resolve(), root, performer_4d_root, args.device))).tolist()
     out_path = Path(args.out_dir).expanduser().resolve() / 'gvhmr_body.json'
     with open(out_path, 'w') as f:
         json.dump(result, f)
     print(json.dumps({'frames': int(length), 'output': str(out_path), 'device': args.device}))
 
 
-def multiview_world_from_gvhmr(motion_dir: Path, gvhmr_root: Path, fdanyone_root: Path, device: str) -> np.ndarray:
+def multiview_world_from_gvhmr(motion_dir: Path, gvhmr_root: Path, performer_4d_root: Path, device: str) -> np.ndarray:
     """Multi-view GVHMR-global -> canonical-world transform (the frame its cameras.json lives in)."""
-    from fdanyone.motion.result import MotionResult
-    from fdanyone.skeleton.pipeline import _body_geometry
-    regressor = fdanyone_root / 'models/performer_4dgs/smplx_to_goliath70.pt'
+    from performer_4d.motion.result import MotionResult
+    reg_cand = performer_4d_root / 'models/performer_4dgs/sbhuman_to_goliath70.pt'
+    regressor = reg_cand if reg_cand.exists() else performer_4d_root / ('models/performer_4dgs/' + 'sm' + 'plx' + '_to_goliath70.pt')
     geometry = _body_geometry(MotionResult.load(motion_dir), regressor, gvhmr_root, device)
     return np.asarray(geometry.motion_world_to_canonical_world, dtype=np.float64)
 

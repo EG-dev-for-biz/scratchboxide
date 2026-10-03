@@ -1,0 +1,10 @@
+{
+  "eyeHeight": 3.895,
+  "walkRadius": 1.25,
+  "source": "pantheon_atrium_360.splat",
+  "origin": {
+    "lat": 41.8986,
+    "lng": 12.4768,
+    "alt": 20
+  }
+}

@@ -354,10 +354,10 @@ Sprint 42 deliverables and backlog.
     assert.strictEqual(metricLens.canHandle('telemetry/kpi.dashboard.json'), true);
 
     const initialCsv = `Date,Throughput,Latency,ErrorRate
-2026-09-01,1420,24,0.02
-2026-09-02,1580,22,0.01
-2026-09-03,1890,21,0.01
-2026-09-04,2100,26,0.03
+2026-09-26,1420,24,0.02
+2026-09-27,1580,22,0.01
+2026-09-28,1890,21,0.01
+2026-09-29,2100,26,0.03
 `;
 
     const csvProj = metricLens.project({ 'analytics/q3-performance.csv': initialCsv });
@@ -371,7 +371,7 @@ Sprint 42 deliverables and backlog.
     // Unproject back to CSV
     const csvUnproj = metricLens.unproject(metricData, { 'analytics/q3-performance.csv': initialCsv });
     const generatedCsv = csvUnproj.files['analytics/q3-performance.csv'];
-    assert.ok(generatedCsv.includes('Label,Value') || generatedCsv.includes('2026-09-01'));
+    assert.ok(generatedCsv.includes('Label,Value') || generatedCsv.includes('2026-09-26'));
     console.log('    ✓ MetricDashboardLens CSV parsing & KPI summary projection verified.');
 
     // =========================================================================

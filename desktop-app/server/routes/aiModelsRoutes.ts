@@ -122,30 +122,6 @@ export function createModelsRouter(): Router {
         }
     });
 
-    router.get('/smplx', (_req: Request, res: Response) => {
-        try {
-            const models = modelRegistry.discoverSmplxModels();
-            res.json({
-                success: true,
-                models
-            });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
-    router.get('/omniroam', (_req: Request, res: Response) => {
-        try {
-            const models = modelRegistry.discoverOmniRoamModels();
-            res.json({
-                success: true,
-                models
-            });
-        } catch (err: any) {
-            res.status(500).json({ success: false, error: err?.message || String(err) });
-        }
-    });
-
     router.get('/geobox', (_req: Request, res: Response) => {
         try {
             const models = modelRegistry.discoverGeoBoxModels();

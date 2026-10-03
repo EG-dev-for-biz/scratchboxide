@@ -1,0 +1,15 @@
+{
+  "apiKey": "AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4",
+  "mapId": "ad80a8568eeae7445909ba9f",
+  "styleId": "171afbfed80e6143e663574d",
+  "styleName": "Vector1",
+  "mapType": "vector",
+  "anchor": {
+    "lat": 40.7484405,
+    "lng": -73.9856644,
+    "elevation": 18.53
+  },
+  "gridBearingDegrees": 29.0,
+  "colmapSurveyCount": 15,
+  "internalUsageAttributionIds": ["gmp_git_agentskills_v1"]
+}

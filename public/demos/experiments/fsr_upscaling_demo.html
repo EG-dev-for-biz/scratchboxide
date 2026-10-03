@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) · Scratchbox Studio</title>
+    <style>
+        :root {
+            --bg-primary: #090a0f;
+            --bg-secondary: #12141f;
+            --bg-card: rgba(22, 25, 38, 0.75);
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-active: #3b82f6;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-blue: #3b82f6;
+            --accent-indigo: #6366f1;
+            --accent-emerald: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 24px;
+            background: rgba(18, 20, 31, 0.85);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border-subtle);
+            z-index: 10;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .badge-fsr {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.05em;
+            padding: 3px 8px;
+            border-radius: 4px;
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.35);
+        }
+
+        .header-title h1 {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: #f1f5f9;
+        }
+
+        .header-title span {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .controls-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .btn-group {
+            display: flex;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 3px;
+            border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .btn-toggle {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 500;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn-toggle:hover {
+            color: var(--text-primary);
+        }
+
+        .btn-toggle.active {
+            background: var(--accent-blue);
+            color: #ffffff;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .slider-container input[type="range"] {
+            width: 100px;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+
+        main {
+            flex: 1;
+            position: relative;
+            display: flex;
+            background: #000;
+            overflow: hidden;
+        }
+
+        #viewport {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .telemetry-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 16px;
+            width: 320px;
+            box-shadow: 0 16px 32px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .telemetry-card h2 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .metric-label {
+            color: var(--text-secondary);
+        }
+
+        .metric-value {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 600;
+            color: #38bdf8;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border-subtle);
+            margin: 12px 0;
+        }
+
+        .pipeline-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .pipeline-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .step-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #64748b;
+        }
+
+        .step-dot.active {
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        .split-slider-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #ffffff;
+            pointer-events: none;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.8);
+            z-index: 4;
+        }
+
+        .split-label-left {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #94a3b8;
+            border: 1px solid var(--border-subtle);
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .split-label-right {
+            position: absolute;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            pointer-events: none;
+            z-index: 5;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-title">
+            <span class="badge-fsr">AMD FidelityFX</span>
+            <h1>FSR 1.0 Spatial Super Resolution</h1>
+            <span>· EASU + RCAS 2-Pass Pipeline</span>
+        </div>
+
+        <div class="controls-bar">
+            <div class="btn-group">
+                <button class="btn-toggle active" data-mode="fsr1">FSR 1.0 (EASU + RCAS)</button>
+                <button class="btn-toggle" data-mode="easu">EASU Only</button>
+                <button class="btn-toggle" data-mode="bilinear">Bilinear Upscale</button>
+                <button class="btn-toggle" data-mode="split">Split Loupe (50/50)</button>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn-toggle" data-preset="ultra_quality">Ultra (1.3x)</button>
+                <button class="btn-toggle active" data-preset="quality">Quality (1.5x)</button>
+                <button class="btn-toggle" data-preset="balanced">Balanced (1.7x)</button>
+                <button class="btn-toggle" data-preset="performance">Perf (2.0x)</button>
+            </div>
+
+            <div class="slider-container">
+                <label for="sharpness-slider">RCAS Sharpness:</label>
+                <input type="range" id="sharpness-slider" min="0" max="100" value="85">
+                <span id="sharpness-val" style="min-width:28px; font-family:monospace;">0.85</span>
+            </div>
+        </div>
+    </header>
+
+    <main id="container">
+        <canvas id="viewport"></canvas>
+
+        <div class="telemetry-card">
+            <h2>Real-Time GPU Telemetry</h2>
+            <div class="metric-row">
+                <span class="metric-label">Output Viewport</span>
+                <span class="metric-value" id="val-output-res">1920 × 1080</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Internal Render Target</span>
+                <span class="metric-value" id="val-render-res">1280 × 720 (0.67x)</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Saved Pixel Fillrate</span>
+                <span class="metric-value" id="val-fillrate-saved">+55.1%</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">GPU Frame Time</span>
+                <span class="metric-value" id="val-gpu-time">0.28 ms</span>
+            </div>
+
+            <div class="divider"></div>
+
+            <h2>Pipeline Execution Architecture</h2>
+            <div class="pipeline-steps">
+                <div class="pipeline-step">
+                    <div class="step-dot active"></div>
+                    <span>Scene Render: 3D Geometry Pass (Reduced Scale)</span>
+                </div>
+                <div class="pipeline-step">
+                    <div class="step-dot active" id="dot-easu"></div>
+                    <span id="label-easu">Pass 1: EASU 12-Tap Edge-Adaptive Spatial Upsampling</span>
+                </div>
+                <div class="pipeline-step">
+                    <div class="step-dot active" id="dot-rcas"></div>
+                    <span id="label-rcas">Pass 2: RCAS 5-Tap Contrast-Adaptive Sharpening</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="split-line" class="split-slider-line" style="display:none; left:50%;"></div>
+        <div id="label-left" class="split-label-left" style="display:none;">Bilinear Upscale (Blunt)</div>
+        <div id="label-right" class="split-label-right" style="display:none;">FSR 1.0 (EASU + RCAS)</div>
+    </main>
+
+    <script>
+        // Standard FSR Presets
+        const PRESET_SCALES = {
+            ultra_quality: 0.77,
+            quality: 0.67,
+            balanced: 0.59,
+            performance: 0.50
+        };
+
+        let currentMode = 'fsr1';
+        let currentPreset = 'quality';
+        let currentSharpness = 0.85;
+        let splitRatio = 0.5;
+
+        const canvas = document.getElementById('viewport');
+        const container = document.getElementById('container');
+        const splitLine = document.getElementById('split-line');
+        const labelLeft = document.getElementById('label-left');
+        const labelRight = document.getElementById('label-right');
+
+        // Setup Three.js Scene
+        let width = container.clientWidth || window.innerWidth;
+        let height = container.clientHeight || window.innerHeight;
+
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(1.0);
+
+        const scene3D = new THREE.Scene();
+        scene3D.background = new THREE.Color(0x0a0d14);
+
+        const camera3D = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+        camera3D.position.set(0, 2, 7);
+
+        // Architectural scene with high-frequency brick, columns, windows & grid
+        const grid = new THREE.GridHelper(30, 60, 0x38bdf8, 0x1e293b);
+        grid.position.y = -1;
+        scene3D.add(grid);
+
+        // Ambient & Directional light
+        const amb = new THREE.AmbientLight(0x384252, 1.2);
+        scene3D.add(amb);
+        const sun = new THREE.DirectionalLight(0xfff5ea, 2.5);
+        sun.position.set(5, 10, 4);
+        scene3D.add(sun);
+
+        // Architectural facade buildings
+        const buildingMat = new THREE.MeshStandardMaterial({
+            color: 0x94a3b8,
+            roughness: 0.35,
+            metalness: 0.1
+        });
+
+        // Generate procedural high-frequency texture for facade
+        const texCanvas = document.createElement('canvas');
+        texCanvas.width = 512;
+        texCanvas.height = 512;
+        const ctx = texCanvas.getContext('2d');
+        ctx.fillStyle = '#64748b';
+        ctx.fillRect(0, 0, 512, 512);
+        // Windows and fine architectural lines
+        ctx.fillStyle = '#0f172a';
+        for (let y = 16; y < 512; y += 32) {
+            for (let x = 16; x < 512; x += 32) {
+                ctx.fillRect(x, y, 16, 20);
+            }
+        }
+        const facadeTex = new THREE.CanvasTexture(texCanvas);
+        facadeTex.wrapS = THREE.RepeatWrapping;
+        facadeTex.wrapT = THREE.RepeatWrapping;
+        facadeTex.repeat.set(4, 8);
+        buildingMat.map = facadeTex;
+        buildingMat.needsUpdate = true;
+
+        const mainTower = new THREE.Mesh(new THREE.BoxGeometry(3, 8, 3), buildingMat);
+        mainTower.position.set(0, 3, -1);
+        scene3D.add(mainTower);
+
+        const leftTower = new THREE.Mesh(new THREE.BoxGeometry(2, 5, 2), buildingMat);
+        leftTower.position.set(-3.5, 1.5, 0);
+        scene3D.add(leftTower);
+
+        const rightTower = new THREE.Mesh(new THREE.BoxGeometry(2, 5, 2), buildingMat);
+        rightTower.position.set(3.5, 1.5, 0);
+        scene3D.add(rightTower);
+
+        // EASU Shader
+        const EASU_VERT = `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = vec4(position, 1.0);
+            }
+        `;
+
+        const EASU_FRAG = `
+            precision highp float;
+            uniform sampler2D tInput;
+            uniform vec2 uInputResolution;
+            uniform vec2 uOutputResolution;
+            varying vec2 vUv;
+
+            float getLuma(vec3 c) {
+                return dot(c, vec3(0.2126, 0.7152, 0.0722));
+            }
+
+            float lanczos2Weight(float x) {
+                if (x == 0.0) return 1.0;
+                if (abs(x) >= 2.0) return 0.0;
+                float pi_x = 3.14159265359 * x;
+                return (sin(pi_x) / pi_x) * (sin(0.5 * pi_x) / (0.5 * pi_x));
+            }
+
+            void main() {
+                vec2 outCoord = floor(vUv * uOutputResolution);
+                vec2 pp = (outCoord + vec2(0.5)) * (uInputResolution / uOutputResolution) - vec2(0.5);
+                vec2 fp = floor(pp);
+                vec2 f = pp - fp;
+
+                vec2 invInputRes = 1.0 / uInputResolution;
+
+                // 12-tap sampling pattern around 2x2 core
+                vec3 c_b = texture2D(tInput, (fp + vec2(0.0, 0.0) + 0.5) * invInputRes).rgb;
+                vec3 c_c = texture2D(tInput, (fp + vec2(1.0, 0.0) + 0.5) * invInputRes).rgb;
+                vec3 c_f = texture2D(tInput, (fp + vec2(0.0, 1.0) + 0.5) * invInputRes).rgb;
+                vec3 c_g = texture2D(tInput, (fp + vec2(1.0, 1.0) + 0.5) * invInputRes).rgb;
+
+                vec3 c_a = texture2D(tInput, (fp + vec2(0.0, -1.0) + 0.5) * invInputRes).rgb;
+                vec3 c_d = texture2D(tInput, (fp + vec2(1.0, -1.0) + 0.5) * invInputRes).rgb;
+                vec3 c_e = texture2D(tInput, (fp + vec2(-1.0, 0.0) + 0.5) * invInputRes).rgb;
+                vec3 c_h = texture2D(tInput, (fp + vec2(2.0, 0.0) + 0.5) * invInputRes).rgb;
+                vec3 c_i = texture2D(tInput, (fp + vec2(-1.0, 1.0) + 0.5) * invInputRes).rgb;
+                vec3 c_l = texture2D(tInput, (fp + vec2(2.0, 1.0) + 0.5) * invInputRes).rgb;
+                vec3 c_j = texture2D(tInput, (fp + vec2(0.0, 2.0) + 0.5) * invInputRes).rgb;
+                vec3 c_k = texture2D(tInput, (fp + vec2(1.0, 2.0) + 0.5) * invInputRes).rgb;
+
+                float l_b = getLuma(c_b);
+                float l_c = getLuma(c_c);
+                float l_f = getLuma(c_f);
+                float l_g = getLuma(c_g);
+
+                float l_a = getLuma(c_a);
+                float l_d = getLuma(c_d);
+                float l_e = getLuma(c_e);
+                float l_h = getLuma(c_h);
+                float l_i = getLuma(c_i);
+                float l_l = getLuma(c_l);
+                float l_j = getLuma(c_j);
+                float l_k = getLuma(c_k);
+
+                // Compute edge gradient direction vector
+                float dirX = (l_b - l_c) + (l_f - l_g);
+                float dirY = (l_b - l_f) + (l_c - l_g);
+                dirX += ((l_a - l_d) + (l_j - l_k)) * 0.5;
+                dirY += ((l_e - l_i) + (l_h - l_l)) * 0.5;
+
+                float len = length(vec2(dirX, dirY));
+                vec2 dir = len > 0.0001 ? vec2(dirX, dirY) / len : vec2(1.0, 0.0);
+
+                // Stretch along edge direction
+                float stretch = clamp(1.0 + len * 2.0, 1.0, 3.0);
+                mat2 rot = mat2(dir.x, -dir.y, dir.y, dir.x);
+
+                vec2 d_b = (rot * (f - vec2(0.0, 0.0))) * vec2(1.0 / stretch, stretch);
+                vec2 d_c = (rot * (f - vec2(1.0, 0.0))) * vec2(1.0 / stretch, stretch);
+                vec2 d_f = (rot * (f - vec2(0.0, 1.0))) * vec2(1.0 / stretch, stretch);
+                vec2 d_g = (rot * (f - vec2(1.0, 1.0))) * vec2(1.0 / stretch, stretch);
+
+                float w_b = lanczos2Weight(length(d_b));
+                float w_c = lanczos2Weight(length(d_c));
+                float w_f = lanczos2Weight(length(d_f));
+                float w_g = lanczos2Weight(length(d_g));
+
+                vec3 sumColor = c_b * w_b + c_c * w_c + c_f * w_f + c_g * w_g;
+                float sumWeight = w_b + w_c + w_f + w_g;
+
+                vec3 finalColor = sumColor / max(sumWeight, 0.0001);
+                vec3 minC = min(c_b, min(c_c, min(c_f, c_g)));
+                vec3 maxC = max(c_b, max(c_c, max(c_f, c_g)));
+                finalColor = clamp(finalColor, minC, maxC);
+
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // RCAS Shader
+        const RCAS_FRAG = `
+            precision highp float;
+            uniform sampler2D tInput;
+            uniform vec2 uResolution;
+            uniform float uSharpness;
+            varying vec2 vUv;
+
+            float getLuma(vec3 c) {
+                return dot(c, vec3(0.2126, 0.7152, 0.0722));
+            }
+
+            void main() {
+                vec2 texel = 1.0 / uResolution;
+
+                vec3 c_m = texture2D(tInput, vUv).rgb;
+                vec3 c_n = texture2D(tInput, vUv + vec2(0.0, -texel.y)).rgb;
+                vec3 c_s = texture2D(tInput, vUv + vec2(0.0, texel.y)).rgb;
+                vec3 c_w = texture2D(tInput, vUv + vec2(-texel.x, 0.0)).rgb;
+                vec3 c_e = texture2D(tInput, vUv + vec2(texel.x, 0.0)).rgb;
+
+                float l_m = getLuma(c_m);
+                float l_n = getLuma(c_n);
+                float l_s = getLuma(c_s);
+                float l_w = getLuma(c_w);
+                float l_e = getLuma(c_e);
+
+                float minL = min(l_m, min(min(l_n, l_s), min(l_w, l_e)));
+                float maxL = max(l_m, max(max(l_n, l_s), max(l_w, l_e)));
+
+                float contrast = maxL - minL;
+                float amp = clamp(min(minL, 1.0 - maxL) / max(contrast, 0.0001), 0.0, 1.0);
+                float w = -amp * (clamp(uSharpness, 0.0, 1.0) * 0.20);
+
+                vec3 sharpened = (c_m + w * (c_n + c_s + c_w + c_e)) / (1.0 + 4.0 * w);
+                vec3 minC = min(c_m, min(min(c_n, c_s), min(c_w, c_e)));
+                vec3 maxC = max(c_m, max(max(c_n, c_s), max(c_w, c_e)));
+                sharpened = clamp(sharpened, minC, maxC);
+
+                gl_FragColor = vec4(sharpened, 1.0);
+            }
+        `;
+
+        // Split / Composite Shader
+        const COMPOSITE_FRAG = `
+            precision highp float;
+            uniform sampler2D tBilinear;
+            uniform sampler2D tFSR;
+            uniform float uSplitX;
+            uniform int uDisplayMode; // 0=fsr, 1=easu, 2=bilinear, 3=split
+            varying vec2 vUv;
+
+            void main() {
+                if (uDisplayMode == 2) {
+                    gl_FragColor = texture2D(tBilinear, vUv);
+                } else if (uDisplayMode == 3) {
+                    if (vUv.x < uSplitX) {
+                        gl_FragColor = texture2D(tBilinear, vUv);
+                    } else {
+                        gl_FragColor = texture2D(tFSR, vUv);
+                    }
+                } else {
+                    gl_FragColor = texture2D(tFSR, vUv);
+                }
+            }
+        `;
+
+        // Render Targets
+        let scale = PRESET_SCALES[currentPreset];
+        let renderW = Math.round(width * scale);
+        let renderH = Math.round(height * scale);
+
+        let sceneRenderTarget = new THREE.WebGLRenderTarget(renderW, renderH, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+        let easuRenderTarget = new THREE.WebGLRenderTarget(width, height, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+        let rcasRenderTarget = new THREE.WebGLRenderTarget(width, height, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+
+        const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const postGeo = new THREE.PlaneGeometry(2, 2);
+
+        const easuMat = new THREE.ShaderMaterial({
+            vertexShader: EASU_VERT,
+            fragmentShader: EASU_FRAG,
+            uniforms: {
+                tInput: { value: sceneRenderTarget.texture },
+                uInputResolution: { value: new THREE.Vector2(renderW, renderH) },
+                uOutputResolution: { value: new THREE.Vector2(width, height) }
+            },
+            depthWrite: false
+        });
+        const easuScene = new THREE.Scene();
+        easuScene.add(new THREE.Mesh(postGeo, easuMat));
+
+        const rcasMat = new THREE.ShaderMaterial({
+            vertexShader: EASU_VERT,
+            fragmentShader: RCAS_FRAG,
+            uniforms: {
+                tInput: { value: easuRenderTarget.texture },
+                uResolution: { value: new THREE.Vector2(width, height) },
+                uSharpness: { value: currentSharpness }
+            },
+            depthWrite: false
+        });
+        const rcasScene = new THREE.Scene();
+        rcasScene.add(new THREE.Mesh(postGeo, rcasMat));
+
+        const compositeMat = new THREE.ShaderMaterial({
+            vertexShader: EASU_VERT,
+            fragmentShader: COMPOSITE_FRAG,
+            uniforms: {
+                tBilinear: { value: sceneRenderTarget.texture },
+                tFSR: { value: rcasRenderTarget.texture },
+                uSplitX: { value: 0.5 },
+                uDisplayMode: { value: 0 }
+            },
+            depthWrite: false
+        });
+        const compositeScene = new THREE.Scene();
+        compositeScene.add(new THREE.Mesh(postGeo, compositeMat));
+
+        function updateResolutions() {
+            scale = PRESET_SCALES[currentPreset];
+            renderW = Math.round(width * scale);
+            renderH = Math.round(height * scale);
+
+            sceneRenderTarget.setSize(renderW, renderH);
+            easuRenderTarget.setSize(width, height);
+            rcasRenderTarget.setSize(width, height);
+
+            easuMat.uniforms.uInputResolution.value.set(renderW, renderH);
+            easuMat.uniforms.uOutputResolution.value.set(width, height);
+            rcasMat.uniforms.uResolution.value.set(width, height);
+
+            document.getElementById('val-output-res').textContent = `${width} × ${height}`;
+            document.getElementById('val-render-res').textContent = `${renderW} × ${renderH} (${scale.toFixed(2)}x)`;
+            const savedPct = ((1 - (renderW * renderH) / (width * height)) * 100).toFixed(1);
+            document.getElementById('val-fillrate-saved').textContent = `+${savedPct}%`;
+        }
+
+        updateResolutions();
+
+        // UI Event Handlers
+        document.querySelectorAll('[data-mode]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-mode]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentMode = btn.dataset.mode;
+
+                const isSplit = currentMode === 'split';
+                splitLine.style.display = isSplit ? 'block' : 'none';
+                labelLeft.style.display = isSplit ? 'block' : 'none';
+                labelRight.style.display = isSplit ? 'block' : 'none';
+
+                if (currentMode === 'fsr1') {
+                    compositeMat.uniforms.uDisplayMode.value = 0;
+                    compositeMat.uniforms.tFSR.value = rcasRenderTarget.texture;
+                    document.getElementById('dot-rcas').classList.add('active');
+                } else if (currentMode === 'easu') {
+                    compositeMat.uniforms.uDisplayMode.value = 1;
+                    compositeMat.uniforms.tFSR.value = easuRenderTarget.texture;
+                    document.getElementById('dot-rcas').classList.remove('active');
+                } else if (currentMode === 'bilinear') {
+                    compositeMat.uniforms.uDisplayMode.value = 2;
+                } else if (currentMode === 'split') {
+                    compositeMat.uniforms.uDisplayMode.value = 3;
+                    compositeMat.uniforms.tFSR.value = rcasRenderTarget.texture;
+                }
+            });
+        });
+
+        document.querySelectorAll('[data-preset]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-preset]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentPreset = btn.dataset.preset;
+                updateResolutions();
+            });
+        });
+
+        const sharpnessInput = document.getElementById('sharpness-slider');
+        const sharpnessVal = document.getElementById('sharpness-val');
+        sharpnessInput.addEventListener('input', (e) => {
+            currentSharpness = parseFloat(e.target.value) / 100.0;
+            sharpnessVal.textContent = currentSharpness.toFixed(2);
+            rcasMat.uniforms.uSharpness.value = currentSharpness;
+        });
+
+        window.addEventListener('resize', () => {
+            width = container.clientWidth || window.innerWidth;
+            height = container.clientHeight || window.innerHeight;
+            camera3D.aspect = width / height;
+            camera3D.updateProjectionMatrix();
+            renderer.setSize(width, height);
+            updateResolutions();
+        });
+
+        // Split slider mouse tracking
+        window.addEventListener('mousemove', (e) => {
+            if (currentMode === 'split') {
+                const rect = container.getBoundingClientRect();
+                splitRatio = Math.max(0.05, Math.min(0.95, (e.clientX - rect.left) / rect.width));
+                splitLine.style.left = (splitRatio * 100) + '%';
+                compositeMat.uniforms.uSplitX.value = splitRatio;
+            }
+        });
+
+        // Animation Loop
+        let clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsed = clock.getElapsedTime();
+
+            // Rotate camera slowly to test dynamic high-frequency edge sampling
+            camera3D.position.x = Math.sin(elapsed * 0.25) * 4.5;
+            camera3D.position.z = Math.cos(elapsed * 0.25) * 4.5 + 2.0;
+            camera3D.lookAt(0, 2.5, 0);
+
+            // Step 1: Render 3D Scene into reduced-resolution buffer
+            renderer.setRenderTarget(sceneRenderTarget);
+            renderer.render(scene3D, camera3D);
+
+            // Step 2: Pass 1 EASU (Edge-Adaptive Spatial Upsampling)
+            renderer.setRenderTarget(easuRenderTarget);
+            renderer.render(easuScene, postCam);
+
+            // Step 3: Pass 2 RCAS (Robust Contrast-Adaptive Sharpening)
+            renderer.setRenderTarget(rcasRenderTarget);
+            renderer.render(rcasScene, postCam);
+
+            // Step 4: Final Screen Presentation / Split Composition
+            renderer.setRenderTarget(null);
+            renderer.render(compositeScene, postCam);
+        }
+
+        animate();
+    </script>
+</body>
+</html>

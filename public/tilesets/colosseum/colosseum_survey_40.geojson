@@ -1,0 +1,2978 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49302398,
+          41.88912722,
+          69.237
+        ]
+      },
+      "properties": {
+        "id": 1,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_01",
+        "imageName": "station_001.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 296.8565,
+        "pitchDegrees": -73.8504,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 22.07,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          68.3865842615784,
+          47.23594741821289,
+          119.15604922428406
+        ],
+        "forwardVector": [
+          -0.2481463496035901,
+          -0.9605384888584336,
+          -0.12565508584999513
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.492594,
+          41.88874002,
+          63.89
+        ]
+      },
+      "properties": {
+        "id": 2,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_02",
+        "imageName": "station_002.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 322.5196,
+        "pitchDegrees": -68.6785,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 16.722,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          32.700209666157946,
+          41.8880012512207,
+          162.16277363423228
+        ],
+        "forwardVector": [
+          -0.22124749325238258,
+          -0.9315546819857428,
+          -0.28854015526435595
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49198235,
+          41.88853043,
+          64.902
+        ]
+      },
+      "properties": {
+        "id": 3,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_03",
+        "imageName": "station_003.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 348.2212,
+        "pitchDegrees": -69.8856,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 17.733,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -18.063822228159758,
+          42.89890365600586,
+          185.44249435329846
+        ],
+        "forwardVector": [
+          -0.07020042428052349,
+          -0.9390080390004879,
+          -0.3366538327767748
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49131014,
+          41.88854,
+          60.666
+        ]
+      },
+      "properties": {
+        "id": 4,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_04",
+        "imageName": "station_004.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 13.9709,
+        "pitchDegrees": -63.7139,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 13.497,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -73.85460946469601,
+          38.66334609985351,
+          184.3797836838795
+        ],
+        "forwardVector": [
+          0.1069180947525514,
+          -0.8965936805314267,
+          -0.429753758617181
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49071054,
+          41.88876686,
+          60.995
+        ]
+      },
+      "properties": {
+        "id": 5,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_05",
+        "imageName": "station_005.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 39.7421,
+        "pitchDegrees": -64.3162,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 13.826,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -123.61840011892629,
+          38.991967010498044,
+          159.18064858933695
+        ],
+        "forwardVector": [
+          0.27708964795387736,
+          -0.9011995559204701,
+          -0.33325768919192816
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49030237,
+          41.88916607,
+          56.713
+        ]
+      },
+      "properties": {
+        "id": 6,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_06",
+        "imageName": "station_006.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 65.4918,
+        "pitchDegrees": -53.7879,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 9.544,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -157.49367473206075,
+          34.71019058227539,
+          114.83871511408036
+        ],
+        "forwardVector": [
+          0.5375483353479816,
+          -0.806835457350277,
+          -0.2450680148999114
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49016646,
+          41.88965851,
+          59.114
+        ]
+      },
+      "properties": {
+        "id": 7,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_07",
+        "imageName": "station_007.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 91.1934,
+        "pitchDegrees": -60.4784,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 11.946,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -168.77243646256227,
+          37.11151962280273,
+          60.14208025642573
+        ],
+        "forwardVector": [
+          0.4926443154596634,
+          -0.8701702483750846,
+          0.010262421162829542
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49032966,
+          41.89014665,
+          65.993
+        ]
+      },
+      "properties": {
+        "id": 8,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_08",
+        "imageName": "station_008.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 116.8565,
+        "pitchDegrees": -71.0507,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 18.825,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -155.2265842615784,
+          43.99134902954101,
+          5.923950775715959
+        ],
+        "forwardVector": [
+          0.2897060620474408,
+          -0.9458062921981127,
+          0.14669988156581099
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49075964,
+          41.89053385,
+          67.807
+        ]
+      },
+      "properties": {
+        "id": 9,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_09",
+        "imageName": "station_009.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 142.5196,
+        "pitchDegrees": -72.7221,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 20.64,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -119.54020966615795,
+          45.80586318969726,
+          -37.082773634232275
+        ],
+        "forwardVector": [
+          0.18072523148613803,
+          -0.9548754884707366,
+          0.2356930041856442
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.4913713,
+          41.89074345,
+          66.462
+        ]
+      },
+      "properties": {
+        "id": 10,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_10",
+        "imageName": "station_010.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 168.2212,
+        "pitchDegrees": -71.5132,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 19.296,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -68.77617777184027,
+          44.461693572998044,
+          -60.36249435329845
+        ],
+        "forwardVector": [
+          0.06472787776615531,
+          -0.9483966257905614,
+          0.31040963585070575
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49204354,
+          41.89073388,
+          68.916
+        ]
+      },
+      "properties": {
+        "id": 11,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_11",
+        "imageName": "station_011.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 193.9709,
+        "pitchDegrees": -73.6102,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.75,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -12.985390535304013,
+          46.91545944213867,
+          -59.299783683879504
+        ],
+        "forwardVector": [
+          -0.06812455007952488,
+          -0.9593639832294603,
+          0.27382438415628013
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49264315,
+          41.89050701,
+          94.279
+        ]
+      },
+      "properties": {
+        "id": 12,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_12",
+        "imageName": "station_012.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 219.7421,
+        "pitchDegrees": -82.5305,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.113,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          36.7784001189262,
+          72.27840118408203,
+          -34.10064858933705
+        ],
+        "forwardVector": [
+          -0.08311263847505401,
+          -0.9915141227053622,
+          0.09996016107195443
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49305131,
+          41.89010779,
+          64.51
+        ]
+      },
+      "properties": {
+        "id": 13,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_13",
+        "imageName": "station_013.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 245.4918,
+        "pitchDegrees": -69.4371,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 17.344,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          70.65367473206071,
+          42.51001815795898,
+          10.241284885919633
+        ],
+        "forwardVector": [
+          -0.3195902294067501,
+          -0.9362869735122775,
+          0.14570102435796567
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.4931872,
+          41.88961535,
+          72.942
+        ]
+      },
+      "properties": {
+        "id": 14,
+        "name": "ADAPTIVE_STREET_PEDESTRIAN_STATION_14",
+        "imageName": "station_014.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 271.1934,
+        "pitchDegrees": -76.1987,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25.775,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          81.93243646256225,
+          50.94113998413086,
+          64.93791974357435
+        ],
+        "forwardVector": [
+          -0.23850335150258528,
+          -0.9711289651598555,
+          -0.0049683346890585945
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49303688,
+          41.88912234,
+          73.853
+        ]
+      },
+      "properties": {
+        "id": 15,
+        "name": "ADAPTIVE_MID_FACADE_STATION_15",
+        "imageName": "station_015.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 296.8565,
+        "pitchDegrees": -54.8672,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 26.685,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          69.45715309124775,
+          51.85119705200195,
+          119.69815842079379
+        ],
+        "forwardVector": [
+          -0.5134029740515962,
+          -0.8178207047150073,
+          -0.2599743856121684
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49250965,
+          41.8886821,
+          69.121
+        ]
+      },
+      "properties": {
+        "id": 16,
+        "name": "ADAPTIVE_MID_FACADE_STATION_16",
+        "imageName": "station_016.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 326.7998,
+        "pitchDegrees": -37.3758,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.953,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          25.699698190357964,
+          47.1190803527832,
+          168.59687494485746
+        ],
+        "forwardVector": [
+          -0.4351343614084022,
+          -0.6070404864746157,
+          -0.6649510773751433
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49175924,
+          41.88849765,
+          69.106
+        ]
+      },
+      "properties": {
+        "id": 17,
+        "name": "ADAPTIVE_MID_FACADE_STATION_17",
+        "imageName": "station_017.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 356.7998,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -36.581529590325644,
+          47.10348293304443,
+          189.08409129300472
+        ],
+        "forwardVector": [
+          -0.044409136389971814,
+          -0.6059516491992684,
+          -0.7942609315821745
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49098667,
+          41.8886185,
+          69.107
+        ]
+      },
+      "properties": {
+        "id": 18,
+        "name": "ADAPTIVE_MID_FACADE_STATION_18",
+        "imageName": "station_018.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 26.8565,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -100.70148834527134,
+          47.10348293304443,
+          175.6607076624692
+        ],
+        "forwardVector": [
+          0.3593738884599865,
+          -0.6059516491992694,
+          -0.7096992370897934
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49039906,
+          41.88901229,
+          69.107
+        ]
+      },
+      "properties": {
+        "id": 19,
+        "name": "ADAPTIVE_MID_FACADE_STATION_19",
+        "imageName": "station_019.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 56.9132,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -149.4696952792509,
+          47.10348293304443,
+          131.92035636903526
+        ],
+        "forwardVector": [
+          0.6665068420485187,
+          -0.6059516491992689,
+          -0.4342709158292748
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.4901539,
+          41.88957343,
+          69.106
+        ]
+      },
+      "properties": {
+        "id": 20,
+        "name": "ADAPTIVE_MID_FACADE_STATION_20",
+        "imageName": "station_020.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 86.9132,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -169.8156132175008,
+          47.10348293304443,
+          69.59282640983348
+        ],
+        "forwardVector": [
+          0.7943472664893004,
+          -0.6059516491992679,
+          -0.04283712237842054
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49031677,
+          41.89015153,
+          69.105
+        ]
+      },
+      "properties": {
+        "id": 21,
+        "name": "ADAPTIVE_MID_FACADE_STATION_21",
+        "imageName": "station_021.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 116.8565,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -156.29715309124776,
+          47.10348293304443,
+          5.381841579206217
+        ],
+        "forwardVector": [
+          0.7096992370897948,
+          -0.6059516491992678,
+          0.3593738884599864
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49084399,
+          41.89059178,
+          69.105
+        ]
+      },
+      "properties": {
+        "id": 22,
+        "name": "ADAPTIVE_MID_FACADE_STATION_22",
+        "imageName": "station_022.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 146.7998,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -112.539698190358,
+          47.10348293304443,
+          -43.51687494485744
+        ],
+        "forwardVector": [
+          0.43558915341809856,
+          -0.6059516491992687,
+          0.6656460683104727
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49159443,
+          41.89077624,
+          69.104
+        ]
+      },
+      "properties": {
+        "id": 23,
+        "name": "ADAPTIVE_MID_FACADE_STATION_23",
+        "imageName": "station_023.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 176.7998,
+        "pitchDegrees": -37.2974,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 21.938,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -50.25847040967439,
+          47.10348293304443,
+          -64.0040912930047
+        ],
+        "forwardVector": [
+          0.04440913638997033,
+          -0.6059516491992695,
+          0.7942609315821737
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49236702,
+          41.89065538,
+          83.714
+        ]
+      },
+      "properties": {
+        "id": 24,
+        "name": "ADAPTIVE_MID_FACADE_STATION_24",
+        "imageName": "station_024.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 206.8565,
+        "pitchDegrees": -70.2877,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 36.548,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          13.861488345271326,
+          61.71427993774414,
+          -50.58070766246923
+        ],
+        "forwardVector": [
+          -0.15237683308137728,
+          -0.9413980260489371,
+          0.30091702725378444
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49295463,
+          41.89026158,
+          70.371
+        ]
+      },
+      "properties": {
+        "id": 25,
+        "name": "ADAPTIVE_MID_FACADE_STATION_25",
+        "imageName": "station_025.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 236.9132,
+        "pitchDegrees": -43.1607,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 23.205,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          62.629695279250925,
+          48.37104873657226,
+          -6.840356369035227
+        ],
+        "forwardVector": [
+          -0.6111555592143485,
+          -0.684047360401513,
+          0.39820609132598567
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49319977,
+          41.88970044,
+          72.942
+        ]
+      },
+      "properties": {
+        "id": 26,
+        "name": "ADAPTIVE_MID_FACADE_STATION_26",
+        "imageName": "station_026.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.4322,
+        "yawDegrees": 266.9132,
+        "pitchDegrees": -52.3189,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25.775,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          82.97561321750077,
+          50.94113998413086,
+          55.48717359016644
+        ],
+        "forwardVector": [
+          -0.6103792557670004,
+          -0.7914250995032583,
+          0.032916196705881244
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.493053,
+          41.88911624,
+          94.506
+        ]
+      },
+      "properties": {
+        "id": 27,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_27",
+        "imageName": "station_027.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 296.8565,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          70.7953641283344,
+          72.50493534088135,
+          120.37579491643098
+        ],
+        "forwardVector": [
+          -0.5284153969071232,
+          -0.8057171290462685,
+          -0.26757629990887855
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49215625,
+          41.88854012,
+          94.508
+        ]
+      },
+      "properties": {
+        "id": 28,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_28",
+        "imageName": "station_028.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 341.791,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -3.631386803740746,
+          72.50493534088135,
+          184.36765937375404
+        ],
+        "forwardVector": [
+          -0.18508410880839607,
+          -0.8057171290462679,
+          -0.5626400098002642
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49097851,
+          41.88860645,
+          94.508
+        ]
+      },
+      "properties": {
+        "id": 29,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_29",
+        "imageName": "station_029.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 26.8565,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -101.37912484090852,
+          72.50493534088135,
+          176.99891869955587
+        ],
+        "forwardVector": [
+          0.2675762999088775,
+          -0.8057171290462681,
+          -0.528415396907124
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49020991,
+          41.88927654,
+          94.508
+        ]
+      },
+      "properties": {
+        "id": 30,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_30",
+        "imageName": "station_030.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 71.922,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -165.1688388900474,
+          72.50493534088135,
+          102.56914634980691
+        ],
+        "forwardVector": [
+          0.5630615085028317,
+          -0.805717129046269,
+          -0.1837978389534365
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49030065,
+          41.89015763,
+          94.507
+        ]
+      },
+      "properties": {
+        "id": 31,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_31",
+        "imageName": "station_031.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 116.8565,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -157.6353641283344,
+          72.50493534088135,
+          4.704205083569043
+        ],
+        "forwardVector": [
+          0.528415396907124,
+          -0.8057171290462681,
+          0.26757629990887793
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49119741,
+          41.89073377,
+          94.506
+        ]
+      },
+      "properties": {
+        "id": 32,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_32",
+        "imageName": "station_032.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 161.791,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -83.20861319625928,
+          72.50493534088135,
+          -59.287659373754046
+        ],
+        "forwardVector": [
+          0.18508410880839668,
+          -0.8057171290462684,
+          0.5626400098002635
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49237518,
+          41.89066743,
+          94.505
+        ]
+      },
+      "properties": {
+        "id": 33,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_33",
+        "imageName": "station_033.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 206.8565,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          14.5391248409085,
+          72.50493534088135,
+          -51.91891869955588
+        ],
+        "forwardVector": [
+          -0.26757629990887766,
+          -0.8057171290462687,
+          0.5284153969071235
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49314378,
+          41.88999733,
+          94.505
+        ]
+      },
+      "properties": {
+        "id": 34,
+        "name": "ADAPTIVE_UPPER_ATTIC_STATION_34",
+        "imageName": "station_034.jpg",
+        "focalLengthMm": 49,
+        "fovDegrees": 40.3413,
+        "yawDegrees": 251.922,
+        "pitchDegrees": -53.6796,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 47.339,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          78.32883889004738,
+          72.50493534088135,
+          22.510853650193056
+        ],
+        "forwardVector": [
+          -0.5630615085028329,
+          -0.805717129046268,
+          0.18379783895343724
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49307557,
+          41.8891077,
+          125.104
+        ]
+      },
+      "properties": {
+        "id": 35,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_35",
+        "imageName": "station_035.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 296.8565,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          72.66885958025574,
+          103.102139377594,
+          121.32448601032303
+        ],
+        "forwardVector": [
+          -0.14957775439630144,
+          -0.9858446028023995,
+          -0.07574242216313765
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49176166,
+          41.8884653,
+          125.105
+        ]
+      },
+      "properties": {
+        "id": 36,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_36",
+        "imageName": "station_036.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 356.7998,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -36.380558384410634,
+          103.102139377594,
+          192.6784772731678
+        ],
+        "forwardVector": [
+          -0.009359766149854813,
+          -0.9858446028023995,
+          -0.16740016100051766
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49036274,
+          41.8889946,
+          125.105
+        ]
+      },
+      "properties": {
+        "id": 37,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_37",
+        "imageName": "station_037.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 56.9132,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -152.4859368611826,
+          103.102139377594,
+          133.8856265080813
+        ],
+        "forwardVector": [
+          0.14047443129880932,
+          -0.9858446028023995,
+          -0.09152788250940369
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49027808,
+          41.89016617,
+          125.104
+        ]
+      },
+      "properties": {
+        "id": 38,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_38",
+        "imageName": "station_038.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 116.8565,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -159.50885958025577,
+          103.102139377594,
+          3.7555139896769845
+        ],
+        "forwardVector": [
+          0.14957775439630208,
+          -0.9858446028023993,
+          0.07574242216313763
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49159201,
+          41.89080859,
+          125.103
+        ]
+      },
+      "properties": {
+        "id": 39,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_39",
+        "imageName": "station_039.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 176.7998,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          -50.45944161558942,
+          103.102139377594,
+          -67.59847727316784
+        ],
+        "forwardVector": [
+          0.00935976614985492,
+          -0.9858446028023993,
+          0.1674001610005182
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          12.49299097,
+          41.89027927,
+          125.102
+        ]
+      },
+      "properties": {
+        "id": 40,
+        "name": "ADAPTIVE_AERIAL_OVERVIEW_STATION_40",
+        "imageName": "station_040.jpg",
+        "focalLengthMm": 24,
+        "fovDegrees": 73.7398,
+        "yawDegrees": 236.9132,
+        "pitchDegrees": -80.3481,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 77.936,
+        "groundElevationASL": 22,
+        "positionLocalENU": [
+          65.64593686118265,
+          103.102139377594,
+          -8.805626508081268
+        ],
+        "forwardVector": [
+          -0.14047443129880977,
+          -0.9858446028023995,
+          0.09152788250940369
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49232189,
+              41.88897767
+            ],
+            [
+              12.49276979,
+              41.88963859
+            ],
+            [
+              12.4932477,
+              41.88945776
+            ],
+            [
+              12.4927998,
+              41.88879684
+            ],
+            [
+              12.49232189,
+              41.88897767
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 1,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_01",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49182929,
+              41.88887647
+            ],
+            [
+              12.49261607,
+              41.88932726
+            ],
+            [
+              12.49293219,
+              41.8890192
+            ],
+            [
+              12.49214541,
+              41.88856841
+            ],
+            [
+              12.49182929,
+              41.88887647
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 2,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_02",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49137595,
+              41.88888881
+            ],
+            [
+              12.49234652,
+              41.88904005
+            ],
+            [
+              12.49245342,
+              41.88865698
+            ],
+            [
+              12.49148285,
+              41.88850575
+            ],
+            [
+              12.49137595,
+              41.88888881
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 3,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_03",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49099249,
+              41.88912023
+            ],
+            [
+              12.49195461,
+              41.88894138
+            ],
+            [
+              12.4918339,
+              41.88857881
+            ],
+            [
+              12.49087177,
+              41.88875766
+            ],
+            [
+              12.49099249,
+              41.88912023
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 4,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_04",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49075709,
+              41.88938809
+            ],
+            [
+              12.49151946,
+              41.88891446
+            ],
+            [
+              12.49119814,
+              41.88862569
+            ],
+            [
+              12.49043578,
+              41.88909932
+            ],
+            [
+              12.49075709,
+              41.88938809
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 5,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_05",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49081958,
+              41.88974937
+            ],
+            [
+              12.49123087,
+              41.88907528
+            ],
+            [
+              12.49082145,
+              41.88893581
+            ],
+            [
+              12.49041015,
+              41.88960989
+            ],
+            [
+              12.49081958,
+              41.88974937
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 6,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_06",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49089423,
+              41.89001769
+            ],
+            [
+              12.4908736,
+              41.88927702
+            ],
+            [
+              12.49038841,
+              41.88928456
+            ],
+            [
+              12.49040904,
+              41.89002524
+            ],
+            [
+              12.49089423,
+              41.89001769
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 7,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_07",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49106815,
+              41.89028244
+            ],
+            [
+              12.49062026,
+              41.8896215
+            ],
+            [
+              12.49014967,
+              41.88979955
+            ],
+            [
+              12.49059756,
+              41.89046048
+            ],
+            [
+              12.49106815,
+              41.89028244
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 8,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_08",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49148926,
+              41.89043161
+            ],
+            [
+              12.49070248,
+              41.88998081
+            ],
+            [
+              12.49037843,
+              41.89029658
+            ],
+            [
+              12.49116522,
+              41.89074738
+            ],
+            [
+              12.49148926,
+              41.89043161
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 9,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_09",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49197298,
+              41.89040205
+            ],
+            [
+              12.49100238,
+              41.89025081
+            ],
+            [
+              12.49089441,
+              41.89063771
+            ],
+            [
+              12.49186501,
+              41.89078894
+            ],
+            [
+              12.49197298,
+              41.89040205
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 10,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_10",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49239435,
+              41.89025325
+            ],
+            [
+              12.49143221,
+              41.89043211
+            ],
+            [
+              12.49156138,
+              41.89082007
+            ],
+            [
+              12.49252353,
+              41.89064121
+            ],
+            [
+              12.49239435,
+              41.89025325
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 11,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_11",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49276745,
+              41.89003934
+            ],
+            [
+              12.49200508,
+              41.89051298
+            ],
+            [
+              12.49235861,
+              41.89083069
+            ],
+            [
+              12.49312099,
+              41.89035705
+            ],
+            [
+              12.49276745,
+              41.89003934
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 12,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_12",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49271133,
+              41.88958488
+            ],
+            [
+              12.49230005,
+              41.89025897
+            ],
+            [
+              12.49277517,
+              41.89042082
+            ],
+            [
+              12.49318645,
+              41.88974673
+            ],
+            [
+              12.49271133,
+              41.88958488
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 13,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_13",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49267624,
+              41.8892528
+            ],
+            [
+              12.4926969,
+              41.88999348
+            ],
+            [
+              12.49323838,
+              41.88998505
+            ],
+            [
+              12.49321772,
+              41.88924437
+            ],
+            [
+              12.49267624,
+              41.8892528
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 14,
+        "stationName": "ADAPTIVE_STREET_PEDESTRIAN_STATION_14",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49211461,
+              41.8890561
+            ],
+            [
+              12.49256251,
+              41.88971703
+            ],
+            [
+              12.49296941,
+              41.88956306
+            ],
+            [
+              12.49252151,
+              41.88890214
+            ],
+            [
+              12.49211461,
+              41.8890561
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 15,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_15",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49158273,
+              41.88906403
+            ],
+            [
+              12.49241234,
+              41.88946969
+            ],
+            [
+              12.49259772,
+              41.88925801
+            ],
+            [
+              12.4917681,
+              41.88885236
+            ],
+            [
+              12.49158273,
+              41.88906403
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 16,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_16",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49121204,
+              41.88917509
+            ],
+            [
+              12.49220195,
+              41.88921645
+            ],
+            [
+              12.49222081,
+              41.88896433
+            ],
+            [
+              12.4912309,
+              41.88892297
+            ],
+            [
+              12.49121204,
+              41.88917509
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 17,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_17",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49096713,
+              41.88940963
+            ],
+            [
+              12.49185165,
+              41.88907496
+            ],
+            [
+              12.49169899,
+              41.88884968
+            ],
+            [
+              12.49081446,
+              41.88918435
+            ],
+            [
+              12.49096713,
+              41.88940963
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 18,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_18",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49091244,
+              41.88970435
+            ],
+            [
+              12.4914537,
+              41.88908365
+            ],
+            [
+              12.49117056,
+              41.8889458
+            ],
+            [
+              12.4906293,
+              41.8895665
+            ],
+            [
+              12.49091244,
+              41.88970435
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 19,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_19",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.4910616,
+              41.88998097
+            ],
+            [
+              12.491115,
+              41.88924121
+            ],
+            [
+              12.49077755,
+              41.88922761
+            ],
+            [
+              12.49072415,
+              41.88996737
+            ],
+            [
+              12.4910616,
+              41.88998097
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 20,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_20",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49137555,
+              41.89016613
+            ],
+            [
+              12.49092766,
+              41.8895052
+            ],
+            [
+              12.49062617,
+              41.88961927
+            ],
+            [
+              12.49107406,
+              41.8902802
+            ],
+            [
+              12.49137555,
+              41.89016613
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 21,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_21",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49177121,
+              41.89020954
+            ],
+            [
+              12.49094159,
+              41.88980388
+            ],
+            [
+              12.49075654,
+              41.89001516
+            ],
+            [
+              12.49158616,
+              41.89042083
+            ],
+            [
+              12.49177121,
+              41.89020954
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 22,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_22",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49214163,
+              41.89009879
+            ],
+            [
+              12.49115171,
+              41.89005743
+            ],
+            [
+              12.49113284,
+              41.89030955
+            ],
+            [
+              12.49212277,
+              41.89035091
+            ],
+            [
+              12.49214163,
+              41.89009879
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 23,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_23",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49254381,
+              41.89009632
+            ],
+            [
+              12.49165928,
+              41.890431
+            ],
+            [
+              12.49189646,
+              41.89078098
+            ],
+            [
+              12.492781,
+              41.8904463
+            ],
+            [
+              12.49254381,
+              41.89009632
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 24,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_24",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49247633,
+              41.88958662
+            ],
+            [
+              12.49193508,
+              41.89020732
+            ],
+            [
+              12.49225471,
+              41.89036293
+            ],
+            [
+              12.49279596,
+              41.88974223
+            ],
+            [
+              12.49247633,
+              41.88958662
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 25,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_25",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49241774,
+              41.88929797
+            ],
+            [
+              12.49236436,
+              41.89003773
+            ],
+            [
+              12.4928051,
+              41.89005549
+            ],
+            [
+              12.49285848,
+              41.88931573
+            ],
+            [
+              12.49241774,
+              41.88929797
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 26,
+        "stationName": "ADAPTIVE_MID_FACADE_STATION_26",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49224053,
+              41.88912708
+            ],
+            [
+              12.49256046,
+              41.88959917
+            ],
+            [
+              12.4928468,
+              41.88949083
+            ],
+            [
+              12.49252687,
+              41.88901874
+            ],
+            [
+              12.49224053,
+              41.88912708
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 27,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_27",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49159134,
+              41.88897658
+            ],
+            [
+              12.49226405,
+              41.88914193
+            ],
+            [
+              12.49236435,
+              41.88891411
+            ],
+            [
+              12.49169163,
+              41.88874876
+            ],
+            [
+              12.49159134,
+              41.88897658
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 28,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_28",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49099301,
+              41.88921354
+            ],
+            [
+              12.49162481,
+              41.88897449
+            ],
+            [
+              12.49147981,
+              41.88876053
+            ],
+            [
+              12.49084801,
+              41.88899958
+            ],
+            [
+              12.49099301,
+              41.88921354
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 29,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_29",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.4907953,
+              41.88969766
+            ],
+            [
+              12.49101507,
+              41.88919461
+            ],
+            [
+              12.49070995,
+              41.88912019
+            ],
+            [
+              12.49049018,
+              41.88962323
+            ],
+            [
+              12.4907953,
+              41.88969766
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 30,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_30",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49111313,
+              41.89014679
+            ],
+            [
+              12.49079321,
+              41.8896747
+            ],
+            [
+              12.49050685,
+              41.88978304
+            ],
+            [
+              12.49082678,
+              41.89025513
+            ],
+            [
+              12.49111313,
+              41.89014679
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 31,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_31",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49176233,
+              41.8902973
+            ],
+            [
+              12.4910896,
+              41.89013194
+            ],
+            [
+              12.4909893,
+              41.89035976
+            ],
+            [
+              12.49166203,
+              41.89052512
+            ],
+            [
+              12.49176233,
+              41.8902973
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 32,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_32",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49236066,
+              41.89006033
+            ],
+            [
+              12.49172885,
+              41.89029939
+            ],
+            [
+              12.49187385,
+              41.89051335
+            ],
+            [
+              12.49250566,
+              41.89027429
+            ],
+            [
+              12.49236066,
+              41.89006033
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 33,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_33",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49255836,
+              41.88957622
+            ],
+            [
+              12.4923386,
+              41.89007926
+            ],
+            [
+              12.49264372,
+              41.89015368
+            ],
+            [
+              12.49286348,
+              41.88965063
+            ],
+            [
+              12.49255836,
+              41.88957622
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 34,
+        "stationName": "ADAPTIVE_UPPER_ATTIC_STATION_34",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49224715,
+              41.88881565
+            ],
+            [
+              12.49290034,
+              41.8897795
+            ],
+            [
+              12.49361566,
+              41.88950884
+            ],
+            [
+              12.49296246,
+              41.88854499
+            ],
+            [
+              12.49224715,
+              41.88881565
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 35,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_35",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49100845,
+              41.88885478
+            ],
+            [
+              12.49245206,
+              41.8889151
+            ],
+            [
+              12.49249682,
+              41.88831692
+            ],
+            [
+              12.49105322,
+              41.8882566
+            ],
+            [
+              12.49100845,
+              41.88885478
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 36,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_36",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49043933,
+              41.88967664
+            ],
+            [
+              12.49122867,
+              41.88877146
+            ],
+            [
+              12.4905569,
+              41.88844439
+            ],
+            [
+              12.48976756,
+              41.88934957
+            ],
+            [
+              12.49043933,
+              41.88967664
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 37,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_37",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.4911065,
+              41.89045823
+            ],
+            [
+              12.49045333,
+              41.88949437
+            ],
+            [
+              12.489738,
+              41.88976501
+            ],
+            [
+              12.49039116,
+              41.89072887
+            ],
+            [
+              12.4911065,
+              41.89045823
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 38,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_38",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49234523,
+              41.8904191
+            ],
+            [
+              12.49090159,
+              41.89035878
+            ],
+            [
+              12.49085681,
+              41.89095696
+            ],
+            [
+              12.49230047,
+              41.89101728
+            ],
+            [
+              12.49234523,
+              41.8904191
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 39,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_39",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              12.49291433,
+              41.88959723
+            ],
+            [
+              12.49212501,
+              41.89050242
+            ],
+            [
+              12.4927968,
+              41.89082948
+            ],
+            [
+              12.49358612,
+              41.88992428
+            ],
+            [
+              12.49291433,
+              41.88959723
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 40,
+        "stationName": "ADAPTIVE_AERIAL_OVERVIEW_STATION_40",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            12.49302398,
+            41.88912722,
+            69.237
+          ],
+          [
+            12.492594,
+            41.88874002,
+            63.89
+          ],
+          [
+            12.49198235,
+            41.88853043,
+            64.902
+          ],
+          [
+            12.49131014,
+            41.88854,
+            60.666
+          ],
+          [
+            12.49071054,
+            41.88876686,
+            60.995
+          ],
+          [
+            12.49030237,
+            41.88916607,
+            56.713
+          ],
+          [
+            12.49016646,
+            41.88965851,
+            59.114
+          ],
+          [
+            12.49032966,
+            41.89014665,
+            65.993
+          ],
+          [
+            12.49075964,
+            41.89053385,
+            67.807
+          ],
+          [
+            12.4913713,
+            41.89074345,
+            66.462
+          ],
+          [
+            12.49204354,
+            41.89073388,
+            68.916
+          ],
+          [
+            12.49264315,
+            41.89050701,
+            94.279
+          ],
+          [
+            12.49305131,
+            41.89010779,
+            64.51
+          ],
+          [
+            12.4931872,
+            41.88961535,
+            72.942
+          ],
+          [
+            12.49303688,
+            41.88912234,
+            73.853
+          ],
+          [
+            12.49250965,
+            41.8886821,
+            69.121
+          ],
+          [
+            12.49175924,
+            41.88849765,
+            69.106
+          ],
+          [
+            12.49098667,
+            41.8886185,
+            69.107
+          ],
+          [
+            12.49039906,
+            41.88901229,
+            69.107
+          ],
+          [
+            12.4901539,
+            41.88957343,
+            69.106
+          ],
+          [
+            12.49031677,
+            41.89015153,
+            69.105
+          ],
+          [
+            12.49084399,
+            41.89059178,
+            69.105
+          ],
+          [
+            12.49159443,
+            41.89077624,
+            69.104
+          ],
+          [
+            12.49236702,
+            41.89065538,
+            83.714
+          ],
+          [
+            12.49295463,
+            41.89026158,
+            70.371
+          ],
+          [
+            12.49319977,
+            41.88970044,
+            72.942
+          ],
+          [
+            12.493053,
+            41.88911624,
+            94.506
+          ],
+          [
+            12.49215625,
+            41.88854012,
+            94.508
+          ],
+          [
+            12.49097851,
+            41.88860645,
+            94.508
+          ],
+          [
+            12.49020991,
+            41.88927654,
+            94.508
+          ],
+          [
+            12.49030065,
+            41.89015763,
+            94.507
+          ],
+          [
+            12.49119741,
+            41.89073377,
+            94.506
+          ],
+          [
+            12.49237518,
+            41.89066743,
+            94.505
+          ],
+          [
+            12.49314378,
+            41.88999733,
+            94.505
+          ],
+          [
+            12.49307557,
+            41.8891077,
+            125.104
+          ],
+          [
+            12.49176166,
+            41.8884653,
+            125.105
+          ],
+          [
+            12.49036274,
+            41.8889946,
+            125.105
+          ],
+          [
+            12.49027808,
+            41.89016617,
+            125.104
+          ],
+          [
+            12.49159201,
+            41.89080859,
+            125.103
+          ],
+          [
+            12.49299097,
+            41.89027927,
+            125.102
+          ]
+        ]
+      },
+      "properties": {
+        "stationCount": 40,
+        "anchorAddress": "Colosseum, Rome, Italy",
+        "type": "camera_trajectory_path"
+      }
+    }
+  ]
+}

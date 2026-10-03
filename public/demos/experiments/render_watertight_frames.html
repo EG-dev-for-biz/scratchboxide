@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Render Watertight Camera Perspective Frames</title>
+  <style>
+    body { margin: 0; background: #0b0f19; overflow: hidden; font-family: monospace; color: #38bdf8; }
+    #canvas-render { width: 1280px; height: 720px; display: block; }
+    #status { position: fixed; top: 10px; left: 10px; font-size: 14px; background: rgba(0,0,0,0.8); padding: 8px 12px; border-radius: 6px; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+  <div id="status">Initializing Three.js Watertight Renderer...</div>
+  <canvas id="canvas-render" width="1280" height="720"></canvas>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const canvas = document.getElementById('canvas-render');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+    scene.fog = new THREE.FogExp2(0x0f172a, 0.0018);
+
+    const camera = new THREE.PerspectiveCamera(54, 1280 / 720, 1, 3000);
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(1280, 720);
+    renderer.setPixelRatio(1);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+
+    // Studio Architectural Lighting
+    const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x090d16, 0.7);
+    scene.add(hemiLight);
+
+    const sunLight = new THREE.DirectionalLight(0xffedd5, 1.35);
+    sunLight.position.set(150, 320, 100);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 4096;
+    sunLight.shadow.mapSize.height = 4096;
+    sunLight.shadow.camera.near = 10;
+    sunLight.shadow.camera.far = 1000;
+    const d = 350;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
+    sunLight.shadow.bias = -0.0005;
+    sunLight.shadow.normalBias = 0.08;
+    scene.add(sunLight);
+
+    const skyFill = new THREE.DirectionalLight(0x93c5fd, 0.45);
+    skyFill.position.set(-150, 180, -120);
+    scene.add(skyFill);
+
+    let cameraPath = [];
+
+    async function init() {
+      try {
+        statusEl.innerText = "Loading camera flight path JSON...";
+        const pathRes = await fetch('/models/google_tiles_camera_path.json');
+        cameraPath = await pathRes.json();
+
+        statusEl.innerText = "Loading watertight C++ GLB model...";
+        const loader = new THREE.GLTFLoader();
+        loader.load('/models/google_tiles_clay_blockout.glb', (gltf) => {
+          const cityModel = gltf.scene;
+
+          cityModel.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              if (child.material) {
+                child.material.roughness = 0.82;
+                child.material.metalness = 0.02;
+                child.material.side = THREE.FrontSide;
+              }
+            }
+          });
+
+          scene.add(cityModel);
+          statusEl.innerText = "Model loaded! Starting frame-by-frame render...";
+          setTimeout(renderAllFrames, 300);
+        }, undefined, (err) => {
+          statusEl.innerText = "Error loading GLB: " + err.message;
+          console.error(err);
+        });
+      } catch (err) {
+        statusEl.innerText = "Init error: " + err.message;
+        console.error(err);
+      }
+    }
+
+    async function renderAllFrames() {
+      const TOTAL = cameraPath.length;
+      for (let i = 0; i < TOTAL; i++) {
+        const f = cameraPath[i];
+
+        camera.position.set(f.position[0], f.position[1], f.position[2]);
+        camera.up.set(f.up[0], f.up[1], f.up[2]);
+        camera.lookAt(f.target[0], f.target[1], f.target[2]);
+        camera.fov = f.fov;
+        camera.updateProjectionMatrix();
+
+        renderer.render(scene, camera);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.96);
+        statusEl.innerText = `Rendering watertight camera frame ${i + 1}/${TOTAL} (t=${f.timeSec.toFixed(2)}s)...`;
+
+        await fetch('http://127.0.0.1:8097/upload-frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ index: i, total: TOTAL, dataUrl: dataUrl, timeSec: f.timeSec })
+        });
+      }
+
+      statusEl.innerText = "All 72 frames uploaded! Notifying compiler...";
+      await fetch('http://127.0.0.1:8097/done', { method: 'POST' });
+      statusEl.innerText = "✅ Compilation complete!";
+    }
+
+    window.addEventListener('load', init);
+  </script>
+</body>
+</html>

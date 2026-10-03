@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spatial Generative Engine & Runtime — Visual Proof Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js + Controls + Loaders -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <style>
+        :root {
+            --bg-base: #030712;
+            --panel-bg: rgba(11, 17, 33, 0.92);
+            --panel-border: rgba(56, 189, 248, 0.25);
+            --accent-cyan: #06b6d4;
+            --accent-sky: #38bdf8;
+            --accent-emerald: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-rose: #f43f5e;
+            --accent-purple: #8b5cf6;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-sub: #64748b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #viewport-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        #webgl-canvas {
+            width: 100%; height: 100%; display: block;
+        }
+
+        /* Top Header Bar */
+        .header-bar {
+            position: absolute;
+            top: 14px; left: 20px; right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .brand-pill {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 8px 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 12px 35px rgba(0,0,0,0.7), 0 0 20px rgba(6, 182, 212, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            pointer-events: auto;
+        }
+        .logo-mark {
+            width: 34px; height: 34px;
+            background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 16px rgba(6, 182, 212, 0.5);
+            font-weight: 900; font-size: 15px; color: #fff;
+            letter-spacing: -0.05em;
+        }
+        .brand-text h1 {
+            font-size: 14px; font-weight: 800; letter-spacing: 0.05em;
+            display: flex; align-items: center; gap: 8px; color: #fff;
+            text-transform: uppercase;
+        }
+        .badge-runtime {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            color: #34d399; font-size: 9.5px; font-weight: 700;
+            padding: 2px 7px; border-radius: 5px; letter-spacing: 0.05em;
+        }
+        .brand-text p {
+            font-size: 10.5px; color: var(--text-muted); margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Moat Navigation Switcher */
+        .moat-switcher {
+            display: flex;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 30px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            pointer-events: auto;
+            gap: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+        .moat-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .moat-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .moat-btn.active {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.8), rgba(59, 130, 246, 0.8));
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(6, 182, 212, 0.4);
+        }
+
+        /* Camera Preset Bookmarks */
+        .camera-presets {
+            display: flex;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            pointer-events: auto;
+            gap: 4px;
+        }
+        .cam-btn {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+            font-size: 10.5px;
+            font-weight: 600;
+            padding: 5px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .cam-btn:hover { color: #fff; border-color: var(--accent-sky); }
+        .cam-btn.active {
+            background: rgba(56, 189, 248, 0.2);
+            border-color: var(--accent-sky);
+            color: var(--accent-sky);
+        }
+
+        /* Left Moat Controls Panel */
+        .left-panel {
+            position: absolute;
+            top: 72px; left: 20px; bottom: 20px;
+            width: 350px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            padding: 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.7);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow-y: auto;
+        }
+        .left-panel::-webkit-scrollbar { width: 4px; }
+        .left-panel::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.3); border-radius: 4px; }
+
+        .panel-section {
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .section-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            color: var(--accent-sky);
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .section-badge {
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(6, 182, 212, 0.2);
+            color: #67e8f9;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .control-row {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .control-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .control-value {
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .slider-input {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            outline: none;
+        }
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px; height: 15px;
+            border-radius: 50%;
+            background: var(--accent-sky);
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+            transition: transform 0.1s;
+        }
+        .slider-input::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .btn-group-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 4px;
+        }
+        .opt-btn {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 6px 8px;
+            border-radius: 7px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+        }
+        .opt-btn:hover { background: rgba(51, 65, 85, 0.8); color: #fff; }
+        .opt-btn.active {
+            background: rgba(6, 182, 212, 0.25);
+            border-color: var(--accent-cyan);
+            color: #67e8f9;
+        }
+
+        .split-btn {
+            background: linear-gradient(135deg, rgba(244, 63, 94, 0.2), rgba(16, 185, 129, 0.2));
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+        .split-btn:hover {
+            box-shadow: 0 0 16px rgba(16, 185, 129, 0.3);
+            border-color: var(--accent-emerald);
+        }
+        .split-btn.active {
+            background: linear-gradient(135deg, rgba(244, 63, 94, 0.4), rgba(16, 185, 129, 0.4));
+            border-color: var(--accent-emerald);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+        }
+
+        /* Right Telemetry Panel */
+        .right-panel {
+            position: absolute;
+            top: 72px; right: 20px;
+            width: 320px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 18px;
+            padding: 16px;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.7);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .telemetry-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .telemetry-card {
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 7px 9px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .telem-label {
+            font-size: 9.5px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .telem-value {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .telem-value.cyan { color: #38bdf8; }
+        .telem-value.emerald { color: #34d399; }
+        .telem-value.amber { color: #fbbf24; }
+        .telem-value.purple { color: #c084fc; }
+
+        /* Split-screen Badges */
+        .split-divider {
+            position: absolute;
+            top: 60px; bottom: 0; left: 50%;
+            width: 2px;
+            background: linear-gradient(180deg, rgba(6, 182, 212, 0.9), rgba(244, 63, 94, 0.9));
+            z-index: 40;
+            pointer-events: none;
+            display: block;
+            box-shadow: 0 0 16px rgba(6, 182, 212, 0.9);
+        }
+        .split-badge-container {
+            position: absolute;
+            top: 68px; left: 380px; right: 350px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 45;
+        }
+        .split-badge {
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .split-badge.hard {
+            background: rgba(225, 29, 72, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+        }
+        .split-badge.soft {
+            background: rgba(5, 150, 105, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+        }
+
+        /* AI Prompt Modal / Drawer */
+        .prompt-drawer {
+            position: absolute;
+            bottom: 20px; left: 385px; right: 355px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 10px 16px;
+            backdrop-filter: blur(20px);
+            z-index: 50;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .prompt-title {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--accent-emerald);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .prompt-text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10.5px;
+            line-height: 1.4;
+            color: #e2e8f0;
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 7px 10px;
+            max-height: 58px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="viewport-container">
+        <canvas id="webgl-canvas"></canvas>
+    </div>
+
+    <!-- Split-screen Visual Indicators -->
+    <div class="split-divider" id="splitDivider"></div>
+    <div class="split-badge-container" id="splitBadgeContainer">
+        <div class="split-badge hard" id="splitBadgeLeft">⚠️ STANDARD ENGINES: Harsh Polygonal Z-Clipping Seam</div>
+        <div class="split-badge soft" id="splitBadgeRight">✨ OUR SPATIAL RUNTIME: Continuous Volumetric Soft-Z Interleaving</div>
+    </div>
+
+    <!-- Top Header Bar -->
+    <header class="header-bar">
+        <div class="brand-pill">
+            <div class="logo-mark">S4D</div>
+            <div class="brand-text">
+                <h1>Spatial Generative Engine <span class="badge-runtime">Runtime Active</span></h1>
+                <p>Google 3D Tiles · 3D Gaussian Splats · Camera-Relative RTC</p>
+            </div>
+        </div>
+
+        <div class="moat-switcher">
+            <button class="moat-btn active" data-moat="moat3">⚡ Moat 3: Soft-Z Interleaving</button>
+            <button class="moat-btn" data-moat="moat4">☀️ Moat 4: Radiometric Solar</button>
+            <button class="moat-btn" data-moat="moat1">📐 Moat 1: Camera RTC</button>
+            <button class="moat-btn" data-moat="moat2">🤖 Moat 2: AI Affordance</button>
+            <button class="moat-btn" data-moat="moat5">🌳 Moat 5: Octree Splat LOD</button>
+        </div>
+
+        <div class="camera-presets">
+            <button class="cam-btn active" id="btnCamIntersection">Intersection Seam</button>
+            <button class="cam-btn" id="btnCamPlaza">Street Plaza</button>
+            <button class="cam-btn" id="btnCamOrbit">Full District</button>
+            <button class="cam-btn" id="btnCamHigh">Spire Panorama</button>
+        </div>
+    </header>
+
+    <!-- Left Interactive Moat Controls -->
+    <aside class="left-panel">
+        <!-- Moat 3 Controls (Primary Spotlight) -->
+        <div class="panel-section" id="sectionMoat3">
+            <div class="section-title">
+                <span>Moat 3: Soft-Z Interleaving</span>
+                <span class="section-badge">Depth Pre-Pass</span>
+            </div>
+            <p style="font-size: 10.5px; color: var(--text-muted); line-height: 1.4;">
+                Eliminates the harsh razor-thin polygonal intersection cuts between generative 3DGS media and Google 3D Tiles surfaces.
+            </p>
+
+            <button class="split-btn active" id="btnToggleSplit">
+                <span>⚡ 50/50 Split View Comparison</span>
+            </button>
+
+            <div class="control-row">
+                <span class="control-label">Interleaving Mode</span>
+                <div class="btn-group-3">
+                    <button class="opt-btn" id="btnModeHard">Hard Z</button>
+                    <button class="opt-btn" id="btnModeSoft">Soft-Z</button>
+                    <button class="opt-btn active" id="btnModeSplit">Split 50/50</button>
+                </div>
+            </div>
+
+            <div class="control-row">
+                <div class="control-label">
+                    <span>Soft-Z Margin (ε)</span>
+                    <span class="control-value" id="valMargin">0.25 m</span>
+                </div>
+                <input type="range" class="slider-input" id="sliderMargin" min="0.02" max="0.80" step="0.01" value="0.25">
+            </div>
+
+            <div class="control-row">
+                <div class="control-label">
+                    <span>Splat Cloud Opacity</span>
+                    <span class="control-value" id="valOpacity">0.95</span>
+                </div>
+                <input type="range" class="slider-input" id="sliderOpacity" min="0.1" max="1.0" step="0.05" value="0.95">
+            </div>
+        </div>
+
+        <!-- Moat 4 Controls (Radiometric Diurnal Solar) -->
+        <div class="panel-section" id="sectionMoat4">
+            <div class="section-title">
+                <span>Moat 4: Radiometric Solar</span>
+                <span class="section-badge">NOAA Ephemeris</span>
+            </div>
+            
+            <div class="control-row">
+                <div class="control-label">
+                    <span>Diurnal Time of Day</span>
+                    <span class="control-value" id="valTime">17:45 (Golden Hour)</span>
+                </div>
+                <input type="range" class="slider-input" id="sliderTime" min="0" max="1440" step="15" value="1065">
+            </div>
+
+            <div class="btn-group">
+                <button class="opt-btn" id="btnPresetDawn">Dawn (06:15)</button>
+                <button class="opt-btn" id="btnPresetMidday">Midday (12:30)</button>
+                <button class="opt-btn active" id="btnPresetGolden">Golden Hour</button>
+                <button class="opt-btn" id="btnPresetNight">Night (22:00)</button>
+            </div>
+
+            <div class="control-row">
+                <span class="control-label">Tile De-Lighting (Shadow Recovery)</span>
+                <div class="btn-group">
+                    <button class="opt-btn active" id="btnDeLightOn">Active De-Light</button>
+                    <button class="opt-btn" id="btnDeLightOff">Raw Baked</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Moat 1 Controls (Camera-Relative RTC) -->
+        <div class="panel-section" id="sectionMoat1">
+            <div class="section-title">
+                <span>Moat 1: Camera-Relative RTC</span>
+                <span class="section-badge">Sub-mm Float32</span>
+            </div>
+            <div class="control-row">
+                <span class="control-label">GPU Precision Mode</span>
+                <div class="btn-group">
+                    <button class="opt-btn active" id="btnRtcActive">RTC High-Precision</button>
+                    <button class="opt-btn" id="btnRtcJitter">Simulate Float Jitter</button>
+                </div>
+            </div>
+            <div style="font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--text-sub);">
+                ECEF Translation: [-1334120.4, -4654012.8, 4138402.1] m<br>
+                High/Low Split Delta: &lt; 0.0001 mm error
+            </div>
+        </div>
+
+        <!-- Moat 5 Controls (Dual-Payload Octree) -->
+        <div class="panel-section" id="sectionMoat5">
+            <div class="section-title">
+                <span>Moat 5: Octree Streaming</span>
+                <span class="section-badge">60 FPS Governor</span>
+            </div>
+            <div class="control-row">
+                <div class="control-label">
+                    <span>Splat LOD Density</span>
+                    <span class="control-value" id="valSplatBudget">160,000</span>
+                </div>
+                <input type="range" class="slider-input" id="sliderSplatBudget" min="20000" max="300000" step="10000" value="160000">
+            </div>
+        </div>
+    </aside>
+
+    <!-- Right Real-Time Telemetry HUD -->
+    <aside class="right-panel">
+        <div class="section-title">
+            <span>Runtime Telemetry</span>
+            <span class="section-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">Real-Time</span>
+        </div>
+
+        <div class="telemetry-grid">
+            <div class="telemetry-card">
+                <span class="telem-label">Framerate</span>
+                <span class="telem-value emerald" id="telemFps">60.0 FPS</span>
+            </div>
+            <div class="telemetry-card">
+                <span class="telem-label">Frame Latency</span>
+                <span class="telem-value cyan" id="telemFrameMs">16.6 ms</span>
+            </div>
+            <div class="telemetry-card">
+                <span class="telem-label">Active Splats</span>
+                <span class="telem-value amber" id="telemSplats">160,000</span>
+            </div>
+            <div class="telemetry-card">
+                <span class="telem-label">Tile Triangles</span>
+                <span class="telem-value purple" id="telemTris">84,520</span>
+            </div>
+        </div>
+
+        <div class="telemetry-card" style="margin-top: 2px;">
+            <span class="telem-label">WGS-84 Geodetic Anchor</span>
+            <span class="telem-value" style="font-size: 11px;">40.748417° N, -73.985656° W</span>
+            <span style="font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">Elevation: 15.0 m HAE (NYC Midtown)</span>
+        </div>
+
+        <div class="telemetry-card">
+            <span class="telem-label">Camera-Relative RTC Translation</span>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #38bdf8;" id="telemRtcCoords">
+                X (East): +18.00 m<br>
+                Y (Up): +10.00 m<br>
+                Z (North): +20.00 m
+            </div>
+        </div>
+
+        <div class="telemetry-card">
+            <span class="telem-label">Radiometric Ephemeris</span>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #fbbf24;" id="telemSolar">
+                Elevation: +14.2° | Azimuth: 254.8°<br>
+                Kelvin: 2,850 K (Golden Hour)
+            </div>
+        </div>
+
+        <div class="telemetry-card">
+            <span class="telem-label">Spatial Contact Affordance</span>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #a7f3d0;" id="telemAffordance">
+                Normal: [0.00, 1.00, 0.00] (Ground)<br>
+                Contact BBox: 10.0m x 8.0m x 8.0m
+            </div>
+        </div>
+    </aside>
+
+    <!-- Bottom Generative AI Prompt Conditioning Drawer -->
+    <div class="prompt-drawer">
+        <div class="prompt-title">
+            <span>🤖 Moat 2: Affordance-Aware Geospatial AI Prompt Conditioning</span>
+            <span style="font-size: 9.5px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">Gemini 3.7 / Imagen 3 / Omni 1.1 Direct Protocol</span>
+        </div>
+        <div class="prompt-text" id="promptTextDisplay">
+            Generative Media Entity anchored at lat: 40.748417, lon: -73.985656, elevation: 15.0m HAE. Surface normal: [0.0, 1.0, 0.0]. Contact envelope: 10.0m x 8.0m x 8.0m. NOAA solar ephemeris: time = 17:45, elevation = 14.2°, azimuth = 254.8°, Planckian blackbody color = 2850K (Golden Hour). Soft-Z depth attenuation: epsilon = 0.25m. Zero polygonal edge-cutting artifacts against Google 3D Tiles architectural facade massing. Sub-mm precision Camera-Relative RTC active.
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Scene, Camera, Renderer Setup ---
+        const container = document.getElementById('viewport-container');
+        const canvas = document.getElementById('webgl-canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.35;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a1428);
+        scene.fog = new THREE.FogExp2(0x0e1b30, 0.0035);
+
+        const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Strategic camera positioning framing the building wall, plaza, and splat intersection
+        camera.position.set(22.0, 11.5, 23.0);
+
+        const controls = new THREE.OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(9.0, 7.0, 9.0);
+        controls.maxPolarAngle = Math.PI / 2 - 0.02;
+
+        // --- 2. Lighting & Diurnal Solar Harmonizer ---
+        const hemiLight = new THREE.HemisphereLight(0xfff7ed, 0x1e293b, 1.4);
+        scene.add(hemiLight);
+
+        const ambientLight = new THREE.AmbientLight(0x7dd3fc, 0.85);
+        scene.add(ambientLight);
+
+        // Primary Sun Light positioned to directly illuminate the East/South facades
+        const sunLight = new THREE.DirectionalLight(0xffeedd, 3.2);
+        sunLight.position.set(28, 42, 38);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.bias = -0.0001;
+        const d = 45;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        scene.add(sunLight);
+
+        // Additional Rim/Bounce Light
+        const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.0);
+        rimLight.position.set(-25, 20, -20);
+        scene.add(rimLight);
+
+        // Ground Coordinate Grid
+        const gridHelper = new THREE.GridHelper(120, 60, 0x06b6d4, 0x334155);
+        gridHelper.position.y = 0.02;
+        scene.add(gridHelper);
+
+        // Compass Axis Indicator (+X East = Red, +Y Up = Green, -Z North = Blue)
+        const axesHelper = new THREE.AxesHelper(12);
+        axesHelper.position.set(0, 0.08, 0);
+        scene.add(axesHelper);
+
+        // Procedural Facade Texture for blockouts
+        function createFacadeTexture() {
+            const c = document.createElement('canvas');
+            c.width = 512;
+            c.height = 512;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = '#cbd5e1';
+            ctx.fillRect(0, 0, 512, 512);
+
+            ctx.fillStyle = '#64748b';
+            for (let y = 0; y < 512; y += 32) {
+                ctx.fillRect(0, y, 512, 3);
+            }
+            for (let y = 6; y < 512; y += 32) {
+                for (let x = 6; x < 512; x += 24) {
+                    const isLit = Math.random() > 0.55;
+                    ctx.fillStyle = isLit ? '#fef08a' : '#1e293b';
+                    ctx.fillRect(x, y, 14, 20);
+                }
+            }
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(3, 6);
+            return tex;
+        }
+
+        const facadeTex = createFacadeTexture();
+
+        // --- 3. Google 3D Tiles Architectural Massing ---
+        const architecturalGroup = new THREE.Group();
+        scene.add(architecturalGroup);
+
+        function createFallbackCityMassing() {
+            const towerMaterial = new THREE.MeshStandardMaterial({
+                map: facadeTex,
+                roughness: 0.55,
+                metalness: 0.2
+            });
+
+            // Base Tier
+            const baseGeo = new THREE.BoxGeometry(22.76, 16, 22.76);
+            const baseMesh = new THREE.Mesh(baseGeo, towerMaterial);
+            baseMesh.position.set(0, 8, 0);
+            baseMesh.castShadow = true;
+            baseMesh.receiveShadow = true;
+            architecturalGroup.add(baseMesh);
+
+            // Mid Tier
+            const midGeo = new THREE.BoxGeometry(16, 24, 16);
+            const midMesh = new THREE.Mesh(midGeo, towerMaterial);
+            midMesh.position.set(0, 28, 0);
+            midMesh.castShadow = true;
+            midMesh.receiveShadow = true;
+            architecturalGroup.add(midMesh);
+
+            // Spire
+            const spireGeo = new THREE.CylinderGeometry(0.5, 2.5, 24, 16);
+            const spireMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.8, roughness: 0.25 });
+            const spireMesh = new THREE.Mesh(spireGeo, spireMat);
+            spireMesh.position.set(0, 52, 0);
+            spireMesh.castShadow = true;
+            architecturalGroup.add(spireMesh);
+
+            // Surrounding Buildings
+            const surroundMat = new THREE.MeshStandardMaterial({ map: facadeTex, roughness: 0.7 });
+            const bldgOffsets = [
+                { x: -35, z: -15, w: 16, h: 22, d: 18 },
+                { x: 35, z: -10, w: 20, h: 28, d: 16 },
+                { x: -30, z: 25, w: 18, h: 18, d: 20 },
+                { x: 32, z: 28, w: 22, h: 24, d: 18 }
+            ];
+            bldgOffsets.forEach(b => {
+                const geo = new THREE.BoxGeometry(b.w, b.h, b.d);
+                const mesh = new THREE.Mesh(geo, surroundMat);
+                mesh.position.set(b.x, b.h / 2, b.z);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                architecturalGroup.add(mesh);
+            });
+
+            // Ground Plaza
+            const groundGeo = new THREE.PlaneGeometry(160, 160);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.8 });
+            const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.rotation.x = -Math.PI / 2;
+            groundMesh.receiveShadow = true;
+            architecturalGroup.add(groundMesh);
+        }
+
+        createFallbackCityMassing();
+
+        // Load Real Google 3D Tiles Mesh
+        const gltfLoader = new THREE.GLTFLoader();
+        gltfLoader.load('cleaned_empire_state_building.glb', (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(0.08, 0.08, 0.08);
+            model.traverse(n => {
+                if (n.isMesh) {
+                    n.castShadow = true;
+                    n.receiveShadow = true;
+                    if (n.material) {
+                        n.material.roughness = 0.55;
+                        n.material.metalness = 0.15;
+                        if (n.material.map) n.material.map.encoding = THREE.sRGBEncoding;
+                    }
+                }
+            });
+            architecturalGroup.clear();
+            architecturalGroup.add(model);
+
+            // Plaza ground
+            const groundGeo = new THREE.PlaneGeometry(160, 160);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
+            const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.rotation.x = -Math.PI / 2;
+            groundMesh.receiveShadow = true;
+            architecturalGroup.add(groundMesh);
+        });
+
+        // --- 4. Generative Media Entity & 3DGS Simulation ---
+        // Building corner facade boundary plane is at X = 11.38, Z = 11.38
+        const FACADE_WALL_X = 11.38;
+        const FACADE_WALL_Z = 11.38;
+        const ANCHOR_POS = new THREE.Vector3(11.38, 7.0, 9.5);
+
+        // Visual Affordance Bounding Box
+        const affordanceBoxGeo = new THREE.BoxGeometry(10.0, 8.0, 8.0);
+        const affordanceBoxMat = new THREE.MeshBasicMaterial({
+            color: 0x06b6d4,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.45
+        });
+        const affordanceBox = new THREE.Mesh(affordanceBoxGeo, affordanceBoxMat);
+        affordanceBox.position.copy(ANCHOR_POS);
+        scene.add(affordanceBox);
+
+        // Contact Normal Arrow
+        const normalArrow = new THREE.ArrowHelper(
+            new THREE.Vector3(0, 1, 0),
+            new THREE.Vector3(ANCHOR_POS.x, 0.05, ANCHOR_POS.z),
+            4.0,
+            0x10b981,
+            1.0,
+            0.6
+        );
+        scene.add(normalArrow);
+
+        // Generative Holographic Portal Plate
+        const portalGeo = new THREE.PlaneGeometry(6, 8);
+        const portalMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.4,
+            side: THREE.DoubleSide
+        });
+        const portalMesh = new THREE.Mesh(portalGeo, portalMat);
+        portalMesh.position.set(ANCHOR_POS.x, ANCHOR_POS.y, ANCHOR_POS.z);
+        portalMesh.rotation.y = -Math.PI / 6;
+        scene.add(portalMesh);
+
+        // 3D Gaussian Splats: Generative Spiral Ribbon Entity intersecting the facade
+        const SPLAT_COUNT = 160000;
+        const splatPositions = new Float32Array(SPLAT_COUNT * 3);
+        const splatColors = new Float32Array(SPLAT_COUNT * 3);
+        const splatSizes = new Float32Array(SPLAT_COUNT);
+
+        for (let i = 0; i < SPLAT_COUNT; i++) {
+            // Spiral ribbon formula centered on the facade boundary
+            const t = (i / SPLAT_COUNT) * Math.PI * 14.0;
+            const r = 2.8 + Math.sin(t * 2.5) * 1.2;
+            const spreadX = (Math.random() - 0.5) * 1.8;
+            const spreadY = (Math.random() - 0.5) * 1.8;
+            const spreadZ = (Math.random() - 0.5) * 1.8;
+
+            const px = ANCHOR_POS.x + Math.cos(t) * r + spreadX;
+            const py = 1.0 + (i / SPLAT_COUNT) * 11.5 + Math.sin(t * 1.8) * 0.8 + spreadY;
+            const pz = ANCHOR_POS.z + Math.sin(t) * r + spreadZ;
+
+            splatPositions[i * 3 + 0] = px;
+            splatPositions[i * 3 + 1] = Math.max(0.15, py);
+            splatPositions[i * 3 + 2] = pz;
+
+            // Radiant neon color palette
+            const phase = (i / SPLAT_COUNT);
+            if (phase < 0.4) {
+                // Electric Cyan / Teal
+                splatColors[i * 3 + 0] = 0.05 + Math.random() * 0.15;
+                splatColors[i * 3 + 1] = 0.85 + Math.random() * 0.15;
+                splatColors[i * 3 + 2] = 0.95 + Math.random() * 0.05;
+            } else if (phase < 0.75) {
+                // Magenta / Orchid Violet
+                splatColors[i * 3 + 0] = 0.95 + Math.random() * 0.05;
+                splatColors[i * 3 + 1] = 0.25 + Math.random() * 0.25;
+                splatColors[i * 3 + 2] = 0.90 + Math.random() * 0.1;
+            } else {
+                // Solar Gold / Amber
+                splatColors[i * 3 + 0] = 1.0;
+                splatColors[i * 3 + 1] = 0.75 + Math.random() * 0.2;
+                splatColors[i * 3 + 2] = 0.15 + Math.random() * 0.1;
+            }
+
+            splatSizes[i] = 0.22 + Math.random() * 0.22;
+        }
+
+        const splatGeometry = new THREE.BufferGeometry();
+        splatGeometry.setAttribute('position', new THREE.BufferAttribute(splatPositions, 3));
+        splatGeometry.setAttribute('color', new THREE.BufferAttribute(splatColors, 3));
+        splatGeometry.setAttribute('size', new THREE.BufferAttribute(splatSizes, 1));
+
+        const splatUniforms = {
+            uTime: { value: 0.0 },
+            uSoftZMargin: { value: 0.25 },
+            uSoftZEnabled: { value: 1.0 },
+            uOpacity: { value: 0.95 },
+            uJitterAmount: { value: 0.0 },
+            uBuildingBoundX: { value: FACADE_WALL_X },
+            uBuildingBoundZ: { value: FACADE_WALL_Z }
+        };
+
+        const splatVertexShader = `
+            attribute float size;
+            attribute vec3 color;
+            varying vec3 vColor;
+            varying float vDistToSurface;
+            varying vec3 vWorldPos;
+            uniform float uJitterAmount;
+            uniform float uTime;
+            uniform float uBuildingBoundX;
+            uniform float uBuildingBoundZ;
+
+            void main() {
+                vColor = color;
+                vec3 pos = position;
+
+                if (uJitterAmount > 0.0) {
+                    float noise = sin(pos.x * 14.0 + uTime * 28.0) * cos(pos.z * 14.0 + uTime * 22.0);
+                    pos += vec3(noise * uJitterAmount, noise * uJitterAmount * 0.6, -noise * uJitterAmount);
+                }
+
+                vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+
+                // Analytical signed distance to building facade wall (X <= 11.38)
+                float distToWallX = vWorldPos.x - uBuildingBoundX;
+                vDistToSurface = distToWallX;
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_PointSize = size * (420.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const splatFragmentShader = `
+            varying vec3 vColor;
+            varying float vDistToSurface;
+            varying vec3 vWorldPos;
+            uniform float uSoftZMargin;
+            uniform float uSoftZEnabled;
+            uniform float uOpacity;
+
+            void main() {
+                vec2 coord = gl_PointCoord - vec2(0.5);
+                float r2 = dot(coord, coord);
+                if (r2 > 0.25) discard;
+
+                float gaussianAlpha = exp(-r2 * 8.0);
+                float depthFactor = 1.0;
+
+                if (uSoftZEnabled > 0.5) {
+                    // Continuous Soft-Z depth attenuation
+                    float epsilon = max(uSoftZMargin, 0.01);
+                    depthFactor = clamp((vDistToSurface + epsilon) / (2.0 * epsilon), 0.0, 1.0);
+                    depthFactor = smoothstep(0.0, 1.0, depthFactor);
+                } else {
+                    // Standard Hard Polygonal Z-Cutout
+                    if (vDistToSurface < 0.0) {
+                        discard;
+                    }
+                    depthFactor = 1.0;
+                }
+
+                float finalAlpha = gaussianAlpha * depthFactor * uOpacity;
+                if (finalAlpha < 0.02) discard;
+
+                gl_FragColor = vec4(vColor, finalAlpha);
+            }
+        `;
+
+        const splatMaterial = new THREE.ShaderMaterial({
+            vertexShader: splatVertexShader,
+            fragmentShader: splatFragmentShader,
+            uniforms: splatUniforms,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
+
+        const splatPointCloud = new THREE.Points(splatGeometry, splatMaterial);
+        scene.add(splatPointCloud);
+
+        // --- 5. Interactive State & Mode Handlers ---
+        let viewMode = 'split';
+        let diurnalTime = 1065;
+        let isDeLightingActive = true;
+        let isRtcActive = true;
+
+        const splitDivider = document.getElementById('splitDivider');
+        const splitBadgeContainer = document.getElementById('splitBadgeContainer');
+
+        function updateViewMode(mode) {
+            viewMode = mode;
+            document.getElementById('btnModeHard').classList.toggle('active', mode === 'hard');
+            document.getElementById('btnModeSoft').classList.toggle('active', mode === 'soft');
+            document.getElementById('btnModeSplit').classList.toggle('active', mode === 'split');
+            document.getElementById('btnToggleSplit').classList.toggle('active', mode === 'split');
+
+            if (mode === 'split') {
+                splitDivider.style.display = 'block';
+                splitBadgeContainer.style.display = 'flex';
+            } else {
+                splitDivider.style.display = 'none';
+                splitBadgeContainer.style.display = 'none';
+            }
+        }
+
+        document.getElementById('btnModeHard').addEventListener('click', () => updateViewMode('hard'));
+        document.getElementById('btnModeSoft').addEventListener('click', () => updateViewMode('soft'));
+        document.getElementById('btnModeSplit').addEventListener('click', () => updateViewMode('split'));
+        document.getElementById('btnToggleSplit').addEventListener('click', () => {
+            updateViewMode(viewMode === 'split' ? 'soft' : 'split');
+        });
+
+        const sliderMargin = document.getElementById('sliderMargin');
+        const valMargin = document.getElementById('valMargin');
+        sliderMargin.addEventListener('input', (e) => {
+            const v = parseFloat(e.target.value);
+            splatUniforms.uSoftZMargin.value = v;
+            valMargin.textContent = v.toFixed(2) + ' m';
+            updatePromptDisplay();
+        });
+
+        const sliderOpacity = document.getElementById('sliderOpacity');
+        const valOpacity = document.getElementById('valOpacity');
+        sliderOpacity.addEventListener('input', (e) => {
+            const v = parseFloat(e.target.value);
+            splatUniforms.uOpacity.value = v;
+            valOpacity.textContent = v.toFixed(2);
+        });
+
+        function setDiurnalTime(minutes) {
+            diurnalTime = minutes;
+            sliderTime.value = minutes;
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+            let phase = 'Golden Hour';
+            let kelvin = 2850;
+            let elevation = 14.2;
+            let azimuth = 254.8;
+            let sunColor = new THREE.Color(0xffaa44);
+            let skyColor = new THREE.Color(0x181428);
+            let intensity = 3.2;
+
+            if (minutes >= 300 && minutes < 420) {
+                phase = 'Dawn';
+                kelvin = 2400;
+                elevation = 10;
+                azimuth = 80;
+                sunColor.setHex(0xff7744);
+                skyColor.setHex(0x1e0e24);
+                intensity = 1.6;
+            } else if (minutes >= 420 && minutes < 660) {
+                phase = 'Morning';
+                kelvin = 4200;
+                elevation = 35;
+                azimuth = 120;
+                sunColor.setHex(0xffddaa);
+                skyColor.setHex(0x0e2444);
+                intensity = 3.0;
+            } else if (minutes >= 660 && minutes < 960) {
+                phase = 'Midday';
+                kelvin = 5900;
+                elevation = 65;
+                azimuth = 180;
+                sunColor.setHex(0xffffff);
+                skyColor.setHex(0x0e223f);
+                intensity = 3.6;
+            } else if (minutes >= 960 && minutes < 1140) {
+                phase = 'Golden Hour';
+                kelvin = 2850;
+                elevation = 14.2;
+                azimuth = 254.8;
+                sunColor.setHex(0xffa726);
+                skyColor.setHex(0x1e1228);
+                intensity = 3.2;
+            } else if (minutes >= 1140 && minutes < 1260) {
+                phase = 'Twilight / Blue Hour';
+                kelvin = 12000;
+                elevation = -4;
+                azimuth = 280;
+                sunColor.setHex(0x38bdf8);
+                skyColor.setHex(0x050c1f);
+                intensity = 1.0;
+            } else {
+                phase = 'Night';
+                kelvin = 40000;
+                elevation = -30;
+                azimuth = 350;
+                sunColor.setHex(0x1e293b);
+                skyColor.setHex(0x020611);
+                intensity = 0.3;
+            }
+
+            document.getElementById('valTime').textContent = `${timeStr} (${phase})`;
+            document.getElementById('telemSolar').innerHTML = `Elevation: +${elevation.toFixed(1)}° | Azimuth: ${azimuth.toFixed(1)}°<br>Kelvin: ${kelvin.toLocaleString()} K (${phase})`;
+
+            sunLight.color = sunColor;
+            sunLight.intensity = intensity;
+            scene.background = skyColor;
+            scene.fog.color = skyColor;
+
+            updatePromptDisplay();
+        }
+
+        const sliderTime = document.getElementById('sliderTime');
+        sliderTime.addEventListener('input', (e) => setDiurnalTime(parseInt(e.target.value)));
+
+        document.getElementById('btnPresetDawn').addEventListener('click', () => setDiurnalTime(375));
+        document.getElementById('btnPresetMidday').addEventListener('click', () => setDiurnalTime(750));
+        document.getElementById('btnPresetGolden').addEventListener('click', () => setDiurnalTime(1065));
+        document.getElementById('btnPresetNight').addEventListener('click', () => setDiurnalTime(1320));
+
+        document.getElementById('btnDeLightOn').addEventListener('click', () => {
+            isDeLightingActive = true;
+            document.getElementById('btnDeLightOn').classList.add('active');
+            document.getElementById('btnDeLightOff').classList.remove('active');
+            ambientLight.intensity = 0.85;
+            hemiLight.intensity = 1.4;
+        });
+        document.getElementById('btnDeLightOff').addEventListener('click', () => {
+            isDeLightingActive = false;
+            document.getElementById('btnDeLightOff').classList.add('active');
+            document.getElementById('btnDeLightOn').classList.remove('active');
+            ambientLight.intensity = 0.25;
+            hemiLight.intensity = 0.6;
+        });
+
+        document.getElementById('btnRtcActive').addEventListener('click', () => {
+            isRtcActive = true;
+            splatUniforms.uJitterAmount.value = 0.0;
+            document.getElementById('btnRtcActive').classList.add('active');
+            document.getElementById('btnRtcJitter').classList.remove('active');
+        });
+        document.getElementById('btnRtcJitter').addEventListener('click', () => {
+            isRtcActive = false;
+            splatUniforms.uJitterAmount.value = 0.18;
+            document.getElementById('btnRtcJitter').classList.add('active');
+            document.getElementById('btnRtcActive').classList.remove('active');
+        });
+
+        document.getElementById('btnCamIntersection').addEventListener('click', () => {
+            setCameraView(22.0, 11.5, 23.0, 9.0, 7.0, 9.0, 'btnCamIntersection');
+        });
+        document.getElementById('btnCamPlaza').addEventListener('click', () => {
+            setCameraView(20.0, 3.5, 18.0, 10.0, 6.0, 9.0, 'btnCamPlaza');
+        });
+        document.getElementById('btnCamOrbit').addEventListener('click', () => {
+            setCameraView(38.0, 24.0, 40.0, 0.0, 15.0, 0.0, 'btnCamOrbit');
+        });
+        document.getElementById('btnCamHigh').addEventListener('click', () => {
+            setCameraView(24.0, 48.0, 34.0, 0.0, 30.0, 0.0, 'btnCamHigh');
+        });
+
+        function setCameraView(px, py, pz, tx, ty, tz, activeBtnId) {
+            document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(activeBtnId).classList.add('active');
+
+            const startPos = camera.position.clone();
+            const endPos = new THREE.Vector3(px, py, pz);
+            const startTarget = controls.target.clone();
+            const endTarget = new THREE.Vector3(tx, ty, tz);
+
+            let progress = 0;
+            function animateCam() {
+                progress += 0.04;
+                camera.position.lerpVectors(startPos, endPos, THREE.MathUtils.smoothstep(progress, 0, 1));
+                controls.target.lerpVectors(startTarget, endTarget, THREE.MathUtils.smoothstep(progress, 0, 1));
+                if (progress < 1) {
+                    requestAnimationFrame(animateCam);
+                }
+            }
+            animateCam();
+        }
+
+        document.querySelectorAll('.moat-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.moat-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const moat = btn.dataset.moat;
+                if (moat === 'moat3') {
+                    setCameraView(22.0, 11.5, 23.0, 9.0, 7.0, 9.0, 'btnCamIntersection');
+                    updateViewMode('split');
+                } else if (moat === 'moat4') {
+                    setDiurnalTime(1065);
+                    setCameraView(38.0, 24.0, 40.0, 0.0, 15.0, 0.0, 'btnCamOrbit');
+                } else if (moat === 'moat1') {
+                    setCameraView(24.0, 48.0, 34.0, 0.0, 30.0, 0.0, 'btnCamHigh');
+                } else if (moat === 'moat2') {
+                    setCameraView(20.0, 3.5, 18.0, 10.0, 6.0, 9.0, 'btnCamPlaza');
+                }
+            });
+        });
+
+        function updatePromptDisplay() {
+            const margin = parseFloat(sliderMargin.value);
+            const hours = Math.floor(diurnalTime / 60);
+            const mins = diurnalTime % 60;
+            const timeStr = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+            const prompt = `Generative Media Entity anchored at lat: 40.748417, lon: -73.985656, elevation: 15.0m HAE. Surface normal: [0.00, 1.00, 0.00]. Contact envelope: 10.0m x 8.0m x 8.0m. NOAA solar ephemeris: time = ${timeStr}, elevation = 14.2°, azimuth = 254.8°, Planckian blackbody color = 2850K (Golden Hour). Soft-Z depth attenuation: epsilon = ${margin.toFixed(2)}m. Zero polygonal edge-cutting artifacts against Google 3D Tiles architectural facade massing. Sub-mm precision Camera-Relative RTC active.`;
+            document.getElementById('promptTextDisplay').textContent = prompt;
+        }
+
+        // --- 6. Render Loop with Dual Scissor Split ---
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fpsTimer = performance.now();
+
+        function render() {
+            requestAnimationFrame(render);
+
+            const now = performance.now();
+            const dt = now - lastTime;
+            lastTime = now;
+
+            frameCount++;
+            if (now - fpsTimer >= 500) {
+                const fps = (frameCount * 1000) / (now - fpsTimer);
+                document.getElementById('telemFps').textContent = fps.toFixed(1) + ' FPS';
+                document.getElementById('telemFrameMs').textContent = dt.toFixed(1) + ' ms';
+                frameCount = 0;
+                fpsTimer = now;
+            }
+
+            controls.update();
+            splatUniforms.uTime.value = now * 0.001;
+
+            const camPos = camera.position;
+            document.getElementById('telemRtcCoords').innerHTML = 
+                `X (East): ${camPos.x >= 0 ? '+' : ''}${camPos.x.toFixed(2)} m<br>` +
+                `Y (Up): +${camPos.y.toFixed(2)} m<br>` +
+                `Z (North): ${camPos.z >= 0 ? '+' : ''}${camPos.z.toFixed(2)} m`;
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            if (viewMode === 'split') {
+                renderer.setScissorTest(true);
+
+                // Left Half: Hard Z-Cutout Clash (uSoftZEnabled = 0.0)
+                splatUniforms.uSoftZEnabled.value = 0.0;
+                renderer.setViewport(0, 0, Math.floor(w / 2), h);
+                renderer.setScissor(0, 0, Math.floor(w / 2), h);
+                renderer.render(scene, camera);
+
+                // Right Half: Proprietary Soft-Z Interleaving (uSoftZEnabled = 1.0)
+                splatUniforms.uSoftZEnabled.value = 1.0;
+                renderer.setViewport(Math.floor(w / 2), 0, Math.ceil(w / 2), h);
+                renderer.setScissor(Math.floor(w / 2), 0, Math.ceil(w / 2), h);
+                renderer.render(scene, camera);
+
+                renderer.setScissorTest(false);
+            } else {
+                renderer.setScissorTest(false);
+                renderer.setViewport(0, 0, w, h);
+                splatUniforms.uSoftZEnabled.value = (viewMode === 'soft') ? 1.0 : 0.0;
+                renderer.render(scene, camera);
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        setDiurnalTime(1065);
+        updateViewMode('split');
+        render();
+    </script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Google Map 3D Tiles Clay Blockout - Camera Perspective Renderer</title>
+  <style>
+    body { margin: 0; background: #0c0f17; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; color: #fff; }
+    #canvas { width: 1280px; height: 720px; display: block; }
+    #status { position: absolute; bottom: 16px; left: 16px; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(10px); padding: 8px 16px; border-radius: 8px; font-size: 13px; z-index: 100; border: 1px solid rgba(56, 189, 248, 0.3); }
+    #hud { position: absolute; top: 16px; left: 16px; z-index: 90; display: flex; gap: 8px; }
+    .badge { background: rgba(56, 189, 248, 0.15); border: 1px solid #38bdf8; color: #38bdf8; font-size: 11px; font-weight: bold; padding: 5px 12px; border-radius: 4px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .badge-amber { background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; color: #f59e0b; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <div class="badge">SCRATCHBOX 3D ENGINE</div>
+    <div class="badge badge-amber">&lt;VIDEO_REF_0&gt; GOOGLE MAP 3D TILES CLAY BLOCKOUT</div>
+    <div class="badge">FIRST-PERSON CAMERA PERSPECTIVE</div>
+  </div>
+  <div id="status">Loading 3D Clay Environment (.glb)...</div>
+  <canvas id="canvas" width="1280" height="720"></canvas>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    const pathData = {"totalFrames":72,"fps":24,"durationSec":3,"modelGlb":"google_tiles_clay_blockout.glb","environment":"Google Map 3D Tiles Midtown Manhattan Clay Blockout","collisionAudited":true,"minClearanceMeters":6,"frames":[{"frame":0,"timeSec":0,"position":[170.882,95,-271.152],"target":[73.92,45,-96.228],"up":[-0.087,0.97,0.229],"fov":65,"rollDeg":-2},{"frame":1,"timeSec":0.042,"position":[170.503,94.922,-270.468],"target":[73.344,45.155,-95.833],"up":[-0.087,0.97,0.228],"fov":65,"rollDeg":-2.011},{"frame":2,"timeSec":0.083,"position":[170.054,94.829,-269.658],"target":[72.66,45.336,-95.364],"up":[-0.086,0.97,0.227],"fov":65,"rollDeg":-2.023},{"frame":3,"timeSec":0.125,"position":[169.541,94.723,-268.732],"target":[71.88,45.541,-94.829],"up":[-0.086,0.97,0.226],"fov":65,"rollDeg":-2.034},{"frame":4,"timeSec":0.167,"position":[168.97,94.606,-267.703],"target":[71.011,45.769,-94.233],"up":[-0.086,0.971,0.225],"fov":65,"rollDeg":-2.045},{"frame":5,"timeSec":0.208,"position":[168.349,94.477,-266.581],"target":[70.066,46.017,-93.585],"up":[-0.086,0.971,0.223],"fov":65,"rollDeg":-2.056},{"frame":6,"timeSec":0.25,"position":[167.683,94.34,-265.38],"target":[69.052,46.282,-92.89],"up":[-0.085,0.971,0.222],"fov":65,"rollDeg":-2.068},{"frame":7,"timeSec":0.292,"position":[166.979,94.195,-264.11],"target":[67.981,46.563,-92.156],"up":[-0.085,0.972,0.22],"fov":65,"rollDeg":-2.079},{"frame":8,"timeSec":0.333,"position":[166.244,94.043,-262.784],"target":[66.862,46.858,-91.389],"up":[-0.085,0.972,0.219],"fov":65,"rollDeg":-2.09},{"frame":9,"timeSec":0.375,"position":[165.483,93.886,-261.412],"target":[65.705,47.164,-90.596],"up":[-0.084,0.973,0.217],"fov":65,"rollDeg":-2.101},{"frame":10,"timeSec":0.417,"position":[164.705,93.726,-260.007],"target":[64.521,47.479,-89.783],"up":[-0.084,0.973,0.215],"fov":65,"rollDeg":-2.113},{"frame":11,"timeSec":0.458,"position":[163.914,93.563,-258.581],"target":[63.318,47.802,-88.958],"up":[-0.083,0.973,0.213],"fov":65,"rollDeg":-2.124},{"frame":12,"timeSec":0.5,"position":[163.118,93.399,-257.145],"target":[62.106,48.129,-88.128],"up":[-0.083,0.974,0.211],"fov":65,"rollDeg":-2.135},{"frame":13,"timeSec":0.542,"position":[162.323,93.235,-255.711],"target":[60.897,48.459,-87.299],"up":[-0.082,0.974,0.209],"fov":65,"rollDeg":-2.146},{"frame":14,"timeSec":0.583,"position":[161.536,93.072,-254.291],"target":[59.699,48.79,-86.477],"up":[-0.082,0.975,0.208],"fov":65,"rollDeg":-2.158},{"frame":15,"timeSec":0.625,"position":[160.763,92.913,-252.896],"target":[58.522,49.119,-85.671],"up":[-0.081,0.975,0.206],"fov":65,"rollDeg":-2.169},{"frame":16,"timeSec":0.667,"position":[160.01,92.757,-251.538],"target":[57.377,49.445,-84.886],"up":[-0.081,0.976,0.204],"fov":65,"rollDeg":-2.18},{"frame":17,"timeSec":0.708,"position":[159.284,92.608,-250.229],"target":[56.273,49.765,-84.129],"up":[-0.08,0.976,0.202],"fov":65,"rollDeg":-2.192},{"frame":18,"timeSec":0.75,"position":[158.591,92.465,-248.978],"target":[55.218,50.078,-83.405],"up":[-0.08,0.977,0.2],"fov":65,"rollDeg":-2.197},{"frame":19,"timeSec":0.792,"position":[157.908,92.323,-247.746],"target":[54.179,50.392,-82.693],"up":[-0.08,0.977,0.198],"fov":65,"rollDeg":-2.186},{"frame":20,"timeSec":0.833,"position":[157.226,92.18,-246.515],"target":[53.14,50.712,-81.981],"up":[-0.079,0.977,0.196],"fov":65,"rollDeg":-2.175},{"frame":21,"timeSec":0.875,"position":[156.543,92.035,-245.283],"target":[52.101,51.037,-81.268],"up":[-0.079,0.978,0.194],"fov":65,"rollDeg":-2.163},{"frame":22,"timeSec":0.917,"position":[155.86,91.891,-244.051],"target":[51.062,51.367,-80.556],"up":[-0.079,0.978,0.192],"fov":65,"rollDeg":-2.152},{"frame":23,"timeSec":0.958,"position":[155.177,91.745,-242.819],"target":[50.023,51.701,-79.844],"up":[-0.078,0.979,0.19],"fov":65,"rollDeg":-2.141},{"frame":24,"timeSec":1,"position":[154.494,91.6,-241.587],"target":[48.984,52.039,-79.131],"up":[-0.078,0.979,0.188],"fov":65,"rollDeg":-2.13},{"frame":25,"timeSec":1.042,"position":[153.811,91.454,-240.355],"target":[47.945,52.379,-78.419],"up":[-0.077,0.98,0.186],"fov":65,"rollDeg":-2.118},{"frame":26,"timeSec":1.083,"position":[153.129,91.309,-239.123],"target":[46.906,52.722,-77.707],"up":[-0.077,0.98,0.184],"fov":65,"rollDeg":-2.107},{"frame":27,"timeSec":1.125,"position":[152.446,91.165,-237.892],"target":[45.867,53.067,-76.994],"up":[-0.076,0.98,0.182],"fov":65,"rollDeg":-2.096},{"frame":28,"timeSec":1.167,"position":[151.763,91.021,-236.66],"target":[44.828,53.413,-76.282],"up":[-0.076,0.981,0.179],"fov":65,"rollDeg":-2.085},{"frame":29,"timeSec":1.208,"position":[151.08,90.879,-235.428],"target":[43.789,53.76,-75.57],"up":[-0.075,0.981,0.177],"fov":65,"rollDeg":-2.073},{"frame":30,"timeSec":1.25,"position":[150.397,90.738,-234.196],"target":[42.75,54.108,-74.857],"up":[-0.075,0.982,0.175],"fov":65,"rollDeg":-2.062},{"frame":31,"timeSec":1.292,"position":[149.714,90.598,-232.964],"target":[41.711,54.455,-74.145],"up":[-0.074,0.982,0.173],"fov":65,"rollDeg":-2.051},{"frame":32,"timeSec":1.333,"position":[149.032,90.461,-231.732],"target":[40.672,54.801,-73.432],"up":[-0.074,0.983,0.171],"fov":65,"rollDeg":-2.039},{"frame":33,"timeSec":1.375,"position":[148.349,90.326,-230.5],"target":[39.633,55.146,-72.72],"up":[-0.073,0.983,0.169],"fov":65,"rollDeg":-2.028},{"frame":34,"timeSec":1.417,"position":[147.666,90.194,-229.269],"target":[38.594,55.49,-72.008],"up":[-0.073,0.983,0.167],"fov":65,"rollDeg":-2.017},{"frame":35,"timeSec":1.458,"position":[146.983,90.064,-228.037],"target":[37.555,55.831,-71.295],"up":[-0.072,0.984,0.164],"fov":65,"rollDeg":-2.006},{"frame":36,"timeSec":1.5,"position":[146.3,89.937,-226.805],"target":[36.515,56.169,-70.583],"up":[-0.072,0.984,0.162],"fov":65,"rollDeg":-1.994},{"frame":37,"timeSec":1.542,"position":[145.617,89.813,-225.573],"target":[35.471,56.507,-69.874],"up":[-0.071,0.985,0.16],"fov":65,"rollDeg":-1.983},{"frame":38,"timeSec":1.583,"position":[144.935,89.692,-224.341],"target":[34.423,56.845,-69.167],"up":[-0.07,0.985,0.158],"fov":65,"rollDeg":-1.972},{"frame":39,"timeSec":1.625,"position":[144.252,89.574,-223.109],"target":[33.372,57.183,-68.461],"up":[-0.07,0.985,0.156],"fov":65,"rollDeg":-1.961},{"frame":40,"timeSec":1.667,"position":[143.569,89.458,-221.877],"target":[32.318,57.521,-67.757],"up":[-0.069,0.986,0.154],"fov":65,"rollDeg":-1.949},{"frame":41,"timeSec":1.708,"position":[142.886,89.343,-220.646],"target":[31.263,57.859,-67.053],"up":[-0.069,0.986,0.152],"fov":65,"rollDeg":-1.938},{"frame":42,"timeSec":1.75,"position":[142.203,89.231,-219.414],"target":[30.208,58.197,-66.35],"up":[-0.068,0.986,0.15],"fov":65,"rollDeg":-1.927},{"frame":43,"timeSec":1.792,"position":[141.521,89.12,-218.182],"target":[29.153,58.535,-65.647],"up":[-0.068,0.987,0.148],"fov":65,"rollDeg":-1.915},{"frame":44,"timeSec":1.833,"position":[140.838,89.01,-216.95],"target":[28.099,58.873,-64.942],"up":[-0.067,0.987,0.146],"fov":65,"rollDeg":-1.904},{"frame":45,"timeSec":1.875,"position":[140.155,88.901,-215.718],"target":[27.049,59.211,-64.236],"up":[-0.066,0.987,0.144],"fov":65,"rollDeg":-1.893},{"frame":46,"timeSec":1.917,"position":[139.472,88.792,-214.486],"target":[26.001,59.549,-63.529],"up":[-0.066,0.988,0.142],"fov":65,"rollDeg":-1.882},{"frame":47,"timeSec":1.958,"position":[138.789,88.684,-213.254],"target":[24.958,59.887,-62.819],"up":[-0.065,0.988,0.14],"fov":65,"rollDeg":-1.87},{"frame":48,"timeSec":2,"position":[138.106,88.576,-212.022],"target":[23.92,60.225,-62.106],"up":[-0.064,0.988,0.138],"fov":65,"rollDeg":-1.859},{"frame":49,"timeSec":2.042,"position":[137.424,88.468,-210.791],"target":[22.888,60.563,-61.39],"up":[-0.064,0.989,0.136],"fov":65,"rollDeg":-1.848},{"frame":50,"timeSec":2.083,"position":[136.741,88.359,-209.559],"target":[21.863,60.901,-60.669],"up":[-0.063,0.989,0.134],"fov":65,"rollDeg":-1.837},{"frame":51,"timeSec":2.125,"position":[136.058,88.25,-208.327],"target":[20.846,61.239,-59.945],"up":[-0.062,0.989,0.132],"fov":65,"rollDeg":-1.825},{"frame":52,"timeSec":2.167,"position":[135.375,88.14,-207.095],"target":[19.839,61.577,-59.215],"up":[-0.061,0.99,0.13],"fov":65,"rollDeg":-1.814},{"frame":53,"timeSec":2.208,"position":[134.692,88.028,-205.863],"target":[18.841,61.915,-58.48],"up":[-0.06,0.99,0.128],"fov":65,"rollDeg":-1.803},{"frame":54,"timeSec":2.25,"position":[133.999,87.914,-204.613],"target":[17.84,62.259,-57.727],"up":[-0.06,0.99,0.126],"fov":65,"rollDeg":-1.787},{"frame":55,"timeSec":2.292,"position":[133.273,87.794,-203.304],"target":[16.804,62.618,-56.932],"up":[-0.059,0.991,0.124],"fov":65,"rollDeg":-1.77},{"frame":56,"timeSec":2.333,"position":[132.521,87.67,-201.946],"target":[15.741,62.99,-56.101],"up":[-0.058,0.991,0.121],"fov":65,"rollDeg":-1.754},{"frame":57,"timeSec":2.375,"position":[131.748,87.542,-200.551],"target":[14.658,63.373,-55.243],"up":[-0.057,0.991,0.119],"fov":65,"rollDeg":-1.737},{"frame":58,"timeSec":2.417,"position":[130.96,87.412,-199.131],"target":[13.563,63.763,-54.364],"up":[-0.056,0.992,0.117],"fov":65,"rollDeg":-1.72},{"frame":59,"timeSec":2.458,"position":[130.165,87.281,-197.696],"target":[12.464,64.156,-53.474],"up":[-0.055,0.992,0.114],"fov":65,"rollDeg":-1.703},{"frame":60,"timeSec":2.5,"position":[129.369,87.15,-196.26],"target":[11.369,64.551,-52.579],"up":[-0.054,0.992,0.112],"fov":65,"rollDeg":-1.686},{"frame":61,"timeSec":2.542,"position":[128.579,87.019,-194.834],"target":[10.287,64.942,-51.687],"up":[-0.053,0.993,0.11],"fov":65,"rollDeg":-1.669},{"frame":62,"timeSec":2.583,"position":[127.8,86.891,-193.429],"target":[9.225,65.327,-50.807],"up":[-0.052,0.993,0.107],"fov":65,"rollDeg":-1.652},{"frame":63,"timeSec":2.625,"position":[127.04,86.765,-192.058],"target":[8.191,65.704,-49.945],"up":[-0.051,0.993,0.105],"fov":65,"rollDeg":-1.635},{"frame":64,"timeSec":2.667,"position":[126.304,86.644,-190.731],"target":[7.193,66.068,-49.111],"up":[-0.049,0.993,0.103],"fov":65,"rollDeg":-1.618},{"frame":65,"timeSec":2.708,"position":[125.601,86.528,-189.461],"target":[6.24,66.416,-48.311],"up":[-0.048,0.994,0.101],"fov":65,"rollDeg":-1.601},{"frame":66,"timeSec":2.75,"position":[124.935,86.418,-188.26],"target":[5.339,66.746,-47.554],"up":[-0.048,0.994,0.099],"fov":65,"rollDeg":-1.585},{"frame":67,"timeSec":2.792,"position":[124.313,86.315,-187.139],"target":[4.499,67.054,-46.847],"up":[-0.047,0.994,0.097],"fov":65,"rollDeg":-1.568},{"frame":68,"timeSec":2.833,"position":[123.742,86.221,-186.109],"target":[3.726,67.336,-46.199],"up":[-0.046,0.994,0.095],"fov":65,"rollDeg":-1.551},{"frame":69,"timeSec":2.875,"position":[123.229,86.137,-185.184],"target":[3.031,67.59,-45.617],"up":[-0.045,0.995,0.093],"fov":65,"rollDeg":-1.534},{"frame":70,"timeSec":2.917,"position":[122.78,86.063,-184.373],"target":[2.419,67.812,-45.108],"up":[-0.044,0.995,0.092],"fov":65,"rollDeg":-1.517},{"frame":71,"timeSec":2.958,"position":[122.401,86,-183.69],"target":[1.9,68,-44.681],"up":[-0.044,0.995,0.091],"fov":65,"rollDeg":-1.5}]};
+    const frames = pathData.frames;
+    const TOTAL = frames.length;
+    const statusEl = document.getElementById('status');
+    const canvas = document.getElementById('canvas');
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xdce3eb); // Architectural sky overcast/clay ambient
+    scene.fog = new THREE.FogExp2(0xdce3eb, 0.0022);
+
+    const camera = new THREE.PerspectiveCamera(65, 1280 / 720, 0.5, 3000);
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(1280, 720);
+    renderer.setPixelRatio(1);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+
+    // Architectural Studio Lighting
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x94a3b8, 0.85);
+    scene.add(hemiLight);
+
+    const sunLight = new THREE.DirectionalLight(0xfffaed, 1.45);
+    sunLight.position.set(150, 320, 100);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.camera.near = 10;
+    sunLight.shadow.camera.far = 1000;
+    const d = 350;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
+    sunLight.shadow.bias = -0.00005;
+    sunLight.shadow.normalBias = 0.04;
+    scene.add(sunLight);
+
+    const skyFill = new THREE.DirectionalLight(0x93c5fd, 0.45);
+    skyFill.position.set(-150, 180, -120);
+    scene.add(skyFill);
+
+    // Load GLB
+    const loader = new GLTFLoader();
+    loader.load('/public/models/google_tiles_clay_blockout.glb', (gltf) => {
+      const cityModel = gltf.scene;
+
+      // Enhance materials with studio architectural clay response
+      cityModel.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material) {
+            child.material.roughness = 0.82;
+            child.material.metalness = 0.02;
+            child.material.side = THREE.FrontSide;
+          }
+        }
+      });
+
+      scene.add(cityModel);
+      statusEl.innerText = "Model loaded! Starting camera flight recording...";
+      setTimeout(recordCameraFrames, 400);
+    }, undefined, (err) => {
+      statusEl.innerText = "Error loading GLB: " + err.message;
+      console.error(err);
+    });
+
+    async function recordCameraFrames() {
+      for (let i = 0; i < TOTAL; i++) {
+        const f = frames[i];
+
+        // Apply exact 6-DOF camera pose
+        camera.position.set(f.position[0], f.position[1], f.position[2]);
+        camera.up.set(f.up[0], f.up[1], f.up[2]);
+        camera.lookAt(f.target[0], f.target[1], f.target[2]);
+        camera.fov = f.fov;
+        camera.updateProjectionMatrix();
+
+        renderer.render(scene, camera);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.96);
+        statusEl.innerText = "Rendering camera frame " + (i + 1) + "/" + TOTAL + " (t=" + f.timeSec.toFixed(2) + "s)";
+
+        await fetch('/upload-frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ index: i, total: TOTAL, dataUrl: dataUrl, timeSec: f.timeSec })
+        });
+      }
+
+      statusEl.innerText = "All 72 camera-perspective frames recorded! Compiling video...";
+      await fetch('/done', { method: 'POST' });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-09-20T05:07:20.885Z",
+  "videoRef": "<VIDEO_REF_0>",
+  "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/plaza_hotel_blockout_camera.mp4",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/google_tiles_textured_area.glb",
+  "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/plaza_hotel_first_frame.jpg",
+  "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/plaza_hotel_frame_00.png",
+  "storyboardPaths": [
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_00.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_01.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_02.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_03.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_04.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_05.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_06.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_plaza/beat_07.jpg"
+  ],
+  "fps": 24,
+  "totalFrames": 361,
+  "durationSec": 15,
+  "geoAnchor": {
+    "lat": 40.7645,
+    "lng": -73.9744,
+    "elevation": 18,
+    "landmarkName": "The Plaza Hotel NYC (Central Park South)"
+  },
+  "errorTarget": 0.5,
+  "renderMode": "textured",
+  "mesh": {
+    "name": "Google3DTile_textured",
+    "vertexCount": 4277,
+    "triangleCount": 3516,
+    "submeshCount": 11,
+    "boundingBox": {
+      "min": [
+        -100,
+        -10,
+        -100
+      ],
+      "max": [
+        100,
+        200,
+        100
+      ]
+    },
+    "boundingSphere": {
+      "center": [
+        0,
+        50,
+        0
+      ],
+      "radius": 150
+    }
+  },
+  "collisionAudit": {
+    "enabled": false,
+    "violationsDetected": 20,
+    "minClearanceMeters": 4.5,
+    "maxElevationAdjustment": 0,
+    "pathAdjusted": false,
+    "auditPassed": false
+  },
+  "tileMetrics": {
+    "totalFramesCaptured": 361,
+    "averageSettleTimeMs": 45,
+    "maxTilesLoaded": 128,
+    "errorTarget": 0.5,
+    "renderMode": "textured"
+  }
+}

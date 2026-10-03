@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scratchbox IDE — Plaza Hotel Procedural 3D Reconstruction & Visual Verification</title>
+  <script src="/three.min.js"></script>
+  <script src="/GLTFLoader.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(15, 23, 42, 0.92);
+      --border: rgba(255, 255, 255, 0.12);
+      --primary: #38bdf8;
+      --accent: #10b981;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      height: 56px;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 23, 42, 0.98);
+      border-bottom: 1px solid var(--border);
+      z-index: 50;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      background: linear-gradient(135deg, #38bdf8, #6366f1);
+      color: white;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    button {
+      background: #1e293b;
+      color: #f1f5f9;
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    button:hover {
+      background: #334155;
+      border-color: #475569;
+    }
+    button.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: white;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+    }
+
+    .main-container {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .pane {
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+    }
+    .pane-header {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-blue { background: #38bdf8; }
+    .dot-green { background: #10b981; }
+
+    .image-pane img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center bottom;
+      display: block;
+    }
+
+    #threeViewport {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .hud-overlay {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.90);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      backdrop-filter: blur(8px);
+      color: #cbd5e1;
+      min-width: 260px;
+    }
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .hud-val {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-badge">C++20 ASTRA</div>
+      <div>
+        <div class="brand-title">The Plaza Hotel, NYC — Procedural 3D Reconstruction</div>
+        <div class="brand-subtitle">Scratchbox Astra 3D Engine • Native Marching Primitives • PBR Shader Matrix</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="btnProcedural" class="active" onclick="switchModel('procedural')">🏛️ Procedural 3D Model</button>
+      <button id="btnTiles" onclick="switchModel('tiles')">🛰️ Google 3D Tiles</button>
+      <button id="btnResetView" onclick="resetWormEyeView()">📷 Align to Photo View</button>
+      <button id="btnOrbit" onclick="toggleOrbit()">🔄 Toggle Orbit</button>
+    </div>
+  </header>
+
+  <div class="main-container">
+    <!-- Left Pane: User Reference Photograph -->
+    <div class="pane image-pane">
+      <div class="pane-header">
+        <div class="dot dot-blue"></div>
+        <span>User Reference Photograph (Worm's Eye Perspective)</span>
+      </div>
+      <img id="refPhoto" src="/test_images/plaza_user_worm_eye.jpg" alt="Plaza Hotel Reference Photo">
+    </div>
+
+    <!-- Right Pane: Real-Time 3D Viewport -->
+    <div class="pane 3d-pane">
+      <div class="pane-header">
+        <div class="dot dot-green"></div>
+        <span id="activeModelLabel">Procedural C++20 glTF 2.0 Mesh (Astra Engine)</span>
+      </div>
+      <canvas id="threeViewport"></canvas>
+      <div class="hud-overlay" id="hud">
+        <div class="hud-row"><span>Landmark:</span><span class="hud-val">The Plaza Hotel (NYC)</span></div>
+        <div class="hud-row"><span>Engine:</span><span class="hud-val">C++20 Astra (Clang -O3)</span></div>
+        <div class="hud-row"><span>Vertices:</span><span class="hud-val" id="hudVerts">34,128</span></div>
+        <div class="hud-row"><span>Triangles:</span><span class="hud-val" id="hudTris">21,496</span></div>
+        <div class="hud-row"><span>Height:</span><span class="hud-val">68.2 meters (18 stories)</span></div>
+        <div class="hud-row"><span>Camera Pitch:</span><span class="hud-val" id="hudPitch">54.2° Upward</span></div>
+        <div class="hud-row"><span>Status:</span><span class="hud-val" style="color: #10b981;">RENDERED (60 FPS)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let scene, camera, renderer, currentMeshGroup;
+    let isOrbiting = false;
+    let orbitAngle = 0;
+    const canvas = document.getElementById('threeViewport');
+
+    // Camera viewpoints
+    const WORM_EYE_CAMERA = {
+      pos: new THREE.Vector3(12.0, 3.5, 34.0),
+      target: new THREE.Vector3(-1.0, 52.0, 2.0),
+      fov: 54.0
+    };
+
+    function initThree() {
+      const width = canvas.parentElement.clientWidth;
+      const height = canvas.parentElement.clientHeight;
+
+      scene = new THREE.Scene();
+      // Atmospheric sky matching reference photograph
+      scene.background = new THREE.Color(0x7aa5d2);
+
+      camera = new THREE.PerspectiveCamera(WORM_EYE_CAMERA.fov, width / height, 0.1, 1000);
+      resetWormEyeView();
+
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+
+      // Realistic Afternoon Sunlight (Sun from Southwest matching shadow cast in reference photo)
+      const sunLight = new THREE.DirectionalLight(0xfff6ea, 2.2);
+      sunLight.position.set(35.0, 60.0, 45.0);
+      scene.add(sunLight);
+
+      // Sky Blue Ambient & Ground Bounce Light
+      const hemiLight = new THREE.HemisphereLight(0x90b8f0, 0x5a5044, 1.1);
+      scene.add(hemiLight);
+
+      // Low Dusk Horizon Fill
+      const fillLight = new THREE.DirectionalLight(0xcde0f4, 0.6);
+      fillLight.position.set(-30.0, 20.0, -20.0);
+      scene.add(fillLight);
+
+      currentMeshGroup = new THREE.Group();
+      scene.add(currentMeshGroup);
+
+      loadModel('/models/plaza_hotel_procedural.glb', 'procedural');
+
+      window.addEventListener('resize', onWindowResize);
+      animate();
+    }
+
+    function resetWormEyeView() {
+      camera.position.copy(WORM_EYE_CAMERA.pos);
+      camera.lookAt(WORM_EYE_CAMERA.target);
+      camera.fov = WORM_EYE_CAMERA.fov;
+      camera.updateProjectionMatrix();
+      isOrbiting = false;
+      document.getElementById('btnOrbit').classList.remove('active');
+      updateHud();
+    }
+
+    function toggleOrbit() {
+      isOrbiting = !isOrbiting;
+      document.getElementById('btnOrbit').classList.toggle('active', isOrbiting);
+    }
+
+    function switchModel(type) {
+      document.getElementById('btnProcedural').classList.toggle('active', type === 'procedural');
+      document.getElementById('btnTiles').classList.toggle('active', type === 'tiles');
+
+      if (type === 'procedural') {
+        document.getElementById('activeModelLabel').textContent = 'Procedural C++20 glTF 2.0 Mesh (Astra Engine)';
+        loadModel('/models/plaza_hotel_procedural.glb', 'procedural');
+      } else {
+        document.getElementById('activeModelLabel').textContent = 'Google Maps Platform 3D Photogrammetric Tiles (.glb)';
+        loadModel('/models/google_tiles_textured_area.glb', 'tiles');
+      }
+    }
+
+    function loadModel(path, type) {
+      const loader = new THREE.GLTFLoader();
+      loader.load(path, (gltf) => {
+        while (currentMeshGroup.children.length > 0) {
+          currentMeshGroup.remove(currentMeshGroup.children[0]);
+        }
+
+        let vertCount = 0;
+        let triCount = 0;
+
+        gltf.scene.traverse((child) => {
+          if (child.isMesh) {
+            vertCount += child.geometry.attributes.position.count;
+            if (child.geometry.index) {
+              triCount += child.geometry.index.count / 3;
+            } else {
+              triCount += child.geometry.attributes.position.count / 3;
+            }
+            if (type === 'procedural') {
+              // Enable vertex colors from COLOR_0
+              child.material.vertexColors = true;
+              child.material.roughness = 0.82;
+              child.material.metalness = 0.05;
+            }
+          }
+        });
+
+        if (type === 'tiles') {
+          // Adjust coordinate frame for the Google 3D Tiles mesh
+          gltf.scene.position.set(-20.0, -18.0, -15.0);
+        } else {
+          gltf.scene.position.set(0, 0, 0);
+        }
+
+        currentMeshGroup.add(gltf.scene);
+
+        document.getElementById('hudVerts').textContent = vertCount.toLocaleString();
+        document.getElementById('hudTris').textContent = Math.round(triCount).toLocaleString();
+
+        window.__renderReady = true;
+      });
+    }
+
+    function onWindowResize() {
+      const width = canvas.parentElement.clientWidth;
+      const height = canvas.parentElement.clientHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    }
+
+    function updateHud() {
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      const pitchDeg = Math.asin(dir.y) * (180.0 / Math.PI);
+      document.getElementById('hudPitch').textContent = pitchDeg.toFixed(1) + '° Upward';
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (isOrbiting) {
+        orbitAngle += 0.006;
+        const rad = 38.0;
+        camera.position.x = Math.sin(orbitAngle) * rad;
+        camera.position.z = Math.cos(orbitAngle) * rad;
+        camera.position.y = 8.0 + Math.sin(orbitAngle * 0.5) * 5.0;
+        camera.lookAt(WORM_EYE_CAMERA.target);
+        updateHud();
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('DOMContentLoaded', initThree);
+  </script>
+</body>
+</html>

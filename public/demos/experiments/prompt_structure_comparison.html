@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scratchbox IDE · Prompting Architecture Comparative Evidence</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --red: #f87171;
+      --green: #34d399;
+      --yellow: #fbbf24;
+      --purple: #c084fc;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 40px 24px; line-height: 1.6; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 48px; }
+    h1 { font-size: 2.5rem; font-weight: 800; background: linear-gradient(135deg, #38bdf8, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 12px; }
+    .subtitle { color: var(--text-muted); font-size: 1.15rem; max-width: 850px; margin: 0 auto; }
+    
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+    .badge-evidence { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid #0284c7; }
+    
+    .section-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 16px; padding: 32px; margin-bottom: 48px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .section-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    .section-title { font-size: 1.6rem; font-weight: 700; color: #fff; }
+    .section-desc { color: var(--text-muted); font-size: 0.95rem; margin-top: 6px; }
+    
+    /* Grids */
+    .triplet-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+    .quad-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
+    @media (max-width: 900px) { 
+      .triplet-grid { grid-template-columns: 1fr; }
+      .quad-grid { grid-template-columns: 1fr; }
+    }
+    .triplet-card { position: relative; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #000; display: flex; flex-direction: column; }
+    .triplet-img-wrap { position: relative; aspect-ratio: 16 / 9; overflow: hidden; background: #050811; }
+    .triplet-img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .triplet-badge { position: absolute; top: 12px; left: 12px; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; backdrop-filter: blur(8px); }
+    .badge-input { background: rgba(251, 191, 36, 0.85); color: #000; }
+    .badge-prose { background: rgba(239, 68, 68, 0.85); color: #fff; }
+    .badge-json { background: rgba(16, 185, 129, 0.85); color: #fff; }
+    .badge-hybrid { background: rgba(192, 132, 252, 0.85); color: #000; font-weight: 900; }
+    
+    .triplet-desc { padding: 16px; font-size: 0.88rem; color: #d1d5db; background: rgba(255,255,255,0.02); flex-grow: 1; }
+    .triplet-desc h4 { margin-bottom: 6px; font-size: 1rem; color: #fff; }
+    
+    /* Comparison Slider */
+    .compare-wrapper { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: #000; user-select: none; }
+    .compare-img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+    .compare-overlay { position: absolute; top: 0; left: 0; width: 50%; height: 100%; overflow: hidden; border-right: 3px solid var(--accent); }
+    .compare-overlay img { width: 1400px; max-width: none; height: 100%; object-fit: cover; }
+    .slider-handle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: #000; display: flex; align-items: center; justify-content: center; font-weight: 900; box-shadow: 0 0 20px var(--accent-glow), 0 0 0 4px rgba(255,255,255,0.2); cursor: ew-resize; z-index: 10; }
+    
+    .label-tag { position: absolute; top: 20px; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 0.9rem; z-index: 5; text-transform: uppercase; letter-spacing: 0.05em; backdrop-filter: blur(8px); }
+    .label-left { left: 20px; background: rgba(239, 68, 68, 0.85); color: #fff; border: 1px solid rgba(255,255,255,0.2); }
+    .label-right { right: 20px; background: rgba(16, 185, 129, 0.85); color: #fff; border: 1px solid rgba(255,255,255,0.2); }
+    
+    .findings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-top: 24px; }
+    .finding-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .finding-card.red { border-left: 4px solid var(--red); }
+    .finding-card.green { border-left: 4px solid var(--green); }
+    .finding-card.yellow { border-left: 4px solid var(--yellow); }
+    .finding-card.purple { border-left: 4px solid var(--purple); }
+    .finding-title { font-weight: 700; font-size: 1.1rem; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    
+    /* Seam Viewer */
+    .seam-container { display: flex; flex-direction: column; gap: 20px; margin-top: 24px; }
+    .seam-box { position: relative; border-radius: 12px; overflow: hidden; border: 1px solid var(--border); background: #000; }
+    .seam-box img { width: 100%; display: block; }
+    .seam-line { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: #e11d48; box-shadow: 0 0 10px #e11d48; z-index: 2; }
+    .seam-indicator { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: #e11d48; color: #fff; font-size: 0.75rem; font-weight: 800; padding: 4px 10px; border-radius: 4px; text-transform: uppercase; z-index: 3; }
+
+    /* Summary Table */
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.9rem; }
+    th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255,255,255,0.05); color: #fff; font-weight: 700; }
+    tr:hover { background: rgba(255,255,255,0.02); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge badge-evidence">Empirical Model Verification Matrix</div>
+      <h1>Visual Evidence: Prose vs. JSON vs. Hybrid Architecture</h1>
+      <p class="subtitle">Direct comparative evidence across multiple domains: 3D photogrammetric blockout restyling, studio grey clay massing, twilight rain atmosphere, and 360° spherical equirectangular seam continuity.</p>
+    </header>
+
+    <!-- TEST 1: DAYLIGHT RESTYLE TRIPLET -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 1: Direct 3D Photogrammetric Blockout Restyle (Daylight)</div>
+          <div class="section-desc">Task: Restyle authentic Google 3D Tiles mesh (&lt;VIDEO_REF_0&gt; Frame 1 at Grand Army Plaza / The Plaza Hotel) into a photorealistic start frame (&lt;IMAGE_REF_0&gt;).</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <!-- 1. Visual Input -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/visual_input_blockout_plaza.png" alt="Visual Input 3D Blockout">
+            <span class="triplet-badge badge-input">Quadrant 1: Google 3D Tiles Blockout</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Raw 3D Blockout Frame</h4>
+            <p>Authentic photogrammetric mesh from Google 3D Tiles. High-angle perspective facing southwest (bearing 225°) looking over Grand Army Plaza toward The Plaza Hotel with foreground mansard dormer roof.</p>
+          </div>
+        </div>
+
+        <!-- 2. Prose Restyle -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/prose_restyle_plaza.png" alt="Prose Restyled Output">
+            <span class="triplet-badge badge-prose">Quadrant 2: Verbatim Prose Template</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Incredible Realism, Camera Drifted ~25° Right</h4>
+            <p><strong>Superior photographic patina</strong>: exquisite carved limestone, individual slate shingle tones, authentic copper trim. However, the camera yawed ~25° clockwise, eliminating Grand Army Plaza and replacing it with an asphalt crosswalk.</p>
+          </div>
+        </div>
+
+        <!-- 3. JSON Restyle -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/json_restyle_plaza.png" alt="JSON Restyled Output">
+            <span class="triplet-badge badge-json">Quadrant 3: Pure JSON Schema</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>100% Geometry & Camera Lock, Flat Light</h4>
+            <p>Camera attitude locked facing southwest. <strong>Pulitzer Fountain and Grand Army Plaza court are preserved</strong> in their exact 3D footprints. However, lighting is flat, stark midday, and limestone is washed out.</p>
+          </div>
+        </div>
+
+        <!-- 4. Hybrid Restyle -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/hybrid_restyle_plaza.png" alt="Hybrid Restyled Output">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid Architecture (Winner)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Flawless 1:1 Invariants + Golden Morning Light</h4>
+            <p><strong>The absolute winner</strong>: Locks camera bearing 225° SW and preserves Pulitzer Fountain with rippling water reflections, while rendering rich morning sunlight, authentic copper standing seams, and stone acanthus carvings.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/daylight_quad_matrix.png" alt="Daylight 4-Way Direct Plate">
+      </div>
+    </div>
+
+    <!-- TEST 2: DUSK RAIN CAMERA-DRIFT STRESS TEST -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 2: Dusk Rain Atmosphere Stress Test (Street-Level Collapse vs. Aerial Lock)</div>
+          <div class="section-desc">Task: Restyle the 3D blockout under twilight rain with wet asphalt reflections and warm window glow.</div>
+        </div>
+      </div>
+
+      <div class="triplet-grid">
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/visual_input_blockout_plaza.png" alt="Input Blockout">
+            <span class="triplet-badge badge-input">1. Visual Input Reference</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>High-Angle Aerial Viewpoint</h4>
+            <p>Camera is elevated ~50m above ground level, looking past the massive left foreground dormer roof onto the plaza below.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/plaza_night_prose.png" alt="Prose Night Restyle">
+            <span class="triplet-badge badge-prose">2. Verbatim Prose (Collapsed)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Severe Failure: Dropped to Ground Level</h4>
+            <p>Describing "wet reflective asphalt streets with warm puddles" attracted the diffusion attention down: <strong>the camera completely fell to the street</strong>, erasing the foreground dormer roof entirely.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/plaza_night_hybrid.png" alt="Hybrid Night Restyle">
+            <span class="triplet-badge badge-hybrid">3. Hybrid Architecture (Locked)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Breakthrough: 100% Aerial & Silhouette Lock</h4>
+            <p>With <code>spatial_envelope_lock</code> wrapping the verbatim narrative: <strong>the massive foreground dormer is fully intact</strong> with wet glistening shingles, while the Pulitzer Fountain and plaza glow below.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/dusk_rain_3way_comparison.png" alt="Dusk Rain 3-Way Composite Plate">
+      </div>
+    </div>
+
+    <!-- TEST 3: STUDIO GREY CLAY VOLUMETRIC MASSING -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 3: Studio Grey Clay Volumetric Massing Matrix</div>
+          <div class="section-desc">Task: Synthesize photorealistic architecture from a completely blank, grey clay 3D model (Midtown Manhattan looking toward the Empire State Building).</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/clay_blockout_frame_36.png" alt="Input Clay Blockout">
+            <span class="triplet-badge badge-input">Quadrant 1: Input Clay Mesh</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Blank Studio Grey Clay Massing</h4>
+            <p>Raw untextured 3D geometry. Low-altitude rooftop perspective looking north-northeast towards Empire State Building base and setbacks.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/clay_restyle_prose.png" alt="Clay Prose Restyle">
+            <span class="triplet-badge badge-prose">Quadrant 2: Verbatim Prose Template</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Exceptional Photographic Character</h4>
+            <p>Natural weathered brick, authentic window sills, organic golden hour lighting, and realistic gravel rooftops with water tanks.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/clay_restyle_json.png" alt="Clay JSON Restyle">
+            <span class="triplet-badge badge-json">Quadrant 3: Pure JSON Schema</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>High Geometric Precision</h4>
+            <p>Sharp material delineation and explicit foreground water tank placement, but slightly higher contrast and more stylized warmth.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/clay_restyle_hybrid.png" alt="Clay Hybrid Restyle">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid Architecture</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Best of Both Worlds</h4>
+            <p>Combines programmatic spatial envelope metadata (API reproducibility) with the rich photographic texture synthesis of the verbatim narrative.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/clay_quad_matrix.png" alt="Clay 2x2 Matrix Plate">
+      </div>
+    </div>
+
+    <!-- TEST 4: 360 EQUIRECTANGULAR SEAM TEST -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 4: 360° Equirectangular Spherical Projection & Seam Wrap</div>
+          <div class="section-desc">Comparing mathematical coordinate unwrapping and boundary continuity when rendering full 360° panoramas.</div>
+        </div>
+      </div>
+
+      <div class="seam-container">
+        <div class="seam-box">
+          <img src="images/prompt_comparison/seams_side_by_side.png" alt="Seam Test: Prose vs JSON">
+          <div class="seam-line" style="left: 25%;"></div>
+          <div class="seam-indicator" style="left: 25%;">Prose 360° Seam (Severe Collision)</div>
+          
+          <div class="seam-line" style="left: 75%;"></div>
+          <div class="seam-indicator" style="left: 75%; background: var(--green);">JSON 360° Seam (Continuous Transit Wrap)</div>
+        </div>
+
+        <div class="findings-grid">
+          <div class="finding-card red">
+            <div class="finding-title" style="color: var(--red);">❌ Prose Seam: Violent Boundary Fracture</div>
+            <p>At the center vertical line where 360° meets 0°, an orange "NIGHT MARKET" sign smashes into a blue storefront. Railings and pavement are severed at mismatched heights, completely breaking VR sphere projection.</p>
+          </div>
+
+          <div class="finding-card green">
+            <div class="finding-title" style="color: var(--green);">✅ JSON Seam: Aligned Transit Wrap</div>
+            <p>Elevated transit tracks exit right at <code>y ≈ 35%</code> and enter left at matching <code>y ≈ 35%</code>, forming an unbroken cylindrical ring across the 360° spherical environment.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TEST 5: GEOGRAPHIC ACCURACY & ARCHITECTURAL ORDERS BENCHMARK (COLOSSEUM, ROME) -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 5: Geographic Accuracy & Classical Orders (The Colosseum, Rome, Italy)</div>
+          <div class="section-desc">Task: High-precision historical landmark restyling. Evaluates Roman travertine limestone pitting, classical architectural arcade tiers (Tuscan, Ionic, Corinthian), the iconic stepped ruin break, and Palatine Hill background topography. (Camera: 41.890210° N, 12.492230° E, bearing 195° SW, standoff 210m).</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/colosseum_3d_blockout_input.png" alt="Input Colosseum 3D Blockout">
+            <span class="triplet-badge badge-input">Quadrant 1: Google 3D Tiles Blockout</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Raw Photogrammetric Mesh</h4>
+            <p>Melted arcade geometry, low-resolution pixelated stone texture, melted Colle Oppio trees in foreground, and blurry Palatine Hill ruins in background.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/colosseum_prose.png" alt="Colosseum Prose Restyle">
+            <span class="triplet-badge badge-prose">Quadrant 2: Verbatim Prose Template</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Superb Mediterranean Patina</h4>
+            <p>Golden Roman morning light filtering through top arches, authentic weathered cream-and-honey travertine limestone fissures, and realistic Italian stone pines.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/colosseum_json.png" alt="Colosseum JSON Restyle">
+            <span class="triplet-badge badge-json">Quadrant 3: Pure JSON Schema</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Sharp Ashlar Block Lines & Streets</h4>
+            <p>Distinctly etched stone joint lines and rectangular attic windows. Sharp road curves and curbs below, but slightly harder contrast and saturated green foliage.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/colosseum_hybrid.png" alt="Colosseum Hybrid Restyle">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid Architecture (Winner)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Flawless 1:1 Invariants & Atmosphere</h4>
+            <p>Locks exact camera pitch and foreground Colle Oppio terrace structure while delivering authentic porous limestone patina and soft morning aerial haze.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/colosseum_4way_matrix.png" alt="Colosseum 4-Way Comparative Matrix">
+      </div>
+    </div>
+
+    <!-- TEST 6: DENSE URBAN SETBACK GEOMETRY & DENOISING (EMPIRE STATE BUILDING, NYC) -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 6: Dense Urban Setback Geometry & Photogrammetric Denoising (Empire State Building, NYC)</div>
+          <div class="section-desc">Task: Dense urban canyon synthesis looking north up 5th Avenue towards the Empire State Building (40.745500° N, -73.986800° W, bearing 18° NNE, standoff 350m). Tests high-rise silhouette retention, pre-war rooftop gravel, cedar water towers, and photogrammetric de-melting.</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/esb_blockout_input.png" alt="Input ESB 3D Blockout">
+            <span class="triplet-badge badge-input">Quadrant 1: Google 3D Tiles Blockout</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Raw Drone Photogrammetric Frame</h4>
+            <p>Characteristic high-density urban scan artifacts: melted rooftop HVAC chillers, warped window grids, and hazy grey background sky.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/esb_prose.png" alt="ESB Prose Restyle">
+            <span class="triplet-badge badge-prose">Quadrant 2: Verbatim Prose Template</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Photographic Architectural Realism</h4>
+            <p>Rich gravel textures on commercial roofs, weathered cedar water tanks with copper conical roofs, and warm afternoon sun reflections on windows.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/esb_json.png" alt="ESB JSON Restyle">
+            <span class="triplet-badge badge-json">Quadrant 3: Pure JSON Schema</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Discovery: Photogrammetric Under-Denoising</h4>
+            <p>JSON locks building silhouettes perfectly, but under-denoises raw photogrammetry: foreground roofs and window grids retain melted scan artifacts.</p>
+          </div>
+        </div>
+
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/esb_hybrid.png" alt="ESB Hybrid Restyle">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid Architecture (Winner)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Complete De-Melting + Silhouette Lock</h4>
+            <p>Combines JSON envelope spatial grounding (locking 6th Ave & Madison Ave silhouettes) with rich prose descriptors that completely de-melt rooftop mechanics.</p>
+          </div>
+        </div>
+      </div>
+
+    <!-- TEST 7: DOUBLE-BRACKET FRAMING ANCHOR & PEDESTRIAN CLOSE-RANGE (CENTRAL PARK, NYC - 10M STANDOFF) -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 7: Double-Bracket Framing Anchor & Close-Range Pedestrian Vantage (Central Park, NYC — 10m Standoff)</div>
+          <div class="section-desc">Task: Close-range pedestrian synthesis at Bethesda Terrace balustrade (40.771057° N, -73.972520° W, bearing 329° NNW, 10m standoff). Evaluates the Double-Bracket Framing Anchor (reinforcing <code>locked to @image1 viewport crop</code> at the prompt tail) to defeat cross-attention recency decay. Compares Standard Prose vs. User Exact Prompt vs. Hybrid Dual-Stream.</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <!-- 1. Visual Input -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/central_park_blockout_input.png" alt="Input Central Park 3D Blockout">
+            <span class="triplet-badge badge-input">Quadrant 1: Google 3D Tiles Blockout</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Raw 10m Pedestrian Blockout</h4>
+            <p>Close-up 10m standoff over sandstone balustrade and staircase facing 329° NNW toward the Lake. Notice faceted balusters and wireframe alignment boundaries.</p>
+          </div>
+        </div>
+
+        <!-- 2. Standard Prose -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/cp_standard_prose.png" alt="Central Park Standard Prose">
+            <span class="triplet-badge badge-prose">Quadrant 2: Standard Prose (No Tail Lock)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Good Realism, Slight Distant Softening</h4>
+            <p>Retains foreground position, but without the tail reinforcement, cross-attention recency decay leads to slightly generic foliage and softened building silhouettes across the lake.</p>
+          </div>
+        </div>
+
+        <!-- 3. User Exact Prompt -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/cp_double_bracket.png" alt="Central Park User Exact Double Bracket">
+            <span class="triplet-badge badge-json" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">Quadrant 3: User Exact Prompt (Double-Bracket)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>0px Viewport Drift & Sharp Sandstone</h4>
+            <p>The tail anchor <code>locked to @image1 viewport crop</code> acts as a recency clamp. Balustrades, step treads, and cracks in the path match the 3D blockout with sub-pixel precision.</p>
+          </div>
+        </div>
+
+        <!-- 4. Hybrid Architecture -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/cp_hybrid_doublebracket.png" alt="Central Park Hybrid Restyle">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid + Double-Bracket Lock (Winner)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Flawless 1:1 Invariants + Luminous Foliage</h4>
+            <p>Combines JSON 10m standoff / WGS-84 invariant grounding with the double-bracket tail lock, elevating autumn tree canopy, amber reflections in the Lake, and carved stone relief.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/central_park_4way_matrix.png" alt="Central Park 4-Way Comparative Matrix">
+      </div>
+    </div>
+
+    <!-- TEST 8: AUTHENTIC GOOGLE 3D MAP TILE CAPTURE (THE PLAZA HOTEL & GRAND ARMY PLAZA, NYC) -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Test 8: Authentic Google Maps Photorealistic 3D Tile Capture (The Plaza Hotel & Grand Army Plaza, NYC)</div>
+          <div class="section-desc">Task: Evaluates restyling performance directly against an <strong>authentic photogrammetric 3D tile capture</strong> from interaction with Google Map Tiles (40.764491° N, -73.974441° W, 110m MSL, facing 15° NNE toward Central Park). Tests whether the model can heal photogrammetric mesh faceting, melted dormers, and stretched facade textures while strictly preserving geographic alignment and vanishing points.</div>
+        </div>
+      </div>
+
+      <div class="quad-grid">
+        <!-- 1. Visual Input -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/authentic_3d_tiles_manhattan_input.jpg" alt="Input Authentic Google 3D Tile Capture">
+            <span class="triplet-badge badge-input">Quadrant 1: Authentic Google 3D Tile Capture</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Raw Interactive Google 3D Tile Capture</h4>
+            <p>Direct photogrammetric capture from Google Maps 3D Tiles pipeline showing authentic mesh faceting on mansard dormers, vertical texture stretching, low-poly tree canopy, and Grand Army Plaza road geometry.</p>
+          </div>
+        </div>
+
+        <!-- 2. Standard Prose -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/authentic_3d_tiles_method1_prose.png" alt="Method 1 Standard Prose Restyle">
+            <span class="triplet-badge badge-prose">Quadrant 2: Standard Prose (No Tail Lock)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Strong Material Realism, Subtle Road Drift</h4>
+            <p>Heals photogrammetric melting into copper shingles and dormers. However, without the recency lock, the lower Grand Army Plaza road markings and street furniture experience subtle drift.</p>
+          </div>
+        </div>
+
+        <!-- 3. User Exact Prompt -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/authentic_3d_tiles_method2_doublebracket.png" alt="Method 2 User Exact Double-Bracket Restyle">
+            <span class="triplet-badge badge-json" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4);">Quadrant 3: User Exact Prompt (Double-Bracket)</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Near-Zero Viewport Drift & Tight Facade Alignment</h4>
+            <p>The double-bracket tail lock <code>locked to @image1 viewport crop</code> anchors cross-attention. Dormer windows, copper seams, and the elevator penthouse maintain razor-sharp alignment with the 3D tile geometry.</p>
+          </div>
+        </div>
+
+        <!-- 4. Hybrid Architecture -->
+        <div class="triplet-card">
+          <div class="triplet-img-wrap">
+            <img src="images/prompt_comparison/authentic_3d_tiles_method3_hybrid.png" alt="Method 3 Hybrid Restyle">
+            <span class="triplet-badge badge-hybrid">Quadrant 4: Hybrid Dual-Stream + Double-Bracket Lock</span>
+          </div>
+          <div class="triplet-desc">
+            <h4>Top Overall: Flawless Invariants + 3D Tree Canopy</h4>
+            <p>JSON spatial envelope preserves depth planes (12m mansard, 95m plaza, 160m park canopy) while prose elevates material shaders. Converts melted polygonal tree blobs into authentic individual leafy foliage while locking every architectural seam.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="seam-box">
+        <img src="images/prompt_comparison/authentic_3d_tiles_4way_matrix.png" alt="Authentic Google 3D Tiles 4-Way Comparative Matrix">
+      </div>
+    </div>
+
+    <!-- ARCHITECTURAL DECISION MATRIX -->
+    <div class="section-card">
+      <div class="section-header">
+        <div>
+          <div class="section-title">Architectural Conclusion & Production Guidelines</div>
+          <div class="section-desc">Clear division of labor derived from empirical visual evidence across all 4 test suites.</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Pipeline Domain</th>
+            <th>Recommended Architecture</th>
+            <th>Empirical Justification</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>3D Location Beautify (<IMAGE_REF_0>)</strong></td>
+            <td><span style="color: var(--green); font-weight: 700;">Verbatim Prose Template</span></td>
+            <td>Google diffusion models are pretrained on natural photography descriptions and Google Earth URLs. Generates authentic limestone patina, slate textures, and realistic daylight diffusion.</td>
+          </tr>
+          <tr>
+            <td><strong>Atmosphere & Weather Stress Tasks (Rain, Dusk, Night)</strong></td>
+            <td><span style="color: var(--purple); font-weight: 700;">Hybrid Architecture</span> (JSON Envelope + Prose Narrative)</td>
+            <td>Prevents the camera from dropping to street level or erasing foreground roof geometry when evocative mood words ("puddles", "wet asphalt") are introduced.</td>
+          </tr>
+          <tr>
+            <td><strong>360° Equirectangular & Cubemap Panoramas</strong></td>
+            <td><span style="color: var(--accent); font-weight: 700;">Structured JSON Schemas</span></td>
+            <td>Prose completely fails to compute spherical geometry, polar unwrap, and 0° ↔ 360° seam continuity. Strict JSON key-value coordinate constraints are mathematically required.</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-Modal Video Trajectories (<VIDEO_REF_0> / Omni / Veo)</strong></td>
+            <td><span style="color: var(--purple); font-weight: 700;">Hybrid Architecture</span></td>
+            <td>Top-level JSON manages API payload contracts, spline coordinates, and multimodal references, while embedding verbatim prose for frame-by-frame visual rendering.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</body>
+</html>

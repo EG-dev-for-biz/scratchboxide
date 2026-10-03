@@ -47,8 +47,7 @@ export {
     retargetSegmentDirections,
     SBHUMAN22_PARENTS,
     SBHUMAN22_SEGMENT_CHILD,
-    SBHUMAN22_LATERAL_REF,
-    SMPLX22_PARENTS
+    SBHUMAN22_LATERAL_REF
 } from './common/humanoid-skinning';
 
 // Universal COLMAP Vector Reference Types (Zero Presets)

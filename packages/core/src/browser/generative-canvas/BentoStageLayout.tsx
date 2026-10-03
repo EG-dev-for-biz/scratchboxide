@@ -105,7 +105,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                     alignItems: 'center',
                     justifyContent: 'center',
                     height: '100%',
-                    color: 'var(--theia-descriptionForeground, #888)',
+                    color: 'var(--sb-descriptionForeground, #888)',
                     padding: '24px',
                     textAlign: 'center'
                 }}>
@@ -164,7 +164,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                 );
             default:
                 return (
-                    <div style={{ padding: 24, color: 'var(--theia-foreground, #ccc)' }}>
+                    <div style={{ padding: 24, color: 'var(--sb-foreground, #ccc)' }}>
                         <h3>{artifact.title}</h3>
                         <p>{artifact.summary}</p>
                     </div>
@@ -185,10 +185,10 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                     flexDirection: 'column',
                     position: 'relative',
                     overflow: 'hidden',
-                    backgroundColor: 'var(--theia-editor-background, #18181b)',
+                    backgroundColor: 'var(--sb-editor-background, #18181b)',
                     border: isFocused
                         ? '1px solid rgba(59, 130, 246, 0.6)'
-                        : '1px solid var(--theia-border, rgba(255, 255, 255, 0.08))',
+                        : '1px solid var(--sb-border, rgba(255, 255, 255, 0.08))',
                     borderRadius: 8,
                     boxShadow: isFocused ? '0 0 0 1px rgba(59, 130, 246, 0.3)' : 'none',
                     transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
@@ -204,8 +204,8 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                     justifyContent: 'space-between',
                     padding: '6px 12px',
                     height: 36,
-                    backgroundColor: 'var(--theia-tab-inactiveBackground, #1e1e24)',
-                    borderBottom: '1px solid var(--theia-border, rgba(255, 255, 255, 0.06))',
+                    backgroundColor: 'var(--sb-tab-inactiveBackground, #1e1e24)',
+                    borderBottom: '1px solid var(--sb-border, rgba(255, 255, 255, 0.06))',
                     fontSize: 12,
                     userSelect: 'none'
                 }}>
@@ -217,7 +217,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                             style={{
                                 background: 'transparent',
                                 border: 'none',
-                                color: 'var(--theia-foreground, #e4e4e7)',
+                                color: 'var(--sb-foreground, #e4e4e7)',
                                 fontSize: 12,
                                 fontWeight: 500,
                                 outline: 'none',
@@ -245,7 +245,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                                 padding: '2px 6px',
                                 borderRadius: 4,
                                 backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                                color: 'var(--theia-descriptionForeground, #a1a1aa)'
+                                color: 'var(--sb-descriptionForeground, #a1a1aa)'
                             }}>
                                 {artifact.type.replace('-', ' ')}
                             </span>
@@ -264,7 +264,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                                 style={{
                                     background: 'transparent',
                                     border: 'none',
-                                    color: 'var(--theia-descriptionForeground, #a1a1aa)',
+                                    color: 'var(--sb-descriptionForeground, #a1a1aa)',
                                     cursor: 'pointer',
                                     padding: '2px 4px',
                                     borderRadius: 4
@@ -324,7 +324,7 @@ export const BentoStageLayout: React.FC<BentoStageLayoutProps> = ({
                                         : 'transparent',
                                     color: layoutMode === mode
                                         ? '#60a5fa'
-                                        : 'var(--theia-descriptionForeground, #a1a1aa)',
+                                        : 'var(--sb-descriptionForeground, #a1a1aa)',
                                     cursor: 'pointer',
                                     transition: 'all 0.12s ease'
                                 }}

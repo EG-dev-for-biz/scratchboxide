@@ -1,0 +1,189 @@
+{
+  "generator": "mock-recolour",
+  "mode": "chained",
+  "anchor": {
+    "lat": -33.8568,
+    "lng": 151.2153,
+    "elevationMeters": 12,
+    "headingDeg": 0,
+    "formattedAddress": "Survey Box"
+  },
+  "glbPath": "public/models/survey_box_ground.glb",
+  "eyeHeight": 6,
+  "cropBox": {
+    "min": [
+      -100.34381103515625,
+      -0.5,
+      -100.18074798583984
+    ],
+    "max": [
+      100.23340606689453,
+      20.499631881713867,
+      100.4571762084961
+    ]
+  },
+  "fusedSplatCount": 999938,
+  "voxelSizeMeters": 0.07195676676928997,
+  "stations": [
+    {
+      "stationId": 1,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 173918,
+      "imagePath": "public/tilesets/survey_box/stations/station_001_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_001_blockout.png",
+      "qc": {
+        "overlapPercent": 46.91476982527211,
+        "residualPx": 1.0940156493377224,
+        "deltaYawDeg": 0.054548014890656304,
+        "deltaPitchDeg": 0.02159978471984214,
+        "deltaPositionM": 0.014793500473179991,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.857161, 151.215300, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.857161,151.215300,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 35 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch 5.7°, 6 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly.",
+      "splatPath": "public/tilesets/survey_box/stations/station_001.splat"
+    },
+    {
+      "stationId": 2,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 173341,
+      "imagePath": "public/tilesets/survey_box/stations/station_002_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_002_blockout.png",
+      "qc": {
+        "overlapPercent": 45.04716449627617,
+        "residualPx": 1.1296169695162535,
+        "deltaYawDeg": 0.054548014890656304,
+        "deltaPitchDeg": 0.05939996915464274,
+        "deltaPositionM": 0.013258252147246762,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.856800, 151.215732, facing 270°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.856800,151.215732,0a,400d,35y,270h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 35 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch 5.7°, 6 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_002.splat"
+    },
+    {
+      "stationId": 3,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 173918,
+      "imagePath": "public/tilesets/survey_box/stations/station_003_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_003_blockout.png",
+      "qc": {
+        "overlapPercent": 46.91476982527211,
+        "residualPx": 1.0940156493377224,
+        "deltaYawDeg": 0.054548014890656304,
+        "deltaPitchDeg": 0.02159978471984214,
+        "deltaPositionM": 0.014793500473179991,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.856439, 151.215300, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.856439,151.215300,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 35 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch 5.7°, 6 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_003.splat"
+    },
+    {
+      "stationId": 4,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 173341,
+      "imagePath": "public/tilesets/survey_box/stations/station_004_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_004_blockout.png",
+      "qc": {
+        "overlapPercent": 45.04716449627617,
+        "residualPx": 1.1296169695162535,
+        "deltaYawDeg": 0.054548014890656304,
+        "deltaPitchDeg": 0.05939996915464274,
+        "deltaPositionM": 0.013258252147246762,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.856800, 151.214868, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.856800,151.214868,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 35 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch 5.7°, 6 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_004.splat"
+    },
+    {
+      "stationId": 5,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 310844,
+      "imagePath": "public/tilesets/survey_box/stations/station_005_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_005_blockout.png",
+      "qc": {
+        "overlapPercent": 68.55115710890279,
+        "residualPx": 0.6817153778575412,
+        "deltaYawDeg": 0.0384801436705402,
+        "deltaPitchDeg": 0.04331141065756583,
+        "deltaPositionM": 0.011443645889749833,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.857106, 151.215667, facing 315°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.857106,151.215667,0a,400d,35y,315h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 42 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -9.5°, 18 m above ground; the horizon sits at 27% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_005.splat"
+    },
+    {
+      "stationId": 6,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 310627,
+      "imagePath": "public/tilesets/survey_box/stations/station_006_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_006_blockout.png",
+      "qc": {
+        "overlapPercent": 67.88212074336258,
+        "residualPx": 0.6958965461180842,
+        "deltaYawDeg": 0.03853190011204788,
+        "deltaPitchDeg": 0.06056898541792144,
+        "deltaPositionM": 0.011443645889747795,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.856494, 151.215667, facing 225°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.856494,151.215667,0a,400d,35y,225h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 42 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -9.5°, 18 m above ground; the horizon sits at 27% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_006.splat"
+    },
+    {
+      "stationId": 7,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 310844,
+      "imagePath": "public/tilesets/survey_box/stations/station_007_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_007_blockout.png",
+      "qc": {
+        "overlapPercent": 68.55115710890279,
+        "residualPx": 0.6817153778575412,
+        "deltaYawDeg": 0.0384801436705402,
+        "deltaPitchDeg": 0.04331141065756583,
+        "deltaPositionM": 0.011443645889749833,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.856494, 151.214933, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.856494,151.214933,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 42 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -9.5°, 18 m above ground; the horizon sits at 27% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_007.splat"
+    },
+    {
+      "stationId": 8,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 310627,
+      "imagePath": "public/tilesets/survey_box/stations/station_008_beautified.png",
+      "blockoutPath": "public/tilesets/survey_box/stations/station_008_blockout.png",
+      "qc": {
+        "overlapPercent": 67.88212074336258,
+        "residualPx": 0.6958965461180842,
+        "deltaYawDeg": 0.03853190011204788,
+        "deltaPitchDeg": 0.06056898541791966,
+        "deltaPositionM": 0.011443645889747795,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Survey Box (camera at coordinates -33.857106, 151.214933, facing 45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@-33.857106,151.214933,0a,400d,35y,45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 42 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -9.5°, 18 m above ground; the horizon sits at 27% of the frame height from the top. Sun: azimuth 359° clockwise from north, elevation 33° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "splatPath": "public/tilesets/survey_box/stations/station_008.splat"
+    }
+  ],
+  "tiles": {
+    "tileCount": 57,
+    "levels": 5,
+    "tileBytes": 5937660
+  },
+  "createdAt": "2026-09-20T20:00:45.601Z",
+  "glbUrl": "/models/survey_box_ground.glb",
+  "walkRadius": 3
+}

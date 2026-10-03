@@ -141,7 +141,7 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
             const result = await AtmosphereImageEstimationService.estimateFromImage({
                 promptHint: 'Colosseum Rome sunny afternoon',
                 knownCoords: { lat: 41.8902, lng: 12.4922 },
-                timestampIso: '2026-09-18T15:30:00Z',
+                timestampIso: '2026-09-28T15:30:00Z',
                 cameraHeadingDeg: 108.0,
                 cameraPitchDeg: 6.0
             });
@@ -166,7 +166,7 @@ describe('Atmosphere Image Estimation Service & Pipeline', () => {
                 promptHint: 'Piazza del Colosseo Rome afternoon',
                 latitude: 41.8902,
                 longitude: 12.4922,
-                isoDate: '2026-09-18T15:30:00Z',
+                isoDate: '2026-09-28T15:30:00Z',
                 cameraHeadingDeg: 108.0
             }, {} as any);
 

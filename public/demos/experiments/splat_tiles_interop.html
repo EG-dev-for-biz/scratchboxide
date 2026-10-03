@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Splat 3D Tiles interop: 3d-tiles-renderer + 3dgs-plugin</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #020617; overflow: hidden; font-family: 'JetBrains Mono', monospace; }
+        canvas { display: block; }
+        #hud { position: absolute; top: 12px; left: 12px; color: #a5b4fc; font-size: 12px; background: rgba(2,6,23,0.7); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(165,180,252,0.3); }
+        .hud-hidden #hud { display: none; }
+    </style>
+    <script>
+        const q = new URLSearchParams(location.search);
+        if (q.get('hud') === '0') document.documentElement.classList.add('hud-hidden');
+        // Test hook: hold=<ms> defers the window load event (via a slow subresource served by the
+        // test's static server) so headless --screenshot captures after tiles have streamed in.
+        if (q.has('hold')) document.write('<img src="/__hold?ms=' + encodeURIComponent(q.get('hold')) + '" width="1" height="1" style="position:absolute;opacity:0">');
+    </script>
+</head>
+<body>
+    <div id="hud">loading tileset...</div>
+    <script src="/js/splat_tiles_interop.js"></script>
+</body>
+</html>

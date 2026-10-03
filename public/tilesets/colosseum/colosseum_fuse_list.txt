@@ -1,0 +1,16 @@
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001.splat 48.5
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002.splat 42.86
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003.splat 48.91
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004.splat 40.14
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005.splat 32
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006.splat 38.6
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007.splat 50.77
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008.splat 71.23
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009.splat 68
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010.splat 68
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011.splat 68
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012.splat 68
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013.splat 115
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014.splat 115
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015.splat 36.16
+/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016.splat 38.34

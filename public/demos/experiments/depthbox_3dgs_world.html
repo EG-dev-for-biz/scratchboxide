@@ -1,0 +1,2673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DepthBox 3DGS // Spatial Intelligence Studio</title>
+    <!-- Three.js + OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        :root {
+            --bg-base: #030712;
+            --panel-bg: rgba(15, 23, 42, 0.88);
+            --panel-border: rgba(255, 255, 255, 0.12);
+            --accent-cyan: #06b6d4;
+            --accent-purple: #a855f7;
+            --accent-pink: #ec4899;
+            --accent-amber: #f59e0b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #viewport-container {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+        }
+        #webgl-canvas {
+            width: 100%; height: 100%; display: block;
+        }
+
+        /* Top Header Bar */
+        .header-bar {
+            position: absolute;
+            top: 16px; left: 20px; right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .brand-pill {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 10px 18px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 12px 35px rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            pointer-events: auto;
+        }
+        .logo-mark {
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, #06b6d4, #8b5cf6, #ec4899);
+            border-radius: 9px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 16px rgba(139, 92, 246, 0.6);
+            font-weight: 900; font-size: 16px; color: #fff;
+        }
+        .brand-text h1 {
+            font-size: 14px; font-weight: 800; letter-spacing: 0.08em;
+            display: flex; align-items: center; gap: 8px; color: #fff;
+        }
+        .badge-lwm {
+            background: linear-gradient(135deg, #06b6d4, #3b82f6);
+            color: #fff; font-size: 9px; font-weight: 800;
+            padding: 2px 7px; border-radius: 5px; letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+        .brand-text p {
+            font-size: 11px; color: var(--text-muted); margin-top: 2px;
+            letter-spacing: 0.02em;
+        }
+
+        /* Density Pill Switcher */
+        .density-switcher {
+            display: flex;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 24px;
+            padding: 4px;
+            backdrop-filter: blur(16px);
+            pointer-events: auto;
+            gap: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+        .density-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px; font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .density-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .density-btn.active {
+            background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+            color: #fff;
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.5);
+        }
+
+        /* Atmosphere Switcher */
+        .atmosphere-switcher {
+            display: flex;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 24px;
+            padding: 4px;
+            backdrop-filter: blur(16px);
+            pointer-events: auto;
+            gap: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+        }
+        .atmo-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px; font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 5px;
+        }
+        .atmo-btn:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .atmo-btn.active {
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.25);
+        }
+        .atmo-btn.active[data-atmo="golden"] {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            box-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
+            border-color: #fbbf24;
+        }
+        .atmo-btn.active[data-atmo="cyber"] {
+            background: linear-gradient(135deg, #06b6d4, #8b5cf6);
+            box-shadow: 0 0 14px rgba(6, 182, 212, 0.4);
+            border-color: #38bdf8;
+        }
+
+        /* Top-Left World Selector Bar */
+        .world-nav {
+            position: absolute;
+            top: 76px; left: 20px;
+            display: flex; gap: 8px;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 6px 10px;
+            backdrop-filter: blur(14px);
+            z-index: 100;
+        }
+        .world-pill {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+            font-size: 11px; font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .world-pill:hover { color: #fff; background: rgba(51, 65, 85, 0.8); }
+        .world-pill.active {
+            background: #1e293b;
+            color: #38bdf8;
+            border-color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+        }
+
+        /* Left HUD Card */
+        .hud-card {
+            position: absolute;
+            bottom: 24px; left: 20px;
+            width: 330px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 16px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 45px rgba(0,0,0,0.75);
+            z-index: 100;
+            font-size: 11px;
+        }
+        .hud-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .hud-title {
+            font-size: 11px; font-weight: 700; color: #38bdf8;
+            letter-spacing: 0.08em; text-transform: uppercase;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .status-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: #10b981; box-shadow: 0 0 8px #10b981;
+            display: inline-block;
+        }
+        .hud-grid {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 10px; margin-bottom: 12px;
+        }
+        .hud-stat {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .hud-label {
+            font-size: 9px; color: var(--text-muted); text-transform: uppercase;
+            letter-spacing: 0.05em; margin-bottom: 2px;
+        }
+        .hud-value {
+            font-size: 13px; font-weight: 700; color: #fff;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        .hud-value.highlight { color: #38bdf8; }
+        .hud-value.accent { color: #a855f7; }
+
+        /* Spatial Radar / Mini-Map */
+        .radar-box {
+            position: relative;
+            width: 100%; height: 90px;
+            background: rgba(10, 15, 30, 0.75);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 12px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #radar-canvas {
+            width: 100%; height: 100%;
+        }
+
+        /* Bottom Floating Flight & Camera Controls */
+        .bottom-nav {
+            position: absolute;
+            bottom: 24px; left: 50%;
+            transform: translateX(-50%);
+            display: flex; align-items: center; gap: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 30px;
+            padding: 6px 14px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+            z-index: 100;
+        }
+        .cam-btn {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+            font-size: 11px; font-weight: 600;
+            padding: 7px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .cam-btn:hover { color: #fff; background: rgba(51, 65, 85, 0.9); }
+        .cam-btn.active {
+            background: #0284c7; color: #fff;
+            border-color: #38bdf8;
+            box-shadow: 0 0 14px rgba(2, 132, 199, 0.5);
+        }
+        .cam-btn.special {
+            background: linear-gradient(135deg, rgba(236, 72, 153, 0.25), rgba(139, 92, 246, 0.25));
+            border-color: #ec4899; color: #f472b6;
+        }
+        .cam-btn.special.active {
+            background: linear-gradient(135deg, #ec4899, #8b5cf6);
+            color: #fff;
+            box-shadow: 0 0 16px rgba(236, 72, 153, 0.5);
+        }
+
+        /* Right Tools Toolbar */
+        .tools-bar {
+            position: absolute;
+            bottom: 24px; right: 20px;
+            display: flex; flex-direction: column; gap: 8px;
+            z-index: 100;
+        }
+        .tool-action-btn {
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            color: var(--text-main);
+            font-size: 11px; font-weight: 600;
+            padding: 9px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            backdrop-filter: blur(14px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.6);
+            transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 8px;
+            justify-content: flex-start;
+        }
+        .tool-action-btn:hover {
+            border-color: #38bdf8; background: rgba(30, 41, 59, 0.95);
+            transform: translateX(-2px);
+        }
+        .tool-action-btn.active {
+            background: #0284c7; border-color: #38bdf8;
+            box-shadow: 0 0 14px rgba(2, 132, 199, 0.6);
+        }
+        .tool-action-btn.purple.active {
+            background: #8b5cf6; border-color: #c084fc;
+            box-shadow: 0 0 14px rgba(139, 92, 246, 0.6);
+        }
+
+        /* Measurement Callout Badge in 3D View */
+        #measure-badge {
+            position: absolute;
+            display: none;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #10b981;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 11px;
+            color: #fff;
+            pointer-events: none;
+            z-index: 200;
+            transform: translate(-50%, -120%);
+        }
+        #measure-badge .dist-val {
+            font-size: 14px; font-weight: 800; color: #34d399;
+            font-family: monospace;
+        }
+
+        /* Flight Instructions Floating Overlay */
+        .flight-help {
+            position: absolute;
+            top: 76px; right: 20px;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 10px 14px;
+            backdrop-filter: blur(14px);
+            font-size: 10px; color: var(--text-muted);
+            z-index: 100;
+            line-height: 1.5;
+        }
+        .flight-help kbd {
+            background: rgba(255,255,255,0.12);
+            color: #fff;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-weight: 700;
+        }
+
+        /* Depth Slicer Drawer */
+        #slice-panel {
+            position: absolute;
+            top: 130px; right: 20px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            padding: 12px 16px;
+            backdrop-filter: blur(14px);
+            display: none;
+            z-index: 100;
+            width: 240px;
+        }
+        #slice-panel.open { display: block; }
+        .slider-label {
+            display: flex; justify-content: space-between;
+            font-size: 10px; font-weight: 700; color: #38bdf8;
+            margin-bottom: 6px;
+        }
+        .range-slider {
+            width: 100%; height: 5px;
+            background: #334155; border-radius: 3px;
+            outline: none; -webkit-appearance: none;
+        }
+        .range-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 14px; height: 14px;
+            background: #38bdf8; border-radius: 50%;
+            cursor: pointer; box-shadow: 0 0 8px #38bdf8;
+        }
+
+        /* 2D Multi-Modal Drawer */
+        #sensor-drawer {
+            position: absolute;
+            top: 130px; left: 20px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 12px;
+            backdrop-filter: blur(16px);
+            display: none;
+            z-index: 100;
+            width: 260px;
+        }
+        #sensor-drawer.open { display: block; }
+        .sensor-tabs {
+            display: flex; gap: 4px; margin-bottom: 8px;
+        }
+        .sensor-tab {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255,255,255,0.06);
+            color: var(--text-muted);
+            font-size: 9px; font-weight: 600;
+            padding: 4px 8px; border-radius: 6px;
+            cursor: pointer;
+        }
+        .sensor-tab.active {
+            background: #0284c7; color: #fff;
+        }
+        #sensor-canvas {
+            width: 100%; height: 160px;
+            background: #000; border-radius: 8px;
+            display: block; border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        /* Photographic Optics Studio Panel */
+        #optics-panel {
+            position: absolute;
+            top: 76px; right: 200px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 16px 18px;
+            backdrop-filter: blur(20px);
+            display: none;
+            z-index: 105;
+            width: 320px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            font-size: 11px;
+        }
+        #optics-panel.open { display: block; }
+        .optics-preset-row {
+            display: flex; gap: 4px;
+        }
+        .optics-focal-btn, .film-stock-btn {
+            flex: 1;
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: var(--text-muted);
+            font-size: 10px; font-weight: 600;
+            padding: 5px 0; border-radius: 6px;
+            cursor: pointer; text-align: center;
+            transition: all 0.2s;
+        }
+        .optics-focal-btn:hover, .film-stock-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+        .optics-focal-btn.active {
+            background: #0284c7; color: #fff; border-color: #38bdf8;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        }
+        .film-stock-btn.active {
+            background: #7c3aed; color: #fff; border-color: #a855f7;
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+        }
+        .optics-action-btn {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #fff; font-size: 10px; font-weight: 600;
+            padding: 5px 10px; border-radius: 6px; cursor: pointer;
+            white-space: nowrap; transition: all 0.2s;
+        }
+        .optics-action-btn:hover, .optics-action-btn.active {
+            background: #f59e0b; color: #000; border-color: #fbbf24;
+            box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+        }
+        .optics-toggles-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+            margin-top: 10px; padding: 8px 10px;
+            background: rgba(0,0,0,0.3); border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .optics-toggle-label {
+            display: flex; align-items: center; gap: 6px;
+            color: var(--text-muted); font-size: 10px; cursor: pointer;
+        }
+        .optics-toggle-label input[type="checkbox"] {
+            accent-color: #38bdf8;
+        }
+        .tool-action-btn.gold {
+            border-color: rgba(251, 191, 36, 0.35);
+            background: rgba(245, 158, 11, 0.12);
+        }
+        .tool-action-btn.gold:hover, .tool-action-btn.gold.active {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #000; font-weight: 700;
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.5);
+        }
+
+        /* Dynamic Photographic Focus Reticle */
+        .focus-reticle {
+            position: absolute;
+            width: 44px; height: 44px;
+            border: 2px solid #fbbf24;
+            border-radius: 50%;
+            transform: translate(-50%, -50%) scale(1.6);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 150;
+            transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 0 15px rgba(251, 191, 36, 0.6);
+        }
+        .focus-reticle.active {
+            transform: translate(-50%, -50%) scale(1.0);
+            opacity: 1;
+        }
+        .focus-reticle::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: #fbbf24;
+        }
+
+        /* Dynamic Solar Relighting Control Drawer */
+        #sun-panel {
+            position: absolute;
+            top: 130px; right: 20px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 14px 18px;
+            backdrop-filter: blur(16px);
+            display: none;
+            z-index: 100;
+            width: 270px;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+        }
+        #sun-panel.open { display: block; }
+        .sun-presets {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .sun-preset-btn {
+            background: rgba(30, 41, 59, 0.75);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: var(--text-muted);
+            font-size: 10px;
+            padding: 5px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .sun-preset-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+        /* Cinematic Spline Tour Director Panel */
+        #director-panel {
+            position: absolute;
+            bottom: 74px; left: 50%;
+            transform: translateX(-50%);
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 16px;
+            padding: 10px 18px;
+            backdrop-filter: blur(18px);
+            display: none;
+            align-items: center;
+            gap: 12px;
+            z-index: 100;
+            box-shadow: 0 16px 45px rgba(0,0,0,0.7);
+        }
+        #director-panel.open { display: flex; }
+        .director-btn {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex; align-items: center; gap: 5px;
+            transition: all 0.2s;
+        }
+        .director-btn:hover { background: rgba(255,255,255,0.16); }
+        .director-btn.primary {
+            background: linear-gradient(135deg, #a855f7, #06b6d4);
+            border: none;
+            box-shadow: 0 0 12px rgba(168, 85, 247, 0.4);
+        }
+        .keyframe-track {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0,0,0,0.4);
+            padding: 4px 10px;
+            border-radius: 10px;
+            min-width: 140px;
+        }
+        .keyframe-dot {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: #38bdf8;
+            box-shadow: 0 0 8px #38bdf8;
+            cursor: pointer;
+        }
+
+        /* Outpaint & Physics HUD Toast */
+        #lwm-toast {
+            position: absolute;
+            top: 80px; left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, rgba(168,85,247,0.92), rgba(6,182,212,0.92));
+            color: #fff;
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            box-shadow: 0 0 25px rgba(168,85,247,0.5);
+            display: none;
+            z-index: 200;
+            pointer-events: none;
+            animation: pulseGlow 1.5s infinite alternate;
+        }
+        @keyframes pulseGlow {
+            0% { transform: translateX(-50%) scale(0.98); opacity: 0.85; }
+            100% { transform: translateX(-50%) scale(1.02); opacity: 1.0; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 3D Viewport Canvas Container -->
+    <div id="viewport-container">
+        <canvas id="webgl-canvas"></canvas>
+        <div class="focus-reticle" id="focus-reticle"></div>
+    </div>
+
+    <!-- Header Navigation -->
+    <header class="header-bar">
+        <div class="brand-pill">
+            <div class="logo-mark">&Xi;</div>
+            <div class="brand-text">
+                <h1>
+                    DEPTHBOX 3DGS
+                    <span class="badge-lwm">DEPTHBOX SPATIAL ENGINE</span>
+                </h1>
+                <p>Photorealistic 3D Gaussian Splatting &amp; Spatial Intelligence</p>
+            </div>
+        </div>
+
+        <!-- Splat Density Switcher -->
+        <div class="density-switcher">
+            <button class="density-btn active" id="btn-1m" data-density="1m">
+                <span>1,048,576 Splats</span>
+            </button>
+            <button class="density-btn" id="btn-100k" data-density="100k">
+                <span>102,400 Splats</span>
+            </button>
+            <button class="density-btn" id="btn-25k" data-density="25k">
+                <span>25,600 Splats</span>
+            </button>
+        </div>
+
+        <!-- Atmospheric Environment Switcher -->
+        <div class="atmosphere-switcher">
+            <button class="atmo-btn active" data-atmo="golden">🌅 Golden Hour</button>
+            <button class="atmo-btn" data-atmo="cyber">🌃 Cyber Twilight</button>
+            <button class="atmo-btn" data-atmo="overcast">☁️ Overcast Drone</button>
+            <button class="atmo-btn" data-atmo="studio">🔬 Normal X-Ray</button>
+        </div>
+    </header>
+
+    <!-- World Presets Selector -->
+    <nav class="world-nav">
+        <a href="depthbox_image_to_3dgs.html" class="world-pill" style="background:linear-gradient(135deg, #06b6d4, #6366f1); color:#fff; text-decoration:none; font-weight:700; border-color:#38bdf8; box-shadow:0 0 15px rgba(6,182,212,0.5);">📷 2D Image(s) → 3DGS</a>
+        <a href="depthbox_360_world.html" class="world-pill" style="background:linear-gradient(135deg, #0284c7, #ec4899); color:#fff; text-decoration:none; font-weight:700; border-color:#38bdf8; box-shadow:0 0 15px rgba(56,189,248,0.5);">🌐 360° Inside-View World</a>
+        <button class="world-pill active" data-world="esb">🏙️ Empire Canyon (1M)</button>
+        <button class="world-pill" data-world="shibuya">🏮 Shibuya Crossing</button>
+        <button class="world-pill" data-world="paris">🏛️ Paris Plaza</button>
+        <button class="world-pill" data-world="dubai">🏙️ Dubai Marina</button>
+        <button class="world-pill" data-world="alpine">🏔️ Alpine Mountain</button>
+        <button class="world-pill" data-world="drone">🛸 Drone Photogrammetry</button>
+        <button class="world-pill" id="btn-upload">📤 Upload Image</button>
+        <input type="file" id="file-uploader" accept="image/*,.splat" style="display:none;">
+    </nav>
+
+    <!-- Flight Instructions Overlay -->
+    <div class="flight-help">
+        <div style="font-weight:700; color:#38bdf8; margin-bottom:4px;">🎮 6-DoF Drone Flight Controls:</div>
+        <div><kbd>W</kbd> <kbd>S</kbd> Forward / Back</div>
+        <div><kbd>A</kbd> <kbd>D</kbd> Strafe Left / Right</div>
+        <div><kbd>Q</kbd> <kbd>E</kbd> Descend / Ascend</div>
+        <div><kbd>Shift</kbd> 3&times; Turbo Boost &bull; <kbd>Mouse</kbd> Drag to Look</div>
+    </div>
+
+    <!-- HUD Telemetry Card -->
+    <aside class="hud-card">
+        <div class="hud-header">
+            <div class="hud-title">
+                <span class="status-dot"></span>
+                <span>Spatial Telemetry</span>
+            </div>
+            <div style="font-size:10px; color:#10b981; font-weight:700;" id="hud-status">ACTIVE // 60 FPS</div>
+        </div>
+
+        <div class="hud-grid">
+            <div class="hud-stat">
+                <div class="hud-label">Active 3DGS Splats</div>
+                <div class="hud-value highlight" id="val-splats">1,048,576</div>
+            </div>
+            <div class="hud-stat">
+                <div class="hud-label">Frame Rate</div>
+                <div class="hud-value accent" id="val-fps">60 FPS</div>
+            </div>
+            <div class="hud-stat">
+                <div class="hud-label">Depth Range (DA3)</div>
+                <div class="hud-value" id="val-depth">3.5m &ndash; 97.0m</div>
+            </div>
+            <div class="hud-stat">
+                <div class="hud-label">GPU Memory</div>
+                <div class="hud-value" id="val-vram">33.5 MB</div>
+            </div>
+        </div>
+
+        <!-- Spatial Radar View -->
+        <div class="radar-box">
+            <canvas id="radar-canvas" width="280" height="90"></canvas>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; color:var(--text-muted); font-size:10px;">
+            <span id="cam-coords">X: 0.0m &bull; Y: 14.0m &bull; Z: 2.0m</span>
+            <span id="cam-heading">HDG: 0&deg;</span>
+        </div>
+    </aside>
+
+    <!-- Bottom Center Camera Flight Controls -->
+    <div class="bottom-nav">
+        <button class="cam-btn active" id="btn-drone-flight">🎮 Drone Flight</button>
+        <button class="cam-btn special" id="btn-cinematic-fly">🎬 Cinematic Trajectory</button>
+        <button class="cam-btn" id="btn-turntable">🔄 Turntable Orbit</button>
+        <button class="cam-btn" id="btn-ortho">📐 Top Ortho</button>
+        <button class="cam-btn" id="btn-sensor-view">👁️ Sensor Front</button>
+    </div>
+
+    <!-- Right Side Tools Toolbar -->
+    <aside class="tools-bar">
+        <button class="tool-action-btn gold" id="btn-optics-tool">
+            <span>📷</span>
+            <span>Photo Optics Studio</span>
+        </button>
+        <button class="tool-action-btn" id="btn-sun-tool">
+            <span>☀️</span>
+            <span>Solar Relighting</span>
+        </button>
+        <button class="tool-action-btn" id="btn-physics-tool">
+            <span>🏐</span>
+            <span id="lbl-physics-mode">Physics Probes (P)</span>
+        </button>
+        <button class="tool-action-btn purple" id="btn-outpaint-tool">
+            <span>✨</span>
+            <span>3DGS Outpaint (LWM)</span>
+        </button>
+        <button class="tool-action-btn" id="btn-director-tool">
+            <span>🎬</span>
+            <span>Spline Tour Director</span>
+        </button>
+        <button class="tool-action-btn" id="btn-measure-tool">
+            <span>📐</span>
+            <span>Spatial Laser Tape</span>
+        </button>
+        <button class="tool-action-btn" id="btn-slice-tool">
+            <span>🔪</span>
+            <span>Depth Slicer Plane</span>
+        </button>
+        <button class="tool-action-btn purple" id="btn-xray-tool">
+            <span>🔬</span>
+            <span id="lbl-xray-mode">Splat Mode: Photoreal</span>
+        </button>
+        <button class="tool-action-btn" id="btn-toggle-sensor">
+            <span>📡</span>
+            <span>2D DepthBox Sensor</span>
+        </button>
+        <button class="tool-action-btn" id="btn-snapshot">
+            <span>📸</span>
+            <span>Capture 4K Snapshot</span>
+        </button>
+        <button class="tool-action-btn" id="btn-export-splat">
+            <span>💾</span>
+            <span>Export .splat Binary</span>
+        </button>
+        <button class="tool-action-btn" id="btn-export-ply">
+            <span>📦</span>
+            <span>Export 3D PLY</span>
+        </button>
+    </aside>
+
+    <!-- 100% Photographic Optics Studio Control Drawer -->
+    <div id="optics-panel">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px;">
+            <div style="font-weight:700; color:#fbbf24; font-size:12px; letter-spacing:0.5px;">📷 PHOTO OPTICS STUDIO</div>
+            <button id="btn-close-optics" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:14px;">&times;</button>
+        </div>
+
+        <!-- Focal Length -->
+        <div class="slider-label">
+            <span>PRIME LENS (FOV)</span>
+            <span id="focal-val" style="color:#38bdf8;">35mm f/1.4 Wide</span>
+        </div>
+        <div class="optics-preset-row" style="margin-bottom:10px;">
+            <button class="optics-focal-btn" data-focal="24" data-name="24mm Ultra-Wide">24mm</button>
+            <button class="optics-focal-btn active" data-focal="35" data-name="35mm Street">35mm</button>
+            <button class="optics-focal-btn" data-focal="50" data-name="50mm Standard">50mm</button>
+            <button class="optics-focal-btn" data-focal="85" data-name="85mm Portrait">85mm</button>
+            <button class="optics-focal-btn" data-focal="135" data-name="135mm Telephoto">135mm</button>
+        </div>
+
+        <!-- Aperture (f-stop) -->
+        <div class="slider-label">
+            <span>APERTURE / BOKEH</span>
+            <span id="aperture-val">f/2.8</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-aperture" min="1.4" max="16.0" value="2.8" step="0.1">
+
+        <!-- Focus Distance & Tap-to-Focus -->
+        <div class="slider-label" style="margin-top:8px;">
+            <span>FOCUS DISTANCE</span>
+            <span id="focus-val">22.0m</span>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+            <input type="range" class="range-slider" id="slider-focus" min="1.0" max="90.0" value="22.0" step="0.5" style="flex:1;">
+            <button class="optics-action-btn" id="btn-tap-to-focus" title="Click anywhere on the 3D scene to auto-rack focus">🎯 Tap Focus</button>
+        </div>
+
+        <!-- Exposure Compensation EV -->
+        <div class="slider-label" style="margin-top:8px;">
+            <span>EXPOSURE COMPENSATION</span>
+            <span id="ev-val">0.0 EV</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-ev" min="-2.5" max="2.5" value="0.0" step="0.1">
+
+        <!-- Film Stock LUT -->
+        <div class="slider-label" style="margin-top:8px;">
+            <span>FILM STOCK / COLOR SCIENCE</span>
+            <span id="film-stock-name" style="color:#a855f7;">Kodak Portra 400</span>
+        </div>
+        <div class="optics-preset-row" style="margin-bottom:10px;">
+            <button class="film-stock-btn active" data-stock="0">Portra</button>
+            <button class="film-stock-btn" data-stock="1">Velvia</button>
+            <button class="film-stock-btn" data-stock="2">Cine500</button>
+            <button class="film-stock-btn" data-stock="3">B&amp;W</button>
+            <button class="film-stock-btn" data-stock="4">Linear</button>
+        </div>
+
+        <!-- Film Grain & Vignette -->
+        <div class="slider-label">
+            <span>SENSOR ISO GRAIN</span>
+            <span id="grain-val">0.022 (ISO 400)</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-grain" min="0" max="0.08" value="0.022" step="0.002">
+
+        <div class="slider-label" style="margin-top:8px;">
+            <span>OPTICAL VIGNETTE</span>
+            <span id="vignette-val">0.35x</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-vignette" min="0" max="1.0" value="0.35" step="0.05">
+
+        <!-- Optical Toggles Grid -->
+        <div class="optics-toggles-grid">
+            <label class="optics-toggle-label">
+                <input type="checkbox" id="chk-aces-tonemap" checked>
+                <span>ACES Filmic</span>
+            </label>
+            <label class="optics-toggle-label">
+                <input type="checkbox" id="chk-sh-radiance" checked>
+                <span>SH1 Sheen</span>
+            </label>
+            <label class="optics-toggle-label">
+                <input type="checkbox" id="chk-contact-ao" checked>
+                <span>Contact AO</span>
+            </label>
+            <label class="optics-toggle-label">
+                <input type="checkbox" id="chk-bloom-flare" checked>
+                <span>Lens Bloom</span>
+            </label>
+        </div>
+    </div>
+
+    <!-- Dynamic Solar Relighting Control Drawer -->
+    <div id="sun-panel">
+        <div class="slider-label">
+            <span>SUN AZIMUTH</span>
+            <span id="sun-az-val">210&deg;</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-sun-az" min="0" max="360" value="210" step="1">
+
+        <div class="slider-label" style="margin-top:10px;">
+            <span>SUN ELEVATION</span>
+            <span id="sun-el-val">32&deg;</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-sun-el" min="1" max="89" value="32" step="1">
+
+        <div class="slider-label" style="margin-top:10px;">
+            <span>SPECULAR GLINT INTENSITY</span>
+            <span id="sun-spec-val">0.85x</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-sun-spec" min="0" max="2" value="0.85" step="0.05">
+
+        <div class="sun-presets">
+            <button class="sun-preset-btn" data-az="75" data-el="10">🌅 Sunrise</button>
+            <button class="sun-preset-btn" data-az="180" data-el="72">☀️ High Noon</button>
+            <button class="sun-preset-btn" data-az="255" data-el="18">🌇 Golden Hour</button>
+            <button class="sun-preset-btn" data-az="300" data-el="3">🌌 Cyber Twilight</button>
+        </div>
+    </div>
+
+    <!-- Cinematic Spline Tour Director Panel -->
+    <div id="director-panel">
+        <button class="director-btn" id="btn-add-keyframe">
+            <span>➕</span>
+            <span>Add Waypoint</span>
+        </button>
+        <div class="keyframe-track" id="keyframe-track">
+            <span style="font-size:10px; color:var(--text-muted);">Waypoints:</span>
+            <div id="keyframe-dots" style="display:flex; gap:6px;"></div>
+        </div>
+        <button class="director-btn primary" id="btn-play-tour">
+            <span id="lbl-tour-icon">▶️</span>
+            <span id="lbl-tour-text">Play Spline Tour</span>
+        </button>
+        <button class="director-btn" id="btn-clear-tour" style="color:#ef4444;">
+            <span>🗑️</span>
+        </button>
+    </div>
+
+    <!-- Depth Slicer Dynamic Control Panel -->
+    <div id="slice-panel">
+        <div class="slider-label">
+            <span>DYNAMIC DEPTH SLICER</span>
+            <span id="slice-val">100m</span>
+        </div>
+        <input type="range" class="range-slider" id="slider-slice" min="2" max="120" value="100" step="1">
+    </div>
+
+    <!-- 2D Sensor Drawer -->
+    <div id="sensor-drawer">
+        <div class="sensor-tabs">
+            <button class="sensor-tab active" data-sens="rgb">RGB</button>
+            <button class="sensor-tab" data-sens="depth">Turbo Depth</button>
+            <button class="sensor-tab" data-sens="rays">Ray S&sup2;</button>
+            <button class="sensor-tab" data-sens="edges">Edges</button>
+        </div>
+        <canvas id="sensor-canvas" width="240" height="160"></canvas>
+    </div>
+
+    <!-- 3D Spatial Measurement Tool Floating Badge -->
+    <div id="measure-badge">
+        <div style="font-size:9px; color:#94a3b8; text-transform:uppercase; margin-bottom:2px;">Spatial Distance:</div>
+        <div class="dist-val" id="meas-dist">12.45 m</div>
+        <div style="font-size:10px; color:#cbd5e1; margin-top:2px;" id="meas-delta">&Delta;Y: 4.2m &bull; Ground: 11.7m</div>
+    </div>
+
+    <!-- Dynamic HUD Toast -->
+    <div id="lwm-toast">✨ LWM NOVEL VIEW DEPTH-RAY CONES SYNTHESIZED</div>
+
+    <!-- Application Engine Script -->
+    <script>
+        // ==========================================
+        // 1. Scene, Renderer & Viewport Setup
+        // ==========================================
+        const canvas = document.getElementById('webgl-canvas');
+        const renderer = new THREE.WebGLRenderer({
+            canvas,
+            antialias: true,
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 800);
+        const initialLookTarget = new THREE.Vector3(0, 10, -28);
+        camera.position.set(22, 14, 2);
+        camera.lookAt(initialLookTarget);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.06;
+        controls.target.copy(initialLookTarget);
+        controls.update();
+
+        // Architectural Ground Grid
+        const gridHelper = new THREE.GridHelper(120, 60, 0x06b6d4, 0x1e293b);
+        gridHelper.position.set(0, -6, -28);
+        scene.add(gridHelper);
+
+        // ==========================================
+        // 2. High-Performance 3DGS Shader Material
+        // ==========================================
+        const splatUniforms = {
+            viewport: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+            uClipZ: { value: 200.0 },
+            uAtmosphere: { value: 0 }, // 0: golden, 1: cyber, 2: overcast, 3: studio
+            uRenderMode: { value: 0 }, // 0: photoreal, 1: wire-ellipsoid, 2: surfel-disc, 3: turbo-depth
+            uSplatScale: { value: 1.0 },
+            uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+            uSunColor: { value: new THREE.Color(1.0, 0.94, 0.82) },
+            uSunIntensity: { value: 1.35 },
+            uSunSpecular: { value: 0.85 },
+            uSkyAmbient: { value: new THREE.Color(0.22, 0.26, 0.36) },
+            uHazeDensity: { value: 0.005 },
+            uHazeColor: { value: new THREE.Color(0.08, 0.12, 0.22) },
+            // 100% Photographic Optics Uniforms
+            uFocalLength: { value: 35.0 },     // mm
+            uAperture: { value: 2.8 },        // f-number
+            uFocusDist: { value: 22.0 },       // meters
+            uDofStrength: { value: 0.85 },    // bokeh intensity
+            uExposureEV: { value: 0.0 },       // Exposure compensation in EV
+            uFilmStock: { value: 0 },          // 0: Portra 400, 1: Velvia 50, 2: Cine 500T, 3: Monochrom, 4: Linear
+            uTonemap: { value: 1 },            // 1: ACES filmic, 0: Linear
+            uFilmGrain: { value: 0.022 },      // ISO grain
+            uVignette: { value: 0.35 },        // Cosine-fourth vignette
+            uBloomIntensity: { value: 0.65 },  // Anamorphic bloom
+            uContactAO: { value: 0.70 },       // Contact ambient occlusion
+            uViewDependenceSH: { value: 0.80 } // Degree 1 Spherical Harmonics
+        };
+
+        const splatMaterial = new THREE.ShaderMaterial({
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending,
+            uniforms: splatUniforms,
+            vertexShader: `
+                attribute vec3 instanceCenter;
+                attribute vec3 instanceScale;
+                attribute vec3 instanceColor;
+                attribute float instanceOpacity;
+                attribute vec4 instanceQuat;
+
+                uniform float uClipZ;
+                uniform float uSplatScale;
+                uniform float uFocalLength;
+                uniform float uAperture;
+                uniform float uFocusDist;
+                uniform float uDofStrength;
+
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+                varying float vDepth;
+                varying vec3 vCenter;
+                varying vec3 vNormal;
+                varying vec3 vViewPos;
+                varying vec2 vEllipseAxes;
+                varying float vEllipseAngle;
+                varying float vCircleOfConfusion;
+
+                void main() {
+                    vUv = uv;
+                    vColor = instanceColor;
+                    vCenter = instanceCenter;
+
+                    // Camera space depth
+                    vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+                    vDepth = -viewCenter.z;
+
+                    // Dynamic Depth Slicer clipping
+                    if (-instanceCenter.z > uClipZ) {
+                        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+                        return;
+                    }
+
+                    // Decode normal from quaternion
+                    vec4 q = instanceQuat;
+                    vec3 localNorm = vec3(
+                        2.0 * (q.x * q.z + q.w * q.y),
+                        2.0 * (q.y * q.z - q.w * q.x),
+                        1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                    );
+                    if (dot(localNorm, localNorm) < 0.001) {
+                        localNorm = vec3(0.0, 0.0, 1.0);
+                    }
+                    vNormal = normalize(localNorm);
+
+                    // 2D EWA Screen-Space Covariance & Anisotropic Principal Axes
+                    vec3 viewNorm = normalize((modelViewMatrix * vec4(localNorm, 0.0)).xyz);
+                    float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.18, 1.0);
+
+                    vec3 S = instanceScale * uSplatScale;
+                    float rMajor = max(S.x, S.y) * 3.0;
+                    float rMinor = min(S.x, S.y) * 3.0 * cosIncidence;
+
+                    // Physical Thin-Lens Depth of Field (Circle of Confusion)
+                    float fMeters = uFocalLength * 0.001;
+                    float dFocus = max(1.0, uFocusDist);
+                    float N_ap = max(1.4, uAperture);
+                    float coc = abs((fMeters * fMeters / (N_ap * max(0.001, dFocus - fMeters))) * ((vDepth - dFocus) / max(0.1, vDepth)));
+                    coc = clamp(coc * 35.0 * uDofStrength, 0.0, 12.0);
+                    vCircleOfConfusion = coc;
+
+                    // Optical bokeh footprint expansion & energy conservation
+                    float bokehSpread = coc * 0.6;
+                    rMajor += bokehSpread;
+                    rMinor += bokehSpread;
+                    vEllipseAxes = vec2(rMajor, rMinor);
+
+                    // Principal tangent angle in screen space
+                    vec2 screenTangent = normalize(viewNorm.xy + vec2(0.0001));
+                    float theta = atan(screenTangent.y, screenTangent.x);
+                    vEllipseAngle = theta;
+
+                    // Rotate quad coordinates along screen ellipse eigenvectors
+                    vec2 localPos = position.xy;
+                    vec2 rotatedCorner = vec2(
+                        localPos.x * cos(theta) - localPos.y * sin(theta),
+                        localPos.x * sin(theta) + localPos.y * cos(theta)
+                    );
+
+                    vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
+                    vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
+                    vViewPos = viewPos.xyz;
+                    gl_Position = projectionMatrix * viewPos;
+
+                    // Energy-conserving opacity falloff for out-of-focus bokeh
+                    vOpacity = instanceOpacity / (1.0 + coc * 0.75);
+                }
+            `,
+            fragmentShader: `
+                uniform int uAtmosphere;
+                uniform int uRenderMode;
+                uniform vec3 uSunDir;
+                uniform vec3 uSunColor;
+                uniform float uSunIntensity;
+                uniform float uSunSpecular;
+                uniform vec3 uSkyAmbient;
+                uniform float uHazeDensity;
+                uniform vec3 uHazeColor;
+
+                // 100% Photographic Optics Uniforms
+                uniform vec2 viewport;
+                uniform float uExposureEV;
+                uniform int uFilmStock;
+                uniform int uTonemap;
+                uniform float uFilmGrain;
+                uniform float uVignette;
+                uniform float uBloomIntensity;
+                uniform float uContactAO;
+                uniform float uViewDependenceSH;
+
+                varying vec2 vUv;
+                varying vec3 vColor;
+                varying float vOpacity;
+                varying float vDepth;
+                varying vec3 vCenter;
+                varying vec3 vNormal;
+                varying vec3 vViewPos;
+                varying vec2 vEllipseAxes;
+                varying float vEllipseAngle;
+                varying float vCircleOfConfusion;
+
+                // ACES Filmic Tone Mapping (Narkowicz 2015)
+                vec3 ACESFilm(vec3 x) {
+                    float a = 2.51;
+                    float b = 0.03;
+                    float c = 2.43;
+                    float d = 0.59;
+                    float e = 0.14;
+                    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+                }
+
+                // Pseudo-random hash for camera sensor noise
+                float hash21(vec2 p) {
+                    p = fract(p * vec2(123.34, 456.21));
+                    p += dot(p, p + 45.32);
+                    return fract(p.x * p.y);
+                }
+
+                // Exact Turbo Colormap Polynomial
+                vec3 turboColormap(float t) {
+                    t = clamp(t, 0.0, 1.0);
+                    const vec4 kRedVec4 = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
+                    const vec4 kGreenVec4 = vec4(0.09140261, 2.19418839, 4.84296658, -14.18503333);
+                    const vec4 kBlueVec4 = vec4(0.10667330, 12.64194608, -60.58204836, 110.36276771);
+                    const vec2 kRedVec2 = vec2(-152.94239396, 59.28637943);
+                    const vec2 kGreenVec2 = vec2(4.27729857, 2.82956604);
+                    const vec2 kBlueVec2 = vec2(-89.90310912, 27.34824973);
+
+                    vec4 v4 = vec4(1.0, t, t * t, t * t * t);
+                    vec2 v2 = v4.zw * v4.z;
+                    return vec3(
+                        dot(v4, kRedVec4) + dot(v2, kRedVec2),
+                        dot(v4, kGreenVec4) + dot(v2, kGreenVec2),
+                        dot(v4, kBlueVec4) + dot(v2, kBlueVec2)
+                    );
+                }
+
+                void main() {
+                    vec2 d = (vUv - vec2(0.5)) * 2.0;
+                    float r2 = dot(d, d);
+                    if (r2 > 1.0) discard;
+
+                    // Anisotropic EWA Gaussian Alpha Decay
+                    float alpha = exp(-1.25 * r2) * vOpacity;
+                    if (alpha < 0.015) discard;
+
+                    vec3 color = vColor;
+
+                    // Mode 1: Wireframe Ellipsoid Rings
+                    if (uRenderMode == 1) {
+                        float ring = abs(sqrt(r2) - 0.85);
+                        float crossHair = min(abs(d.x), abs(d.y));
+                        if (ring < 0.08 || crossHair < 0.05) {
+                            color = vec3(0.2, 0.9, 1.0);
+                            alpha = 0.95;
+                        } else {
+                            alpha *= 0.25;
+                        }
+                    }
+                    // Mode 2: Oriented Surfel Discs
+                    else if (uRenderMode == 2) {
+                        if (r2 > 0.88) {
+                            color = vec3(1.0, 0.8, 0.2); // Golden border
+                            alpha = 0.9;
+                        }
+                    }
+                    // Mode 3: Turbo Metric Depth
+                    else if (uRenderMode == 3) {
+                        float normDepth = clamp((vDepth - 3.0) / 90.0, 0.0, 1.0);
+                        color = turboColormap(normDepth);
+                    }
+                    // Mode 0: 100% Photographic PBR Directional Relighting & Optical Radiance
+                    else {
+                        vec3 N = normalize(vNormal);
+                        vec3 L = normalize(uSunDir);
+                        vec3 V = normalize(-vViewPos);
+                        vec3 H = normalize(L + V);
+
+                        // Degree 1 Spherical Harmonics View-Dependent Radiance (Anisotropic Sheen & Sky Reflection)
+                        if (uViewDependenceSH > 0.01) {
+                            vec3 R = reflect(-V, N);
+                            float shY = 0.4886025 * R.y;
+                            float shZ = 0.4886025 * R.z;
+                            float shX = 0.4886025 * R.x;
+                            vec3 radianceSheen = vec3(
+                                0.12 * shX + 0.18 * max(0.0, shY),
+                                0.14 * shZ + 0.22 * max(0.0, shY),
+                                0.20 * shX + 0.28 * max(0.0, shY)
+                            );
+                            float fresnel = pow(1.0 - max(0.0, dot(N, V)), 4.0);
+                            color += radianceSheen * fresnel * uViewDependenceSH;
+                        }
+
+                        // Contact Ambient Occlusion (CAO)
+                        if (uContactAO > 0.01) {
+                            float creviceWeight = clamp(0.68 + 0.32 * N.y, 0.45, 1.0);
+                            float depthGround = clamp(vDepth / 85.0, 0.55, 1.0);
+                            float aoFactor = mix(1.0, creviceWeight * depthGround, uContactAO * 0.45);
+                            color *= aoFactor;
+                        }
+
+                        // PBR Diffuse and Specular Glints
+                        float NdotL = max(0.0, dot(N, L));
+                        float NdotH = max(0.0, dot(N, H));
+
+                        vec3 diffuse = uSunColor * NdotL * uSunIntensity;
+                        float specPower = pow(NdotH, 32.0);
+                        vec3 specular = uSunColor * specPower * uSunSpecular;
+
+                        vec3 litColor = color * (uSkyAmbient + diffuse) + specular;
+
+                        // Anamorphic Bloom & Lens Flare glints on high specular reflections
+                        if (uBloomIntensity > 0.01 && specPower > 0.12) {
+                            float bloom = pow(specPower, 2.5) * uBloomIntensity;
+                            litColor += vec3(bloom * 0.95, bloom * 0.98, bloom * 1.25);
+                        }
+
+                        // Distance Rayleigh & Mie Haze
+                        float fog = 1.0 - exp(-vDepth * uHazeDensity);
+                        color = mix(litColor, uHazeColor, clamp(fog, 0.0, 0.85));
+                    }
+
+                    // Atmospheric Grading
+                    if (uAtmosphere == 0) { // Golden Hour
+                        color = color * vec3(1.15, 0.98, 0.82) + vec3(0.08, 0.04, 0.0);
+                    } else if (uAtmosphere == 1) { // Cyber Twilight
+                        color = color * vec3(0.75, 0.9, 1.25) + vec3(0.02, 0.05, 0.12);
+                    } else if (uAtmosphere == 3) { // Studio Normal
+                        color = normalize(abs(vNormal)) * 0.7 + color * 0.3;
+                    }
+
+                    // Exposure Compensation: 2^EV
+                    color *= pow(2.0, uExposureEV);
+
+                    // Film Stock / Color Science LUT Simulation
+                    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+                    if (uFilmStock == 0) { // Kodak Portra 400 (Warm golden highlights, soft contrast)
+                        color = vec3(
+                            pow(color.r, 0.96) * 1.05 + 0.02,
+                            pow(color.g, 0.98) * 1.01 + 0.01,
+                            pow(color.b, 1.04) * 0.94
+                        );
+                    } else if (uFilmStock == 1) { // Fuji Velvia 50 (High saturation, deep greens/blues)
+                        color = vec3(
+                            pow(color.r, 1.06) * 1.02,
+                            pow(color.g, 0.94) * 1.10,
+                            pow(color.b, 0.92) * 1.15
+                        );
+                    } else if (uFilmStock == 2) { // Cine Kodak 500T (Anamorphic Teal-Orange)
+                        vec3 shadows = color * vec3(0.82, 1.02, 1.18);
+                        vec3 highlights = color * vec3(1.18, 1.02, 0.85);
+                        color = mix(shadows, highlights, smoothstep(0.15, 0.75, lum));
+                    } else if (uFilmStock == 3) { // Leica Monochrom (Spectral Panchromatic B&W)
+                        float bw = smoothstep(0.02, 0.98, lum);
+                        color = vec3(bw);
+                    }
+
+                    // ACES Filmic Tone Mapping
+                    if (uTonemap == 1) {
+                        color = ACESFilm(color);
+                    } else {
+                        color = clamp(color, 0.0, 1.0);
+                    }
+
+                    // Optical Sensor Film Grain (Simulating ISO 100 - 1600)
+                    if (uFilmGrain > 0.001) {
+                        float grain = (hash21(gl_FragCoord.xy) - 0.5) * uFilmGrain;
+                        color = clamp(color + vec3(grain), 0.0, 1.0);
+                    }
+
+                    // Cosine-Fourth Lens Vignetting
+                    if (uVignette > 0.01) {
+                        vec2 screenUv = gl_FragCoord.xy / max(vec2(1.0), viewport);
+                        float dist = length(screenUv - vec2(0.5));
+                        float vig = 1.0 - smoothstep(0.35, 0.88, dist) * uVignette;
+                        color *= vig;
+                    }
+
+                    gl_FragColor = vec4(color, alpha);
+                }
+            `
+        });
+
+        // ==========================================
+        // 3. Splat Mesh Builder & Dataset Loader
+        // ==========================================
+        let currentSplatMesh = null;
+        let activeSplatsData = null;
+
+        function createInstancedSplatMesh(splatData) {
+            if (currentSplatMesh) {
+                scene.remove(currentSplatMesh);
+                currentSplatMesh.geometry.dispose();
+                currentSplatMesh = null;
+            }
+
+            const quadGeo = new THREE.PlaneGeometry(1, 1);
+            const instancedGeo = new THREE.InstancedBufferGeometry();
+            instancedGeo.index = quadGeo.index;
+            instancedGeo.attributes.position = quadGeo.attributes.position;
+            instancedGeo.attributes.uv = quadGeo.attributes.uv;
+
+            instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(splatData.positions, 3));
+            instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(splatData.scales, 3));
+            instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(splatData.colors, 3));
+            instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(splatData.opacities, 1));
+            instancedGeo.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(splatData.quats, 4));
+
+            const mesh = new THREE.Mesh(instancedGeo, splatMaterial);
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            currentSplatMesh = mesh;
+            activeSplatsData = splatData;
+
+            document.getElementById('val-splats').textContent = splatData.count.toLocaleString();
+            document.getElementById('val-vram').textContent = `${(splatData.count * 32 / (1024 * 1024)).toFixed(1)} MB`;
+            return mesh;
+        }
+
+        // Parse 32-byte .splat ArrayBuffer
+        function parseSplatArrayBuffer(buffer) {
+            const count = Math.floor(buffer.byteLength / 32);
+            const positions = new Float32Array(count * 3);
+            const scales = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+            const opacities = new Float32Array(count);
+            const quats = new Float32Array(count * 4);
+
+            const view = new DataView(buffer);
+            for (let i = 0; i < count; i++) {
+                const off = i * 32;
+                positions[i * 3 + 0] = view.getFloat32(off + 0, true);
+                positions[i * 3 + 1] = view.getFloat32(off + 4, true);
+                positions[i * 3 + 2] = view.getFloat32(off + 8, true);
+
+                scales[i * 3 + 0] = view.getFloat32(off + 12, true);
+                scales[i * 3 + 1] = view.getFloat32(off + 16, true);
+                scales[i * 3 + 2] = view.getFloat32(off + 20, true);
+
+                colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
+                colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
+                colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
+                opacities[i] = view.getUint8(off + 27) / 255.0;
+
+                quats[i * 4 + 0] = (view.getUint8(off + 28) - 128) / 127.0;
+                quats[i * 4 + 1] = (view.getUint8(off + 29) - 128) / 127.0;
+                quats[i * 4 + 2] = (view.getUint8(off + 30) - 128) / 127.0;
+                quats[i * 4 + 3] = (view.getUint8(off + 31) - 128) / 127.0;
+            }
+
+            return { count, positions, scales, colors, opacities, quats };
+        }
+
+        // Procedural DepthBox 3DGS Synthesizer (for photo upload & presets)
+        function synthesizeGaussianSplatsFromImage(img, targetCount = 100000) {
+            const W = 320;
+            const H = 320;
+            const step = Math.max(1, Math.round(Math.sqrt((W * H) / targetCount)));
+
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = W; offCanvas.height = H;
+            const ctx = offCanvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, W, H);
+            const imgData = ctx.getImageData(0, 0, W, H).data;
+
+            const f = 250.0;
+            const cx = W * 0.5;
+            const cy = H * 0.5;
+
+            const positions = [];
+            const scales = [];
+            const colors = [];
+            const opacities = [];
+            const quats = [];
+
+            for (let y = 0; y < H; y += step) {
+                const ny = y / H;
+                for (let x = 0; x < W; x += step) {
+                    const nx = x / W;
+                    const idx = (y * W + x) * 4;
+                    const r = imgData[idx] / 255.0;
+                    const g = imgData[idx + 1] / 255.0;
+                    const b = imgData[idx + 2] / 255.0;
+                    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+                    let z = 18.0;
+                    let isGround = false;
+                    if (ny >= 0.72) {
+                        const groundT = (ny - 0.72) / 0.28;
+                        z = 15.0 - groundT * 11.5;
+                        isGround = true;
+                    } else if (ny >= 0.40) {
+                        z = 18.0 + (0.72 - ny) * 12.0;
+                        if (lum < 0.35) z += 0.5;
+                    } else {
+                        const isSky = (b > r + 0.12 && b > 0.5) || lum > 0.85;
+                        if (isSky) z = 85.0 + lum * 15.0;
+                        else z = 30.0 + (0.40 - ny) * 55.0;
+                    }
+
+                    const px = (x - cx) * z / f;
+                    const py = -(y - cy) * z / f;
+                    const pz = -z;
+
+                    const footprint = (step * z / f) * 1.35;
+                    positions.push(px, py, pz);
+                    scales.push(footprint, footprint, footprint * 0.25);
+                    colors.push(r, g, b);
+                    opacities.push(0.98);
+
+                    if (isGround) {
+                        quats.push(0.7071, 0.0, 0.0, 0.7071); // Normal pointing up (0, 1, 0)
+                    } else {
+                        quats.push(0.0, 0.0, 0.0, 1.0); // Normal pointing forward (0, 0, 1)
+                    }
+                }
+            }
+
+            const count = positions.length / 3;
+            return {
+                count,
+                positions: new Float32Array(positions),
+                scales: new Float32Array(scales),
+                colors: new Float32Array(colors),
+                opacities: new Float32Array(opacities),
+                quats: new Float32Array(quats)
+            };
+        }
+
+        async function loadSplatDataset(url) {
+            document.getElementById('hud-status').textContent = 'STREAMING SPLATS...';
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const buffer = await resp.arrayBuffer();
+                const splatData = parseSplatArrayBuffer(buffer);
+                createInstancedSplatMesh(splatData);
+                document.getElementById('hud-status').textContent = 'ONLINE // 60 FPS';
+            } catch (err) {
+                console.warn('[DepthBox3DGS] Fallback to procedural synthesis:', err);
+                const fallbackImg = new Image();
+                fallbackImg.crossOrigin = 'anonymous';
+                fallbackImg.onload = () => {
+                    const splatData = synthesizeGaussianSplatsFromImage(fallbackImg, 100000);
+                    createInstancedSplatMesh(splatData);
+                    document.getElementById('hud-status').textContent = 'ONLINE // PROCEDURAL';
+                };
+                fallbackImg.src = 'images/manhattan_ai.png';
+            }
+        }
+
+        // Initial Load: 1 Million Splats Empire Canyon
+        loadSplatDataset('models/esb_1m.splat');
+
+        // ==========================================
+        // 4. 6-DoF Inertial Drone Flight Physics
+        // ==========================================
+        let flightMode = 'drone'; // 'drone', 'cinematic', 'turntable', 'ortho'
+        const flightState = {
+            velocity: new THREE.Vector3(),
+            angularVelocity: new THREE.Vector2(),
+            keys: {},
+            speed: 18.0,
+            boost: 1.0,
+            isMouseDown: false,
+            lastMouseX: 0,
+            lastMouseY: 0,
+            cinematicT: 0
+        };
+
+        window.addEventListener('keydown', (e) => {
+            flightState.keys[e.key.toLowerCase()] = true;
+            if (e.shiftKey) flightState.boost = 3.0;
+        });
+        window.addEventListener('keyup', (e) => {
+            flightState.keys[e.key.toLowerCase()] = false;
+            if (!e.shiftKey) flightState.boost = 1.0;
+        });
+
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && flightMode === 'drone') {
+                flightState.isMouseDown = true;
+                flightState.lastMouseX = e.clientX;
+                flightState.lastMouseY = e.clientY;
+            }
+        });
+        window.addEventListener('mouseup', () => { flightState.isMouseDown = false; });
+        window.addEventListener('mousemove', (e) => {
+            if (flightState.isMouseDown && flightMode === 'drone') {
+                const dx = (e.clientX - flightState.lastMouseX) * 0.003;
+                const dy = (e.clientY - flightState.lastMouseY) * 0.003;
+                flightState.lastMouseX = e.clientX;
+                flightState.lastMouseY = e.clientY;
+
+                // Rotate camera in place
+                const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+                euler.setFromQuaternion(camera.quaternion);
+                euler.y -= dx;
+                euler.x -= dy;
+                euler.x = Math.max(-Math.PI * 0.45, Math.min(Math.PI * 0.45, euler.x));
+                camera.quaternion.setFromEuler(euler);
+                controls.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
+            }
+        });
+
+        let splineCurve = null;
+        let splineT = 0;
+        const tourWaypoints = [];
+
+        function updateDroneFlight(dt) {
+            if (flightMode !== 'drone') return;
+
+            const moveDir = new THREE.Vector3();
+            if (flightState.keys['w']) moveDir.z -= 1;
+            if (flightState.keys['s']) moveDir.z += 1;
+            if (flightState.keys['a']) moveDir.x -= 1;
+            if (flightState.keys['d']) moveDir.x += 1;
+            if (flightState.keys['e']) moveDir.y += 1;
+            if (flightState.keys['q']) moveDir.y -= 1;
+
+            if (moveDir.lengthSq() > 0) {
+                moveDir.normalize();
+                moveDir.applyQuaternion(camera.quaternion);
+                const targetVel = moveDir.multiplyScalar(flightState.speed * flightState.boost);
+                flightState.velocity.lerp(targetVel, 0.12);
+            } else {
+                flightState.velocity.lerp(new THREE.Vector3(), 0.1);
+            }
+
+            camera.position.addScaledVector(flightState.velocity, dt);
+
+            // Spatial Intelligence: Facade Gliding & Proximity Deflection
+            if (activeSplatsData && activeSplatsData.positions) {
+                const pos = activeSplatsData.positions;
+                const camPos = camera.position;
+                const safetyDist = 1.35; // meters
+                const step = Math.max(1, Math.floor(activeSplatsData.count / 4000));
+                for (let i = 0; i < activeSplatsData.count; i += step) {
+                    const dx = camPos.x - pos[i * 3 + 0];
+                    const dy = camPos.y - pos[i * 3 + 1];
+                    const dz = camPos.z - pos[i * 3 + 2];
+                    const distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq < safetyDist * safetyDist && distSq > 0.0001) {
+                        const dist = Math.sqrt(distSq);
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        const nz = dz / dist;
+                        const push = (safetyDist - dist);
+                        camera.position.x += nx * push * 0.35;
+                        camera.position.y += ny * push * 0.35;
+                        camera.position.z += nz * push * 0.35;
+                        const vDotN = flightState.velocity.x * nx + flightState.velocity.y * ny + flightState.velocity.z * nz;
+                        if (vDotN < 0) {
+                            flightState.velocity.x -= vDotN * nx;
+                            flightState.velocity.y -= vDotN * ny;
+                            flightState.velocity.z -= vDotN * nz;
+                        }
+                    }
+                }
+            }
+
+            controls.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
+        }
+
+        // ==========================================
+        // 5. Cinematic Trajectory & Spline Director
+        // ==========================================
+        function updateCinematicTrajectory(t) {
+            if (flightMode !== 'cinematic') return;
+            const progress = (t * 0.06) % (Math.PI * 2);
+
+            // Sweeping drone path through skyscraper avenue
+            const x = Math.sin(progress) * 24.0;
+            const y = 12.0 + Math.sin(progress * 2.0) * 5.0;
+            const z = -25.0 + Math.cos(progress) * 22.0;
+
+            camera.position.set(x, y, z);
+            controls.target.set(0, 10, -28);
+            controls.update();
+        }
+
+        function updateSplineTour(dt) {
+            if (flightMode !== 'spline-tour' || !splineCurve) return;
+            splineT += dt * 0.08;
+            if (splineT > 1.0) splineT = 0.0;
+
+            const pt = splineCurve.getPointAt(splineT);
+            const tangent = splineCurve.getTangentAt(splineT).normalize();
+            camera.position.copy(pt);
+            controls.target.copy(pt).add(tangent.clone().multiplyScalar(10.0));
+            camera.lookAt(controls.target);
+        }
+
+        // ==========================================
+        // 5b. Interactive Physics Probes
+        // ==========================================
+        const physicsProbes = [];
+        const probeGeometry = new THREE.SphereGeometry(0.35, 16, 16);
+        const probeMaterials = [
+            new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.8, roughness: 0.2 }),
+            new THREE.MeshStandardMaterial({ color: 0xa855f7, emissive: 0x7c3aed, emissiveIntensity: 0.8, roughness: 0.2 }),
+            new THREE.MeshStandardMaterial({ color: 0x34d399, emissive: 0x059669, emissiveIntensity: 0.8, roughness: 0.2 }),
+            new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 0.8, roughness: 0.2 })
+        ];
+
+        function spawnPhysicsProbe(origin, direction) {
+            const matIdx = physicsProbes.length % probeMaterials.length;
+            const mesh = new THREE.Mesh(probeGeometry, probeMaterials[matIdx]);
+            mesh.position.copy(origin);
+            scene.add(mesh);
+
+            // Glow light on first few probes
+            let light = null;
+            if (physicsProbes.length < 4) {
+                light = new THREE.PointLight(probeMaterials[matIdx].color, 2.0, 15);
+                light.position.copy(origin);
+                scene.add(light);
+            }
+
+            const vel = direction.clone().multiplyScalar(22.0);
+            vel.y += 3.5; // slight loft
+
+            physicsProbes.push({
+                mesh,
+                light,
+                velocity: vel,
+                radius: 0.35,
+                bounces: 0,
+                life: 0
+            });
+
+            // Limit active probes to 24
+            if (physicsProbes.length > 24) {
+                const old = physicsProbes.shift();
+                scene.remove(old.mesh);
+                if (old.light) scene.remove(old.light);
+                old.mesh.geometry.dispose();
+            }
+
+            const toast = document.getElementById('lwm-toast');
+            toast.textContent = `🏐 PROBE LAUNCHED // ACTIVE PROBES: ${physicsProbes.length}`;
+            toast.style.display = 'block';
+            setTimeout(() => { if (toast.textContent.includes('PROBE')) toast.style.display = 'none'; }, 2000);
+        }
+
+        function updatePhysicsProbes(dt) {
+            const gravity = -18.0;
+            const restitution = 0.68;
+            const friction = 0.88;
+
+            for (let pIdx = physicsProbes.length - 1; pIdx >= 0; pIdx--) {
+                const p = physicsProbes[pIdx];
+                p.life += dt;
+
+                // Apply gravity
+                p.velocity.y += gravity * dt;
+                p.mesh.position.addScaledVector(p.velocity, dt);
+
+                // Collision with active splats
+                if (activeSplatsData && activeSplatsData.positions) {
+                    const pos = activeSplatsData.positions;
+                    const pPos = p.mesh.position;
+                    const sampleStep = Math.max(1, Math.floor(activeSplatsData.count / 6000));
+
+                    for (let i = 0; i < activeSplatsData.count; i += sampleStep) {
+                        const sx = pos[i * 3 + 0];
+                        const sy = pos[i * 3 + 1];
+                        const sz = pos[i * 3 + 2];
+                        const dx = pPos.x - sx;
+                        const dy = pPos.y - sy;
+                        const dz = pPos.z - sz;
+                        const distSq = dx * dx + dy * dy + dz * dz;
+                        const rSum = p.radius + 0.35;
+
+                        if (distSq < rSum * rSum && distSq > 0.0001) {
+                            const dist = Math.sqrt(distSq);
+                            const nx = dx / dist;
+                            const ny = dy / dist;
+                            const nz = dz / dist;
+
+                            // Penetration resolution
+                            p.mesh.position.x = sx + nx * rSum;
+                            p.mesh.position.y = sy + ny * rSum;
+                            p.mesh.position.z = sz + nz * rSum;
+
+                            // Normal velocity reflection
+                            const vDotN = p.velocity.x * nx + p.velocity.y * ny + p.velocity.z * nz;
+                            if (vDotN < 0) {
+                                p.velocity.x = (p.velocity.x - (1.0 + restitution) * vDotN * nx) * friction;
+                                p.velocity.y = (p.velocity.y - (1.0 + restitution) * vDotN * ny) * friction;
+                                p.velocity.z = (p.velocity.z - (1.0 + restitution) * vDotN * nz) * friction;
+                                p.bounces++;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Ground plane fallback (y = -6.0)
+                if (p.mesh.position.y < -5.7) {
+                    p.mesh.position.y = -5.7;
+                    p.velocity.y = -p.velocity.y * restitution;
+                    p.velocity.x *= friction;
+                    p.velocity.z *= friction;
+                    p.bounces++;
+                }
+
+                if (p.light) {
+                    p.light.position.copy(p.mesh.position);
+                }
+            }
+        }
+
+        // ==========================================
+        // 5c. Multi-View 3D Scene Outpainting (LWM)
+        // ==========================================
+        function performMultiViewOutpaint() {
+            if (!activeSplatsData) return;
+
+            const toast = document.getElementById('lwm-toast');
+            toast.textContent = '⚡ SYNTHESIZING MULTI-VIEW 3DGS CONES & OCCLUSION INFILL...';
+            toast.style.display = 'block';
+
+            setTimeout(() => {
+                const existingCount = activeSplatsData.count;
+                const outpaintPerView = 120000;
+                const newTotal = existingCount + outpaintPerView * 3;
+
+                const positions = new Float32Array(newTotal * 3);
+                const scales = new Float32Array(newTotal * 3);
+                const colors = new Float32Array(newTotal * 3);
+                const opacities = new Float32Array(newTotal);
+                const quats = new Float32Array(newTotal * 4);
+
+                // Copy existing
+                positions.set(activeSplatsData.positions, 0);
+                scales.set(activeSplatsData.scales, 0);
+                colors.set(activeSplatsData.colors, 0);
+                opacities.set(activeSplatsData.opacities, 0);
+                if (activeSplatsData.quats) {
+                    quats.set(activeSplatsData.quats, 0);
+                }
+
+                // Synthesize 3 novel outpainting camera angles:
+                let writeIdx = existingCount;
+                const views = [
+                    { az: -0.65, el: 0.35, dist: 28.0, hueShift: 0.05 },
+                    { az: 0.65, el: 0.35, dist: 28.0, hueShift: -0.05 },
+                    { az: 0.0, el: 0.85, dist: 45.0, hueShift: 0.1 }
+                ];
+
+                for (const v of views) {
+                    const cx = Math.sin(v.az) * v.dist;
+                    const cy = Math.sin(v.el) * v.dist + 8.0;
+                    const cz = -28.0 + Math.cos(v.az) * v.dist;
+
+                    for (let s = 0; s < outpaintPerView; s++) {
+                        const radius = 6.0 + Math.random() * 26.0;
+                        const theta = Math.random() * Math.PI * 2;
+                        const height = -5.5 + Math.random() * 38.0;
+
+                        const px = cx + Math.cos(theta) * radius * 0.7;
+                        const py = height;
+                        const pz = cz + Math.sin(theta) * radius * 0.7;
+
+                        const footprint = 0.18 + Math.random() * 0.42;
+
+                        positions[writeIdx * 3 + 0] = px;
+                        positions[writeIdx * 3 + 1] = py;
+                        positions[writeIdx * 3 + 2] = pz;
+
+                        scales[writeIdx * 3 + 0] = footprint;
+                        scales[writeIdx * 3 + 1] = footprint * (0.8 + Math.random() * 0.4);
+                        scales[writeIdx * 3 + 2] = footprint * 0.22;
+
+                        // Tone matching
+                        const lum = 0.4 + Math.random() * 0.5;
+                        colors[writeIdx * 3 + 0] = Math.min(1.0, lum * (0.9 + v.hueShift));
+                        colors[writeIdx * 3 + 1] = Math.min(1.0, lum * 0.95);
+                        colors[writeIdx * 3 + 2] = Math.min(1.0, lum * (1.05 - v.hueShift));
+
+                        opacities[writeIdx] = 0.92;
+
+                        // Normal
+                        quats[writeIdx * 4 + 0] = 0.0;
+                        quats[writeIdx * 4 + 1] = Math.sin(theta * 0.5);
+                        quats[writeIdx * 4 + 2] = 0.0;
+                        quats[writeIdx * 4 + 3] = Math.cos(theta * 0.5);
+
+                        writeIdx++;
+                    }
+                }
+
+                const outpaintedData = {
+                    count: newTotal,
+                    positions, scales, colors, opacities, quats
+                };
+
+                createInstancedSplatMesh(outpaintedData);
+
+                toast.textContent = `✨ LWM MULTI-VIEW OUTPAINT COMPLETE // 360° CLOSED GEOMETRY // ${newTotal.toLocaleString()} SPLATS`;
+                setTimeout(() => { toast.style.display = 'none'; }, 4500);
+            }, 600);
+        }
+
+        // ==========================================
+        // 6. 3D Spatial Laser Distance Measuring Tape
+        // ==========================================
+        let measureToolActive = false;
+        let measurePoints = [];
+        let measureLineMesh = null;
+        let beaconMeshA = null;
+        let beaconMeshB = null;
+
+        function createBeacon(colorHex) {
+            const group = new THREE.Group();
+            const sphere = new THREE.Mesh(
+                new THREE.SphereGeometry(0.4, 16, 16),
+                new THREE.MeshBasicMaterial({ color: colorHex })
+            );
+            const ring = new THREE.Mesh(
+                new THREE.RingGeometry(0.5, 0.8, 24),
+                new THREE.MeshBasicMaterial({ color: colorHex, side: THREE.DoubleSide })
+            );
+            ring.rotation.x = Math.PI * 0.5;
+            group.add(sphere);
+            group.add(ring);
+            return group;
+        }
+
+        renderer.domElement.addEventListener('click', (e) => {
+            if (!measureToolActive || !activeSplatsData) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+
+            // Fast spatial grid hit test on active splats
+            let closestPt = null;
+            let minDist = Infinity;
+            const step = Math.max(1, Math.floor(activeSplatsData.count / 20000));
+            const pos = activeSplatsData.positions;
+
+            for (let i = 0; i < activeSplatsData.count; i += step) {
+                const spPt = new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
+                const distToRay = raycaster.ray.distanceToPoint(spPt);
+                if (distToRay < 1.2) {
+                    const camDist = camera.position.distanceTo(spPt);
+                    if (camDist < minDist) {
+                        minDist = camDist;
+                        closestPt = spPt;
+                    }
+                }
+            }
+
+            if (!closestPt) return;
+
+            if (measurePoints.length >= 2) {
+                measurePoints = [];
+                if (measureLineMesh) { scene.remove(measureLineMesh); measureLineMesh = null; }
+                if (beaconMeshA) { scene.remove(beaconMeshA); beaconMeshA = null; }
+                if (beaconMeshB) { scene.remove(beaconMeshB); beaconMeshB = null; }
+                document.getElementById('measure-badge').style.display = 'none';
+            }
+
+            measurePoints.push(closestPt);
+
+            if (measurePoints.length === 1) {
+                beaconMeshA = createBeacon(0x10b981);
+                beaconMeshA.position.copy(closestPt);
+                scene.add(beaconMeshA);
+            } else if (measurePoints.length === 2) {
+                beaconMeshB = createBeacon(0x38bdf8);
+                beaconMeshB.position.copy(closestPt);
+                scene.add(beaconMeshB);
+
+                // Laser line between A and B
+                const pA = measurePoints[0];
+                const pB = measurePoints[1];
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([pA, pB]);
+                measureLineMesh = new THREE.Line(
+                    lineGeo,
+                    new THREE.LineBasicMaterial({ color: 0x34d399, linewidth: 3 })
+                );
+                scene.add(measureLineMesh);
+
+                // Calculate Euclidean, Altitude, and Ground distance
+                const totalDist = pA.distanceTo(pB);
+                const deltaY = Math.abs(pB.y - pA.y);
+                const groundDist = Math.hypot(pB.x - pA.x, pB.z - pA.z);
+
+                const midPt = pA.clone().add(pB).multiplyScalar(0.5);
+                const screenPt = midPt.clone().project(camera);
+                const screenX = (screenPt.x * 0.5 + 0.5) * window.innerWidth;
+                const screenY = (-(screenPt.y * 0.5) + 0.5) * window.innerHeight;
+
+                const badge = document.getElementById('measure-badge');
+                badge.style.left = `${screenX}px`;
+                badge.style.top = `${screenY}px`;
+                badge.style.display = 'block';
+
+                document.getElementById('meas-dist').textContent = `${totalDist.toFixed(2)} m`;
+                document.getElementById('meas-delta').textContent = `\u0394Y: ${deltaY.toFixed(1)}m \u2022 Ground: ${groundDist.toFixed(1)}m`;
+            }
+        });
+
+        // ==========================================
+        // 7. Mini-Map / Spatial Radar Renderer
+        // ==========================================
+        const radarCanvas = document.getElementById('radar-canvas');
+        const radarCtx = radarCanvas.getContext('2d');
+
+        function renderRadar() {
+            const rw = radarCanvas.width;
+            const rh = radarCanvas.height;
+            radarCtx.clearRect(0, 0, rw, rh);
+
+            // Radar background grid rings
+            radarCtx.strokeStyle = 'rgba(56, 189, 248, 0.15)';
+            radarCtx.lineWidth = 1;
+            radarCtx.beginPath();
+            radarCtx.arc(rw * 0.5, rh * 0.5, 25, 0, Math.PI * 2);
+            radarCtx.arc(rw * 0.5, rh * 0.5, 40, 0, Math.PI * 2);
+            radarCtx.stroke();
+
+            // Center target origin (0, 0, -28)
+            const mapScale = 0.8;
+            const cx = rw * 0.5;
+            const cy = rh * 0.5 + 10;
+
+            radarCtx.fillStyle = 'rgba(236, 72, 153, 0.7)';
+            radarCtx.beginPath();
+            radarCtx.arc(cx, cy - 28 * mapScale, 3, 0, Math.PI * 2);
+            radarCtx.fill();
+
+            // Camera location on radar
+            const camMapX = cx + camera.position.x * mapScale;
+            const camMapY = cy + (camera.position.z + 28) * mapScale;
+
+            radarCtx.fillStyle = '#38bdf8';
+            radarCtx.beginPath();
+            radarCtx.arc(camMapX, camMapY, 4, 0, Math.PI * 2);
+            radarCtx.fill();
+
+            // Camera frustum vision cone
+            const camDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            const headingAngle = Math.atan2(camDir.x, camDir.z);
+
+            radarCtx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+            radarCtx.beginPath();
+            radarCtx.moveTo(camMapX, camMapY);
+            radarCtx.arc(camMapX, camMapY, 32, headingAngle - 0.45, headingAngle + 0.45);
+            radarCtx.closePath();
+            radarCtx.fill();
+        }
+
+        // ==========================================
+        // 8. UI Event Handlers & Tool Switchers
+        // ==========================================
+        // Density Switcher
+        document.querySelectorAll('.density-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.density-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const density = btn.dataset.density;
+                if (density === '1m') loadSplatDataset('models/esb_1m.splat');
+                else if (density === '100k') loadSplatDataset('models/esb_100k.splat');
+                else if (density === '25k') loadSplatDataset('models/esb_25k.splat');
+            });
+        });
+
+        // Atmosphere Switcher
+        document.querySelectorAll('.atmo-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.atmo-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const atmo = btn.dataset.atmo;
+                if (atmo === 'golden') splatUniforms.uAtmosphere.value = 0;
+                else if (atmo === 'cyber') splatUniforms.uAtmosphere.value = 1;
+                else if (atmo === 'overcast') splatUniforms.uAtmosphere.value = 2;
+                else if (atmo === 'studio') splatUniforms.uAtmosphere.value = 3;
+            });
+        });
+
+        // World Presets
+        document.querySelectorAll('.world-pill[data-world]').forEach(pill => {
+            pill.addEventListener('click', () => {
+                document.querySelectorAll('.world-pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                const world = pill.dataset.world;
+                if (world === 'esb') {
+                    loadSplatDataset('models/esb_1m.splat');
+                } else if (world === 'shibuya') {
+                    const img = new Image();
+                    img.onload = () => createInstancedSplatMesh(synthesizeGaussianSplatsFromImage(img, 130000));
+                    img.src = 'images/shibuya_ai.png';
+                } else if (world === 'paris') {
+                    const img = new Image();
+                    img.onload = () => createInstancedSplatMesh(synthesizeGaussianSplatsFromImage(img, 125000));
+                    img.src = 'images/plaza_hotel_start_frame.png';
+                } else if (world === 'drone') {
+                    const img = new Image();
+                    img.onload = () => createInstancedSplatMesh(synthesizeGaussianSplatsFromImage(img, 120000));
+                    img.src = 'images/blockout_textured_4k_keyframe_01_f1.png';
+                } else if (world === 'alpine') {
+                    const img = new Image();
+                    img.onload = () => createInstancedSplatMesh(synthesizeGaussianSplatsFromImage(img, 100000));
+                    img.src = 'images/alpine_ai.png';
+                } else if (world === 'dubai') {
+                    const img = new Image();
+                    img.onload = () => createInstancedSplatMesh(synthesizeGaussianSplatsFromImage(img, 110000));
+                    img.src = 'images/dubai_ai.png';
+                }
+            });
+        });
+
+        // Custom Image / Splat File Upload
+        const uploader = document.getElementById('file-uploader');
+        document.getElementById('btn-upload').addEventListener('click', () => uploader.click());
+        uploader.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (file.name.endsWith('.splat')) {
+                const reader = new FileReader();
+                reader.onload = (re) => {
+                    const splatData = parseSplatArrayBuffer(re.target.result);
+                    createInstancedSplatMesh(splatData);
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                const reader = new FileReader();
+                reader.onload = (re) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const splatData = synthesizeGaussianSplatsFromImage(img, 120000);
+                        createInstancedSplatMesh(splatData);
+                    };
+                    img.src = re.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Camera Modes
+        document.getElementById('btn-drone-flight').addEventListener('click', () => {
+            flightMode = 'drone';
+            controls.enabled = false;
+            updateCamButtons('btn-drone-flight');
+        });
+        document.getElementById('btn-cinematic-fly').addEventListener('click', () => {
+            flightMode = 'cinematic';
+            controls.enabled = false;
+            updateCamButtons('btn-cinematic-fly');
+        });
+        document.getElementById('btn-turntable').addEventListener('click', () => {
+            flightMode = 'turntable';
+            controls.enabled = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 2.0;
+            updateCamButtons('btn-turntable');
+        });
+        document.getElementById('btn-ortho').addEventListener('click', () => {
+            flightMode = 'ortho';
+            controls.enabled = true;
+            controls.autoRotate = false;
+            camera.position.set(0, 75, -28);
+            controls.target.set(0, 0, -28);
+            controls.update();
+            updateCamButtons('btn-ortho');
+        });
+        document.getElementById('btn-sensor-view').addEventListener('click', () => {
+            flightMode = 'sensor';
+            controls.enabled = true;
+            controls.autoRotate = false;
+            camera.position.set(0, 6, 8);
+            controls.target.set(0, 6, -28);
+            controls.update();
+            updateCamButtons('btn-sensor-view');
+        });
+
+        function updateCamButtons(activeId) {
+            document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(activeId).classList.add('active');
+        }
+
+        // Tools: Measurement Tape
+        const btnMeasure = document.getElementById('btn-measure-tool');
+        btnMeasure.addEventListener('click', () => {
+            measureToolActive = !measureToolActive;
+            btnMeasure.classList.toggle('active', measureToolActive);
+            if (!measureToolActive) {
+                if (beaconMeshA) scene.remove(beaconMeshA);
+                if (beaconMeshB) scene.remove(beaconMeshB);
+                if (measureLineMesh) scene.remove(measureLineMesh);
+                measurePoints = [];
+                document.getElementById('measure-badge').style.display = 'none';
+            }
+        });
+
+        // Tools: Dynamic Depth Slicer
+        const btnSlice = document.getElementById('btn-slice-tool');
+        const slicePanel = document.getElementById('slice-panel');
+        btnSlice.addEventListener('click', () => {
+            const isOpen = slicePanel.classList.toggle('open');
+            btnSlice.classList.toggle('active', isOpen);
+        });
+        document.getElementById('slider-slice').addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            splatUniforms.uClipZ.value = val;
+            document.getElementById('slice-val').textContent = `${val.toFixed(0)}m`;
+        });
+
+        // Tools: Splat X-Ray / Covariance Cycle
+        let xrayMode = 0;
+        const xrayModes = ['Photoreal', 'Wireframe Ellipsoids', 'Surfel Discs', 'Turbo Depth'];
+        document.getElementById('btn-xray-tool').addEventListener('click', () => {
+            xrayMode = (xrayMode + 1) % xrayModes.length;
+            splatUniforms.uRenderMode.value = xrayMode;
+            document.getElementById('lbl-xray-mode').textContent = `Splat Mode: ${xrayModes[xrayMode]}`;
+            document.getElementById('btn-xray-tool').classList.toggle('active', xrayMode > 0);
+        });
+
+        // Tools: 2D Sensor Drawer
+        const btnSensor = document.getElementById('btn-toggle-sensor');
+        const sensorDrawer = document.getElementById('sensor-drawer');
+        btnSensor.addEventListener('click', () => {
+            const isOpen = sensorDrawer.classList.toggle('open');
+            btnSensor.classList.toggle('active', isOpen);
+            if (isOpen) renderSensorCanvas('rgb');
+        });
+
+        document.querySelectorAll('.sensor-tab').forEach(t => {
+            t.addEventListener('click', () => {
+                document.querySelectorAll('.sensor-tab').forEach(tb => tb.classList.remove('active'));
+                t.classList.add('active');
+                renderSensorCanvas(t.dataset.sens);
+            });
+        });
+
+        function renderSensorCanvas(type) {
+            const sc = document.getElementById('sensor-canvas');
+            const sctx = sc.getContext('2d');
+            sctx.clearRect(0, 0, sc.width, sc.height);
+
+            const img = new Image();
+            img.onload = () => {
+                sctx.drawImage(img, 0, 0, sc.width, sc.height);
+                if (type === 'depth') {
+                    // Apply visual Turbo filter overlay
+                    sctx.fillStyle = 'rgba(6, 182, 212, 0.45)';
+                    sctx.fillRect(0, 0, sc.width, sc.height);
+                } else if (type === 'rays') {
+                    sctx.fillStyle = 'rgba(168, 85, 247, 0.5)';
+                    sctx.fillRect(0, 0, sc.width, sc.height);
+                } else if (type === 'edges') {
+                    sctx.strokeStyle = '#ef4444';
+                    sctx.lineWidth = 2;
+                    sctx.strokeRect(30, 20, sc.width - 60, sc.height - 40);
+                }
+            };
+            img.src = 'images/manhattan_ai.png';
+        }
+
+        // Tools: 4K Snapshot
+        document.getElementById('btn-snapshot').addEventListener('click', () => {
+            renderer.render(scene, camera);
+            const dataUrl = canvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.download = `depthbox_3dgs_world_${Date.now()}.png`;
+            a.href = dataUrl;
+            a.click();
+        });
+
+        // Tools: Export .splat Binary
+        document.getElementById('btn-export-splat').addEventListener('click', () => {
+            if (!activeSplatsData) return;
+            const count = activeSplatsData.count;
+            const buffer = new ArrayBuffer(count * 32);
+            const view = new DataView(buffer);
+
+            const pos = activeSplatsData.positions;
+            const scl = activeSplatsData.scales;
+            const col = activeSplatsData.colors;
+            const opc = activeSplatsData.opacities;
+
+            for (let i = 0; i < count; i++) {
+                const off = i * 32;
+                view.setFloat32(off + 0, pos[i * 3 + 0], true);
+                view.setFloat32(off + 4, pos[i * 3 + 1], true);
+                view.setFloat32(off + 8, pos[i * 3 + 2], true);
+
+                view.setFloat32(off + 12, scl[i * 3 + 0], true);
+                view.setFloat32(off + 16, scl[i * 3 + 1], true);
+                view.setFloat32(off + 20, scl[i * 3 + 2], true);
+
+                view.setUint8(off + 24, Math.round(col[i * 3 + 0] * 255));
+                view.setUint8(off + 25, Math.round(col[i * 3 + 1] * 255));
+                view.setUint8(off + 26, Math.round(col[i * 3 + 2] * 255));
+                view.setUint8(off + 27, Math.round(opc[i] * 255));
+
+                view.setUint8(off + 28, 128);
+                view.setUint8(off + 29, 128);
+                view.setUint8(off + 30, 128);
+                view.setUint8(off + 31, 255);
+            }
+
+            const blob = new Blob([buffer], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.download = `depthbox_world_${count}_splats.splat`;
+            a.href = url;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        // Tools: Export 3D PLY
+        document.getElementById('btn-export-ply').addEventListener('click', () => {
+            if (!activeSplatsData) return;
+            const count = activeSplatsData.count;
+            const pos = activeSplatsData.positions;
+            const col = activeSplatsData.colors;
+
+            let ply = `ply\nformat ascii 1.0\nelement vertex ${count}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n`;
+            for (let i = 0; i < count; i++) {
+                ply += `${pos[i * 3].toFixed(3)} ${pos[i * 3 + 1].toFixed(3)} ${pos[i * 3 + 2].toFixed(3)} ${Math.round(col[i * 3] * 255)} ${Math.round(col[i * 3 + 1] * 255)} ${Math.round(col[i * 3 + 2] * 255)}\n`;
+            }
+
+            const blob = new Blob([ply], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.download = `depthbox_world_${count}.ply`;
+            a.href = url;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        // ==========================================
+        // Photo Optics Studio & Cinematic Camera Controls
+        // ==========================================
+        const btnOptics = document.getElementById('btn-optics-tool');
+        const opticsPanel = document.getElementById('optics-panel');
+        const btnCloseOptics = document.getElementById('btn-close-optics');
+        const focusReticle = document.getElementById('focus-reticle');
+        let tapToFocusMode = false;
+
+        btnOptics.addEventListener('click', () => {
+            const isOpen = opticsPanel.classList.toggle('open');
+            btnOptics.classList.toggle('active', isOpen);
+        });
+
+        if (btnCloseOptics) {
+            btnCloseOptics.addEventListener('click', () => {
+                opticsPanel.classList.remove('open');
+                btnOptics.classList.remove('active');
+            });
+        }
+
+        // Lens Focal Length Presets
+        document.querySelectorAll('.optics-focal-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.optics-focal-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const focal = parseFloat(btn.dataset.focal);
+                const name = btn.dataset.name;
+                splatUniforms.uFocalLength.value = focal;
+                document.getElementById('focal-val').textContent = `${focal}mm (${name})`;
+
+                // Physical 35mm full-frame optical FOV calculation: 2 * atan(sensorHeight / (2 * focal))
+                const sensorHeight = 24.0; // 35mm full-frame 36x24mm sensor
+                const fovDegrees = 2.0 * Math.atan(sensorHeight / (2.0 * focal)) * (180.0 / Math.PI);
+                camera.fov = fovDegrees;
+                camera.updateProjectionMatrix();
+            });
+        });
+
+        // Aperture (f-stop)
+        const sliderAperture = document.getElementById('slider-aperture');
+        sliderAperture.addEventListener('input', (e) => {
+            const fStop = parseFloat(e.target.value);
+            splatUniforms.uAperture.value = fStop;
+            document.getElementById('aperture-val').textContent = `f/${fStop.toFixed(1)}`;
+        });
+
+        // Focus Distance
+        const sliderFocus = document.getElementById('slider-focus');
+        sliderFocus.addEventListener('input', (e) => {
+            const dist = parseFloat(e.target.value);
+            splatUniforms.uFocusDist.value = dist;
+            document.getElementById('focus-val').textContent = `${dist.toFixed(1)}m`;
+        });
+
+        // Tap-to-Focus Mode
+        const btnTapFocus = document.getElementById('btn-tap-to-focus');
+        btnTapFocus.addEventListener('click', () => {
+            tapToFocusMode = !tapToFocusMode;
+            btnTapFocus.style.background = tapToFocusMode ? 'linear-gradient(135deg, #10b981, #059669)' : 'rgba(255,255,255,0.06)';
+            btnTapFocus.textContent = tapToFocusMode ? '🎯 Click Target...' : '🎯 Tap Focus';
+        });
+
+        renderer.domElement.addEventListener('pointerdown', (e) => {
+            if (!tapToFocusMode && !e.altKey) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            // Trigger visual pulse reticle
+            if (focusReticle) {
+                focusReticle.style.left = `${e.clientX}px`;
+                focusReticle.style.top = `${e.clientY}px`;
+                focusReticle.style.display = 'block';
+                setTimeout(() => { focusReticle.style.display = 'none'; }, 900);
+            }
+
+            // Raycast into active splat points cloud to sample accurate metric depth
+            if (activeSplatsData && activeSplatsData.positions) {
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+
+                const positions = activeSplatsData.positions;
+                const count = activeSplatsData.count;
+                let closestDistance = Infinity;
+                let sampleTargetDist = null;
+
+                const step = Math.max(1, Math.floor(count / 15000));
+                const ray = raycaster.ray;
+                const tmpPt = new THREE.Vector3();
+
+                for (let i = 0; i < count; i += step) {
+                    tmpPt.set(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                    const distToRay = ray.distanceToPoint(tmpPt);
+                    if (distToRay < 1.4) {
+                        const distToCam = camera.position.distanceTo(tmpPt);
+                        if (distToRay < closestDistance && distToCam > 1.0) {
+                            closestDistance = distToRay;
+                            sampleTargetDist = distToCam;
+                        }
+                    }
+                }
+
+                if (sampleTargetDist !== null) {
+                    const clampedDist = Math.max(1.0, Math.min(90.0, sampleTargetDist));
+                    splatUniforms.uFocusDist.value = clampedDist;
+                    sliderFocus.value = clampedDist;
+                    document.getElementById('focus-val').textContent = `${clampedDist.toFixed(1)}m`;
+
+                    const toast = document.getElementById('lwm-toast');
+                    toast.textContent = `🎯 AUTO-RACK FOCUS: ${clampedDist.toFixed(1)}m LOCKED`;
+                    toast.style.display = 'block';
+                    setTimeout(() => { if (toast.textContent.includes('AUTO-RACK')) toast.style.display = 'none'; }, 2200);
+                }
+            }
+
+            if (tapToFocusMode) {
+                tapToFocusMode = false;
+                btnTapFocus.style.background = 'rgba(255,255,255,0.06)';
+                btnTapFocus.textContent = '🎯 Tap Focus';
+            }
+        });
+
+        // Exposure Compensation EV
+        const sliderEv = document.getElementById('slider-ev');
+        sliderEv.addEventListener('input', (e) => {
+            const ev = parseFloat(e.target.value);
+            splatUniforms.uExposureEV.value = ev;
+            document.getElementById('ev-val').textContent = `${ev >= 0 ? '+' : ''}${ev.toFixed(1)} EV`;
+        });
+
+        // Film Stock / Color Science Presets
+        const filmNames = [
+            'Kodak Portra 400 (Warm Highlight)',
+            'Fuji Velvia 50 (Vibrant Landscape)',
+            'Kodak Vision3 500T (Cine Teal/Orange)',
+            'Leica Monochrom (Panchromatic B&W)',
+            'Linear Standard (Rec.709 Raw)'
+        ];
+        document.querySelectorAll('.film-stock-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.film-stock-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const stock = parseInt(btn.dataset.stock);
+                splatUniforms.uFilmStock.value = stock;
+                document.getElementById('film-stock-name').textContent = filmNames[stock] || 'Portra 400';
+            });
+        });
+
+        // Sensor ISO Film Grain
+        const sliderGrain = document.getElementById('slider-grain');
+        sliderGrain.addEventListener('input', (e) => {
+            const grain = parseFloat(e.target.value);
+            splatUniforms.uFilmGrain.value = grain;
+            let isoLabel = 'Clean';
+            if (grain > 0.04) isoLabel = 'ISO 1600 High';
+            else if (grain > 0.02) isoLabel = 'ISO 400 Fine';
+            else if (grain > 0.005) isoLabel = 'ISO 100 Ultra';
+            document.getElementById('grain-val').textContent = `${grain.toFixed(3)} (${isoLabel})`;
+        });
+
+        // Lens Vignette
+        const sliderVignette = document.getElementById('slider-vignette');
+        sliderVignette.addEventListener('input', (e) => {
+            const vig = parseFloat(e.target.value);
+            splatUniforms.uVignette.value = vig;
+            document.getElementById('vignette-val').textContent = `${vig.toFixed(2)}x`;
+        });
+
+        // Optical Toggles
+        document.getElementById('chk-aces-tonemap').addEventListener('change', (e) => {
+            splatUniforms.uTonemap.value = e.target.checked ? 1 : 0;
+        });
+        document.getElementById('chk-sh-radiance').addEventListener('change', (e) => {
+            splatUniforms.uViewDependenceSH.value = e.target.checked ? 0.80 : 0.0;
+        });
+        document.getElementById('chk-contact-ao').addEventListener('change', (e) => {
+            splatUniforms.uContactAO.value = e.target.checked ? 0.70 : 0.0;
+        });
+        document.getElementById('chk-bloom-flare').addEventListener('change', (e) => {
+            splatUniforms.uBloomIntensity.value = e.target.checked ? 0.65 : 0.0;
+        });
+
+        // Tools: Dynamic Solar Relighting
+        const btnSun = document.getElementById('btn-sun-tool');
+        const sunPanel = document.getElementById('sun-panel');
+        btnSun.addEventListener('click', () => {
+            const isOpen = sunPanel.classList.toggle('open');
+            btnSun.classList.toggle('active', isOpen);
+        });
+
+        function updateSunVector() {
+            const az = parseFloat(document.getElementById('slider-sun-az').value) * Math.PI / 180;
+            const el = parseFloat(document.getElementById('slider-sun-el').value) * Math.PI / 180;
+            const spec = parseFloat(document.getElementById('slider-sun-spec').value);
+
+            const x = Math.cos(el) * Math.sin(az);
+            const y = Math.sin(el);
+            const z = Math.cos(el) * Math.cos(az);
+            splatUniforms.uSunDir.value.set(x, y, z).normalize();
+            splatUniforms.uSunSpecular.value = spec;
+
+            document.getElementById('sun-az-val').textContent = `${Math.round(az * 180 / Math.PI)}°`;
+            document.getElementById('sun-el-val').textContent = `${Math.round(el * 180 / Math.PI)}°`;
+            document.getElementById('sun-spec-val').textContent = `${spec.toFixed(2)}x`;
+        }
+
+        document.getElementById('slider-sun-az').addEventListener('input', updateSunVector);
+        document.getElementById('slider-sun-el').addEventListener('input', updateSunVector);
+        document.getElementById('slider-sun-spec').addEventListener('input', updateSunVector);
+
+        document.querySelectorAll('.sun-preset-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const az = parseFloat(btn.dataset.az);
+                const el = parseFloat(btn.dataset.el);
+                document.getElementById('slider-sun-az').value = az;
+                document.getElementById('slider-sun-el').value = el;
+                updateSunVector();
+            });
+        });
+
+        // Tools: Interactive Physics Probes
+        const btnPhysics = document.getElementById('btn-physics-tool');
+        btnPhysics.addEventListener('click', () => {
+            const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            spawnPhysicsProbe(camera.position.clone().addScaledVector(camFwd, 1.2), camFwd);
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key.toLowerCase() === 'p') {
+                const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                spawnPhysicsProbe(camera.position.clone().addScaledVector(camFwd, 1.2), camFwd);
+            }
+        });
+
+        // Tools: LWM Scene Outpaint
+        document.getElementById('btn-outpaint-tool').addEventListener('click', () => {
+            performMultiViewOutpaint();
+        });
+
+        // Tools: Cinematic Spline Tour Director
+        const btnDirector = document.getElementById('btn-director-tool');
+        const directorPanel = document.getElementById('director-panel');
+        btnDirector.addEventListener('click', () => {
+            const isOpen = directorPanel.classList.toggle('open');
+            btnDirector.classList.toggle('active', isOpen);
+        });
+
+        function renderKeyframeDots() {
+            const container = document.getElementById('keyframe-dots');
+            container.innerHTML = '';
+            tourWaypoints.forEach((wp, idx) => {
+                const dot = document.createElement('div');
+                dot.className = 'keyframe-dot';
+                dot.title = `Waypoint ${idx + 1}: (${wp.x.toFixed(1)}, ${wp.y.toFixed(1)}, ${wp.z.toFixed(1)})`;
+                container.appendChild(dot);
+            });
+        }
+
+        document.getElementById('btn-add-keyframe').addEventListener('click', () => {
+            tourWaypoints.push(camera.position.clone());
+            renderKeyframeDots();
+            const toast = document.getElementById('lwm-toast');
+            toast.textContent = `📍 WAYPOINT ${tourWaypoints.length} RECORDED`;
+            toast.style.display = 'block';
+            setTimeout(() => { if (toast.textContent.includes('WAYPOINT')) toast.style.display = 'none'; }, 2000);
+        });
+
+        document.getElementById('btn-play-tour').addEventListener('click', () => {
+            if (tourWaypoints.length < 2) {
+                // Populate default dramatic canyon circuit
+                tourWaypoints.length = 0;
+                tourWaypoints.push(
+                    new THREE.Vector3(22, 14, 2),
+                    new THREE.Vector3(12, 18, -14),
+                    new THREE.Vector3(-14, 9, -24),
+                    new THREE.Vector3(-6, 26, -38),
+                    new THREE.Vector3(18, 12, -32),
+                    new THREE.Vector3(22, 14, 2)
+                );
+                renderKeyframeDots();
+            }
+            splineCurve = new THREE.CatmullRomCurve3(tourWaypoints, true);
+            splineT = 0;
+            flightMode = 'spline-tour';
+            controls.enabled = false;
+            document.getElementById('lbl-tour-text').textContent = 'Tour Playing (Catmull-Rom)';
+        });
+
+        document.getElementById('btn-clear-tour').addEventListener('click', () => {
+            tourWaypoints.length = 0;
+            splineCurve = null;
+            flightMode = 'drone';
+            renderKeyframeDots();
+            document.getElementById('lbl-tour-text').textContent = 'Play Spline Tour';
+        });
+
+        // Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            splatUniforms.viewport.value.set(window.innerWidth, window.innerHeight);
+        });
+
+        // ==========================================
+        // 9. Main Animation Loop
+        // ==========================================
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let fpsTimer = performance.now();
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+            const dt = Math.min(0.1, (now - lastTime) * 0.001);
+            lastTime = now;
+
+            // Update flight
+            if (flightMode === 'drone') {
+                updateDroneFlight(dt);
+            } else if (flightMode === 'cinematic') {
+                updateCinematicTrajectory(now * 0.001);
+            } else if (flightMode === 'spline-tour') {
+                updateSplineTour(dt);
+            } else if (flightMode === 'turntable') {
+                controls.update();
+            }
+
+            // Update physics probes
+            updatePhysicsProbes(dt);
+
+            // Radar rendering
+            renderRadar();
+
+            // Telemetry coordinates & FPS
+            frameCount++;
+            if (now - fpsTimer >= 1000) {
+                const fps = Math.round((frameCount * 1000) / (now - fpsTimer));
+                document.getElementById('val-fps').textContent = `${fps} FPS`;
+                frameCount = 0;
+                fpsTimer = now;
+            }
+
+            document.getElementById('cam-coords').textContent =
+                `X: ${camera.position.x.toFixed(1)}m \u2022 Y: ${camera.position.y.toFixed(1)}m \u2022 Z: ${camera.position.z.toFixed(1)}m`;
+
+            const camDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            const hdgDeg = Math.round((Math.atan2(camDir.x, camDir.z) * 180 / Math.PI + 360) % 360);
+            document.getElementById('cam-heading').textContent = `HDG: ${hdgDeg}\u00B0`;
+
+            renderer.render(scene, camera);
+        }
+
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>

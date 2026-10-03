@@ -27,7 +27,7 @@ async function runGoogleDriveIntegrationTests() {
         title: 'Distributed Event Streaming Architecture',
         subtitle: 'Production specification for Kafka & N8N Event Router',
         author: 'Scratchbox Architecture Team',
-        lastUpdated: '2026-09-05',
+        lastUpdated: '2026-09-28',
         tags: ['Architecture', 'Kafka', 'GoogleDocs', 'Export'],
         sections: [
             {

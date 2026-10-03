@@ -1,0 +1,551 @@
+{
+  "title": "Colosseum & Archaeological Forum Populated 3D Scene",
+  "subtitle": "Individually separated architectural monuments, ruins, and stone pines synthesized via TRELLIS 2",
+  "sceneType": "city",
+  "renderMode": "pbr",
+  "cameraMode": "orbit",
+  "camera": {
+    "position": [
+      59.74529270160117,
+      3.5,
+      87.69651056970112
+    ],
+    "target": [
+      0,
+      15,
+      0
+    ],
+    "fov": 50
+  },
+  "environment": {
+    "skybox": "physical-atmosphere",
+    "timeOfDay": 17.5,
+    "kelvinTemperature": 3800,
+    "sunElevation": 12,
+    "sunAzimuth": 255,
+    "aerialPerspective": {
+      "enabled": true,
+      "inscatteringIntensity": 0.75,
+      "fogDensity": 0.002
+    }
+  },
+  "objects": [
+    {
+      "id": "trellis-det-colosseum-facade",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_colosseum-facade.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": 0
+        },
+        "boundingBox": {
+          "min": [
+            -94,
+            0,
+            -78
+          ],
+          "max": [
+            94,
+            48.5,
+            78
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Watertight multi-tier curved Roman amphitheater travertine arcade, Doric and Ionic arches, classical Roman architecture, weathered limestone PBR texture"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-arch-of-constantine",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_arch-of-constantine.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -137.8,
+          "y": 0,
+          "z": -49.8,
+          "yaw": 18.5
+        },
+        "boundingBox": {
+          "min": [
+            -12.85,
+            0,
+            -3.7
+          ],
+          "max": [
+            12.85,
+            21,
+            3.7
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Watertight Roman triumphal arch, 3 arched passageways, Corinthian columns, carved travertine relief sculptures, classical Roman monument, PBR limestone"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-meta-sudans",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_meta-sudans.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -102.4,
+          "y": 0,
+          "z": -22.1,
+          "yaw": 0
+        },
+        "boundingBox": {
+          "min": [
+            -6,
+            0,
+            -6
+          ],
+          "max": [
+            6,
+            4.5,
+            6
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Ancient Roman fluted stone column ruins, cylindrical brick foundation base, weathered Roman tufa rock, PBR materials"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-temple-venus-roma",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_temple-venus-roma.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -270.8,
+          "y": 8,
+          "z": 85.6,
+          "yaw": -12
+        },
+        "boundingBox": {
+          "min": [
+            -72.5,
+            0,
+            -50
+          ],
+          "max": [
+            72.5,
+            18,
+            50
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Classical Roman temple apsidal portico, pedimented basilica roof, classical travertine columns"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-velian-brick-ruins",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_velian-brick-ruins.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": 45,
+          "y": 0,
+          "z": -35,
+          "yaw": 35
+        },
+        "boundingBox": {
+          "min": [
+            -20,
+            0,
+            -12.5
+          ],
+          "max": [
+            20,
+            12,
+            12.5
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Ancient Roman opus latericium red brick arched foundation ruins, crumbling arches, historical Roman masonry"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-foundation-stone-blocks",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_foundation-stone-blocks.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -40,
+          "y": 0,
+          "z": -15,
+          "yaw": 15
+        },
+        "boundingBox": {
+          "min": [
+            -9,
+            0,
+            -5
+          ],
+          "max": [
+            9,
+            1.2,
+            5
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Low rectangular Roman travertine stone foundation blocks, chisel-dressed ashlar stone masonry, weathered moss"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-umbrella-pine-tree",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_umbrella-pine-tree.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": 95,
+          "y": 14,
+          "z": 45,
+          "yaw": 0
+        },
+        "boundingBox": {
+          "min": [
+            -5.5,
+            0,
+            -5.5
+          ],
+          "max": [
+            5.5,
+            15,
+            5.5
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Photorealistic Italian stone pine tree, Pinus pinea umbrella canopy, tall bare bark trunk, dense Mediterranean needle foliage"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-umbrella-pine-tree-2",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_umbrella-pine-tree-2.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": 82,
+          "y": 13,
+          "z": 52,
+          "yaw": 42
+        },
+        "boundingBox": {
+          "min": [
+            -4.75,
+            0,
+            -4.75
+          ],
+          "max": [
+            4.75,
+            13.5,
+            4.75
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Mediterranean umbrella stone pine, spreading flat-topped crown, gnarly fissured trunk, Mediterranean needle foliage"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-cypress-tree-1",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_cypress-tree-1.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -210,
+          "y": 10,
+          "z": 90,
+          "yaw": 0
+        },
+        "boundingBox": {
+          "min": [
+            -1.75,
+            0,
+            -1.75
+          ],
+          "max": [
+            1.75,
+            12,
+            1.75
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Slender vertical Italian cypress tree, columnar evergreen habit, dense dark green foliage"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-church-campanile",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_church-campanile.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": -235,
+          "y": 12,
+          "z": 115,
+          "yaw": -8
+        },
+        "boundingBox": {
+          "min": [
+            -6,
+            0,
+            -7
+          ],
+          "max": [
+            6,
+            32,
+            7
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "12th-century Romanesque brick bell tower campanile, multi-tiered arched belfry windows, terracotta tiled roof"
+        }
+      }
+    },
+    {
+      "id": "trellis-det-piazza-terrain",
+      "content": {
+        "type": "3d-model",
+        "durableUri": "public/models/trellis_piazza-terrain.glb",
+        "mimeType": "model/gltf-binary",
+        "metadata": {
+          "material": "pbr",
+          "materials": {
+            "travertineAlbedo": [
+              210,
+              195,
+              175
+            ],
+            "roughness": 0.85,
+            "metalness": 0.02
+          }
+        }
+      },
+      "space": {
+        "spatial3d": {
+          "x": 0,
+          "y": -0.5,
+          "z": 0,
+          "yaw": 0
+        },
+        "boundingBox": {
+          "min": [
+            -160,
+            0,
+            -160
+          ],
+          "max": [
+            160,
+            0.5,
+            160
+          ]
+        }
+      },
+      "lineage": {
+        "version": 1,
+        "generation": {
+          "model": "trellis-2-dit",
+          "prompt": "Ancient Roman cobblestone paving sampietrini basalt stones, weathered mortar joints, flat pedestrian apron"
+        }
+      }
+    }
+  ]
+}

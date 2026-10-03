@@ -1,0 +1,906 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2153,
+          -33.8580622,
+          37
+        ]
+      },
+      "properties": {
+        "id": 1,
+        "name": "ORBIT_TIER_1_STATION_01",
+        "imageName": "station_001.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 0,
+        "pitchDegrees": -2.05,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          0,
+          25,
+          140
+        ],
+        "forwardVector": [
+          0,
+          -0.03569153051241249,
+          -0.9993628543475496
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2168129,
+          -33.8568,
+          37
+        ]
+      },
+      "properties": {
+        "id": 2,
+        "name": "ORBIT_TIER_1_STATION_02",
+        "imageName": "station_002.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 270,
+        "pitchDegrees": -2.05,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          140,
+          25,
+          8.572527594031473e-15
+        ],
+        "forwardVector": [
+          -0.9993628543475496,
+          -0.03569153051241249,
+          -6.119332603817446e-17
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2153,
+          -33.8555378,
+          37
+        ]
+      },
+      "properties": {
+        "id": 3,
+        "name": "ORBIT_TIER_1_STATION_03",
+        "imageName": "station_003.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 180,
+        "pitchDegrees": -2.05,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          1.7145055188062946e-14,
+          25,
+          -140
+        ],
+        "forwardVector": [
+          -1.2238665207634892e-16,
+          -0.03569153051241249,
+          0.9993628543475496
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2137871,
+          -33.8568,
+          37
+        ]
+      },
+      "properties": {
+        "id": 4,
+        "name": "ORBIT_TIER_1_STATION_04",
+        "imageName": "station_004.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 90,
+        "pitchDegrees": -2.05,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 25,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          -140,
+          25,
+          -2.5717582782094416e-14
+        ],
+        "forwardVector": [
+          0.9993628543475496,
+          -0.03569153051241249,
+          1.8357997811452336e-16
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2165837,
+          -33.857871,
+          87
+        ]
+      },
+      "properties": {
+        "id": 5,
+        "name": "ORBIT_TIER_2_STATION_05",
+        "imageName": "station_005.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 315,
+        "pitchDegrees": -18.13,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 75,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          118.79393923933998,
+          75,
+          118.79393923933999
+        ],
+        "forwardVector": [
+          -0.6720107522580547,
+          -0.3111319618732964,
+          -0.6720107522580548
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2165837,
+          -33.855729,
+          87
+        ]
+      },
+      "properties": {
+        "id": 6,
+        "name": "ORBIT_TIER_2_STATION_06",
+        "imageName": "station_006.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 225,
+        "pitchDegrees": -18.13,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 75,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          118.79393923933999,
+          75,
+          -118.79393923933998
+        ],
+        "forwardVector": [
+          -0.6720107522580548,
+          -0.3111319618732964,
+          0.6720107522580547
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2140163,
+          -33.855729,
+          87
+        ]
+      },
+      "properties": {
+        "id": 7,
+        "name": "ORBIT_TIER_2_STATION_07",
+        "imageName": "station_007.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 135,
+        "pitchDegrees": -18.13,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 75,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          -118.79393923933998,
+          75,
+          -118.79393923934
+        ],
+        "forwardVector": [
+          0.6720107522580548,
+          -0.31113196187329645,
+          0.6720107522580551
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2140163,
+          -33.857871,
+          87
+        ]
+      },
+      "properties": {
+        "id": 8,
+        "name": "ORBIT_TIER_2_STATION_08",
+        "imageName": "station_008.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 45,
+        "pitchDegrees": -18.13,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 75,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          -118.79393923934,
+          75,
+          118.79393923933995
+        ],
+        "forwardVector": [
+          0.6720107522580551,
+          -0.31113196187329645,
+          -0.6720107522580547
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.217418,
+          -33.8568,
+          152
+        ]
+      },
+      "properties": {
+        "id": 9,
+        "name": "ORBIT_TIER_3_STATION_09",
+        "imageName": "station_009.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 270,
+        "pitchDegrees": -31.48,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 140,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          196,
+          140,
+          1.2001538631644062e-14
+        ],
+        "forwardVector": [
+          -0.8528513040762653,
+          -0.5221538596385298,
+          -5.222208098428222e-17
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2153,
+          -33.855033,
+          152
+        ]
+      },
+      "properties": {
+        "id": 10,
+        "name": "ORBIT_TIER_3_STATION_10",
+        "imageName": "station_010.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 180,
+        "pitchDegrees": -31.48,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 140,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          2.4003077263288124e-14,
+          140,
+          -196
+        ],
+        "forwardVector": [
+          -1.0444416196856444e-16,
+          -0.5221538596385298,
+          0.8528513040762653
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.213182,
+          -33.8568,
+          152
+        ]
+      },
+      "properties": {
+        "id": 11,
+        "name": "ORBIT_TIER_3_STATION_11",
+        "imageName": "station_011.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 90,
+        "pitchDegrees": -31.48,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 140,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          -196,
+          140,
+          -3.6004615894932184e-14
+        ],
+        "forwardVector": [
+          0.8528513040762653,
+          -0.5221538596385298,
+          1.5666624295284664e-16
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          151.2153,
+          -33.858567,
+          152
+        ]
+      },
+      "properties": {
+        "id": 12,
+        "name": "ORBIT_TIER_3_STATION_12",
+        "imageName": "station_012.jpg",
+        "focalLengthMm": 35,
+        "fovDegrees": 54.43,
+        "yawDegrees": 0,
+        "pitchDegrees": -31.48,
+        "rollDegrees": 0,
+        "cameraHeightAboveGround": 140,
+        "groundElevationASL": 12,
+        "positionLocalENU": [
+          -4.800615452657625e-14,
+          140,
+          196
+        ],
+        "forwardVector": [
+          2.0888832393712888e-16,
+          -0.5221538596385298,
+          -0.8528513040762653
+        ],
+        "type": "colmap_station"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2157446,
+              -33.8573488
+            ],
+            [
+              151.2148554,
+              -33.8573488
+            ],
+            [
+              151.2148554,
+              -33.8573339
+            ],
+            [
+              151.2157446,
+              -33.8573339
+            ],
+            [
+              151.2157446,
+              -33.8573488
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 1,
+        "stationName": "ORBIT_TIER_1_STATION_01",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2159578,
+              -33.8564291
+            ],
+            [
+              151.2159579,
+              -33.8571709
+            ],
+            [
+              151.21594,
+              -33.8571709
+            ],
+            [
+              151.21594,
+              -33.8564291
+            ],
+            [
+              151.2159578,
+              -33.8564291
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 2,
+        "stationName": "ORBIT_TIER_1_STATION_02",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2148554,
+              -33.8562512
+            ],
+            [
+              151.2157446,
+              -33.8562512
+            ],
+            [
+              151.2157446,
+              -33.8562661
+            ],
+            [
+              151.2148554,
+              -33.8562661
+            ],
+            [
+              151.2148554,
+              -33.8562512
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 3,
+        "stationName": "ORBIT_TIER_1_STATION_03",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2146421,
+              -33.8571709
+            ],
+            [
+              151.2146422,
+              -33.8564291
+            ],
+            [
+              151.21466,
+              -33.8564291
+            ],
+            [
+              151.21466,
+              -33.8571709
+            ],
+            [
+              151.2146421,
+              -33.8571709
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 4,
+        "stationName": "ORBIT_TIER_1_STATION_04",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2163722,
+              -33.8571699
+            ],
+            [
+              151.2157434,
+              -33.8576945
+            ],
+            [
+              151.2156334,
+              -33.8576027
+            ],
+            [
+              151.2162621,
+              -33.8570781
+            ],
+            [
+              151.2163722,
+              -33.8571699
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 5,
+        "stationName": "ORBIT_TIER_2_STATION_05",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2157434,
+              -33.8559055
+            ],
+            [
+              151.2163721,
+              -33.8564301
+            ],
+            [
+              151.2162621,
+              -33.8565219
+            ],
+            [
+              151.2156334,
+              -33.8559973
+            ],
+            [
+              151.2157434,
+              -33.8559055
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 6,
+        "stationName": "ORBIT_TIER_2_STATION_06",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2142279,
+              -33.8564301
+            ],
+            [
+              151.2148566,
+              -33.8559055
+            ],
+            [
+              151.2149666,
+              -33.8559973
+            ],
+            [
+              151.2143379,
+              -33.8565219
+            ],
+            [
+              151.2142279,
+              -33.8564301
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 7,
+        "stationName": "ORBIT_TIER_2_STATION_07",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2148566,
+              -33.8576945
+            ],
+            [
+              151.2142278,
+              -33.8571699
+            ],
+            [
+              151.2143379,
+              -33.8570781
+            ],
+            [
+              151.2149666,
+              -33.8576027
+            ],
+            [
+              151.2148566,
+              -33.8576945
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 8,
+        "stationName": "ORBIT_TIER_2_STATION_08",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2168113,
+              -33.8564291
+            ],
+            [
+              151.2168113,
+              -33.8571709
+            ],
+            [
+              151.2165501,
+              -33.8571709
+            ],
+            [
+              151.2165501,
+              -33.8564291
+            ],
+            [
+              151.2168113,
+              -33.8564291
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 9,
+        "stationName": "ORBIT_TIER_3_STATION_09",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2148554,
+              -33.8555391
+            ],
+            [
+              151.2157446,
+              -33.8555391
+            ],
+            [
+              151.2157446,
+              -33.855757
+            ],
+            [
+              151.2148554,
+              -33.855757
+            ],
+            [
+              151.2148554,
+              -33.8555391
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 10,
+        "stationName": "ORBIT_TIER_3_STATION_10",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2137887,
+              -33.8571709
+            ],
+            [
+              151.2137887,
+              -33.8564291
+            ],
+            [
+              151.2140499,
+              -33.8564291
+            ],
+            [
+              151.2140499,
+              -33.8571709
+            ],
+            [
+              151.2137887,
+              -33.8571709
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 11,
+        "stationName": "ORBIT_TIER_3_STATION_11",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              151.2157446,
+              -33.8580609
+            ],
+            [
+              151.2148554,
+              -33.8580609
+            ],
+            [
+              151.2148554,
+              -33.857843
+            ],
+            [
+              151.2157446,
+              -33.857843
+            ],
+            [
+              151.2157446,
+              -33.8580609
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "stationId": 12,
+        "stationName": "ORBIT_TIER_3_STATION_12",
+        "type": "camera_frustum_footprint"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            151.2153,
+            -33.8580622,
+            37
+          ],
+          [
+            151.2168129,
+            -33.8568,
+            37
+          ],
+          [
+            151.2153,
+            -33.8555378,
+            37
+          ],
+          [
+            151.2137871,
+            -33.8568,
+            37
+          ],
+          [
+            151.2165837,
+            -33.857871,
+            87
+          ],
+          [
+            151.2165837,
+            -33.855729,
+            87
+          ],
+          [
+            151.2140163,
+            -33.855729,
+            87
+          ],
+          [
+            151.2140163,
+            -33.857871,
+            87
+          ],
+          [
+            151.217418,
+            -33.8568,
+            152
+          ],
+          [
+            151.2153,
+            -33.855033,
+            152
+          ],
+          [
+            151.213182,
+            -33.8568,
+            152
+          ],
+          [
+            151.2153,
+            -33.858567,
+            152
+          ]
+        ]
+      },
+      "properties": {
+        "stationCount": 12,
+        "anchorAddress": "sydney_opera_house",
+        "type": "camera_trajectory_path"
+      }
+    }
+  ]
+}

@@ -10,6 +10,11 @@
     "desktop-app"
   ],
   "scripts": {
+    "hydrate": "node scripts/hydrate_demo_assets.cjs",
+    "hydrate:check": "node scripts/hydrate_demo_assets.cjs --check",
+    "predev": "node scripts/hydrate_demo_assets.cjs --quiet",
+    "preserve": "node scripts/hydrate_demo_assets.cjs --quiet",
+    "prestart": "node scripts/hydrate_demo_assets.cjs --quiet",
     "dev": "npm --prefix desktop-app run dev",
     "build": "npm --prefix packages/core run build && npm --prefix packages/cli run build && npm --prefix desktop-app run build",
     "build:core": "npm --prefix packages/core run build",

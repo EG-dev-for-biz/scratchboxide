@@ -218,7 +218,7 @@ describe('Performer 4D Gaussian Splatting Dynamic Humanoid Avatar System', () =>
 #include <cassert>
 
 int main() {
-    using namespace scratchbox::four_d_anyone;
+    using namespace scratchbox::performer_4d;
     FourDHumanoidAvatar avatar;
 
     assert(avatar.canonicalJoints.size() == 22);

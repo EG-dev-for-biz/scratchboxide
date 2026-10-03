@@ -54,7 +54,7 @@ test('route contract: every renderer client route reaches a JSON handler', async
         assert.ok(ping.status === 200 || ping.status === 500, `mcp/ping must be routed (got ${ping.status})`);
         assert.ok(ping.json && typeof ping.json === 'object');
 
-        // gemini-client.ts: routes that only existed on the deleted Theia endpoint
+        // gemini-client.ts: standalone verification routes
         const verify = await post('/gemini/verify-visual', {});
         assert.strictEqual(verify.status, 400, 'verify-visual must require image + prompt');
         const repair = await post('/gemini/verify-and-repair', { request: {} });

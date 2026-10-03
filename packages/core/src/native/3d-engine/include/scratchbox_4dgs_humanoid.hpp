@@ -24,7 +24,7 @@
 #include <cstring>
 
 namespace scratchbox {
-namespace four_d_anyone {
+namespace performer_4d {
 
 /**
  * Single 3D Gaussian Primitive representation.
@@ -442,7 +442,7 @@ public:
     }
 };
 
-} // namespace four_d_anyone
+} // namespace performer_4d
 } // namespace scratchbox
 
 #endif // SCRATCHBOX_4DGS_HUMANOID_HPP

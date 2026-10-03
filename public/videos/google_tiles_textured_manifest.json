@@ -1,0 +1,71 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-10-03T00:48:45.341Z",
+  "videoRef": "<VIDEO_REF_0>",
+  "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_textured_blockout_camera.mp4",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/google_tiles_textured_area.glb",
+  "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_textured_first_frame.jpg",
+  "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_textured_frame_00.png",
+  "storyboardPaths": [
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_00.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_01.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_02.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_03.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_04.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_05.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_06.jpg",
+    "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_textured/beat_07.jpg"
+  ],
+  "fps": 24,
+  "totalFrames": 72,
+  "durationSec": 3,
+  "geoAnchor": {
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "elevation": 15,
+    "landmarkName": "Coordinates (40.748400, -73.985700)"
+  },
+  "errorTarget": 0.5,
+  "renderMode": "textured",
+  "mesh": {
+    "name": "Google3DTile_textured",
+    "vertexCount": 552125,
+    "triangleCount": 356137,
+    "submeshCount": 209,
+    "boundingBox": {
+      "min": [
+        -100,
+        -10,
+        -100
+      ],
+      "max": [
+        100,
+        200,
+        100
+      ]
+    },
+    "boundingSphere": {
+      "center": [
+        0,
+        50,
+        0
+      ],
+      "radius": 150
+    }
+  },
+  "collisionAudit": {
+    "enabled": true,
+    "violationsDetected": 0,
+    "minClearanceMeters": 65,
+    "maxElevationAdjustment": 0,
+    "pathAdjusted": false,
+    "auditPassed": true
+  },
+  "tileMetrics": {
+    "totalFramesCaptured": 72,
+    "averageSettleTimeMs": 45,
+    "maxTilesLoaded": 128,
+    "errorTarget": 0.5,
+    "renderMode": "textured"
+  }
+}

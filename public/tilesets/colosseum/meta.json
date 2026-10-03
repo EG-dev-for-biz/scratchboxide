@@ -1,0 +1,15 @@
+{
+  "landmark": "colosseum",
+  "title": "Rome Colosseum Complete 1:1 Metric 3DGS Reconstruction",
+  "fusedSplats": 13029410,
+  "fusedSplatMb": "397.63",
+  "fusedSpzKb": "175323.3",
+  "stations": 16,
+  "cropCenter": [
+    -44.76,
+    22,
+    63.05
+  ],
+  "cropRadius": 125,
+  "timestamp": "2026-10-02T15:14:56.676Z"
+}

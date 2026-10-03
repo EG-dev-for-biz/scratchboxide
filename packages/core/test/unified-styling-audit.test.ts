@@ -234,7 +234,7 @@ async function runUnifiedStylingAuditTests() {
         '.sb-workspace-thread-item must use var(--sb-text-secondary) for light/dark theme contrast safety'
     );
     assert.ok(
-        unifiedCss.includes('body.theia-light .sb-workspace-thread-selected {'),
+        unifiedCss.includes('body.sb-light .sb-workspace-thread-selected {'),
         'unified-ui.css must provide light theme override for selected workspace threads'
     );
     console.log('  ✓ Test 9 Passed: Workspace & sidebar text contrast safety across light & dark themes verified');

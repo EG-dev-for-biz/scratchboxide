@@ -1,0 +1,2641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>3D Volumetric Particle & Fluid Simulation</title>
+    <style>
+        :root {
+            --glass-bg: rgba(14, 15, 20, 0.62);
+            --glass-border: rgba(255, 255, 255, 0.14);
+            --glass-blur: blur(28px);
+            --text-primary: rgba(255, 255, 255, 0.95);
+            --text-secondary: rgba(255, 255, 255, 0.6);
+            --accent: #ff5500;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000000;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+            color: var(--text-primary);
+        }
+
+        canvas#webgl {
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+            cursor: grab;
+        }
+
+        canvas#webgl:active {
+            cursor: grabbing;
+        }
+
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-radius: 999px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        }
+
+        header.top-bar {
+            position: fixed;
+            top: calc(18px + env(safe-area-inset-top, 0px));
+            left: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .title-badge {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 18px;
+            pointer-events: auto;
+        }
+
+        .fire-icon {
+            width: 18px;
+            height: 18px;
+            background: radial-gradient(circle, #fff 15%, #ffbb00 50%, #ff3300 90%);
+            border-radius: 50%;
+            box-shadow: 0 0 16px #ff6600, 0 0 32px #ff3300;
+            animation: pulse-fire 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse-fire {
+            0%, 100% { transform: scale(1); filter: brightness(1); }
+            50% { transform: scale(1.18); filter: brightness(1.4); }
+        }
+
+        .title-text h1 {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: #fff;
+        }
+
+        .title-text span {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .top-stats {
+            display: flex;
+            gap: 8px;
+            pointer-events: auto;
+        }
+
+        .stat-pill {
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-pill .indicator {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #00ff88;
+            box-shadow: 0 0 8px #00ff88;
+        }
+
+        .stat-pill .indicator.core {
+            background: #ff3b30;
+            box-shadow: 0 0 14px #ff3b30;
+            animation: blink-warning 0.5s infinite alternate;
+        }
+
+        @keyframes blink-warning {
+            from { opacity: 0.5; }
+            to { opacity: 1.0; }
+        }
+
+        .bottom-instructions {
+            position: fixed;
+            bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 10px 22px;
+            font-size: 13px;
+            font-weight: 450;
+            letter-spacing: 0.01em;
+            color: rgba(255, 255, 255, 0.88);
+            pointer-events: auto;
+            z-index: 10;
+            white-space: nowrap;
+        }
+
+        .bottom-instructions b {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .btn-trigger {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #fff;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .btn-trigger:hover {
+            background: rgba(255, 255, 255, 0.16);
+            transform: translateY(-1px);
+        }
+
+        .flight-crosshair {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 14px;
+            height: 14px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 5;
+        }
+
+        .flight-crosshair.active {
+            opacity: 0.65;
+        }
+
+        .flight-crosshair::before, .flight-crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 1px;
+        }
+
+        .flight-crosshair::before {
+            top: 6px;
+            left: 0;
+            right: 0;
+            height: 2px;
+        }
+
+        .flight-crosshair::after {
+            left: 6px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+        }
+
+        #core-glare {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(circle at center, rgba(255, 140, 20, 0.6) 0%, rgba(255, 40, 0, 0.25) 50%, rgba(0, 0, 0, 0) 90%);
+            opacity: 0;
+            transition: opacity 0.15s ease-out;
+            mix-blend-mode: screen;
+            z-index: 4;
+        }
+
+        /* --- Floating AI Simulation Prompt Dock --- */
+        .prompt-dock {
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            width: min(92vw, 680px);
+            z-index: 10;
+            pointer-events: auto;
+        }
+
+        .prompt-bar {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 7px 6px 16px;
+            border-radius: 999px;
+            background: rgba(16, 20, 28, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .prompt-bar:focus-within {
+            border-color: rgba(255, 140, 40, 0.55);
+            box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65), 0 0 24px rgba(255, 100, 20, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .prompt-icon {
+            font-size: 15px;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .prompt-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+            font-size: 13.5px;
+            font-weight: 450;
+            letter-spacing: -0.01em;
+        }
+
+        .prompt-input::placeholder {
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        .btn-morph {
+            background: linear-gradient(135deg, rgba(255, 120, 30, 0.95), rgba(255, 45, 15, 0.98));
+            border: 1px solid rgba(255, 180, 80, 0.6);
+            color: #ffffff;
+            padding: 7px 18px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 4px 14px rgba(255, 60, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            flex-shrink: 0;
+        }
+
+        .btn-morph:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 18px rgba(255, 80, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+        }
+
+        .btn-morph:active {
+            transform: scale(0.98);
+        }
+
+        .prompt-chips-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            max-width: 100%;
+        }
+
+        .prompt-chip {
+            background: rgba(22, 26, 36, 0.62);
+            border: 1px solid rgba(255, 255, 255, 0.11);
+            color: rgba(255, 255, 255, 0.78);
+            font-size: 11.5px;
+            font-weight: 500;
+            padding: 4px 10px;
+            border-radius: 999px;
+            cursor: pointer;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            transition: all 0.18s ease;
+            white-space: nowrap;
+        }
+
+        .prompt-chip:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.25);
+            color: #ffffff;
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="webgl"></canvas>
+    <div id="core-glare"></div>
+    <div class="flight-crosshair" id="crosshair"></div>
+
+    <header class="top-bar">
+        <div class="glass-panel title-badge">
+            <div class="fire-icon"></div>
+            <div class="title-text">
+                <h1 id="sim-title">3D Volumetric Fire Explosion</h1>
+                <span id="sim-subtitle">Continuous Fluid Raymarching</span>
+            </div>
+        </div>
+
+        <div class="top-stats">
+            <div class="glass-panel stat-pill" id="proximity-pill">
+                <div class="indicator" id="proximity-dot"></div>
+                <span id="proximity-label">Distance: 7.2m</span>
+            </div>
+            <div class="glass-panel stat-pill">
+                <span id="fps-label">60 FPS</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- AI Simulation Prompt Dock -->
+    <div class="prompt-dock">
+        <form class="glass-panel prompt-bar" id="prompt-form" onsubmit="return false;">
+            <div class="prompt-icon">✨</div>
+            <input type="text" id="prompt-input" class="prompt-input" placeholder="Prompt any particle simulation... (e.g. Electric Plasma Vortex, Cosmic Supernova, Toxic Acid Fountain)" autocomplete="off" />
+            <button id="btn-morph" type="submit" class="btn-morph">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                <span id="btn-morph-text">Morph</span>
+            </button>
+        </form>
+        <div class="prompt-chips-row">
+            <button class="prompt-chip" type="button" data-prompt="Crystal clear water fountain with splashing droplets and ripples">💧 Water Splash</button>
+            <button class="prompt-chip" type="button" data-prompt="Swirling desert dust storm with fine sandy wind and ochre particles">🏜️ Desert Dust</button>
+            <button class="prompt-chip" type="button" data-prompt="Geothermal steam vent billowing white vapor and water mist">💨 Steam Vent</button>
+            <button class="prompt-chip" type="button" data-prompt="Heavy rain downpour with splashing water droplets hitting puddle">🌧️ Rain Downpour</button>
+            <button class="prompt-chip" type="button" data-prompt="Industrial welding sparks ricocheting off concrete floor with hot embers">⚡ Welding Sparks</button>
+            <button class="prompt-chip" type="button" data-prompt="Gentle campfire smoke plume with cool grey smoke and glowing cinders">🪵 Campfire Smoke</button>
+            <button class="prompt-chip" type="button" data-prompt="Electric blue plasma vortex with purple lightning">⚡ Plasma Vortex</button>
+        </div>
+    </div>
+
+    <div class="glass-panel bottom-instructions">
+        <span><b>Hold Shift</b> to fly fast · <b>WASD</b> to move · <b>Drag</b> to look around · <b>[F]</b> Toggle Fly Mode</span>
+
+        <button class="btn-trigger" id="btn-blast">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+            </svg>
+            <span>Detonate</span>
+        </button>
+    </div>
+
+    <script>
+    "use strict";
+
+    /* ==========================================================================
+       1. WebGL2 Context & Fullscreen Quad Setup
+       ========================================================================== */
+    const canvas = document.getElementById('webgl');
+    const gl = canvas.getContext('webgl2', {
+        powerPreference: 'high-performance',
+        antialias: false,
+        depth: false,
+        stencil: false,
+        alpha: false,
+        preserveDrawingBuffer: true
+    });
+
+    if (!gl) {
+        document.body.innerHTML = '<div style="color:#fff;padding:40px;font-family:sans-serif;">WebGL 2.0 is required.</div>';
+        throw new Error("WebGL2 not supported");
+    }
+
+    const vsSource = `#version 300 es
+    in vec2 aPosition;
+    out vec2 vUv;
+    void main() {
+        vUv = aPosition * 0.5 + 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+    }`;
+
+    // Continuous Fluid Raymarching Fragment Shader
+    const fsSource = `#version 300 es
+    precision highp float;
+    precision highp int;
+
+    in vec2 vUv;
+    out vec4 fragColor;
+
+    uniform vec2 uResolution;
+    uniform float uTime;
+    uniform float uBlastTime;
+    uniform vec3 uCameraPos;
+    uniform mat3 uCameraRot;
+    uniform float uFov;
+    uniform vec3 uExplosionCenter;
+    uniform float uExplosionScale;
+
+    // --- Dynamic Prompt Simulation Uniforms ---
+    uniform vec3 uPaletteCore;
+    uniform vec3 uPaletteMid;
+    uniform vec3 uPaletteOuter;
+    uniform float uSwirlVorticity;
+    uniform float uUpwardDraft;
+    uniform float uRadialExpansion;
+    uniform float uGravityBuoyancy;
+    uniform float uAbsorptionCoeff;
+    uniform vec4 uTopologyWeights;
+    uniform vec2 uTopologyWeights2;
+    uniform vec3 uWindVelocity;
+    uniform float uSubstanceMass;
+    uniform float uKinematicGravity;
+    uniform int uEmissionModel; // 0: incandescent, 1: diffuse, 2: transmissive, 3: luminescent
+
+    // --- High-Performance Noise Primitives ---
+    vec3 hash33(vec3 p) {
+        p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+        p += dot(p, p.yxz + 33.33);
+        return fract((p.xxy + p.yxx) * p.zyx);
+    }
+
+    float hash13(vec3 p) {
+        p = fract(p * 0.1031);
+        p += dot(p, p.zyx + 31.32);
+        return fract((p.x + p.y) * p.z);
+    }
+
+    // 3D Value Noise with quintic Hermite interpolation
+    float noise3D(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+        float n000 = hash13(i + vec3(0,0,0));
+        float n100 = hash13(i + vec3(1,0,0));
+        float n010 = hash13(i + vec3(0,1,0));
+        float n110 = hash13(i + vec3(1,1,0));
+        float n001 = hash13(i + vec3(0,0,1));
+        float n101 = hash13(i + vec3(1,0,1));
+        float n011 = hash13(i + vec3(0,1,1));
+        float n111 = hash13(i + vec3(1,1,1));
+
+        return mix(mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
+                   mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
+    }
+
+    // Ordered 4x4 Bayer Matrix for sub-pixel anti-banding dithering (no noisy grain)
+    float bayer4x4(vec2 p) {
+        vec2 b = floor(mod(p, 4.0));
+        int idx = int(b.x) + int(b.y) * 4;
+        const float m[16] = float[16](
+             0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0,
+            12.0/16.0,  4.0/16.0, 14.0/16.0,  6.0/16.0,
+             3.0/16.0, 11.0/16.0,  1.0/16.0,  9.0/16.0,
+            15.0/16.0,  7.0/16.0, 13.0/16.0,  5.0/16.0
+        );
+        return m[idx];
+    }
+
+    // Divergence-Free 3D Curl Noise for fluid swirling
+    vec3 curlNoise(vec3 p) {
+        const float e = 0.12;
+        float dx = (noise3D(p + vec3(0, e, 0)) - noise3D(p - vec3(0, e, 0))) - (noise3D(p + vec3(0, 0, e)) - noise3D(p - vec3(0, 0, e)));
+        float dy = (noise3D(p + vec3(0, 0, e)) - noise3D(p - vec3(0, 0, e))) - (noise3D(p + vec3(e, 0, 0)) - noise3D(p - vec3(e, 0, 0)));
+        float dz = (noise3D(p + vec3(e, 0, 0)) - noise3D(p - vec3(e, 0, 0))) - (noise3D(p + vec3(0, e, 0)) - noise3D(p - vec3(0, e, 0)));
+        return vec3(dx, dy, dz) / (2.0 * e);
+    }
+
+    // Multi-octave continuous Fractional Brownian Motion (fBm)
+    float fbm(vec3 p) {
+        float f = 0.0;
+        f += 0.5000 * noise3D(p); p = p * 2.02 + vec3(0.0, 0.1, 0.0);
+        f += 0.2500 * noise3D(p); p = p * 2.03 + vec3(0.1, 0.0, 0.2);
+        f += 0.1250 * noise3D(p); p = p * 2.01;
+        f += 0.0625 * noise3D(p);
+        return f;
+    }
+
+    // Seamless Domain Warping with Velocity-Aligned Flow Smear (Produces silky, liquid-like fire ribbons)
+    float warpedFluidNoise(vec3 p, float time) {
+        // Anisotropic vertical elongation along flow direction
+        vec3 sp = vec3(p.x * 1.15, p.y * 0.42, p.z * 1.15);
+        vec3 q = vec3(
+            fbm(sp + vec3(0.0, -time * 1.35, 0.0)),
+            fbm(sp + vec3(5.2, -time * 1.45, 1.3)),
+            fbm(sp + vec3(1.7, -time * 1.25, 3.4))
+        );
+
+        vec3 r = vec3(
+            fbm(sp + 3.8 * q + vec3(1.7, -time * 1.65, 0.5)),
+            fbm(sp + 3.8 * q + vec3(8.3, -time * 1.55, 2.8)),
+            fbm(sp + 3.8 * q + vec3(3.2, -time * 1.45, 6.1))
+        );
+
+        // Directional flow smearing along the vertical advection stream
+        float sCenter = fbm(sp + 3.2 * r);
+        float sTrail1 = fbm(sp + 3.2 * r + vec3(0.0, 0.35, 0.0));
+        float sTrail2 = fbm(sp + 3.2 * r - vec3(0.0, 0.35, 0.0));
+        return (sCenter * 0.50 + sTrail1 * 0.25 + sTrail2 * 0.25);
+    }
+
+    // Planckian Thermal Blackbody Radiation Curve
+    vec3 blackbody(float kelvin) {
+        float temp = clamp(kelvin / 100.0, 10.0, 120.0);
+        float r = 0.0, g = 0.0, b = 0.0;
+        if (temp <= 66.0) {
+            r = 1.0;
+            g = clamp(0.39008157876 * log(max(1.0, temp)) - 0.63184144378, 0.0, 1.0);
+            b = temp <= 19.0 ? 0.0 : clamp(0.54320678911 * log(max(1.0, temp - 10.0)) - 1.19625408914, 0.0, 1.0);
+        } else {
+            r = clamp(1.292936186 * pow(max(0.1, temp - 60.0), -0.1332047592), 0.0, 1.0);
+            g = clamp(1.129817658 * pow(max(0.1, temp - 60.0), -0.0755148492), 0.0, 1.0);
+            b = 1.0;
+        }
+        return vec3(r, g, b);
+    }
+
+    // Beer-Lambert optical extinction law: T(s) = exp(-sigma_a * s)
+    float beerLambert(float opticalDepth) {
+        return exp(-opticalDepth);
+    }
+
+    // Smooth minimum for blending discrete flame lobes
+    float smin(float a, float b, float k) {
+        float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+        return mix(b, a, h) - k * h * (1.0 - h);
+    }
+
+    // Ray-Bounding Volume Intersection (Mushroom Cloud Capsule)
+    vec2 intersectPlumeBounds(vec3 ro, vec3 rd, vec3 center, float radius, float height) {
+        vec3 oc = ro - (center + vec3(0.0, height * 0.5, 0.0));
+        float totalR = max(radius, height * 0.65) * 1.45;
+        float b = dot(oc, rd);
+        float c = dot(oc, oc) - totalR * totalR;
+        float h = b * b - c;
+        if (h < 0.0) return vec2(-1.0);
+        h = sqrt(h);
+        return vec2(-b - h, -b + h);
+    }
+
+    // Ground Plane Surface (Zero light projection onto ground)
+    vec3 renderGround(vec3 ro, vec3 rd, float blastIntensity) {
+        if (rd.y >= -1e-4) return vec3(0.0);
+        float tGround = (-0.5 - ro.y) / rd.y;
+        if (tGround <= 0.0) return vec3(0.0);
+
+        vec3 hit = ro + rd * tGround;
+
+        vec2 grid = abs(fract(hit.xz * 0.75) - 0.5);
+        float lines = smoothstep(0.46, 0.5, max(grid.x, grid.y));
+        vec3 floorCol = mix(vec3(0.012, 0.014, 0.018), vec3(0.045, 0.05, 0.06), lines);
+
+        if (uEmissionModel == 1) {
+            // Diffuse Sand / Desert Dust: Wind-rippled dune surface (Zero light projection)
+            float duneWaves = sin(hit.x * 0.9 + hit.z * 1.8 + sin(hit.x * 2.2) * 0.4) * 0.5 + 0.5;
+            vec3 sandCol = mix(vec3(0.22, 0.16, 0.09), vec3(0.38, 0.28, 0.16), duneWaves);
+            return sandCol * exp(-tGround * 0.030);
+        } else if (uEmissionModel == 2) {
+            // Transmissive Water / Rain: Wet, dark reflective pavement (Zero light projection)
+            float puddles = smoothstep(0.35, 0.65, noise3D(vec3(hit.xz * 0.35, 0.0)));
+            vec3 wetFloor = mix(floorCol * 0.35, vec3(0.015, 0.022, 0.032), puddles);
+            vec3 skyReflect = vec3(0.06, 0.09, 0.14) * puddles * 1.5;
+            return (wetFloor + skyReflect) * exp(-tGround * 0.035);
+        } else if (uEmissionModel == 3) {
+            // Geothermal Steam: Damp ground
+            vec3 steamFloor = mix(floorCol, vec3(0.025, 0.035, 0.045), 0.2);
+            return steamFloor * exp(-tGround * 0.035);
+        } else {
+            return floorCol * exp(-tGround * 0.035);
+        }
+    }
+
+    // Asymmetric Volumetric Multi-Topology Field
+    // Evaluates plume, cyclone vortex, parabolic fountain, supernova, orbital disk, and blizzard morphologies
+    float evaluateFlameField(vec3 p, float blastTime, out float heatFraction, out float smokeDensity) {
+        vec3 local = p - uExplosionCenter;
+        float y = local.y;
+
+        // Substance-specific aerodynamic wind displacement (plumes & dust tilt downwind with altitude)
+        float windCoupling = clamp(0.75 / (uSubstanceMass + 0.25), 0.05, 2.4);
+        vec3 windTilt = vec3(uWindVelocity.x * max(0.0, y) * 0.28, 0.0, uWindVelocity.z * max(0.0, y) * 0.28) * windCoupling;
+        vec3 localAero = local - windTilt;
+
+        float rXZ = length(localAero.xz);
+        float theta = atan(localAero.z, localAero.x);
+
+        // --- 1. PLUME TOPOLOGY (Buoyant convective chimney + licking flame flutes) ---
+        float plumeUpward = clamp(uUpwardDraft * (1.35 - rXZ * 0.65), -1.5, 5.0) + uGravityBuoyancy * 0.6;
+        vec3 advectPlume = localAero;
+        advectPlume.y *= 0.65;
+        advectPlume.y -= (uTime * (uUpwardDraft * 0.65) + plumeUpward * 0.35);
+        advectPlume.xz -= uWindVelocity.xz * (uTime * 0.35 * windCoupling);
+        float twistPlume = y * 0.45 * uSwirlVorticity + uTime * 0.35 * uSwirlVorticity;
+        float cosTP = cos(twistPlume), sinTP = sin(twistPlume);
+        advectPlume.xz = vec2(advectPlume.x * cosTP - advectPlume.z * sinTP, advectPlume.x * sinTP + advectPlume.z * cosTP);
+        vec3 turbPlume = advectPlume + curlNoise(advectPlume * 0.62) * 0.68;
+        float flutes = 1.0 + 0.42 * cos(3.0 * theta + y * 1.2 + uTime * 0.5) 
+                           + 0.28 * sin(5.0 * theta - y * 1.6 - uTime * 0.4);
+        float trunkRadius = (0.35 + 0.32 * y) * flutes;
+        float capExpansion = smoothstep(0.8, 2.5, y) * 1.25 * (1.0 - smoothstep(2.5, 4.8, y));
+        float profileRadius = trunkRadius + capExpansion;
+        float dColumn = length(turbPlume.xz) - profileRadius;
+        vec3 jet1Pos = turbPlume - vec3(0.9, 1.8 + 0.4 * sin(uTime), 0.6);
+        float dJet1 = length(jet1Pos * vec3(1.0, 0.5, 1.0)) - 0.75;
+        vec3 jet2Pos = turbPlume - vec3(-1.1, 2.4 + 0.3 * cos(uTime * 0.8), -0.5);
+        float dJet2 = length(jet2Pos * vec3(1.0, 0.45, 1.0)) - 0.85;
+        float dPlume = smin(smin(dColumn, dJet1, 0.60), dJet2, 0.70);
+
+        // --- 2. VORTEX TOPOLOGY (Hyperbolic cyclone funnel with central eye) ---
+        float spinV = uTime * (2.4 * uSwirlVorticity);
+        float cosV = cos(spinV + y * 1.6), sinV = sin(spinV + y * 1.6);
+        vec2 rotVortex = vec2(localAero.x * cosV - localAero.z * sinV, localAero.x * sinV + localAero.z * cosV);
+        float funnelR = 0.28 + 0.09 * y * y;
+        vec3 turbVortex = localAero + curlNoise(vec3(rotVortex.x, y * 0.7 - uTime * 2.8, rotVortex.y) * 0.9) * 0.42;
+        float dVortexCol = abs(length(turbVortex.xz) - funnelR) - 0.26;
+        float eyeR = 0.08 * (1.0 + 0.3 * max(0.0, y));
+        float dVortex = max(dVortexCol, -(length(localAero.xz) - eyeR));
+
+        // --- 3. FOUNTAIN TOPOLOGY (Pressurized nozzle jet + parabolic gravity cascade) ---
+        float nozzleRadius = 0.20 + 0.38 * sqrt(max(0.0, y));
+        float parabolicY = clamp(3.0 - 0.65 * rXZ * rXZ, -0.5, 3.6);
+        vec3 turbFountain = localAero + curlNoise(localAero * 0.85 + vec3(0.0, uTime * 2.2, 0.0)) * 0.45;
+        float dFountain = smin(length(turbFountain.xz) - nozzleRadius, abs(y - parabolicY) - 0.40, 0.35);
+
+        // --- 4. SUPERNOVA TOPOLOGY (Spherical shockwave shell + radial ejecta) ---
+        float shellRadius = 1.65 * (uRadialExpansion / 1.8);
+        float spikePattern = sin(theta * 6.0) * sin(atan(local.y, max(0.01, rXZ)) * 6.0);
+        vec3 turbSupernova = local + curlNoise(local * 1.25) * 0.35;
+        float dSupernova = (abs(length(turbSupernova) - shellRadius) - 0.32) - spikePattern * 0.18;
+
+        // --- 5. ORBITAL TOPOLOGY (Galactic accretion disk + spiral arms) ---
+        float diskThickness = 0.18 + 0.07 * rXZ;
+        float dDiskPlane = abs(y - 0.5) - diskThickness;
+        float spiralArm = cos(theta * 2.0 - log(max(0.15, rXZ)) * 2.6 + uTime * uSwirlVorticity);
+        float dOrbital = max(dDiskPlane, (rXZ - 3.4)) - smoothstep(0.1, 0.75, spiralArm) * 0.35;
+
+        // --- 6. BLIZZARD TOPOLOGY (Horizontal turbulent gale + sweeping particulate waves) ---
+        vec3 galePos = local + vec3(uTime * 3.2, uTime * 0.4, sin(uTime * 1.2) * 0.8) + uWindVelocity * (uTime * 0.8);
+        float dBlizzard = (length(localAero.xz) - 3.6) + (noise3D(galePos * 0.8) - 0.5) * 1.8;
+
+        // Smoothly blend distance fields according to topology weights
+        float dShape = dPlume * uTopologyWeights.x +
+                       dVortex * uTopologyWeights.y +
+                       dFountain * uTopologyWeights.z +
+                       dSupernova * uTopologyWeights.w +
+                       dOrbital * uTopologyWeights2.x +
+                       dBlizzard * uTopologyWeights2.y;
+
+        // Vertical boundary envelope adaptable per topology
+        float yGround = mix(smoothstep(-0.3, 0.35, y), 1.0, uTopologyWeights.w);
+        float yDissipation = mix(1.0 - smoothstep(3.2, 5.4, y), 1.0 - smoothstep(1.5, 3.8, abs(y - 0.5)), uTopologyWeights2.x);
+        float verticalEnvelope = yGround * yDissipation;
+
+        vec3 turbPos = turbPlume * uTopologyWeights.x +
+                       turbVortex * uTopologyWeights.y +
+                       turbFountain * uTopologyWeights.z +
+                       turbSupernova * uTopologyWeights.w +
+                       local * (uTopologyWeights2.x + uTopologyWeights2.y);
+
+        // Seamless Continuous Fluid Turbulence with Velocity Smear
+        float fluidPattern = warpedFluidNoise(turbPos * 1.15, uTime * 0.7);
+
+        // Heavily smeared density field: wide smoothstep range softens and feathers all boundaries
+        float flameBoundary = -dShape * 0.55 + (fluidPattern - 0.42) * 1.15;
+        // Translucent, feather-light density accumulation allowing light to filter through wisps
+        float density = smoothstep(-0.35, 0.78, flameBoundary) * verticalEnvelope * 2.15;
+
+        // Dynamic core proximity based on topology
+        vec3 centerTarget = mix(vec3(0.0, 0.8, 0.0), vec3(0.0, 0.5, 0.0), uTopologyWeights2.x);
+        float coreDist = length(local - centerTarget);
+        float coreProximity = clamp(1.0 - (coreDist / 2.0), 0.0, 1.0);
+
+        // Continuous licking heat tongues with soft feathered falloff
+        float flameTongues = smoothstep(0.20, 0.85, fluidPattern);
+        
+        // Graceful exponential cooling with altitude
+        float heightCooling = clamp(exp(-max(0.0, y - 0.5) * 0.48), 0.0, 1.0);
+        float combustion = clamp((pow(coreProximity, 1.5) * 1.25 + flameTongues * 0.75) * heightCooling, 0.0, 1.0);
+
+        heatFraction = combustion;
+        smokeDensity = density;
+        return density;
+    }
+
+    // Volumetric Raymarcher with Continuous Fluid Radiance Integration
+    vec4 marchExplosion(vec3 ro, vec3 rd, float tNear, float tFar, float blastTime, float blastRadius, float blastIntensity) {
+        const int NUM_STEPS = 54;
+        float stepSize = (tFar - tNear) / float(NUM_STEPS);
+
+        // Ordered sub-pixel Bayer dithering: eradicates stepping bands with ZERO noisy grain/stipple
+        float dither = (bayer4x4(gl_FragCoord.xy) - 0.5) * 0.35;
+        float t = tNear + stepSize * (0.5 + dither);
+
+        vec3 accumulatedRadiance = vec3(0.0);
+        float transmittance = 1.0;
+        // Reduced absorption coefficient for ethereal volumetric translucency
+        const float absorptionCoeff = 2.15;
+
+        vec3 coreCenter = uExplosionCenter + vec3(0.0, 1.0, 0.0);
+
+        for (int i = 0; i < NUM_STEPS; i++) {
+            if (t >= tFar || transmittance < 0.005) break;
+
+            vec3 pos = ro + rd * t;
+            float heatFraction, density;
+            evaluateFlameField(pos, blastTime, heatFraction, density);
+
+            if (density > 0.01) {
+                // Optical depth & Beer-Lambert transmittance
+                float stepOpticalDepth = density * stepSize * uAbsorptionCoeff;
+                float stepTransmittance = beerLambert(stepOpticalDepth);
+
+                vec3 inscattered = vec3(0.0);
+
+                if (uEmissionModel == 0) {
+                    // --- 0: INCANDESCENT FIRE / SUPERNOVA / PLASMA ---
+                    float combustion = heatFraction * blastIntensity;
+                    float tEmber = smoothstep(0.02, 0.35, combustion);
+                    float tFlame = smoothstep(0.22, 0.68, combustion);
+                    float tCore  = smoothstep(0.62, 0.96, combustion);
+
+                    vec3 colOuter = uPaletteOuter * 0.45;
+                    vec3 colMid = uPaletteMid * 2.5;
+                    vec3 colCore = uPaletteCore * 4.6;
+
+                    vec3 colEmber = mix(colOuter, mix(colOuter, colMid, 0.5), tEmber);
+                    vec3 colFlame = mix(colEmber, colMid, tFlame);
+                    vec3 fireColor = mix(colFlame, colCore, tCore * tCore);
+
+                    float distToCore = length(pos - coreCenter);
+                    float lightFromCore = exp(-distToCore * 0.95);
+                    vec3 smokeAlbedo = vec3(0.008, 0.007, 0.007);
+                    vec3 smokeBounce = uPaletteMid * lightFromCore * 2.6 * blastIntensity;
+                    vec3 smokeRadiance = smokeAlbedo + smokeBounce;
+
+                    inscattered = mix(smokeRadiance, fireColor, smoothstep(0.10, 0.55, combustion));
+                } else if (uEmissionModel == 1) {
+                    // --- 1: DIFFUSE MINERAL SAND & DUST SCATTERING (NO FIRE!) ---
+                    vec3 sunDir = normalize(vec3(0.4, 0.85, 0.35));
+                    float sunPhase = clamp(dot(rd, -sunDir) * 0.35 + 0.65, 0.2, 1.0);
+                    inscattered = uPaletteMid * (sunPhase * 0.82) + uPaletteOuter * 0.18;
+                } else if (uEmissionModel == 2) {
+                    // --- 2: TRANSMISSIVE WATER MIST & LIQUID JET (NO FIRE!) ---
+                    vec3 lightDir = normalize(vec3(0.1, 0.95, 0.2));
+                    float forwardScatter = pow(clamp(dot(rd, lightDir) * 0.5 + 0.5, 0.0, 1.0), 3.0) * 0.35;
+                    vec3 waterMist = mix(uPaletteOuter * 0.25, uPaletteMid * 0.55, smoothstep(0.05, 0.6, density));
+                    inscattered = waterMist + uPaletteCore * forwardScatter;
+                } else if (uEmissionModel == 3) {
+                    // --- 3: CONDENSING GEOTHERMAL STEAM & VAPOR (NO FIRE!) ---
+                    vec3 steamDiffuse = mix(uPaletteOuter * 0.3, vec3(0.92, 0.94, 0.98), smoothstep(0.02, 0.45, density));
+                    float skylight = clamp(rd.y * 0.35 + 0.65, 0.35, 1.0);
+                    inscattered = steamDiffuse * skylight * 0.88;
+                } else if (uEmissionModel == 4) {
+                    // --- 4: CAMPFIRE SMOKE PLUME ---
+                    float distToBase = length(pos - uExplosionCenter);
+                    vec3 baseGlow = uPaletteCore * exp(-distToBase * 1.8) * 0.9;
+                    vec3 sootColor = mix(vec3(0.015, 0.015, 0.018), uPaletteOuter * 0.35, density);
+                    inscattered = sootColor + baseGlow;
+                } else {
+                    // --- 5: COLD CHEMICAL BIOLUMINESCENCE ---
+                    float lum = smoothstep(0.08, 0.75, density);
+                    inscattered = mix(uPaletteOuter * 0.3, uPaletteMid * 1.6, lum) + uPaletteCore * pow(lum, 2.5) * 0.8;
+                }
+
+                vec3 sliceContribution = inscattered * (1.0 - stepTransmittance) * transmittance;
+                accumulatedRadiance += sliceContribution;
+                transmittance *= stepTransmittance;
+            }
+
+            t += stepSize;
+        }
+
+        return vec4(accumulatedRadiance, 1.0 - transmittance);
+    }
+
+    void main() {
+        vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+        vec3 rd = normalize(uCameraRot * vec3(uv * tan(radians(uFov * 0.5)), -1.0));
+        vec3 ro = uCameraPos;
+
+        // Blast cycle (repeats or triggers on demand)
+        float blastTime = mod(uBlastTime, 7.5);
+        float shock = exp(-blastTime * 1.1);
+        float blastRadius = (1.65 + 0.55 * shock) * uExplosionScale * (uRadialExpansion / 1.8);
+        float blastIntensity = 0.95 + 1.1 * shock;
+
+        // Ground plane distance
+        float tGround = (rd.y < -1e-4) ? (-0.5 - ro.y) / rd.y : 1e9;
+
+        // Environmental backdrop adapted per substance
+        vec3 skyColor = vec3(0.0);
+        if (uEmissionModel == 2 && abs(uWindVelocity.y) > 1.5) {
+            // Overcast stormy slate sky for rain downpour
+            skyColor = mix(vec3(0.14, 0.17, 0.22), vec3(0.05, 0.06, 0.08), clamp(rd.y * 1.5, 0.0, 1.0));
+        } else if (uEmissionModel == 1) {
+            // Warm desert dust horizon gradient
+            skyColor = mix(vec3(0.24, 0.19, 0.13), vec3(0.08, 0.06, 0.04), clamp(rd.y * 1.4, 0.0, 1.0));
+        } else if (uEmissionModel == 3) {
+            // Cool outdoor mist sky for steam vent
+            skyColor = mix(vec3(0.14, 0.17, 0.20), vec3(0.04, 0.05, 0.06), clamp(rd.y * 1.4, 0.0, 1.0));
+        } else {
+            // Deep cinematic inky black for fire, sparks, plasma, and space
+            skyColor = mix(vec3(0.012, 0.014, 0.018), vec3(0.002, 0.003, 0.004), length(uv) * 0.9);
+        }
+
+        vec3 bgCol = (rd.y < -1e-4 && tGround > 0.0) 
+            ? renderGround(ro, rd, blastIntensity)
+            : skyColor;
+
+        vec3 col = bgCol;
+
+        // Rain precipitation does NOT march a central explosion sphere!
+        bool isRain = (uEmissionModel == 2 && abs(uWindVelocity.y) > 1.5);
+
+        if (!isRain) {
+            // Plume bounding intersection
+            vec2 bounds = intersectPlumeBounds(ro, rd, uExplosionCenter, blastRadius * 2.2, 5.0 * blastRadius);
+
+            if (bounds.y > 0.0) {
+                float tNear = max(0.01, bounds.x);
+                float tFar = bounds.y;
+                if (tGround > 0.0 && tGround < tFar) {
+                    tFar = max(tNear, tGround);
+                }
+
+                if (tFar > tNear) {
+                    vec4 blast = marchExplosion(ro, rd, tNear, tFar, blastTime, blastRadius, blastIntensity);
+                    col = blast.rgb + bgCol * (1.0 - blast.a);
+                }
+            }
+        }
+
+        // Camera lens glow / bloom: ONLY for incandescent fire / sparks / plasma / supernova!
+        // ZERO fire glow for water, rain, dust, steam, or smoke!
+        if (uEmissionModel == 0 || uEmissionModel == 5) {
+            vec3 toCenter = uExplosionCenter - ro;
+            float centerDist = length(toCenter);
+            vec3 centerDir = toCenter / centerDist;
+            float halo = max(0.0, dot(rd, centerDir));
+            float haloStrength = (uEmissionModel == 0) ? (0.5 * blastIntensity) : 0.22;
+            vec3 fireGlow = uPaletteMid * pow(halo, 16.0) * haloStrength;
+            col += fireGlow;
+        }
+
+        // ACES Filmic Tone Mapping with high dynamic range compression
+        vec3 x = col;
+        float a = 2.51;
+        float b = 0.03;
+        float c = 2.43;
+        float d = 0.59;
+        float e = 0.14;
+        col = clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+
+        fragColor = vec4(col, 1.0);
+    }
+    `;
+
+    function createShader(gl, type, source) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, source);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+            console.error(gl.getShaderInfoLog(s));
+            gl.deleteShader(s);
+            return null;
+        }
+        return s;
+    }
+
+    const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+    const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.error(gl.getProgramInfoLog(program));
+        throw new Error("Program link failed");
+    }
+
+    const uResLoc = gl.getUniformLocation(program, "uResolution");
+    const uTimeLoc = gl.getUniformLocation(program, "uTime");
+    const uBlastTimeLoc = gl.getUniformLocation(program, "uBlastTime");
+    const uCamPosLoc = gl.getUniformLocation(program, "uCameraPos");
+    const uCamRotLoc = gl.getUniformLocation(program, "uCameraRot");
+    const uFovLoc = gl.getUniformLocation(program, "uFov");
+    const uCenterLoc = gl.getUniformLocation(program, "uExplosionCenter");
+    const uScaleLoc = gl.getUniformLocation(program, "uExplosionScale");
+
+    const uPaletteCoreLoc = gl.getUniformLocation(program, "uPaletteCore");
+    const uPaletteMidLoc = gl.getUniformLocation(program, "uPaletteMid");
+    const uPaletteOuterLoc = gl.getUniformLocation(program, "uPaletteOuter");
+    const uSwirlVorticityLoc = gl.getUniformLocation(program, "uSwirlVorticity");
+    const uUpwardDraftLoc = gl.getUniformLocation(program, "uUpwardDraft");
+    const uRadialExpansionLoc = gl.getUniformLocation(program, "uRadialExpansion");
+    const uGravityBuoyancyLoc = gl.getUniformLocation(program, "uGravityBuoyancy");
+    const uAbsorptionCoeffLoc = gl.getUniformLocation(program, "uAbsorptionCoeff");
+    const uTopologyWeightsLoc = gl.getUniformLocation(program, "uTopologyWeights");
+    const uTopologyWeights2Loc = gl.getUniformLocation(program, "uTopologyWeights2");
+    const uAdaptiveManifoldsLoc = uTopologyWeightsLoc;
+    const uWindVelocityLoc = gl.getUniformLocation(program, "uWindVelocity");
+    const uSubstanceMassLoc = gl.getUniformLocation(program, "uSubstanceMass");
+    const uKinematicGravityLoc = gl.getUniformLocation(program, "uKinematicGravity");
+    const uEmissionModelLoc = gl.getUniformLocation(program, "uEmissionModel");
+
+    const quadVao = gl.createVertexArray();
+    gl.bindVertexArray(quadVao);
+    const quadVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+    ]), gl.STATIC_DRAW);
+    const posLoc = gl.getAttribLocation(program, "aPosition");
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    /* ==========================================================================
+       2. Dynamic GPU Particle Swarm System (2,500 active particles)
+       ========================================================================== */
+    const swarmVsSource = `#version 300 es
+    precision highp float;
+    precision highp int;
+    in vec3 aPosition;
+    in vec3 aVelocity;
+    in float aLife;
+    in float aSeed;
+
+    uniform mat3 uCameraRot;
+    uniform vec3 uCameraPos;
+    uniform float uFov;
+    uniform vec2 uResolution;
+    uniform float uParticleSize;
+    uniform float uTime;
+    uniform int uParticleShape;
+
+    out float vLife;
+    out float vSeed;
+    out vec2 vVelocityScreen;
+    out float vSpeed;
+
+    void main() {
+        vLife = aLife;
+        vSeed = aSeed;
+
+        vec3 camRel = aPosition - uCameraPos;
+        // Project position to camera view space
+        vec3 viewPos = vec3(
+            dot(camRel, vec3(uCameraRot[0][0], uCameraRot[1][0], uCameraRot[2][0])),
+            dot(camRel, vec3(uCameraRot[0][1], uCameraRot[1][1], uCameraRot[2][1])),
+            dot(camRel, -vec3(uCameraRot[0][2], uCameraRot[1][2], uCameraRot[2][2]))
+        );
+
+        // Project velocity to camera view space to obtain directional screen-space streak
+        vec3 viewVel = vec3(
+            dot(aVelocity, vec3(uCameraRot[0][0], uCameraRot[1][0], uCameraRot[2][0])),
+            dot(aVelocity, vec3(uCameraRot[0][1], uCameraRot[1][1], uCameraRot[2][1])),
+            dot(aVelocity, -vec3(uCameraRot[0][2], uCameraRot[1][2], uCameraRot[2][2]))
+        );
+
+        float speed = length(viewVel.xy);
+        vSpeed = speed;
+        vVelocityScreen = (speed > 0.001) ? normalize(viewVel.xy) : vec2(0.0, 1.0);
+
+        float fovRad = radians(uFov * 0.5);
+        float tanHalfFov = tan(fovRad);
+        float aspect = uResolution.x / uResolution.y;
+
+        float clipX = viewPos.x / (viewPos.z * tanHalfFov * aspect);
+        float clipY = viewPos.y / (viewPos.z * tanHalfFov);
+        float clipZ = (viewPos.z - 0.1) / (100.0 - 0.1);
+
+        gl_Position = vec4(clipX, clipY, clipZ * 2.0 - 1.0, 1.0);
+
+        // Distance attenuation on point size: calibrated for physically fine micro-particulate systems
+        float distAtten = clamp(8.5 / max(0.4, viewPos.z), 0.45, 3.2);
+        float baseSize = uParticleSize * distAtten;
+
+        // Subtle aerodynamic velocity elongation for welding sparks and rain
+        if (uParticleShape == 0) { // sparks
+            baseSize *= clamp(1.0 + speed * 0.10, 1.0, 2.6);
+        } else if (uParticleShape == 1 && length(aVelocity.y) > 4.5) { // rain streaks
+            baseSize *= clamp(1.0 + speed * 0.08, 1.0, 2.2);
+        }
+
+        // Delicately fine: 1.0px to 6.5px max (fine motes, needles, atomized droplets)
+        gl_PointSize = clamp(baseSize * (0.80 + 0.20 * sin(aSeed * 25.0 + uTime * 6.0)), 1.0, 7.5);
+    }`;
+
+    const swarmFsSource = `#version 300 es
+    precision highp float;
+    precision highp int;
+    in float vLife;
+    in float vSeed;
+    in vec2 vVelocityScreen;
+    in float vSpeed;
+    out vec4 fragColor;
+
+    uniform vec3 uPaletteCore;
+    uniform vec3 uPaletteMid;
+    uniform int uParticleShape; // 0: spark, 1: droplet, 2: crystal, 3: orb, 4: mote
+    uniform float uParticleGlow;
+
+    void main() {
+        vec2 pc = gl_PointCoord - 0.5;
+        pc.y = -pc.y; // Match screen space Y orientation
+        float dist = length(pc);
+        float alpha = 0.0;
+
+        if (uParticleShape == 0) {
+            // Directional welding spark streak aligned with velocity
+            vec2 vDir = vVelocityScreen;
+            float along = dot(pc, vDir);
+            float across = length(pc - vDir * along);
+            float streakLen = clamp(0.18 + vSpeed * 0.035, 0.20, 0.48);
+            float streakThick = clamp(0.08 / (1.0 + vSpeed * 0.05), 0.03, 0.12);
+            float dAlong = abs(along) / streakLen;
+            float dAcross = abs(across) / streakThick;
+            alpha = clamp(1.0 - (dAlong * dAlong + dAcross * dAcross), 0.0, 1.0);
+            alpha = pow(alpha, 1.4);
+        } else if (uParticleShape == 1) {
+            // Water droplet / rain with specular highlight
+            if (vSpeed > 4.0) {
+                vec2 vDir = vVelocityScreen;
+                float along = dot(pc, vDir);
+                float across = length(pc - vDir * along);
+                float streak = clamp(1.0 - (abs(along) / 0.45 + abs(across) / 0.12), 0.0, 1.0);
+                alpha = streak * 0.85;
+            } else {
+                float sphere = smoothstep(0.48, 0.25, dist);
+                float spec = smoothstep(0.12, 0.0, length(pc - vec2(-0.12, 0.12)));
+                alpha = sphere + spec * 0.7;
+            }
+        } else if (uParticleShape == 2) {
+            // Hexagonal crystal ice flake
+            float a = atan(pc.y, pc.x);
+            float hex = cos(a * 6.0) * 0.15 + 0.32;
+            alpha = smoothstep(hex, 0.05, dist);
+        } else if (uParticleShape == 4) {
+            // Mote: diffuse particulate dust grain (Bagnold aeolian sand)
+            alpha = smoothstep(0.48, 0.18, dist) * 0.70;
+        } else {
+            // Soft Gaussian orb (steam puff, nebula, smoke)
+            alpha = exp(-dist * dist * 12.0);
+        }
+
+        if (alpha < 0.015) discard;
+
+        vec3 pCol = vec3(0.0);
+        if (uParticleShape == 0) {
+            // Blackbody oxidation & cooling ramp: 2500K white -> 1800K orange -> 1100K crimson -> dark cinder
+            float heat = clamp(vLife * (1.0 + vSpeed * 0.08), 0.0, 1.0);
+            vec3 cWhite = vec3(1.0, 0.98, 0.90);
+            vec3 cOrange = vec3(1.0, 0.58, 0.10);
+            vec3 cCrimson = vec3(0.60, 0.06, 0.01);
+            pCol = (heat > 0.5) ? mix(cOrange, cWhite, (heat - 0.5) * 2.0) : mix(cCrimson, cOrange, heat * 2.0);
+            pCol *= uParticleGlow * 1.5;
+        } else if (uParticleShape == 4) {
+            // Diffuse sand / dust mote: natural mineral scattering with zero synthetic glow
+            pCol = uPaletteMid * (0.85 + 0.28 * sin(vSeed * 42.0));
+        } else if (uParticleShape == 1) {
+            // Water droplet: clear transmission tint
+            pCol = mix(uPaletteMid, vec3(0.95, 0.98, 1.0), 0.40) * uParticleGlow;
+        } else {
+            pCol = mix(uPaletteMid, uPaletteCore, clamp(vLife * 1.2, 0.0, 1.0)) * uParticleGlow;
+        }
+
+        fragColor = vec4(pCol, alpha * vLife * 0.88);
+    }`;
+
+    const swarmVs = createShader(gl, gl.VERTEX_SHADER, swarmVsSource);
+    const swarmFs = createShader(gl, gl.FRAGMENT_SHADER, swarmFsSource);
+    const swarmProgram = gl.createProgram();
+    gl.attachShader(swarmProgram, swarmVs);
+    gl.attachShader(swarmProgram, swarmFs);
+    gl.linkProgram(swarmProgram);
+
+    const swarmCamRotLoc = gl.getUniformLocation(swarmProgram, "uCameraRot");
+    const swarmCamPosLoc = gl.getUniformLocation(swarmProgram, "uCameraPos");
+    const swarmFovLoc = gl.getUniformLocation(swarmProgram, "uFov");
+    const swarmResLoc = gl.getUniformLocation(swarmProgram, "uResolution");
+    const swarmParticleSizeLoc = gl.getUniformLocation(swarmProgram, "uParticleSize");
+    const swarmTimeLoc = gl.getUniformLocation(swarmProgram, "uTime");
+    const swarmPaletteCoreLoc = gl.getUniformLocation(swarmProgram, "uPaletteCore");
+    const swarmPaletteMidLoc = gl.getUniformLocation(swarmProgram, "uPaletteMid");
+    const swarmParticleShapeLoc = gl.getUniformLocation(swarmProgram, "uParticleShape");
+    const swarmParticleGlowLoc = gl.getUniformLocation(swarmProgram, "uParticleGlow");
+
+    const SWARM_COUNT = 6000;
+    const swarmPosData = new Float32Array(SWARM_COUNT * 3);
+    const swarmVelData = new Float32Array(SWARM_COUNT * 3);
+    const swarmLifeData = new Float32Array(SWARM_COUNT);
+    const swarmSeedData = new Float32Array(SWARM_COUNT);
+    for (let i = 0; i < SWARM_COUNT; i++) {
+        swarmSeedData[i] = Math.random();
+    }
+
+    const swarmVao = gl.createVertexArray();
+    gl.bindVertexArray(swarmVao);
+
+    const swarmPosVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, swarmPosVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, swarmPosData.byteLength, gl.DYNAMIC_DRAW);
+    const swarmPosLoc = gl.getAttribLocation(swarmProgram, "aPosition");
+    gl.enableVertexAttribArray(swarmPosLoc);
+    gl.vertexAttribPointer(swarmPosLoc, 3, gl.FLOAT, false, 0, 0);
+
+    const swarmVelVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, swarmVelVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, swarmVelData.byteLength, gl.DYNAMIC_DRAW);
+    const swarmVelLoc = gl.getAttribLocation(swarmProgram, "aVelocity");
+    gl.enableVertexAttribArray(swarmVelLoc);
+    gl.vertexAttribPointer(swarmVelLoc, 3, gl.FLOAT, false, 0, 0);
+
+    const swarmLifeVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, swarmLifeVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, swarmLifeData.byteLength, gl.DYNAMIC_DRAW);
+    const swarmLifeLoc = gl.getAttribLocation(swarmProgram, "aLife");
+    gl.enableVertexAttribArray(swarmLifeLoc);
+    gl.vertexAttribPointer(swarmLifeLoc, 1, gl.FLOAT, false, 0, 0);
+
+    const swarmSeedVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, swarmSeedVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, swarmSeedData, gl.STATIC_DRAW);
+    const swarmSeedLoc = gl.getAttribLocation(swarmProgram, "aSeed");
+    gl.enableVertexAttribArray(swarmSeedLoc);
+    gl.vertexAttribPointer(swarmSeedLoc, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindVertexArray(null);
+
+    /* ==========================================================================
+       3. Post-Process Gaussian Lens Blur, Optical Bloom & Heat Shimmer Pass
+       ========================================================================== */
+    const blurVsSource = `#version 300 es
+    in vec2 aPosition;
+    out vec2 vUv;
+    void main() {
+        vUv = aPosition * 0.5 + 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+    }`;
+
+    const blurFsSource = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 fragColor;
+
+    uniform sampler2D uSceneTex;
+    uniform vec2 uResolution;
+    uniform float uBlurAmount;
+    uniform float uTime;
+    uniform vec3 uCameraPos;
+    uniform mat3 uCameraRot;
+    uniform float uFov;
+    uniform vec3 uExplosionCenter;
+    uniform float uShimmerAmount;
+
+    void main() {
+        vec2 texel = 1.0 / uResolution;
+
+        // Reconstruct ray direction for this screen pixel to compute 3D thermal chimney proximity
+        vec2 pNorm = (gl_FragCoord.xy - 0.5 * uResolution) / min(uResolution.x, uResolution.y);
+        vec3 rd = normalize(uCameraRot * vec3(pNorm * tan(radians(uFov * 0.5)), -1.0));
+        vec3 ro = uCameraPos;
+
+        // Closest approach distance between camera ray and the rising heat column
+        vec3 d0 = ro - uExplosionCenter;
+        float dotHoriz = max(0.001, dot(rd.xz, rd.xz));
+        float tClosest = -dot(d0.xz, rd.xz) / dotHoriz;
+        vec3 pClosest = ro + rd * max(0.0, tClosest);
+        float lateralDist = length(pClosest.xz - uExplosionCenter.xz);
+        float yRelative = pClosest.y - uExplosionCenter.y;
+
+        // Thermal envelope: tightly localized around the rising heat column
+        float lateralFalloff = exp(-lateralDist * lateralDist * 0.70);
+        float verticalFalloff = smoothstep(-0.2, 0.6, yRelative) * exp(-max(0.0, yRelative - 3.2) * 0.55);
+        float heatEnvelope = lateralFalloff * verticalFalloff * uShimmerAmount;
+
+        // Delicate high-frequency convective micro-shimmer (Thermal Schlieren air disturbance)
+        vec2 heatCoord = vUv * vec2(85.0, 150.0) + vec2(0.0, -uTime * 2.2);
+        float wave1 = sin(heatCoord.x * 1.15 + heatCoord.y * 1.35 + uTime * 1.6);
+        float wave2 = cos(heatCoord.x * 1.75 - heatCoord.y * 0.95 - uTime * 1.3);
+        float wave3 = sin((heatCoord.x + heatCoord.y) * 1.85 + uTime * 2.4) * 0.35;
+        vec2 shimmerDir = vec2(wave1 * 0.5 + wave2 * 0.35 + wave3 * 0.15,
+                               wave2 * 0.6 - wave1 * 0.25 + wave3 * 0.15);
+
+        // Scaled to subtle sub-pixel displacement (~1-2 px max) to eliminate intense warping
+        vec2 shimmerOffset = shimmerDir * heatEnvelope * 0.0024;
+
+        // Subtle chromatic dispersion (tight ±1.2% split to eliminate colored fringing)
+        vec4 baseR = texture(uSceneTex, vUv + shimmerOffset * 1.012);
+        vec4 baseG = texture(uSceneTex, vUv + shimmerOffset);
+        vec4 baseB = texture(uSceneTex, vUv + shimmerOffset * 0.988);
+        vec4 base = vec4(baseR.r, baseG.g, baseB.b, baseG.a);
+
+        // 13-tap Gaussian / Poisson disc optical blur filter
+        vec4 bloom = vec4(0.0);
+        float totalWeight = 0.0;
+
+        const vec2 offsets[12] = vec2[12](
+            vec2(-1.5, -0.5), vec2(1.5, 0.5), vec2(-0.5, 1.5), vec2(0.5, -1.5),
+            vec2(-2.5,  1.5), vec2(2.5, -1.5), vec2( 1.5, 2.5), vec2(-1.5, -2.5),
+            vec2(-3.5, -1.0), vec2(3.5,  1.0), vec2(-1.0, 3.5), vec2( 1.0, -3.5)
+        );
+
+        bloom += base * 0.28;
+        totalWeight += 0.28;
+
+        float blurRadius = 2.8 * uBlurAmount;
+        for (int i = 0; i < 12; i++) {
+            vec2 uvOff = (vUv + shimmerOffset) + offsets[i] * texel * blurRadius;
+            vec4 s = texture(uSceneTex, uvOff);
+            float w = exp(-dot(offsets[i], offsets[i]) * 0.08);
+            bloom += s * w;
+            totalWeight += w;
+        }
+        bloom /= totalWeight;
+
+        // Smears and feathers the edges for warm organic optical glow
+        vec3 composite = mix(base.rgb, bloom.rgb, 0.46) + bloom.rgb * 0.24;
+        fragColor = vec4(composite, 1.0);
+    }`;
+
+    const blurVs = createShader(gl, gl.VERTEX_SHADER, blurVsSource);
+    const blurFs = createShader(gl, gl.FRAGMENT_SHADER, blurFsSource);
+    const blurProgram = gl.createProgram();
+    gl.attachShader(blurProgram, blurVs);
+    gl.attachShader(blurProgram, blurFs);
+    gl.linkProgram(blurProgram);
+
+    const blurSceneTexLoc = gl.getUniformLocation(blurProgram, "uSceneTex");
+    const blurResLoc = gl.getUniformLocation(blurProgram, "uResolution");
+    const blurAmountLoc = gl.getUniformLocation(blurProgram, "uBlurAmount");
+    const blurTimeLoc = gl.getUniformLocation(blurProgram, "uTime");
+    const blurCamPosLoc = gl.getUniformLocation(blurProgram, "uCameraPos");
+    const blurCamRotLoc = gl.getUniformLocation(blurProgram, "uCameraRot");
+    const blurFovLoc = gl.getUniformLocation(blurProgram, "uFov");
+    const blurCenterLoc = gl.getUniformLocation(blurProgram, "uExplosionCenter");
+    const blurShimmerLoc = gl.getUniformLocation(blurProgram, "uShimmerAmount");
+
+    let sceneFbo = null;
+    let sceneTex = null;
+
+    function initFbo(w, h) {
+        if (sceneTex) gl.deleteTexture(sceneTex);
+        if (sceneFbo) gl.deleteFramebuffer(sceneFbo);
+
+        sceneFbo = gl.createFramebuffer();
+        sceneTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    /* ==========================================================================
+       4. Dynamic Prompt-Driven Simulation Engine & Morphing State
+       ========================================================================== */
+    const explosionCenter = [0.0, 2.0, 0.0];
+    const explosionScale = 1.0;
+    let blastTime = 0.0;
+
+    function triggerBlast() {
+        blastTime = 0.0;
+    }
+
+    /* ==========================================================================
+       4. Adaptive Domain Particle Architecture (AdaptiveDomainParticleService & AdaptiveParticleContract)
+       ========================================================================== */
+    const DEFAULT_FIRE_SIMULATION_PROFILE = {
+        name: 'Volumetric Fire Explosion',
+        prompt: 'realistic 3D fire explosion with dark billowing smoke',
+        topology: 'plume',
+        emissionModel: 0,
+        swarm: {
+            particleCount: 6000,
+            behavior: 'thermal_drift',
+            particleSize: 1.5,
+            particleGlow: 1.2,
+            shape: 'spark',
+            speed: 1.0,
+            gravity: -1.2,
+            fadeRate: 0.8
+        },
+        dynamics: {
+            upwardDraft: 2.2,
+            swirlVorticity: 0.85,
+            radialExpansion: 1.8,
+            gravityBuoyancy: 0.75,
+            windVelocity: [0.4, 0.1, 0.1],
+            windTurbulence: 0.35,
+            substanceMass: 0.30
+        },
+        morphology: {
+            scale: 1.0,
+            absorptionCoeff: 2.15
+        },
+        palette: {
+            core: [1.0, 0.96, 0.72],
+            mid: [1.0, 0.46, 0.05],
+            outer: [0.18, 0.06, 0.02]
+        },
+        optics: {
+            blurAmount: 1.25,
+            shimmerAmount: 0.45
+        },
+        audio: {
+            subBassFreq: 60,
+            resonanceFreq: 350,
+            crackleRate: 8,
+            noiseType: 'rumble'
+        }
+    };
+
+    const TOPOLOGY_MAP = {
+        plume:     { w: [1, 0, 0, 0], w2: [0, 0] },
+        vortex:    { w: [0, 1, 0, 0], w2: [0, 0] },
+        fountain:  { w: [0, 0, 1, 0], w2: [0, 0] },
+        supernova: { w: [0, 0, 0, 1], w2: [0, 0] },
+        orbital:   { w: [0, 0, 0, 0], w2: [1, 0] },
+        blizzard:  { w: [0, 0, 0, 0], w2: [0, 1] },
+        dust:      { w: [0, 0, 0, 0], w2: [0, 1] },
+        steam:     { w: [0.75, 0, 0.25, 0], w2: [0, 0] },
+        rain:      { w: [0, 0, 0.85, 0], w2: [0, 0.15] },
+        sparks:    { w: [0, 0, 0, 0.65], w2: [0, 0] }
+    };
+
+    function getTopologyWeights(currentTop, targetTop, t) {
+        const c = TOPOLOGY_MAP[currentTop] || TOPOLOGY_MAP.plume;
+        const tgt = TOPOLOGY_MAP[targetTop] || TOPOLOGY_MAP.plume;
+        const w = [
+            lerp(c.w[0], tgt.w[0], t),
+            lerp(c.w[1], tgt.w[1], t),
+            lerp(c.w[2], tgt.w[2], t),
+            lerp(c.w[3], tgt.w[3], t)
+        ];
+        const w2 = [
+            lerp(c.w2[0], tgt.w2[0], t),
+            lerp(c.w2[1], tgt.w2[1], t)
+        ];
+        return { w, w2 };
+    }
+
+    const SHAPE_MAP = {
+        spark: 0,
+        droplet: 1,
+        crystal: 2,
+        orb: 3,
+        mote: 4
+    };
+
+    function lerp(a, b, t) {
+        return a + (b - a) * Math.max(0.0, Math.min(1.0, t));
+    }
+
+    function lerp3(a, b, t) {
+        const cl = Math.max(0.0, Math.min(1.0, t));
+        return [
+            a[0] + (b[0] - a[0]) * cl,
+            a[1] + (b[1] - a[1]) * cl,
+            a[2] + (b[2] - a[2]) * cl
+        ];
+    }
+
+    function interpolateSimulationProfiles(current, target, alpha) {
+        const t = Math.max(0.0, Math.min(1.0, alpha));
+        return {
+            name: t < 0.5 ? current.name : target.name,
+            prompt: t < 0.5 ? current.prompt : target.prompt,
+            topology: t < 0.5 ? current.topology : target.topology,
+            emissionModel: t < 0.5 ? current.emissionModel : target.emissionModel,
+            swarm: {
+                particleCount: Math.round(lerp(current.swarm.particleCount, target.swarm.particleCount, t)),
+                behavior: t < 0.5 ? current.swarm.behavior : target.swarm.behavior,
+                particleSize: lerp(current.swarm.particleSize, target.swarm.particleSize, t),
+                particleGlow: lerp(current.swarm.particleGlow, target.swarm.particleGlow, t),
+                shape: t < 0.5 ? current.swarm.shape : target.swarm.shape,
+                speed: lerp(current.swarm.speed, target.swarm.speed, t),
+                gravity: lerp(current.swarm.gravity, target.swarm.gravity, t),
+                fadeRate: lerp(current.swarm.fadeRate, target.swarm.fadeRate, t)
+            },
+            dynamics: {
+                upwardDraft: lerp(current.dynamics.upwardDraft, target.dynamics.upwardDraft, t),
+                swirlVorticity: lerp(current.dynamics.swirlVorticity, target.dynamics.swirlVorticity, t),
+                radialExpansion: lerp(current.dynamics.radialExpansion, target.dynamics.radialExpansion, t),
+                gravityBuoyancy: lerp(current.dynamics.gravityBuoyancy, target.dynamics.gravityBuoyancy, t),
+                windVelocity: lerp3(current.dynamics.windVelocity, target.dynamics.windVelocity, t),
+                windTurbulence: lerp(current.dynamics.windTurbulence, target.dynamics.windTurbulence, t),
+                substanceMass: lerp(current.dynamics.substanceMass, target.dynamics.substanceMass, t)
+            },
+            morphology: {
+                scale: lerp(current.morphology.scale, target.morphology.scale, t),
+                absorptionCoeff: lerp(current.morphology.absorptionCoeff, target.morphology.absorptionCoeff, t)
+            },
+            palette: {
+                core: lerp3(current.palette.core, target.palette.core, t),
+                mid: lerp3(current.palette.mid, target.palette.mid, t),
+                outer: lerp3(current.palette.outer, target.palette.outer, t)
+            },
+            optics: {
+                blurAmount: lerp(current.optics.blurAmount, target.optics.blurAmount, t),
+                shimmerAmount: lerp(current.optics.shimmerAmount, target.optics.shimmerAmount, t)
+            },
+            audio: {
+                subBassFreq: lerp(current.audio.subBassFreq, target.audio.subBassFreq, t),
+                resonanceFreq: lerp(current.audio.resonanceFreq, target.audio.resonanceFreq, t),
+                crackleRate: lerp(current.audio.crackleRate, target.audio.crackleRate, t),
+                noiseType: t < 0.5 ? current.audio.noiseType : target.audio.noiseType
+            }
+        };
+    }
+
+    function compileSimulationFromPrompt(prompt, baseProfile = DEFAULT_FIRE_SIMULATION_PROFILE) {
+        const text = prompt.toLowerCase();
+        const hasWord = (pattern) => pattern.test(text);
+
+        let coreRGB = [...baseProfile.palette.core];
+        let midRGB = [...baseProfile.palette.mid];
+        let outerRGB = [...baseProfile.palette.outer];
+
+        if (text.includes('purple') || text.includes('violet')) {
+            coreRGB = [0.92, 0.78, 1.0];
+            midRGB = [0.55, 0.12, 0.95];
+            outerRGB = [0.18, 0.02, 0.35];
+        } else if (text.includes('pink') || text.includes('magenta') || text.includes('rose')) {
+            coreRGB = [1.0, 0.85, 0.95];
+            midRGB = [0.95, 0.15, 0.65];
+            outerRGB = [0.32, 0.02, 0.22];
+        } else if (text.includes('blue') || text.includes('cyan') || text.includes('azure') || text.includes('sapphire')) {
+            coreRGB = [0.85, 0.95, 1.0];
+            midRGB = [0.10, 0.55, 1.0];
+            outerRGB = [0.02, 0.15, 0.45];
+        } else if (text.includes('turquoise') || text.includes('teal') || text.includes('aqua')) {
+            coreRGB = [0.82, 1.0, 0.95];
+            midRGB = [0.05, 0.85, 0.78];
+            outerRGB = [0.01, 0.25, 0.28];
+        } else if (text.includes('green') || text.includes('emerald') || text.includes('lime') || text.includes('jade')) {
+            coreRGB = [0.88, 1.0, 0.45];
+            midRGB = [0.12, 0.92, 0.25];
+            outerRGB = [0.02, 0.28, 0.08];
+        } else if (text.includes('yellow') || text.includes('gold') || text.includes('amber')) {
+            coreRGB = [1.0, 0.98, 0.85];
+            midRGB = [1.0, 0.78, 0.12];
+            outerRGB = [0.32, 0.15, 0.02];
+        } else if (text.includes('red') || text.includes('crimson') || text.includes('blood') || text.includes('ruby')) {
+            coreRGB = [1.0, 0.82, 0.78];
+            midRGB = [0.95, 0.08, 0.05];
+            outerRGB = [0.28, 0.02, 0.02];
+        } else if (text.includes('white') || text.includes('silver') || text.includes('crystal')) {
+            coreRGB = [1.0, 1.0, 1.0];
+            midRGB = [0.85, 0.90, 0.98];
+            outerRGB = [0.35, 0.40, 0.48];
+        } else if (text.includes('black') || text.includes('dark matter') || text.includes('void') || text.includes('shadow')) {
+            coreRGB = [0.75, 0.45, 0.95];
+            midRGB = [0.25, 0.05, 0.35];
+            outerRGB = [0.01, 0.005, 0.02];
+        } else if (text.includes('plasma') || text.includes('lightning') || text.includes('electric') || text.includes('neon') || text.includes('cyber')) {
+            coreRGB = [0.85, 0.95, 1.0];
+            midRGB = [0.12, 0.45, 1.0];
+            outerRGB = [0.45, 0.05, 0.85];
+        } else if (text.includes('acid') || text.includes('toxic') || text.includes('poison') || text.includes('slime')) {
+            coreRGB = [0.88, 1.0, 0.35];
+            midRGB = [0.08, 0.92, 0.22];
+            outerRGB = [0.02, 0.28, 0.08];
+        } else if (text.includes('supernova') || text.includes('cosmic') || text.includes('galaxy') || text.includes('stellar') || text.includes('nebula')) {
+            coreRGB = [1.0, 0.95, 0.82];
+            midRGB = [0.82, 0.15, 0.78];
+            outerRGB = [0.25, 0.02, 0.38];
+        } else if (text.includes('blizzard') || text.includes('ice') || text.includes('frost') || text.includes('cryo') || text.includes('cold') || text.includes('snow')) {
+            coreRGB = [0.92, 0.98, 1.0];
+            midRGB = [0.48, 0.78, 0.98];
+            outerRGB = [0.15, 0.32, 0.45];
+        } else if (hasWord(/\b(dust|sand|desert|earth|clay|ochre)\b/)) {
+            coreRGB = [0.95, 0.85, 0.65];
+            midRGB = [0.78, 0.58, 0.28];
+            outerRGB = [0.38, 0.26, 0.12];
+        } else if (text.includes('water') || text.includes('cascade') || text.includes('fountain') || text.includes('splash') || text.includes('ocean') || text.includes('river')) {
+            coreRGB = [0.88, 0.96, 1.0];
+            midRGB = [0.12, 0.68, 0.95];
+            outerRGB = [0.04, 0.28, 0.48];
+        } else if (text.includes('steam') || text.includes('vapor') || text.includes('mist') || text.includes('fog')) {
+            coreRGB = [0.96, 0.96, 0.98];
+            midRGB = [0.82, 0.85, 0.90];
+            outerRGB = [0.35, 0.38, 0.42];
+        } else if (text.includes('rain') || text.includes('downpour') || text.includes('drizzle')) {
+            coreRGB = [0.88, 0.92, 0.98];
+            midRGB = [0.25, 0.45, 0.65];
+            outerRGB = [0.08, 0.14, 0.22];
+        } else if (hasWord(/\b(sparks?|welding|grinding)\b/)) {
+            coreRGB = [1.0, 1.0, 0.88];
+            midRGB = [1.0, 0.68, 0.15];
+            outerRGB = [0.45, 0.15, 0.02];
+        } else if (text.includes('smoke') || text.includes('campfire') || text.includes('soot') || text.includes('chimney')) {
+            coreRGB = [0.95, 0.75, 0.35];
+            midRGB = [0.35, 0.32, 0.32];
+            outerRGB = [0.08, 0.08, 0.08];
+        } else if (text.includes('solar') || text.includes('sun') || text.includes('holy') || text.includes('divine')) {
+            coreRGB = [1.0, 0.98, 0.85];
+            midRGB = [1.0, 0.72, 0.12];
+            outerRGB = [0.35, 0.18, 0.02];
+        }
+
+        // 2. Behavioral Topology Classification
+        let topology = 'plume';
+        if (hasWord(/\b(supernova|shockwave)\b/)) {
+            topology = 'supernova';
+        } else if (hasWord(/\b(galaxy|accretion|orbital)\b/)) {
+            topology = 'orbital';
+        } else if (hasWord(/\b(sparks?|welding|grinding)\b/)) {
+            topology = 'sparks';
+        } else if (hasWord(/\b(fountain|geyser|cascade|waterfall|acid|splash)\b/)) {
+            topology = 'fountain';
+        } else if (hasWord(/\b(rain|downpour|drizzle)\b/)) {
+            topology = 'rain';
+        } else if (hasWord(/\b(steam|geothermal)\b/)) {
+            topology = 'steam';
+        } else if (hasWord(/\b(dust|sand|desert|sandstorm)\b/)) {
+            topology = 'dust';
+        } else if (hasWord(/\b(blizzard|snow|frost|ice|flurry|freezing)\b/)) {
+            topology = 'blizzard';
+        } else if (hasWord(/\b(vortex|tornado|cyclone|twister|whirlpool)\b/)) {
+            topology = 'vortex';
+        }
+
+        // 3. Dynamic Swarm Kinematics & Styling
+        let swarmBehavior = 'thermal_drift';
+        let swarmShape = 'spark';
+        let swarmGravity = -1.2;
+        let swarmSpeed = 1.0;
+        let particleSize = 1.5;
+        let particleGlow = 1.2;
+        let fadeRate = 0.8;
+
+        if (topology === 'dust') {
+            swarmBehavior = 'dust_sweep';
+            swarmShape = 'mote';
+            swarmGravity = -0.4;
+            swarmSpeed = 1.6;
+            particleSize = 1.0;
+            particleGlow = 0.22; // Diffuse non-emissive dust motes
+            fadeRate = 0.5;
+        } else if (topology === 'steam') {
+            swarmBehavior = 'thermal_drift';
+            swarmShape = 'orb';
+            swarmGravity = 0.3; // Soft buoyant rise
+            swarmSpeed = 0.8;
+            particleSize = 2.2;
+            particleGlow = 0.45;
+            fadeRate = 0.7;
+        } else if (topology === 'rain') {
+            swarmBehavior = 'rain_fall';
+            swarmShape = 'droplet';
+            swarmGravity = -16.0; // Rapid downward downpour
+            swarmSpeed = 3.6;
+            particleSize = 1.3;
+            particleGlow = 0.55;
+            fadeRate = 1.4;
+        } else if (topology === 'sparks') {
+            swarmBehavior = 'spark_ricochet';
+            swarmShape = 'spark';
+            swarmGravity = -9.8;
+            swarmSpeed = 3.8;
+            particleSize = 1.2;
+            particleGlow = 1.9; // Brilliant molten incandescence
+            fadeRate = 1.3;
+        } else if (topology === 'fountain') {
+            swarmBehavior = 'ballistic_cascade';
+            swarmShape = 'droplet';
+            swarmGravity = -9.8; // Earth gravitational drop
+            swarmSpeed = 2.2;
+            particleSize = 1.4;
+            particleGlow = 0.75;
+            fadeRate = 0.9;
+        } else if (topology === 'vortex') {
+            swarmBehavior = 'helical_funnel';
+            swarmShape = 'spark';
+            swarmGravity = 0.8;
+            swarmSpeed = 2.6;
+            particleSize = 1.4;
+            particleGlow = 1.4;
+            fadeRate = 0.7;
+        } else if (topology === 'orbital') {
+            swarmBehavior = 'keplerian_disk';
+            swarmShape = 'orb';
+            swarmGravity = 0.0;
+            swarmSpeed = 1.2;
+            particleSize = 1.2;
+            particleGlow = 1.5;
+            fadeRate = 0.4;
+        } else if (topology === 'supernova') {
+            swarmBehavior = 'radial_ejecta';
+            swarmShape = 'spark';
+            swarmGravity = 0.0;
+            swarmSpeed = 3.4;
+            particleSize = 1.5;
+            particleGlow = 1.8;
+            fadeRate = 1.2;
+        } else if (topology === 'blizzard') {
+            swarmBehavior = 'turbulent_gale';
+            swarmShape = 'crystal';
+            swarmGravity = -0.8;
+            swarmSpeed = 1.4;
+            particleSize = 1.3;
+            particleGlow = 0.9;
+            fadeRate = 0.5;
+        } else if (text.includes('smoke') || text.includes('campfire')) {
+            swarmBehavior = 'thermal_drift';
+            swarmShape = 'spark';
+            particleSize = 1.3;
+            particleGlow = 0.65;
+            swarmGravity = -0.5;
+        }
+
+        let swirlVorticity = baseProfile.dynamics.swirlVorticity;
+        let upwardDraft = baseProfile.dynamics.upwardDraft;
+        let radialExpansion = baseProfile.dynamics.radialExpansion;
+        let gravityBuoyancy = baseProfile.dynamics.gravityBuoyancy;
+
+        if (topology === 'dust') {
+            upwardDraft = 0.6;
+            swirlVorticity = 0.35;
+            gravityBuoyancy = 0.1;
+            radialExpansion = 1.4;
+        } else if (topology === 'steam') {
+            upwardDraft = 1.4;
+            swirlVorticity = 0.25;
+            gravityBuoyancy = 0.45;
+            radialExpansion = 1.2;
+        } else if (topology === 'rain') {
+            upwardDraft = -3.5;
+            swirlVorticity = 0.1;
+            gravityBuoyancy = -1.0;
+            radialExpansion = 0.8;
+        } else if (topology === 'sparks') {
+            upwardDraft = 2.4;
+            swirlVorticity = 0.6;
+            radialExpansion = 2.2;
+        } else if (topology === 'vortex') {
+            swirlVorticity = 2.65;
+            upwardDraft = Math.max(upwardDraft, 2.4);
+        } else if (topology === 'fountain') {
+            gravityBuoyancy = -0.45;
+            upwardDraft = 2.8;
+            swirlVorticity = 0.45;
+            radialExpansion = 1.1;
+        } else if (topology === 'orbital') {
+            swirlVorticity = 2.4;
+            upwardDraft = 0.25;
+            gravityBuoyancy = 0.0;
+        } else if (topology === 'supernova') {
+            radialExpansion = 2.85;
+            upwardDraft = 1.8;
+        } else if (topology === 'blizzard') {
+            gravityBuoyancy = 0.35;
+            upwardDraft = 0.8;
+        }
+
+        if (text.includes('smoke') || text.includes('campfire')) {
+            upwardDraft = 1.25;
+            swirlVorticity = 0.45;
+        }
+
+        // 5. Substance Aerodynamics & Wind Velocity
+        let windVelocity = [0.4, 0.1, 0.1];
+        let windTurbulence = 0.35;
+        let substanceMass = 0.30; // Standard combustion gas/embers
+
+        if (topology === 'dust') {
+            windVelocity = [3.2, 0.15, 0.4]; // Strong horizontal wind gusts
+            windTurbulence = 0.75;
+            substanceMass = 0.08; // Ultra-light sand motes, easily swept by gusts
+        } else if (topology === 'fountain') {
+            windVelocity = [0.35, 0.0, 0.15];
+            windTurbulence = 0.20;
+            substanceMass = 1.40; // Heavy liquid mass, ballistic inertia dominates
+        } else if (topology === 'rain') {
+            windVelocity = [2.4, -2.5, 0.5]; // Crosswind angled downpour
+            windTurbulence = 0.45;
+            substanceMass = 0.85; // Heavy droplets with crosswind slant
+        } else if (topology === 'steam') {
+            windVelocity = [0.85, 0.45, 0.25]; // Gentle buoyant thermal breeze
+            windTurbulence = 0.40;
+            substanceMass = 0.15; // Light buoyant water vapor
+        } else if (topology === 'sparks') {
+            windVelocity = [0.6, 0.0, 0.2];
+            windTurbulence = 0.20;
+            substanceMass = 4.50; // Dense molten metal, resists wind deflection
+        } else if (topology === 'blizzard') {
+            windVelocity = [3.5, -0.4, 0.8]; // Horizontal gale
+            windTurbulence = 0.85;
+            substanceMass = 0.18; // Lightweight crystalline ice flakes
+        } else if (topology === 'vortex') {
+            windVelocity = [0.2, 0.0, 0.2];
+            windTurbulence = 0.90;
+            substanceMass = 0.35;
+        } else if (topology === 'orbital') {
+            windVelocity = [0.0, 0.0, 0.0];
+            windTurbulence = 0.15;
+            substanceMass = 1.0;
+        } else if (topology === 'supernova') {
+            windVelocity = [0.0, 0.0, 0.0];
+            windTurbulence = 0.10;
+            substanceMass = 2.0;
+        } else if (text.includes('smoke') || text.includes('campfire')) {
+            windVelocity = [1.2, 0.25, 0.2];
+            windTurbulence = 0.55;
+            substanceMass = 0.06; // Ultra-light soot particles
+        }
+
+        if (hasWord(/\b(wind|gale|breeze|gust|storm)\b/)) {
+            windVelocity = [windVelocity[0] * 1.4, windVelocity[1], windVelocity[2] * 1.4];
+            windTurbulence = Math.min(1.0, windTurbulence * 1.3);
+        }
+
+        let scale = baseProfile.morphology.scale;
+        let absorptionCoeff = baseProfile.morphology.absorptionCoeff;
+
+        if (text.includes('supernova') || text.includes('cosmic') || text.includes('massive') || text.includes('huge')) {
+            scale = 1.45;
+        } else if (text.includes('tiny') || text.includes('micro') || text.includes('spark')) {
+            scale = 0.65;
+        }
+
+        if (text.includes('steam') || text.includes('mist') || text.includes('vapor') || text.includes('blizzard') || text.includes('ethereal') || text.includes('ghost')) {
+            absorptionCoeff = 0.95;
+        }
+
+        let subBassFreq = baseProfile.audio.subBassFreq;
+        let resonanceFreq = baseProfile.audio.resonanceFreq;
+        let crackleRate = baseProfile.audio.crackleRate;
+        let noiseType = 'rumble';
+
+        if (text.includes('plasma') || text.includes('electric') || text.includes('lightning') || text.includes('laser')) {
+            noiseType = 'electrical';
+            resonanceFreq = 1200;
+            crackleRate = 24;
+        } else if (text.includes('acid') || text.includes('toxic') || text.includes('bubbling') || text.includes('fountain') || text.includes('liquid')) {
+            noiseType = 'bubbling';
+            resonanceFreq = 580;
+            crackleRate = 14;
+        } else if (text.includes('blizzard') || text.includes('wind') || text.includes('frost') || text.includes('breeze') || text.includes('cold')) {
+            noiseType = 'wind';
+            resonanceFreq = 720;
+            crackleRate = 2;
+        } else if (text.includes('supernova') || text.includes('cosmic') || text.includes('deep') || text.includes('abyss')) {
+            subBassFreq = 32;
+            resonanceFreq = 220;
+        }
+
+        const words = prompt.trim().split(/\s+/).slice(0, 4);
+        const capitalizedName = words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+
+        let emissionModel = 0; // 0: incandescent
+        if (topology === 'dust') {
+            emissionModel = 1; // diffuse mineral
+        } else if (topology === 'fountain' || topology === 'rain') {
+            emissionModel = 2; // transmissive liquid
+        } else if (topology === 'steam') {
+            emissionModel = 3; // condensing vapor
+        } else if (text.includes('smoke') || text.includes('campfire')) {
+            emissionModel = 4; // smoke plume
+        } else if (hasWord(/\b(bioluminescent|plankton|dinoflagellate|fluorescent)\b/)) {
+            emissionModel = 5; // cold chemical luminescence
+        }
+
+        let shimmerAmount = baseProfile.optics.shimmerAmount;
+        let blurAmount = baseProfile.optics.blurAmount;
+        if (emissionModel === 2) {
+            shimmerAmount = 0.0; // zero heat mirage in liquid water / rain
+            blurAmount = 0.40;   // subtle clean bloom, no blinding glare
+        } else if (emissionModel === 1) {
+            shimmerAmount = 0.12;
+            blurAmount = 0.60;
+        } else if (emissionModel === 3) {
+            shimmerAmount = 0.18;
+            blurAmount = 1.05;
+        }
+
+        return {
+            name: capitalizedName || 'Custom Particle Simulation',
+            prompt,
+            topology,
+            emissionModel,
+            swarm: {
+                particleCount: 6000,
+                behavior: swarmBehavior,
+                particleSize,
+                particleGlow,
+                shape: swarmShape,
+                speed: swarmSpeed,
+                gravity: swarmGravity,
+                fadeRate
+            },
+            dynamics: {
+                upwardDraft,
+                swirlVorticity,
+                radialExpansion,
+                gravityBuoyancy,
+                windVelocity,
+                windTurbulence,
+                substanceMass
+            },
+            morphology: {
+                scale,
+                absorptionCoeff
+            },
+            palette: {
+                core: coreRGB,
+                mid: midRGB,
+                outer: outerRGB
+            },
+            optics: {
+                blurAmount,
+                shimmerAmount
+            },
+            audio: {
+                subBassFreq,
+                resonanceFreq,
+                crackleRate,
+                noiseType
+            }
+        };
+    }
+
+    let currentProfile = JSON.parse(JSON.stringify(DEFAULT_FIRE_SIMULATION_PROFILE));
+    let targetProfile = JSON.parse(JSON.stringify(DEFAULT_FIRE_SIMULATION_PROFILE));
+    let morphStartProfile = JSON.parse(JSON.stringify(DEFAULT_FIRE_SIMULATION_PROFILE));
+    let morphProgress = 1.0;
+    const morphDuration = 1.4;
+
+    function morphToSimulation(promptText) {
+        if (!promptText || !promptText.trim()) return;
+        morphStartProfile = JSON.parse(JSON.stringify(currentProfile));
+        targetProfile = compileSimulationFromPrompt(promptText, currentProfile);
+        morphProgress = 0.0;
+
+        const simTitle = document.getElementById('sim-title');
+        const simSubtitle = document.getElementById('sim-subtitle');
+        if (simTitle) simTitle.textContent = targetProfile.name;
+        if (simSubtitle) simSubtitle.textContent = `Prompt: "${promptText.trim()}"`;
+
+        if (targetProfile.swarm && currentProfile.swarm && targetProfile.swarm.behavior !== currentProfile.swarm.behavior) {
+            if (typeof swarm !== 'undefined') {
+                for (let i = 0; i < swarm.count; i++) {
+                    swarm.resetParticle(i, true);
+                }
+            }
+        }
+
+        triggerBlast();
+    }
+
+    /* ==========================================================================
+       3. 6-DOF Camera & Smooth Flight System
+       ========================================================================== */
+    class CameraController {
+        constructor() {
+            this.mode = 'orbit';
+            this.fov = 62.0;
+
+            this.target = [0, 2.2, 0];
+            this.radius = 6.8;
+            this.theta = 0.55;
+            this.phi = 1.38;
+
+            this.pos = [0, 2.2, 6.8];
+            this.vel = [0, 0, 0];
+            this.yaw = 0.0;
+            this.pitch = 0.0;
+
+            this.keys = {};
+            this.isDragging = false;
+            this.lastMouse = [0, 0];
+
+            this.setupEvents();
+        }
+
+        setupEvents() {
+            window.addEventListener('keydown', (e) => {
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
+                    return;
+                }
+                this.keys[e.code] = true;
+                if (e.code === 'KeyF') {
+                    toggleCameraMode();
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
+                    return;
+                }
+                this.keys[e.code] = false;
+            });
+
+            canvas.addEventListener('mousedown', (e) => {
+                this.isDragging = true;
+                this.lastMouse = [e.clientX, e.clientY];
+            });
+
+            window.addEventListener('mouseup', () => {
+                this.isDragging = false;
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!this.isDragging) return;
+                const dx = e.clientX - this.lastMouse[0];
+                const dy = e.clientY - this.lastMouse[1];
+                this.lastMouse = [e.clientX, e.clientY];
+
+                if (this.mode === 'orbit') {
+                    this.theta -= dx * 0.0055;
+                    this.phi = Math.max(0.1, Math.min(Math.PI * 0.48, this.phi - dy * 0.0055));
+                } else {
+                    this.yaw -= dx * 0.0035;
+                    this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - dy * 0.0035));
+                }
+            });
+
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                if (this.mode === 'orbit') {
+                    this.radius = Math.max(0.4, Math.min(25.0, this.radius + e.deltaY * 0.01));
+                } else {
+                    const forward = this.getForwardVector();
+                    const boost = -e.deltaY * 0.018;
+                    this.vel[0] += forward[0] * boost;
+                    this.vel[1] += forward[1] * boost;
+                    this.vel[2] += forward[2] * boost;
+                }
+            }, { passive: false });
+
+            let touchDist = 0;
+            canvas.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    this.isDragging = true;
+                    this.lastMouse = [e.touches[0].clientX, e.touches[0].clientY];
+                } else if (e.touches.length === 2) {
+                    touchDist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                }
+            });
+
+            canvas.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 1 && this.isDragging) {
+                    const dx = e.touches[0].clientX - this.lastMouse[0];
+                    const dy = e.touches[0].clientY - this.lastMouse[1];
+                    this.lastMouse = [e.touches[0].clientX, e.touches[0].clientY];
+                    this.theta -= dx * 0.006;
+                    this.phi = Math.max(0.1, Math.min(Math.PI * 0.48, this.phi - dy * 0.006));
+                } else if (e.touches.length === 2) {
+                    const newDist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    this.radius = Math.max(0.4, Math.min(25.0, this.radius - (newDist - touchDist) * 0.02));
+                    touchDist = newDist;
+                }
+            });
+
+            canvas.addEventListener('touchend', () => {
+                this.isDragging = false;
+            });
+        }
+
+        getForwardVector() {
+            const cosP = Math.cos(this.pitch);
+            return [
+                Math.sin(this.yaw) * cosP,
+                Math.sin(this.pitch),
+                -Math.cos(this.yaw) * cosP
+            ];
+        }
+
+        getRightVector() {
+            return [
+                Math.cos(this.yaw),
+                0,
+                Math.sin(this.yaw)
+            ];
+        }
+
+        update(dt) {
+            if (this.mode === 'orbit') {
+                const cx = this.target[0] + this.radius * Math.sin(this.phi) * Math.sin(this.theta);
+                const cy = this.target[1] + this.radius * Math.cos(this.phi);
+                const cz = this.target[2] + this.radius * Math.sin(this.phi) * Math.cos(this.theta);
+
+                this.vel[0] = (cx - this.pos[0]) / Math.max(dt, 0.001);
+                this.vel[1] = (cy - this.pos[1]) / Math.max(dt, 0.001);
+                this.vel[2] = (cz - this.pos[2]) / Math.max(dt, 0.001);
+
+                this.pos[0] = cx;
+                this.pos[1] = cy;
+                this.pos[2] = cz;
+            } else {
+                const forward = this.getForwardVector();
+                const right = this.getRightVector();
+
+                const speed = (this.keys['ShiftLeft'] || this.keys['ShiftRight']) ? 14.0 : 5.8;
+                const accel = [0, 0, 0];
+
+                if (this.keys['KeyW']) {
+                    accel[0] += forward[0] * speed;
+                    accel[1] += forward[1] * speed;
+                    accel[2] += forward[2] * speed;
+                }
+                if (this.keys['KeyS']) {
+                    accel[0] -= forward[0] * speed;
+                    accel[1] -= forward[1] * speed;
+                    accel[2] -= forward[2] * speed;
+                }
+                if (this.keys['KeyA']) {
+                    accel[0] -= right[0] * speed;
+                    accel[2] -= right[2] * speed;
+                }
+                if (this.keys['KeyD']) {
+                    accel[0] += right[0] * speed;
+                    accel[2] += right[2] * speed;
+                }
+                if (this.keys['KeyE'] || this.keys['Space']) {
+                    accel[1] += speed * 0.85;
+                }
+                if (this.keys['KeyQ']) {
+                    accel[1] -= speed * 0.85;
+                }
+
+                this.vel[0] = this.vel[0] * 0.88 + accel[0] * dt;
+                this.vel[1] = this.vel[1] * 0.88 + accel[1] * dt;
+                this.vel[2] = this.vel[2] * 0.88 + accel[2] * dt;
+
+                this.pos[0] += this.vel[0] * dt;
+                this.pos[1] += this.vel[1] * dt;
+                this.pos[2] += this.vel[2] * dt;
+            }
+        }
+
+        getRotationMatrix() {
+            if (this.mode === 'orbit') {
+                const fx = this.target[0] - this.pos[0];
+                const fy = this.target[1] - this.pos[1];
+                const fz = this.target[2] - this.pos[2];
+                const fLen = Math.hypot(fx, fy, fz);
+                const forward = [fx / fLen, fy / fLen, fz / fLen];
+
+                const rx = -forward[2];
+                const rz = forward[0];
+                const rLen = Math.hypot(rx, rz);
+                const right = [rx / rLen, 0, rz / rLen];
+
+                const up = [
+                    right[1] * forward[2] - right[2] * forward[1],
+                    right[2] * forward[0] - right[0] * forward[2],
+                    right[0] * forward[1] - right[1] * forward[0]
+                ];
+
+                return [
+                    right[0], right[1], right[2],
+                    up[0], up[1], up[2],
+                    -forward[0], -forward[1], -forward[2]
+                ];
+            } else {
+                const cosY = Math.cos(this.yaw), sinY = Math.sin(this.yaw);
+                const cosP = Math.cos(this.pitch), sinP = Math.sin(this.pitch);
+
+                const fx = Math.sin(this.yaw) * cosP;
+                const fy = Math.sin(this.pitch);
+                const fz = -Math.cos(this.yaw) * cosP;
+
+                const rx = Math.cos(this.yaw);
+                const ry = 0;
+                const rz = Math.sin(this.yaw);
+
+                const ux = ry * fz - rz * fy;
+                const uy = rz * fx - rx * fz;
+                const uz = rx * fy - ry * fx;
+
+                return [
+                    rx, ry, rz,
+                    ux, uy, uz,
+                    -fx, -fy, -fz
+                ];
+            }
+        }
+    }
+
+    /* ==========================================================================
+       4. Dynamic Particle Swarm Simulation Engine
+       ========================================================================== */
+    class ParticleSwarm {
+        constructor(count = SWARM_COUNT) {
+            this.count = count;
+            this.positions = new Float32Array(count * 3);
+            this.velocities = new Float32Array(count * 3);
+            this.lifetimes = new Float32Array(count);
+
+            for (let i = 0; i < count; i++) {
+                this.resetParticle(i, true);
+            }
+        }
+
+        resetParticle(i, initial = false) {
+            const theta = Math.random() * Math.PI * 2.0;
+            const phi = (Math.random() - 0.5) * Math.PI;
+
+            this.lifetimes[i] = initial ? Math.random() : 1.0;
+
+            const behavior = (currentProfile && currentProfile.swarm) ? currentProfile.swarm.behavior : 'thermal_drift';
+            const speedScale = (currentProfile && currentProfile.swarm) ? currentProfile.swarm.speed : 1.0;
+            const center = explosionCenter;
+
+            if (behavior === 'ballistic_cascade') {
+                // Water / Liquid fountain: upward pressurized nozzle spray with initial droplet grouping
+                const spreadAngle = 0.08 + Math.random() * 0.24;
+                const speed = (4.5 + Math.random() * 3.2) * speedScale;
+                this.positions[i * 3 + 0] = center[0] + (Math.random() - 0.5) * 0.18;
+                this.positions[i * 3 + 1] = -0.35;
+                this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 0.18;
+
+                this.velocities[i * 3 + 0] = Math.cos(theta) * Math.sin(spreadAngle) * speed;
+                this.velocities[i * 3 + 1] = Math.cos(spreadAngle) * speed;
+                this.velocities[i * 3 + 2] = Math.sin(theta) * Math.sin(spreadAngle) * speed;
+            } else if (behavior === 'dust_sweep') {
+                // Bagnold Aeolian Sand Model: 70% saltating surface grains, 30% suspended atmospheric motes
+                const isSuspended = (Math.random() < 0.30);
+                if (isSuspended) {
+                    // Suspended fine dust motes: high altitude dispersion across air volume
+                    this.positions[i * 3 + 0] = center[0] + (Math.random() - 0.5) * 6.8;
+                    this.positions[i * 3 + 1] = center[1] + 0.4 + Math.random() * 3.2;
+                    this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 6.8;
+
+                    this.velocities[i * 3 + 0] = (1.8 + Math.random() * 2.4) * speedScale;
+                    this.velocities[i * 3 + 1] = (Math.random() - 0.52) * 0.25 * speedScale;
+                    this.velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.8 * speedScale;
+                } else {
+                    // Saltating sand grains: initiated near ground by surface shear velocity
+                    this.positions[i * 3 + 0] = center[0] - 2.8 + Math.random() * 1.5;
+                    this.positions[i * 3 + 1] = -0.42 + Math.random() * 0.22;
+                    this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 3.5;
+
+                    this.velocities[i * 3 + 0] = (2.2 + Math.random() * 2.8) * speedScale;
+                    this.velocities[i * 3 + 1] = (0.7 + Math.random() * 1.4) * speedScale; // Low hop
+                    this.velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6 * speedScale;
+                }
+            } else if (behavior === 'rain_fall') {
+                // Gunn-Kinzer Rain Model: high ceiling spawn with terminal downward velocity
+                this.positions[i * 3 + 0] = center[0] + (Math.random() - 0.5) * 7.5;
+                this.positions[i * 3 + 1] = center[1] + 4.2 + Math.random() * 3.5;
+                this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 7.5;
+
+                this.velocities[i * 3 + 0] = (Math.random() - 0.5) * 0.3;
+                this.velocities[i * 3 + 1] = -(12.0 + Math.random() * 5.0) * speedScale;
+                this.velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.3;
+            } else if (behavior === 'spark_ricochet') {
+                // Industrial welding sparks: violent workpiece ejection with high velocity
+                this.positions[i * 3 + 0] = center[0] + (Math.random() - 0.5) * 0.12;
+                this.positions[i * 3 + 1] = 0.08 + Math.random() * 0.20;
+                this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 0.12;
+
+                const spread = (Math.random() - 0.5) * Math.PI * 0.9;
+                const spd = (8.5 + Math.random() * 7.5) * speedScale;
+                this.velocities[i * 3 + 0] = Math.cos(spread) * spd;
+                this.velocities[i * 3 + 1] = (1.2 + Math.random() * 4.8) * speedScale;
+                this.velocities[i * 3 + 2] = Math.sin(spread) * spd;
+            } else if (behavior === 'helical_funnel') {
+                // Cyclone / vortex: spirals inward into funnel eye
+                const ringR = 0.35 + Math.random() * 1.8;
+                this.positions[i * 3 + 0] = center[0] + Math.cos(theta) * ringR;
+                this.positions[i * 3 + 1] = center[1] - 0.2 + Math.random() * 0.6;
+                this.positions[i * 3 + 2] = center[2] + Math.sin(theta) * ringR;
+
+                this.velocities[i * 3 + 0] = -Math.sin(theta) * 2.8 * speedScale;
+                this.velocities[i * 3 + 1] = (1.8 + Math.random() * 2.5) * speedScale;
+                this.velocities[i * 3 + 2] = Math.cos(theta) * 2.8 * speedScale;
+            } else if (behavior === 'keplerian_disk') {
+                // Keplerian accretion disk in orbital plane
+                const diskR = 0.5 + Math.random() * 3.2;
+                this.positions[i * 3 + 0] = center[0] + Math.cos(theta) * diskR;
+                this.positions[i * 3 + 1] = center[1] + (Math.random() - 0.5) * 0.22;
+                this.positions[i * 3 + 2] = center[2] + Math.sin(theta) * diskR;
+
+                const orbSpeed = Math.sqrt(2.0 / diskR) * 1.6 * speedScale;
+                this.velocities[i * 3 + 0] = -Math.sin(theta) * orbSpeed;
+                this.velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.08;
+                this.velocities[i * 3 + 2] = Math.cos(theta) * orbSpeed;
+            } else if (behavior === 'radial_ejecta') {
+                // Supernova: 3D omnidirectional explosion
+                const speed = (3.5 + Math.random() * 4.8) * speedScale;
+                this.positions[i * 3 + 0] = center[0] + Math.cos(theta) * Math.cos(phi) * 0.22;
+                this.positions[i * 3 + 1] = center[1] + Math.sin(phi) * 0.22;
+                this.positions[i * 3 + 2] = center[2] + Math.sin(theta) * Math.cos(phi) * 0.22;
+
+                this.velocities[i * 3 + 0] = Math.cos(theta) * Math.cos(phi) * speed;
+                this.velocities[i * 3 + 1] = Math.sin(phi) * speed;
+                this.velocities[i * 3 + 2] = Math.sin(theta) * Math.cos(phi) * speed;
+            } else if (behavior === 'turbulent_gale') {
+                // Blizzard: sweeping gale wind
+                this.positions[i * 3 + 0] = center[0] - 3.8 + Math.random() * 0.6;
+                this.positions[i * 3 + 1] = center[1] + Math.random() * 3.8;
+                this.positions[i * 3 + 2] = center[2] + (Math.random() - 0.5) * 3.8;
+
+                this.velocities[i * 3 + 0] = (3.4 + Math.random() * 2.2) * speedScale;
+                this.velocities[i * 3 + 1] = -0.4 + (Math.random() - 0.5) * 0.8;
+                this.velocities[i * 3 + 2] = (Math.random() - 0.5) * 1.4;
+            } else {
+                // Thermal drift: campfire smoke & embers rising in buoyant chimney
+                const baseR = Math.random() * 0.55;
+                this.positions[i * 3 + 0] = center[0] + Math.cos(theta) * baseR;
+                this.positions[i * 3 + 1] = center[1] - 0.2 + Math.random() * 0.4;
+                this.positions[i * 3 + 2] = center[2] + Math.sin(theta) * baseR;
+
+                this.velocities[i * 3 + 0] = (Math.random() - 0.5) * 0.6;
+                this.velocities[i * 3 + 1] = (1.2 + Math.random() * 1.8) * speedScale;
+                this.velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.6;
+            }
+        }
+
+        update(dt) {
+            const swarm = (currentProfile && currentProfile.swarm) || DEFAULT_FIRE_SIMULATION_PROFILE.swarm;
+            const gravity = swarm.gravity;
+            const behavior = swarm.behavior;
+            const floorY = -0.45;
+
+            const dynamics = (currentProfile && currentProfile.dynamics) || DEFAULT_FIRE_SIMULATION_PROFILE.dynamics;
+            const wind = dynamics.windVelocity || [0.4, 0.1, 0.1];
+            const mass = dynamics.substanceMass || 0.30;
+            const coupling = Math.min(18.0, 1.45 / Math.max(0.04, mass));
+
+            for (let i = 0; i < this.count; i++) {
+                this.lifetimes[i] -= dt * swarm.fadeRate;
+
+                // Differential aerodynamic drag: particles relax towards ambient wind velocity based on substance inertia
+                const dragAx = (wind[0] - this.velocities[i * 3 + 0]) * coupling;
+                const dragAy = (wind[1] - this.velocities[i * 3 + 1]) * coupling * 0.35;
+                const dragAz = (wind[2] - this.velocities[i * 3 + 2]) * coupling;
+
+                // Thermal buoyancy for steam and smoke plumes (Boussinesq approximation)
+                let extraAccelY = 0.0;
+                if (currentProfile.topology === 'steam') {
+                    extraAccelY = +2.4 * Math.max(0.0, this.lifetimes[i]);
+                } else if (behavior === 'thermal_drift') {
+                    extraAccelY = +0.6 * Math.max(0.0, this.lifetimes[i]);
+                }
+
+                this.velocities[i * 3 + 0] += dragAx * dt;
+                this.velocities[i * 3 + 1] += (gravity + dragAy + extraAccelY) * dt;
+                this.velocities[i * 3 + 2] += dragAz * dt;
+
+                // Terminal velocity drag clamp for rain
+                if (behavior === 'rain_fall') {
+                    this.velocities[i * 3 + 1] = Math.max(-18.0, this.velocities[i * 3 + 1]);
+                }
+
+                // Mid-air explosive carbon starburst pop for welding sparks
+                if (behavior === 'spark_ricochet') {
+                    if (this.lifetimes[i] > 0.48 && this.lifetimes[i] < 0.52 && (i % 4 === 0)) {
+                        this.velocities[i * 3 + 0] += (Math.random() - 0.5) * 4.5;
+                        this.velocities[i * 3 + 1] += Math.random() * 3.5;
+                        this.velocities[i * 3 + 2] += (Math.random() - 0.5) * 4.5;
+                    }
+                }
+
+                this.positions[i * 3 + 0] += this.velocities[i * 3 + 0] * dt;
+                this.positions[i * 3 + 1] += this.velocities[i * 3 + 1] * dt;
+                this.positions[i * 3 + 2] += this.velocities[i * 3 + 2] * dt;
+
+                // --- Ground Collision & Splash Physics ---
+                if (this.positions[i * 3 + 1] < floorY) {
+                    this.positions[i * 3 + 1] = floorY;
+
+                    if (behavior === 'ballistic_cascade') {
+                        // Water SPH Breakup: impacting drops atomize into upward splash crown
+                        if (Math.abs(this.velocities[i * 3 + 1]) > 1.8) {
+                            const dx = this.positions[i * 3 + 0] - explosionCenter[0];
+                            const dz = this.positions[i * 3 + 2] - explosionCenter[2];
+                            const len = Math.hypot(dx, dz) || 1.0;
+                            const splashSpd = 2.0 + Math.random() * 2.4;
+
+                            this.velocities[i * 3 + 0] = (dx / len) * splashSpd + (Math.random() - 0.5) * 0.8;
+                            this.velocities[i * 3 + 1] = 0.9 + Math.random() * 1.8; // Upward splash
+                            this.velocities[i * 3 + 2] = (dz / len) * splashSpd + (Math.random() - 0.5) * 0.8;
+                            this.lifetimes[i] = 0.22; // Quick atomization fade
+                        } else {
+                            this.velocities[i * 3 + 1] = 0.0;
+                            this.velocities[i * 3 + 0] *= 0.65;
+                            this.velocities[i * 3 + 2] *= 0.65;
+                        }
+                    } else if (behavior === 'spark_ricochet') {
+                        // Inelastic Newton collision with high restitution and friction
+                        this.velocities[i * 3 + 1] = -this.velocities[i * 3 + 1] * 0.72;
+                        this.velocities[i * 3 + 0] *= 0.80;
+                        this.velocities[i * 3 + 2] *= 0.80;
+                    } else if (behavior === 'dust_sweep') {
+                        // Bagnold reptation / surface creep: low bounce, slides along wind
+                        this.velocities[i * 3 + 1] = 0.12 + Math.random() * 0.28;
+                        this.velocities[i * 3 + 0] = wind[0] * 0.35 + (Math.random() - 0.5) * 0.4;
+                        this.velocities[i * 3 + 2] = wind[2] * 0.35 + (Math.random() - 0.5) * 0.4;
+                    } else if (behavior === 'rain_fall') {
+                        // Instantaneous pavement micro-splatter burst
+                        this.velocities[i * 3 + 1] = 0.8 + Math.random() * 1.4;
+                        const angle = Math.random() * Math.PI * 2.0;
+                        this.velocities[i * 3 + 0] = Math.cos(angle) * (1.6 + Math.random() * 1.8);
+                        this.velocities[i * 3 + 2] = Math.sin(angle) * (1.6 + Math.random() * 1.8);
+                        this.lifetimes[i] = 0.06; // Flash splash disappears
+                    }
+                }
+
+                const killFloor = (behavior === 'ballistic_cascade' || behavior === 'spark_ricochet' || behavior === 'dust_sweep') ? (floorY - 0.08) : (floorY - 0.5);
+                if (this.lifetimes[i] <= 0.0 || this.positions[i * 3 + 1] < killFloor) {
+                    this.resetParticle(i);
+                }
+            }
+        }
+    }
+
+    const swarm = new ParticleSwarm(SWARM_COUNT);
+    const camera = new CameraController();
+
+    window.currentProfile = currentProfile;
+    window.targetProfile = targetProfile;
+    window.morphToSimulation = morphToSimulation;
+    window.swarm = swarm;
+    window.camera = camera;
+    const crosshair = document.getElementById('crosshair');
+
+    function toggleCameraMode() {
+        if (camera.mode === 'orbit') {
+            camera.mode = 'flight';
+            camera.yaw = -camera.theta - Math.PI;
+            camera.pitch = (Math.PI * 0.5) - camera.phi;
+            crosshair.classList.add('active');
+        } else {
+            camera.mode = 'orbit';
+            crosshair.classList.remove('active');
+        }
+    }
+
+    document.getElementById('btn-blast').addEventListener('click', () => {
+        triggerBlast();
+    });
+
+    const promptInput = document.getElementById('prompt-input');
+    const btnMorph = document.getElementById('btn-morph');
+    const btnMorphText = document.getElementById('btn-morph-text');
+    const promptForm = document.getElementById('prompt-form');
+
+    function handleMorphSubmit() {
+        const val = promptInput ? promptInput.value.trim() : '';
+        if (!val) return;
+        morphToSimulation(val);
+        if (btnMorphText) {
+            btnMorphText.textContent = 'Morphed!';
+            setTimeout(() => {
+                if (btnMorphText) btnMorphText.textContent = 'Morph';
+            }, 1200);
+        }
+    }
+
+    if (promptForm) {
+        promptForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleMorphSubmit();
+        });
+    }
+
+    if (btnMorph) {
+        btnMorph.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleMorphSubmit();
+        });
+    }
+
+    if (promptInput) {
+        promptInput.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleMorphSubmit();
+            }
+        });
+        promptInput.addEventListener('keyup', (e) => {
+            e.stopPropagation();
+        });
+        promptInput.addEventListener('keypress', (e) => {
+            e.stopPropagation();
+        });
+    }
+
+    document.querySelectorAll('.prompt-chip').forEach(chip => {
+        chip.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const prompt = chip.getAttribute('data-prompt');
+            if (promptInput) promptInput.value = prompt;
+            morphToSimulation(prompt);
+        });
+    });
+
+    function resize() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const maxDim = 1280;
+        const scale = Math.min(1.0, maxDim / Math.max(w, h));
+        const targetW = Math.max(320, Math.floor(w * scale));
+        const targetH = Math.max(240, Math.floor(h * scale));
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
+            initFbo(canvas.width, canvas.height);
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let frameCount = 0;
+    let lastFpsUpdate = performance.now();
+    const fpsLabel = document.getElementById('fps-label');
+    const proximityLabel = document.getElementById('proximity-label');
+    const proximityDot = document.getElementById('proximity-dot');
+    const coreGlare = document.getElementById('core-glare');
+
+    let lastTime = performance.now();
+
+    function render(currentTime) {
+        const dt = Math.min(0.1, (currentTime - lastTime) * 0.001);
+        lastTime = currentTime;
+
+        blastTime += dt;
+
+        camera.update(dt);
+
+        if (morphProgress < 1.0) {
+            morphProgress = Math.min(1.0, morphProgress + dt / morphDuration);
+            const smoothAlpha = morphProgress * morphProgress * (3.0 - 2.0 * morphProgress);
+            currentProfile = interpolateSimulationProfiles(morphStartProfile, targetProfile, smoothAlpha);
+            window.currentProfile = currentProfile;
+        }
+
+        const scale = currentProfile.morphology.scale * explosionScale;
+        const coreRadius = 2.4 * scale;
+
+        const dx = camera.pos[0] - explosionCenter[0];
+        const dy = camera.pos[1] - explosionCenter[1];
+        const dz = camera.pos[2] - explosionCenter[2];
+        const distToCenter = Math.hypot(dx, dy, dz);
+        const isInsideCore = distToCenter < coreRadius;
+
+        if (isInsideCore && currentProfile.emissionModel === 0) {
+            const heatRatio = 1.0 - (distToCenter / coreRadius);
+            coreGlare.style.opacity = (heatRatio * 0.95).toFixed(2);
+            proximityLabel.textContent = `INSIDE ${currentProfile.name.toUpperCase()} (${distToCenter.toFixed(1)}m)`;
+            proximityDot.className = 'indicator core';
+        } else {
+            coreGlare.style.opacity = '0';
+            proximityLabel.textContent = `Distance: ${distToCenter.toFixed(1)}m`;
+            proximityDot.className = 'indicator';
+        }
+
+        // Pass 1: Continuous Volumetric Fluid Raymarching to Offscreen FBO
+        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        gl.useProgram(program);
+        gl.uniform2f(uResLoc, canvas.width, canvas.height);
+        gl.uniform1f(uTimeLoc, currentTime * 0.001);
+        gl.uniform1f(uBlastTimeLoc, blastTime);
+        gl.uniform3f(uCamPosLoc, camera.pos[0], camera.pos[1], camera.pos[2]);
+
+        const rotMat = camera.getRotationMatrix();
+        gl.uniformMatrix3fv(uCamRotLoc, false, new Float32Array(rotMat));
+
+        gl.uniform1f(uFovLoc, camera.fov);
+        gl.uniform3f(uCenterLoc, explosionCenter[0], explosionCenter[1], explosionCenter[2]);
+        gl.uniform1f(uScaleLoc, scale);
+
+        // Dynamic Simulation Uniforms
+        gl.uniform3fv(uPaletteCoreLoc, currentProfile.palette.core);
+        gl.uniform3fv(uPaletteMidLoc, currentProfile.palette.mid);
+        gl.uniform3fv(uPaletteOuterLoc, currentProfile.palette.outer);
+        gl.uniform1f(uSwirlVorticityLoc, currentProfile.dynamics.swirlVorticity);
+        gl.uniform1f(uUpwardDraftLoc, currentProfile.dynamics.upwardDraft);
+        gl.uniform1f(uRadialExpansionLoc, currentProfile.dynamics.radialExpansion);
+        gl.uniform1f(uGravityBuoyancyLoc, currentProfile.dynamics.gravityBuoyancy);
+        gl.uniform1f(uAbsorptionCoeffLoc, currentProfile.morphology.absorptionCoeff);
+
+        const { w: topWeights, w2: topWeights2 } = getTopologyWeights(
+            morphStartProfile.topology || 'plume',
+            targetProfile.topology || 'plume',
+            morphProgress
+        );
+        gl.uniform4fv(uTopologyWeightsLoc, topWeights);
+        gl.uniform2fv(uTopologyWeights2Loc, topWeights2);
+
+        gl.uniform3fv(uWindVelocityLoc, currentProfile.dynamics.windVelocity || [0.4, 0.1, 0.1]);
+        gl.uniform1f(uSubstanceMassLoc, currentProfile.dynamics.substanceMass || 0.30);
+        gl.uniform1f(uKinematicGravityLoc, currentProfile.swarm ? currentProfile.swarm.gravity : -1.2);
+        gl.uniform1i(uEmissionModelLoc, typeof currentProfile.emissionModel === 'number' ? currentProfile.emissionModel : 0);
+
+        gl.bindVertexArray(quadVao);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        // Sub-pass 1B: GPU Particle Swarm additive overlay onto sceneFbo
+        swarm.update(dt);
+        gl.useProgram(swarmProgram);
+        gl.uniformMatrix3fv(swarmCamRotLoc, false, new Float32Array(rotMat));
+        gl.uniform3f(swarmCamPosLoc, camera.pos[0], camera.pos[1], camera.pos[2]);
+        gl.uniform1f(swarmFovLoc, camera.fov);
+        gl.uniform2f(swarmResLoc, canvas.width, canvas.height);
+        gl.uniform1f(swarmParticleSizeLoc, currentProfile.swarm ? currentProfile.swarm.particleSize : 3.5);
+        gl.uniform1f(swarmTimeLoc, currentTime * 0.001);
+        gl.uniform3fv(swarmPaletteCoreLoc, currentProfile.palette.core);
+        gl.uniform3fv(swarmPaletteMidLoc, currentProfile.palette.mid);
+        const shapeId = SHAPE_MAP[currentProfile.swarm ? currentProfile.swarm.shape : 'spark'] || 0;
+        gl.uniform1i(swarmParticleShapeLoc, shapeId);
+        gl.uniform1f(swarmParticleGlowLoc, currentProfile.swarm ? currentProfile.swarm.particleGlow : 1.2);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, swarmPosVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, swarm.positions);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, swarmVelVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, swarm.velocities);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, swarmLifeVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, swarm.lifetimes);
+
+        gl.enable(gl.BLEND);
+        if (shapeId === 4) {
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); // Diffuse non-emissive dust scattering
+        } else {
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive luminous incandescence / water transmission
+        }
+
+        gl.bindVertexArray(swarmVao);
+        const drawCount = currentProfile.swarm ? Math.min(SWARM_COUNT, currentProfile.swarm.particleCount || SWARM_COUNT) : SWARM_COUNT;
+        gl.drawArrays(gl.POINTS, 0, drawCount);
+
+        gl.disable(gl.BLEND);
+        gl.bindVertexArray(null);
+
+        // Pass 2: Post-Process Lens Blur, Soft Bloom & Optical Heat Shimmer to Screen
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        gl.useProgram(blurProgram);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+        gl.uniform1i(blurSceneTexLoc, 0);
+        gl.uniform2f(blurResLoc, canvas.width, canvas.height);
+        gl.uniform1f(blurAmountLoc, (currentProfile.emissionModel === 2) ? 0.35 : currentProfile.optics.blurAmount);
+        gl.uniform1f(blurTimeLoc, currentTime * 0.001);
+        gl.uniform3f(blurCamPosLoc, camera.pos[0], camera.pos[1], camera.pos[2]);
+        gl.uniformMatrix3fv(blurCamRotLoc, false, new Float32Array(rotMat));
+        gl.uniform1f(blurFovLoc, camera.fov);
+        gl.uniform3f(blurCenterLoc, explosionCenter[0], explosionCenter[1], explosionCenter[2]);
+        gl.uniform1f(blurShimmerLoc, (currentProfile.emissionModel === 2) ? 0.0 : currentProfile.optics.shimmerAmount);
+
+        gl.bindVertexArray(quadVao);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        frameCount++;
+        if (currentTime - lastFpsUpdate >= 1000) {
+            fpsLabel.textContent = `${frameCount} FPS`;
+            frameCount = 0;
+            lastFpsUpdate = currentTime;
+        }
+
+        requestAnimationFrame(render);
+    }
+
+    requestAnimationFrame(render);
+    </script>
+</body>
+</html>

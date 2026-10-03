@@ -1,0 +1,283 @@
+{
+  "generator": "architectural-photoreal-generator",
+  "mode": "chained",
+  "anchor": {
+    "lat": 41.889792,
+    "lng": 12.49052,
+    "elevationMeters": 0,
+    "headingDeg": 16.63,
+    "formattedAddress": "Arch of Constantine (Arco di Costantino), Rome, Italy"
+  },
+  "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/arch_constantine_sb_archi.glb",
+  "eyeHeight": 35,
+  "cropBox": {
+    "min": [
+      -165,
+      30,
+      -65
+    ],
+    "max": [
+      -115,
+      60,
+      -25
+    ]
+  },
+  "fusedSplatCount": 1191133,
+  "voxelSizeMeters": 0.025,
+  "stations": [
+    {
+      "stationId": 1,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 237463,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_001.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_001_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_001_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 1",
+      "positionLocalENU": [
+        -139.610625,
+        35.0065625,
+        -18.289375
+      ],
+      "forwardVector": [
+        -0.0009419285626095206,
+        0.2514883038647271,
+        -0.9678598792128051
+      ],
+      "name": "ORBIT_TIER_1_STATION_01"
+    },
+    {
+      "stationId": 2,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 252131,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_002.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_002_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_002_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 2",
+      "positionLocalENU": [
+        -116.25606409782016,
+        34.9934375,
+        -58.779999999999994
+      ],
+      "forwardVector": [
+        -0.8376127159300284,
+        0.25197272089104783,
+        0.4846799831219398
+      ],
+      "name": "ORBIT_TIER_1_STATION_02"
+    },
+    {
+      "stationId": 3,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 141682,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_003.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_003_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_003_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 3",
+      "positionLocalENU": [
+        -163.02143590217983,
+        34.986875,
+        -58.780000000000015
+      ],
+      "forwardVector": [
+        0.8385898821637934,
+        0.25179573594463867,
+        0.4830796175503712
+      ],
+      "name": "ORBIT_TIER_1_STATION_03"
+    },
+    {
+      "stationId": 4,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 177056,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_004.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_004_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_004_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 4",
+      "positionLocalENU": [
+        -112.75446248268241,
+        42.986875,
+        -29.779999999999998
+      ],
+      "forwardVector": [
+        -0.8660800270814232,
+        -0.03087994180356813,
+        -0.49895071488559833
+      ],
+      "name": "ORBIT_TIER_2_STATION_04"
+    },
+    {
+      "stationId": 5,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 308394,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_005.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_005_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_005_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 5",
+      "positionLocalENU": [
+        -139.62,
+        43,
+        -76.31750000000001
+      ],
+      "forwardVector": [
+        0,
+        -0.03164819321370573,
+        0.9994990704679559
+      ],
+      "name": "ORBIT_TIER_2_STATION_05"
+    },
+    {
+      "stationId": 6,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 243188,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_006.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_006_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_006_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 6",
+      "positionLocalENU": [
+        -166.4480375173176,
+        42.986875,
+        -29.780000000000022
+      ],
+      "forwardVector": [
+        0.8651397929302381,
+        -0.030980346407424933,
+        -0.5005730284634807
+      ],
+      "name": "ORBIT_TIER_2_STATION_06"
+    },
+    {
+      "stationId": 7,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 205206,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_007.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_007_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_007_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 7",
+      "positionLocalENU": [
+        -108.46183546376021,
+        51.986875,
+        -63.279999999999994
+      ],
+      "forwardVector": [
+        -0.8341534366581816,
+        -0.266842381689815,
+        0.48268332004063674
+      ],
+      "name": "ORBIT_TIER_3_STATION_07"
+    },
+    {
+      "stationId": 8,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 102852,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_008.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_008_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/arch_constantine/stations/station_008_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 8",
+      "positionLocalENU": [
+        -170.82503953623979,
+        52,
+        -63.280000000000015
+      ],
+      "forwardVector": [
+        0.8352822143714626,
+        -0.2670168986043035,
+        0.48063041748774626
+      ],
+      "name": "ORBIT_TIER_3_STATION_08"
+    }
+  ],
+  "tiles": {
+    "tileCount": 100,
+    "levels": 4,
+    "tileBytes": 12412480
+  },
+  "createdAt": "2026-09-28T04:03:36.982Z"
+}

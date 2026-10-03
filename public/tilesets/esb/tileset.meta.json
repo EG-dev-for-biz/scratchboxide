@@ -1,0 +1,875 @@
+{
+  "generator": "architectural-photoreal-generator",
+  "mode": "chained",
+  "anchor": {
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "elevationMeters": 15,
+    "headingDeg": 0,
+    "formattedAddress": "Empire State Building, New York"
+  },
+  "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/esb_grounded.glb",
+  "eyeHeight": 78.489,
+  "cropBox": {
+    "min": [
+      -385.4588928222656,
+      -0.4954107664525509,
+      -289.291259765625
+    ],
+    "max": [
+      202.09703063964844,
+      461.62396240234375,
+      322.8282775878906
+    ]
+  },
+  "fusedSplatCount": 1300408,
+  "voxelSizeMeters": 0.25,
+  "stations": [
+    {
+      "stationId": 1,
+      "accepted": false,
+      "attempts": 3,
+      "usedReference": false,
+      "splatCount": 0,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_001_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_001_blockout.png",
+      "qc": {
+        "overlapPercent": 12.91561956085683,
+        "residualPx": 1.7035387099756492,
+        "deltaYawDeg": 23.05211551165371,
+        "deltaPitchDeg": 2.751651560876212,
+        "deltaPositionM": 4.069066999939909,
+        "passed": false,
+        "reason": "yaw moved 23.05 deg (> 0.5); pitch moved 2.75 deg (> 0.5); position moved 4.07 m (> 0.8)"
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.747319, -73.985700, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.747319,-73.985700,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 7 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -29.9°, 78.5 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly.",
+      "positionLocalENU": [
+        2.9000000000000004,
+        93.33149999999999,
+        117.15
+      ],
+      "forwardVector": [
+        -0.3482765636937887,
+        -0.45705144081660043,
+        -0.818417629104552
+      ],
+      "name": "ORBIT_TIER_1_STATION_01"
+    },
+    {
+      "stationId": 2,
+      "accepted": false,
+      "attempts": 3,
+      "usedReference": false,
+      "splatCount": 0,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_002_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_002_blockout.png",
+      "qc": {
+        "overlapPercent": 35.59999240966745,
+        "residualPx": 1.3209151394417784,
+        "deltaYawDeg": 7.988490690420122,
+        "deltaPitchDeg": 18.76356735950156,
+        "deltaPositionM": 2.616324951148094,
+        "passed": false,
+        "reason": "yaw moved 7.99 deg (> 0.5); pitch moved 18.76 deg (> 0.5); position moved 2.62 m (> 0.8)"
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.984279, facing -90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.984279,0a,400d,35y,-90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 10 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -11.2°, 33.4 m above ground; the horizon sits at 16% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly.",
+      "positionLocalENU": [
+        118.14999999999998,
+        46.944500000000005,
+        -1.099999999999993
+      ],
+      "forwardVector": [
+        -0.9816489528718756,
+        0.1318610139303611,
+        -0.13776068499687186
+      ],
+      "name": "ORBIT_TIER_1_STATION_02"
+    },
+    {
+      "stationId": 3,
+      "accepted": false,
+      "attempts": 3,
+      "usedReference": false,
+      "splatCount": 0,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_003_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_003_blockout.png",
+      "qc": {
+        "overlapPercent": 19.996823560380417,
+        "residualPx": 1.5841810094124347,
+        "deltaYawDeg": 34.04194310186051,
+        "deltaPitchDeg": 33.99342164779071,
+        "deltaPositionM": 3.0648011762592464,
+        "passed": false,
+        "reason": "yaw moved 34.04 deg (> 0.5); pitch moved 33.99 deg (> 0.5); position moved 3.06 m (> 0.8)"
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749481, -73.985700, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749481,-73.985700,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 12 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -34.2°, 90.9 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly.",
+      "positionLocalENU": [
+        -1.3499999999999852,
+        103.5115,
+        -121.35000000000001
+      ],
+      "forwardVector": [
+        0.5597947207557188,
+        -0.00419505076001966,
+        0.8286207046430518
+      ],
+      "name": "ORBIT_TIER_1_STATION_03"
+    },
+    {
+      "stationId": 4,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 439080,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_004_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_004_blockout.png",
+      "qc": {
+        "overlapPercent": 21.477678897099768,
+        "residualPx": 1.5578088700897617,
+        "deltaYawDeg": 0.09650537993354646,
+        "deltaPitchDeg": 0.03574446709264123,
+        "deltaPositionM": 0.009375,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.987121, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.987121,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 17 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -56.2°, 188 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly.",
+      "positionLocalENU": [
+        -120,
+        202.961,
+        0.009374999999977957
+      ],
+      "forwardVector": [
+        0.5563661313219721,
+        -0.8309367302899989,
+        -0.0009371087384900075
+      ],
+      "name": "ORBIT_TIER_1_STATION_04",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_004.splat"
+    },
+    {
+      "stationId": 5,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 317254,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_005_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_005_blockout.png",
+      "qc": {
+        "overlapPercent": 29.252841541408937,
+        "residualPx": 1.4286837540213673,
+        "deltaYawDeg": 0.03805356835255225,
+        "deltaPitchDeg": 0.14718698728233992,
+        "deltaPositionM": 0.027873878901228392,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.747509, -73.984528, facing 315°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.747509,-73.984528,0a,400d,35y,315h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 91 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.1°, 65 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        99.00432436611665,
+        64.97375,
+        98.99494936611666
+      ],
+      "forwardVector": [
+        -0.7056462598473521,
+        0.07380918128616687,
+        -0.7047095577053777
+      ],
+      "name": "ORBIT_TIER_2_STATION_05",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_005.splat"
+    },
+    {
+      "stationId": 6,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 369989,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_006_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_006_blockout.png",
+      "qc": {
+        "overlapPercent": 0,
+        "residualPx": 10,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0,
+        "deltaPositionM": 0,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749291, -73.984528, facing -45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749291,-73.984528,0a,400d,35y,-45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 14 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -2.0°, 64.9 m above ground; the horizon sits at 44% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        98.99494936611666,
+        79.949,
+        -98.99494936611664
+      ],
+      "forwardVector": [
+        -0.7066585730949114,
+        -0.03559946829557532,
+        0.7066585730949114
+      ],
+      "name": "ORBIT_TIER_2_STATION_06",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_006.splat"
+    },
+    {
+      "stationId": 7,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 262360,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_007_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_007_blockout.png",
+      "qc": {
+        "overlapPercent": 28.24936373206738,
+        "residualPx": 1.4449032485082867,
+        "deltaYawDeg": 0.007606673105556183,
+        "deltaPitchDeg": 0.07004860665862278,
+        "deltaPositionM": 0.01612935987571008,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749291, -73.986872, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749291,-73.986872,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 34 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.1°, 65 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -99.00432436611665,
+        64.986875,
+        -98.99494936611667
+      ],
+      "forwardVector": [
+        0.7053413143943863,
+        0.07246646832053857,
+        0.7051540549252681
+      ],
+      "name": "ORBIT_TIER_2_STATION_07",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_007.splat"
+    },
+    {
+      "stationId": 8,
+      "accepted": false,
+      "attempts": 3,
+      "usedReference": true,
+      "splatCount": 0,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_008_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_008_blockout.png",
+      "qc": {
+        "overlapPercent": 20.475600762777432,
+        "residualPx": 1.573098727549911,
+        "deltaYawDeg": 7.47174366674551,
+        "deltaPitchDeg": 0.12599824284795247,
+        "deltaPositionM": 1.7705159029220958,
+        "passed": false,
+        "reason": "yaw moved 7.47 deg (> 0.5); position moved 1.77 m (> 0.8)"
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.747509, -73.986872, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.747509,-73.986872,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 78 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch -15.1°, 97.5 m above ground; the horizon sits at 4% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -99.44494936611667,
+        113.78875000000001,
+        97.84494936611662
+      ],
+      "forwardVector": [
+        0.7654001463120003,
+        -0.26176695100702546,
+        -0.5879121357703498
+      ],
+      "name": "ORBIT_TIER_2_STATION_08"
+    },
+    {
+      "stationId": 9,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 239836,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_009_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_009_blockout.png",
+      "qc": {
+        "overlapPercent": 26.12138505068411,
+        "residualPx": 1.478988257157665,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.038376940481283484,
+        "deltaPositionM": 0.056250000000005684,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.983806, facing 270°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.983806,0a,400d,35y,270h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 128 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 5.4°, 135 m above ground; the horizon sits at 66% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        159.94375,
+        135,
+        9.797174393178826e-15
+      ],
+      "forwardVector": [
+        -0.9955714827475369,
+        0.09400756746065936,
+        -6.140056884604083e-17
+      ],
+      "name": "ORBIT_TIER_3_STATION_09",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_009.splat"
+    },
+    {
+      "stationId": 10,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 288184,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_010_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_010_blockout.png",
+      "qc": {
+        "overlapPercent": 19.730012530935436,
+        "residualPx": 1.5805060505030077,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.05674753034586644,
+        "deltaPositionM": 0.07500000000001705,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749841, -73.985700, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749841,-73.985700,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 137 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 5.4°, 135 m above ground; the horizon sits at 66% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        1.9594348786357652e-14,
+        135,
+        -159.92499999999998
+      ],
+      "forwardVector": [
+        -1.2321810874921437e-16,
+        0.09432676999834948,
+        0.9955412901842287
+      ],
+      "name": "ORBIT_TIER_3_STATION_10",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_010.splat"
+    },
+    {
+      "stationId": 11,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 391271,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_011_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_011_blockout.png",
+      "qc": {
+        "overlapPercent": 15.781286407212736,
+        "residualPx": 1.652651564395415,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.02215159354277585,
+        "deltaPositionM": 0.13124999999999432,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.987594, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.987594,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 23 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 5.4°, 135 m above ground; the horizon sits at 66% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -159.86875,
+        135,
+        -2.9391523179536473e-14
+      ],
+      "forwardVector": [
+        0.9955980644289485,
+        0.09372563206151832,
+        1.8364927248352375e-16
+      ],
+      "name": "ORBIT_TIER_3_STATION_11",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_011.splat"
+    },
+    {
+      "stationId": 12,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 254663,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_012_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_012_blockout.png",
+      "qc": {
+        "overlapPercent": 31.88226996886906,
+        "residualPx": 1.3905838374547357,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.06084683830280557,
+        "deltaPositionM": 0.11250000000001137,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.746959, -73.985700, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.746959,-73.985700,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 137 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 5.4°, 135 m above ground; the horizon sits at 66% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -3.9188697572715304e-14,
+        135,
+        159.8875
+      ],
+      "forwardVector": [
+        2.4662230417894837e-16,
+        0.09439799717303715,
+        -0.9955345388934125
+      ],
+      "name": "ORBIT_TIER_3_STATION_12",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_012.splat"
+    },
+    {
+      "stationId": 13,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 187513,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_013_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_013_blockout.png",
+      "qc": {
+        "overlapPercent": 15.846170147046474,
+        "residualPx": 1.643945650648019,
+        "deltaYawDeg": 0.06104694933333121,
+        "deltaPitchDeg": 0.035055978635362806,
+        "deltaPositionM": 0.026250000000004547,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749546, -73.984193, facing 225°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749546,-73.984193,0a,400d,35y,225h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 165 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.8°, 210 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        127.27922061357856,
+        209.97375,
+        -127.27922061357854
+      ],
+      "forwardVector": [
+        -0.7038770426981611,
+        0.08365519307027151,
+        0.7053785632090522
+      ],
+      "name": "ORBIT_TIER_4_STATION_13",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_013.splat"
+    },
+    {
+      "stationId": 14,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 115240,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_014_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_014_blockout.png",
+      "qc": {
+        "overlapPercent": 32.52996426776431,
+        "residualPx": 1.3869954540956622,
+        "deltaYawDeg": 0.022859124324213553,
+        "deltaPitchDeg": 0.05054183532300627,
+        "deltaPositionM": 0.021805693780529913,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749546, -73.987207, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749546,-73.987207,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 152 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.8°, 210 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -127.26984561357854,
+        209.9803125,
+        -127.27922061357859
+      ],
+      "forwardVector": [
+        0.704893250221032,
+        0.08392452180499284,
+        0.7043310162364234
+      ],
+      "name": "ORBIT_TIER_4_STATION_14",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_014.splat"
+    },
+    {
+      "stationId": 15,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 134769,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_015_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_015_blockout.png",
+      "qc": {
+        "overlapPercent": 29.793335204421567,
+        "residualPx": 1.4367429572434345,
+        "deltaYawDeg": 0.06104694933333121,
+        "deltaPitchDeg": 0.020053033998170378,
+        "deltaPositionM": 0.013125000000002274,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.747254, -73.987207, facing 45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.747254,-73.987207,0a,400d,35y,45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 166 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.8°, 210 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -127.27922061357859,
+        209.986875,
+        127.27922061357852
+      ],
+      "forwardVector": [
+        0.7038924913545276,
+        0.0833942572734708,
+        -0.7053940448207107
+      ],
+      "name": "ORBIT_TIER_4_STATION_15",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_015.splat"
+    },
+    {
+      "stationId": 16,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 122540,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_016_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_016_blockout.png",
+      "qc": {
+        "overlapPercent": 36.16286357596911,
+        "residualPx": 1.331141636472082,
+        "deltaYawDeg": 0.038088406271526765,
+        "deltaPitchDeg": 0.01931359954797074,
+        "deltaPositionM": 0.011443645889755655,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.747254, -73.984193, facing 315°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.747254,-73.984193,0a,400d,35y,315h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 151 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.8°, 210 m above ground; the horizon sits at 64% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        127.28859561357852,
+        210.0065625,
+        127.27922061357859
+      ],
+      "forwardVector": [
+        -0.7051126984219328,
+        0.08338139665560247,
+        -0.7041758482196769
+      ],
+      "name": "ORBIT_TIER_4_STATION_16",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_016.splat"
+    },
+    {
+      "stationId": 17,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 147967,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_017_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_017_blockout.png",
+      "qc": {
+        "overlapPercent": 12.662179435929707,
+        "residualPx": 1.696198077394071,
+        "deltaYawDeg": 0.010813796360025663,
+        "deltaPitchDeg": 0.016129546306949294,
+        "deltaPositionM": 0.03865411524016005,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.750201, -73.985700, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.750201,-73.985700,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 177 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.3°, 285 m above ground; the horizon sits at 63% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -0.009374999999975507,
+        285,
+        -199.9625
+      ],
+      "forwardVector": [
+        0.00018820377678567115,
+        0.0750706705316794,
+        0.9971781982199882
+      ],
+      "name": "ORBIT_TIER_5_STATION_17",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_017.splat"
+    },
+    {
+      "stationId": 18,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 121897,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_018_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_018_blockout.png",
+      "qc": {
+        "overlapPercent": 28.156544494043896,
+        "residualPx": 1.451428091034843,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.01612962269876661,
+        "deltaPositionM": 0.037499999999994316,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.988068, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.988068,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 168 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.3°, 285 m above ground; the horizon sits at 63% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -199.9625,
+        285,
+        -3.6739403974420595e-14
+      ],
+      "forwardVector": [
+        0.9971782158803447,
+        0.07507067186120588,
+        1.838701160093306e-16
+      ],
+      "name": "ORBIT_TIER_5_STATION_18",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_018.splat"
+    },
+    {
+      "stationId": 19,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 133585,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_019_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_019_blockout.png",
+      "qc": {
+        "overlapPercent": 30.81639344675275,
+        "residualPx": 1.4202966351266855,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.07188773686470551,
+        "deltaPositionM": 0.15000000000000568,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.746599, -73.985700, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.746599,-73.985700,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 177 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.3°, 285 m above ground; the horizon sits at 63% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -4.898587196589413e-14,
+        285,
+        199.85
+      ],
+      "forwardVector": [
+        2.4832915171627856e-16,
+        0.07604105278227367,
+        -0.9971046877293094
+      ],
+      "name": "ORBIT_TIER_5_STATION_19",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_019.splat"
+    },
+    {
+      "stationId": 20,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 128956,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_020_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_020_blockout.png",
+      "qc": {
+        "overlapPercent": 25.050973121217922,
+        "residualPx": 1.5051266653267765,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0,
+        "deltaPositionM": 0.6000000000000227,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.983332, facing 270°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.983332,0a,400d,35y,270h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 168 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 4.3°, 285 m above ground; the horizon sits at 63% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        200.60000000000002,
+        285,
+        6.123233995736766e-14
+      ],
+      "forwardVector": [
+        -0.9971993098884562,
+        0.07478994824163585,
+        -3.053042357417119e-16
+      ],
+      "name": "ORBIT_TIER_5_STATION_20",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_020.splat"
+    },
+    {
+      "stationId": 21,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 50441,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_021_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_021_blockout.png",
+      "qc": {
+        "overlapPercent": 34.039149818518915,
+        "residualPx": 1.3596543329880295,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.09002210834593027,
+        "deltaPositionM": 0.026250000000004547,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749801, -73.987542, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749801,-73.987542,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 204 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 3.9°, 355 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -155.56349186104043,
+        355.02625,
+        -155.5634918610405
+      ],
+      "forwardVector": [
+        0.7053924597375154,
+        0.069591346379527,
+        0.7053924597375154
+      ],
+      "name": "ORBIT_TIER_6_STATION_21",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_021.splat"
+    },
+    {
+      "stationId": 22,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 61585,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_022_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_022_blockout.png",
+      "qc": {
+        "overlapPercent": 39.33052662761492,
+        "residualPx": 1.2679827691142056,
+        "deltaYawDeg": 0.038095584114103076,
+        "deltaPitchDeg": 0.040120820737884255,
+        "deltaPositionM": 0.011443645889739356,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.746999, -73.987542, facing 45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.746999,-73.987542,0a,400d,35y,45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 210 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 3.9°, 355 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -155.55411686104048,
+        354.9934375,
+        155.5634918610404
+      ],
+      "forwardVector": [
+        0.7049658549615098,
+        0.06872248985145121,
+        -0.7059039330723444
+      ],
+      "name": "ORBIT_TIER_6_STATION_22",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_022.splat"
+    },
+    {
+      "stationId": 23,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 51616,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_023_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_023_blockout.png",
+      "qc": {
+        "overlapPercent": 36.276816823015395,
+        "residualPx": 1.3218268616011934,
+        "deltaYawDeg": 0.0608477317747429,
+        "deltaPitchDeg": 0.04083438649739257,
+        "deltaPositionM": 0.03937500000000682,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.746999, -73.983858, facing 315°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.746999,-73.983858,0a,400d,35y,315h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 203 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 3.9°, 355 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        155.5634918610404,
+        354.960625,
+        155.5634918610405
+      ],
+      "forwardVector": [
+        -0.7061832133790065,
+        0.0687349144743243,
+        -0.704684880406773
+      ],
+      "name": "ORBIT_TIER_6_STATION_23",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_023.splat"
+    },
+    {
+      "stationId": 24,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 64733,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_024_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_024_blockout.png",
+      "qc": {
+        "overlapPercent": 22.194280955877403,
+        "residualPx": 1.539082887653754,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.0750197819123617,
+        "deltaPositionM": 0.013125000000002274,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.749801, -73.983858, facing 225°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.749801,-73.983858,0a,400d,35y,225h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 209 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 3.9°, 355 m above ground; the horizon sits at 62% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        155.56349186104063,
+        354.986875,
+        -155.56349186104026
+      ],
+      "forwardVector": [
+        -0.7054053203130726,
+        0.06933013881442306,
+        0.7054053203130697
+      ],
+      "name": "ORBIT_TIER_6_STATION_24",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_024.splat"
+    },
+    {
+      "stationId": 25,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 16306,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_025_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_025_blockout.png",
+      "qc": {
+        "overlapPercent": 41.550752541169956,
+        "residualPx": 1.2732121427677001,
+        "deltaYawDeg": 0.0220933037442137,
+        "deltaPitchDeg": 0.06524277981857551,
+        "deltaPositionM": 0.13258252147247204,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.988542, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.988542,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 238 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 2.4°, 415 m above ground; the horizon sits at 57% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -239.86875,
+        415,
+        0.018749999999955913
+      ],
+      "forwardVector": [
+        0.9990849463121062,
+        0.04276823162656169,
+        -0.0003852480665538676
+      ],
+      "name": "ORBIT_TIER_7_STATION_25",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_025.splat"
+    },
+    {
+      "stationId": 26,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 18548,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_026_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_026_blockout.png",
+      "qc": {
+        "overlapPercent": 55.27117082881434,
+        "residualPx": 1.0672362052439404,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.040941451057732614,
+        "deltaPositionM": 0.16875000000001705,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.746239, -73.985700, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.746239,-73.985700,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 238 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 2.4°, 415 m above ground; the horizon sits at 57% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        -5.878304635907296e-14,
+        415,
+        239.83124999999998
+      ],
+      "forwardVector": [
+        2.4891373939640737e-16,
+        0.04234447767064345,
+        -0.9991030703640144
+      ],
+      "name": "ORBIT_TIER_7_STATION_26",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_026.splat"
+    },
+    {
+      "stationId": 27,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 16803,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_027_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_027_blockout.png",
+      "qc": {
+        "overlapPercent": 41.23669272779924,
+        "residualPx": 1.278173052079879,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.0492988277321067,
+        "deltaPositionM": 0.037499999999994316,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.748400, -73.982858, facing 270°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.748400,-73.982858,0a,400d,35y,270h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 238 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 2.4°, 415 m above ground; the horizon sits at 57% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        240.0375,
+        415,
+        7.347880794884119e-14
+      ],
+      "forwardVector": [
+        -0.9990968832115896,
+        0.0424902101299474,
+        -3.1221299898441973e-16
+      ],
+      "name": "ORBIT_TIER_7_STATION_27",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_027.splat"
+    },
+    {
+      "stationId": 28,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": true,
+      "splatCount": 19060,
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_028_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_028_blockout.png",
+      "qc": {
+        "overlapPercent": 34.58148682082327,
+        "residualPx": 1.3780937916391431,
+        "deltaYawDeg": 0,
+        "deltaPitchDeg": 0.04557734704770011,
+        "deltaPositionM": 0.1875,
+        "passed": true
+      },
+      "prompt": "Transform this photorealistic 3D tiles rendering of Empire State Building (camera at coordinates 40.750561, -73.985700, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@40.750561,-73.985700,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 238 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 35mm lens, 54.4° horizontal field of view, pitch 2.4°, 415 m above ground; the horizon sits at 57% of the frame height from the top. Sun: azimuth 258° clockwise from north, elevation 9° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+      "positionLocalENU": [
+        8.817456953860942e-14,
+        415,
+        -239.8125
+      ],
+      "forwardVector": [
+        -3.7408340295108677e-16,
+        0.042425316608696285,
+        0.9990996409321005
+      ],
+      "name": "ORBIT_TIER_7_STATION_28",
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/esb/stations/station_028.splat"
+    }
+  ],
+  "tiles": {
+    "tileCount": 75,
+    "levels": 5,
+    "tileBytes": 13226736
+  },
+  "createdAt": "2026-09-30T21:51:32.668Z"
+}

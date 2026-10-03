@@ -871,7 +871,7 @@ export interface MultiViewCameraEntry {
     transformMatrixNerfstudio: number[][];
 }
 
-export type FourDAnyoneCameraEntry = MultiViewCameraEntry;
+export type Performer4DCameraEntry = MultiViewCameraEntry;
 
 export interface MultiViewCameraRigResult {
     preset: MultiViewCameraRigPreset;
@@ -958,7 +958,7 @@ export function generateMultiViewCameraRig(
     const elevationM = options.elevationM ?? 1.25;
     const fovDeg = options.fovDeg ?? 50.0;
 
-    const cameras: FourDAnyoneCameraEntry[] = [];
+    const cameras: Performer4DCameraEntry[] = [];
     let idx = 0;
 
     for (const pitchDeg of layerPitches) {

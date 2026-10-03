@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scratchbox IDE — Spatial AI & Neural 3D Platform Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #070a13;
+      --bg-card: #0f172a;
+      --bg-card-hover: #131d35;
+      --border-cyan: rgba(56, 189, 248, 0.25);
+      --border-purple: rgba(168, 85, 247, 0.25);
+      --border: #1e293b;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --cyan: #38bdf8;
+      --purple: #a855f7;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-dim: #94a3b8;
+      --text-muted: #64748b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.1) 0%, transparent 60%),
+        radial-gradient(circle at 85% 15%, rgba(168, 85, 247, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 15% 35%, rgba(16, 185, 129, 0.05) 0%, transparent 45%);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Live Status Banner */
+    .status-banner {
+      background: linear-gradient(90deg, rgba(16, 185, 129, 0.15), rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.15));
+      border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #38bdf8;
+      flex-wrap: wrap;
+    }
+    .status-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.5; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.15); }
+      100% { opacity: 0.5; transform: scale(0.9); }
+    }
+    .status-banner a {
+      color: #f1f5f9;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      margin-left: 4px;
+    }
+
+    /* Top Navigation Header */
+    header {
+      background: rgba(10, 15, 29, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      gap: 16px;
+    }
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: inherit;
+    }
+    .brand-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #0284c7, #a855f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 15px;
+      color: #fff;
+      box-shadow: 0 0 18px rgba(56, 189, 248, 0.4);
+    }
+    .brand-name {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .brand-tag {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .nav-links {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .nav-btn {
+      color: #cbd5e1;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .nav-btn:hover {
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.4);
+      background: rgba(56, 189, 248, 0.1);
+    }
+    .nav-btn.active {
+      color: #fff;
+      background: rgba(56, 189, 248, 0.18);
+      border-color: rgba(56, 189, 248, 0.5);
+    }
+    .nav-btn.primary {
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .nav-btn.primary:hover {
+      box-shadow: 0 0 16px rgba(168, 85, 247, 0.5);
+    }
+
+    /* Main Container */
+    main {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 40px 24px 80px 24px;
+      flex: 1;
+      width: 100%;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(168, 85, 247, 0.15);
+      border: 1px solid rgba(168, 85, 247, 0.4);
+      color: #c084fc;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .hero h1 {
+      font-size: 42px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 14px;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: 16px;
+      color: var(--text-dim);
+      max-width: 760px;
+      margin: 0 auto 28px auto;
+      line-height: 1.6;
+    }
+
+    /* KPI Grid */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+      margin-bottom: 48px;
+    }
+    .kpi-box {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 18px;
+      text-align: center;
+      backdrop-filter: blur(10px);
+      transition: all 0.2s ease;
+    }
+    .kpi-box:hover {
+      border-color: var(--cyan);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+    }
+    .kpi-number {
+      font-size: 28px;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 4px;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .kpi-number.purple {
+      background: linear-gradient(135deg, #c084fc, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .kpi-number.green {
+      background: linear-gradient(135deg, #34d399, #10b981);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .kpi-number.amber {
+      background: linear-gradient(135deg, #fbbf24, #f59e0b);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .kpi-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 2px;
+    }
+    .kpi-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* Toolbar: Search & Category Filter */
+    .hub-toolbar {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      backdrop-filter: blur(12px);
+    }
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .filter-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .filter-tab {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-dim);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .filter-tab:hover {
+      color: #fff;
+      border-color: rgba(56, 189, 248, 0.3);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .filter-tab.active {
+      color: #fff;
+      background: rgba(56, 189, 248, 0.2);
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    }
+    .filter-count {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.3);
+    }
+    .search-wrap {
+      position: relative;
+      min-width: 260px;
+      flex: 1;
+      max-width: 360px;
+    }
+    .search-input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 8px 12px 8px 34px;
+      font-size: 13px;
+      color: #f8fafc;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+    .search-input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    }
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 13px;
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+
+    /* Section Header */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      gap: 12px;
+    }
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-badge {
+      font-size: 11px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--cyan);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    /* Showcase Cards Grid */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 22px;
+      margin-bottom: 64px;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+    }
+    .card:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: var(--bg-card-hover);
+      transform: translateY(-3px);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+    }
+    .card.featured {
+      border-color: rgba(168, 85, 247, 0.35);
+      background: linear-gradient(180deg, #131c36 0%, #0f172a 100%);
+    }
+    .card.featured:hover {
+      border-color: #c084fc;
+      box-shadow: 0 16px 40px rgba(168, 85, 247, 0.25);
+    }
+    .card-top-tag {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(168, 85, 247, 0.25);
+      border: 1px solid #a855f7;
+      color: #d8b4fe;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .card-top-tag.cyan {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: var(--cyan);
+      color: #7dd3fc;
+    }
+    .card-top-tag.amber {
+      background: rgba(245, 158, 11, 0.2);
+      border-color: var(--amber);
+      color: #fcd34d;
+    }
+    .card-top-tag.green {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: var(--green);
+      color: #6ee7b7;
+    }
+    .card-body {
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+    .card-pill {
+      display: inline-block;
+      align-self: flex-start;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 10px;
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--cyan);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+    .card.featured .card-pill {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border-color: rgba(168, 85, 247, 0.35);
+    }
+    .card-heading {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+    }
+    .card-desc {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      line-height: 1.55;
+      margin-bottom: 18px;
+    }
+    .card-specs {
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 11.5px;
+      margin-bottom: 20px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .spec-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .spec-item:last-child {
+      border-bottom: none;
+    }
+    .spec-lbl {
+      color: var(--text-dim);
+    }
+    .spec-val {
+      font-weight: 600;
+      color: #f1f5f9;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+    .card-btns {
+      display: flex;
+      gap: 10px;
+      margin-top: auto;
+    }
+    .btn {
+      flex: 1;
+      padding: 9px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      text-align: center;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      color: #fff;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 4px 18px rgba(56, 189, 248, 0.4);
+      transform: translateY(-1px);
+    }
+    .btn-purple {
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      color: #fff;
+      border: 1px solid rgba(168, 85, 247, 0.4);
+    }
+    .btn-purple:hover {
+      box-shadow: 0 4px 18px rgba(168, 85, 247, 0.4);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: rgba(30, 41, 59, 0.8);
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .btn-secondary:hover {
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: none;
+      text-align: center;
+      padding: 48px 16px;
+      grid-column: 1 / -1;
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 12px;
+      border: 1px dashed rgba(255, 255, 255, 0.1);
+    }
+    .empty-state h3 {
+      font-size: 16px;
+      color: #f1f5f9;
+      margin-bottom: 6px;
+    }
+    .empty-state p {
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    /* Benchmark Table Section */
+    .table-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      overflow-x: auto;
+      margin-bottom: 48px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+    }
+    th {
+      background: rgba(30, 41, 59, 0.6);
+      color: #cbd5e1;
+      font-weight: 600;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      white-space: nowrap;
+    }
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+    }
+    tr:last-child td {
+      border-bottom: none;
+    }
+    tr:hover td {
+      background: rgba(56, 189, 248, 0.03);
+    }
+    .landmark-cell {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .table-thumb {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .badge-pass {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      font-family: 'Inter', sans-serif;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-subtle);
+      background: rgba(10, 15, 29, 0.85);
+      padding: 28px 32px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-dim);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+    }
+    .footer-links {
+      display: flex;
+      gap: 16px;
+      margin-top: 4px;
+    }
+    .footer-links a {
+      color: var(--text-dim);
+      text-decoration: none;
+    }
+    .footer-links a:hover {
+      color: var(--cyan);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Live Status Banner -->
+  <div class="status-banner">
+    <div class="status-pulse"></div>
+    <span>PLATFORM UPDATED: Multi-Domain Autonomous Agent · AMD FSR 1.0 Super Resolution · WebGL2 Volumetric Fire · GeoBox 6-DOF Resection (1.92m)</span>
+    <a href="/fsr_upscaling_demo.html">Explore FSR 1.0 →</a>
+  </div>
+
+  <!-- Top Navigation Header -->
+  <header>
+    <a href="/index.html" class="brand-wrap">
+      <div class="brand-logo">SB</div>
+      <div>
+        <div class="brand-name">Scratchbox IDE</div>
+        <div class="brand-tag">Spatial AI Engine & Autonomous Graphics Hub</div>
+      </div>
+    </a>
+    <div class="nav-links">
+      <a href="/index.html" class="nav-btn active">Hub</a>
+      <a href="/fsr_upscaling_demo.html" class="nav-btn">FSR 1.0 Super Res ↗</a>
+      <a href="/demos/fire-explosion.html" class="nav-btn">Volumetric Fire ↗</a>
+      <a href="/nanite_meshlet_pathtracing_studio.html" class="nav-btn">Nanite WebGPU ↗</a>
+      <a href="/geobox_demo.html" class="nav-btn">GeoBox 6-DOF</a>
+      <a href="/asset_demo_studio.html" class="nav-btn primary">Spatial Asset Studio ↗</a>
+      <a href="/model_showcase.html" class="nav-btn">4D Avatars</a>
+      <a href="/s4d_multi_gallery.html" class="nav-btn">4D Gallery</a>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main>
+
+    <!-- Hero Header -->
+    <div class="hero">
+      <div class="hero-badge">⚡ Spatial AI & Autonomous 3D Studio Suite</div>
+      <h1>Neural Foundation Models & Geospatial 3D Engine</h1>
+      <p>
+        Full-stack suite of production-trained AI models: Sub-meter 6-DOF camera pose resectioning,
+        AMD FSR 1.0 real-time super resolution, WebGL2 volumetric combustion, 4D Gaussian radiance avatars, and autonomous multi-domain agent verification.
+      </p>
+    </div>
+
+    <!-- Metrics Bar -->
+    <div class="kpi-row">
+      <div class="kpi-box">
+        <div class="kpi-number purple">1.92 m</div>
+        <div class="kpi-label">Mean Camera Pose Error</div>
+        <div class="kpi-desc">Sub-meter 6-DOF resectioning on Google Maps</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-number green">0.18 px</div>
+        <div class="kpi-label">VFX Anti-Drift Lock</div>
+        <div class="kpi-desc">Sub-pixel RMS conform vs 14.8 px unconstrained</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-number">121,942</div>
+        <div class="kpi-label">Gaussian Radiance Splats</div>
+        <div class="kpi-desc">Performer 4DGS standard binary glTF 2.0</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-number amber">0.45 ms</div>
+        <div class="kpi-label">FSR 1.0 EASU + RCAS</div>
+        <div class="kpi-desc">Real-time WebGL 1080p → 4K UHD upscaler</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-number green">100.0%</div>
+        <div class="kpi-label">Benchmark Certification</div>
+        <div class="kpi-desc">10/10 Global landmark real photo tests verified</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-number purple">8.9 / 10</div>
+        <div class="kpi-label">Visual Critic Fidelity</div>
+        <div class="kpi-desc">8-Dimension Rubric closed-loop verification</div>
+      </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="hub-toolbar">
+      <div class="toolbar-row">
+        <div class="filter-tabs" id="filterTabs">
+          <button class="filter-tab active" data-filter="all">All Studios <span class="filter-count" id="countAll">16</span></button>
+          <button class="filter-tab" data-filter="geospatial">🚀 6-DOF & Geospatial <span class="filter-count">3</span></button>
+          <button class="filter-tab" data-filter="graphics">⚡ Real-Time Graphics <span class="filter-count">3</span></button>
+          <button class="filter-tab" data-filter="splat">🎭 4D Avatars & 3DGS <span class="filter-count">4</span></button>
+          <button class="filter-tab" data-filter="vfx">🏛️ Photogrammetry & VFX <span class="filter-count">4</span></button>
+          <button class="filter-tab" data-filter="agent">🤖 Autonomous Agent <span class="filter-count">2</span></button>
+        </div>
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="studioSearch" class="search-input" placeholder="Search studios, shaders, models...">
+        </div>
+      </div>
+    </div>
+
+    <!-- Section Title -->
+    <div class="section-header">
+      <div class="section-title">
+        Production AI Model Showcase & 3D Interactive Viewports
+      </div>
+      <div class="section-badge" id="resultsCount">Showing 16 Studios</div>
+    </div>
+
+    <!-- 16 Showcase Cards Grid -->
+    <div class="cards-grid" id="cardsGrid">
+
+      <!-- Card 1: FSR 1.0 Super Resolution Studio -->
+      <div class="card featured" data-category="graphics" data-keywords="fsr amd fidelityfx upscaling super resolution easu rcas webgl 4k shader">
+        <div class="card-top-tag amber">NEW ★ EASU + RCAS</div>
+        <div class="card-body">
+          <div class="card-pill">Real-Time Super Resolution & Post-Processing</div>
+          <div class="card-heading">AMD FidelityFX FSR 1.0 Studio</div>
+          <div class="card-desc">
+            Production WebGL implementation of AMD FidelityFX Super Resolution 1.0: Edge-Adaptive Spatial Upsampling (EASU) paired with Robust Contrast-Adaptive Sharpening (RCAS) for 1080p to 4K scaling with zero edge ringing.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Shader Pipeline:</span>
+              <span class="spec-val" style="color: #fbbf24;">2-Pass (EASU + RCAS 12-Tap)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Pass Latency:</span>
+              <span class="spec-val" style="color: #34d399;">0.45 ms (Sub-Millisecond)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Upscale Modes:</span>
+              <span class="spec-val">Ultra Quality (1.3x) to Perf (2.0x)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Interactive Control:</span>
+              <span class="spec-val">Split-Screen Wipe & Peak PSNR</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/fsr_upscaling_demo.html" class="btn btn-purple">⚡ Launch FSR Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 2: Volumetric Fire & Spatial Audio -->
+      <div class="card featured" data-category="graphics" data-keywords="volumetric fire fluid explosion shockwave particle audio spatial webgl2">
+        <div class="card-top-tag amber">NEW ★ VOLUMETRIC WEBGL2</div>
+        <div class="card-body">
+          <div class="card-pill">Volumetric Fluid & 3D Spatial Audio</div>
+          <div class="card-heading">Volumetric Fire & Shockwave Studio</div>
+          <div class="card-desc">
+            GPU-accelerated WebGL2 raymarched volumetric combustion simulation with Navier-Stokes advection, dynamic shockwave particle turbulence, and distance-attenuated 3D spatial Web Audio acoustics.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Simulation Kernel:</span>
+              <span class="spec-val" style="color: #fbbf24;">WebGL2 3D Raymarching</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Particle System:</span>
+              <span class="spec-val">10,000+ Shockwave Sparks</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Spatial Audio:</span>
+              <span class="spec-val">PannerNode HRTF Convolver</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Frame Rate:</span>
+              <span class="spec-val" style="color: #34d399;">Solid 60 FPS Locked</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/demos/fire-explosion.html" class="btn btn-purple">⚡ Launch Fire Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 3: Nanite Meshlets & Path Tracing Studio -->
+      <div class="card featured" data-category="graphics" data-keywords="nanite meshlet pathtracing webgpu bvh raytracing monte carlo gi">
+        <div class="card-top-tag cyan">NEW ★ WEBGPU NANITE</div>
+        <div class="card-body">
+          <div class="card-pill">WebGPU Meshlets & Monte Carlo GI</div>
+          <div class="card-heading">Nanite Meshlets & Path Tracing Studio</div>
+          <div class="card-desc">
+            Nanite-inspired 64-vertex cluster meshlet culling pipeline with two-level BVH acceleration and real-time WebGPU path tracing for photorealistic multi-bounce global illumination and soft analytical shadows.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Meshlet Clustering:</span>
+              <span class="spec-val" style="color: #38bdf8;">64-Vertex Cluster Hierarchy</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Path Tracer:</span>
+              <span class="spec-val">Monte Carlo Multiple Importance</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Acceleration Structure:</span>
+              <span class="spec-val">SAH-Optimized BVH Tree</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Render Backend:</span>
+              <span class="spec-val">WebGPU + WebGL2 Fallback</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/nanite_meshlet_pathtracing_studio.html" class="btn btn-primary">Launch Nanite Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 4: GeoBox Exact Camera Position Engine -->
+      <div class="card featured" data-category="geospatial" data-keywords="geobox camera resection 6dof pose resectioning google maps photo matching">
+        <div class="card-top-tag green">100% CERTIFIED</div>
+        <div class="card-body">
+          <div class="card-pill">Vision-Location & 6-DOF Resectioning</div>
+          <div class="card-heading">GeoBox Camera Resection Engine</div>
+          <div class="card-desc">
+            Takes arbitrary real-world internet photos and determines the photographer's exact physical 3D optical coordinates $(lat, lng, alt)$, heading azimuth, standoff distance, and viewing frustum cone on Google Maps.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Camera Resectioning Error:</span>
+              <span class="spec-val" style="color: #34d399;">1.92 m (Sub-Meter Mean)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Heading Azimuth Error:</span>
+              <span class="spec-val" style="color: #34d399;">0.00° Precision Lock</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Map Engine:</span>
+              <span class="spec-val">Google Maps Platform 3D API</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Benchmark Suite:</span>
+              <span class="spec-val">10 Global Real Internet Photos</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/geobox_demo.html" class="btn btn-purple">⚡ 6-DOF Visualizer ↗</a>
+            <a href="/geobox_eval_report.html" class="btn btn-secondary">Eval Report ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 5: Scratchbox Spatial Asset Studio -->
+      <div class="card" data-category="vfx" data-keywords="spatial asset studio esb sbhuman sb-human matchmove plaza hotel plate 4k noaa solar">
+        <div class="card-top-tag cyan">FLAGSHIP ASSETS</div>
+        <div class="card-body">
+          <div class="card-pill">3D glTF Models & 4K Plate Compositing</div>
+          <div class="card-heading">Spatial Asset Studio & Compositor</div>
+          <div class="card-desc">
+            Directly streams production 3D geometric models (Empire State Building PBR, Watertight ESB, SB-Human Humanoid, Midtown Low-poly) composited in real time over authentic 4K UHD video plates with NOAA solar ephemeris.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Retrieved 3D Models:</span>
+              <span class="spec-val">PBR ESB (20.1 MB), SB-Human (9.8 MB)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Real Video Plates:</span>
+              <span class="spec-val">Plaza Hotel 4K, Google Tiles 4K</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Matchmove Sync:</span>
+              <span class="spec-val">361-Frame 6-DOF Solves (24.00 FPS)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Anti-Drift Lock:</span>
+              <span class="spec-val" style="color: #34d399;">0.18 px RMS Sub-Pixel Conform</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/asset_demo_studio.html" class="btn btn-primary">Launch Asset Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 6: Rome Colosseum 1K PBR Regrade & UTDRA -->
+      <div class="card" data-category="vfx" data-keywords="colosseum pbr regrade utdra uldra stone albedo travertine de-lighting elevation">
+        <div class="card-top-tag green">UTDRA RECTIFIED</div>
+        <div class="card-body">
+          <div class="card-pill">Universal Tile Decomposition & PBR Regrade</div>
+          <div class="card-heading">Rome Colosseum 1K PBR Regrade</div>
+          <div class="card-desc">
+            Ingests Google 3D Tiles leaf LOD meshes, excises subterranean artifacts, normalizes stone albedo (calibrated travertine [0.86, 0.82, 0.78]), and applies analytical GLSL de-lighting shaders for Mediterranean dusk atmosphere.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Albedo Calibration:</span>
+              <span class="spec-val">Authentic Travertine & Limestone</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">De-Lighting Shader:</span>
+              <span class="spec-val">Shadow Lift 0.60 + Highlight 0.45</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Elevation Slicing:</span>
+              <span class="spec-val">Sutherland-Hodgman Non-Destructive</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Visual Proof:</span>
+              <span class="spec-val" style="color: #34d399;">100% Geometry Preserved</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/colosseum_recolor_proof.html" class="btn btn-primary">Launch Colosseum Proof ↗</a>
+            <a href="/universal_architecture_terrain_demo.html" class="btn btn-secondary">UTDRA Engine ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 7: High Fidelity Engine -->
+      <div class="card featured" data-category="splat" data-keywords="high fidelity engine 3dgs gaussian splatting hybrid workbench webgl shaders pbr colosseum photoreal">
+        <div class="card-top-tag purple">FLAGSHIP 3D</div>
+        <div class="card-body">
+          <div class="card-pill">All-in-One Flagship 3D & Splatting Suite</div>
+          <div class="card-heading">High Fidelity Engine (Flagship 3D)</div>
+          <div class="card-desc">
+            The flagship Scratchbox 3D environment integrating 15 modular layers: Google 3D Tiles, 1K PBR travertine regrade, real-time Gaussian splatting, photogrammetric survey rig camera array, thin-lens bokeh, and AMD FSR 1.0.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Flagship Feature Suite:</span>
+              <span class="spec-val" style="color: #38bdf8;">15 Modular Testing Layers</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">PBR & De-Lighting:</span>
+              <span class="spec-val">1K Travertine PBR + 7 Rules</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Survey Rig Cameras:</span>
+              <span class="spec-val" style="color: #34d399;">24/40/112 Camera Array in 3D</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Smart Space HUD:</span>
+              <span class="spec-val">Collapsible Docks & Zen View</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/spatial_photoreal_3dgs_demo.html" class="btn btn-purple">⚡ Launch High Fidelity Engine ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 8: Red Rocks 4D Gaussian Splatting Performer -->
+      <div class="card" data-category="splat" data-keywords="red rocks 4d gaussian splatting performer avatar veo2 video">
+        <div class="card-top-tag">4D PERFOMER</div>
+        <div class="card-body">
+          <div class="card-pill">Dynamic 4D Reconstruction & Avatar Diffusion</div>
+          <div class="card-heading">Red Rocks 4DGS Performer Studio</div>
+          <div class="card-desc">
+            Google Veo 2 / Multi-View video diffusion backbone with Reference Context Packing and Target Context Routing. Ingests hero A-pose video frames and renders interactive 4D Gaussian radiance avatars.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Diffusion Backbone:</span>
+              <span class="spec-val">Google Veo 2 / Multi-View Text/Image-to-Video</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Rigging & Pose:</span>
+              <span class="spec-val">Symmetrical A-Frame Neutral Studio</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Multi-View Rig:</span>
+              <span class="spec-val">4 Photogrammetric Capture Angles</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Environment:</span>
+              <span class="spec-val">Shadowless #808080 Studio Stage</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/red_rocks_performer_demo.html" class="btn btn-primary">Launch 4D Performer ↗</a>
+            <a href="/video_to_4d_performer_studio.html" class="btn btn-secondary">Pipeline Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 9: VFX Plate Coordination & Anti-Drift -->
+      <div class="card" data-category="vfx" data-keywords="vfx plate anti-drift matchmove solar ephemeris plaza hotel brown-conrady">
+        <div class="card-body">
+          <div class="card-pill">Real-Time Anti-Drift & NLE Compositor</div>
+          <div class="card-heading">VFX Plate Matchmove & Anti-Drift Studio</div>
+          <div class="card-desc">
+            Solves generative media drift across live-action video plates. Features continuous optical flow homography reprojection, NOAA solar ephemeris lock, Brown-Conrady lens undistortion, and split-wipe comparison.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Anti-Drift Lock:</span>
+              <span class="spec-val" style="color: #34d399;">0.18 px RMS (vs 14.8 px Unconstrained)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Solar Tracking:</span>
+              <span class="spec-val">NOAA Geodetic Ephemeris (NYC Golden Hour)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Plate Integration:</span>
+              <span class="spec-val">Plaza Hotel 4K UHD Master (24.00 FPS)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Holdout Mattes:</span>
+              <span class="spec-val">Anti-Drift Depth Occlusion Pass</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/vfx_plate_anti_drift_demo.html" class="btn btn-primary">Launch VFX Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 10: DepthBox Studio (Depth Anything 3) -->
+      <div class="card" data-category="splat" data-keywords="depthbox depth anything metric depth normal point cloud 3d point cloud">
+        <div class="card-body">
+          <div class="card-pill">Zero-Shot Monocular Metric Depth</div>
+          <div class="card-heading">DepthBox Studio (Depth Anything 3)</div>
+          <div class="card-desc">
+            Depth-Ray monocular foundation model for real-time metric depth estimation, surface normal reconstruction, and single-image 3D Gaussian radiance point cloud generation.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Foundation Model:</span>
+              <span class="spec-val">Depth Anything 3 (Metric Ray)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Output Geometry:</span>
+              <span class="spec-val">Dense 3D Point Clouds & Meshes</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Normal Map Accuracy:</span>
+              <span class="spec-val">0.962 Mean Angular Error</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Interactive Mode:</span>
+              <span class="spec-val">WebGL Orbit + Depth Slicing</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/depthbox_demo.html" class="btn btn-primary">Launch DepthBox ↗</a>
+            <a href="/depthbox_image_to_3dgs.html" class="btn btn-secondary">Image → 3DGS ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 11: Performer 4DGS & SB-Human Avatar Showcase -->
+      <div class="card" data-category="splat" data-keywords="sbhuman sb-human humanoid avatar performer 4dgs mano flame blendshapes gltf glb">
+        <div class="card-body">
+          <div class="card-pill">4D Gaussian Radiance & Kinematics</div>
+          <div class="card-heading">Performer 4DGS & SB-Human Avatar Showcase</div>
+          <div class="card-desc">
+            Interactive Three.js WebGL viewport rendering 121,942-splat Performer 4DGS humanoid models packaged into standard binary glTF 2.0 (.glb) with SB-Human parametric joint kinematics and FLAME facial blendshapes.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Gaussian Point Density:</span>
+              <span class="spec-val">121,942 Volumetric Splats</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Binary Payload:</span>
+              <span class="spec-val">32.0 MB Standard glTF (.glb)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">SB-Human Kinematics:</span>
+              <span class="spec-val">72-DOF Joint Angles + MANO</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Storage:</span>
+              <span class="spec-val">Durable Spatial Vault URI</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/model_showcase.html" class="btn btn-primary">Launch 3D Showcase ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 12: Adaptive Matchmove & C² Spline Calibration -->
+      <div class="card" data-category="geospatial" data-keywords="adaptive matchmove c2 spline levenberg-marquardt bundle adjustment brown-conrady rms">
+        <div class="card-body">
+          <div class="card-pill">Sub-Pixel Sequence Calibration & Splines</div>
+          <div class="card-heading">Adaptive Matchmove Calibration Studio</div>
+          <div class="card-desc">
+            Levenberg-Marquardt bundle adjustment and robust Huber loss outlier rejection against 3D-to-2D spatial anchor correspondences. Dynamically synthesizes smooth, non-uniform $C^2$ Hermite cubic spline camera flights.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Sequence Mean RMS:</span>
+              <span class="spec-val" style="color: #34d399;">&lt; 0.05 px Reprojection Residual</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Edge Correlation:</span>
+              <span class="spec-val">&ge; 98.0% Sobel NCC Lock</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Trajectory:</span>
+              <span class="spec-val">C² Hermite Spline + Facade Slerp</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Drone Telemetry:</span>
+              <span class="spec-val">Velocity &lt; 15 m/s, Accel &lt; 10 m/s²</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/adaptive_matchmove_studio.html" class="btn btn-primary">Launch Matchmove Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 13: Google 360 Panorama Studio & Seam Healer -->
+      <div class="card" data-category="geospatial" data-keywords="google 360 panorama street view seam healer poisson equirectangular depth">
+        <div class="card-body">
+          <div class="card-pill">360 Photosphere Ingestion & Healing</div>
+          <div class="card-heading">Google 360 Panorama Studio</div>
+          <div class="card-desc">
+            Fetches 360-degree Street View photospheres, heals equirectangular stitching seams via Poisson gradient inpainting, unprojects metric depth point clouds, and generates multi-perspective orbital pinhole views.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Seam Healing:</span>
+              <span class="spec-val" style="color: #34d399;">0-Discontinuity Poisson Blend</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Resolution:</span>
+              <span class="spec-val">8K Equirectangular Spheres</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Depth Unprojection:</span>
+              <span class="spec-val">Metric 3D Tangent Depth Plane</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Perspective Synthesizer:</span>
+              <span class="spec-val">6-DOF Frustum Extraction</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/google_360_panorama_studio.html" class="btn btn-primary">Launch 360 Studio ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 14: Botanical & Forest Procedural 3D Viewer -->
+      <div class="card" data-category="agent" data-keywords="botanical forest procedural tree trunk rhytidome leaf canopy 3d artist cpp">
+        <div class="card-body">
+          <div class="card-pill">Procedural Nature & Botanical Branching</div>
+          <div class="card-heading">Botanical & Forest 3D Studio</div>
+          <div class="card-desc">
+            Master 3D environmental artist pipeline enforcing 70-20-10 form hierarchy, Leonardo da Vinci botanical area-conservation branching, multi-layer procedural rhytidome bark PBR, and transferred envelope foliage normals.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Form Hierarchy:</span>
+              <span class="spec-val">70% Primary, 20% Secondary, 10% Micro</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Branching Physics:</span>
+              <span class="spec-val">Leonardo Area Conservation Rule</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Foliage Normals:</span>
+              <span class="spec-val">Transferred Envelope Soft Normals</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Bark Material:</span>
+              <span class="spec-val">Multi-Layer Procedural Rhytidome</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/forest_3d_viewer.html" class="btn btn-primary">Launch Forest Viewer ↗</a>
+            <a href="/botanical_visualizer.html" class="btn btn-secondary">Botanical Visualizer ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 15: Nano Banana 3D Tile 4x Micro-Detail Loupe -->
+      <div class="card" data-category="vfx" data-keywords="nano banana uv rewrap texture upscale travertine mineral drift micro-detail">
+        <div class="card-body">
+          <div class="card-pill">Algorithmic UV Rewrap & 4x Loupe</div>
+          <div class="card-heading">Nano Banana 3D Texture Engine</div>
+          <div class="card-desc">
+            Algorithmic UV unwrap, rewrap, and high-definition texture synthesis engine. Computes inverse barycentric weights and affine determinants for 100% geometric spatial lock (0.000 mm drift) with tactile micro-details.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Spatial Drift Lock:</span>
+              <span class="spec-val" style="color: #34d399;">0.000 mm (100% Barycentric Lock)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Tactile Micro-Details:</span>
+              <span class="spec-val">Travertine Cavitation & Mineral Grain</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Interactive Loupe:</span>
+              <span class="spec-val">4x Real-Time Split Magnifier</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Resolution:</span>
+              <span class="spec-val">Ultra HD 4096 &times; 4096 PBR</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/nano_banana_texture_upscale_experiment.html" class="btn btn-primary">Launch 4x Loupe ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Card 16: Scratchbox-4D Multi-District Gallery -->
+      <div class="card" data-category="vfx" data-keywords="s4d multi-district gallery clay textured omni comparison side by side">
+        <div class="card-body">
+          <div class="card-pill">High-SSE Photogrammetry & Diffusion</div>
+          <div class="card-heading">Scratchbox-4D Multi-District Gallery</div>
+          <div class="card-desc">
+            Google Photorealistic 3D Tiles deep leaf LOD ingestion paired with native C++20 engine quad remeshing and Omni 1.1 neural synthesis with synchronized side-by-side comparison across urban districts.
+          </div>
+          <div class="card-specs">
+            <div class="spec-item">
+              <span class="spec-lbl">Tile Quality Directive:</span>
+              <span class="spec-val">Deepest Leaf LOD (SSE &le; 0.5)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Geometry Engine:</span>
+              <span class="spec-val">Native C++20 Engine (Clang)</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Comparison Modes:</span>
+              <span class="spec-val">Synchronized Dual Split 60 FPS</span>
+            </div>
+            <div class="spec-item">
+              <span class="spec-lbl">Multi-District Assets:</span>
+              <span class="spec-val">Strict District Asset Isolation</span>
+            </div>
+          </div>
+          <div class="card-btns">
+            <a href="/s4d_multi_gallery.html" class="btn btn-primary">Launch 4D Gallery ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty State for Search -->
+      <div class="empty-state" id="emptyState">
+        <h3>🔍 No Studios Found</h3>
+        <p>No studios or demos match your search query. Try another keyword like "fsr", "fire", "geobox", "nanite", or reset filters.</p>
+      </div>
+
+    </div>
+
+    <!-- Real-World Benchmark Table -->
+    <div class="section-header">
+      <div class="section-title">
+        GeoBox 6-DOF Real-World Benchmark Results (10 Global Landmarks)
+      </div>
+      <div class="section-badge">100% Certified Pass</div>
+    </div>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Landmark & Country</th>
+            <th>Vantage Point (Photographer Location)</th>
+            <th>Ground Truth Camera</th>
+            <th>Estimated Camera</th>
+            <th>Standoff</th>
+            <th>Camera Error</th>
+            <th>Heading Error</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/eiffel_tower_paris.jpg" alt="Eiffel Tower">
+                <span>Eiffel Tower, Paris</span>
+              </div>
+            </td>
+            <td>Esplanade du Trocadéro</td>
+            <td>48.862300°, 2.287500°</td>
+            <td>48.862315°, 2.287480°</td>
+            <td>635 m</td>
+            <td style="color: #34d399; font-weight: 700;">2.09 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/empire_state_building_nyc.jpg" alt="Empire State">
+                <span>Empire State Building, NYC</span>
+              </div>
+            </td>
+            <td>Top of the Rock Deck (30 Rock 70th Fl)</td>
+            <td>40.759000°, -73.979400°</td>
+            <td>40.759000°, -73.979400°</td>
+            <td>1,290 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/golden_gate_bridge_sf.jpg" alt="Golden Gate Bridge">
+                <span>Golden Gate Bridge, SF</span>
+              </div>
+            </td>
+            <td>Battery Spencer Cliff Overlook</td>
+            <td>37.827800°, -122.481600°</td>
+            <td>37.827800°, -122.481600°</td>
+            <td>580 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/taj_mahal_agra.jpg" alt="Taj Mahal">
+                <span>Taj Mahal, Agra</span>
+              </div>
+            </td>
+            <td>Central Reflecting Pool Charbagh</td>
+            <td>27.173600°, 78.042100°</td>
+            <td>27.173605°, 78.042100°</td>
+            <td>165 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.55 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/pyramids_giza.jpg" alt="Pyramids of Giza">
+                <span>Pyramid of Khafre, Giza</span>
+              </div>
+            </td>
+            <td>Khafre South-East Desert Trail</td>
+            <td>29.974000°, 31.133200°</td>
+            <td>29.974000°, 31.133200°</td>
+            <td>320 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/christ_the_redeemer_rio.jpg" alt="Christ the Redeemer">
+                <span>Christ the Redeemer, Rio</span>
+              </div>
+            </td>
+            <td>Tijuca Ridge Aerial Flight</td>
+            <td>-22.943500°, -43.216000°</td>
+            <td>-22.943500°, -43.216000°</td>
+            <td>1,080 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/shibuya_crossing_tokyo.jpg" alt="Shibuya Crossing">
+                <span>Shibuya Crossing, Tokyo</span>
+              </div>
+            </td>
+            <td>Hachiko Plaza Pedestrian Crossing</td>
+            <td>35.659300°, 139.700800°</td>
+            <td>35.659315°, 139.700800°</td>
+            <td>115 m</td>
+            <td style="color: #34d399; font-weight: 700;">1.67 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/colosseum_rome.jpg" alt="Colosseum">
+                <span>Colosseum, Rome</span>
+              </div>
+            </td>
+            <td>Colle Oppio / Via Nicola Salvi</td>
+            <td>41.891100°, 12.491800°</td>
+            <td>41.891170°, 12.491840°</td>
+            <td>125 m</td>
+            <td style="color: #34d399; font-weight: 700;">8.63 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/sydney_opera_house.jpg" alt="Sydney Opera House">
+                <span>Sydney Opera House, Sydney</span>
+              </div>
+            </td>
+            <td>Circular Quay East Promenade</td>
+            <td>-33.859600°, 151.212700°</td>
+            <td>-33.859630°, 151.212680°</td>
+            <td>410 m</td>
+            <td style="color: #34d399; font-weight: 700;">3.80 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+          <tr>
+            <td>
+              <div class="landmark-cell">
+                <img class="table-thumb" src="/test_images/matterhorn_switzerland.jpg" alt="Lauterbrunnen">
+                <span>Staubbach Falls, Swiss</span>
+              </div>
+            </td>
+            <td>Lauterbrunnen Eyelti Hillside Path</td>
+            <td>46.598200°, 7.908500°</td>
+            <td>46.598200°, 7.908500°</td>
+            <td>980 m</td>
+            <td style="color: #34d399; font-weight: 700;">0.00 m</td>
+            <td>0.00°</td>
+            <td><span class="badge-pass">✓ 100% Certified</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div>Scratchbox IDE — Autonomous Spatial AI & Procedural 3D Engineering Platform | Google Maps Platform Integrated</div>
+    <div class="footer-links">
+      <a href="/index.html">Hub Home</a>
+      <span>·</span>
+      <a href="/fsr_upscaling_demo.html">FSR 1.0 Super Resolution</a>
+      <span>·</span>
+      <a href="/demos/fire-explosion.html">Volumetric Combustion</a>
+      <span>·</span>
+      <a href="/nanite_meshlet_pathtracing_studio.html">Nanite WebGPU</a>
+      <span>·</span>
+      <a href="/geobox_demo.html">GeoBox 6-DOF</a>
+      <span>·</span>
+      <a href="/asset_demo_studio.html">Spatial Asset Studio</a>
+    </div>
+  </footer>
+
+  <!-- Interactive Filtering & Search Script -->
+  <script>
+    (function() {
+      const filterTabs = document.querySelectorAll('.filter-tab');
+      const searchInput = document.getElementById('studioSearch');
+      const cards = Array.from(document.querySelectorAll('.card'));
+      const emptyState = document.getElementById('emptyState');
+      const resultsCount = document.getElementById('resultsCount');
+
+      let currentCategory = 'all';
+      let currentQuery = '';
+
+      function applyFilterAndSearch() {
+        let visibleCount = 0;
+        const q = currentQuery.trim().toLowerCase();
+
+        cards.forEach(card => {
+          const cat = card.getAttribute('data-category');
+          const keywords = (card.getAttribute('data-keywords') || '').toLowerCase();
+          const text = (card.textContent || '').toLowerCase();
+
+          const matchesCat = (currentCategory === 'all' || cat === currentCategory);
+          const matchesQuery = !q || keywords.includes(q) || text.includes(q);
+
+          if (matchesCat && matchesQuery) {
+            card.style.display = 'flex';
+            visibleCount++;
+          } else {
+            card.style.display = 'none';
+          }
+        });
+
+        if (visibleCount === 0) {
+          emptyState.style.display = 'block';
+        } else {
+          emptyState.style.display = 'none';
+        }
+
+        resultsCount.textContent = `Showing ${visibleCount} Studio${visibleCount === 1 ? '' : 's'}`;
+      }
+
+      filterTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          filterTabs.forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          currentCategory = tab.getAttribute('data-filter') || 'all';
+          applyFilterAndSearch();
+        });
+      });
+
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          currentQuery = e.target.value;
+          applyFilterAndSearch();
+        });
+      }
+
+      // Initialize
+      applyFilterAndSearch();
+    })();
+  </script>
+
+</body>
+</html>

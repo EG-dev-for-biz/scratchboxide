@@ -1,0 +1,24 @@
+{
+  "id": "rerun-mudatmb8-vgqjk",
+  "kind": "rerun-pipeline",
+  "status": "error",
+  "progress": 1,
+  "message": "The server is being restarted or closed. Request is outdated",
+  "createdAt": 1790119318580,
+  "updatedAt": 1790119349389,
+  "request": {
+    "location": "colosseum",
+    "activeModel": "colosseum_clay",
+    "forceRebake": true,
+    "clean": false,
+    "reusePlates": true,
+    "use2dgs": true,
+    "shDegree": 0,
+    "sigmaScale": 1,
+    "voxelSizeMeters": 0.025,
+    "surveyPreset": "interior-pilot-40",
+    "cameraCount": 40
+  },
+  "result": null,
+  "error": "Command failed: /Users/eligreen/dev/scratchbox-ide-master/node_modules/.bin/vite-node /Users/eligreen/dev/scratchbox-ide-master/scripts/run_survey_pipeline_cli.ts --job-file /Users/eligreen/dev/scratchbox-ide-master/public/tilesets/jobs/rerun-mudatmb8-vgqjk.json\n[SurveyPipeline] Pipeline failed: The server is being restarted or closed. Request is outdated\n"
+}

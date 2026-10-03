@@ -85,17 +85,7 @@ describe('Trained Models API Endpoints (/api/models)', () => {
         expect(data.avatar.glbPath).toBeDefined();
     });
 
-    it('5. should list SMPL-X parametric models on GET /api/models/smplx', async () => {
-        const res = await authedFetch('/api/models/smplx');
-        expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.success).toBe(true);
-        expect(data.models.length).toBe(3);
-        const readyModels = data.models.filter((m: any) => m.status === 'ready');
-        expect(readyModels.length).toBe(3);
-    });
-
-    it('5b. should list native SB-Human parametric models on GET /api/models/sbhuman', async () => {
+    it('5. should list native SB-Human parametric models on GET /api/models/sbhuman', async () => {
         const res = await authedFetch('/api/models/sbhuman');
         expect(res.status).toBe(200);
         const data = await res.json();
@@ -104,16 +94,6 @@ describe('Trained Models API Endpoints (/api/models)', () => {
         const readyModels = data.models.filter((m: any) => m.status === 'ready');
         expect(readyModels.length).toBe(3);
         expect(readyModels.every((m: any) => m.family === 'sbhuman')).toBe(true);
-    });
-
-    it('6. should list OmniRoam camera checkpoints on GET /api/models/omniroam', async () => {
-        const res = await authedFetch('/api/models/omniroam');
-        expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.success).toBe(true);
-        expect(data.models.length).toBe(2);
-        const readyModels = data.models.filter((m: any) => m.status === 'ready');
-        expect(readyModels.length).toBe(2);
     });
 
     it('7. should list GeoBox vision-location models on GET /api/models/geobox', async () => {

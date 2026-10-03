@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scratchbox 3D Engine - Botanical & Vegetation Pipeline Visualizer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #050811;
+            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+        #webgl-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .hud-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(10, 16, 30, 0.94);
+            border: 1px solid rgba(16, 185, 129, 0.45);
+            border-radius: 12px;
+            padding: 18px 22px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 36px rgba(0,0,0,0.65), 0 0 24px rgba(16, 185, 129, 0.15);
+            max-width: 520px;
+            z-index: 100;
+        }
+        .hud-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 8px;
+        }
+        .hud-title {
+            font-size: 13.5px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #34d399;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .badge {
+            background: #059669;
+            color: #ffffff;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+        .test-selector-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 6px;
+            margin-bottom: 14px;
+        }
+        .test-btn {
+            padding: 7px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #94a3b8;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+        .test-btn:hover {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-color: #34d399;
+        }
+        .test-btn.active {
+            background: #059669;
+            color: #ffffff;
+            border-color: #34d399;
+            box-shadow: 0 2px 10px rgba(5, 150, 105, 0.5);
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11.5px;
+            margin: 4px 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .metric-label { color: #94a3b8; }
+        .metric-val { color: #f8fafc; font-weight: 600; }
+        .accent { color: #34d399; }
+        .amber { color: #fbbf24; }
+        .cyan { color: #22d3ee; }
+        .annotation-banner {
+            margin-top: 12px;
+            padding: 10px 12px;
+            background: rgba(16, 185, 129, 0.12);
+            border-left: 3px solid #10b981;
+            border-radius: 4px;
+            font-size: 11.5px;
+            line-height: 1.45;
+            color: #e2e8f0;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(10, 16, 30, 0.85);
+            padding: 16px 24px;
+            border-radius: 8px;
+            border: 1px solid #10b981;
+            color: #34d399;
+            font-size: 14px;
+            font-weight: 600;
+            display: none;
+            z-index: 200;
+        }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <canvas id="webgl-canvas"></canvas>
+
+    <div class="hud-panel">
+        <div class="hud-header">
+            <div class="hud-title">
+                <span>🌿 Botanical & Vegetation Engine</span>
+            </div>
+            <span class="badge" id="render-status">READY</span>
+        </div>
+
+        <div class="test-selector-grid">
+            <button class="test-btn" id="btn-test1" onclick="window.loadTest('test1')">1. Raw Scan ("Melted Broccoli")</button>
+            <button class="test-btn" id="btn-test2" onclick="window.loadTest('test2')">2. ExG Detection & Anchors</button>
+            <button class="test-btn" id="btn-test3" onclick="window.loadTest('test3')">3. Space Colonization Tree</button>
+            <button class="test-btn" id="btn-test4" onclick="window.loadTest('test4')">4. Transferred Normals</button>
+            <button class="test-btn" id="btn-test5" onclick="window.loadTest('test5')">5. Clinging Ivy (IvyGen)</button>
+            <button class="test-btn" id="btn-test6" onclick="window.loadTest('test6')">6. Replaced Streetscape</button>
+            <button class="test-btn" id="btn-leaf1" onclick="window.loadTest('leaf1')">7. Ovate Leaf (Midrib Furrow)</button>
+            <button class="test-btn" id="btn-leaf2" onclick="window.loadTest('leaf2')">8. Serrated Birch (Teeth)</button>
+            <button class="test-btn" id="btn-leaf3" onclick="window.loadTest('leaf3')">9. Lobed Oak/Maple Leaf</button>
+            <button class="test-btn" id="btn-leaf4" onclick="window.loadTest('leaf4')">10. MTree Twig Spray (Phyllotaxis)</button>
+            <button class="test-btn" id="btn-leaf5" onclick="window.loadTest('leaf5')">11. Space Tree + Detailed Twigs</button>
+            <button class="test-btn" id="btn-conf1" onclick="window.loadTest('conf1')">12. Conformal Street Tree (7.98m)</button>
+            <button class="test-btn" id="btn-conf2" onclick="window.loadTest('conf2')">13. Conformal Shrub (Multi-Stem)</button>
+            <button class="test-btn" id="btn-conf3" onclick="window.loadTest('conf3')">14. Scan-to-Tree Conformal Overlay</button>
+            <button class="test-btn" id="btn-conf4" onclick="window.loadTest('conf4')">15. Side-by-Side Raw Scans</button>
+            <button class="test-btn" id="btn-smpl1" onclick="window.loadTest('smpl1')">16. SB-Veggie Real Scan Fit</button>
+        </div>
+
+        <div class="metric-row">
+            <span class="metric-label">Pipeline Stage:</span>
+            <span class="metric-val accent" id="metric-stage">Replaced Streetscape</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Geometry Count:</span>
+            <span class="metric-val" id="metric-polys">7,868 Verts | 6,508 Tris</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Botanical Synthesis Law:</span>
+            <span class="metric-val amber" id="metric-law">Runions 2007 + da Vinci Pipe (r^2.2)</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Normal Transfer Method:</span>
+            <span class="metric-val cyan" id="metric-normals">Radial Clump Envelope (Blender Mod)</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Tree Anchor Coords:</span>
+            <span class="metric-val" id="metric-anchor">(1.29m, 0.05m, -2.50m)</span>
+        </div>
+        <div class="metric-row">
+            <span class="metric-label">Height & Tapering:</span>
+            <span class="metric-val accent" id="metric-height">7.67m (Trunk r=0.28m -> 0.022m)</span>
+        </div>
+
+        <div class="annotation-banner" id="annotation-banner">
+            <span>🌿 <b>Visual Inspection:</b> Real-time photogrammetric replacement verified.</span>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loading-indicator">Streaming 3D GLB Asset...</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        const TEST_CONFIGS = {
+            'test1': {
+                name: 'Stage 1: Raw Photogrammetric Scan ("Melted Broccoli")',
+                file: '/models/botanical_tests/test1_raw_photogrammetry_melted_tree.glb',
+                polys: '512 Vertices | 874 Triangles',
+                law: 'None (Raw Unrectified Aerial Photogrammetry)',
+                normals: 'Planar Face Faceted (Noisy Scan)',
+                anchor: 'Unresolved (Melted In Facade/Sidewalk)',
+                height: '5.85m (Amorphous Scan Blob)',
+                camPos: [11.5, 7.5, 9.5],
+                targetPos: [0, 2.5, -2.5],
+                banner: 'Raw aerial photogrammetric mesh: noisy crumpled triangle soup where tree foliage has melted into the building facade and sidewalk.'
+            },
+            'test2': {
+                name: 'Stage 2: Excess Green (ExG) Detection & Anchor Harvesting',
+                file: '/models/botanical_tests/test2_vegetation_detection_anchors.glb',
+                polys: '548 Vertices | 886 Triangles',
+                law: 'Excess Green ExG = 2g - r - b > 0.12',
+                normals: 'Vegetation Classified (False-Color Emerald)',
+                anchor: '(X: 1.29m, Y: 0.05m, Z: -2.50m) [Golden Pin]',
+                height: 'Centroid Harvested at Pavement Elevation',
+                camPos: [10.5, 6.5, 8.5],
+                targetPos: [1.2, 1.0, -2.5],
+                banner: 'Excess Green (ExG) and NDVI isolate vegetative vertices in emerald green, shield foliage from planar architectural snapping, and harvest exact ground tree root anchor coordinates (golden pin).'
+            },
+            'test3': {
+                name: 'Stage 3: Space Colonization Procedural Tree',
+                file: '/models/botanical_tests/test3_space_colonization_procedural_tree.glb',
+                polys: '7,544 Vertices | 6,044 Triangles',
+                law: 'Runions Space Colonization + da Vinci Pipe Law (r^2.2)',
+                normals: 'Transferred Radial Canopy Normals (Mix=0.85)',
+                anchor: 'Plant Root Origin (0.00m, 0.00m, 0.00m)',
+                height: '7.67m (Trunk r=0.28m, Fluted Base=1.8x)',
+                camPos: [9.0, 5.0, 9.0],
+                targetPos: [0, 3.8, 0],
+                banner: 'Native C++20 botanical generator: Runions (2007) light attractors guide branch growth, while Leonardo da Vinci hydraulic pipe law scales branch radii realistically.'
+            },
+            'test4': {
+                name: 'Stage 4: Blender Data Transfer Transferred Normals',
+                file: '/models/botanical_tests/test4_transferred_envelope_normals.glb',
+                polys: '15,088 Vertices | 12,088 Triangles',
+                law: 'Radial Clump Envelope Normal Projection',
+                normals: 'Left: Flat Faceted (Red) | Right: Transferred (Green)',
+                anchor: 'Side-by-Side Architectural Foliage Shading',
+                height: '7.67m Crown Height Comparison',
+                camPos: [16.0, 7.0, 14.0],
+                targetPos: [0, 3.8, 0],
+                banner: 'Comparison: Left crown uses raw face normals (harsh, paper-cut card shading in red); Right crown uses transferred radial clump envelope normals (soft, lush, organic ambient catch in green).'
+            },
+            'test5': {
+                name: 'Stage 5: Obstacle-Clinging Ivy Growth (IvyGen)',
+                file: '/models/botanical_tests/test5_clinging_ivy_facade.glb',
+                polys: '9,560 Vertices | 8,686 Triangles',
+                law: 'Luft IvyGen Surface Projection + Upward Phototropism',
+                normals: 'Dynamic Surface-Projected Adhesion Normals',
+                anchor: 'Root Origin at (0.00m, 0.00m, 3.00m)',
+                height: '6.00m Vertical Wall Climber',
+                camPos: [7.5, 4.5, 7.5],
+                targetPos: [0, 2.8, 0],
+                banner: 'Native C++20 IvyGen generator: ivy creepers cling dynamically to building facades, climb vertically, and wrap architectural obstacles.'
+            },
+            'test6': {
+                name: 'Stage 6: Fully Rectified & Replaced Streetscape',
+                file: '/models/botanical_tests/test6_integrated_streetscape_replacement.glb',
+                polys: '7,868 Vertices | 6,508 Triangles',
+                law: 'Full Hybrid: UTDRA Rectification + Botanical Instancing',
+                normals: 'Transferred Normals + Smooth PBR Limestone Facade',
+                anchor: '(1.29m, 0.05m, -2.50m) with Cobblestone Tree Pit',
+                height: '7.67m Tree + Rectified Facade & Sidewalk',
+                camPos: [12.0, 7.5, 10.0],
+                targetPos: [0.5, 3.0, -2.5],
+                banner: 'Complete integrated solution: raw photogrammetric scan is cleaned, melted tree blob is removed, sidewalk tree pit curb is installed, and native procedural tree is planted at the exact harvested anchor.'
+            },
+            'leaf1': {
+                name: 'Test 7: Single Ovate Simple Leaf (Midrib Furrow + Cupped Lamina)',
+                file: '/models/leaf_tests/leaf_test1_ovate_simple.glb',
+                polys: '177 Vertices | 572 Triangles',
+                law: 'Superelliptic Boundary w(t) + Parabolic Camber Δz = -D·e^(-u²/2σ²) + C·u²',
+                normals: 'Curved Bi-directional Lamina Normals with Double-Sided PBR',
+                anchor: 'Cylindrical Petiole Stem Anchor at Origin',
+                height: '0.43m Total Length (0.08m Petiole + 0.35m Blade)',
+                camPos: [0.42, 0.38, 0.52],
+                targetPos: [0.0, 0.18, 0.0],
+                isLeaf: true,
+                banner: 'Detailed anatomical leaf: cylindrical petiole stalk connects to blade with sunken midrib groove (Gaussian furrow D=0.016m), upward transverse edge cupping (C=0.035m), and longitudinal droop.'
+            },
+            'leaf2': {
+                name: 'Test 8: Serrated Birch Leaf (High-Frequency Tooth Margins)',
+                file: '/models/leaf_tests/leaf_test2_serrated.glb',
+                polys: '221 Vertices | 732 Triangles',
+                law: 'Harmonic Serration Teeth w(t)·(1 + A_serr·sin(2π f_serr t))',
+                normals: 'Serrated Quad Geometry with Edge Bleed Highlights',
+                anchor: 'Flexible Petiole Base at Origin',
+                height: '0.39m Total Length (0.07m Petiole + 0.32m Blade)',
+                camPos: [0.40, 0.36, 0.50],
+                targetPos: [0.0, 0.17, 0.0],
+                isLeaf: true,
+                banner: 'Serrated morphology: 16 harmonic teeth along blade margins, high longitudinal resolution (18 subdivisions), luminous vein coloration, and parabolic transverse camber.'
+            },
+            'leaf3': {
+                name: 'Test 9: Lobed Oak/Maple Leaf (Palmate 5-Point Morphology)',
+                file: '/models/leaf_tests/leaf_test3_lobed_oak_maple.glb',
+                polys: '285 Vertices | 972 Triangles',
+                law: 'Lobed Sine Wave Modulation w(t)·(1 + 0.42·sin(5π t)·sin(π t))',
+                normals: 'Multi-Lobe Surface Normals with Transverse Valley Creases',
+                anchor: 'Petiole Base at Origin',
+                height: '0.45m Total Length (0.09m Petiole + 0.36m Blade)',
+                camPos: [0.44, 0.38, 0.52],
+                targetPos: [0.0, 0.18, 0.0],
+                isLeaf: true,
+                banner: 'Lobed morphology: 5 distinct lobed projections (3 terminal, 2 basal), deep sinus recesses, wide lateral width ratio (0.70), and sunken central midrib furrow.'
+            },
+            'leaf4': {
+                name: 'Test 10: MTree Twig Cluster (Golden Spiral Phyllotaxis Spray)',
+                file: '/models/leaf_tests/leaf_test4_mtree_twig_cluster.glb',
+                polys: '1,344 Vertices | 3,996 Triangles',
+                law: 'Fibonacci Golden Angle Spiral θ_k = k · 137.5077° + 44° Insertion',
+                normals: 'Phototropic Upward Lift + Radial Foliage Normals',
+                anchor: 'Secondary Branching Collar at Origin',
+                height: '0.55m Micro-Twig with 12 Attached Detailed Leaves',
+                camPos: [0.95, 0.75, 0.95],
+                targetPos: [0.0, 0.22, 0.0],
+                isLeaf: true,
+                banner: 'MTree twig cluster spray: 12 detailed leaves distributed along a tapered terminal twig using the Fibonacci golden angle (137.5°), naturally drooping outwards and catching phototropic light.'
+            },
+            'leaf5': {
+                name: 'Test 11: Space Colonization Tree with Detailed Leaves & Twig Sprays',
+                file: '/models/leaf_tests/leaf_test5_space_colonization_detailed_tree.glb',
+                polys: '30,004 Vertices | 76,444 Triangles',
+                law: 'Runions (2007) + da Vinci Pipe Law + MTree Phyllotactic Twigs',
+                normals: 'Transferred Smooth Radial Canopy Envelope Normals',
+                anchor: 'Ground Root Anchor (0.00m, 0.00m, 0.00m)',
+                height: '7.60m Full Architectural Tree with Detailed Twigs',
+                camPos: [9.5, 5.2, 9.5],
+                targetPos: [0.0, 3.8, 0.0],
+                banner: 'Full tree with 30,004 vertices of authentic 3D geometry: terminal twig sprays sprout detailed leaves with midrib grooves and cupping, shaded with soft transferred envelope normals.'
+            },
+            'conf1': {
+                name: 'Test 12: Strategy B Conformal Street Tree (Asymmetric Lean + Clear Trunk)',
+                file: '/models/test_conformal1_asymmetric_street_tree.glb',
+                polys: '113,320 Vertices | 233,812 Triangles',
+                law: 'Strategy B Conformal Attractor Seeding + Allometric Caliper Law',
+                normals: 'Conformal Radial Canopy Transferred Normals',
+                anchor: 'Detected Ground Anchor (0.75m, 0.00m, -0.07m)',
+                height: '7.98m Height (2.12m Clear Trunk + +1.4m Lean)',
+                camPos: [11.5, 6.0, 11.5],
+                targetPos: [0.75, 4.5, 0.0],
+                banner: 'Direct Conformal Seeding (Strategy B): Ingested raw photogrammetric scan telemetry directly guides space colonization. Reconstructs +1.4m phototropic lean, 2.12m clear trunk clearance, and allometric base caliper.'
+            },
+            'conf2': {
+                name: 'Test 13: Strategy B Conformal Multi-Stem Shrub / Hedge (Low Canopy)',
+                file: '/models/test_conformal2_dense_shrub.glb',
+                polys: '33,024 Vertices | 67,664 Triangles',
+                law: 'Shrub Bifurcation: Ground-Level 4-Shoot Radial Basal Colonization',
+                normals: 'Conformal Clump Normals + High-Density Foliage (10 leaves/tip)',
+                anchor: 'Basal Origin (0.00m, 0.05m, 0.00m)',
+                height: '1.71m Shrub Height (Clear Trunk 0.15m)',
+                camPos: [3.8, 2.0, 3.8],
+                targetPos: [0.0, 0.85, 0.0],
+                banner: 'Multi-stem shrub bifurcation: Telemetry detected height < 2.2m with zero clear trunk, automatically triggering basal ground-level multi-shoot branching and high foliage packing density.'
+            },
+            'conf3': {
+                name: 'Test 14: Scan-to-Tree Conformal Overlay (Ghost Scan Alignment Proof)',
+                file: '/models/test_conformal3_envelope_alignment.glb',
+                polys: '113,880 Vertices | 234,812 Triangles',
+                law: 'Conformal Point-Cloud Ingestion Fidelity Verification',
+                normals: 'Generated PBR Foliage + Ghost Photogrammetric Silhouette',
+                anchor: 'Direct Coincident Alignment with Raw Scan',
+                height: '7.98m Asymmetric Canopy Overlay',
+                camPos: [11.5, 6.0, 11.5],
+                targetPos: [0.75, 4.5, 0.0],
+                banner: 'Verification Proof: Procedural tree (green foliage, wooden bark) grows precisely within the envelope of the raw scan silhouette (magenta contour), proving exact shape and lean fidelity.'
+            },
+            'conf4': {
+                name: 'Test 15: Side-by-Side Raw Photogrammetry Scans (Tree + Shrub)',
+                file: '/models/test_conformal4_raw_scans.glb',
+                polys: '912 Vertices | 1,630 Triangles',
+                law: 'Input Raw Scans: Asymmetric Street Tree (Left) & Boxwood Shrub (Right)',
+                normals: 'Raw Photogrammetric Shading with ExG Chlorophyll Coloration',
+                anchor: 'Ground Baselines at Y=0.00m and Y=0.05m',
+                height: '7.80m Street Tree (X=0) and 1.55m Shrub (X=4.5m)',
+                camPos: [10.0, 4.5, 12.0],
+                targetPos: [2.25, 3.0, 0.0],
+                banner: 'Source photogrammetric meshes: Melted broccoli tree scan with +1.4m lean and 2.3m trunk clearance on left; dense rounded boxwood hedge scan on right.'
+            },
+            'smpl1': {
+                name: 'Test 16: SB-Veggie Real Scan Inversion (7.5ms C++ Solver)',
+                file: '/models/smpl_real_data_side_by_side.glb',
+                polys: '1,564 Vertices | 2,098 Triangles',
+                law: 'SB-Veggie Inversion Optimizer (Damped GD: -10% Chamfer Error in 7.5ms)',
+                normals: 'Leonardo da Vinci Pipe Law + Phyllotactic Cards',
+                anchor: 'Side-by-Side: Left Raw Scan (-4m) | Right Fitted SB-Veggie (+4m)',
+                height: '7.80m Height (β₀=3.00, β₁=0.80, β₂=2.20)',
+                camPos: [0.0, 6.0, 16.0],
+                targetPos: [0.0, 4.0, 0.0],
+                banner: 'SB-Veggie Parametric Inversion: Left is raw photogrammetric scan ("melted broccoli"); Right is the watertight, rigged botanical manifold fitted from scan point cloud in 7.5ms with 13-joint skeleton.'
+            }
+        };
+
+        const canvas = document.getElementById('webgl-canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.15;
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050811);
+
+        const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(12.0, 7.5, 10.0);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(0.5, 3.0, -2.5);
+
+        window.camera = camera;
+        window.controls = controls;
+        window.setCamera = function(x, y, z, tx, ty, tz) {
+            camera.position.set(x, y, z);
+            controls.target.set(tx, ty, tz);
+            controls.update();
+        };
+
+        // Lighting
+        const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x0f172a, 0.95);
+        scene.add(hemiLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.8);
+        sunLight.position.set(25, 40, 20);
+        scene.add(sunLight);
+
+        const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.6);
+        fillLight.position.set(-20, 15, -20);
+        scene.add(fillLight);
+
+        const grid = new THREE.GridHelper(30, 30, 0x059669, 0x1e293b);
+        grid.position.y = -0.05;
+        scene.add(grid);
+
+        const leafGrid = new THREE.GridHelper(1.0, 20, 0x10b981, 0x1e293b);
+        leafGrid.position.y = -0.005;
+        leafGrid.visible = false;
+        scene.add(leafGrid);
+
+        const loader = new GLTFLoader();
+        let currentModel = null;
+
+        window.loadTest = function(testKey) {
+            const cfg = TEST_CONFIGS[testKey];
+            if (!cfg) return;
+
+            window.__READY_FOR_SCREENSHOT__ = false;
+            document.querySelectorAll('.test-btn').forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.getElementById('btn-' + testKey);
+            if (activeBtn) activeBtn.classList.add('active');
+
+            document.getElementById('metric-stage').textContent = cfg.name;
+            document.getElementById('metric-polys').textContent = cfg.polys;
+            document.getElementById('metric-law').textContent = cfg.law;
+            document.getElementById('metric-normals').textContent = cfg.normals;
+            document.getElementById('metric-anchor').textContent = cfg.anchor;
+            document.getElementById('metric-height').textContent = cfg.height;
+            document.getElementById('annotation-banner').innerHTML = '<span>🌿 <b>Visual Inspection:</b> ' + cfg.banner + '</span>';
+
+            const loaderElem = document.getElementById('loading-indicator');
+            const statusElem = document.getElementById('render-status');
+            loaderElem.style.display = 'block';
+            statusElem.textContent = 'LOADING';
+
+            if (cfg.isLeaf) {
+                grid.visible = false;
+                leafGrid.visible = true;
+                sunLight.intensity = 2.4;
+            } else {
+                grid.visible = true;
+                leafGrid.visible = false;
+                sunLight.intensity = 1.8;
+            }
+
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel = null;
+            }
+
+            function tryLoad(urls, index) {
+                if (index >= urls.length) {
+                    console.error("Failed to load GLTF across all candidate paths:", cfg.file);
+                    loaderElem.textContent = "Error loading " + cfg.file;
+                    statusElem.textContent = 'ERROR';
+                    return;
+                }
+                const url = urls[index];
+                loader.load(url, (gltf) => {
+                    currentModel = gltf.scene;
+
+                    currentModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+
+                    scene.add(currentModel);
+
+                    camera.position.set(...cfg.camPos);
+                    controls.target.set(...cfg.targetPos);
+                    controls.update();
+
+                    loaderElem.style.display = 'none';
+                    statusElem.textContent = 'READY';
+                    window.__READY_FOR_SCREENSHOT__ = true;
+                }, undefined, (err) => {
+                    console.warn(`Candidate path [${url}] failed, trying next fallback...`, err);
+                    tryLoad(urls, index + 1);
+                });
+            }
+
+            const cleanRel = (cfg.file || '').replace(/^\//, '');
+            const candidateUrls = [
+                cfg.file,
+                cleanRel,
+                '/' + cleanRel,
+                './' + cleanRel,
+                '../' + cleanRel,
+                'http://127.0.0.1:5173/' + cleanRel,
+                'http://localhost:5173/' + cleanRel,
+                'http://127.0.0.1:3030/' + cleanRel,
+                'http://localhost:3030/' + cleanRel
+            ];
+            const uniqueUrls = [...new Set(candidateUrls)];
+            tryLoad(uniqueUrls, 0);
+        };
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Check URL params for ?test=...
+        const urlParams = new URLSearchParams(window.location.search);
+        const requestedTest = urlParams.get('test') || 'test6';
+        window.loadTest(requestedTest);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

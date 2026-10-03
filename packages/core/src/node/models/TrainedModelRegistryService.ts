@@ -10,7 +10,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 
-export type TrainedModelFamily = 'sbhuman' | 'smplx' | 'performer_4dgs' | 'omniroam' | 'geobox' | 'depthbox';
+export type TrainedModelFamily = 'sbhuman' | 'performer_4dgs' | 'geobox' | 'depthbox';
 
 export interface TrainedModelItem {
     id: string;
@@ -75,19 +75,13 @@ export class TrainedModelRegistryService {
         // 1. SB-Human Parametric Humanoid Models (Primary Native Standard)
         models.push(...this.discoverSbHumanModels());
 
-        // 2. SMPL-X Body Models (Compatibility)
-        models.push(...this.discoverSmplxModels());
-
-        // 3. Performer 4DGS Humanoid Models (Demos & Artifacts)
+        // 2. Performer 4DGS Humanoid Models (Demos & Artifacts)
         models.push(...this.discover4DGSModels());
 
-        // 4. OmniRoam Checkpoints
-        models.push(...this.discoverOmniRoamModels());
-
-        // 5. GeoBox Checkpoints & Coordinate Gallery
+        // 3. GeoBox Checkpoints & Coordinate Gallery
         models.push(...this.discoverGeoBoxModels());
 
-        // 6. Standard Pre-converted Splat/GLB Avatars
+        // 4. Standard Pre-converted Splat/GLB Avatars
         models.push(...this.discoverConvertedAvatars());
 
         return models;
@@ -140,58 +134,6 @@ export class TrainedModelRegistryService {
         return results;
     }
 
-    /**
-     * Discovers SMPL-X parametric humanoid body models.
-     * Falls back seamlessly to .sbhuman standard when legacy SMPL-X npz files are not present.
-     */
-    public discoverSmplxModels(): TrainedModelItem[] {
-        const results: TrainedModelItem[] = [];
-        const smplxDir = path.join(this.repoRoot, 'models', 'smplx');
-        const genders = [
-            { id: 'smplx_neutral', name: 'SMPL-X Neutral Body Model', file: 'SMPLX_NEUTRAL.npz' },
-            { id: 'smplx_male', name: 'SMPL-X Male Body Model', file: 'SMPLX_MALE.npz' },
-            { id: 'smplx_female', name: 'SMPL-X Female Body Model', file: 'SMPLX_FEMALE.npz' }
-        ];
-
-        let hasAnyNpz = false;
-        for (const g of genders) {
-            const p = path.join(smplxDir, g.file);
-            const exists = fs.existsSync(p);
-            const size = exists ? fs.statSync(p).size : 0;
-            if (exists && size > 0) hasAnyNpz = true;
-            results.push({
-                id: g.id,
-                name: g.name,
-                family: 'smplx',
-                format: 'npz',
-                filePath: p,
-                webUri: `/models/smplx/${g.file}`,
-                sizeBytes: size,
-                status: exists && size > 0 ? 'ready' : 'missing',
-                metadata: { gender: g.file.replace('SMPLX_', '').replace('.npz', '').toLowerCase() }
-            });
-        }
-
-        // If legacy NPZ files are absent, proxy to the ready .sbhuman models with smplx family tagging
-        if (!hasAnyNpz) {
-            const sbHumans = this.discoverSbHumanModels();
-            if (sbHumans.some(m => m.status === 'ready')) {
-                return sbHumans.map(m => ({
-                    id: m.id.replace('sbhuman_', 'smplx_'),
-                    name: m.name.replace('SB-Human', 'SMPL-X (SB-Human Native)'),
-                    family: 'smplx',
-                    format: 'sbhuman',
-                    filePath: m.filePath,
-                    webUri: m.webUri,
-                    sizeBytes: m.sizeBytes,
-                    status: m.status,
-                    metadata: m.metadata
-                }));
-            }
-        }
-
-        return results;
-    }
 
     /**
      * Discovers Performer 4D Gaussian Splatting humanoid avatars.
@@ -277,34 +219,6 @@ export class TrainedModelRegistryService {
         return results;
     }
 
-    /**
-     * Discovers OmniRoam foundation camera navigation checkpoints.
-     */
-    public discoverOmniRoamModels(): TrainedModelItem[] {
-        const results: TrainedModelItem[] = [];
-        const omniDir = path.join(this.repoRoot, 'models', 'omniroam');
-        const checkpoints = [
-            { id: 'omniroam_preview', name: 'OmniRoam Stage 1 Preview Checkpoint', file: 'preview.ckpt' },
-            { id: 'omniroam_refine', name: 'OmniRoam Stage 2 Refinement Checkpoint', file: 'refine.ckpt' }
-        ];
-
-        for (const cp of checkpoints) {
-            const p = path.join(omniDir, cp.file);
-            const exists = fs.existsSync(p);
-            const size = exists ? fs.statSync(p).size : 0;
-            results.push({
-                id: cp.id,
-                name: cp.name,
-                family: 'omniroam',
-                format: 'ckpt',
-                filePath: p,
-                webUri: `/models/omniroam/${cp.file}`,
-                sizeBytes: size,
-                status: exists && size > 0 ? 'ready' : 'missing'
-            });
-        }
-        return results;
-    }
 
     /**
      * Discovers GeoBox vision-location foundation models and gallery embeddings.
@@ -404,25 +318,6 @@ export class TrainedModelRegistryService {
     }
 
     /**
-     * Returns SMPL-X model file path for the requested gender.
-     * Falls back to .sbhuman when SMPL-X npz files are not present.
-     */
-    public getSmplxModel(gender: 'neutral' | 'male' | 'female'): string | undefined {
-        const filename = `SMPLX_${gender.toUpperCase()}.npz`;
-        const p = path.join(this.repoRoot, 'models', 'smplx', filename);
-        if (fs.existsSync(p)) return p;
-        return this.getSbHumanModel(gender);
-    }
-
-    /**
-     * Returns OmniRoam checkpoint file path.
-     */
-    public getOmniRoamCheckpoint(type: 'preview' | 'refine'): string | undefined {
-        const p = path.join(this.repoRoot, 'models', 'omniroam', `${type}.ckpt`);
-        return fs.existsSync(p) ? p : undefined;
-    }
-
-    /**
      * Returns GeoBox checkpoint path.
      */
     public getGeoBoxCheckpoint(version: string = 'real_trained'): string | undefined {
@@ -437,9 +332,7 @@ export class TrainedModelRegistryService {
         const all = this.discoverAllModels();
         const families: Record<TrainedModelFamily, number> = {
             sbhuman: 0,
-            smplx: 0,
             performer_4dgs: 0,
-            omniroam: 0,
             geobox: 0,
             depthbox: 0
         };

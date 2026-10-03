@@ -28,7 +28,7 @@ async function runInContextPatternMatchingTestSuite() {
         {
             path: 'src/services/user-auth-service.ts',
             content: `
-import { injectable, inject } from '@theia/core/shared/inversify';
+import { injectable, inject } from 'inversify';
 
 @injectable()
 export class UserAuthService {
@@ -123,7 +123,7 @@ async function testUserAuth() {
 
     await fs.writeFile(
         path.join(tempDir, 'src', 'demo-service.ts'),
-        `import { injectable } from '@theia/core/shared/inversify';
+        `import { injectable } from 'inversify';
 @injectable()
 export class DemoService {}`
     );

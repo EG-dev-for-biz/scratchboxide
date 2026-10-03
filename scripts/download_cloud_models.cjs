@@ -2,8 +2,7 @@
  * Download Trained Models and Checkpoints from Google Cloud Run / Cloud Storage to Local Drive.
  * 
  * Supports:
- * - Performer / 4DGS Humanoid Models and SMPL-X Base Weights (scratchbox-canvas-multiview-artifacts)
- * - OmniRoam Preview & Refine Checkpoints (wander-ray-models-scratchbox-canvas)
+ * - Performer / 4DGS Humanoid Models (scratchbox-canvas-multiview-artifacts)
  * - GeoBox Location Checkpoints & Gallery (scratchbox-canvas-geobox)
  */
 
@@ -107,36 +106,13 @@ async function main() {
   let token = await getAccessToken(sa);
   console.log('✅ Acquired OAuth2 access token.\n');
 
-  // 1. SMPL-X Body Models (311 MB)
-  console.log('--- Step 1: Downloading SMPL-X Body Models ---');
-  const smplxFiles = [
-    'models/body_models/smplx/SMPLX_FEMALE.npz',
-    'models/body_models/smplx/SMPLX_MALE.npz',
-    'models/body_models/smplx/SMPLX_NEUTRAL.npz'
-  ];
-  for (const file of smplxFiles) {
-    const local = path.join(REPO_ROOT, 'models', 'smplx', path.basename(file));
-    await downloadFile('scratchbox-canvas-multiview-artifacts', file, local, token);
-  }
-
-  // 2. Performer Trained 4DGS Humanoid Models (artifacts/ ~86 MB and demos/ ~98 MB)
-  console.log('\n--- Step 2: Downloading Performer Trained Humanoid Models (4DGS) ---');
+// 1. Performer Trained 4DGS Humanoid Models (artifacts/ ~86 MB and demos/ ~98 MB)
+  console.log('--- Step 1: Downloading Performer Trained Humanoid Models (4DGS) ---');
   await downloadPrefix('scratchbox-canvas-multiview-artifacts', 'artifacts/', path.join(REPO_ROOT, 'models', 'performer_4dgs', 'artifacts'), token);
   await downloadPrefix('scratchbox-canvas-multiview-artifacts', 'demos/', path.join(REPO_ROOT, 'models', 'performer_4dgs', 'demos'), token);
 
-  // 3. OmniRoam Foundation Checkpoints (~6 GB)
-  console.log('\n--- Step 3: Downloading OmniRoam Checkpoints ---');
-  const omniFiles = [
-    'OmniRoam/Preview/preview.ckpt',
-    'OmniRoam/Refine/refine.ckpt'
-  ];
-  for (const file of omniFiles) {
-    const local = path.join(REPO_ROOT, 'models', 'omniroam', path.basename(file));
-    await downloadFile('wander-ray-models-scratchbox-canvas', file, local, token);
-  }
-
-  // 4. GeoBox Checkpoint and Gallery
-  console.log('\n--- Step 4: Verifying GeoBox Checkpoint & Gallery ---');
+  // 2. GeoBox Checkpoint and Gallery
+  console.log('\n--- Step 2: Verifying GeoBox Checkpoint & Gallery ---');
   const geoboxLocal = path.join(REPO_ROOT, 'build', 'geobox_checkpoints', 'geobox_real_trained.pt');
   await downloadFile('scratchbox-canvas-geobox', 'checkpoints/geobox_real_trained.pt', geoboxLocal, token);
 

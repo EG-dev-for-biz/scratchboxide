@@ -6,7 +6,7 @@
 # followed by STAGE=refine (reads the stage); STAGE=all does both in one task.
 # The artifacts bucket is mounted at /mnt/artifacts:
 #   runtime/models/        cached weights
-#   models/body_models/    licensed SMPL-X
+#   models/body_models/    canonical SbHuman body models
 #   jobs/<JOB_ID>/         input.mp4, scripts/, status.json, log.txt, stage/, output/
 set -euo pipefail
 
@@ -29,18 +29,18 @@ cd /opt/multiview-main
 status setup "linking weights"
 mkdir -p models/body_models input out
 for d in diffusion gvhmr birefnet perceptual; do [ -d "$A/runtime/models/$d" ] && ln -sfn "$A/runtime/models/$d" "models/$d"; done
-ln -sfn "$A/models/body_models/smplx" models/body_models/smplx
-python -c "from fdanyone.download import ensure_smplx, ensure_models; ensure_smplx('models', 'third_party/GVHMR'); ensure_models('models', 'third_party/GVHMR')" || true
+[ -d "$A/models/body_models/sbhuman" ] && ln -sfn "$A/models/body_models/sbhuman" models/body_models/sbhuman || true
+python -c "from performer_4d.download import ensure_models; ensure_models('models', 'third_party/GVHMR')" || true
 python -c "import torch; assert torch.cuda.is_available(); print('cuda', torch.cuda.get_device_name(0))"
 cp "$JOBDIR/input.mp4" "input/$CLIP.mp4"
 rm -rf scripts && cp -r "$JOBDIR/scripts" scripts
 
 STAGE_SRC="$JOBDIR/stage"
 [ -n "${REUSE_FROM:-}" ] && STAGE_SRC="$A/jobs/$REUSE_FROM/stage"
-if [ -f "$STAGE_SRC/fdanyone/$CLIP/cameras.json" ] && [ "$STAGE" != inference ]; then
+if [ -f "$STAGE_SRC/performer_4d/$CLIP/cameras.json" ] && [ "$STAGE" != inference ]; then
   status inference "reusing staged multi-view videos from ${REUSE_FROM:-this job}"
-  mkdir -p data/fdanyone data/gvhmr/results
-  cp -r "$STAGE_SRC/fdanyone/$CLIP" data/fdanyone/
+  mkdir -p data/performer_4d data/gvhmr/results
+  cp -r "$STAGE_SRC/performer_4d/$CLIP" data/performer_4d/
   cp -r "$STAGE_SRC/gvhmr/$CLIP" data/gvhmr/results/
 elif [ "$STAGE" = refine ]; then
   echo "no staged diffusion output at $STAGE_SRC"; false
@@ -48,8 +48,8 @@ else
   status inference "Multi-view diffusion ($VIEWS views/layer, pitches $PITCHES)"
   python inference.py --video_path "input/$CLIP.mp4" --views_per_layer "$VIEWS" \
     --layer_pitches "$PITCHES" --views_per_group "${VIEWS_PER_GROUP:-auto}" --data_dir data --model_dir models
-  mkdir -p "$JOBDIR/stage/fdanyone" "$JOBDIR/stage/gvhmr"
-  cp -r "data/fdanyone/$CLIP" "$JOBDIR/stage/fdanyone/"
+  mkdir -p "$JOBDIR/stage/performer_4d" "$JOBDIR/stage/gvhmr"
+  cp -r "data/performer_4d/$CLIP" "$JOBDIR/stage/performer_4d/"
   cp -r "data/gvhmr/results/$CLIP" "$JOBDIR/stage/gvhmr/"
 fi
 if [ "$STAGE" = inference ]; then
@@ -64,13 +64,13 @@ python scripts/run_gvhmr.py --video "input/$CLIP.mp4" --out-dir out --device cud
 
 status refine "animatable Gaussian avatar training ($ITERS iterations)"
 python scripts/refine_multiview_avatar.py --body out/gvhmr_body.json \
-  --result-dir "data/fdanyone/$CLIP" --source out/gvhmr_input.mp4 --out-dir out/refined \
-  --birefnet models/birefnet --fdanyone-root . --iters "$ITERS" --max-seconds "${REFINE_MAX_SECONDS:-0}"
+  --result-dir "data/performer_4d/$CLIP" --source out/gvhmr_input.mp4 --out-dir out/refined \
+  --birefnet models/birefnet --performer_4d-root . --iters "$ITERS" --max-seconds "${REFINE_MAX_SECONDS:-0}"
 
 status upload "writing results"
 mkdir -p "$JOBDIR/output"
 cp out/gvhmr_body.json "$JOBDIR/output/"
-cp -r out/refined "data/fdanyone/$CLIP/cameras.json" "data/fdanyone/$CLIP/metadata.json" \
-  "data/fdanyone/$CLIP/videos" "$JOBDIR/output/"
+cp -r out/refined "data/performer_4d/$CLIP/cameras.json" "data/performer_4d/$CLIP/metadata.json" \
+  "data/performer_4d/$CLIP/videos" "$JOBDIR/output/"
 cp "$LOG" "$JOBDIR/log.txt"
 status done "complete"

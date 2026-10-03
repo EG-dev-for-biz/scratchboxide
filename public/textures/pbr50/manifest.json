@@ -1,0 +1,507 @@
+{
+  "version": "2.0.0",
+  "resolution": 1024,
+  "materialCount": 50,
+  "materials": [
+    {
+      "id": 0,
+      "key": "indiana_limestone",
+      "name": "Indiana Limestone (Honed)",
+      "category": "Stones",
+      "baseRoughness": 0.76,
+      "baseMetallic": 0.02,
+      "normalStrength": 1.8,
+      "description": "Porous warm-grey oolitic calcarenite limestone with subtle quarry grain"
+    },
+    {
+      "id": 1,
+      "key": "portland_stone",
+      "name": "Portland Stone (Weathered)",
+      "category": "Stones",
+      "baseRoughness": 0.82,
+      "baseMetallic": 0.01,
+      "normalStrength": 2.2,
+      "description": "Fossiliferous British limestone with micro-shell fragments and weathered pitting"
+    },
+    {
+      "id": 2,
+      "key": "roman_travertine",
+      "name": "Roman Travertine (Polished)",
+      "category": "Stones",
+      "baseRoughness": 0.28,
+      "baseMetallic": 0.02,
+      "normalStrength": 2.4,
+      "description": "Cream sedimentary limestone with filled linear fibrous pore tracks"
+    },
+    {
+      "id": 3,
+      "key": "stratified_sandstone",
+      "name": "Stratified Sandstone",
+      "category": "Stones",
+      "baseRoughness": 0.85,
+      "baseMetallic": 0,
+      "normalStrength": 2.8,
+      "description": "Warm ochre architectural sandstone with pronounced geological bedding laminae"
+    },
+    {
+      "id": 4,
+      "key": "carrara_marble",
+      "name": "Carrara Statuario Marble",
+      "category": "Stones",
+      "baseRoughness": 0.1,
+      "baseMetallic": 0.02,
+      "normalStrength": 1.2,
+      "description": "Pristine white metamorphic marble with delicate grey curl-warped veining"
+    },
+    {
+      "id": 5,
+      "key": "nero_marquina",
+      "name": "Nero Marquina Black Marble",
+      "category": "Stones",
+      "baseRoughness": 0.12,
+      "baseMetallic": 0.03,
+      "normalStrength": 1.4,
+      "description": "Deep midnight-black limestone marble with stark branching white calcite veins"
+    },
+    {
+      "id": 6,
+      "key": "charcoal_granite",
+      "name": "Charcoal Granite (Polished)",
+      "category": "Stones",
+      "baseRoughness": 0.32,
+      "baseMetallic": 0.06,
+      "normalStrength": 1.8,
+      "description": "Speckled dark plutonic granite with quartz, feldspar, and biotite grains"
+    },
+    {
+      "id": 7,
+      "key": "flamed_granite",
+      "name": "Grey Flamed Granite",
+      "category": "Stones",
+      "baseRoughness": 0.88,
+      "baseMetallic": 0.04,
+      "normalStrength": 3.2,
+      "description": "Thermal flamed slip-resistant architectural granite with fractured micro-relief"
+    },
+    {
+      "id": 8,
+      "key": "volcanic_basalt",
+      "name": "Volcanic Basalt (Vesicular)",
+      "category": "Stones",
+      "baseRoughness": 0.8,
+      "baseMetallic": 0.02,
+      "normalStrength": 2.6,
+      "description": "Dark aphanitic volcanic basalt with fine spherical gas vesicles"
+    },
+    {
+      "id": 9,
+      "key": "welsh_slate",
+      "name": "Welsh Roofing Slate",
+      "category": "Stones",
+      "baseRoughness": 0.45,
+      "baseMetallic": 0.01,
+      "normalStrength": 2.5,
+      "description": "Cleaved metamorphic slate displaying planar sheet foliation"
+    },
+    {
+      "id": 10,
+      "key": "weathered_concrete",
+      "name": "Weathered Structural Concrete",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.78,
+      "baseMetallic": 0.02,
+      "normalStrength": 2.5,
+      "description": "Cast concrete with board form seams, fine aggregate specks, and micro-cracks"
+    },
+    {
+      "id": 11,
+      "key": "scored_sidewalk",
+      "name": "Scored Sidewalk Pavement",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.85,
+      "baseMetallic": 0.02,
+      "normalStrength": 2.8,
+      "description": "Light grey broom-finished sidewalk concrete with 1.5m scored contraction joint grid"
+    },
+    {
+      "id": 12,
+      "key": "exposed_aggregate",
+      "name": "Exposed Aggregate Concrete",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.65,
+      "baseMetallic": 0.01,
+      "normalStrength": 3.5,
+      "description": "Washed river pebbles and angular quartz aggregates embedded in cement matrix"
+    },
+    {
+      "id": 13,
+      "key": "asphalt_roadway",
+      "name": "Heavy Asphalt Roadway",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.92,
+      "baseMetallic": 0.01,
+      "normalStrength": 3,
+      "description": "Dense graded bituminous asphalt road with fine crushed basalt aggregates"
+    },
+    {
+      "id": 14,
+      "key": "cobblestone_pavers",
+      "name": "European Cobblestone Pavers",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.75,
+      "baseMetallic": 0.02,
+      "normalStrength": 3.8,
+      "description": "Worn basalt and granite setts with compacted dirt and fine sand mortar joints"
+    },
+    {
+      "id": 15,
+      "key": "flemish_brick",
+      "name": "Flemish Bond Red Brick",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.82,
+      "baseMetallic": 0,
+      "normalStrength": 3.2,
+      "description": "Aged architectural clay brickwork with recessed lime-sand mortar joints"
+    },
+    {
+      "id": 16,
+      "key": "exterior_stucco",
+      "name": "Weathered Exterior Stucco",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.88,
+      "baseMetallic": 0,
+      "normalStrength": 2.2,
+      "description": "Troweled exterior Portland cement stucco with sandy tactile grain"
+    },
+    {
+      "id": 17,
+      "key": "polished_terrazzo",
+      "name": "Polished Architectural Terrazzo",
+      "category": "Concrete & Paving",
+      "baseRoughness": 0.15,
+      "baseMetallic": 0.02,
+      "normalStrength": 1,
+      "description": "Honed composite floor featuring multi-colored marble aggregate chips in cement"
+    },
+    {
+      "id": 18,
+      "key": "statuary_bronze",
+      "name": "Statuary Cast Bronze",
+      "category": "Metals",
+      "baseRoughness": 0.35,
+      "baseMetallic": 0.88,
+      "normalStrength": 2.2,
+      "description": "Architectural bronze with dark brown oxide patina and golden burnished wear"
+    },
+    {
+      "id": 19,
+      "key": "polished_brass",
+      "name": "Polished Architectural Brass",
+      "category": "Metals",
+      "baseRoughness": 0.18,
+      "baseMetallic": 0.95,
+      "normalStrength": 1.2,
+      "description": "High-specular warm yellow copper-zinc alloy with subtle buffing grain"
+    },
+    {
+      "id": 20,
+      "key": "brushed_titanium",
+      "name": "Aerospace Brushed Titanium",
+      "category": "Metals",
+      "baseRoughness": 0.25,
+      "baseMetallic": 0.96,
+      "normalStrength": 2,
+      "description": "Linear anisotropic hairline scratch pattern on durable titanium"
+    },
+    {
+      "id": 21,
+      "key": "turned_aluminum",
+      "name": "Turned Lathe Aluminum",
+      "category": "Metals",
+      "baseRoughness": 0.22,
+      "baseMetallic": 0.95,
+      "normalStrength": 2.2,
+      "description": "Concentric circular lathe machining marks with anisotropic radial sheen"
+    },
+    {
+      "id": 22,
+      "key": "galvanized_steel",
+      "name": "Hot-Dipped Galvanized Steel",
+      "category": "Metals",
+      "baseRoughness": 0.3,
+      "baseMetallic": 0.92,
+      "normalStrength": 1.8,
+      "description": "Silvery zinc coating with crystalline spangle dendritic flake crystallization"
+    },
+    {
+      "id": 23,
+      "key": "corten_steel",
+      "name": "Cor-Ten Weathering Steel",
+      "category": "Metals",
+      "baseRoughness": 0.88,
+      "baseMetallic": 0.35,
+      "normalStrength": 3.2,
+      "description": "Velvety iron-oxide rust patina in rich terracotta-orange tones"
+    },
+    {
+      "id": 24,
+      "key": "wrought_iron",
+      "name": "Wrought Ornamental Iron",
+      "category": "Metals",
+      "baseRoughness": 0.48,
+      "baseMetallic": 0.82,
+      "normalStrength": 2.8,
+      "description": "Hand-hammered black forged iron with ball-peen dimpling and edge wear"
+    },
+    {
+      "id": 25,
+      "key": "mirror_chrome",
+      "name": "Mirror-Finish Chrome",
+      "category": "Metals",
+      "baseRoughness": 0.04,
+      "baseMetallic": 0.99,
+      "normalStrength": 0.5,
+      "description": "Ultra-smooth high-reflectance chrome conductor plating"
+    },
+    {
+      "id": 26,
+      "key": "copper_verdigris",
+      "name": "Oxidized Copper Verdigris",
+      "category": "Metals",
+      "baseRoughness": 0.82,
+      "baseMetallic": 0.15,
+      "normalStrength": 3,
+      "description": "Atmospheric weathered copper with powdery verdigris basic carbonate crust"
+    },
+    {
+      "id": 27,
+      "key": "champagne_gold",
+      "name": "Anodized Champagne Gold",
+      "category": "Metals",
+      "baseRoughness": 0.28,
+      "baseMetallic": 0.9,
+      "normalStrength": 1.4,
+      "description": "Satin architectural anodized aluminum with warm champagne gold sheen"
+    },
+    {
+      "id": 28,
+      "key": "stainless_steel_316",
+      "name": "Brushed Stainless Steel 316",
+      "category": "Metals",
+      "baseRoughness": 0.22,
+      "baseMetallic": 0.95,
+      "normalStrength": 1.6,
+      "description": "Marine-grade exterior stainless steel with fine directional brush lines"
+    },
+    {
+      "id": 29,
+      "key": "cast_pewter",
+      "name": "Cast Pewter / Lead Flashing",
+      "category": "Metals",
+      "baseRoughness": 0.52,
+      "baseMetallic": 0.78,
+      "normalStrength": 2,
+      "description": "Soft malleable dull grey metal with soft specular diffusion for roofing flashings"
+    },
+    {
+      "id": 30,
+      "key": "solar_low_e_glass",
+      "name": "Solar Low-E Reflective Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.06,
+      "baseMetallic": 0.92,
+      "normalStrength": 0.4,
+      "description": "High-performance tinted architectural glazing with deep blue-grey solar reflectance"
+    },
+    {
+      "id": 31,
+      "key": "low_iron_glass",
+      "name": "Ultra-Clear Low-Iron Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.03,
+      "baseMetallic": 0.02,
+      "normalStrength": 0.2,
+      "description": "Crystal clear Starphire glass with neutral crisp specular highlights"
+    },
+    {
+      "id": 32,
+      "key": "fluted_glass",
+      "name": "Fluted Reeded Architectural Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.12,
+      "baseMetallic": 0.04,
+      "normalStrength": 3.5,
+      "description": "Prismatic vertical half-round reeded flutes for privacy and light diffusion"
+    },
+    {
+      "id": 33,
+      "key": "frosted_glass",
+      "name": "Acid-Etched Frosted Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.45,
+      "baseMetallic": 0.02,
+      "normalStrength": 1.2,
+      "description": "Uniform transmissive micro-roughness with diffuse light scattering"
+    },
+    {
+      "id": 34,
+      "key": "wire_safety_glass",
+      "name": "Wire-Reinforced Safety Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.08,
+      "baseMetallic": 0.08,
+      "normalStrength": 1.6,
+      "description": "Architectural glass with embedded internal steel diamond wire mesh"
+    },
+    {
+      "id": 35,
+      "key": "tinted_bronze_glass",
+      "name": "Tinted Bronze Solar Glass",
+      "category": "Glazing",
+      "baseRoughness": 0.08,
+      "baseMetallic": 0.85,
+      "normalStrength": 0.4,
+      "description": "Warm bronze-tinted solar control float glass"
+    },
+    {
+      "id": 36,
+      "key": "bitumen_gravel_roof",
+      "name": "Bitumen Tar & Gravel Ballast",
+      "category": "Roofing",
+      "baseRoughness": 0.92,
+      "baseMetallic": 0.01,
+      "normalStrength": 3.5,
+      "description": "Built-up flat roof with black asphaltic bitumen and crushed mineral chip ballast"
+    },
+    {
+      "id": 37,
+      "key": "standing_seam_copper",
+      "name": "Standing Seam Copper Roof",
+      "category": "Roofing",
+      "baseRoughness": 0.42,
+      "baseMetallic": 0.65,
+      "normalStrength": 3,
+      "description": "Longitudinal folded metal standing seams with pre-patinated verdigris copper"
+    },
+    {
+      "id": 38,
+      "key": "corrugated_roof",
+      "name": "Corrugated Galvanized Roof",
+      "category": "Roofing",
+      "baseRoughness": 0.32,
+      "baseMetallic": 0.92,
+      "normalStrength": 3.8,
+      "description": "Sinusoidal wave corrugated industrial metal sheet roofing"
+    },
+    {
+      "id": 39,
+      "key": "spanish_clay_tiles",
+      "name": "Clay Spanish Barrel Tiles",
+      "category": "Roofing",
+      "baseRoughness": 0.82,
+      "baseMetallic": 0,
+      "normalStrength": 4,
+      "description": "Interlocking curved terracotta clay roof tiles with sun-baked patina"
+    },
+    {
+      "id": 40,
+      "key": "standing_seam_zinc",
+      "name": "Standing Seam Dark Zinc",
+      "category": "Roofing",
+      "baseRoughness": 0.38,
+      "baseMetallic": 0.88,
+      "normalStrength": 3,
+      "description": "Pre-weathered anthracite dark zinc standing seam roof panels"
+    },
+    {
+      "id": 41,
+      "key": "epdm_membrane",
+      "name": "EPDM Waterproofing Membrane",
+      "category": "Roofing",
+      "baseRoughness": 0.7,
+      "baseMetallic": 0.02,
+      "normalStrength": 1.2,
+      "description": "Smooth black vulcanized synthetic rubber membrane with vulcanized seam tape"
+    },
+    {
+      "id": 42,
+      "key": "weathered_oak",
+      "name": "Weathered Exterior Oak",
+      "category": "Wood",
+      "baseRoughness": 0.78,
+      "baseMetallic": 0,
+      "normalStrength": 2.8,
+      "description": "Weathered silver-grey architectural timber with open grain and micro-fissures"
+    },
+    {
+      "id": 43,
+      "key": "endgrain_timber",
+      "name": "Concentric End-Grain Timber",
+      "category": "Wood",
+      "baseRoughness": 0.55,
+      "baseMetallic": 0,
+      "normalStrength": 2.5,
+      "description": "Cross-cut timber block with circular annual rings and radial medullary rays"
+    },
+    {
+      "id": 44,
+      "key": "polished_walnut",
+      "name": "Polished Quartersawn Walnut",
+      "category": "Wood",
+      "baseRoughness": 0.22,
+      "baseMetallic": 0,
+      "normalStrength": 1.4,
+      "description": "Fine interior architectural walnut paneling with rich chatoyancy and grain"
+    },
+    {
+      "id": 45,
+      "key": "marine_teak",
+      "name": "Marine Teak Decking",
+      "category": "Wood",
+      "baseRoughness": 0.45,
+      "baseMetallic": 0,
+      "normalStrength": 2.6,
+      "description": "Straight-grain golden teak boards with flexible black polysulfide caulking seams"
+    },
+    {
+      "id": 46,
+      "key": "art_deco_chevron",
+      "name": "Art Deco Chevron Spandrel",
+      "category": "Reliefs & Finishes",
+      "baseRoughness": 0.32,
+      "baseMetallic": 0.85,
+      "normalStrength": 3.6,
+      "description": "Geometric stepped chevron relief spandrel panel in cast bronze"
+    },
+    {
+      "id": 47,
+      "key": "chipped_enamel_rust",
+      "name": "Chipped Enamel on Rusted Iron",
+      "category": "Reliefs & Finishes",
+      "baseRoughness": 0.65,
+      "baseMetallic": 0.4,
+      "normalStrength": 3.2,
+      "description": "Peeling high-gloss architectural enamel over pitted rust iron substrate"
+    },
+    {
+      "id": 48,
+      "key": "salt_efflorescence",
+      "name": "Salt Efflorescence Masonry",
+      "category": "Reliefs & Finishes",
+      "baseRoughness": 0.88,
+      "baseMetallic": 0,
+      "normalStrength": 2.6,
+      "description": "Crystalline white mineral salt efflorescence bleeding across damp brick/stone"
+    },
+    {
+      "id": 49,
+      "key": "mossy_rock_crevice",
+      "name": "Mossy Rock Crevice Weathering",
+      "category": "Reliefs & Finishes",
+      "baseRoughness": 0.75,
+      "baseMetallic": 0,
+      "normalStrength": 3.4,
+      "description": "Stone masonry with moisture staining and moss/lichen vegetation in crevices"
+    }
+  ]
+}

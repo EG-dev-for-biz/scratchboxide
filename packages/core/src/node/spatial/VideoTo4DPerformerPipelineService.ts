@@ -278,8 +278,6 @@ export const SBHUMAN_22_JOINTS: Array<{ index: number; name: string; parent: num
     { index: 21, name: 'right_wrist',     parent: 19, restOffset: [0.34, 0.88, -0.01] }
 ];
 
-// Backward compatibility alias for legacy SMPL-X nomenclature
-export const SMPLX_22_JOINTS = SBHUMAN_22_JOINTS;
 
 // ============================================================================
 // Video-to-Performer 4D Projection Pipeline Service

@@ -25,7 +25,7 @@ async function runSemanticSymbolGraphTestSuite() {
     console.log('\n--- Section 1: TypeScript AST Symbol Extraction ---');
 
     const sampleTsCode = `
-import { ILogger } from '@theia/core/lib/common';
+import { ILogger } from '@scratchbox/core';
 
 /**
  * Coordinate spatial point in 3D frame.

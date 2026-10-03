@@ -181,9 +181,6 @@ export const SBHUMAN_22_PARENTS = [
   -1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19
 ];
 
-/** Backward-compatible aliases */
-export const SMPLX_22_JOINT_NAMES = SBHUMAN_22_JOINT_NAMES;
-export const SMPLX_22_PARENTS = SBHUMAN_22_PARENTS;
 
 /**
  * Default metric canonical rest joints for SB-Human humanoids.

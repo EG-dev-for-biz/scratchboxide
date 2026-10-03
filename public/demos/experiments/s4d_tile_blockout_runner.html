@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Google 3D Tile Blockout Video Recorder (<VIDEO_REF_0>)</title>
+  <style>
+    body {
+      margin: 0;
+      background: #dce3eb;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+    }
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      color: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 1.4;
+      pointer-events: none;
+      z-index: 100;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/node_modules/three/build/three.module.js",
+      "three/addons/": "/node_modules/three/examples/jsm/",
+      "3d-tiles-renderer": "/node_modules/3d-tiles-renderer/build/index.js",
+      "3d-tiles-renderer/plugins": "/node_modules/3d-tiles-renderer/build/index.plugins.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <div><strong>Google 3D Tile Blockout Recorder</strong> (<span id="renderMode">textured</span>)</div>
+    <div>Anchor: 40.764500, -73.974400 | LOD errorTarget: 0.5</div>
+    <div id="progress">Initializing Three.js & 3D Tiles...</div>
+    <div id="stats" style="font-size: 11px; opacity: 0.8; margin-top: 4px;">Downloading root octree...</div>
+  </div>
+  <div id="container"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { TilesRenderer } from '3d-tiles-renderer';
+    import { GoogleCloudAuthPlugin } from '3d-tiles-renderer/plugins';
+    import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+    const hudProgress = document.getElementById('progress');
+    const hudStats = document.getElementById('stats');
+    const container = document.getElementById('container');
+    const urlParams = new URLSearchParams(window.location.search);
+    const FRAMES = [{"frame":1,"timeSec":0,"position":[46.5,67,0.4],"target":[32,72.8,3.4],"up":[0,1,0],"fov":52,"rollDeg":0},{"frame":2,"timeSec":0.0418,"position":[46.532,66.783,0.561],"target":[32.068,72.585,2.835],"up":[0,1,0],"fov":51.79,"rollDeg":0},{"frame":3,"timeSec":0.0837,"position":[46.574,66.505,0.767],"target":[32.161,72.312,2.037],"up":[0,1,0],"fov":51.58,"rollDeg":0},{"frame":4,"timeSec":0.1255,"position":[46.623,66.177,1.01],"target":[32.274,71.989,1.072],"up":[0,1,0],"fov":51.37,"rollDeg":0},{"frame":5,"timeSec":0.1674,"position":[46.679,65.809,1.284],"target":[32.399,71.626,0.006],"up":[0,1,0],"fov":51.16,"rollDeg":0},{"frame":6,"timeSec":0.2092,"position":[46.738,65.41,1.579],"target":[32.529,71.233,-1.096],"up":[0,1,0],"fov":50.95,"rollDeg":0},{"frame":7,"timeSec":0.251,"position":[46.799,64.992,1.889],"target":[32.657,70.819,-2.169],"up":[0,1,0],"fov":50.74,"rollDeg":0},{"frame":8,"timeSec":0.2929,"position":[46.86,64.565,2.207],"target":[32.778,70.394,-3.147],"up":[0,1,0],"fov":50.54,"rollDeg":0},{"frame":9,"timeSec":0.3347,"position":[46.919,64.139,2.524],"target":[32.883,69.968,-3.963],"up":[0,1,0],"fov":50.33,"rollDeg":0},{"frame":10,"timeSec":0.3766,"position":[46.972,63.724,2.833],"target":[32.966,69.551,-4.554],"up":[0,1,0],"fov":50.12,"rollDeg":0},{"frame":11,"timeSec":0.4184,"position":[47.021,63.327,3.13],"target":[33.021,69.148,-4.862],"up":[0,1,0],"fov":49.91,"rollDeg":0},{"frame":12,"timeSec":0.4603,"position":[47.069,62.934,3.43],"target":[33.054,68.747,-4.938],"up":[0,1,0],"fov":49.7,"rollDeg":0},{"frame":13,"timeSec":0.5021,"position":[47.116,62.539,3.737],"target":[33.071,68.341,-4.83],"up":[0,1,0],"fov":49.49,"rollDeg":0},{"frame":14,"timeSec":0.5439,"position":[47.164,62.139,4.05],"target":[33.074,67.929,-4.575],"up":[0,1,0],"fov":49.28,"rollDeg":0},{"frame":15,"timeSec":0.5858,"position":[47.21,61.733,4.367],"target":[33.067,67.509,-4.209],"up":[0,1,0],"fov":49.07,"rollDeg":0},{"frame":16,"timeSec":0.6276,"position":[47.254,61.32,4.686],"target":[33.053,67.08,-3.769],"up":[0,1,0],"fov":48.86,"rollDeg":0},{"frame":17,"timeSec":0.6695,"position":[47.295,60.897,5.007],"target":[33.036,66.64,-3.294],"up":[0,1,0],"fov":48.65,"rollDeg":0},{"frame":18,"timeSec":0.7113,"position":[47.333,60.464,5.327],"target":[33.019,66.187,-2.819],"up":[0,1,0],"fov":48.44,"rollDeg":0},{"frame":19,"timeSec":0.7531,"position":[47.367,60.017,5.646],"target":[33.006,65.72,-2.381],"up":[0,1,0],"fov":48.23,"rollDeg":0},{"frame":20,"timeSec":0.795,"position":[47.397,59.556,5.962],"target":[33,65.237,-2.019],"up":[0,1,0],"fov":48.03,"rollDeg":0},{"frame":21,"timeSec":0.8368,"position":[47.42,59.128,6.245],"target":[33,64.787,-1.748],"up":[0,1,0],"fov":47.84,"rollDeg":0},{"frame":22,"timeSec":0.8787,"position":[47.44,58.692,6.527],"target":[33,64.327,-1.477],"up":[0,1,0],"fov":47.65,"rollDeg":0},{"frame":23,"timeSec":0.9205,"position":[47.458,58.243,6.81],"target":[33,63.852,-1.204],"up":[0,1,0],"fov":47.47,"rollDeg":0},{"frame":24,"timeSec":0.9623,"position":[47.474,57.783,7.095],"target":[33,63.365,-0.928],"up":[0,1,0],"fov":47.28,"rollDeg":0},{"frame":25,"timeSec":1.0042,"position":[47.488,57.316,7.379],"target":[33,62.87,-0.651],"up":[0,1,0],"fov":47.1,"rollDeg":0},{"frame":26,"timeSec":1.046,"position":[47.498,56.843,7.662],"target":[33,62.368,-0.374],"up":[0,1,0],"fov":46.91,"rollDeg":0},{"frame":27,"timeSec":1.0879,"position":[47.506,56.367,7.942],"target":[33,61.862,-0.098],"up":[0,1,0],"fov":46.73,"rollDeg":0},{"frame":28,"timeSec":1.1297,"position":[47.51,55.891,8.218],"target":[33,61.356,0.176],"up":[0,1,0],"fov":46.55,"rollDeg":0},{"frame":29,"timeSec":1.1715,"position":[47.51,55.415,8.489],"target":[33,60.852,0.446],"up":[0,1,0],"fov":46.36,"rollDeg":0},{"frame":30,"timeSec":1.2134,"position":[47.507,54.944,8.754],"target":[33,60.352,0.713],"up":[0,1,0],"fov":46.18,"rollDeg":0},{"frame":31,"timeSec":1.2552,"position":[47.5,54.477,9.013],"target":[33,59.859,0.976],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":32,"timeSec":1.2971,"position":[47.486,53.971,9.287],"target":[33,59.325,1.258],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":33,"timeSec":1.3389,"position":[47.466,53.465,9.554],"target":[33,58.792,1.536],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":34,"timeSec":1.3808,"position":[47.44,52.959,9.814],"target":[33,58.259,1.81],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":35,"timeSec":1.4226,"position":[47.411,52.452,10.069],"target":[33,57.727,2.082],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":36,"timeSec":1.4644,"position":[47.378,51.946,10.32],"target":[33,57.195,2.351],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":37,"timeSec":1.5063,"position":[47.342,51.44,10.567],"target":[33,56.663,2.618],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":38,"timeSec":1.5481,"position":[47.305,50.934,10.812],"target":[33,56.13,2.883],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":39,"timeSec":1.59,"position":[47.267,50.428,11.055],"target":[33,55.597,3.147],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":40,"timeSec":1.6318,"position":[47.23,49.922,11.298],"target":[33,55.064,3.41],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":41,"timeSec":1.6736,"position":[47.194,49.417,11.54],"target":[33,54.531,3.672],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":42,"timeSec":1.7155,"position":[47.159,48.916,11.78],"target":[33,54.002,3.932],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":43,"timeSec":1.7573,"position":[47.124,48.412,12.021],"target":[33,53.47,4.192],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":44,"timeSec":1.7992,"position":[47.088,47.906,12.261],"target":[33,52.936,4.452],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":45,"timeSec":1.841,"position":[47.051,47.399,12.499],"target":[33,52.401,4.711],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":46,"timeSec":1.8828,"position":[47.013,46.894,12.735],"target":[33,51.866,4.967],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":47,"timeSec":1.9247,"position":[46.973,46.392,12.966],"target":[33,51.335,5.221],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":48,"timeSec":1.9665,"position":[46.932,45.894,13.192],"target":[33,50.806,5.47],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":49,"timeSec":2.0084,"position":[46.888,45.401,13.411],"target":[33,50.283,5.713],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":50,"timeSec":2.0502,"position":[46.842,44.916,13.623],"target":[33,49.767,5.95],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":51,"timeSec":2.0921,"position":[46.794,44.439,13.826],"target":[33,49.258,6.18],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":52,"timeSec":2.1339,"position":[46.742,43.977,14.016],"target":[33,48.765,6.399],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":53,"timeSec":2.1757,"position":[46.688,43.531,14.195],"target":[33,48.288,6.608],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":54,"timeSec":2.2176,"position":[46.631,43.094,14.364],"target":[33,47.821,6.809],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":55,"timeSec":2.2594,"position":[46.572,42.663,14.527],"target":[33,47.36,7.004],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":56,"timeSec":2.3013,"position":[46.512,42.234,14.686],"target":[33,46.899,7.196],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":57,"timeSec":2.3431,"position":[46.45,41.802,14.844],"target":[33,46.433,7.388],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":58,"timeSec":2.3849,"position":[46.387,41.362,15.003],"target":[33,45.958,7.583],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":59,"timeSec":2.4268,"position":[46.323,40.911,15.167],"target":[33,45.468,7.781],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":60,"timeSec":2.4686,"position":[46.259,40.443,15.337],"target":[33,44.957,7.987],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":61,"timeSec":2.5105,"position":[46.194,39.954,15.517],"target":[33,44.421,8.203],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":62,"timeSec":2.5523,"position":[46.127,39.442,15.708],"target":[33,43.868,8.431],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":63,"timeSec":2.5941,"position":[46.058,38.919,15.904],"target":[33,43.316,8.665],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":64,"timeSec":2.636,"position":[45.988,38.387,16.104],"target":[33,42.759,8.904],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":65,"timeSec":2.6778,"position":[45.917,37.844,16.307],"target":[33,42.19,9.147],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":66,"timeSec":2.7197,"position":[45.845,37.291,16.512],"target":[33,41.602,9.392],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":67,"timeSec":2.7615,"position":[45.773,36.727,16.719],"target":[33,40.99,9.639],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":68,"timeSec":2.8033,"position":[45.7,36.154,16.927],"target":[33,40.346,9.887],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":69,"timeSec":2.8452,"position":[45.628,35.57,17.134],"target":[33,39.665,10.134],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":70,"timeSec":2.887,"position":[45.556,34.975,17.34],"target":[33,38.939,10.379],"up":[0,1,0],"fov":46,"rollDeg":0},{"frame":71,"timeSec":2.9289,"position":[45.485,34.373,17.542],"target":[32.999,38.167,10.62],"up":[-0.0044,1,-0.0024],"fov":46,"rollDeg":0},{"frame":72,"timeSec":2.9707,"position":[45.417,33.755,17.743],"target":[32.981,37.401,10.818],"up":[-0.0249,0.9996,-0.0138],"fov":46,"rollDeg":0},{"frame":73,"timeSec":3.0126,"position":[45.351,33.116,17.946],"target":[32.943,36.639,10.975],"up":[-0.0454,0.9987,-0.0252],"fov":46,"rollDeg":0},{"frame":74,"timeSec":3.0544,"position":[45.286,32.459,18.15],"target":[32.896,35.863,11.11],"up":[-0.0659,0.9972,-0.0365],"fov":46,"rollDeg":0},{"frame":75,"timeSec":3.0962,"position":[45.222,31.792,18.355],"target":[32.847,35.057,11.243],"up":[-0.0863,0.9951,-0.0479],"fov":46,"rollDeg":0},{"frame":76,"timeSec":3.1381,"position":[45.156,31.12,18.558],"target":[32.806,34.202,11.393],"up":[-0.1067,0.9925,-0.0592],"fov":46,"rollDeg":0},{"frame":77,"timeSec":3.1799,"position":[45.089,30.449,18.76],"target":[32.781,33.28,11.578],"up":[-0.1271,0.9894,-0.0704],"fov":46,"rollDeg":0},{"frame":78,"timeSec":3.2218,"position":[45.019,29.786,18.959],"target":[32.782,32.274,11.818],"up":[-0.1474,0.9857,-0.0817],"fov":46,"rollDeg":0},{"frame":79,"timeSec":3.2636,"position":[44.946,29.135,19.154],"target":[32.817,31.167,12.132],"up":[-0.1675,0.9815,-0.0929],"fov":46,"rollDeg":0},{"frame":80,"timeSec":3.3054,"position":[44.868,28.503,19.346],"target":[32.896,29.941,12.539],"up":[-0.1876,0.9767,-0.104],"fov":46,"rollDeg":0},{"frame":81,"timeSec":3.3473,"position":[44.785,27.896,19.532],"target":[33.027,28.575,13.059],"up":[-0.2111,0.9704,-0.117],"fov":46,"rollDeg":0},{"frame":82,"timeSec":3.3891,"position":[44.694,27.302,19.717],"target":[33.217,26.971,13.746],"up":[-0.2507,0.958,-0.139],"fov":46,"rollDeg":0},{"frame":83,"timeSec":3.431,"position":[44.596,26.715,19.901],"target":[33.46,25.132,14.589],"up":[-0.2898,0.9435,-0.1606],"fov":46,"rollDeg":0},{"frame":84,"timeSec":3.4728,"position":[44.492,26.136,20.084],"target":[33.744,23.123,15.546],"up":[-0.3282,0.9269,-0.1819],"fov":46,"rollDeg":0},{"frame":85,"timeSec":3.5146,"position":[44.385,25.566,20.264],"target":[34.06,21.011,16.573],"up":[-0.3659,0.9083,-0.2028],"fov":46,"rollDeg":0},{"frame":86,"timeSec":3.5565,"position":[44.277,25.008,20.439],"target":[34.397,18.86,17.63],"up":[-0.4027,0.8877,-0.2232],"fov":46,"rollDeg":0},{"frame":87,"timeSec":3.5983,"position":[44.169,24.462,20.61],"target":[34.745,16.737,18.674],"up":[-0.4387,0.8651,-0.2432],"fov":46,"rollDeg":0},{"frame":88,"timeSec":3.6402,"position":[44.065,23.931,20.775],"target":[35.093,14.708,19.661],"up":[-0.4737,0.8406,-0.2626],"fov":46,"rollDeg":0},{"frame":89,"timeSec":3.682,"position":[43.965,23.415,20.932],"target":[35.432,12.837,20.55],"up":[-0.5077,0.8143,-0.2814],"fov":46,"rollDeg":0},{"frame":90,"timeSec":3.7238,"position":[43.873,22.916,21.08],"target":[35.75,11.191,21.299],"up":[-0.5406,0.7861,-0.2997],"fov":46,"rollDeg":0},{"frame":91,"timeSec":3.7657,"position":[43.789,22.435,21.218],"target":[36.038,9.831,21.866],"up":[-0.5716,0.7569,-0.3168],"fov":46,"rollDeg":0},{"frame":92,"timeSec":3.8075,"position":[43.712,21.964,21.349],"target":[36.31,8.712,22.272],"up":[-0.5975,0.7303,-0.3312],"fov":46,"rollDeg":0},{"frame":93,"timeSec":3.8494,"position":[43.64,21.508,21.47],"target":[36.574,7.787,22.548],"up":[-0.6224,0.7026,-0.345],"fov":46,"rollDeg":0},{"frame":94,"timeSec":3.8912,"position":[43.573,21.068,21.583],"target":[36.831,7.027,22.718],"up":[-0.6463,0.6738,-0.3583],"fov":46,"rollDeg":0},{"frame":95,"timeSec":3.9331,"position":[43.51,20.643,21.689],"target":[37.082,6.402,22.804],"up":[-0.6692,0.6439,-0.371],"fov":46,"rollDeg":0},{"frame":96,"timeSec":3.9749,"position":[43.451,20.233,21.788],"target":[37.33,5.885,22.829],"up":[-0.6911,0.6129,-0.3831],"fov":46,"rollDeg":0},{"frame":97,"timeSec":4.0167,"position":[43.395,19.839,21.882],"target":[37.575,5.446,22.815],"up":[-0.7118,0.5811,-0.3946],"fov":46,"rollDeg":0},{"frame":98,"timeSec":4.0586,"position":[43.341,19.46,21.971],"target":[37.82,5.055,22.784],"up":[-0.7315,0.5482,-0.4055],"fov":46,"rollDeg":0},{"frame":99,"timeSec":4.1004,"position":[43.289,19.097,22.056],"target":[38.065,4.685,22.76],"up":[-0.7499,0.5146,-0.4157],"fov":46,"rollDeg":0},{"frame":100,"timeSec":4.1423,"position":[43.238,18.749,22.14],"target":[38.313,4.305,22.765],"up":[-0.7672,0.4801,-0.4253],"fov":46,"rollDeg":0},{"frame":101,"timeSec":4.1841,"position":[43.187,18.417,22.22],"target":[38.564,3.893,22.818],"up":[-0.7817,0.4486,-0.4333],"fov":46,"rollDeg":0},{"frame":102,"timeSec":4.2259,"position":[43.139,18.108,22.294],"target":[38.819,3.512,22.88],"up":[-0.7907,0.4275,-0.4383],"fov":46,"rollDeg":0},{"frame":103,"timeSec":4.2678,"position":[43.093,17.817,22.36],"target":[39.08,3.182,22.932],"up":[-0.7992,0.4062,-0.443],"fov":46,"rollDeg":0},{"frame":104,"timeSec":4.3096,"position":[43.048,17.542,22.421],"target":[39.343,2.894,22.978],"up":[-0.8073,0.3846,-0.4475],"fov":46,"rollDeg":0},{"frame":105,"timeSec":4.3515,"position":[43.006,17.282,22.477],"target":[39.607,2.642,23.017],"up":[-0.815,0.3628,-0.4518],"fov":46,"rollDeg":0},{"frame":106,"timeSec":4.3933,"position":[42.966,17.036,22.531],"target":[39.868,2.417,23.052],"up":[-0.8222,0.3409,-0.4558],"fov":46,"rollDeg":0},{"frame":107,"timeSec":4.4351,"position":[42.927,16.802,22.584],"target":[40.124,2.214,23.083],"up":[-0.829,0.3187,-0.4595],"fov":46,"rollDeg":0},{"frame":108,"timeSec":4.477,"position":[42.891,16.579,22.638],"target":[40.373,2.023,23.113],"up":[-0.8353,0.2964,-0.463],"fov":46,"rollDeg":0},{"frame":109,"timeSec":4.5188,"position":[42.856,16.364,22.693],"target":[40.611,1.838,23.143],"up":[-0.8412,0.2739,-0.4663],"fov":46,"rollDeg":0},{"frame":110,"timeSec":4.5607,"position":[42.824,16.157,22.751],"target":[40.835,1.652,23.174],"up":[-0.8466,0.2512,-0.4693],"fov":46,"rollDeg":0},{"frame":111,"timeSec":4.6025,"position":[42.793,15.957,22.814],"target":[41.045,1.456,23.208],"up":[-0.8515,0.2284,-0.472],"fov":46,"rollDeg":0},{"frame":112,"timeSec":4.6444,"position":[42.765,15.766,22.885],"target":[41.247,1.261,23.243],"up":[-0.8559,0.2055,-0.4745],"fov":46,"rollDeg":0},{"frame":113,"timeSec":4.6862,"position":[42.739,15.586,22.961],"target":[41.445,1.073,23.279],"up":[-0.8599,0.1825,-0.4767],"fov":46,"rollDeg":0},{"frame":114,"timeSec":4.728,"position":[42.714,15.417,23.042],"target":[41.636,0.893,23.314],"up":[-0.8634,0.1594,-0.4786],"fov":46,"rollDeg":0},{"frame":115,"timeSec":4.7699,"position":[42.692,15.258,23.123],"target":[41.818,0.722,23.349],"up":[-0.8665,0.1362,-0.4803],"fov":46,"rollDeg":0},{"frame":116,"timeSec":4.8117,"position":[42.671,15.108,23.203],"target":[41.99,0.563,23.381],"up":[-0.869,0.1129,-0.4817],"fov":46,"rollDeg":0},{"frame":117,"timeSec":4.8536,"position":[42.653,14.967,23.28],"target":[42.149,0.416,23.412],"up":[-0.8711,0.0895,-0.4829],"fov":46,"rollDeg":0},{"frame":118,"timeSec":4.8954,"position":[42.636,14.835,23.351],"target":[42.292,0.284,23.44],"up":[-0.8727,0.0661,-0.4837],"fov":46,"rollDeg":0},{"frame":119,"timeSec":4.9372,"position":[42.621,14.71,23.414],"target":[42.419,0.167,23.465],"up":[-0.8738,0.0427,-0.4844],"fov":46,"rollDeg":0},{"frame":120,"timeSec":4.9791,"position":[42.609,14.592,23.467],"target":[42.527,0.068,23.486],"up":[-0.8745,0.0192,-0.4847],"fov":46,"rollDeg":0},{"frame":121,"timeSec":5.0209,"position":[42.598,14.48,23.506],"target":[42.614,-0.013,23.503],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":122,"timeSec":5.0628,"position":[42.591,14.379,23.532],"target":[42.674,-0.07,23.514],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":123,"timeSec":5.1046,"position":[42.587,14.29,23.547],"target":[42.707,-0.101,23.52],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":124,"timeSec":5.1464,"position":[42.585,14.212,23.552],"target":[42.718,-0.111,23.522],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":125,"timeSec":5.1883,"position":[42.586,14.142,23.549],"target":[42.713,-0.106,23.521],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":126,"timeSec":5.2301,"position":[42.588,14.079,23.542],"target":[42.695,-0.089,23.518],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":127,"timeSec":5.272,"position":[42.591,14.02,23.531],"target":[42.67,-0.066,23.513],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":128,"timeSec":5.3138,"position":[42.595,13.962,23.519],"target":[42.643,-0.041,23.508],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":129,"timeSec":5.3556,"position":[42.598,13.905,23.509],"target":[42.62,-0.018,23.504],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":130,"timeSec":5.3975,"position":[42.6,13.845,23.502],"target":[42.604,-0.003,23.501],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":131,"timeSec":5.4393,"position":[42.6,13.78,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":132,"timeSec":5.4812,"position":[42.6,13.716,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":133,"timeSec":5.523,"position":[42.6,13.654,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":134,"timeSec":5.5649,"position":[42.6,13.592,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":135,"timeSec":5.6067,"position":[42.6,13.531,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":136,"timeSec":5.6485,"position":[42.6,13.471,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":137,"timeSec":5.6904,"position":[42.6,13.412,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":138,"timeSec":5.7322,"position":[42.6,13.354,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":139,"timeSec":5.7741,"position":[42.6,13.297,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":140,"timeSec":5.8159,"position":[42.6,13.241,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":141,"timeSec":5.8577,"position":[42.6,13.186,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":142,"timeSec":5.8996,"position":[42.6,13.132,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":143,"timeSec":5.9414,"position":[42.6,13.08,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":144,"timeSec":5.9833,"position":[42.6,13.03,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":145,"timeSec":6.0251,"position":[42.6,12.981,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":146,"timeSec":6.0669,"position":[42.6,12.932,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":147,"timeSec":6.1088,"position":[42.6,12.884,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":148,"timeSec":6.1506,"position":[42.6,12.835,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":149,"timeSec":6.1925,"position":[42.6,12.787,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":150,"timeSec":6.2343,"position":[42.6,12.738,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":151,"timeSec":6.2762,"position":[42.6,12.689,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":152,"timeSec":6.318,"position":[42.6,12.637,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":153,"timeSec":6.3598,"position":[42.6,12.585,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":154,"timeSec":6.4017,"position":[42.6,12.533,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":155,"timeSec":6.4435,"position":[42.6,12.481,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":156,"timeSec":6.4854,"position":[42.6,12.429,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":157,"timeSec":6.5272,"position":[42.6,12.377,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":158,"timeSec":6.569,"position":[42.6,12.327,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":159,"timeSec":6.6109,"position":[42.6,12.278,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":160,"timeSec":6.6527,"position":[42.6,12.23,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":161,"timeSec":6.6946,"position":[42.6,12.185,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":162,"timeSec":6.7364,"position":[42.6,12.141,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":163,"timeSec":6.7782,"position":[42.6,12.1,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":164,"timeSec":6.8201,"position":[42.6,12.059,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":165,"timeSec":6.8619,"position":[42.6,12.02,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":166,"timeSec":6.9038,"position":[42.6,11.981,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":167,"timeSec":6.9456,"position":[42.6,11.943,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":168,"timeSec":6.9874,"position":[42.6,11.905,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":169,"timeSec":7.0293,"position":[42.6,11.866,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":170,"timeSec":7.0711,"position":[42.6,11.827,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":171,"timeSec":7.113,"position":[42.6,11.788,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":172,"timeSec":7.1548,"position":[42.6,11.747,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":173,"timeSec":7.1967,"position":[42.6,11.706,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":174,"timeSec":7.2385,"position":[42.6,11.664,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":175,"timeSec":7.2803,"position":[42.6,11.623,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":176,"timeSec":7.3222,"position":[42.6,11.582,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":177,"timeSec":7.364,"position":[42.6,11.541,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":178,"timeSec":7.4059,"position":[42.6,11.502,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":179,"timeSec":7.4477,"position":[42.6,11.463,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":180,"timeSec":7.4895,"position":[42.6,11.426,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":181,"timeSec":7.5314,"position":[42.6,11.39,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":182,"timeSec":7.5732,"position":[42.6,11.356,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":183,"timeSec":7.6151,"position":[42.6,11.322,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":184,"timeSec":7.6569,"position":[42.6,11.29,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":185,"timeSec":7.6987,"position":[42.6,11.258,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":186,"timeSec":7.7406,"position":[42.6,11.227,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":187,"timeSec":7.7824,"position":[42.6,11.198,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":188,"timeSec":7.8243,"position":[42.6,11.169,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":189,"timeSec":7.8661,"position":[42.6,11.142,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":190,"timeSec":7.9079,"position":[42.6,11.116,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":191,"timeSec":7.9498,"position":[42.6,11.09,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":192,"timeSec":7.9916,"position":[42.6,11.067,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":193,"timeSec":8.0335,"position":[42.6,11.045,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":194,"timeSec":8.0753,"position":[42.6,11.025,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":195,"timeSec":8.1172,"position":[42.6,11.006,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":196,"timeSec":8.159,"position":[42.6,10.987,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":197,"timeSec":8.2008,"position":[42.6,10.968,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":198,"timeSec":8.2427,"position":[42.6,10.95,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":199,"timeSec":8.2845,"position":[42.6,10.932,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":200,"timeSec":8.3264,"position":[42.6,10.913,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":201,"timeSec":8.3682,"position":[42.6,10.893,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":202,"timeSec":8.41,"position":[42.6,10.872,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":203,"timeSec":8.4519,"position":[42.6,10.851,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":204,"timeSec":8.4937,"position":[42.6,10.829,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":205,"timeSec":8.5356,"position":[42.6,10.808,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":206,"timeSec":8.5774,"position":[42.6,10.787,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":207,"timeSec":8.6192,"position":[42.6,10.766,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":208,"timeSec":8.6611,"position":[42.6,10.746,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":209,"timeSec":8.7029,"position":[42.6,10.728,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":210,"timeSec":8.7448,"position":[42.6,10.711,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":211,"timeSec":8.7866,"position":[42.6,10.695,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":212,"timeSec":8.8285,"position":[42.6,10.682,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":213,"timeSec":8.8703,"position":[42.6,10.67,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":214,"timeSec":8.9121,"position":[42.6,10.659,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":215,"timeSec":8.954,"position":[42.6,10.649,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":216,"timeSec":8.9958,"position":[42.6,10.64,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":217,"timeSec":9.0377,"position":[42.6,10.632,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":218,"timeSec":9.0795,"position":[42.6,10.623,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":219,"timeSec":9.1213,"position":[42.6,10.615,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":220,"timeSec":9.1632,"position":[42.6,10.606,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":221,"timeSec":9.205,"position":[42.6,10.596,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":222,"timeSec":9.2469,"position":[42.6,10.585,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":223,"timeSec":9.2887,"position":[42.6,10.573,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":224,"timeSec":9.3305,"position":[42.6,10.562,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":225,"timeSec":9.3724,"position":[42.6,10.55,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":226,"timeSec":9.4142,"position":[42.6,10.539,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":227,"timeSec":9.4561,"position":[42.6,10.528,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":228,"timeSec":9.4979,"position":[42.6,10.519,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":229,"timeSec":9.5397,"position":[42.6,10.51,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":230,"timeSec":9.5816,"position":[42.6,10.503,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":231,"timeSec":9.6234,"position":[42.6,10.498,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":232,"timeSec":9.6653,"position":[42.6,10.495,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":233,"timeSec":9.7071,"position":[42.6,10.493,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":234,"timeSec":9.749,"position":[42.6,10.493,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":235,"timeSec":9.7908,"position":[42.6,10.493,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":236,"timeSec":9.8326,"position":[42.6,10.495,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":237,"timeSec":9.8745,"position":[42.6,10.497,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":238,"timeSec":9.9163,"position":[42.6,10.498,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":239,"timeSec":9.9582,"position":[42.6,10.499,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0},{"frame":240,"timeSec":10,"position":[42.6,10.5,23.5],"target":[42.6,0,23.5],"up":[-0.8746,0,-0.4848],"fov":46,"rollDeg":0}];
+    const TOTAL_FRAMES = FRAMES.length;
+    const RENDER_MODE = urlParams.get('mode') || urlParams.get('renderMode') || 'textured';
+    const ERROR_TARGET = 0.5;
+    const STABLE_THRESHOLD = 2;
+    const MAX_SETTLE_MS = 3000;
+
+    const renderModeDisplay = document.getElementById('renderMode');
+    if (renderModeDisplay) renderModeDisplay.innerText = RENDER_MODE;
+
+    const width = 1280;
+    const height = 720;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#dce3eb');
+    scene.fog = new THREE.FogExp2('#dce3eb', 0.0022);
+
+    const camera = new THREE.PerspectiveCamera(FRAMES[0].fov || 65, width / height, 0.5, 15000);
+    camera.position.set(FRAMES[0].position[0], FRAMES[0].position[1], FRAMES[0].position[2]);
+    camera.up.set(FRAMES[0].up[0], FRAMES[0].up[1], FRAMES[0].up[2]);
+    camera.lookAt(FRAMES[0].target[0], FRAMES[0].target[1], FRAMES[0].target[2]);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(1);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // Atmosphere Lighting
+    const hemiLight = new THREE.HemisphereLight('#ffffff', '#94a3b8', 0.85);
+    scene.add(hemiLight);
+
+    const sunLight = new THREE.DirectionalLight('#fffaed', 0.95);
+    sunLight.position.set(150, 320, 100);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.camera.near = 10;
+    sunLight.shadow.camera.far = 1200;
+    const d = 350;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
+    sunLight.shadow.bias = -0.00005;
+    sunLight.shadow.normalBias = 0.04;
+    scene.add(sunLight);
+
+    const skyFill = new THREE.DirectionalLight('#93c5fd', 0.45);
+    skyFill.position.set(-150, 180, -120);
+    scene.add(skyFill);
+
+    // 3D Tiles Renderer & Coordinate Matrix
+    const localMatrix = new THREE.Matrix4();
+    localMatrix.set(0.9611384440394719, 0.27606682413753164, 0, 0, 0.20909294756767177, -0.7279660310965166, 0.6529514506049039, -6369016.513801988, 0.18025823328449017, -0.6275767412677135, -0.7573997644262584, -21146.13063929137, 0, 0, 0, 1);
+
+    const tiles = new TilesRenderer();
+    const auth = new GoogleCloudAuthPlugin({
+      apiToken: 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4',
+      autoRefreshToken: true,
+      useRecommendedSettings: false
+    });
+    tiles.registerPlugin(auth);
+
+    tiles.group.matrix.copy(localMatrix);
+    tiles.group.matrixAutoUpdate = false;
+    scene.add(tiles.group);
+
+    tiles.setCamera(camera);
+    // Use 4K SSE resolution to force deep leaf LOD tiles
+    tiles.setResolution(camera, 3840, 2160);
+    tiles.errorTarget = ERROR_TARGET;
+
+    // Expand LRU cache memory budget (4GB) and worker queues to guarantee leaf tiles are never evicted during sweeps
+    const maxBytes = 4096 * 1024 * 1024;
+    if (tiles.lruCache) {
+      tiles.lruCache.maxBytesSize = maxBytes;
+      tiles.lruCache.minBytesSize = Math.floor(maxBytes * 0.8);
+    }
+    if (tiles.downloadQueue) {
+      tiles.downloadQueue.maxJobs = 32;
+    }
+    if (tiles.parseQueue) {
+      tiles.parseQueue.maxJobs = 16;
+    }
+    tiles.maxTilesProcessed = 1000;
+
+    // Architectural studio clay shader configuration & material assignment
+    // diffuseColor.rgb = uTileColor;
+    // roughnessFactor = 0.82;
+    // metalnessFactor = 0.02;
+    const sharedClayMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#dcd6cd'),
+      roughness: 0.82,
+      metalness: 0.02,
+      side: THREE.FrontSide
+    });
+
+    function applyAtmosphereToModel(modelScene) {
+      if (!modelScene) return;
+      modelScene.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (RENDER_MODE === 'clay' || RENDER_MODE === 'greybox' || RENDER_MODE === 'graybox') {
+            child.material = sharedClayMat;
+          } else if (RENDER_MODE === 'clay-hybrid') {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(m => {
+                m.color.set('#dcd6cd');
+                m.roughness = 0.82;
+                m.metalness = 0.02;
+                m.side = THREE.FrontSide;
+                m.needsUpdate = true;
+              });
+            } else if (child.material) {
+              child.material.color.set('#dcd6cd');
+              child.material.roughness = 0.82;
+              child.material.metalness = 0.02;
+              child.material.side = THREE.FrontSide;
+              child.material.needsUpdate = true;
+            }
+          } else if (RENDER_MODE === 'textured' || RENDER_MODE === 'photoreal' || RENDER_MODE === 'full-texture') {
+            // Retain Google 3D Tiles authentic photogrammetric textures and UVs
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach(m => {
+              if (m) {
+                m.side = THREE.DoubleSide; // Prevents backface culling gaps in photogrammetry facades
+                if (m.map) {
+                  m.map.colorSpace = THREE.SRGBColorSpace;
+                  if (renderer && renderer.capabilities) {
+                    m.map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                  }
+                  m.map.generateMipmaps = true;
+                  m.map.minFilter = THREE.LinearMipmapLinearFilter;
+                  m.map.magFilter = THREE.LinearFilter;
+                }
+                m.roughness = Math.max(m.roughness ?? 0.65, 0.45);
+                m.metalness = Math.min(m.metalness ?? 0.05, 0.15);
+                m.needsUpdate = true;
+              }
+            });
+          }
+        }
+      });
+    }
+
+    tiles.addEventListener('load-model', (e) => {
+      if (e && e.scene) {
+        applyAtmosphereToModel(e.scene);
+      }
+    });
+
+    window.tiles = tiles;
+    window.scene = scene;
+    window.camera = camera;
+
+    // Strict Frame Step & Settlement Engine
+    async function executeTrajectoryRecording() {
+      hudProgress.innerText = 'Pre-warming tile streamer across flight trajectory...';
+
+      // Sweep key waypoints along trajectory so all tiles along the flight path are fetched & parsed
+      const prewarmWaypoints = [0, Math.floor(TOTAL_FRAMES * 0.25), Math.floor(TOTAL_FRAMES * 0.5), Math.floor(TOTAL_FRAMES * 0.75), Math.max(0, TOTAL_FRAMES - 1)];
+      for (const wIdx of prewarmWaypoints) {
+        const wf = FRAMES[wIdx];
+        if (!wf) continue;
+        camera.position.set(wf.position[0], wf.position[1], wf.position[2]);
+        camera.up.set(wf.up[0], wf.up[1], wf.up[2]);
+        camera.lookAt(wf.target[0], wf.target[1], wf.target[2]);
+        camera.updateMatrixWorld(true);
+        tiles.setCamera(camera);
+        tiles.setResolution(camera, 3840, 2160);
+        tiles.update();
+        tiles.forEachLoadedModel((modelScene) => {
+          applyAtmosphereToModel(modelScene);
+        });
+        renderer.render(scene, camera);
+        let sampleSettled = 0;
+        while (sampleSettled < 25) {
+          tiles.update();
+          renderer.render(scene, camera);
+          sampleSettled++;
+          await new Promise(r => requestAnimationFrame(r));
+        }
+      }
+
+      // Reset camera to frame 0
+      const f0 = FRAMES[0];
+      camera.position.set(f0.position[0], f0.position[1], f0.position[2]);
+      camera.up.set(f0.up[0], f0.up[1], f0.up[2]);
+      camera.lookAt(f0.target[0], f0.target[1], f0.target[2]);
+      camera.updateMatrixWorld(true);
+      tiles.setCamera(camera);
+      tiles.update();
+      renderer.render(scene, camera);
+
+      // Pre-Render Spatial Clearance & Collision Audit Pass
+      if (false) {
+        hudProgress.innerText = 'Auditing camera trajectory clearance against 3D tiles...';
+        const raycaster = new THREE.Raycaster();
+        const downVector = new THREE.Vector3(0, -1, 0);
+        let collisionViolations = 0;
+        let minClearanceMeters = Infinity;
+        let maxElevationAdjustment = 0;
+        const elevationAdjustments = new Array(TOTAL_FRAMES).fill(0);
+
+        const testMeshes = [];
+        scene.traverse((obj) => {
+          if (obj.isMesh && obj.visible) {
+            testMeshes.push(obj);
+          }
+        });
+
+        const MIN_CLEARANCE = 12;
+        if (testMeshes.length > 0) {
+          for (let i = 0; i < TOTAL_FRAMES; i++) {
+            const f = FRAMES[i];
+            const camPos = new THREE.Vector3(f.position[0], f.position[1], f.position[2]);
+            const probeOrigin = new THREE.Vector3(camPos.x, 450, camPos.z);
+            raycaster.set(probeOrigin, downVector);
+            raycaster.near = 0.1;
+            raycaster.far = 450 + 500;
+
+            const hits = raycaster.intersectObjects(testMeshes, false);
+            let surfaceY = -Infinity;
+            if (hits.length > 0) {
+              surfaceY = hits[0].point.y;
+              const dist = camPos.y - surfaceY;
+              if (dist < minClearanceMeters) {
+                minClearanceMeters = dist;
+              }
+            }
+
+            if (surfaceY > -1e5 && camPos.y <= (surfaceY + MIN_CLEARANCE)) {
+              collisionViolations++;
+              const neededLift = (surfaceY + MIN_CLEARANCE) - camPos.y;
+              elevationAdjustments[i] = Math.max(elevationAdjustments[i], neededLift);
+              maxElevationAdjustment = Math.max(maxElevationAdjustment, neededLift);
+            }
+          }
+        }
+
+        if (minClearanceMeters === Infinity) {
+          minClearanceMeters = 25.0;
+        }
+
+        if (collisionViolations > 0 && true) {
+          hudProgress.innerText = 'Applying adaptive elevation to resolve ' + collisionViolations + ' clearance breaches...';
+          const smoothedAdjustments = new Array(TOTAL_FRAMES).fill(0);
+          const radius = 8;
+          for (let i = 0; i < TOTAL_FRAMES; i++) {
+            let sumWeight = 0;
+            let maxVal = 0;
+            for (let k = -radius; k <= radius; k++) {
+              const idx = Math.min(Math.max(i + k, 0), TOTAL_FRAMES - 1);
+              maxVal = Math.max(maxVal, elevationAdjustments[idx]);
+              const weight = Math.exp(-0.5 * (k * k) / (radius * radius * 0.25));
+              smoothedAdjustments[i] += elevationAdjustments[idx] * weight;
+              sumWeight += weight;
+            }
+            if (sumWeight > 0) smoothedAdjustments[i] /= sumWeight;
+            smoothedAdjustments[i] = Math.max(smoothedAdjustments[i], maxVal * 0.95);
+          }
+
+          for (let i = 0; i < TOTAL_FRAMES; i++) {
+            FRAMES[i].position[1] += smoothedAdjustments[i];
+          }
+        }
+
+        await fetch('/report-collision-audit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: true,
+            violationsDetected: collisionViolations,
+            minClearanceMeters: minClearanceMeters,
+            maxElevationAdjustment: maxElevationAdjustment,
+            pathAdjusted: (collisionViolations > 0 && true),
+            auditPassed: collisionViolations === 0
+          })
+        }).catch(() => {});
+      }
+
+      console.log('🚀 Starting frame-by-frame camera trajectory recording...');
+
+      for (let i = 0; i < TOTAL_FRAMES; i++) {
+        const f = FRAMES[i];
+        camera.position.set(f.position[0], f.position[1], f.position[2]);
+        camera.up.set(f.up[0], f.up[1], f.up[2]);
+        camera.lookAt(f.target[0], f.target[1], f.target[2]);
+        if (f.fov) {
+          camera.fov = f.fov;
+          camera.updateProjectionMatrix();
+        }
+        camera.updateMatrixWorld(true);
+
+        hudProgress.innerText = 'Recording frame ' + (i + 1) + ' / ' + TOTAL_FRAMES + ' (t=' + f.timeSec.toFixed(2) + 's)...';
+
+        // Settling loop: Ensure all leaf tiles for this pose are fully downloaded & parsed
+        let stableCount = 0;
+        const settleStart = Date.now();
+        let totalTilesAtFrame = 0;
+
+        while (Date.now() - settleStart < MAX_SETTLE_MS) {
+          tiles.setCamera(camera);
+          tiles.setResolution(camera, 3840, 2160);
+          tiles.update();
+          tiles.forEachLoadedModel((modelScene) => {
+            applyAtmosphereToModel(modelScene);
+          });
+          renderer.render(scene, camera);
+
+          const stats = tiles.stats;
+          totalTilesAtFrame = stats.loaded || 0;
+          hudStats.innerText = 'Downloading: ' + stats.downloading + ' | Parsing: ' + stats.parsing + ' | Loaded: ' + stats.loaded;
+
+          if (stats.downloading === 0 && stats.parsing === 0 && stats.loaded > 0) {
+            stableCount++;
+            if (stableCount >= STABLE_THRESHOLD) {
+              break;
+            }
+          } else {
+            stableCount = 0;
+          }
+
+          await new Promise(r => requestAnimationFrame(r));
+        }
+
+        const settleTimeMs = Date.now() - settleStart;
+
+        // Final crisp render
+        tiles.forEachLoadedModel((modelScene) => {
+          applyAtmosphereToModel(modelScene);
+        });
+        renderer.render(scene, camera);
+        const dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.96);
+
+        // Upload frame to server
+        await fetch('/upload-frame', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            index: i,
+            total: TOTAL_FRAMES,
+            timeSec: f.timeSec,
+            dataUrl,
+            settleTimeMs,
+            tilesLoaded: totalTilesAtFrame
+          })
+        });
+      }
+
+      // Synthesizing 360° perimeter coverage across flight corridor... Enforcing atomic building integrity
+      hudProgress.innerText = 'Synthesizing 360° perimeter coverage across flight corridor... Enforcing atomic building integrity & multi-tier zenith settle...';
+      const exportCameras = [];
+      const numSampleCams = Math.min(16, TOTAL_FRAMES);
+      for (let s = 0; s < numSampleCams; s++) {
+        const frameIdx = numSampleCams === 1 ? 0 : Math.round((s / (numSampleCams - 1)) * (TOTAL_FRAMES - 1));
+        const f = FRAMES[frameIdx];
+        const cam = new THREE.PerspectiveCamera(f.fov || 52, width / height, 0.5, 25000);
+        cam.position.set(f.position[0], f.position[1], f.position[2]);
+        cam.up.set(f.up[0], f.up[1], f.up[2]);
+        cam.lookAt(f.target[0], f.target[1], f.target[2]);
+        cam.updateProjectionMatrix();
+        cam.updateMatrixWorld(true);
+        exportCameras.push(cam);
+        tiles.setCamera(cam);
+        tiles.setResolution(cam, 3840, 2160);
+      }
+
+      // --- Rule: Zero Building Clipping During Tile Extraction (Atomic Building Integrity) ---
+      // 1. High-Altitude Zenith Context Camera (encompasses full district & tallest skyscraper spires)
+      const zenithAlt = Math.max(1800, 1800.0);
+      const topCamHigh = new THREE.PerspectiveCamera(75, 1.0, 0.5, 35000);
+      topCamHigh.position.set(0, zenithAlt, 0.01);
+      topCamHigh.up.set(0, 0, -1);
+      topCamHigh.lookAt(0, 0, 0);
+      topCamHigh.updateProjectionMatrix();
+      topCamHigh.updateMatrixWorld(true);
+      const topCam = topCamHigh;
+      exportCameras.push(topCam);
+      tiles.setCamera(topCamHigh);
+      tiles.setResolution(topCamHigh, 3840, 2160);
+
+      // 2. Mid-Altitude Zenith Camera (settles high-frequency rooftop & setback details)
+      const topCamMid = new THREE.PerspectiveCamera(70, 1.0, 0.5, 25000);
+      topCamMid.position.set(0, 650.0, 0.01);
+      topCamMid.up.set(0, 0, -1);
+      topCamMid.lookAt(0, 0, 0);
+      topCamMid.updateProjectionMatrix();
+      topCamMid.updateMatrixWorld(true);
+      exportCameras.push(topCamMid);
+      tiles.setCamera(topCamMid);
+      tiles.setResolution(topCamMid, 3840, 2160);
+
+      // 3. Oblique Cardinal Skyline Elevators (ensures vertical building facades & spires settle)
+      const cardinalDist = 650.0;
+      const cardinalAlt = 280.0;
+      const cardinalPositions = [
+        [0, cardinalAlt, cardinalDist],
+        [cardinalDist, cardinalAlt, 0],
+        [0, cardinalAlt, -cardinalDist],
+        [-cardinalDist, cardinalAlt, 0]
+      ];
+      for (const pos of cardinalPositions) {
+        const cardinalCam = new THREE.PerspectiveCamera(65, width / height, 0.5, 25000);
+        cardinalCam.position.set(pos[0], pos[1], pos[2]);
+        cardinalCam.lookAt(0, 120.0, 0);
+        cardinalCam.updateProjectionMatrix();
+        cardinalCam.updateMatrixWorld(true);
+        exportCameras.push(cardinalCam);
+        tiles.setCamera(cardinalCam);
+        tiles.setResolution(cardinalCam, 3840, 2160);
+      }
+
+      // Settle multi-camera coverage so all 360° leaf tiles are unified in tiles.group
+      let multiStableCount = 0;
+      const multiSettleStart = Date.now();
+      while (Date.now() - multiSettleStart < MAX_SETTLE_MS) {
+        tiles.update();
+        tiles.forEachLoadedModel((modelScene) => {
+          applyAtmosphereToModel(modelScene);
+        });
+        const stats = tiles.stats;
+        if (stats.downloading === 0 && stats.parsing === 0) {
+          multiStableCount++;
+          if (multiStableCount >= 5) break;
+        } else {
+          multiStableCount = 0;
+        }
+        await new Promise(r => requestAnimationFrame(r));
+      }
+
+      // Extract high-resolution 3D tile mesh and export as binary .glb
+      hudProgress.innerText = 'Extracting high-resolution 3D tile mesh object...';
+      const exportGroup = new THREE.Group();
+      exportGroup.name = 'Google3DTile_' + RENDER_MODE;
+      let keptMeshes = 0;
+      let keptTris = 0;
+      let keptVerts = 0;
+      const seenMeshes = new Set();
+
+      tiles.group.updateMatrixWorld(true);
+      tiles.group.traverse((node) => {
+        if (node.isMesh && node.geometry && !seenMeshes.has(node.uuid)) {
+          seenMeshes.add(node.uuid);
+          const geom = node.geometry.clone();
+          geom.applyMatrix4(node.matrixWorld);
+          let mat;
+          if (RENDER_MODE === 'clay' || RENDER_MODE === 'greybox' || RENDER_MODE === 'graybox') {
+            mat = sharedClayMat.clone();
+          } else if (Array.isArray(node.material)) {
+            mat = node.material.map(m => m.clone());
+          } else if (node.material) {
+            mat = node.material.clone();
+          } else {
+            mat = new THREE.MeshStandardMaterial({ color: 0xd4d4d8 });
+          }
+          const mesh = new THREE.Mesh(geom, mat);
+          exportGroup.add(mesh);
+          keptMeshes++;
+          keptVerts += geom.attributes.position ? geom.attributes.position.count : 0;
+          keptTris += geom.index ? (geom.index.count / 3) : (geom.attributes.position ? geom.attributes.position.count / 3 : 0);
+        }
+      });
+
+      // Clean up export cameras and restore primary camera
+      for (const c of exportCameras) {
+        tiles.deleteCamera(c);
+      }
+      tiles.setCamera(camera);
+      tiles.setResolution(camera, 3840, 2160);
+
+      try {
+        const exporter = new GLTFExporter();
+        await new Promise((resolveGlb) => {
+          exporter.parse(
+            exportGroup,
+            async (glbArrayBuffer) => {
+              const uint8 = new Uint8Array(glbArrayBuffer);
+              let binaryStr = '';
+              for (let b = 0; b < uint8.length; b++) {
+                binaryStr += String.fromCharCode(uint8[b]);
+              }
+              const base64 = btoa(binaryStr);
+              const bbox = new THREE.Box3().setFromObject(exportGroup);
+              const bsphere = new THREE.Sphere();
+              bbox.getBoundingSphere(bsphere);
+              const calculatedBBox = {
+                min: [bbox.min.x, bbox.min.y, bbox.min.z],
+                max: [bbox.max.x, bbox.max.y, bbox.max.z]
+              };
+              const calculatedBSphere = {
+                center: [bsphere.center.x, bsphere.center.y, bsphere.center.z],
+                radius: bsphere.radius
+              };
+
+              await fetch('/upload-glb', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  base64,
+                  meshStats: {
+                    name: 'Google3DTile_' + RENDER_MODE,
+                    submeshCount: keptMeshes,
+                    vertexCount: keptVerts,
+                    triangleCount: Math.round(keptTris),
+                    boundingBox: calculatedBBox,
+                    boundingSphere: calculatedBSphere
+                  }
+                })
+              });
+              resolveGlb();
+            },
+            (err) => {
+              console.error('GLTFExporter failed', err);
+              resolveGlb();
+            },
+            { binary: true }
+          );
+        });
+      } catch (e) {
+        console.error('3D object export error:', e);
+      }
+
+      hudProgress.innerText = 'All ' + TOTAL_FRAMES + ' frames recorded! Compiling video...';
+      await fetch('/done', { method: 'POST' });
+    }
+
+    // Wait 2 seconds for initial script initialization before beginning
+    setTimeout(executeTrajectoryRecording, 2000);
+  </script>
+</body>
+</html>

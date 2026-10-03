@@ -45,7 +45,7 @@ export type ComponentParadigm =
 
 export interface ComponentPattern {
     paradigm: ComponentParadigm;
-    uiLibrary: 'spectrum' | 'theia-widget' | 'react-dom' | 'custom-css' | 'tailwind' | 'unknown';
+    uiLibrary: 'spectrum' | 'scratchbox-widget' | 'react-dom' | 'custom-css' | 'tailwind' | 'unknown';
     stateHookUsage: 'useState' | 'useReducer' | 'zustand' | 'redux' | 'inversify-property' | 'local-state';
     propsInterfaceNaming: string;
     exemplarSnippet?: string;

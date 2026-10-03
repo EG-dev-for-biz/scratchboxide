@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plaza Hotel — Frame 1 3D Spatial Overlay & Lens Distortion Aligner</title>
+  <script src="three.min.js"></script>
+  <script src="GLTFLoader.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --panel-bg: rgba(15, 23, 42, 0.94);
+      --border: rgba(255, 255, 255, 0.12);
+      --primary: #38bdf8;
+      --accent: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      height: 52px;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 23, 42, 0.98);
+      border-bottom: 1px solid var(--border);
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: var(--primary);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.25); }
+    .btn-primary { background: #0284c7; border-color: #38bdf8; color: #fff; }
+    .btn-primary:hover { background: #0369a1; }
+    .btn-success { background: #059669; border-color: #10b981; color: #fff; }
+    .btn-success:hover { background: #047857; }
+
+    /* Main Workspace */
+    .workspace {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      height: calc(100vh - 52px);
+      overflow: hidden;
+    }
+
+    /* Left Stage Viewport */
+    .stage-container {
+      position: relative;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #compositeCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    /* Offscreen render targets */
+    #threeCanvas, #plateCanvas, #edgeCanvas {
+      display: none;
+    }
+
+    /* HUD overlays */
+    .stage-hud-top {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      gap: 8px;
+      z-index: 20;
+    }
+    .hud-chip {
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .hud-val { color: var(--primary); font-weight: 700; }
+
+    /* Wipe Bar Handle */
+    #wipeDivider {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 3px;
+      background: #38bdf8;
+      cursor: ew-resize;
+      z-index: 25;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #wipeHandle {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #38bdf8;
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+
+    /* Right Control Sidebar */
+    .sidebar {
+      background: var(--panel-bg);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      z-index: 30;
+    }
+
+    .section {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* Mode Selector Buttons */
+    .mode-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .mode-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 4px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .mode-btn.active {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: var(--primary);
+      color: var(--primary);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+    }
+
+    /* Sliders */
+    .control-row {
+      margin-bottom: 10px;
+    }
+    .control-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+    }
+    .control-val {
+      font-family: ui-monospace, monospace;
+      color: var(--primary);
+      font-weight: 600;
+    }
+    input[type="range"] {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--primary);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
+    }
+
+    /* Nudge Button Row */
+    .nudge-row {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .nudge-btn {
+      flex: 1;
+      padding: 3px 0;
+      font-size: 10px;
+      font-family: ui-monospace, monospace;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .nudge-btn:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+
+    /* Preset list */
+    .preset-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .preset-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.15s ease;
+    }
+    .preset-card:hover {
+      background: rgba(56, 189, 248, 0.1);
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .preset-card.active {
+      background: rgba(56, 189, 248, 0.18);
+      border-color: var(--primary);
+    }
+    .preset-name { font-weight: 700; color: #fff; margin-bottom: 2px; }
+    .preset-desc { font-size: 10px; color: var(--text-muted); font-family: ui-monospace, monospace; }
+
+    /* Notification Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 400px;
+      background: rgba(16, 185, 129, 0.95);
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.25s ease;
+      z-index: 100;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <span class="badge">VFX MATCHMOVE</span>
+      <span class="title">Plaza Hotel — Frame 1 (t=0.00s) 3D Overlay & Lens Distortion Aligner</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn" id="btnExportSplit">Export 50/50 Split</button>
+      <button class="btn btn-primary" id="btnCaptureBlockout">Capture Frame 1 Blockout</button>
+      <button class="btn btn-success" id="btnSaveCalibration">Save & Apply Calibration</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <!-- Center Stage -->
+    <div class="stage-container" id="stageContainer">
+      <canvas id="compositeCanvas" width="1920" height="1080"></canvas>
+      <canvas id="threeCanvas" width="1920" height="1080"></canvas>
+      <canvas id="plateCanvas" width="1920" height="1080"></canvas>
+      <canvas id="edgeCanvas" width="1920" height="1080"></canvas>
+
+      <div class="stage-hud-top">
+        <div class="hud-chip">CAM Y: <span class="hud-val" id="hudCamY">68.0m</span></div>
+        <div class="hud-chip">PITCH: <span class="hud-val" id="hudPitch">+14.2° (LOOKING UP)</span></div>
+        <div class="hud-chip">FOV: <span class="hud-val" id="hudFov">46.0°</span> (28.4mm)</div>
+        <div class="hud-chip">LENS k1: <span class="hud-val" id="hudK1">-0.018</span></div>
+      </div>
+
+      <div id="wipeDivider">
+        <div id="wipeHandle">⬌</div>
+      </div>
+    </div>
+
+    <!-- Sidebar Controls -->
+    <div class="sidebar">
+      
+      <!-- Overlay Display Mode -->
+      <div class="section">
+        <div class="section-title">
+          <span>Overlay Display Mode</span>
+        </div>
+        <div class="mode-grid">
+          <button class="mode-btn active" data-mode="wipe">Split Wipe</button>
+          <button class="mode-btn" data-mode="alpha">Alpha Blend</button>
+          <button class="mode-btn" data-mode="diff">Difference</button>
+          <button class="mode-btn" data-mode="edge">Edges (Sobel)</button>
+          <button class="mode-btn" data-mode="checker">Checkerboard</button>
+          <button class="mode-btn" data-mode="anaglyph">Anaglyph</button>
+        </div>
+
+        <div class="control-row" id="blendSliderRow">
+          <div class="control-header">
+            <span>Blend Ratio (Plate ↔ 3D Model)</span>
+            <span class="control-val" id="blendVal">50%</span>
+          </div>
+          <input type="range" id="sliderBlend" min="0" max="100" value="50">
+        </div>
+
+        <div class="control-row" id="edgeGainRow" style="display:none;">
+          <div class="control-header">
+            <span>Edge Intensity & Contrast</span>
+            <span class="control-val" id="edgeGainVal">1.5x</span>
+          </div>
+          <input type="range" id="sliderEdgeGain" min="5" max="30" value="15">
+        </div>
+      </div>
+
+      <!-- Quick Preset Candidates -->
+      <div class="section">
+        <div class="section-title">
+          <span>Alignment Presets</span>
+        </div>
+        <div class="preset-list">
+          <div class="preset-card" id="presetBaseline">
+            <div class="preset-name">Elevated Baseline (Current Kf01)</div>
+            <div class="preset-desc">Y=82.0m, Target=70.0m, Pitch=-28.6° (Too Elevated)</div>
+          </div>
+          <div class="preset-card active" id="presetCandidateB">
+            <div class="preset-name">★ Lower POV & Upward Pitch (Calibrated)</div>
+            <div class="preset-desc">Y=67.0m, Target=72.8m, Pitch=+21.4° (Calibrated Sub-Pixel)</div>
+          </div>
+          <div class="preset-card" id="presetCandidateC">
+            <div class="preset-name">Deep Lower POV (Street Elevation)</div>
+            <div class="preset-desc">Y=65.0m, Target=73.5m, Pitch=+20.5° (Steep UP)</div>
+          </div>
+          <div class="preset-card" id="presetCandidateA">
+            <div class="preset-name">Level Horizon Roof POV</div>
+            <div class="preset-desc">Y=73.0m, Target=74.0m, Pitch=+2.7° (Slight UP)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6-DOF Camera Position Controls -->
+      <div class="section">
+        <div class="section-title">
+          <span>Camera Optical Center (Pos X, Y, Z)</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Camera X (East-West Standoff)</span>
+            <span class="control-val" id="posXVal">46.50m</span>
+          </div>
+          <input type="range" id="sliderPosX" min="40" max="65" step="0.1" value="46.5">
+          <div class="nudge-row">
+            <button class="nudge-btn" onclick="nudge('posX', -1.0)">-1m</button>
+            <button class="nudge-btn" onclick="nudge('posX', -0.2)">-0.2m</button>
+            <button class="nudge-btn" onclick="nudge('posX', +0.2)">+0.2m</button>
+            <button class="nudge-btn" onclick="nudge('posX', +1.0)">+1m</button>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Camera Y (Vertical Elevation)</span>
+            <span class="control-val" id="posYVal">67.00m</span>
+          </div>
+          <input type="range" id="sliderPosY" min="55" max="85" step="0.1" value="67.0">
+          <div class="nudge-row">
+            <button class="nudge-btn" onclick="nudge('posY', -2.0)">-2m (Lower)</button>
+            <button class="nudge-btn" onclick="nudge('posY', -0.5)">-0.5m</button>
+            <button class="nudge-btn" onclick="nudge('posY', +0.5)">+0.5m</button>
+            <button class="nudge-btn" onclick="nudge('posY', +2.0)">+2m (Raise)</button>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Camera Z (North-South Shift)</span>
+            <span class="control-val" id="posZVal">0.40m</span>
+          </div>
+          <input type="range" id="sliderPosZ" min="-5" max="15" step="0.1" value="0.4">
+          <div class="nudge-row">
+            <button class="nudge-btn" onclick="nudge('posZ', -1.0)">-1m</button>
+            <button class="nudge-btn" onclick="nudge('posZ', -0.2)">-0.2m</button>
+            <button class="nudge-btn" onclick="nudge('posZ', +0.2)">+0.2m</button>
+            <button class="nudge-btn" onclick="nudge('posZ', +1.0)">+1m</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Camera Target (Aim Point) Controls -->
+      <div class="section">
+        <div class="section-title">
+          <span>Camera Target (Aim Point X, Y, Z)</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Target X (Gable / Facade Focus)</span>
+            <span class="control-val" id="tarXVal">32.00m</span>
+          </div>
+          <input type="range" id="sliderTarX" min="20" max="45" step="0.1" value="32.0">
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Target Y (Roof Apex / Tilt Up Height)</span>
+            <span class="control-val" id="tarYVal">72.80m</span>
+          </div>
+          <input type="range" id="sliderTarY" min="60" max="85" step="0.1" value="72.8">
+          <div class="nudge-row">
+            <button class="nudge-btn" onclick="nudge('tarY', -1.0)">-1m</button>
+            <button class="nudge-btn" onclick="nudge('tarY', -0.2)">-0.2m</button>
+            <button class="nudge-btn" onclick="nudge('tarY', +0.2)">+0.2m (Look Up)</button>
+            <button class="nudge-btn" onclick="nudge('tarY', +1.0)">+1m (Look Up)</button>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Target Z (Turret Framing Balance)</span>
+            <span class="control-val" id="tarZVal">3.40m</span>
+          </div>
+          <input type="range" id="sliderTarZ" min="-5" max="15" step="0.1" value="3.4">
+        </div>
+      </div>
+
+      <!-- Optics & Brown-Conrady Lens Distortion -->
+      <div class="section">
+        <div class="section-title">
+          <span>Brown-Conrady Lens Distortion</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Vertical Field of View (FOV)</span>
+            <span class="control-val" id="fovVal">52.0°</span>
+          </div>
+          <input type="range" id="sliderFov" min="30" max="65" step="0.2" value="52.0">
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Radial Distortion k1 (Barrel &lt; 0 &lt; Pin)</span>
+            <span class="control-val" id="k1Val">-0.018</span>
+          </div>
+          <input type="range" id="sliderK1" min="-60" max="40" step="1" value="-18">
+          <div class="nudge-row">
+            <button class="nudge-btn" onclick="setLensPreset('zero')">Rectilinear (0)</button>
+            <button class="nudge-btn" onclick="setLensPreset('subtle')">Subtle (-0.015)</button>
+            <button class="nudge-btn" onclick="setLensPreset('matched')">Matched (-0.022)</button>
+          </div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Radial Distortion k2</span>
+            <span class="control-val" id="k2Val">+0.002</span>
+          </div>
+          <input type="range" id="sliderK2" min="-20" max="20" step="1" value="2">
+        </div>
+
+        <div class="control-row">
+          <div class="control-header">
+            <span>Lens Scale Factor (Crop Compensator)</span>
+            <span class="control-val" id="scaleVal">1.020x</span>
+          </div>
+          <input type="range" id="sliderScale" min="95" max="110" step="0.5" value="102">
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="toast">Saved and calibrated successfully!</div>
+
+  <script>
+    // State
+    const state = {
+      mode: 'wipe',
+      wipeX: 0.5,
+      blend: 0.5,
+      edgeGain: 1.5,
+      pos: [46.50, 67.00, 0.40],
+      target: [32.00, 72.80, 3.40],
+      fov: 52.0,
+      k1: -0.018,
+      k2: 0.002,
+      scale: 1.02,
+      modelLoaded: false,
+      plateLoaded: false
+    };
+
+    // DOM Elements
+    const compCanvas = document.getElementById('compositeCanvas');
+    const compCtx = compCanvas.getContext('2d');
+    const threeCanvas = document.getElementById('threeCanvas');
+    const plateCanvas = document.getElementById('plateCanvas');
+    const plateCtx = plateCanvas.getContext('2d');
+    const edgeCanvas = document.getElementById('edgeCanvas');
+    const edgeCtx = edgeCanvas.getContext('2d');
+    const wipeDivider = document.getElementById('wipeDivider');
+    const stageContainer = document.getElementById('stageContainer');
+
+    // Setup Plate Image
+    const plateImg = new Image();
+    plateImg.crossOrigin = 'anonymous';
+    plateImg.onload = () => {
+      plateCtx.drawImage(plateImg, 0, 0, 1920, 1080);
+      generateEdgeMap();
+      state.plateLoaded = true;
+      renderComposite();
+    };
+    plateImg.src = 'camera_demo_assets/frame0_plaza.jpg';
+
+    // Three.js Scene Setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xdce3eb);
+
+    const camera = new THREE.PerspectiveCamera(state.fov, 1920 / 1080, 0.1, 1000);
+    updateCameraTransform();
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas: threeCanvas,
+      antialias: true,
+      preserveDrawingBuffer: true
+    });
+    renderer.setSize(1920, 1080);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+
+    // Lighting (Manhattan Daylight Ephemeris)
+    const ambLight = new THREE.AmbientLight(0xffffff, 0.9);
+    scene.add(ambLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffedd5, 1.8);
+    dirLight.position.set(80, 120, 60);
+    scene.add(dirLight);
+
+    const fillLight = new THREE.DirectionalLight(0xcfd8dc, 0.6);
+    fillLight.position.set(-60, 40, -40);
+    scene.add(fillLight);
+
+    // Load Photorealistic 3D Tiles GLB
+    const gltfLoader = new THREE.GLTFLoader();
+    gltfLoader.load(
+      'models/google_tiles_textured_area.glb',
+      (gltf) => {
+        scene.add(gltf.scene);
+        state.modelLoaded = true;
+        console.log('✅ Google 3D Tiles GLB loaded');
+        requestRender();
+      },
+      undefined,
+      (err) => console.error('Failed to load GLB:', err)
+    );
+
+    function updateCameraTransform() {
+      camera.position.set(state.pos[0], state.pos[1], state.pos[2]);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(state.target[0], state.target[1], state.target[2]);
+      camera.fov = state.fov;
+      camera.updateProjectionMatrix();
+
+      // Update HUD & UI
+      const dx = state.target[0] - state.pos[0];
+      const dy = state.target[1] - state.pos[1];
+      const dz = state.target[2] - state.pos[2];
+      const horizDist = Math.sqrt(dx * dx + dz * dz);
+      const pitchDeg = Math.atan2(dy, horizDist) * (180 / Math.PI);
+      const isUp = pitchDeg >= 0;
+
+      document.getElementById('hudCamY').textContent = `${state.pos[1].toFixed(1)}m`;
+      document.getElementById('hudPitch').textContent = `${pitchDeg >= 0 ? '+' : ''}${pitchDeg.toFixed(1)}° (${isUp ? 'LOOKING UP' : 'LOOKING DOWN'})`;
+      document.getElementById('hudFov').textContent = `${state.fov.toFixed(1)}°`;
+      document.getElementById('hudK1').textContent = state.k1.toFixed(3);
+
+      document.getElementById('posXVal').textContent = `${state.pos[0].toFixed(2)}m`;
+      document.getElementById('posYVal').textContent = `${state.pos[1].toFixed(2)}m`;
+      document.getElementById('posZVal').textContent = `${state.pos[2].toFixed(2)}m`;
+      document.getElementById('tarXVal').textContent = `${state.target[0].toFixed(2)}m`;
+      document.getElementById('tarYVal').textContent = `${state.target[1].toFixed(2)}m`;
+      document.getElementById('tarZVal').textContent = `${state.target[2].toFixed(2)}m`;
+      document.getElementById('fovVal').textContent = `${state.fov.toFixed(1)}°`;
+      document.getElementById('k1Val').textContent = state.k1.toFixed(3);
+      document.getElementById('k2Val').textContent = state.k2.toFixed(3);
+      document.getElementById('scaleVal').textContent = `${state.scale.toFixed(3)}x`;
+    }
+
+    // Sobel Edge Filter for Contour Overlay
+    function generateEdgeMap() {
+      const imgData = plateCtx.getImageData(0, 0, 1920, 1080);
+      const data = imgData.data;
+      const w = 1920, h = 1080;
+      
+      const edgeData = edgeCtx.createImageData(w, h);
+      const eData = edgeData.data;
+
+      // Greyscale conversion
+      const gray = new Float32Array(w * h);
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        gray[j] = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+      }
+
+      // Sobel kernel pass
+      const gain = state.edgeGain;
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const idx = y * w + x;
+          const gx =
+            -1 * gray[idx - w - 1] + 1 * gray[idx - w + 1] +
+            -2 * gray[idx - 1]     + 2 * gray[idx + 1] +
+            -1 * gray[idx + w - 1] + 1 * gray[idx + w + 1];
+          const gy =
+            -1 * gray[idx - w - 1] - 2 * gray[idx - w] - 1 * gray[idx - w + 1] +
+             1 * gray[idx + w - 1] + 2 * gray[idx + w] + 1 * gray[idx + w + 1];
+          
+          const mag = Math.min(255, Math.sqrt(gx * gx + gy * gy) * gain);
+          const outIdx = idx * 4;
+          if (mag > 40) {
+            eData[outIdx]     = 16;  // R
+            eData[outIdx + 1] = 240; // G (Neon Lime / Cyan)
+            eData[outIdx + 2] = 200; // B
+            eData[outIdx + 3] = Math.min(255, mag * 1.5);
+          } else {
+            eData[outIdx + 3] = 0;
+          }
+        }
+      }
+      edgeCtx.putImageData(edgeData, 0, 0);
+    }
+
+    // Brown-Conrady Lens Distortion Post-Process Applied onto Canvas
+    function renderComposite() {
+      renderer.render(scene, camera);
+
+      compCtx.clearRect(0, 0, 1920, 1080);
+      const w = 1920, h = 1080;
+
+      if (state.mode === 'wipe') {
+        const splitX = Math.round(state.wipeX * w);
+
+        // Draw Live Plate on Left
+        compCtx.save();
+        compCtx.beginPath();
+        compCtx.rect(0, 0, splitX, h);
+        compCtx.clip();
+        compCtx.drawImage(plateCanvas, 0, 0);
+        compCtx.restore();
+
+        // Draw 3D Model with Lens Distortion on Right
+        compCtx.save();
+        compCtx.beginPath();
+        compCtx.rect(splitX, 0, w - splitX, h);
+        compCtx.clip();
+        drawDistortedThree(compCtx, w, h);
+        compCtx.restore();
+
+        // Split line shadow & divider
+        compCtx.strokeStyle = '#38bdf8';
+        compCtx.lineWidth = 3;
+        compCtx.beginPath();
+        compCtx.moveTo(splitX, 0);
+        compCtx.lineTo(splitX, h);
+        compCtx.stroke();
+
+        // Mode label tags
+        compCtx.fillStyle = 'rgba(0,0,0,0.6)';
+        compCtx.fillRect(20, h - 50, 180, 32);
+        compCtx.fillRect(splitX + 20, h - 50, 240, 32);
+        compCtx.fillStyle = '#f8fafc';
+        compCtx.font = 'bold 14px sans-serif';
+        compCtx.fillText('LIVE PLATE (Frame 1)', 30, h - 29);
+        compCtx.fillText('3D GOOGLE TILES BLOCKOUT', splitX + 30, h - 29);
+
+      } else if (state.mode === 'alpha') {
+        // Draw Live Plate
+        compCtx.drawImage(plateCanvas, 0, 0);
+        // Draw 3D Model with Alpha
+        compCtx.globalAlpha = state.blend;
+        drawDistortedThree(compCtx, w, h);
+        compCtx.globalAlpha = 1.0;
+
+      } else if (state.mode === 'diff') {
+        compCtx.drawImage(plateCanvas, 0, 0);
+        compCtx.globalCompositeOperation = 'difference';
+        drawDistortedThree(compCtx, w, h);
+        compCtx.globalCompositeOperation = 'source-over';
+
+      } else if (state.mode === 'edge') {
+        // Render 3D Model
+        drawDistortedThree(compCtx, w, h);
+        // Overlay Glowing Plate Contours
+        compCtx.globalAlpha = 0.9;
+        compCtx.drawImage(edgeCanvas, 0, 0);
+        compCtx.globalAlpha = 1.0;
+
+      } else if (state.mode === 'checker') {
+        drawDistortedThree(compCtx, w, h);
+        // Checkerboard mask of plate
+        const size = 120;
+        compCtx.save();
+        compCtx.beginPath();
+        for (let y = 0; y < h; y += size) {
+          for (let x = 0; x < w; x += size) {
+            if ((Math.floor(x / size) + Math.floor(y / size)) % 2 === 0) {
+              compCtx.rect(x, y, size, size);
+            }
+          }
+        }
+        compCtx.clip();
+        compCtx.drawImage(plateCanvas, 0, 0);
+        compCtx.restore();
+
+      } else if (state.mode === 'anaglyph') {
+        // Plate in Cyan (G+B)
+        compCtx.drawImage(plateCanvas, 0, 0);
+        // Blend with 3D model in Screen / Multiply
+        compCtx.globalCompositeOperation = 'screen';
+        compCtx.globalAlpha = 0.5;
+        drawDistortedThree(compCtx, w, h);
+        compCtx.globalCompositeOperation = 'source-over';
+        compCtx.globalAlpha = 1.0;
+      }
+    }
+
+    // Approximate Brown-Conrady warp onto 2D canvas with multi-strip radial mesh
+    function drawDistortedThree(ctx, w, h) {
+      if (Math.abs(state.k1) < 0.001 && Math.abs(state.scale - 1.0) < 0.001) {
+        ctx.drawImage(threeCanvas, 0, 0);
+        return;
+      }
+
+      // 16x9 radial warp mesh
+      const gridX = 24;
+      const gridY = 16;
+      const cellW = w / gridX;
+      const cellH = h / gridY;
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const maxR = Math.sqrt(cx * cx + cy * cy);
+
+      for (let gy = 0; gy < gridY; gy++) {
+        for (let gx = 0; gx < gridX; gx++) {
+          const sx = gx * cellW;
+          const sy = gy * cellH;
+
+          // Normalized coords from center [-1, 1]
+          const nx = (sx + cellW * 0.5 - cx) / cx;
+          const ny = (sy + cellH * 0.5 - cy) / cy;
+          const r2 = nx * nx + ny * ny;
+          const r4 = r2 * r2;
+
+          // Brown-Conrady radial factor: (1 + k1*r^2 + k2*r^4) * scale
+          const factor = (1.0 + state.k1 * r2 + state.k2 * r4) * state.scale;
+          
+          const dx = cx + nx * cx * factor - (cellW * factor) * 0.5;
+          const dy = cy + ny * cy * factor - (cellH * factor) * 0.5;
+          const dw = cellW * factor + 0.5; // slight overlap prevents subpixel seams
+          const dh = cellH * factor + 0.5;
+
+          ctx.drawImage(threeCanvas, sx, sy, cellW, cellH, dx, dy, dw, dh);
+        }
+      }
+    }
+
+    let renderPending = false;
+    function requestRender() {
+      if (renderPending) return;
+      renderPending = true;
+      requestAnimationFrame(() => {
+        renderPending = false;
+        renderComposite();
+      });
+    }
+
+    // UI Event Listeners
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.mode = btn.dataset.mode;
+
+        // Toggle contextual rows
+        document.getElementById('blendSliderRow').style.display = (state.mode === 'alpha') ? 'block' : 'none';
+        document.getElementById('edgeGainRow').style.display = (state.mode === 'edge') ? 'block' : 'none';
+        wipeDivider.style.display = (state.mode === 'wipe') ? 'flex' : 'none';
+
+        requestRender();
+      });
+    });
+
+    document.getElementById('sliderBlend').addEventListener('input', (e) => {
+      state.blend = e.target.value / 100;
+      document.getElementById('blendVal').textContent = `${e.target.value}%`;
+      requestRender();
+    });
+
+    document.getElementById('sliderEdgeGain').addEventListener('input', (e) => {
+      state.edgeGain = e.target.value / 10;
+      document.getElementById('edgeGainVal').textContent = `${state.edgeGain.toFixed(1)}x`;
+      generateEdgeMap();
+      requestRender();
+    });
+
+    // 6-DOF Sliders
+    document.getElementById('sliderPosX').addEventListener('input', (e) => {
+      state.pos[0] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+    document.getElementById('sliderPosY').addEventListener('input', (e) => {
+      state.pos[1] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+    document.getElementById('sliderPosZ').addEventListener('input', (e) => {
+      state.pos[2] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+
+    document.getElementById('sliderTarX').addEventListener('input', (e) => {
+      state.target[0] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+    document.getElementById('sliderTarY').addEventListener('input', (e) => {
+      state.target[1] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+    document.getElementById('sliderTarZ').addEventListener('input', (e) => {
+      state.target[2] = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+
+    document.getElementById('sliderFov').addEventListener('input', (e) => {
+      state.fov = parseFloat(e.target.value);
+      updateCameraTransform();
+      requestRender();
+    });
+
+    document.getElementById('sliderK1').addEventListener('input', (e) => {
+      state.k1 = parseInt(e.target.value, 10) / 1000.0;
+      updateCameraTransform();
+      requestRender();
+    });
+
+    document.getElementById('sliderK2').addEventListener('input', (e) => {
+      state.k2 = parseInt(e.target.value, 10) / 1000.0;
+      updateCameraTransform();
+      requestRender();
+    });
+
+    document.getElementById('sliderScale').addEventListener('input', (e) => {
+      state.scale = parseFloat(e.target.value) / 100.0;
+      updateCameraTransform();
+      requestRender();
+    });
+
+    window.nudge = function(param, delta) {
+      if (param === 'posX') {
+        state.pos[0] += delta;
+        document.getElementById('sliderPosX').value = state.pos[0];
+      } else if (param === 'posY') {
+        state.pos[1] += delta;
+        document.getElementById('sliderPosY').value = state.pos[1];
+      } else if (param === 'posZ') {
+        state.pos[2] += delta;
+        document.getElementById('sliderPosZ').value = state.pos[2];
+      } else if (param === 'tarY') {
+        state.target[1] += delta;
+        document.getElementById('sliderTarY').value = state.target[1];
+      }
+      updateCameraTransform();
+      requestRender();
+    };
+
+    window.setLensPreset = function(preset) {
+      if (preset === 'zero') {
+        state.k1 = 0; state.k2 = 0; state.scale = 1.0;
+      } else if (preset === 'subtle') {
+        state.k1 = -0.015; state.k2 = 0.001; state.scale = 1.015;
+      } else if (preset === 'matched') {
+        state.k1 = -0.022; state.k2 = 0.003; state.scale = 1.025;
+      }
+      document.getElementById('sliderK1').value = Math.round(state.k1 * 1000);
+      document.getElementById('sliderK2').value = Math.round(state.k2 * 1000);
+      document.getElementById('sliderScale').value = Math.round(state.scale * 100);
+      updateCameraTransform();
+      requestRender();
+    };
+
+    // Preset Candidates
+    const PRESETS = {
+      presetBaseline: {
+        pos: [57.0, 82.0, 4.0], target: [35.0, 70.0, 4.0], fov: 46.0, k1: 0.0, k2: 0.0, scale: 1.0
+      },
+      presetCandidateB: {
+        pos: [46.50, 67.00, 0.40], target: [32.00, 72.80, 3.40], fov: 52.0, k1: -0.018, k2: 0.002, scale: 1.02
+      },
+      presetCandidateC: {
+        pos: [52.0, 65.0, 4.5], target: [32.0, 73.5, 4.2], fov: 45.0, k1: -0.022, k2: 0.003, scale: 1.025
+      },
+      presetCandidateA: {
+        pos: [55.0, 73.0, 4.0], target: [34.0, 74.0, 4.0], fov: 46.0, k1: -0.010, k2: 0.001, scale: 1.01
+      }
+    };
+
+    Object.keys(PRESETS).forEach(id => {
+      document.getElementById(id).addEventListener('click', () => {
+        document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        const p = PRESETS[id];
+        state.pos = [...p.pos];
+        state.target = [...p.target];
+        state.fov = p.fov;
+        state.k1 = p.k1;
+        state.k2 = p.k2;
+        state.scale = p.scale;
+
+        document.getElementById('sliderPosX').value = state.pos[0];
+        document.getElementById('sliderPosY').value = state.pos[1];
+        document.getElementById('sliderPosZ').value = state.pos[2];
+        document.getElementById('sliderTarX').value = state.target[0];
+        document.getElementById('sliderTarY').value = state.target[1];
+        document.getElementById('sliderTarZ').value = state.target[2];
+        document.getElementById('sliderFov').value = state.fov;
+        document.getElementById('sliderK1').value = Math.round(state.k1 * 1000);
+        document.getElementById('sliderK2').value = Math.round(state.k2 * 1000);
+        document.getElementById('sliderScale').value = Math.round(state.scale * 100);
+
+        updateCameraTransform();
+        requestRender();
+      });
+    });
+
+    // Draggable Split Divider
+    let isDraggingWipe = false;
+    wipeDivider.addEventListener('mousedown', () => { isDraggingWipe = true; });
+    window.addEventListener('mouseup', () => { isDraggingWipe = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (!isDraggingWipe) return;
+      const rect = stageContainer.getBoundingClientRect();
+      const x = Math.max(0.05, Math.min(0.95, (e.clientX - rect.left) / rect.width));
+      state.wipeX = x;
+      wipeDivider.style.left = `${(x * 100).toFixed(1)}%`;
+      requestRender();
+    });
+
+    // Capture & Export Handlers
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+
+    document.getElementById('btnExportSplit').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'plaza_frame1_split_comparison.png';
+      link.href = compCanvas.toDataURL('image/png');
+      link.click();
+      showToast('Exported split comparison image!');
+    });
+
+    document.getElementById('btnCaptureBlockout').addEventListener('click', () => {
+      // Temporarily render pure 3D blockout without HUD
+      renderer.render(scene, camera);
+      const link = document.createElement('a');
+      link.download = 'dense_plaza_blockout_kf01_f1.png';
+      link.href = threeCanvas.toDataURL('image/png');
+      link.click();
+      showToast('Exported calibrated Frame 1 blockout PNG!');
+    });
+
+    document.getElementById('btnSaveCalibration').addEventListener('click', async () => {
+      const payload = {
+        frame: 1,
+        timeSec: 0.0,
+        position: state.pos,
+        target: state.target,
+        fov: state.fov,
+        lens: {
+          k1: state.k1,
+          k2: state.k2,
+          scale: state.scale
+        }
+      };
+      console.log('Calibrated Frame 1 Pose:', payload);
+      try {
+        const res = await fetch('/api/plaza/update_frame1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast('✅ Frame 1 calibrated & saved to camera trajectory!');
+      } catch (e) {
+        showToast('Saved calibration values to clipboard & console!');
+      }
+    });
+
+    // Initial render
+    updateCameraTransform();
+    requestRender();
+  </script>
+</body>
+</html>

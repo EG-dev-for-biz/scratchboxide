@@ -1,0 +1,5938 @@
+[
+  {
+    "id": 1,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_01",
+    "imageName": "station_001.jpg",
+    "positionLocalENU": [
+      0,
+      3.5,
+      101.26320796881559
+    ],
+    "forwardVector": [
+      0,
+      0.02468061715667146,
+      -0.9996953871738959
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 0,
+    "pitchDegrees": 1.4142,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88928831,
+      "lng": 12.4922,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49170427,
+        41.8900032
+      ],
+      [
+        12.49269573,
+        41.8900032
+      ],
+      [
+        12.49269574,
+        41.89001348
+      ],
+      [
+        12.49170426,
+        41.89001348
+      ]
+    ]
+  },
+  {
+    "id": 2,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_02",
+    "imageName": "station_002.jpg",
+    "positionLocalENU": [
+      30.926439212798037,
+      3.5,
+      97.81274782995997
+    ],
+    "forwardVector": [
+      -0.30138050107128805,
+      0.02436269004310155,
+      -0.9531926630581474
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 342.4541,
+    "pitchDegrees": 1.396,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88931937,
+      "lng": 12.49257263,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49181151,
+        41.88988941
+      ],
+      [
+        12.49275685,
+        41.89011274
+      ],
+      [
+        12.49275275,
+        41.89012242
+      ],
+      [
+        12.49180741,
+        41.88989908
+      ]
+    ]
+  },
+  {
+    "id": 3,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_03",
+    "imageName": "station_003.jpg",
+    "positionLocalENU": [
+      59.74529270160117,
+      3.5,
+      87.69651056970112
+    ],
+    "forwardVector": [
+      -0.5628731997950671,
+      0.023553035492115938,
+      -0.8262076103931564
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 325.7344,
+    "pitchDegrees": 1.3496,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88941045,
+      "lng": 12.49291987,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49197131,
+        41.88979292
+      ],
+      [
+        12.4927907,
+        41.89021003
+      ],
+      [
+        12.49278331,
+        41.89021814
+      ],
+      [
+        12.49196392,
+        41.88980103
+      ]
+    ]
+  },
+  {
+    "id": 4,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_04",
+    "imageName": "station_004.jpg",
+    "positionLocalENU": [
+      84.49260322655468,
+      3.5,
+      71.60390103945315
+    ],
+    "forwardVector": [
+      -0.7627013143336652,
+      0.022567103071987026,
+      -0.6463570460454793
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 310.2799,
+    "pitchDegrees": 1.2931,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88955533,
+      "lng": 12.49321805,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49216717,
+        41.88973525
+      ],
+      [
+        12.49280818,
+        41.89030043
+      ],
+      [
+        12.49279858,
+        41.89030651
+      ],
+      [
+        12.49215757,
+        41.88974133
+      ]
+    ]
+  },
+  {
+    "id": 5,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_05",
+    "imageName": "station_005.jpg",
+    "positionLocalENU": [
+      103.48188247224726,
+      3.5,
+      50.63160398440781
+    ],
+    "forwardVector": [
+      -0.8980343106009424,
+      0.02169544777178231,
+      -0.43939012793811394
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 296.0716,
+    "pitchDegrees": 1.2432,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88974415,
+      "lng": 12.49344686,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49236878,
+        41.88972592
+      ],
+      [
+        12.49280453,
+        41.89039136
+      ],
+      [
+        12.49279367,
+        41.89039534
+      ],
+      [
+        12.49235792,
+        41.88972989
+      ]
+    ]
+  },
+  {
+    "id": 6,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_06",
+    "imageName": "station_006.jpg",
+    "positionLocalENU": [
+      115.41904243935272,
+      3.5,
+      26.208846790506822
+    ],
+    "forwardVector": [
+      -0.974956916370041,
+      0.02111776565990692,
+      -0.2213889138953307
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 282.7935,
+    "pitchDegrees": 1.21,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88996403,
+      "lng": 12.4935907,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49254687,
+        41.8897613
+      ],
+      [
+        12.49276643,
+        41.89048374
+      ],
+      [
+        12.49275494,
+        41.89048569
+      ],
+      [
+        12.49253539,
+        41.88976325
+      ]
+    ]
+  },
+  {
+    "id": 7,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_07",
+    "imageName": "station_007.jpg",
+    "positionLocalENU": [
+      119.49058540320236,
+      3.5,
+      6.200583175520138e-15
+    ],
+    "forwardVector": [
+      -0.999781203639903,
+      0.02091757271642567,
+      -5.188045978327524e-17
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 270,
+    "pitchDegrees": 1.1986,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89019999,
+      "lng": 12.49363976,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49268187,
+        41.88982958
+      ],
+      [
+        12.49268187,
+        41.89057041
+      ],
+      [
+        12.49267021,
+        41.89057042
+      ],
+      [
+        12.4926702,
+        41.88982958
+      ]
+    ]
+  },
+  {
+    "id": 8,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_08",
+    "imageName": "station_008.jpg",
+    "positionLocalENU": [
+      115.41904243935272,
+      3.5,
+      -26.208846790506808
+    ],
+    "forwardVector": [
+      -0.974956916370041,
+      0.02111776565990692,
+      0.22138891389533055
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 257.2065,
+    "pitchDegrees": 1.21,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89043596,
+      "lng": 12.49359071,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49276642,
+        41.88991626
+      ],
+      [
+        12.49254688,
+        41.8906387
+      ],
+      [
+        12.49253539,
+        41.89063675
+      ],
+      [
+        12.49275494,
+        41.88991431
+      ]
+    ]
+  },
+  {
+    "id": 9,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_09",
+    "imageName": "station_009.jpg",
+    "positionLocalENU": [
+      103.48188247224728,
+      3.5,
+      -50.631603984407775
+    ],
+    "forwardVector": [
+      -0.8980343106009425,
+      0.02169544777178231,
+      0.4393901279381136
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 243.9284,
+    "pitchDegrees": 1.2432,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89065584,
+      "lng": 12.49344688,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49280453,
+        41.89000863
+      ],
+      [
+        12.49236879,
+        41.89067408
+      ],
+      [
+        12.49235792,
+        41.89067011
+      ],
+      [
+        12.49279366,
+        41.89000466
+      ]
+    ]
+  },
+  {
+    "id": 10,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_10",
+    "imageName": "station_010.jpg",
+    "positionLocalENU": [
+      84.49260322655469,
+      3.5,
+      -71.60390103945313
+    ],
+    "forwardVector": [
+      -0.7627013143336653,
+      0.022567103071987026,
+      0.6463570460454792
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 229.7201,
+    "pitchDegrees": 1.2931,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89084466,
+      "lng": 12.49321807,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49280817,
+        41.89009957
+      ],
+      [
+        12.49216717,
+        41.89066475
+      ],
+      [
+        12.49215757,
+        41.89065867
+      ],
+      [
+        12.49279858,
+        41.89009349
+      ]
+    ]
+  },
+  {
+    "id": 11,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_11",
+    "imageName": "station_011.jpg",
+    "positionLocalENU": [
+      59.74529270160117,
+      3.5,
+      -87.69651056970112
+    ],
+    "forwardVector": [
+      -0.5628731997950671,
+      0.023553035492115938,
+      0.8262076103931564
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 214.2656,
+    "pitchDegrees": 1.3496,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89098955,
+      "lng": 12.49291989,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.4927907,
+        41.89018997
+      ],
+      [
+        12.49197131,
+        41.89060708
+      ],
+      [
+        12.49196391,
+        41.89059897
+      ],
+      [
+        12.49278331,
+        41.89018186
+      ]
+    ]
+  },
+  {
+    "id": 12,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_12",
+    "imageName": "station_012.jpg",
+    "positionLocalENU": [
+      30.926439212798073,
+      3.5,
+      -97.81274782995996
+    ],
+    "forwardVector": [
+      -0.30138050107128833,
+      0.024362690043101546,
+      0.9531926630581472
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 197.5459,
+    "pitchDegrees": 1.396,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89108063,
+      "lng": 12.49257264,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49275685,
+        41.89028725
+      ],
+      [
+        12.4918115,
+        41.89051059
+      ],
+      [
+        12.4918074,
+        41.89050091
+      ],
+      [
+        12.49275275,
+        41.89027757
+      ]
+    ]
+  },
+  {
+    "id": 13,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_13",
+    "imageName": "station_013.jpg",
+    "positionLocalENU": [
+      1.463337629422752e-14,
+      3.5,
+      -101.26320796881559
+    ],
+    "forwardVector": [
+      -1.4446430321093646e-16,
+      0.02468061715667146,
+      0.9996953871738959
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 180,
+    "pitchDegrees": 1.4142,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89111169,
+      "lng": 12.4922,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49269574,
+        41.8903968
+      ],
+      [
+        12.49170426,
+        41.8903968
+      ],
+      [
+        12.49170426,
+        41.89038651
+      ],
+      [
+        12.49269574,
+        41.89038651
+      ]
+    ]
+  },
+  {
+    "id": 14,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_14",
+    "imageName": "station_014.jpg",
+    "positionLocalENU": [
+      -30.926439212798044,
+      3.5,
+      -97.81274782995997
+    ],
+    "forwardVector": [
+      0.3013805010712881,
+      0.02436269004310155,
+      0.9531926630581474
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 162.4541,
+    "pitchDegrees": 1.396,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89108063,
+      "lng": 12.49182736,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.4925885,
+        41.89051059
+      ],
+      [
+        12.49164315,
+        41.89028725
+      ],
+      [
+        12.49164725,
+        41.89027757
+      ],
+      [
+        12.4925926,
+        41.89050091
+      ]
+    ]
+  },
+  {
+    "id": 15,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_15",
+    "imageName": "station_015.jpg",
+    "positionLocalENU": [
+      -59.745292701601144,
+      3.5,
+      -87.69651056970113
+    ],
+    "forwardVector": [
+      0.5628731997950669,
+      0.02355303549211594,
+      0.8262076103931566
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 145.7344,
+    "pitchDegrees": 1.3496,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89098955,
+      "lng": 12.49148011,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49242869,
+        41.89060708
+      ],
+      [
+        12.4916093,
+        41.89018997
+      ],
+      [
+        12.49161669,
+        41.89018186
+      ],
+      [
+        12.49243609,
+        41.89059897
+      ]
+    ]
+  },
+  {
+    "id": 16,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_16",
+    "imageName": "station_016.jpg",
+    "positionLocalENU": [
+      -84.49260322655464,
+      3.5,
+      -71.60390103945318
+    ],
+    "forwardVector": [
+      0.762701314333665,
+      0.02256710307198703,
+      0.6463570460454796
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 130.2799,
+    "pitchDegrees": 1.2931,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89084466,
+      "lng": 12.49118193,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49223283,
+        41.89066475
+      ],
+      [
+        12.49159183,
+        41.89009957
+      ],
+      [
+        12.49160142,
+        41.89009349
+      ],
+      [
+        12.49224243,
+        41.89065867
+      ]
+    ]
+  },
+  {
+    "id": 17,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_17",
+    "imageName": "station_017.jpg",
+    "positionLocalENU": [
+      -103.48188247224725,
+      3.5,
+      -50.63160398440784
+    ],
+    "forwardVector": [
+      0.8980343106009424,
+      0.021695447771782315,
+      0.4393901279381142
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 116.0716,
+    "pitchDegrees": 1.2432,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89065584,
+      "lng": 12.49095312,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49203121,
+        41.89067408
+      ],
+      [
+        12.49159547,
+        41.89000863
+      ],
+      [
+        12.49160634,
+        41.89000466
+      ],
+      [
+        12.49204208,
+        41.89067011
+      ]
+    ]
+  },
+  {
+    "id": 18,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_18",
+    "imageName": "station_018.jpg",
+    "positionLocalENU": [
+      -115.41904243935272,
+      3.5,
+      -26.208846790506808
+    ],
+    "forwardVector": [
+      0.974956916370041,
+      0.02111776565990692,
+      0.22138891389533055
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 102.7935,
+    "pitchDegrees": 1.21,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89043596,
+      "lng": 12.49080929,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49185312,
+        41.8906387
+      ],
+      [
+        12.49163358,
+        41.88991626
+      ],
+      [
+        12.49164506,
+        41.88991431
+      ],
+      [
+        12.49186461,
+        41.89063675
+      ]
+    ]
+  },
+  {
+    "id": 19,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_19",
+    "imageName": "station_019.jpg",
+    "positionLocalENU": [
+      -119.49058540320236,
+      3.5,
+      -1.8601749526560415e-14
+    ],
+    "forwardVector": [
+      0.999781203639903,
+      0.02091757271642567,
+      1.5564137934982572e-16
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 90,
+    "pitchDegrees": 1.1986,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89019999,
+      "lng": 12.49076024,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49171813,
+        41.89057041
+      ],
+      [
+        12.49171813,
+        41.88982958
+      ],
+      [
+        12.4917298,
+        41.88982958
+      ],
+      [
+        12.49172979,
+        41.89057042
+      ]
+    ]
+  },
+  {
+    "id": 20,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_20",
+    "imageName": "station_020.jpg",
+    "positionLocalENU": [
+      -115.41904243935274,
+      3.5,
+      26.208846790506776
+    ],
+    "forwardVector": [
+      0.9749569163700412,
+      0.021117765659906924,
+      -0.22138891389533033
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 77.2065,
+    "pitchDegrees": 1.21,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88996403,
+      "lng": 12.4908093,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49163357,
+        41.89048374
+      ],
+      [
+        12.49185313,
+        41.8897613
+      ],
+      [
+        12.49186461,
+        41.88976325
+      ],
+      [
+        12.49164506,
+        41.89048569
+      ]
+    ]
+  },
+  {
+    "id": 21,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_21",
+    "imageName": "station_021.jpg",
+    "positionLocalENU": [
+      -103.48188247224726,
+      3.5,
+      50.63160398440781
+    ],
+    "forwardVector": [
+      0.8980343106009424,
+      0.02169544777178231,
+      -0.43939012793811394
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 63.9284,
+    "pitchDegrees": 1.2432,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88974415,
+      "lng": 12.49095314,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49159547,
+        41.89039136
+      ],
+      [
+        12.49203122,
+        41.88972592
+      ],
+      [
+        12.49204208,
+        41.88972989
+      ],
+      [
+        12.49160633,
+        41.89039534
+      ]
+    ]
+  },
+  {
+    "id": 22,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_22",
+    "imageName": "station_022.jpg",
+    "positionLocalENU": [
+      -84.4926032265547,
+      3.5,
+      71.60390103945312
+    ],
+    "forwardVector": [
+      0.7627013143336655,
+      0.022567103071987026,
+      -0.6463570460454791
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 49.7201,
+    "pitchDegrees": 1.2931,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88955533,
+      "lng": 12.49118195,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49159182,
+        41.89030043
+      ],
+      [
+        12.49223283,
+        41.88973525
+      ],
+      [
+        12.49224243,
+        41.88974133
+      ],
+      [
+        12.49160142,
+        41.89030651
+      ]
+    ]
+  },
+  {
+    "id": 23,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_23",
+    "imageName": "station_023.jpg",
+    "positionLocalENU": [
+      -59.74529270160123,
+      3.5,
+      87.69651056970108
+    ],
+    "forwardVector": [
+      0.5628731997950677,
+      0.023553035492115938,
+      -0.8262076103931559
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 34.2656,
+    "pitchDegrees": 1.3496,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88941045,
+      "lng": 12.49148013,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.4916093,
+        41.89021003
+      ],
+      [
+        12.49242869,
+        41.88979292
+      ],
+      [
+        12.49243608,
+        41.88980103
+      ],
+      [
+        12.49161669,
+        41.89021814
+      ]
+    ]
+  },
+  {
+    "id": 24,
+    "name": "AMPHITHEATRE_TIER_1_STREET_STATION_24",
+    "imageName": "station_024.jpg",
+    "positionLocalENU": [
+      -30.926439212798137,
+      3.5,
+      97.81274782995995
+    ],
+    "forwardVector": [
+      0.301380501071289,
+      0.02436269004310155,
+      -0.9531926630581472
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 17.5459,
+    "pitchDegrees": 1.396,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88931937,
+      "lng": 12.49182737,
+      "elevation": 25.501
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 3.5,
+    "cameraAltitude": 3.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49164315,
+        41.89011274
+      ],
+      [
+        12.49258849,
+        41.88988941
+      ],
+      [
+        12.49259259,
+        41.88989908
+      ],
+      [
+        12.49164725,
+        41.89012242
+      ]
+    ]
+  },
+  {
+    "id": 25,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_25",
+    "imageName": "station_025.jpg",
+    "positionLocalENU": [
+      18.432405867702133,
+      20,
+      118.65086667543873
+    ],
+    "forwardVector": [
+      -0.15348734197249994,
+      0.01665407577004861,
+      -0.9880102618973461
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 351.1697,
+    "pitchDegrees": 0.9543,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88913176,
+      "lng": 12.49242209,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.491785,
+        41.88978309
+      ],
+      [
+        12.49276471,
+        41.88989682
+      ],
+      [
+        12.49276329,
+        41.88990367
+      ],
+      [
+        12.49178357,
+        41.88978995
+      ]
+    ]
+  },
+  {
+    "id": 26,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_26",
+    "imageName": "station_026.jpg",
+    "positionLocalENU": [
+      54.041079604213444,
+      20,
+      110.56500619133574
+    ],
+    "forwardVector": [
+      -0.43906739705980696,
+      0.01624939398973717,
+      -0.898307173540372
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 333.9519,
+    "pitchDegrees": 0.9311,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88920456,
+      "lng": 12.49285114,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49198453,
+        41.88968587
+      ],
+      [
+        12.49287528,
+        41.89001119
+      ],
+      [
+        12.49287131,
+        41.89001727
+      ],
+      [
+        12.49198055,
+        41.88969195
+      ]
+    ]
+  },
+  {
+    "id": 27,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_27",
+    "imageName": "station_027.jpg",
+    "positionLocalENU": [
+      85.96694307280423,
+      20,
+      94.94432325260512
+    ],
+    "forwardVector": [
+      -0.6711102460771555,
+      0.015613216478078123,
+      -0.7411931361537751
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 317.8409,
+    "pitchDegrees": 0.8946,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88934519,
+      "lng": 12.49323581,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49222436,
+        41.88962802
+      ],
+      [
+        12.49295932,
+        41.89012525
+      ],
+      [
+        12.49295348,
+        41.89013008
+      ],
+      [
+        12.49221852,
+        41.88963284
+      ]
+    ]
+  },
+  {
+    "id": 28,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_28",
+    "imageName": "station_028.jpg",
+    "positionLocalENU": [
+      112.03430143807401,
+      20,
+      72.85334158712226
+    ],
+    "forwardVector": [
+      -0.8382435813009321,
+      0.014964052447174208,
+      -0.5450906122307977
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 303.035,
+    "pitchDegrees": 0.8574,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88954408,
+      "lng": 12.4935499,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49247515,
+        41.88962446
+      ],
+      [
+        12.49301565,
+        41.89024552
+      ],
+      [
+        12.49300866,
+        41.89024892
+      ],
+      [
+        12.49246816,
+        41.88962786
+      ]
+    ]
+  },
+  {
+    "id": 29,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_29",
+    "imageName": "station_029.jpg",
+    "positionLocalENU": [
+      130.46670730577614,
+      20,
+      45.7975250883165
+    ],
+    "forwardVector": [
+      -0.9434567000818419,
+      0.014462796211613633,
+      -0.3311801361742921
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 289.3425,
+    "pitchDegrees": 0.8287,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88978767,
+      "lng": 12.493772,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49270219,
+        41.8896757
+      ],
+      [
+        12.49303058,
+        41.89037472
+      ],
+      [
+        12.49302298,
+        41.89037671
+      ],
+      [
+        12.49269458,
+        41.8896777
+      ]
+    ]
+  },
+  {
+    "id": 30,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_30",
+    "imageName": "station_030.jpg",
+    "positionLocalENU": [
+      140.0080226770177,
+      20,
+      15.620682938730614
+    ],
+    "forwardVector": [
+      -0.9937334486644124,
+      0.014195378659933516,
+      -0.11087075462102206
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 276.3662,
+    "pitchDegrees": 0.8134,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89005935,
+      "lng": 12.49388697,
+      "elevation": 42.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49287804,
+        41.88977076
+      ],
+      [
+        12.49298799,
+        41.89050702
+      ],
+      [
+        12.49298012,
+        41.89050768
+      ],
+      [
+        12.49287018,
+        41.88977141
+      ]
+    ]
+  },
+  {
+    "id": 31,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_31",
+    "imageName": "station_031.jpg",
+    "positionLocalENU": [
+      140.0080226770177,
+      20,
+      -15.620682938730628
+    ],
+    "forwardVector": [
+      -0.9937334486644124,
+      0.014195378659933516,
+      0.11087075462102217
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 263.6338,
+    "pitchDegrees": 0.8134,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89034062,
+      "lng": 12.49388698,
+      "elevation": 42.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49298798,
+        41.88989297
+      ],
+      [
+        12.49287805,
+        41.89062924
+      ],
+      [
+        12.49287019,
+        41.89062858
+      ],
+      [
+        12.49298012,
+        41.88989232
+      ]
+    ]
+  },
+  {
+    "id": 32,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_32",
+    "imageName": "station_032.jpg",
+    "positionLocalENU": [
+      130.46670730577614,
+      20,
+      -45.79752508831648
+    ],
+    "forwardVector": [
+      -0.9434567000818419,
+      0.014462796211613633,
+      0.331180136174292
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 250.6575,
+    "pitchDegrees": 0.8287,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89061231,
+      "lng": 12.49377202,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49303058,
+        41.89002528
+      ],
+      [
+        12.4927022,
+        41.89072429
+      ],
+      [
+        12.49269459,
+        41.8907223
+      ],
+      [
+        12.49302297,
+        41.89002328
+      ]
+    ]
+  },
+  {
+    "id": 33,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_33",
+    "imageName": "station_033.jpg",
+    "positionLocalENU": [
+      112.03430143807405,
+      20,
+      -72.85334158712222
+    ],
+    "forwardVector": [
+      -0.8382435813009325,
+      0.014964052447174208,
+      0.5450906122307974
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 236.965,
+    "pitchDegrees": 0.8574,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8908559,
+      "lng": 12.49354993,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49301565,
+        41.89015447
+      ],
+      [
+        12.49247516,
+        41.89077554
+      ],
+      [
+        12.49246816,
+        41.89077214
+      ],
+      [
+        12.49300866,
+        41.89015107
+      ]
+    ]
+  },
+  {
+    "id": 34,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_34",
+    "imageName": "station_034.jpg",
+    "positionLocalENU": [
+      85.96694307280427,
+      20,
+      -94.9443232526051
+    ],
+    "forwardVector": [
+      -0.6711102460771556,
+      0.01561321647807812,
+      0.7411931361537748
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 222.1591,
+    "pitchDegrees": 0.8946,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8910548,
+      "lng": 12.49323584,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49295932,
+        41.89027474
+      ],
+      [
+        12.49222436,
+        41.89077198
+      ],
+      [
+        12.49221852,
+        41.89076716
+      ],
+      [
+        12.49295348,
+        41.89026992
+      ]
+    ]
+  },
+  {
+    "id": 35,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_35",
+    "imageName": "station_035.jpg",
+    "positionLocalENU": [
+      54.041079604213465,
+      20,
+      -110.56500619133574
+    ],
+    "forwardVector": [
+      -0.43906739705980713,
+      0.016249393989737168,
+      0.8983071735403719
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 206.0481,
+    "pitchDegrees": 0.9311,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89119543,
+      "lng": 12.49285116,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49287529,
+        41.89038881
+      ],
+      [
+        12.49198452,
+        41.89071413
+      ],
+      [
+        12.49198054,
+        41.89070805
+      ],
+      [
+        12.49287131,
+        41.89038272
+      ]
+    ]
+  },
+  {
+    "id": 36,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_36",
+    "imageName": "station_036.jpg",
+    "positionLocalENU": [
+      18.43240586770219,
+      20,
+      -118.65086667543873
+    ],
+    "forwardVector": [
+      -0.15348734197250039,
+      0.016654075770048606,
+      0.9880102618973459
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 188.8303,
+    "pitchDegrees": 0.9543,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89126823,
+      "lng": 12.4924221,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49276472,
+        41.89050318
+      ],
+      [
+        12.491785,
+        41.8906169
+      ],
+      [
+        12.49178357,
+        41.89061005
+      ],
+      [
+        12.49276329,
+        41.89049632
+      ]
+    ]
+  },
+  {
+    "id": 37,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_37",
+    "imageName": "station_037.jpg",
+    "positionLocalENU": [
+      -18.432405867702098,
+      20,
+      -118.65086667543875
+    ],
+    "forwardVector": [
+      0.15348734197249964,
+      0.016654075770048606,
+      0.9880102618973461
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 171.1697,
+    "pitchDegrees": 0.9543,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89126823,
+      "lng": 12.4919779,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.492615,
+        41.8906169
+      ],
+      [
+        12.49163528,
+        41.89050318
+      ],
+      [
+        12.49163671,
+        41.89049632
+      ],
+      [
+        12.49261643,
+        41.89061005
+      ]
+    ]
+  },
+  {
+    "id": 38,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_38",
+    "imageName": "station_038.jpg",
+    "positionLocalENU": [
+      -54.04107960421342,
+      20,
+      -110.56500619133575
+    ],
+    "forwardVector": [
+      0.43906739705980674,
+      0.016249393989737168,
+      0.898307173540372
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 153.9519,
+    "pitchDegrees": 0.9311,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89119543,
+      "lng": 12.49154884,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49241548,
+        41.89071413
+      ],
+      [
+        12.49152471,
+        41.89038881
+      ],
+      [
+        12.49152869,
+        41.89038272
+      ],
+      [
+        12.49241946,
+        41.89070805
+      ]
+    ]
+  },
+  {
+    "id": 39,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_39",
+    "imageName": "station_039.jpg",
+    "positionLocalENU": [
+      -85.9669430728042,
+      20,
+      -94.94432325260514
+    ],
+    "forwardVector": [
+      0.6711102460771553,
+      0.015613216478078123,
+      0.7411931361537754
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 137.8409,
+    "pitchDegrees": 0.8946,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8910548,
+      "lng": 12.49116416,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49217564,
+        41.89077198
+      ],
+      [
+        12.49144068,
+        41.89027474
+      ],
+      [
+        12.49144652,
+        41.89026992
+      ],
+      [
+        12.49218148,
+        41.89076716
+      ]
+    ]
+  },
+  {
+    "id": 40,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_40",
+    "imageName": "station_040.jpg",
+    "positionLocalENU": [
+      -112.03430143807398,
+      20,
+      -72.85334158712229
+    ],
+    "forwardVector": [
+      0.8382435813009319,
+      0.014964052447174208,
+      0.5450906122307978
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 123.035,
+    "pitchDegrees": 0.8574,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8908559,
+      "lng": 12.49085007,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49192484,
+        41.89077554
+      ],
+      [
+        12.49138435,
+        41.89015447
+      ],
+      [
+        12.49139134,
+        41.89015107
+      ],
+      [
+        12.49193184,
+        41.89077214
+      ]
+    ]
+  },
+  {
+    "id": 41,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_41",
+    "imageName": "station_041.jpg",
+    "positionLocalENU": [
+      -130.4667073057761,
+      20,
+      -45.797525088316554
+    ],
+    "forwardVector": [
+      0.9434567000818417,
+      0.014462796211613633,
+      0.3311801361742925
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 109.3425,
+    "pitchDegrees": 0.8287,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89061231,
+      "lng": 12.49062798,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.4916978,
+        41.89072429
+      ],
+      [
+        12.49136942,
+        41.89002528
+      ],
+      [
+        12.49137703,
+        41.89002328
+      ],
+      [
+        12.49170541,
+        41.8907223
+      ]
+    ]
+  },
+  {
+    "id": 42,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_42",
+    "imageName": "station_042.jpg",
+    "positionLocalENU": [
+      -140.0080226770177,
+      20,
+      -15.62068293873063
+    ],
+    "forwardVector": [
+      0.9937334486644124,
+      0.014195378659933516,
+      0.11087075462102217
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 96.3662,
+    "pitchDegrees": 0.8134,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89034062,
+      "lng": 12.49051302,
+      "elevation": 42.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49152195,
+        41.89062924
+      ],
+      [
+        12.49141202,
+        41.88989297
+      ],
+      [
+        12.49141988,
+        41.88989232
+      ],
+      [
+        12.49152981,
+        41.89062858
+      ]
+    ]
+  },
+  {
+    "id": 43,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_43",
+    "imageName": "station_043.jpg",
+    "positionLocalENU": [
+      -140.0080226770177,
+      20,
+      15.620682938730587
+    ],
+    "forwardVector": [
+      0.9937334486644124,
+      0.014195378659933516,
+      -0.11087075462102187
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 83.6338,
+    "pitchDegrees": 0.8134,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89005935,
+      "lng": 12.49051303,
+      "elevation": 42.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49141201,
+        41.89050702
+      ],
+      [
+        12.49152196,
+        41.88977076
+      ],
+      [
+        12.49152982,
+        41.88977141
+      ],
+      [
+        12.49141988,
+        41.89050768
+      ]
+    ]
+  },
+  {
+    "id": 44,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_44",
+    "imageName": "station_044.jpg",
+    "positionLocalENU": [
+      -130.46670730577617,
+      20,
+      45.79752508831642
+    ],
+    "forwardVector": [
+      0.9434567000818421,
+      0.014462796211613633,
+      -0.3311801361742915
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 70.6575,
+    "pitchDegrees": 0.8287,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88978767,
+      "lng": 12.490628,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49136942,
+        41.89037472
+      ],
+      [
+        12.49169781,
+        41.8896757
+      ],
+      [
+        12.49170542,
+        41.8896777
+      ],
+      [
+        12.49137702,
+        41.89037671
+      ]
+    ]
+  },
+  {
+    "id": 45,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_45",
+    "imageName": "station_045.jpg",
+    "positionLocalENU": [
+      -112.03430143807401,
+      20,
+      72.85334158712224
+    ],
+    "forwardVector": [
+      0.8382435813009321,
+      0.014964052447174208,
+      -0.5450906122307976
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 56.965,
+    "pitchDegrees": 0.8574,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88954408,
+      "lng": 12.4908501,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49138435,
+        41.89024552
+      ],
+      [
+        12.49192485,
+        41.88962446
+      ],
+      [
+        12.49193184,
+        41.88962786
+      ],
+      [
+        12.49139134,
+        41.89024892
+      ]
+    ]
+  },
+  {
+    "id": 46,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_46",
+    "imageName": "station_046.jpg",
+    "positionLocalENU": [
+      -85.96694307280427,
+      20,
+      94.94432325260509
+    ],
+    "forwardVector": [
+      0.6711102460771559,
+      0.015613216478078123,
+      -0.7411931361537749
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 42.1591,
+    "pitchDegrees": 0.8946,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88934519,
+      "lng": 12.49116419,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49144068,
+        41.89012525
+      ],
+      [
+        12.49217564,
+        41.88962802
+      ],
+      [
+        12.49218148,
+        41.88963284
+      ],
+      [
+        12.49144652,
+        41.89013008
+      ]
+    ]
+  },
+  {
+    "id": 47,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_47",
+    "imageName": "station_047.jpg",
+    "positionLocalENU": [
+      -54.04107960421353,
+      20,
+      110.56500619133571
+    ],
+    "forwardVector": [
+      0.43906739705980763,
+      0.016249393989737168,
+      -0.8983071735403717
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 26.0481,
+    "pitchDegrees": 0.9311,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88920456,
+      "lng": 12.49154886,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49152472,
+        41.89001119
+      ],
+      [
+        12.49241547,
+        41.88968587
+      ],
+      [
+        12.49241945,
+        41.88969195
+      ],
+      [
+        12.49152869,
+        41.89001727
+      ]
+    ]
+  },
+  {
+    "id": 48,
+    "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_48",
+    "imageName": "station_048.jpg",
+    "positionLocalENU": [
+      -18.432405867702272,
+      20,
+      118.65086667543872
+    ],
+    "forwardVector": [
+      0.1534873419725011,
+      0.01665407577004861,
+      -0.988010261897346
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 8.8303,
+    "pitchDegrees": 0.9543,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88913176,
+      "lng": 12.49197791,
+      "elevation": 42.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49163529,
+        41.88989682
+      ],
+      [
+        12.492615,
+        41.88978309
+      ],
+      [
+        12.49261643,
+        41.88978995
+      ],
+      [
+        12.49163671,
+        41.88990367
+      ]
+    ]
+  },
+  {
+    "id": 49,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_49",
+    "imageName": "station_049.jpg",
+    "positionLocalENU": [
+      62.355091851015516,
+      38,
+      127.57500714384895
+    ],
+    "forwardVector": [
+      -0.4387338915787301,
+      0.04221633344333706,
+      -0.8976248401034724
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 333.9519,
+    "pitchDegrees": 2.4195,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88905142,
+      "lng": 12.49295131,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49222027,
+        41.88957855
+      ],
+      [
+        12.49284379,
+        41.88980627
+      ],
+      [
+        12.49283656,
+        41.88981733
+      ],
+      [
+        12.49221303,
+        41.88958961
+      ]
+    ]
+  },
+  {
+    "id": 50,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_50",
+    "imageName": "station_050.jpg",
+    "positionLocalENU": [
+      115.2171862180291,
+      38,
+      97.64168323561793
+    ],
+    "forwardVector": [
+      -0.762294261280803,
+      0.03969690388923175,
+      -0.6460120858311894
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 310.2799,
+    "pitchDegrees": 2.2751,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88932091,
+      "lng": 12.49358824,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49263502,
+        41.88958465
+      ],
+      [
+        12.49308372,
+        41.88998027
+      ],
+      [
+        12.49307191,
+        41.88998776
+      ],
+      [
+        12.4926232,
+        41.88959214
+      ]
+    ]
+  },
+  {
+    "id": 51,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_51",
+    "imageName": "station_051.jpg",
+    "positionLocalENU": [
+      150.5385084297417,
+      38,
+      52.84329817882673
+    ],
+    "forwardVector": [
+      -0.9428888590494994,
+      0.03758063776045282,
+      -0.3309808078210139
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 289.3425,
+    "pitchDegrees": 2.1537,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88972423,
+      "lng": 12.49401384,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49299695,
+        41.88971616
+      ],
+      [
+        12.49322683,
+        41.89020547
+      ],
+      [
+        12.49321299,
+        41.8902091
+      ],
+      [
+        12.49298311,
+        41.88971979
+      ]
+    ]
+  },
+  {
+    "id": 52,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_52",
+    "imageName": "station_052.jpg",
+    "positionLocalENU": [
+      162.94170736800322,
+      38,
+      8.455340693891098e-15
+    ],
+    "forwardVector": [
+      -0.9993227225772333,
+      0.036798045339745955,
+      -5.185666836946727e-17
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 270,
+    "pitchDegrees": 2.1088,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89019998,
+      "lng": 12.4941633,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.4932072,
+        41.88994071
+      ],
+      [
+        12.49320721,
+        41.89045929
+      ],
+      [
+        12.49319285,
+        41.89045929
+      ],
+      [
+        12.49319284,
+        41.8899407
+      ]
+    ]
+  },
+  {
+    "id": 53,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_53",
+    "imageName": "station_053.jpg",
+    "positionLocalENU": [
+      150.5385084297417,
+      38,
+      -52.843298178826714
+    ],
+    "forwardVector": [
+      -0.9428888590494994,
+      0.03758063776045282,
+      0.3309808078210138
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 250.6575,
+    "pitchDegrees": 2.1537,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89067574,
+      "lng": 12.49401387,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49322683,
+        41.89019452
+      ],
+      [
+        12.49299696,
+        41.89068383
+      ],
+      [
+        12.49298313,
+        41.8906802
+      ],
+      [
+        12.49321299,
+        41.89019089
+      ]
+    ]
+  },
+  {
+    "id": 54,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_54",
+    "imageName": "station_054.jpg",
+    "positionLocalENU": [
+      115.21718621802913,
+      38,
+      -97.64168323561792
+    ],
+    "forwardVector": [
+      -0.7622942612808031,
+      0.03969690388923174,
+      0.6460120858311892
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 229.7201,
+    "pitchDegrees": 2.2751,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89107907,
+      "lng": 12.49358828,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49308373,
+        41.89041972
+      ],
+      [
+        12.49263503,
+        41.89081534
+      ],
+      [
+        12.49262321,
+        41.89080786
+      ],
+      [
+        12.49307191,
+        41.89041223
+      ]
+    ]
+  },
+  {
+    "id": 55,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_55",
+    "imageName": "station_055.jpg",
+    "positionLocalENU": [
+      62.35509185101553,
+      38,
+      -127.57500714384895
+    ],
+    "forwardVector": [
+      -0.4387338915787301,
+      0.04221633344333705,
+      0.8976248401034723
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 206.0481,
+    "pitchDegrees": 2.4195,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89134857,
+      "lng": 12.49295134,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.4928438,
+        41.89059373
+      ],
+      [
+        12.49222027,
+        41.89082145
+      ],
+      [
+        12.49221303,
+        41.89081039
+      ],
+      [
+        12.49283657,
+        41.89058267
+      ]
+    ]
+  },
+  {
+    "id": 56,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_56",
+    "imageName": "station_056.jpg",
+    "positionLocalENU": [
+      1.9954604037582984e-14,
+      38,
+      -138.08619268474854
+    ],
+    "forwardVector": [
+      -1.44372099304578e-16,
+      0.0434101620957241,
+      0.9990573346043876
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 180,
+    "pitchDegrees": 2.488,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89144321,
+      "lng": 12.4922,
+      "elevation": 60.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49254702,
+        41.89072997
+      ],
+      [
+        12.49185298,
+        41.89072997
+      ],
+      [
+        12.49185298,
+        41.89071731
+      ],
+      [
+        12.49254702,
+        41.89071731
+      ]
+    ]
+  },
+  {
+    "id": 57,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_57",
+    "imageName": "station_057.jpg",
+    "positionLocalENU": [
+      -62.35509185101549,
+      38,
+      -127.57500714384896
+    ],
+    "forwardVector": [
+      0.4387338915787298,
+      0.04221633344333705,
+      0.8976248401034724
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 153.9519,
+    "pitchDegrees": 2.4195,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89134857,
+      "lng": 12.49144866,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49217973,
+        41.89082145
+      ],
+      [
+        12.4915562,
+        41.89059373
+      ],
+      [
+        12.49156343,
+        41.89058267
+      ],
+      [
+        12.49218697,
+        41.89081039
+      ]
+    ]
+  },
+  {
+    "id": 58,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_58",
+    "imageName": "station_058.jpg",
+    "positionLocalENU": [
+      -115.2171862180291,
+      38,
+      -97.64168323561795
+    ],
+    "forwardVector": [
+      0.762294261280803,
+      0.03969690388923175,
+      0.6460120858311894
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 130.2799,
+    "pitchDegrees": 2.2751,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89107907,
+      "lng": 12.49081172,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49176497,
+        41.89081534
+      ],
+      [
+        12.49131627,
+        41.89041972
+      ],
+      [
+        12.49132809,
+        41.89041223
+      ],
+      [
+        12.49177679,
+        41.89080786
+      ]
+    ]
+  },
+  {
+    "id": 59,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_59",
+    "imageName": "station_059.jpg",
+    "positionLocalENU": [
+      -150.53850842974165,
+      38,
+      -52.8432981788268
+    ],
+    "forwardVector": [
+      0.9428888590494992,
+      0.037580637760452826,
+      0.3309808078210144
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 109.3425,
+    "pitchDegrees": 2.1537,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89067574,
+      "lng": 12.49038613,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49140304,
+        41.89068383
+      ],
+      [
+        12.49117317,
+        41.89019452
+      ],
+      [
+        12.49118701,
+        41.89019089
+      ],
+      [
+        12.49141687,
+        41.8906802
+      ]
+    ]
+  },
+  {
+    "id": 60,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_60",
+    "imageName": "station_060.jpg",
+    "positionLocalENU": [
+      -162.94170736800322,
+      38,
+      -2.536602208167329e-14
+    ],
+    "forwardVector": [
+      0.9993227225772333,
+      0.036798045339745955,
+      1.555700051084018e-16
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 90,
+    "pitchDegrees": 2.1088,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89019998,
+      "lng": 12.4902367,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49119279,
+        41.89045929
+      ],
+      [
+        12.4911928,
+        41.88994071
+      ],
+      [
+        12.49120716,
+        41.8899407
+      ],
+      [
+        12.49120715,
+        41.89045929
+      ]
+    ]
+  },
+  {
+    "id": 61,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_61",
+    "imageName": "station_061.jpg",
+    "positionLocalENU": [
+      -150.53850842974168,
+      38,
+      52.84329817882676
+    ],
+    "forwardVector": [
+      0.9428888590494994,
+      0.037580637760452826,
+      -0.33098080782101413
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 70.6575,
+    "pitchDegrees": 2.1537,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88972423,
+      "lng": 12.49038616,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49117317,
+        41.89020547
+      ],
+      [
+        12.49140305,
+        41.88971616
+      ],
+      [
+        12.49141689,
+        41.88971979
+      ],
+      [
+        12.49118701,
+        41.8902091
+      ]
+    ]
+  },
+  {
+    "id": 62,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_62",
+    "imageName": "station_062.jpg",
+    "positionLocalENU": [
+      -115.21718621802903,
+      38,
+      97.64168323561799
+    ],
+    "forwardVector": [
+      0.7622942612808026,
+      0.03969690388923175,
+      -0.6460120858311897
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 49.7201,
+    "pitchDegrees": 2.2751,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88932091,
+      "lng": 12.49081176,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49131628,
+        41.88998027
+      ],
+      [
+        12.49176498,
+        41.88958465
+      ],
+      [
+        12.4917768,
+        41.88959214
+      ],
+      [
+        12.49132809,
+        41.88998776
+      ]
+    ]
+  },
+  {
+    "id": 63,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_63",
+    "imageName": "station_063.jpg",
+    "positionLocalENU": [
+      -62.355091851015615,
+      38,
+      127.57500714384891
+    ],
+    "forwardVector": [
+      0.4387338915787306,
+      0.04221633344333704,
+      -0.8976248401034718
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 26.0481,
+    "pitchDegrees": 2.4195,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88905142,
+      "lng": 12.49144869,
+      "elevation": 60.002
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49155621,
+        41.88980627
+      ],
+      [
+        12.49217973,
+        41.88957855
+      ],
+      [
+        12.49218697,
+        41.88958961
+      ],
+      [
+        12.49156344,
+        41.88981733
+      ]
+    ]
+  },
+  {
+    "id": 64,
+    "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_64",
+    "imageName": "station_064.jpg",
+    "positionLocalENU": [
+      -3.990920807516597e-14,
+      38,
+      138.08619268474854
+    ],
+    "forwardVector": [
+      2.88744198609156e-16,
+      0.0434101620957241,
+      -0.9990573346043876
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 0,
+    "pitchDegrees": 2.488,
+    "rollDegrees": 0,
+    "focalLengthMm": 50,
+    "sensorWidthMm": 36,
+    "fovDegrees": 39.5978,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88895679,
+      "lng": 12.4922,
+      "elevation": 60.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 38,
+    "cameraAltitude": 38,
+    "frustumFootprintWGS84": [
+      [
+        12.49185299,
+        41.88967003
+      ],
+      [
+        12.49254701,
+        41.88967003
+      ],
+      [
+        12.49254701,
+        41.88968269
+      ],
+      [
+        12.49185299,
+        41.88968269
+      ]
+    ]
+  },
+  {
+    "id": 65,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_65",
+    "imageName": "station_065.jpg",
+    "positionLocalENU": [
+      16.898104968463297,
+      4.5,
+      21.432034977905516
+    ],
+    "forwardVector": [
+      0.578386949932393,
+      0.35684425069744985,
+      0.7335739341689284
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 141.746,
+    "pitchDegrees": 20.9065,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89000704,
+      "lng": 12.49240361,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49343898,
+        41.88989828
+      ],
+      [
+        12.49230357,
+        41.88922938
+      ],
+      [
+        12.49248326,
+        41.88905907
+      ],
+      [
+        12.49361868,
+        41.88972799
+      ]
+    ]
+  },
+  {
+    "id": 66,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_66",
+    "imageName": "station_066.jpg",
+    "positionLocalENU": [
+      25.289801273928504,
+      4.5,
+      14.320427939375682
+    ],
+    "forwardVector": [
+      0.8190707427533436,
+      0.337655803485249,
+      0.46380133326481165
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 119.5208,
+    "pitchDegrees": 19.7341,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89007107,
+      "lng": 12.49250472,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49353098,
+        41.89025762
+      ],
+      [
+        12.49281852,
+        41.88931751
+      ],
+      [
+        12.4930575,
+        41.88921639
+      ],
+      [
+        12.49376996,
+        41.89015651
+      ]
+    ]
+  },
+  {
+    "id": 67,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_67",
+    "imageName": "station_067.jpg",
+    "positionLocalENU": [
+      29.831354588057522,
+      4.5,
+      5.02866556207843
+    ],
+    "forwardVector": [
+      0.9322804022683495,
+      0.3258155461492044,
+      0.15715432362445544
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 99.5684,
+    "pitchDegrees": 19.015,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89015473,
+      "lng": 12.49255944,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49344761,
+        41.89059066
+      ],
+      [
+        12.49320725,
+        41.88952532
+      ],
+      [
+        12.49346857,
+        41.88949239
+      ],
+      [
+        12.49370893,
+        41.89055775
+      ]
+    ]
+  },
+  {
+    "id": 68,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_68",
+    "imageName": "station_068.jpg",
+    "positionLocalENU": [
+      29.831354588057522,
+      4.5,
+      -5.028665562078427
+    ],
+    "forwardVector": [
+      0.9322804022683495,
+      0.3258155461492044,
+      -0.15715432362445533
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 80.4316,
+    "pitchDegrees": 19.015,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89024527,
+      "lng": 12.49255944,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49320727,
+        41.89087468
+      ],
+      [
+        12.4934476,
+        41.88980933
+      ],
+      [
+        12.49370891,
+        41.88984223
+      ],
+      [
+        12.49346859,
+        41.89090759
+      ]
+    ]
+  },
+  {
+    "id": 69,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_69",
+    "imageName": "station_069.jpg",
+    "positionLocalENU": [
+      25.289801273928507,
+      4.5,
+      -14.320427939375673
+    ],
+    "forwardVector": [
+      0.8190707427533438,
+      0.33765580348524904,
+      -0.46380133326481154
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 60.4792,
+    "pitchDegrees": 19.7341,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89032893,
+      "lng": 12.49250472,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49281854,
+        41.89108248
+      ],
+      [
+        12.49353098,
+        41.89014236
+      ],
+      [
+        12.49376996,
+        41.89024347
+      ],
+      [
+        12.49305752,
+        41.8911836
+      ]
+    ]
+  },
+  {
+    "id": 70,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_70",
+    "imageName": "station_070.jpg",
+    "positionLocalENU": [
+      16.898104968463297,
+      4.5,
+      -21.43203497790552
+    ],
+    "forwardVector": [
+      0.5783869499323929,
+      0.3568442506974498,
+      -0.7335739341689284
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 38.254,
+    "pitchDegrees": 20.9065,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89039296,
+      "lng": 12.49240361,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49230357,
+        41.89117062
+      ],
+      [
+        12.49343899,
+        41.8905017
+      ],
+      [
+        12.4936187,
+        41.890672
+      ],
+      [
+        12.49248327,
+        41.89134092
+      ]
+    ]
+  },
+  {
+    "id": 71,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_71",
+    "imageName": "station_071.jpg",
+    "positionLocalENU": [
+      5.933825363252555,
+      4.5,
+      -25.28080897293011
+    ],
+    "forwardVector": [
+      0.21205473393312016,
+      0.37257304706254524,
+      -0.9034501172832311
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 13.2092,
+    "pitchDegrees": 21.8744,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89042761,
+      "lng": 12.4922715,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49173746,
+        41.89109154
+      ],
+      [
+        12.49314511,
+        41.89084466
+      ],
+      [
+        12.49321436,
+        41.8910651
+      ],
+      [
+        12.4918067,
+        41.89131197
+      ]
+    ]
+  },
+  {
+    "id": 72,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_72",
+    "imageName": "station_072.jpg",
+    "positionLocalENU": [
+      -5.933825363252547,
+      4.5,
+      -25.28080897293011
+    ],
+    "forwardVector": [
+      -0.21205473393311988,
+      0.37257304706254524,
+      -0.9034501172832311
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 346.7908,
+    "pitchDegrees": 21.8744,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89042761,
+      "lng": 12.4921285,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49125489,
+        41.89084466
+      ],
+      [
+        12.49266254,
+        41.89109154
+      ],
+      [
+        12.4925933,
+        41.89131197
+      ],
+      [
+        12.49118564,
+        41.8910651
+      ]
+    ]
+  },
+  {
+    "id": 73,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_73",
+    "imageName": "station_073.jpg",
+    "positionLocalENU": [
+      -16.89810496846329,
+      4.5,
+      -21.432034977905523
+    ],
+    "forwardVector": [
+      -0.5783869499323927,
+      0.35684425069744985,
+      -0.7335739341689285
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 321.746,
+    "pitchDegrees": 20.9065,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89039296,
+      "lng": 12.49199639,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49096101,
+        41.8905017
+      ],
+      [
+        12.49209643,
+        41.89117062
+      ],
+      [
+        12.49191673,
+        41.89134092
+      ],
+      [
+        12.4907813,
+        41.890672
+      ]
+    ]
+  },
+  {
+    "id": 74,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_74",
+    "imageName": "station_074.jpg",
+    "positionLocalENU": [
+      -25.289801273928504,
+      4.5,
+      -14.320427939375678
+    ],
+    "forwardVector": [
+      -0.8190707427533436,
+      0.337655803485249,
+      -0.46380133326481165
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 299.5208,
+    "pitchDegrees": 19.7341,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89032893,
+      "lng": 12.49189528,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49086902,
+        41.89014236
+      ],
+      [
+        12.49158146,
+        41.89108248
+      ],
+      [
+        12.49134248,
+        41.8911836
+      ],
+      [
+        12.49063004,
+        41.89024347
+      ]
+    ]
+  },
+  {
+    "id": 75,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_75",
+    "imageName": "station_075.jpg",
+    "positionLocalENU": [
+      -29.83135458805752,
+      4.5,
+      -5.028665562078439
+    ],
+    "forwardVector": [
+      -0.9322804022683495,
+      0.3258155461492045,
+      -0.15715432362445575
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 279.5684,
+    "pitchDegrees": 19.015,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89024527,
+      "lng": 12.49184056,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.4909524,
+        41.88980933
+      ],
+      [
+        12.49119273,
+        41.89087468
+      ],
+      [
+        12.49093141,
+        41.89090759
+      ],
+      [
+        12.49069109,
+        41.88984223
+      ]
+    ]
+  },
+  {
+    "id": 76,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_76",
+    "imageName": "station_076.jpg",
+    "positionLocalENU": [
+      -29.83135458805753,
+      4.5,
+      5.028665562078406
+    ],
+    "forwardVector": [
+      -0.9322804022683496,
+      0.3258155461492044,
+      0.1571543236244547
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 260.4316,
+    "pitchDegrees": 19.015,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89015473,
+      "lng": 12.49184056,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49119275,
+        41.88952532
+      ],
+      [
+        12.49095239,
+        41.89059066
+      ],
+      [
+        12.49069107,
+        41.89055775
+      ],
+      [
+        12.49093143,
+        41.88949239
+      ]
+    ]
+  },
+  {
+    "id": 77,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_77",
+    "imageName": "station_077.jpg",
+    "positionLocalENU": [
+      -25.28980127392851,
+      4.5,
+      14.32042793937567
+    ],
+    "forwardVector": [
+      -0.8190707427533437,
+      0.337655803485249,
+      0.4638013332648114
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 240.4792,
+    "pitchDegrees": 19.7341,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89007107,
+      "lng": 12.49189528,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49158148,
+        41.88931751
+      ],
+      [
+        12.49086902,
+        41.89025762
+      ],
+      [
+        12.49063004,
+        41.89015651
+      ],
+      [
+        12.4913425,
+        41.88921639
+      ]
+    ]
+  },
+  {
+    "id": 78,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_78",
+    "imageName": "station_078.jpg",
+    "positionLocalENU": [
+      -16.898104968463297,
+      4.5,
+      21.432034977905516
+    ],
+    "forwardVector": [
+      -0.578386949932393,
+      0.35684425069744985,
+      0.7335739341689284
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 218.254,
+    "pitchDegrees": 20.9065,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89000704,
+      "lng": 12.49199639,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49209643,
+        41.88922938
+      ],
+      [
+        12.49096102,
+        41.88989828
+      ],
+      [
+        12.49078132,
+        41.88972799
+      ],
+      [
+        12.49191674,
+        41.88905907
+      ]
+    ]
+  },
+  {
+    "id": 79,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_79",
+    "imageName": "station_079.jpg",
+    "positionLocalENU": [
+      -5.9338253632525575,
+      4.5,
+      25.280808972930107
+    ],
+    "forwardVector": [
+      -0.21205473393312033,
+      0.3725730470625453,
+      0.9034501172832311
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 193.2092,
+    "pitchDegrees": 21.8744,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88997239,
+      "lng": 12.4921285,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49266253,
+        41.88930846
+      ],
+      [
+        12.49125491,
+        41.88955533
+      ],
+      [
+        12.49118567,
+        41.8893349
+      ],
+      [
+        12.49259329,
+        41.88908802
+      ]
+    ]
+  },
+  {
+    "id": 80,
+    "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_80",
+    "imageName": "station_080.jpg",
+    "positionLocalENU": [
+      5.933825363252517,
+      4.5,
+      25.280808972930114
+    ],
+    "forwardVector": [
+      0.21205473393311886,
+      0.37257304706254535,
+      0.9034501172832314
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 166.7908,
+    "pitchDegrees": 21.8744,
+    "rollDegrees": 0,
+    "focalLengthMm": 24,
+    "sensorWidthMm": 36,
+    "fovDegrees": 73.7398,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88997239,
+      "lng": 12.4922715,
+      "elevation": 26.5
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 4.5,
+    "cameraAltitude": 4.5,
+    "frustumFootprintWGS84": [
+      [
+        12.49314509,
+        41.88955533
+      ],
+      [
+        12.49173747,
+        41.88930846
+      ],
+      [
+        12.49180671,
+        41.88908802
+      ],
+      [
+        12.49321433,
+        41.8893349
+      ]
+    ]
+  },
+  {
+    "id": 81,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_81",
+    "imageName": "station_081.jpg",
+    "positionLocalENU": [
+      42.24630161327734,
+      20,
+      35.801950519726574
+    ],
+    "forwardVector": [
+      -0.7545676354706005,
+      -0.14735450808493916,
+      -0.6394640978564413
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 310.2799,
+    "pitchDegrees": -8.4736,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88987767,
+      "lng": 12.49270903,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49154187,
+        41.89000982
+      ],
+      [
+        12.49234313,
+        41.89071629
+      ],
+      [
+        12.4924215,
+        41.89066667
+      ],
+      [
+        12.49162024,
+        41.88996019
+      ]
+    ]
+  },
+  {
+    "id": 82,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_82",
+    "imageName": "station_082.jpg",
+    "positionLocalENU": [
+      55.19745309090529,
+      20,
+      19.375875998903133
+    ],
+    "forwardVector": [
+      -0.9343100628231548,
+      -0.13964517539598326,
+      -0.3279694063415333
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 289.3425,
+    "pitchDegrees": -8.0273,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89002555,
+      "lng": 12.49286508,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.4917133,
+        41.88983694
+      ],
+      [
+        12.49212379,
+        41.89071071
+      ],
+      [
+        12.49221564,
+        41.89068662
+      ],
+      [
+        12.49180516,
+        41.88981284
+      ]
+    ]
+  },
+  {
+    "id": 83,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_83",
+    "imageName": "station_083.jpg",
+    "positionLocalENU": [
+      59.74529270160118,
+      20,
+      3.100291587760069e-15
+    ],
+    "forwardVector": [
+      -0.9906003135922082,
+      -0.13678822577626595,
+      -5.140404674894332e-17
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 270,
+    "pitchDegrees": -7.862,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8902,
+      "lng": 12.49291988,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49191733,
+        41.88973698
+      ],
+      [
+        12.49191733,
+        41.89066302
+      ],
+      [
+        12.49201269,
+        41.89066302
+      ],
+      [
+        12.49201269,
+        41.88973698
+      ]
+    ]
+  },
+  {
+    "id": 84,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_84",
+    "imageName": "station_084.jpg",
+    "positionLocalENU": [
+      55.19745309090529,
+      20,
+      -19.37587599890313
+    ],
+    "forwardVector": [
+      -0.9343100628231548,
+      -0.13964517539598326,
+      0.32796940634153326
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 250.6575,
+    "pitchDegrees": -8.0273,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89037444,
+      "lng": 12.49286508,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49212379,
+        41.88968929
+      ],
+      [
+        12.4917133,
+        41.89056306
+      ],
+      [
+        12.49180515,
+        41.89058716
+      ],
+      [
+        12.49221564,
+        41.88971338
+      ]
+    ]
+  },
+  {
+    "id": 85,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_85",
+    "imageName": "station_085.jpg",
+    "positionLocalENU": [
+      42.246301613277346,
+      20,
+      -35.80195051972657
+    ],
+    "forwardVector": [
+      -0.7545676354706008,
+      -0.1473545080849392,
+      0.6394640978564413
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 229.7201,
+    "pitchDegrees": -8.4736,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89052233,
+      "lng": 12.49270903,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49234312,
+        41.88968371
+      ],
+      [
+        12.49154187,
+        41.89039018
+      ],
+      [
+        12.49162023,
+        41.8904398
+      ],
+      [
+        12.49242149,
+        41.88973333
+      ]
+    ]
+  },
+  {
+    "id": 86,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_86",
+    "imageName": "station_086.jpg",
+    "positionLocalENU": [
+      22.863533678705693,
+      20,
+      -46.77750261941128
+    ],
+    "forwardVector": [
+      -0.43371445017647564,
+      -0.1565000521895915,
+      0.8873553456044386
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 206.0481,
+    "pitchDegrees": -9.0038,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89062115,
+      "lng": 12.49247549,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49259018,
+        41.88974208
+      ],
+      [
+        12.49147674,
+        41.89014873
+      ],
+      [
+        12.49152464,
+        41.89022197
+      ],
+      [
+        12.4926381,
+        41.88981532
+      ]
+    ]
+  },
+  {
+    "id": 87,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_87",
+    "imageName": "station_087.jpg",
+    "positionLocalENU": [
+      7.31668814711376e-15,
+      20,
+      -50.631603984407796
+    ],
+    "forwardVector": [
+      -1.4262734744580685e-16,
+      -0.1608207966184911,
+      0.9869836226478097
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 180,
+    "pitchDegrees": -9.2545,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89065585,
+      "lng": 12.4922,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49281966,
+        41.88990308
+      ],
+      [
+        12.49158034,
+        41.88990308
+      ],
+      [
+        12.49158033,
+        41.88998685
+      ],
+      [
+        12.49281967,
+        41.88998685
+      ]
+    ]
+  },
+  {
+    "id": 88,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_88",
+    "imageName": "station_088.jpg",
+    "positionLocalENU": [
+      -22.86353367870568,
+      20,
+      -46.77750261941129
+    ],
+    "forwardVector": [
+      0.43371445017647536,
+      -0.1565000521895915,
+      0.8873553456044387
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 153.9519,
+    "pitchDegrees": -9.0038,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89062115,
+      "lng": 12.49192451,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49292326,
+        41.89014873
+      ],
+      [
+        12.49180982,
+        41.88974208
+      ],
+      [
+        12.4917619,
+        41.88981532
+      ],
+      [
+        12.49287536,
+        41.89022197
+      ]
+    ]
+  },
+  {
+    "id": 89,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_89",
+    "imageName": "station_089.jpg",
+    "positionLocalENU": [
+      -42.24630161327734,
+      20,
+      -35.80195051972658
+    ],
+    "forwardVector": [
+      0.7545676354706005,
+      -0.14735450808493916,
+      0.6394640978564414
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 130.2799,
+    "pitchDegrees": -8.4736,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89052233,
+      "lng": 12.49169097,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49285813,
+        41.89039018
+      ],
+      [
+        12.49205688,
+        41.88968371
+      ],
+      [
+        12.49197851,
+        41.88973333
+      ],
+      [
+        12.49277977,
+        41.8904398
+      ]
+    ]
+  },
+  {
+    "id": 90,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_90",
+    "imageName": "station_090.jpg",
+    "positionLocalENU": [
+      -55.19745309090528,
+      20,
+      -19.375875998903158
+    ],
+    "forwardVector": [
+      0.9343100628231545,
+      -0.13964517539598326,
+      0.32796940634153376
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 109.3425,
+    "pitchDegrees": -8.0273,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89037444,
+      "lng": 12.49153492,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.4926867,
+        41.89056306
+      ],
+      [
+        12.49227621,
+        41.88968929
+      ],
+      [
+        12.49218436,
+        41.88971338
+      ],
+      [
+        12.49259485,
+        41.89058716
+      ]
+    ]
+  },
+  {
+    "id": 91,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_91",
+    "imageName": "station_091.jpg",
+    "positionLocalENU": [
+      -59.74529270160118,
+      20,
+      -9.300874763280207e-15
+    ],
+    "forwardVector": [
+      0.9906003135922082,
+      -0.13678822577626595,
+      1.5421214024682995e-16
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 90,
+    "pitchDegrees": -7.862,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.8902,
+      "lng": 12.49148012,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49248267,
+        41.89066302
+      ],
+      [
+        12.49248267,
+        41.88973698
+      ],
+      [
+        12.49238731,
+        41.88973698
+      ],
+      [
+        12.49238731,
+        41.89066302
+      ]
+    ]
+  },
+  {
+    "id": 92,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_92",
+    "imageName": "station_092.jpg",
+    "positionLocalENU": [
+      -55.197453090905306,
+      20,
+      19.3758759989031
+    ],
+    "forwardVector": [
+      0.9343100628231549,
+      -0.13964517539598326,
+      -0.3279694063415328
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 70.6575,
+    "pitchDegrees": -8.0273,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89002555,
+      "lng": 12.49153492,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49227621,
+        41.89071071
+      ],
+      [
+        12.4926867,
+        41.88983694
+      ],
+      [
+        12.49259484,
+        41.88981284
+      ],
+      [
+        12.49218436,
+        41.89068662
+      ]
+    ]
+  },
+  {
+    "id": 93,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_93",
+    "imageName": "station_093.jpg",
+    "positionLocalENU": [
+      -42.24630161327735,
+      20,
+      35.80195051972656
+    ],
+    "forwardVector": [
+      0.7545676354706007,
+      -0.14735450808493916,
+      -0.6394640978564411
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 49.7201,
+    "pitchDegrees": -8.4736,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88987767,
+      "lng": 12.49169097,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49205687,
+        41.89071629
+      ],
+      [
+        12.49285813,
+        41.89000982
+      ],
+      [
+        12.49277976,
+        41.88996019
+      ],
+      [
+        12.4919785,
+        41.89066667
+      ]
+    ]
+  },
+  {
+    "id": 94,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_94",
+    "imageName": "station_094.jpg",
+    "positionLocalENU": [
+      -22.863533678705675,
+      20,
+      46.77750261941129
+    ],
+    "forwardVector": [
+      0.43371445017647525,
+      -0.1565000521895915,
+      -0.8873553456044387
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 26.0481,
+    "pitchDegrees": -9.0038,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88977885,
+      "lng": 12.49192452,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49180981,
+        41.89065792
+      ],
+      [
+        12.49292326,
+        41.89025127
+      ],
+      [
+        12.49287536,
+        41.89017803
+      ],
+      [
+        12.4917619,
+        41.89058468
+      ]
+    ]
+  },
+  {
+    "id": 95,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_95",
+    "imageName": "station_095.jpg",
+    "positionLocalENU": [
+      -1.463337629422752e-14,
+      20,
+      50.631603984407796
+    ],
+    "forwardVector": [
+      2.852546948916137e-16,
+      -0.1608207966184911,
+      -0.9869836226478097
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 0,
+    "pitchDegrees": -9.2545,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88974415,
+      "lng": 12.4922,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49158033,
+        41.89049692
+      ],
+      [
+        12.49281967,
+        41.89049692
+      ],
+      [
+        12.49281967,
+        41.89041315
+      ],
+      [
+        12.49158033,
+        41.89041315
+      ]
+    ]
+  },
+  {
+    "id": 96,
+    "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_96",
+    "imageName": "station_096.jpg",
+    "positionLocalENU": [
+      22.863533678705647,
+      20,
+      46.777502619411294
+    ],
+    "forwardVector": [
+      -0.4337144501764749,
+      -0.15650005218959154,
+      -0.887355345604439
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 333.9519,
+    "pitchDegrees": -9.0038,
+    "rollDegrees": 0,
+    "focalLengthMm": 28,
+    "sensorWidthMm": 36,
+    "fovDegrees": 65.4705,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88977885,
+      "lng": 12.49247548,
+      "elevation": 42
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 20,
+    "cameraAltitude": 20,
+    "frustumFootprintWGS84": [
+      [
+        12.49147674,
+        41.89025127
+      ],
+      [
+        12.49259019,
+        41.89065792
+      ],
+      [
+        12.4926381,
+        41.89058468
+      ],
+      [
+        12.49152464,
+        41.89017803
+      ]
+    ]
+  },
+  {
+    "id": 97,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_97",
+    "imageName": "station_097.jpg",
+    "positionLocalENU": [
+      76.7726110101401,
+      65,
+      43.47272767310475
+    ],
+    "forwardVector": [
+      -0.35120885788243306,
+      -0.9149326908682197,
+      -0.19887309854667531
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 299.5208,
+    "pitchDegrees": -66.1962,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88980861,
+      "lng": 12.49312503,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49232022,
+        41.88972345
+      ],
+      [
+        12.49280877,
+        41.89036811
+      ],
+      [
+        12.49325278,
+        41.89018024
+      ],
+      [
+        12.49276424,
+        41.88953558
+      ]
+    ]
+  },
+  {
+    "id": 98,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_98",
+    "imageName": "station_098.jpg",
+    "positionLocalENU": [
+      90.55946928517461,
+      65,
+      15.26559188488095
+    ],
+    "forwardVector": [
+      -0.4114892083338646,
+      -0.9087712451981629,
+      -0.0693646547295512
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 279.5684,
+    "pitchDegrees": -65.3361,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89006256,
+      "lng": 12.49329115,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49256222,
+        41.88977873
+      ],
+      [
+        12.49272704,
+        41.89050926
+      ],
+      [
+        12.49322681,
+        41.89044631
+      ],
+      [
+        12.49306199,
+        41.88971578
+      ]
+    ]
+  },
+  {
+    "id": 99,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_99",
+    "imageName": "station_099.jpg",
+    "positionLocalENU": [
+      90.55946928517461,
+      65,
+      -15.265591884880939
+    ],
+    "forwardVector": [
+      -0.4114892083338646,
+      -0.9087712451981629,
+      0.06936465472955114
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 260.4316,
+    "pitchDegrees": -65.3361,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89033743,
+      "lng": 12.49329116,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49272703,
+        41.88989074
+      ],
+      [
+        12.49256223,
+        41.89062127
+      ],
+      [
+        12.49306201,
+        41.89068421
+      ],
+      [
+        12.4932268,
+        41.88995368
+      ]
+    ]
+  },
+  {
+    "id": 100,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_100",
+    "imageName": "station_100.jpg",
+    "positionLocalENU": [
+      76.77261101014011,
+      65,
+      -43.47272767310473
+    ],
+    "forwardVector": [
+      -0.35120885788243306,
+      -0.9149326908682197,
+      0.19887309854667531
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 240.4792,
+    "pitchDegrees": -66.1962,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89059139,
+      "lng": 12.49312504,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49280876,
+        41.89003189
+      ],
+      [
+        12.49232023,
+        41.89067655
+      ],
+      [
+        12.49276425,
+        41.89086442
+      ],
+      [
+        12.49325278,
+        41.89021975
+      ]
+    ]
+  },
+  {
+    "id": 101,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_101",
+    "imageName": "station_101.jpg",
+    "positionLocalENU": [
+      51.29781865426358,
+      65,
+      -65.06153475435605
+    ],
+    "forwardVector": [
+      -0.23696109349159944,
+      -0.9238642098552641,
+      0.30054011698902006
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 218.254,
+    "pitchDegrees": -67.4977,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89078575,
+      "lng": 12.4928181,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49281946,
+        41.89018879
+      ],
+      [
+        12.49204088,
+        41.89064748
+      ],
+      [
+        12.4923599,
+        41.8909498
+      ],
+      [
+        12.49313848,
+        41.89049111
+      ]
+    ]
+  },
+  {
+    "id": 102,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_102",
+    "imageName": "station_102.jpg",
+    "positionLocalENU": [
+      18.01339842415954,
+      65,
+      -76.74531295353783
+    ],
+    "forwardVector": [
+      -0.08379292390083586,
+      -0.9303399828036107,
+      0.3569961656672605
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 193.2092,
+    "pitchDegrees": -68.4879,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89089095,
+      "lng": 12.49241705,
+      "elevation": 87
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49275962,
+        41.89036046
+      ],
+      [
+        12.49179437,
+        41.89052975
+      ],
+      [
+        12.49191293,
+        41.89090718
+      ],
+      [
+        12.49287818,
+        41.8907379
+      ]
+    ]
+  },
+  {
+    "id": 103,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_103",
+    "imageName": "station_103.jpg",
+    "positionLocalENU": [
+      -18.01339842415952,
+      65,
+      -76.74531295353783
+    ],
+    "forwardVector": [
+      0.0837929239008358,
+      -0.9303399828036107,
+      0.3569961656672605
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 166.7908,
+    "pitchDegrees": -68.4879,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89089095,
+      "lng": 12.49198295,
+      "elevation": 87
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49260563,
+        41.89052975
+      ],
+      [
+        12.49164038,
+        41.89036046
+      ],
+      [
+        12.49152182,
+        41.8907379
+      ],
+      [
+        12.49248707,
+        41.89090718
+      ]
+    ]
+  },
+  {
+    "id": 104,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_104",
+    "imageName": "station_104.jpg",
+    "positionLocalENU": [
+      -51.29781865426356,
+      65,
+      -65.06153475435606
+    ],
+    "forwardVector": [
+      0.23696109349159922,
+      -0.9238642098552641,
+      0.30054011698902006
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 141.746,
+    "pitchDegrees": -67.4977,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89078575,
+      "lng": 12.4915819,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49235912,
+        41.89064748
+      ],
+      [
+        12.49158054,
+        41.89018879
+      ],
+      [
+        12.49126152,
+        41.89049111
+      ],
+      [
+        12.4920401,
+        41.8909498
+      ]
+    ]
+  },
+  {
+    "id": 105,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_105",
+    "imageName": "station_105.jpg",
+    "positionLocalENU": [
+      -76.7726110101401,
+      65,
+      -43.47272767310474
+    ],
+    "forwardVector": [
+      0.35120885788243306,
+      -0.9149326908682197,
+      0.19887309854667531
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 119.5208,
+    "pitchDegrees": -66.1962,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89059139,
+      "lng": 12.49127496,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49207977,
+        41.89067655
+      ],
+      [
+        12.49159124,
+        41.89003189
+      ],
+      [
+        12.49114722,
+        41.89021975
+      ],
+      [
+        12.49163575,
+        41.89086442
+      ]
+    ]
+  },
+  {
+    "id": 106,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_106",
+    "imageName": "station_106.jpg",
+    "positionLocalENU": [
+      -90.55946928517461,
+      65,
+      -15.265591884880976
+    ],
+    "forwardVector": [
+      0.411489208333865,
+      -0.9087712451981627,
+      0.06936465472955128
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 99.5684,
+    "pitchDegrees": -65.3361,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89033743,
+      "lng": 12.49110884,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49183777,
+        41.89062127
+      ],
+      [
+        12.49167297,
+        41.88989074
+      ],
+      [
+        12.4911732,
+        41.88995368
+      ],
+      [
+        12.49133799,
+        41.89068421
+      ]
+    ]
+  },
+  {
+    "id": 107,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_107",
+    "imageName": "station_107.jpg",
+    "positionLocalENU": [
+      -90.55946928517461,
+      65,
+      15.265591884880948
+    ],
+    "forwardVector": [
+      0.4114892083338646,
+      -0.9087712451981629,
+      -0.0693646547295512
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 80.4316,
+    "pitchDegrees": -65.3361,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.89006256,
+      "lng": 12.49110885,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49167296,
+        41.89050926
+      ],
+      [
+        12.49183778,
+        41.88977873
+      ],
+      [
+        12.49133801,
+        41.88971578
+      ],
+      [
+        12.49117319,
+        41.89044631
+      ]
+    ]
+  },
+  {
+    "id": 108,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_108",
+    "imageName": "station_108.jpg",
+    "positionLocalENU": [
+      -76.77261101014012,
+      65,
+      43.472727673104714
+    ],
+    "forwardVector": [
+      0.3512088578824334,
+      -0.9149326908682196,
+      -0.19887309854667504
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 60.4792,
+    "pitchDegrees": -66.1962,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88980861,
+      "lng": 12.49127497,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49159123,
+        41.89036811
+      ],
+      [
+        12.49207978,
+        41.88972345
+      ],
+      [
+        12.49163576,
+        41.88953558
+      ],
+      [
+        12.49114722,
+        41.89018024
+      ]
+    ]
+  },
+  {
+    "id": 109,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_109",
+    "imageName": "station_109.jpg",
+    "positionLocalENU": [
+      -51.29781865426358,
+      65,
+      65.06153475435605
+    ],
+    "forwardVector": [
+      0.23696109349159944,
+      -0.9238642098552641,
+      -0.3005401169890203
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 38.254,
+    "pitchDegrees": -67.4977,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88961424,
+      "lng": 12.49158192,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49158054,
+        41.89021121
+      ],
+      [
+        12.49235911,
+        41.88975252
+      ],
+      [
+        12.4920401,
+        41.8894502
+      ],
+      [
+        12.49126153,
+        41.88990888
+      ]
+    ]
+  },
+  {
+    "id": 110,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_110",
+    "imageName": "station_110.jpg",
+    "positionLocalENU": [
+      -18.013398424159472,
+      65,
+      76.74531295353785
+    ],
+    "forwardVector": [
+      0.08379292390083556,
+      -0.9303399828036105,
+      -0.3569961656672609
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 13.2092,
+    "pitchDegrees": -68.4879,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88950905,
+      "lng": 12.49198296,
+      "elevation": 87
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49164039,
+        41.89003953
+      ],
+      [
+        12.49260562,
+        41.88987025
+      ],
+      [
+        12.49248706,
+        41.88949281
+      ],
+      [
+        12.49152183,
+        41.8896621
+      ]
+    ]
+  },
+  {
+    "id": 111,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_111",
+    "imageName": "station_111.jpg",
+    "positionLocalENU": [
+      18.013398424159508,
+      65,
+      76.74531295353783
+    ],
+    "forwardVector": [
+      -0.08379292390083574,
+      -0.9303399828036107,
+      -0.3569961656672605
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 346.7908,
+    "pitchDegrees": -68.4879,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88950905,
+      "lng": 12.49241704,
+      "elevation": 87
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49179438,
+        41.88987025
+      ],
+      [
+        12.49275961,
+        41.89003953
+      ],
+      [
+        12.49287817,
+        41.8896621
+      ],
+      [
+        12.49191294,
+        41.88949281
+      ]
+    ]
+  },
+  {
+    "id": 112,
+    "name": "AMPHITHEATRE_TIER_6_RIM_SURVEY_STATION_112",
+    "imageName": "station_112.jpg",
+    "positionLocalENU": [
+      51.29781865426355,
+      65,
+      65.06153475435606
+    ],
+    "forwardVector": [
+      -0.23696109349159922,
+      -0.9238642098552641,
+      -0.30054011698901983
+    ],
+    "upVector": [
+      0,
+      1,
+      0
+    ],
+    "yawDegrees": 321.746,
+    "pitchDegrees": -67.4977,
+    "rollDegrees": 0,
+    "focalLengthMm": 35,
+    "sensorWidthMm": 36,
+    "fovDegrees": 54.4322,
+    "aspectRatio": 1.7777777777777777,
+    "coordinatesWGS84": {
+      "lat": 41.88961424,
+      "lng": 12.49281808,
+      "elevation": 87.001
+    },
+    "groundElevationASL": 22,
+    "cameraHeightAboveGround": 65,
+    "cameraAltitude": 65,
+    "frustumFootprintWGS84": [
+      [
+        12.49204089,
+        41.88975252
+      ],
+      [
+        12.49281946,
+        41.89021121
+      ],
+      [
+        12.49313847,
+        41.88990888
+      ],
+      [
+        12.4923599,
+        41.8894502
+      ]
+    ]
+  }
+]

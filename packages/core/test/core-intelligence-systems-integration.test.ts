@@ -58,7 +58,7 @@ export class BillingCalculationService {
     patternEngine.analyzeFilesPatterns([
         {
             path: 'src/services/billing-service.ts',
-            content: `import { injectable } from '@theia/core/shared/inversify';
+            content: `import { injectable } from 'inversify';
 @injectable()
 export class BillingCalculationService {}`
         }

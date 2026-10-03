@@ -533,7 +533,7 @@ export class GoogleDriveService {
                 name: 'Scratchbox Architecture & Pipeline Spec',
                 mimeType: 'application/vnd.google-apps.document',
                 webViewLink: 'https://docs.google.com/document/d/1gdoc_arch_spec_001/edit',
-                modifiedTime: '2026-09-05T17:30:00Z',
+                modifiedTime: '2026-09-28T17:30:00Z',
                 size: '24 KB'
             },
             {
@@ -541,7 +541,7 @@ export class GoogleDriveService {
                 name: 'Gemini 3.7 Flash Subagent Sprint Plan',
                 mimeType: 'application/vnd.google-apps.document',
                 webViewLink: 'https://docs.google.com/document/d/1gdoc_agent_sprint_002/edit',
-                modifiedTime: '2026-09-04T12:00:00Z',
+                modifiedTime: '2026-09-27T12:00:00Z',
                 size: '18 KB'
             },
             {
@@ -549,7 +549,7 @@ export class GoogleDriveService {
                 name: 'n8n_reasoning_flow.json',
                 mimeType: 'application/json',
                 webViewLink: 'https://drive.google.com/file/d/1gfile_n8n_flow_003/view',
-                modifiedTime: '2026-09-03T09:15:00Z',
+                modifiedTime: '2026-09-26T09:15:00Z',
                 size: '8.4 KB'
             }
         ];

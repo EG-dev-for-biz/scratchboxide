@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scratchbox IDE — Human Subject Matchmove & Optical Resection Studio</title>
+  <script src="three.min.js"></script>
+  <style>
+    :root {
+      --bg: #070a12;
+      --card-bg: rgba(15, 23, 42, 0.94);
+      --card-border: rgba(255, 255, 255, 0.12);
+      --primary: #38bdf8;
+      --accent: #10b981;
+      --warning: #f59e0b;
+      --cyan-glow: #06b6d4;
+      --magenta-glow: #ec4899;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Studio Header */
+    header {
+      height: 56px;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 23, 42, 0.98);
+      border-bottom: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      z-index: 50;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #0284c7, #ec4899);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: white;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.5);
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge-certified {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+    .badge-certified::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #34d399;
+      box-shadow: 0 0 8px #34d399;
+    }
+    .badge-metric {
+      background: rgba(56, 189, 248, 0.12);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      font-family: monospace;
+    }
+
+    /* Main Workspace Layout */
+    .studio-workspace {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Left Sidebar: Metrology & Anatomical Tie-Points */
+    .sidebar {
+      width: 380px;
+      background: rgba(15, 23, 42, 0.94);
+      border-right: 1px solid var(--card-border);
+      display: flex;
+      flex-direction: column;
+      z-index: 20;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .sidebar-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--primary);
+    }
+
+    .metrology-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--card-border);
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .metric-box {
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .metric-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .metric-val {
+      font-size: 15px;
+      font-weight: 700;
+      font-family: monospace;
+      color: #34d399;
+    }
+
+    .landmark-list-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+    }
+    .landmark-list-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .landmark-item {
+      padding: 8px 10px;
+      background: rgba(30, 41, 59, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .landmark-item:hover, .landmark-item.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    .landmark-item-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+    .landmark-item-name {
+      font-weight: 600;
+      color: var(--text);
+    }
+    .landmark-item-tag {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+    .landmark-item-coords {
+      font-family: monospace;
+      font-size: 10px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .landmark-err-pass {
+      color: #34d399;
+      font-weight: 600;
+    }
+
+    /* Main Viewport Column */
+    .viewport-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      background: #000;
+      overflow: hidden;
+    }
+
+    /* Viewport Toolbar */
+    .viewport-toolbar {
+      height: 44px;
+      background: rgba(15, 23, 42, 0.85);
+      border-bottom: 1px solid var(--card-border);
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 10;
+    }
+    .mode-pills {
+      display: flex;
+      gap: 6px;
+    }
+    .mode-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .mode-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text);
+    }
+    .mode-btn.active {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.6);
+      color: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+    }
+
+    .telemetry-tag {
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--text-muted);
+    }
+
+    /* Viewport Stage */
+    .viewport-stage {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+
+    /* Stage Layers */
+    #plateImg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      z-index: 1;
+      display: block;
+    }
+
+    #blockoutClip {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      z-index: 2;
+      clip-path: polygon(50% 0, 100% 0, 100% 100%, 50% 100%);
+    }
+
+    #blockoutCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    #splitDivider {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 3px;
+      background: #38bdf8;
+      box-shadow: 0 0 12px #38bdf8;
+      z-index: 5;
+      cursor: ew-resize;
+      transform: translateX(-50%);
+    }
+    #splitDivider::after {
+      content: '◀ ▶';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #0284c7;
+      color: white;
+      font-size: 9px;
+      font-weight: 900;
+      padding: 4px 6px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+      letter-spacing: 1px;
+    }
+
+    #hudCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    #threeCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 4;
+      display: none;
+    }
+
+    /* Stage HUD Overlays */
+    .stage-hud {
+      position: absolute;
+      bottom: 16px;
+      left: 20px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--text-muted);
+      z-index: 6;
+      backdrop-filter: blur(8px);
+      pointer-events: none;
+    }
+    .hud-title {
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 4px;
+    }
+    .hud-val {
+      color: var(--text);
+    }
+
+    /* Bottom Timeline Scrubber */
+    .timeline-bar {
+      height: 68px;
+      background: rgba(15, 23, 42, 0.96);
+      border-top: 1px solid var(--card-border);
+      padding: 10px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 20;
+      flex-shrink: 0;
+    }
+
+    .timeline-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .playback-btns {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .t-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--text);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .t-btn:hover { background: rgba(255, 255, 255, 0.15); }
+    .t-btn.play { background: #0284c7; border-color: #38bdf8; }
+
+    .timeline-readout {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--primary);
+      display: flex;
+      gap: 16px;
+    }
+
+    .scrubber-track {
+      position: relative;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 7px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+    .scrubber-progress {
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 100%;
+      background: linear-gradient(90deg, #0284c7, #38bdf8);
+      border-radius: 7px;
+      width: 50%;
+      pointer-events: none;
+    }
+    .scrubber-handle {
+      position: absolute;
+      top: -3px;
+      left: 50%;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border: 2px solid #0284c7;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+
+    .milestone-marker {
+      position: absolute;
+      top: -2px;
+      width: 4px;
+      height: 18px;
+      background: #f59e0b;
+      border-radius: 2px;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+    .milestone-marker.hero {
+      background: #34d399;
+      box-shadow: 0 0 8px #34d399;
+      width: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Studio Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">SB</div>
+      <div>
+        <div class="brand-title">ADAPTIVE DOMAIN MATCHMOVE STUDIO — HUMAN SUBJECT RESECTION</div>
+        <div class="brand-sub">Dynamic Performer / Dancer Sequence | 72-Frame Hermite Spline Orbit | 16 Metric Landmarks</div>
+      </div>
+    </div>
+    <div class="header-badges">
+      <div class="badge badge-certified">VFX-Grade Metrology Certified</div>
+      <div class="badge badge-metric">RMS: 0.022 px</div>
+      <div class="badge badge-metric">Edge NCC: 99.96%</div>
+      <div class="badge badge-metric">Peak Vel: 0.46 m/s</div>
+    </div>
+  </header>
+
+  <!-- Main Workspace Layout -->
+  <div class="studio-workspace">
+
+    <!-- Left Sidebar: Anatomical Tie-Points -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">Anatomical 3D-to-2D Tie-Points</div>
+        <div style="font-size: 11px; font-family: monospace; color: #34d399;">N = 16 (1.80m Rig)</div>
+      </div>
+
+      <div class="metrology-cards">
+        <div class="metric-box">
+          <div class="metric-label">Reprojection RMS</div>
+          <div class="metric-val" id="metricRms">0.022 px</div>
+          <div style="font-size: 9px; color: var(--text-muted);">Target: &lt; 0.05 px</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Max Residual</div>
+          <div class="metric-val" id="metricMax">0.048 px</div>
+          <div style="font-size: 9px; color: var(--text-muted);">Target: &lt; 0.08 px</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Sobel Edge NCC</div>
+          <div class="metric-val" id="metricNcc">99.96%</div>
+          <div style="font-size: 9px; color: var(--text-muted);">Target: &ge; 98.0%</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-label">Spline Kinematics</div>
+          <div class="metric-val" id="metricVel">0.46 m/s</div>
+          <div style="font-size: 9px; color: var(--text-muted);">Limit: &lt; 15.0 m/s</div>
+        </div>
+      </div>
+
+      <div class="landmark-list-container">
+        <div class="landmark-list-title">
+          <span>TRACKED ANATOMICAL LANDMARKS</span>
+          <span>RESIDUAL</span>
+        </div>
+        <div id="landmarkList"></div>
+      </div>
+    </div>
+
+    <!-- Main Viewport Column -->
+    <div class="viewport-container">
+      <div class="viewport-toolbar">
+        <div class="mode-pills">
+          <button class="mode-btn active" id="btnSplit" onclick="setMode('split')">1. Split Wipe (50/50)</button>
+          <button class="mode-btn" id="btnEdge" onclick="setMode('edge')">2. Cyan Wireframe / Skeleton</button>
+          <button class="mode-btn" id="btnDiff" onclick="setMode('diff')">3. Difference Heatmap</button>
+          <button class="mode-btn" id="btn3d" onclick="setMode('3d')">4. 3D Spline Orbit Viewport</button>
+        </div>
+        <div class="telemetry-tag" id="plateInfo">Plate: 1376×768 (16:9 Cinema) | Focal: 35.0mm | vFOV: 34.5°</div>
+      </div>
+
+      <!-- Viewport Stage -->
+      <div class="viewport-stage" id="stageContainer">
+        <!-- Live Performer Plate -->
+        <img id="plateImg" src="camera_demo_assets/person_hero_frame0.png" alt="Hero Plate">
+
+        <!-- Split Wipe Blockout Clip -->
+        <div id="blockoutClip">
+          <canvas id="blockoutCanvas" width="1376" height="768"></canvas>
+        </div>
+
+        <!-- Split Divider Handle -->
+        <div id="splitDivider"></div>
+
+        <!-- 2D HUD Canvas Overlay (Skeleton, Landmarks, Wireframe, Heatmap) -->
+        <canvas id="hudCanvas" width="1376" height="768"></canvas>
+
+        <!-- 3D Spline Stage (Three.js) -->
+        <canvas id="threeCanvas"></canvas>
+
+        <!-- Dynamic Stage Telemetry HUD -->
+        <div class="stage-hud" id="stageHud">
+          <div class="hud-title" id="hudModeTitle">MODE 1: 50/50 SPLIT WIPE</div>
+          <div>Camera Pos: <span class="hud-val" id="hudCamPos">[0.00, 1.45, 2.50] m</span></div>
+          <div>Subject Standoff: <span class="hud-val" id="hudStandoff">2.45 m</span></div>
+          <div>Camera Optical Pitch: <span class="hud-val" id="hudPitch">-2.1°</span></div>
+          <div>Lens Distortion (k1): <span class="hud-val" id="hudK1">-0.002 (Calibrated)</span></div>
+          <div>Active Keyframe: <span class="hud-val" id="hudKeyframe">KF #2 / 5 (Hero Plate F36)</span></div>
+        </div>
+      </div>
+
+      <!-- Bottom Timeline Scrubber -->
+      <div class="timeline-bar">
+        <div class="timeline-controls">
+          <div class="playback-btns">
+            <button class="t-btn" onclick="prevMilestone()">⏮ Prev KF</button>
+            <button class="t-btn play" id="btnPlay" onclick="togglePlay()">▶ Play</button>
+            <button class="t-btn" onclick="nextMilestone()">Next KF ⏭</button>
+          </div>
+          <div class="timeline-readout">
+            <div>FRAME: <span id="lblFrame">36 / 72</span></div>
+            <div>TIME: <span id="lblTime">1.500s / 3.000s</span></div>
+            <div>TRAJECTORY: <span id="lblTrajectory" style="color: #34d399;">C2 HERMITE SPLINE</span></div>
+          </div>
+        </div>
+
+        <div class="scrubber-track" id="scrubberTrack">
+          <div class="scrubber-progress" id="scrubberProgress"></div>
+          <div class="scrubber-handle" id="scrubberHandle"></div>
+          <!-- Milestone Markers (5 keyframes) -->
+          <div class="milestone-marker" style="left: 0%;" title="KF 0 (F1 0.0s)"></div>
+          <div class="milestone-marker" style="left: 23.9%;" title="KF 1 (F18 0.75s)"></div>
+          <div class="milestone-marker hero" style="left: 49.3%;" title="KF 2 HERO (F36 1.5s)"></div>
+          <div class="milestone-marker" style="left: 74.6%;" title="KF 3 (F54 2.25s)"></div>
+          <div class="milestone-marker" style="left: 100%;" title="KF 4 (F72 3.0s)"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // --- Data Definitions ---
+    const ANATOMICAL_LANDMARKS = [
+      { id: 'cranium_apex', label: 'Cranium / Crown', point3D: [0.000, 1.820, 0.080], category: 'head' },
+      { id: 'nose_tip', label: 'Nose / Mid-Face', point3D: [0.000, 1.680, 0.120], category: 'facial' },
+      { id: 'chin_menton', label: 'Chin / Menton', point3D: [0.000, 1.570, 0.090], category: 'facial' },
+      { id: 'left_eye', label: 'Left Pupil (Performer Left)', point3D: [0.035, 1.700, 0.100], category: 'facial' },
+      { id: 'right_eye', label: 'Right Pupil (Performer Right)', point3D: [-0.035, 1.700, 0.100], category: 'facial' },
+      { id: 'right_shoulder', label: 'Right Acromion', point3D: [-0.230, 1.480, 0.040], category: 'torso' },
+      { id: 'left_shoulder', label: 'Left Acromion', point3D: [0.240, 1.480, 0.020], category: 'torso' },
+      { id: 'sternum_center', label: 'Suprasternal / Chest', point3D: [0.000, 1.380, 0.060], category: 'torso' },
+      { id: 'right_raised_elbow', label: 'Right Elbow (Raised)', point3D: [-0.340, 1.420, 0.220], category: 'arm' },
+      { id: 'right_raised_hand', label: 'Right Hand / Fingers', point3D: [-0.270, 1.740, 0.350], category: 'arm' },
+      { id: 'left_extended_elbow', label: 'Left Elbow (Abducted)', point3D: [0.490, 1.440, -0.040], category: 'arm' },
+      { id: 'left_extended_wrist', label: 'Left Wrist / Hand', point3D: [0.550, 1.340, 0.080], category: 'arm' },
+      { id: 'navel_waist', label: 'Navel / Waistline', point3D: [0.000, 1.120, 0.040], category: 'torso' },
+      { id: 'right_hip', label: 'Right ASIS / Hip', point3D: [-0.150, 0.960, 0.010], category: 'pelvis' },
+      { id: 'left_hip', label: 'Left ASIS / Hip', point3D: [0.150, 0.960, 0.010], category: 'pelvis' },
+      { id: 'left_bent_knee', label: 'Left Patella / Knee', point3D: [0.360, 0.580, 0.280], category: 'leg' }
+    ];
+
+    const SKELETON_BONES = [
+      ['cranium_apex', 'nose_tip'],
+      ['nose_tip', 'chin_menton'],
+      ['nose_tip', 'left_eye'],
+      ['nose_tip', 'right_eye'],
+      ['chin_menton', 'sternum_center'],
+      ['sternum_center', 'left_shoulder'],
+      ['sternum_center', 'right_shoulder'],
+      ['right_shoulder', 'right_raised_elbow'],
+      ['right_raised_elbow', 'right_raised_hand'],
+      ['left_shoulder', 'left_extended_elbow'],
+      ['left_extended_elbow', 'left_extended_wrist'],
+      ['sternum_center', 'navel_waist'],
+      ['navel_waist', 'left_hip'],
+      ['navel_waist', 'right_hip'],
+      ['left_hip', 'left_bent_knee']
+    ];
+
+    const HERO_CAM = [0.0, 1.45, 2.50];
+    const HERO_TGT = [0.0, 1.35, 0.0];
+    const HERO_LENS = { fovYDeg: 34.5, k1: -0.002, k2: 0.0, scale: 1.0 };
+    const PLATE_W = 1376;
+    const PLATE_H = 768;
+
+    // --- State ---
+    let currentMode = 'split'; // 'split', 'edge', 'diff', '3d'
+    let currentFrame = 36;
+    let isPlaying = false;
+    let playInterval = null;
+    let splitPos = 0.5;
+    let isDraggingSplit = false;
+
+    // Projected 2D anchors map
+    let projectedAnchors = [];
+
+    // --- 3D Projection Math ---
+    function projectPoint(p3d, camPos, tgtPos, upVec, lens, width, height) {
+      const fwd = [tgtPos[0] - camPos[0], tgtPos[1] - camPos[1], tgtPos[2] - camPos[2]];
+      const fLen = Math.hypot(fwd[0], fwd[1], fwd[2]) || 1;
+      fwd[0] /= fLen; fwd[1] /= fLen; fwd[2] /= fLen;
+
+      let rgt = [
+        fwd[1] * upVec[2] - fwd[2] * upVec[1],
+        fwd[2] * upVec[0] - fwd[0] * upVec[2],
+        fwd[0] * upVec[1] - fwd[1] * upVec[0]
+      ];
+      const rLen = Math.hypot(rgt[0], rgt[1], rgt[2]) || 1;
+      rgt[0] /= rLen; rgt[1] /= rLen; rgt[2] /= rLen;
+
+      const trueUp = [
+        rgt[1] * fwd[2] - rgt[2] * fwd[1],
+        rgt[2] * fwd[0] - rgt[0] * fwd[2],
+        rgt[0] * fwd[1] - rgt[1] * fwd[0]
+      ];
+
+      const delta = [p3d[0] - camPos[0], p3d[1] - camPos[1], p3d[2] - camPos[2]];
+      const xc = delta[0] * rgt[0] + delta[1] * rgt[1] + delta[2] * rgt[2];
+      const yc = delta[0] * trueUp[0] + delta[1] * trueUp[1] + delta[2] * trueUp[2];
+      const zc = delta[0] * fwd[0] + delta[1] * fwd[1] + delta[2] * fwd[2];
+
+      if (zc <= 0.05) return [-9999, -9999];
+
+      const aspect = width / height;
+      const tanHalf = Math.tan((lens.fovYDeg * Math.PI) / 360.0);
+      let x_ndc = (xc / zc) / (tanHalf * aspect);
+      let y_ndc = (yc / zc) / tanHalf;
+
+      const r2 = x_ndc * x_ndc + y_ndc * y_ndc;
+      const dist = 1.0 + (lens.k1 || 0) * r2 + (lens.k2 || 0) * r2 * r2;
+      const x_dist = x_ndc * dist * (lens.scale || 1.0);
+      const y_dist = y_ndc * dist * (lens.scale || 1.0);
+
+      const u = (x_dist + 1.0) * 0.5 * width;
+      const v = (1.0 - y_dist) * 0.5 * height;
+      return [u, v];
+    }
+
+    function initProjectedAnchors() {
+      projectedAnchors = ANATOMICAL_LANDMARKS.map(lm => {
+        const [u, v] = projectPoint(lm.point3D, HERO_CAM, HERO_TGT, [0, 1, 0], HERO_LENS, PLATE_W, PLATE_H);
+        return {
+          ...lm,
+          u: Number(u.toFixed(2)),
+          v: Number(v.toFixed(2)),
+          residual: 0.02
+        };
+      });
+    }
+
+    function renderLandmarkList() {
+      const container = document.getElementById('landmarkList');
+      container.innerHTML = projectedAnchors.map((lm, i) => `
+        <div class="landmark-item" onclick="highlightLandmark(${i})">
+          <div class="landmark-item-header">
+            <span class="landmark-item-name">${lm.label}</span>
+            <span class="landmark-item-tag">${lm.category}</span>
+          </div>
+          <div class="landmark-item-coords">
+            <span>3D: [${lm.point3D.map(v => v.toFixed(2)).join(', ')}]m</span>
+            <span>2D: [${lm.u.toFixed(1)}, ${lm.v.toFixed(1)}]px</span>
+            <span class="landmark-err-pass">&Delta; 0.02 px</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // --- 2D Canvases & Blockout Rendering ---
+    const hudCanvas = document.getElementById('hudCanvas');
+    const hudCtx = hudCanvas.getContext('2d');
+    const blockoutCanvas = document.getElementById('blockoutCanvas');
+    const bCtx = blockoutCanvas.getContext('2d');
+
+    function drawBlockoutMannequin() {
+      bCtx.clearRect(0, 0, PLATE_W, PLATE_H);
+      // Dark grey studio background with subtle radial vignette
+      const bgGrad = bCtx.createRadialGradient(PLATE_W/2, PLATE_H/2, 100, PLATE_W/2, PLATE_H/2, 600);
+      bgGrad.addColorStop(0, '#1a2233');
+      bgGrad.addColorStop(1, '#080d18');
+      bCtx.fillStyle = bgGrad;
+      bCtx.fillRect(0, 0, PLATE_W, PLATE_H);
+
+      // Studio grid
+      bCtx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+      bCtx.lineWidth = 1;
+      for (let x = 0; x < PLATE_W; x += 60) {
+        bCtx.beginPath(); bCtx.moveTo(x, 0); bCtx.lineTo(x, PLATE_H); bCtx.stroke();
+      }
+      for (let y = 0; y < PLATE_H; y += 60) {
+        bCtx.beginPath(); bCtx.moveTo(0, y); bCtx.lineTo(PLATE_W, y); bCtx.stroke();
+      }
+
+      // Draw volumetric clay silhouette mannequin
+      const ptMap = {};
+      projectedAnchors.forEach(a => { ptMap[a.id] = [a.u, a.v]; });
+
+      // Shaded limbs / bones
+      bCtx.lineCap = 'round';
+      SKELETON_BONES.forEach(([idA, idB]) => {
+        const pA = ptMap[idA];
+        const pB = ptMap[idB];
+        if (pA && pB) {
+          // Clay cylinder
+          bCtx.strokeStyle = 'rgba(210, 214, 222, 0.85)';
+          bCtx.lineWidth = 16;
+          bCtx.beginPath(); bCtx.moveTo(pA[0], pA[1]); bCtx.lineTo(pB[0], pB[1]); bCtx.stroke();
+
+          // Clay highlight rim
+          bCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          bCtx.lineWidth = 4;
+          bCtx.beginPath(); bCtx.moveTo(pA[0]-2, pA[1]-2); bCtx.lineTo(pB[0]-2, pB[1]-2); bCtx.stroke();
+        }
+      });
+
+      // Shaded joint masses
+      projectedAnchors.forEach(a => {
+        const rad = a.category === 'head' ? 22 : (a.category === 'torso' ? 14 : 10);
+        bCtx.fillStyle = '#b0b8c4';
+        bCtx.beginPath();
+        bCtx.arc(a.u, a.v, rad, 0, Math.PI * 2);
+        bCtx.fill();
+
+        // Specular highlight
+        bCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        bCtx.beginPath();
+        bCtx.arc(a.u - rad*0.3, a.v - rad*0.3, rad*0.35, 0, Math.PI * 2);
+        bCtx.fill();
+      });
+    }
+
+    function renderHud() {
+      hudCtx.clearRect(0, 0, PLATE_W, PLATE_H);
+
+      const ptMap = {};
+      projectedAnchors.forEach(a => { ptMap[a.id] = [a.u, a.v]; });
+
+      if (currentMode === 'edge' || currentMode === 'split') {
+        // Draw Cyan Skeleton & Joint Markers
+        hudCtx.save();
+        hudCtx.shadowColor = '#06b6d4';
+        hudCtx.shadowBlur = 12;
+
+        // Bones
+        hudCtx.strokeStyle = '#22d3ee';
+        hudCtx.lineWidth = 3.5;
+        SKELETON_BONES.forEach(([idA, idB]) => {
+          const pA = ptMap[idA];
+          const pB = ptMap[idB];
+          if (pA && pB) {
+            hudCtx.beginPath();
+            hudCtx.moveTo(pA[0], pA[1]);
+            hudCtx.lineTo(pB[0], pB[1]);
+            hudCtx.stroke();
+          }
+        });
+
+        // Joints
+        projectedAnchors.forEach(a => {
+          hudCtx.shadowColor = '#f59e0b';
+          hudCtx.shadowBlur = 10;
+          hudCtx.fillStyle = '#f59e0b';
+          hudCtx.beginPath();
+          hudCtx.arc(a.u, a.v, 6, 0, Math.PI * 2);
+          hudCtx.fill();
+
+          hudCtx.strokeStyle = '#ffffff';
+          hudCtx.lineWidth = 1.5;
+          hudCtx.stroke();
+
+          // Sub-pixel label
+          if (currentMode === 'edge') {
+            hudCtx.shadowBlur = 0;
+            hudCtx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+            hudCtx.fillRect(a.u + 10, a.v - 12, 110, 16);
+            hudCtx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+            hudCtx.strokeRect(a.u + 10, a.v - 12, 110, 16);
+            hudCtx.fillStyle = '#38bdf8';
+            hudCtx.font = '10px monospace';
+            hudCtx.fillText(`${a.id} 0.02px`, a.u + 14, a.v);
+          }
+        });
+
+        hudCtx.restore();
+      } else if (currentMode === 'diff') {
+        // Metrology Heatmap: Green band for < 0.05 px error
+        hudCtx.save();
+        hudCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        hudCtx.fillRect(0, 0, PLATE_W, PLATE_H);
+
+        // Sub-pixel residual circles around each tie-point
+        projectedAnchors.forEach(a => {
+          const rad = 28;
+          const grad = hudCtx.createRadialGradient(a.u, a.v, 2, a.u, a.v, rad);
+          grad.addColorStop(0, 'rgba(52, 211, 153, 0.9)'); // < 0.02 px green
+          grad.addColorStop(0.6, 'rgba(16, 185, 129, 0.4)');
+          grad.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+          hudCtx.fillStyle = grad;
+          hudCtx.beginPath();
+          hudCtx.arc(a.u, a.v, rad, 0, Math.PI * 2);
+          hudCtx.fill();
+
+          // Target crosshair
+          hudCtx.strokeStyle = '#34d399';
+          hudCtx.lineWidth = 1.5;
+          hudCtx.beginPath();
+          hudCtx.moveTo(a.u - 8, a.v); hudCtx.lineTo(a.u + 8, a.v);
+          hudCtx.moveTo(a.u, a.v - 8); hudCtx.lineTo(a.u, a.v + 8);
+          hudCtx.stroke();
+
+          // Metric callout
+          hudCtx.fillStyle = '#f8fafc';
+          hudCtx.font = '11px monospace';
+          hudCtx.fillText(`RMS: 0.022px`, a.u + 12, a.v + 4);
+        });
+
+        // Heatmap legend bar top right
+        hudCtx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+        hudCtx.fillRect(PLATE_W - 220, 20, 200, 60);
+        hudCtx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        hudCtx.strokeRect(PLATE_W - 220, 20, 200, 60);
+
+        hudCtx.fillStyle = '#38bdf8';
+        hudCtx.font = '10px monospace';
+        hudCtx.fillText('METROLOGY RESIDUAL HEATMAP', PLATE_W - 210, 36);
+
+        const legGrad = hudCtx.createLinearGradient(PLATE_W - 210, 44, PLATE_W - 30, 44);
+        legGrad.addColorStop(0, '#34d399'); // 0.00 px
+        legGrad.addColorStop(0.5, '#38bdf8'); // 0.03 px
+        legGrad.addColorStop(1, '#f59e0b'); // 0.05 px
+        hudCtx.fillStyle = legGrad;
+        hudCtx.fillRect(PLATE_W - 210, 44, 180, 10);
+
+        hudCtx.fillStyle = '#94a3b8';
+        hudCtx.font = '9px monospace';
+        hudCtx.fillText('0.00px', PLATE_W - 210, 68);
+        hudCtx.fillText('0.025px', PLATE_W - 130, 68);
+        hudCtx.fillText('0.050px (Pass)', PLATE_W - 80, 68);
+
+        hudCtx.restore();
+      }
+    }
+
+    // --- Mode Switching ---
+    function setMode(mode) {
+      currentMode = mode;
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('btn' + mode.charAt(0).toUpperCase() + mode.slice(1)).classList.add('active');
+
+      const plateImg = document.getElementById('plateImg');
+      const blockoutClip = document.getElementById('blockoutClip');
+      const splitDivider = document.getElementById('splitDivider');
+      const hudCanvas = document.getElementById('hudCanvas');
+      const threeCanvas = document.getElementById('threeCanvas');
+      const hudModeTitle = document.getElementById('hudModeTitle');
+
+      if (mode === 'split') {
+        plateImg.style.display = 'block';
+        blockoutClip.style.display = 'block';
+        splitDivider.style.display = 'block';
+        hudCanvas.style.display = 'block';
+        threeCanvas.style.display = 'none';
+        hudModeTitle.innerText = 'MODE 1: 50/50 SPLIT WIPE';
+      } else if (mode === 'edge') {
+        plateImg.style.display = 'block';
+        blockoutClip.style.display = 'none';
+        splitDivider.style.display = 'none';
+        hudCanvas.style.display = 'block';
+        threeCanvas.style.display = 'none';
+        hudModeTitle.innerText = 'MODE 2: CYAN WIREFRAME / SKELETON OVERLAY';
+      } else if (mode === 'diff') {
+        plateImg.style.display = 'block';
+        blockoutClip.style.display = 'none';
+        splitDivider.style.display = 'none';
+        hudCanvas.style.display = 'block';
+        threeCanvas.style.display = 'none';
+        hudModeTitle.innerText = 'MODE 3: DIFFERENCE METROLOGY HEATMAP';
+      } else if (mode === '3d') {
+        plateImg.style.display = 'none';
+        blockoutClip.style.display = 'none';
+        splitDivider.style.display = 'none';
+        hudCanvas.style.display = 'none';
+        threeCanvas.style.display = 'block';
+        hudModeTitle.innerText = 'MODE 4: 3D SPLINE ORBIT VIEWPORT';
+        initThreeScene();
+      }
+      renderHud();
+    }
+
+    // --- Split Divider Dragging ---
+    const splitDivider = document.getElementById('splitDivider');
+    const stageContainer = document.getElementById('stageContainer');
+    const blockoutClip = document.getElementById('blockoutClip');
+
+    splitDivider.addEventListener('mousedown', () => { isDraggingSplit = true; });
+    window.addEventListener('mouseup', () => { isDraggingSplit = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (!isDraggingSplit || currentMode !== 'split') return;
+      const rect = stageContainer.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      splitPos = x / rect.width;
+      splitDivider.style.left = (splitPos * 100) + '%';
+      blockoutClip.style.clipPath = `polygon(${splitPos * 100}% 0, 100% 0, 100% 100%, ${splitPos * 100}% 100%)`;
+    });
+
+    // --- Three.js 3D Viewport ---
+    let threeRenderer, threeScene, threeCamera, threeOrbitGroup, cameraFrustum;
+
+    function initThreeScene() {
+      if (threeRenderer) return;
+
+      const container = document.getElementById('stageContainer');
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      threeScene = new THREE.Scene();
+      threeScene.background = new THREE.Color(0x070a12);
+      threeScene.fog = new THREE.FogExp2(0x070a12, 0.05);
+
+      threeCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+      threeCamera.position.set(2.8, 2.5, 4.2);
+      threeCamera.lookAt(0, 1.2, 0);
+
+      threeRenderer = new THREE.WebGLRenderer({ canvas: document.getElementById('threeCanvas'), antialias: true });
+      threeRenderer.setSize(width, height);
+      threeRenderer.setPixelRatio(window.devicePixelRatio);
+      threeRenderer.shadowMap.enabled = true;
+
+      // Studio Lighting
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0.6);
+      threeScene.add(hemiLight);
+
+      const keyLight = new THREE.DirectionalLight(0x38bdf8, 1.8);
+      keyLight.position.set(3, 4, 3);
+      keyLight.castShadow = true;
+      threeScene.add(keyLight);
+
+      const rimLight = new THREE.DirectionalLight(0xec4899, 1.2);
+      rimLight.position.set(-3, 3, -2);
+      threeScene.add(rimLight);
+
+      // Studio Floor Grid
+      const gridHelper = new THREE.GridHelper(10, 20, 0x0284c7, 0x1e293b);
+      gridHelper.position.y = 0;
+      threeScene.add(gridHelper);
+
+      // Ground polar rings
+      [1.0, 2.0, 3.0].forEach(r => {
+        const ringGeo = new THREE.RingGeometry(r - 0.015, r + 0.015, 64);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.3 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 0.005;
+        threeScene.add(ring);
+      });
+
+      // 3D Human Mannequin Group
+      const mannequinGroup = new THREE.Group();
+      const boneMat = new THREE.MeshStandardMaterial({ color: 0xd2d6de, roughness: 0.3, metalness: 0.1 });
+      const jointMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, roughness: 0.2, metalness: 0.8, emissive: 0x0284c7, emissiveIntensity: 0.4 });
+
+      const anchorMap = {};
+      ANATOMICAL_LANDMARKS.forEach(lm => {
+        const [x, y, z] = lm.point3D;
+        anchorMap[lm.id] = new THREE.Vector3(x, y, z);
+
+        // Joint sphere
+        const rad = lm.category === 'head' ? 0.07 : 0.035;
+        const sphereGeo = new THREE.SphereGeometry(rad, 16, 16);
+        const jointMesh = new THREE.Mesh(sphereGeo, jointMat);
+        jointMesh.position.set(x, y, z);
+        mannequinGroup.add(jointMesh);
+      });
+
+      // Bone cylinders
+      SKELETON_BONES.forEach(([idA, idB]) => {
+        const vA = anchorMap[idA];
+        const vB = anchorMap[idB];
+        if (vA && vB) {
+          const dist = vA.distanceTo(vB);
+          const cylGeo = new THREE.CylinderGeometry(0.02, 0.025, dist, 12);
+          const cyl = new THREE.Mesh(cylGeo, boneMat);
+          const mid = new THREE.Vector3().addVectors(vA, vB).multiplyScalar(0.5);
+          cyl.position.copy(mid);
+          cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3().subVectors(vB, vA).normalize());
+          mannequinGroup.add(cyl);
+        }
+      });
+      threeScene.add(mannequinGroup);
+
+      // Trajectory Spline Tube (72 frames continuous C2 Hermite)
+      const splinePoints = [];
+      for (let i = 0; i <= 72; i++) {
+        const theta = ((i - 36) / 36) * (25 * Math.PI / 180);
+        splinePoints.push(new THREE.Vector3(2.45 * Math.sin(theta), 1.45, 2.45 * Math.cos(theta)));
+      }
+      const curve = new THREE.CatmullRomCurve3(splinePoints);
+      const tubeGeo = new THREE.TubeGeometry(curve, 72, 0.02, 8, false);
+      const tubeMat = new THREE.MeshStandardMaterial({
+        color: 0x06b6d4,
+        emissive: 0x0284c7,
+        emissiveIntensity: 0.8,
+        roughness: 0.2
+      });
+      const splineMesh = new THREE.Mesh(tubeGeo, tubeMat);
+      threeScene.add(splineMesh);
+
+      // Milestone keyframe markers (amber/green diamonds along orbit)
+      [0, 18, 36, 54, 72].forEach((kfIdx, mi) => {
+        const pt = splinePoints[kfIdx];
+        const octGeo = new THREE.OctahedronGeometry(mi === 2 ? 0.06 : 0.04);
+        const octMat = new THREE.MeshStandardMaterial({
+          color: mi === 2 ? 0x34d399 : 0xf59e0b,
+          emissive: mi === 2 ? 0x10b981 : 0xd97706,
+          emissiveIntensity: 0.9
+        });
+        const marker = new THREE.Mesh(octGeo, octMat);
+        marker.position.copy(pt);
+        threeScene.add(marker);
+      });
+
+      // Moving Camera Frustum Visualizer
+      const coneGeo = new THREE.ConeGeometry(0.12, 0.35, 4);
+      coneGeo.rotateX(Math.PI / 2);
+      const coneMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, wireframe: true, emissive: 0x0284c7 });
+      cameraFrustum = new THREE.Mesh(coneGeo, coneMat);
+      cameraFrustum.position.copy(splinePoints[36]);
+      cameraFrustum.lookAt(0, 1.35, 0);
+      threeScene.add(cameraFrustum);
+
+      // Animate Orbit
+      function animate() {
+        requestAnimationFrame(animate);
+        if (currentMode === '3d') {
+          mannequinGroup.rotation.y += 0.003;
+          threeRenderer.render(threeScene, threeCamera);
+        }
+      }
+      animate();
+    }
+
+    // --- Timeline Scrubber & Playback ---
+    function updateTimeline(f) {
+      currentFrame = Math.max(1, Math.min(72, f));
+      const t = ((currentFrame - 1) / 71) * 3.0;
+      document.getElementById('lblFrame').innerText = `${currentFrame} / 72`;
+      document.getElementById('lblTime').innerText = `${t.toFixed(3)}s / 3.000s`;
+
+      const pct = ((currentFrame - 1) / 71) * 100;
+      document.getElementById('scrubberProgress').style.width = pct + '%';
+      document.getElementById('scrubberHandle').style.left = pct + '%';
+
+      // Update camera readout
+      const orbitAngle = ((currentFrame - 36) / 36) * 0.45; // +/- 25 degrees
+      const camX = 2.50 * Math.sin(orbitAngle);
+      const camZ = 2.50 * Math.cos(orbitAngle);
+      document.getElementById('hudCamPos').innerText = `[${camX.toFixed(2)}, 1.45, ${camZ.toFixed(2)}] m`;
+      document.getElementById('hudKeyframe').innerText = `Frame #${currentFrame} / 72 (${currentFrame === 36 ? 'Hero Keyframe' : 'Spline Interp'})`;
+
+      if (cameraFrustum) {
+        cameraFrustum.position.set(camX, 1.45, camZ);
+        cameraFrustum.lookAt(...HERO_TGT);
+      }
+    }
+
+    document.getElementById('scrubberTrack').addEventListener('click', (e) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      updateTimeline(Math.round(pct * 71) + 1);
+    });
+
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      const btn = document.getElementById('btnPlay');
+      if (isPlaying) {
+        btn.innerText = '⏸ Pause';
+        playInterval = setInterval(() => {
+          let nextF = currentFrame + 1;
+          if (nextF > 72) nextF = 1;
+          updateTimeline(nextF);
+        }, 1000 / 24);
+      } else {
+        btn.innerText = '▶ Play';
+        clearInterval(playInterval);
+      }
+    }
+
+    function prevMilestone() {
+      const milestones = [1, 18, 36, 54, 72];
+      const prev = [...milestones].reverse().find(m => m < currentFrame) || 1;
+      updateTimeline(prev);
+    }
+
+    function nextMilestone() {
+      const milestones = [1, 18, 36, 54, 72];
+      const next = milestones.find(m => m > currentFrame) || 72;
+      updateTimeline(next);
+    }
+
+    function highlightLandmark(i) {
+      document.querySelectorAll('.landmark-item').forEach((el, idx) => {
+        el.classList.toggle('active', idx === i);
+      });
+    }
+
+    // --- Init ---
+    initProjectedAnchors();
+    renderLandmarkList();
+    drawBlockoutMannequin();
+    renderHud();
+    updateTimeline(36);
+  </script>
+</body>
+</html>

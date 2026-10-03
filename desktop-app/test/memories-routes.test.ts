@@ -17,8 +17,7 @@ import { createStandaloneServer } from '../server/app';
 
 /**
  * The renderer's `UserMemoriesClient` (packages/core/src/browser/generative-canvas/user-memories-client.ts)
- * talks to `/gemini/memories/*`. These routes used to live only in the deleted Theia
- * endpoint, so the standalone server must expose the same contract.
+ * talks to `/gemini/memories/*`. The standalone server exposes this contract.
  *
  * All mutations use `scope: 'workspace'` against a tmpdir so the user's real
  * `~/.scratchbox-ide/memories.json` is never written.

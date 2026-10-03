@@ -107,7 +107,7 @@ describe('Gaussian PLY codec', () => {
 #include <iostream>
 int main() {
     std::ifstream in("${plyPath}"); std::stringstream ss; ss << in.rdbuf();
-    scratchbox::four_d_anyone::FourDHumanoidAvatar a;
+    scratchbox::performer_4d::FourDHumanoidAvatar a;
     if (!a.parsePly(ss.str())) return 1;
     const auto& g = a.restGaussians[0];
     std::cout << g.color.x << " " << g.color.y << " " << g.color.z << " " << g.rotation.x << " " << g.rotation.y << " " << g.rotation.z << " " << g.rotation.w;

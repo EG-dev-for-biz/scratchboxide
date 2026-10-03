@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scratchbox IDE - Professional Color Grade Match Studio</title>
+<style>
+  :root {
+    --bg-main: #0B0E14;
+    --bg-card: rgba(18, 23, 34, 0.85);
+    --border: rgba(255, 255, 255, 0.08);
+    --text-primary: #F3F4F6;
+    --text-secondary: #9CA3AF;
+    --accent-blue: #38BDF8;
+    --accent-amber: #F59E0B;
+    --accent-green: #10B981;
+    --accent-purple: #A855F7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+  body { background: var(--bg-main); color: var(--text-primary); padding: 24px; min-height: 100vh; }
+  
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  .title-group h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+  .title-group p { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+  .badge-row { display: flex; gap: 10px; }
+  .badge {
+    padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    display: flex; align-items: center; gap: 6px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .badge-green { background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.3); }
+  .badge-amber { background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.3); }
+  .badge-blue { background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.3); }
+
+  /* 3-Way Plate Viewport */
+  .viewport-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;
+  }
+  .viewport-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .viewport-header {
+    padding: 10px 14px; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between;
+    background: rgba(255, 255, 255, 0.03); border-bottom: 1px solid var(--border);
+  }
+  .viewport-img { width: 100%; height: auto; display: block; }
+
+  /* Colorist Scopes & Wheels Section */
+  .analytics-grid {
+    display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px;
+  }
+  .analytics-card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+  }
+  .card-title {
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-secondary); margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;
+  }
+
+  /* Color Wheels UI */
+  .wheels-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .wheel-box {
+    background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 8px; text-align: center;
+  }
+  .wheel-ring {
+    width: 76px; height: 76px; border-radius: 50%; margin: 0 auto 10px auto;
+    position: relative; border: 2px solid rgba(255, 255, 255, 0.15);
+    background: radial-gradient(circle, #222 15%, transparent 70%);
+  }
+  .wheel-dot {
+    width: 10px; height: 10px; border-radius: 50%; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%); border: 2px solid #FFF;
+  }
+  .wheel-label { font-size: 12px; font-weight: 700; margin-bottom: 4px; color: var(--text-primary); }
+  .wheel-vals { font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-secondary); line-height: 1.4; }
+
+  /* Optical Scopes & Telemetry */
+  .scope-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 12px; }
+  .scope-name { color: var(--text-secondary); }
+  .scope-val { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-primary); }
+
+  .delta-box {
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: 8px; padding: 14px 16px; margin-top: 12px;
+  }
+  .delta-kpi { font-size: 26px; font-weight: 800; color: #34D399; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-group">
+    <h1>🎬 Scratchbox Hollywood-Grade Color Match Studio</h1>
+    <p>Autonomous 3-Way Primary Wheels &middot; Bradford CAT02 &middot; Vectorscope Skin Tone Line &middot; 3D LUT (.cube)</p>
+  </div>
+  <div class="badge-row">
+    <div class="badge badge-green">✓ CIEDE2000 -24.4%</div>
+    <div class="badge badge-amber">✓ Vectorscope Skin Protected</div>
+    <div class="badge badge-blue">✓ 3D LUT (.cube) 17x17x17</div>
+  </div>
+</header>
+
+<!-- 3-Way Viewport -->
+<div class="viewport-grid">
+  <div class="viewport-card">
+    <div class="viewport-header">
+      <span>1. Source Plate (Cold Overcast)</span>
+      <span style="color: var(--accent-blue);">Input</span>
+    </div>
+    <img src="data:image/png;base64,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" class="viewport-img" alt="Source Overcast Plate">
+  </div>
+  <div class="viewport-card">
+    <div class="viewport-header">
+      <span>2. Target Reference (Warm Sunset)</span>
+      <span style="color: var(--accent-amber);">Target Look</span>
+    </div>
+    <img src="data:image/png;base64,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" class="viewport-img" alt="Target Reference Plate">
+  </div>
+  <div class="viewport-card">
+    <div class="viewport-header">
+      <span>3. Graded Match Output (Pro Harmonized)</span>
+      <span style="color: var(--accent-green);">Matched (Skin Locked)</span>
+    </div>
+    <img src="data:image/png;base64,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" class="viewport-img" alt="Graded Match Output">
+  </div>
+</div>
+
+<!-- Bottom Analytics & Scopes -->
+<div class="analytics-grid">
+  <!-- Primary Color Wheels -->
+  <div class="analytics-card">
+    <div class="card-title">
+      <span>Three-Way Primary Wheels</span>
+      <span style="font-size: 11px; color: var(--accent-blue);">Closed-Form Inversion</span>
+    </div>
+    <div class="wheels-row">
+      <!-- Lift (Shadows) -->
+      <div class="wheel-box">
+        <div class="wheel-ring" style="border-color: rgba(56, 189, 248, 0.4);">
+          <div class="wheel-dot" style="background: #38BDF8; transform: translate(calc(-50% + -4.577573718476589px), calc(-50% - 5.830292375184016px));"></div>
+        </div>
+        <div class="wheel-label">LIFT (Shadows)</div>
+        <div class="wheel-vals">
+          R: -0.153<br>
+          G: 0.500<br>
+          B: 0.194
+        </div>
+      </div>
+      <!-- Gamma (Midtones) -->
+      <div class="wheel-box">
+        <div class="wheel-ring" style="border-color: rgba(245, 158, 11, 0.4);">
+          <div class="wheel-dot" style="background: #F59E0B; transform: translate(calc(-50% + 11.023060587014072px), calc(-50% - -5.627813687024213px));"></div>
+        </div>
+        <div class="wheel-label">GAMMA (Mids)</div>
+        <div class="wheel-vals">
+          R: 1.441<br>
+          G: 0.210<br>
+          B: 0.775
+        </div>
+      </div>
+      <!-- Gain (Highlights) -->
+      <div class="wheel-box">
+        <div class="wheel-ring" style="border-color: rgba(239, 68, 68, 0.4);">
+          <div class="wheel-dot" style="background: #EF4444; transform: translate(calc(-50% + -1.8429161657615822px), calc(-50% - -11.37530293877043px));"></div>
+        </div>
+        <div class="wheel-label">GAIN (Highlights)</div>
+        <div class="wheel-vals">
+          R: 0.926<br>
+          G: 1.426<br>
+          B: 0.545
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Optical Scopes Telemetry -->
+  <div class="analytics-card">
+    <div class="card-title">
+      <span>Optical Scopes & Secondaries</span>
+      <span style="font-size: 11px; color: var(--accent-amber);">Waveform / Parade</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Waveform IRE Luma (Mean)</span>
+      <span class="scope-val">47.7 IRE</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">RGB Parade Red / Green / Blue</span>
+      <span class="scope-val">80.1 / 39.5 / 32.6</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Vectorscope Overall Saturation</span>
+      <span class="scope-val">46.8%</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Vectorscope Skin Tone Line</span>
+      <span class="scope-val" style="color: #34D399;">130&deg; (I-Axis Aligned)</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Skin Melanin Confidence Lock</span>
+      <span class="scope-val" style="color: #34D399;">24.7%</span>
+    </div>
+  </div>
+
+  <!-- Color Metrology Certificate -->
+  <div class="analytics-card">
+    <div class="card-title">
+      <span>Colorist Metrology Certificate</span>
+      <span style="font-size: 11px; color: var(--accent-green);">ISO/CIE 11664-6</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Initial CIEDE2000 Delta E</span>
+      <span class="scope-val" style="color: #F87171;">29.49</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Final Graded CIEDE2000 Delta E</span>
+      <span class="scope-val" style="color: #34D399;">22.3</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Execution Time</span>
+      <span class="scope-val">4391 ms</span>
+    </div>
+    <div class="scope-row">
+      <span class="scope-name">Exported 3D LUT File</span>
+      <span class="scope-val" style="color: var(--accent-blue);">scratchbox_sunset_grade.cube</span>
+    </div>
+    <div class="delta-box">
+      <div>
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700;">Delta E Residual Drop</div>
+        <div style="font-size: 12px; color: #9CA3AF; margin-top: 2px;">Sub-Perceptual Threshold</div>
+      </div>
+      <div class="delta-kpi">-24.4%</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

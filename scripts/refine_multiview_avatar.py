@@ -158,7 +158,7 @@ def main() -> int:
     ap.add_argument('--source', required=True)
     ap.add_argument('--out-dir', required=True)
     ap.add_argument('--birefnet', required=True, help='BiRefNet model dir (models/birefnet)')
-    ap.add_argument('--fdanyone-root', required=True)
+    ap.add_argument('--performer_4d-root', required=True)
     ap.add_argument('--num-body', type=int, default=80000)
     ap.add_argument('--num-hull', type=int, default=60000)
     ap.add_argument('--iters', type=int, default=50000)
@@ -173,8 +173,8 @@ def main() -> int:
     import torch
     from gsplat import rasterization
     from gsplat.strategy import DefaultStrategy
-    sys.path.insert(0, args.fdanyone_root)
-    from fdanyone.foreground import predict_foreground_masks
+    sys.path.insert(0, args.performer_4d_root)
+    from performer_4d.foreground import predict_foreground_masks
 
     t0 = time.time()
     rng = np.random.default_rng(args.seed)

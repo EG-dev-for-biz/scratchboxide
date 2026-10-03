@@ -151,8 +151,6 @@ export {
     MUSIC_VENUE_PRESETS,
     SBHUMAN_22_JOINT_NAMES,
     SBHUMAN_22_PARENTS,
-    SMPLX_22_JOINT_NAMES,
-    SMPLX_22_PARENTS,
     DEFAULT_CANONICAL_JOINTS,
     type MusicVenuePreset,
     type ConcertStageOptions,

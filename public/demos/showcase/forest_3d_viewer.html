@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scratchbox IDE — Hyperrealistic Procedural 3D Forest Reconstruction</title>
+  
+  <!-- Primary scripts with relative paths -->
+  <script src="three.min.js"></script>
+  <script src="GLTFLoader.js"></script>
+  <script src="OrbitControls.js"></script>
+  
+  <!-- CDN fallbacks in case opened in isolated environments -->
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+    }
+  </script>
+  <script>
+    if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"><\/script>');
+    }
+  </script>
+  <script>
+    if (typeof THREE !== 'undefined' && typeof THREE.OrbitControls === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"><\/script>');
+    }
+  </script>
+
+  <style>
+    :root {
+      --bg: #070c0e;
+      --card-bg: rgba(11, 20, 22, 0.94);
+      --border: rgba(255, 255, 255, 0.12);
+      --primary: #10b981;
+      --accent: #38bdf8;
+      --gold: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      height: 56px;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(10, 18, 19, 0.98);
+      border-bottom: 1px solid var(--border);
+      z-index: 50;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #132224;
+      color: #f1f5f9;
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    button:hover {
+      background: #1d3336;
+      border-color: #334e52;
+    }
+    button.active {
+      background: #059669;
+      border-color: #10b981;
+      color: white;
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+    }
+
+    .main-container {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .pane {
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: #091012;
+    }
+    .pane-header {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 10;
+      background: rgba(10, 20, 22, 0.88);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot-gold { background: #f59e0b; }
+    .dot-green { background: #10b981; }
+
+    .image-pane img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center center;
+      display: block;
+    }
+
+    #threeViewport {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: grab;
+    }
+    #threeViewport:active {
+      cursor: grabbing;
+    }
+
+    .nav-hints {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 10;
+      background: rgba(10, 20, 22, 0.88);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: monospace;
+      color: #94a3b8;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .nav-hint-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .key-badge {
+      background: #1e293b;
+      color: #f1f5f9;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10px;
+      font-weight: bold;
+    }
+
+    .hud-overlay {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      z-index: 10;
+      background: rgba(10, 20, 22, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      backdrop-filter: blur(8px);
+      color: #cbd5e1;
+      min-width: 270px;
+    }
+    .hud-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .hud-val {
+      color: #10b981;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-badge">C++20 ASTRA</div>
+      <div>
+        <div class="brand-title">Ancient Temperate Forest — Hyperrealistic 3D Reconstruction</div>
+        <div class="brand-subtitle">Volumetric Mie Light Scattering • Solar Contre-Jour • Multi-Mesh PBR • 6-DOF Navigation</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="btnWideshot" class="active" onclick="flyToBookmark('wideshot')">🌲 Forest Wideshot</button>
+      <button id="btnMatchedView" onclick="flyToBookmark('matched')">📷 Photo-Matched</button>
+      <button id="btnHeroCloseUp" onclick="flyToBookmark('hero')">🌳 Hero Redwood</button>
+      <button id="btnFernCloseUp" onclick="flyToBookmark('ferns')">🌿 Nurse Log & Ferns</button>
+      <button id="btnCanopySunbeams" onclick="flyToBookmark('canopy')">☀️ Canopy Sunbeams</button>
+      <button id="btnWalkPath" onclick="flyToBookmark('walk')">🚶 Forest Path Walk</button>
+      <button id="btnOrbit" onclick="toggleAutoOrbit()">🔄 Auto-Orbit</button>
+    </div>
+  </header>
+
+  <div class="main-container">
+    <!-- Left Pane: Generated Forest Reference Photograph -->
+    <div class="pane image-pane">
+      <div class="pane-header">
+        <div class="dot dot-gold"></div>
+        <span>Generated Reference Photograph (National Geographic Style)</span>
+      </div>
+      <img id="refPhoto" src="forest_reference.png" alt="Forest Reference Photograph" onerror="handleImageError(this)">
+    </div>
+
+    <!-- Right Pane: Real-Time Interactive 3D Viewport -->
+    <div class="pane three-pane">
+      <div class="pane-header">
+        <div class="dot dot-green"></div>
+        <span id="activeModelLabel">Interactive 3D Viewport (Astra C++20 glTF)</span>
+      </div>
+      <div class="nav-hints">
+        <div class="nav-hint-item"><span>Left-Drag:</span> <b>Orbit</b></div>
+        <div class="nav-hint-item"><span>Right-Drag:</span> <b>Pan</b></div>
+        <div class="nav-hint-item"><span>Scroll:</span> <b>Zoom</b></div>
+        <div class="nav-hint-item"><span class="key-badge">W</span><span class="key-badge">A</span><span class="key-badge">S</span><span class="key-badge">D</span> <b>Walk</b></div>
+        <div class="nav-hint-item"><span class="key-badge">Q</span><span class="key-badge">E</span> <b>Up/Down</b></div>
+        <div class="nav-hint-item"><span>Double-Click:</span> <b>Focus</b></div>
+      </div>
+      <canvas id="threeViewport"></canvas>
+      <div class="hud-overlay" id="hud">
+        <div class="hud-row"><span>Biome:</span><span class="hud-val">Ancient Temperate Redwood</span></div>
+        <div class="hud-row"><span>Engine:</span><span class="hud-val">C++20 Astra (Clang -O3)</span></div>
+        <div class="hud-row"><span>Vertices:</span><span class="hud-val" id="hudVerts">--</span></div>
+        <div class="hud-row"><span>Triangles:</span><span class="hud-val" id="hudTris">--</span></div>
+        <div class="hud-row"><span>Camera Pos:</span><span class="hud-val" id="hudCamPos">[0.35, 1.65, 4.20]</span></div>
+        <div class="hud-row"><span>Volumetrics:</span><span class="hud-val">Henyey-Greenstein Mie (g=0.82)</span></div>
+        <div class="hud-row"><span>Status:</span><span class="hud-val" id="hudStatus" style="color: #10b981;">INITIALIZING...</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Smooth redirect if opened directly via file:// while local server is active
+    if (window.location.protocol === 'file:') {
+      fetch('http://127.0.0.1:5173/forest_3d_viewer.html', { method: 'HEAD', mode: 'no-cors' })
+        .then(() => {
+          console.log('Redirecting file:// to live local dev server on http://localhost:5173/forest_3d_viewer.html');
+          window.location.replace('http://localhost:5173/forest_3d_viewer.html');
+        })
+        .catch(() => {});
+    }
+
+    function handleImageError(img) {
+      if (!img._retried) {
+        img._retried = true;
+        img.src = 'http://localhost:5173/forest_reference.png';
+      }
+    }
+
+    let scene, camera, renderer, forestGroup, controls;
+    let isAutoOrbiting = false;
+    let orbitAngle = 0;
+    const canvas = document.getElementById('threeViewport');
+
+    // Sun Vector in 3D Space (Upper Right streaming diagonally across into Lower Left Foreground)
+    // Sun Vector in 3D Space (Upper Left streaming diagonally across into Lower Right Foreground)
+    const SUN_POSITION = new THREE.Vector3(-7.5, 22.0, -16.0);
+    const SUN_TARGET = new THREE.Vector3(1.2, 0.8, -0.8);
+    const SUN_COLOR = new THREE.Color(0xffeed4);
+
+    // Camera viewpoints calibrated to match the National Geographic reference photo
+    const BOOKMARKS = {
+      wideshot: {
+        pos: new THREE.Vector3(-1.8, 14.0, 32.0),
+        target: new THREE.Vector3(0.5, 9.5, -6.0),
+        fov: 52.0,
+        buttonId: 'btnWideshot'
+      },
+      matched: {
+        pos: new THREE.Vector3(0.0, 1.30, 2.20),
+        target: new THREE.Vector3(0.45, 1.60, -2.10),
+        fov: 46.0,
+        buttonId: 'btnMatchedView'
+      },
+      hero: {
+        pos: new THREE.Vector3(0.20, 1.15, -0.40),
+        target: new THREE.Vector3(0.95, 1.45, -2.10),
+        fov: 48.0,
+        buttonId: 'btnHeroCloseUp'
+      },
+      ferns: {
+        pos: new THREE.Vector3(-0.35, 0.95, 0.90),
+        target: new THREE.Vector3(0.0, 0.45, -0.50),
+        fov: 46.0,
+        buttonId: 'btnFernCloseUp'
+      },
+      canopy: {
+        pos: new THREE.Vector3(0.10, 1.50, 1.80),
+        target: new THREE.Vector3(-3.50, 15.00, -12.00),
+        fov: 56.0,
+        buttonId: 'btnCanopySunbeams'
+      },
+      walk: {
+        pos: new THREE.Vector3(-0.50, 1.35, -1.20),
+        target: new THREE.Vector3(-1.50, 1.40, -12.00),
+        fov: 48.0,
+        buttonId: 'btnWalkPath'
+      }
+    };
+
+    // Camera animation state for smooth flying
+    let animatingCamera = false;
+    let animStartPos = new THREE.Vector3();
+    let animEndPos = new THREE.Vector3();
+    let animStartTarget = new THREE.Vector3();
+    let animEndTarget = new THREE.Vector3();
+    let animStartFov = 48.0;
+    let animEndFov = 48.0;
+    let animProgress = 0;
+
+    // Keyboard state for WASD / walk navigation
+    const keysDown = {};
+
+    // Volumetric God Rays Shader Material
+    let volumetricSunbeamMaterial = null;
+
+    function createVolumetricSunbeamMaterial() {
+      return new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uSunPosition: { value: SUN_POSITION.clone() },
+          uSunColor: { value: new THREE.Vector3(1.0, 0.92, 0.74) },
+          uIntensity: { value: 1.45 },
+          uMistDensity: { value: 0.85 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+          varying vec3 vViewPosition;
+
+          void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldPosition = worldPos.xyz;
+            vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+            vViewPosition = -mvPos.xyz;
+            gl_Position = projectionMatrix * mvPos;
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform vec3 uSunPosition;
+          uniform vec3 uSunColor;
+          uniform float uIntensity;
+          uniform float uMistDensity;
+
+          varying vec2 vUv;
+          varying vec3 vNormal;
+          varying vec3 vWorldPosition;
+          varying vec3 vViewPosition;
+
+          void main() {
+            vec3 viewDir = normalize(vViewPosition);
+            vec3 lightDir = normalize(uSunPosition - vWorldPosition);
+
+            // 1. Henyey-Greenstein Mie Forward Scattering Phase Function (g = 0.82)
+            // Creates the breathtaking golden atmospheric glare when looking towards the sun
+            float cosTheta = dot(viewDir, lightDir);
+            float g = 0.82;
+            float g2 = g * g;
+            float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+            float phase = (1.0 - g2) / (4.0 * 3.14159265 * pow(max(0.01, denom), 1.5));
+            phase = clamp(phase * 0.42, 0.35, 4.8);
+
+            // 2. View-dependent Fresnel rim falloff to completely melt away polygonal cone edges
+            float rim = abs(dot(vNormal, viewDir));
+            float edgeFade = smoothstep(0.01, 0.40, rim);
+
+            // 3. Lengthwise beam profile: soft emergence at canopy aperture, soft fade at ground
+            float vFade = smoothstep(0.01, 0.16, vUv.y) * pow(max(0.0, 1.0 - vUv.y), 1.35);
+
+            // 4. Animated drifting mist advection & fine aerosol shimmer
+            float shimmer = 0.88 + 0.12 * sin(uTime * 1.5 + vWorldPosition.x * 0.45 + vWorldPosition.y * 0.35 + vWorldPosition.z * 0.40);
+            float dustMotes = 0.94 + 0.06 * sin(uTime * 3.2 + vUv.x * 25.0 + vUv.y * 18.0);
+
+            // Ethereal volumetric opacity
+            float alpha = edgeFade * vFade * phase * shimmer * dustMotes * (uIntensity * 0.22);
+
+            // Warm golden solar core transitioning to soft ivory/pale amber edges
+            vec3 col = uSunColor * (1.0 + phase * 0.28);
+
+            gl_FragColor = vec4(col, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: true
+      });
+    }
+
+    // Procedural PBR Redwood Needle Mulch & Humus Texture for Forest Floor
+    function createWoodlandGroundTextures() {
+      const size = 512;
+      const canvasBump = document.createElement('canvas');
+      canvasBump.width = size;
+      canvasBump.height = size;
+      const ctx = canvasBump.getContext('2d');
+
+      // Base soil grain
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, size, size);
+
+      const imgData = ctx.getImageData(0, 0, size, size);
+      const d = imgData.data;
+
+      // Needle duff & soil micro-granularity
+      for (let i = 0; i < d.length; i += 4) {
+        const noise = (Math.random() - 0.5) * 45;
+        const v = Math.max(0, Math.min(255, 128 + noise));
+        d[i] = v;
+        d[i + 1] = v;
+        d[i + 2] = v;
+        d[i + 3] = 255;
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      // Draw thin intersecting fallen redwood needles
+      ctx.strokeStyle = '#a8a8a8';
+      ctx.lineWidth = 1.2;
+      for (let n = 0; n < 1200; ++n) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const len = 6 + Math.random() * 12;
+        const ang = Math.random() * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+        ctx.stroke();
+      }
+
+      const bumpTex = new THREE.CanvasTexture(canvasBump);
+      bumpTex.wrapS = THREE.RepeatWrapping;
+      bumpTex.wrapT = THREE.RepeatWrapping;
+      bumpTex.repeat.set(16, 16);
+      return bumpTex;
+    }
+
+    // Atmospheric Airborne Spores & Dust Particles
+    let dustParticles = null;
+    function createDustParticles() {
+      const count = 1600;
+      const geom = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      const phases = new Float32Array(count);
+
+      for (let i = 0; i < count; i++) {
+        positions[i * 3 + 0] = (Math.random() - 0.5) * 14.0;
+        positions[i * 3 + 1] = 0.2 + Math.random() * 6.5;
+        positions[i * 3 + 2] = -14.0 + Math.random() * 18.0;
+        phases[i] = Math.random() * Math.PI * 2;
+      }
+
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geom.setAttribute('phase', new THREE.BufferAttribute(phases, 1));
+
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 }
+        },
+        vertexShader: `
+          uniform float uTime;
+          attribute float phase;
+          varying float vAlpha;
+          void main() {
+            vec3 p = position;
+            p.y += sin(uTime * 0.5 + phase) * 0.12;
+            p.x += cos(uTime * 0.35 + phase * 1.3) * 0.10;
+            p.z += sin(uTime * 0.25 + phase * 0.7) * 0.10;
+
+            vec4 mvPos = modelViewMatrix * vec4(p, 1.0);
+            gl_Position = projectionMatrix * mvPos;
+
+            gl_PointSize = (14.0 / max(0.5, -mvPos.z)) * (1.0 + 0.4 * sin(uTime * 1.8 + phase));
+            vAlpha = clamp(0.3 + 0.7 * sin(phase + uTime * 0.6), 0.0, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying float vAlpha;
+          void main() {
+            float dist = length(gl_PointCoord - vec2(0.5));
+            if (dist > 0.5) discard;
+            float alpha = (1.0 - smoothstep(0.08, 0.5, dist)) * vAlpha * 0.70;
+            gl_FragColor = vec4(1.0, 0.94, 0.78, alpha);
+          }
+        `,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      });
+
+      dustParticles = new THREE.Points(geom, mat);
+      scene.add(dustParticles);
+    }
+
+    // Optical Camera Post-Processing Pipeline (Deep Focus / Infinite Depth-of-Field, Sunbeams, Bloom, Vignette)
+    let postTarget = null;
+    let postScene = null;
+    let postCamera = null;
+    let postMaterial = null;
+    let postQuad = null;
+
+    function initPostProcessing(width, height) {
+      postTarget = new THREE.WebGLRenderTarget(width, height, {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat,
+        stencilBuffer: false
+      });
+
+      postScene = new THREE.Scene();
+      postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+      postMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          tDiffuse: { value: postTarget.texture },
+          uResolution: { value: new THREE.Vector2(width, height) },
+          uSunScreenPos: { value: new THREE.Vector2(0.5, 0.5) },
+          uSunOnScreen: { value: 1.0 },
+          uTime: { value: 0 },
+          uBloomIntensity: { value: 0.38 },
+          uRadialRaysIntensity: { value: 0.32 },
+          uVignetteStrength: { value: 0.62 },
+          uChromaticAberration: { value: 0.0015 }
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D tDiffuse;
+          uniform vec2 uResolution;
+          uniform vec2 uSunScreenPos;
+          uniform float uSunOnScreen;
+          uniform float uTime;
+          uniform float uBloomIntensity;
+          uniform float uRadialRaysIntensity;
+          uniform float uVignetteStrength;
+          uniform float uChromaticAberration;
+
+          varying vec2 vUv;
+
+          void main() {
+            vec2 uv = vUv;
+            vec2 centerOffset = uv - vec2(0.5);
+
+            // 1. Deep Optical Focus (Zero DoF Blur - Tack Sharp from 0.1m to 100m)
+            // Subtle lateral chromatic aberration only at extreme outer sensor perimeter
+            float distFromCenter = length(centerOffset);
+            vec2 chromaDir = normalize(centerOffset + 0.0001) * (distFromCenter * distFromCenter * distFromCenter * uChromaticAberration);
+
+            float r = texture2D(tDiffuse, uv - chromaDir).r;
+            float g = texture2D(tDiffuse, uv).g;
+            float b = texture2D(tDiffuse, uv + chromaDir).b;
+            vec3 baseColor = vec3(r, g, b);
+
+            // 2. Radial Crepuscular Sunbeam Shafts
+            vec3 rayColor = vec3(0.0);
+            if (uSunOnScreen > 0.0) {
+              vec2 delta = (uSunScreenPos - uv);
+              float deltaLen = length(delta);
+              vec2 stepDir = (delta / max(0.001, deltaLen)) * (1.0 / 26.0) * min(deltaLen, 0.65);
+
+              float decay = 1.0;
+              vec2 sampleCoord = uv;
+
+              for (int i = 0; i < 26; i++) {
+                sampleCoord += stepDir;
+                vec4 samp = texture2D(tDiffuse, sampleCoord);
+                float lum = dot(samp.rgb, vec3(0.299, 0.587, 0.114));
+                float bright = max(0.0, lum - 0.70) * 2.5;
+                rayColor += samp.rgb * bright * decay;
+                decay *= 0.945;
+              }
+              rayColor *= (uRadialRaysIntensity / 26.0);
+              rayColor *= vec3(1.0, 0.94, 0.76);
+            }
+
+            // 3. Optical Veiling Glare / Highlight Bloom
+            float luma = dot(baseColor, vec3(0.299, 0.587, 0.114));
+            float highlight = smoothstep(0.72, 1.0, luma);
+            vec3 bloom = vec3(1.0, 0.96, 0.84) * highlight * uBloomIntensity;
+
+            vec3 color = baseColor + rayColor + bloom;
+
+            // 4. Photographic cos^4 Vignetting
+            float vignette = 1.0 - smoothstep(0.45, 1.45, length(centerOffset * 1.40)) * uVignetteStrength;
+            color *= vignette;
+
+            // 5. Film S-Curve Tone Compression & Color Balance
+            color = pow(color, vec3(1.05));
+            color = color / (color + vec3(0.16)) * 1.16;
+
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+        depthTest: false,
+        depthWrite: false
+      });
+
+      postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMaterial);
+      postScene.add(postQuad);
+    }
+
+    function initThree() {
+      const width = canvas.parentElement.clientWidth || 800;
+      const height = canvas.parentElement.clientHeight || 600;
+
+      scene = new THREE.Scene();
+      
+      // 1. Rich Atmospheric Background & Calibrated Forest Fog
+      const fogColor = new THREE.Color(0x18241e);
+      scene.background = fogColor;
+      scene.fog = new THREE.FogExp2(0x18241e, 0.012);
+
+      // Create an authentic sky dome with warm morning solar backlight & deep canopy ceiling
+      const skyGeo = new THREE.SphereGeometry(250, 32, 24);
+      const skyCanvas = document.createElement('canvas');
+      skyCanvas.width = 512;
+      skyCanvas.height = 512;
+      const skyCtx = skyCanvas.getContext('2d');
+      const skyGrad = skyCtx.createLinearGradient(0, 0, 0, 512);
+      skyGrad.addColorStop(0.0, '#1c2822');   // Deep forest canopy ceiling
+      skyGrad.addColorStop(0.28, '#4a6250');  // High conifer bough silhouettes
+      skyGrad.addColorStop(0.50, '#f2e8cb');  // Luminous morning sun-drenched haze
+      skyGrad.addColorStop(0.72, '#cfcaa6');  // Warm atmospheric woodland mist
+      skyGrad.addColorStop(1.0, '#4a3e30');   // Rich humus horizon
+      skyCtx.fillStyle = skyGrad;
+      skyCtx.fillRect(0, 0, 512, 512);
+      const skyTex = new THREE.CanvasTexture(skyCanvas);
+      const skyMat = new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, depthWrite: false });
+      const skyDome = new THREE.Mesh(skyGeo, skyMat);
+      scene.add(skyDome);
+
+      // Atmospheric optical depth fog (Beer-Lambert aerial perspective)
+      scene.fog = new THREE.FogExp2(0xc8c0a8, 0.015);
+
+      camera = new THREE.PerspectiveCamera(BOOKMARKS.wideshot.fov, width / height, 0.1, 1000);
+      camera.position.copy(BOOKMARKS.wideshot.pos);
+
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.24;
+      renderer.shadowMap.enabled = true;
+      if (THREE.PCFSoftShadowMap) {
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      }
+
+      // Initialize OrbitControls with buttery smooth damping
+      const ControlsClass = THREE.OrbitControls || (window.THREE && window.THREE.OrbitControls) || window.OrbitControls;
+      if (ControlsClass) {
+        controls = new ControlsClass(camera, renderer.domElement);
+        controls.target.copy(BOOKMARKS.wideshot.target);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.screenSpacePanning = true;
+        controls.maxPolarAngle = Math.PI / 2 + 0.06;
+        controls.minDistance = 0.4;
+        controls.maxDistance = 75.0;
+        controls.zoomSpeed = 1.2;
+        controls.rotateSpeed = 0.8;
+        controls.panSpeed = 0.8;
+
+        controls.addEventListener('start', () => {
+          if (isAutoOrbiting) {
+            isAutoOrbiting = false;
+            document.getElementById('btnOrbit').classList.remove('active');
+          }
+        });
+      }
+
+      // 1. Morning Golden Sunlight (CONTRE-JOUR: streaming from background canopy towards foreground)
+      const sunLight = new THREE.DirectionalLight(0xffeed6, 4.8);
+      sunLight.position.copy(SUN_POSITION);
+      sunLight.target.position.copy(SUN_TARGET);
+      scene.add(sunLight.target);
+      sunLight.castShadow = true;
+      if (sunLight.shadow) {
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 1.5;
+        sunLight.shadow.camera.far = 90.0;
+        sunLight.shadow.camera.left = -26;
+        sunLight.shadow.camera.right = 26;
+        sunLight.shadow.camera.top = 26;
+        sunLight.shadow.camera.bottom = -26;
+        sunLight.shadow.bias = -0.00025;
+        sunLight.shadow.radius = 1.5;
+      }
+      scene.add(sunLight);
+
+      // 2. Glowing Solar Disc Corona in the canopy background
+      const canvasSprite = document.createElement('canvas');
+      canvasSprite.width = 256;
+      canvasSprite.height = 256;
+      const sCtx = canvasSprite.getContext('2d');
+      const grad = sCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      grad.addColorStop(0.18, 'rgba(255, 248, 220, 0.90)');
+      grad.addColorStop(0.42, 'rgba(255, 225, 160, 0.40)');
+      grad.addColorStop(0.75, 'rgba(255, 195, 110, 0.12)');
+      grad.addColorStop(1.0, 'rgba(255, 180, 80, 0.0)');
+      sCtx.fillStyle = grad;
+      sCtx.fillRect(0, 0, 256, 256);
+      const sunTex = new THREE.CanvasTexture(canvasSprite);
+      const sunMat = new THREE.SpriteMaterial({
+        map: sunTex,
+        color: 0xfff0d0,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false
+      });
+      const sunSprite = new THREE.Sprite(sunMat);
+      sunSprite.position.copy(SUN_POSITION);
+      sunSprite.scale.set(6.5, 6.5, 1.0);
+      sunMat.opacity = 0.35;
+      scene.add(sunSprite);
+
+      // 3. Diffuse Canopy Green Sky & Soil Bounce Light
+      const hemiLight = new THREE.HemisphereLight(0x78a088, 0x3a2216, 1.45);
+      scene.add(hemiLight);
+
+      // 4. Soft Morning Forward Camera Fill (preserves foreground bark texture without washing out backlighting)
+      const fillLight = new THREE.DirectionalLight(0x709080, 0.95);
+      fillLight.position.set(0.0, 5.0, 8.0);
+      scene.add(fillLight);
+
+      // Create Volumetric Sunbeam Material
+      volumetricSunbeamMaterial = createVolumetricSunbeamMaterial();
+
+      // Atmospheric Airborne Dust & Spore Particles
+      createDustParticles();
+
+      forestGroup = new THREE.Group();
+      scene.add(forestGroup);
+
+      // Initialize Optical Camera Post-Processing Pipeline
+      initPostProcessing(width, height);
+
+      // Determine model path based on origin
+      let modelPath = 'models/forest_hyperreal.glb';
+      if (window.location.protocol === 'file:') {
+        modelPath = 'http://localhost:5173/models/forest_hyperreal.glb';
+      }
+
+      loadModel(modelPath);
+
+      // Event Listeners for Keyboard & Interaction
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+      canvas.addEventListener('dblclick', onDoubleClick);
+
+      animate();
+    }
+
+    function setActiveButton(btnId) {
+      ['btnWideshot', 'btnMatchedView', 'btnOrbit', 'btnHeroCloseUp', 'btnFernCloseUp', 'btnCanopySunbeams', 'btnWalkPath'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('active', id === btnId);
+      });
+    }
+
+    function flyToBookmark(key) {
+      const bm = BOOKMARKS[key];
+      if (!bm) return;
+
+      isAutoOrbiting = false;
+      document.getElementById('btnOrbit').classList.remove('active');
+      setActiveButton(bm.buttonId);
+
+      animStartPos.copy(camera.position);
+      animEndPos.copy(bm.pos);
+      if (controls) {
+        animStartTarget.copy(controls.target);
+      } else {
+        animStartTarget.copy(BOOKMARKS.matched.target);
+      }
+      animEndTarget.copy(bm.target);
+      animStartFov = camera.fov;
+      animEndFov = bm.fov;
+      animProgress = 0;
+      animatingCamera = true;
+    }
+
+    function toggleAutoOrbit() {
+      isAutoOrbiting = !isAutoOrbiting;
+      document.getElementById('btnOrbit').classList.toggle('active', isAutoOrbiting);
+      if (isAutoOrbiting) {
+        animatingCamera = false;
+        if (controls) {
+          orbitAngle = Math.atan2(camera.position.x - controls.target.x, camera.position.z - controls.target.z);
+        }
+      }
+    }
+
+    // Expose automation hooks for CDP and headless testing
+    window.flyToBookmark = flyToBookmark;
+    window.toggleOrbit = toggleAutoOrbit;
+    window.toggleAutoOrbit = toggleAutoOrbit;
+    window.heroCloseUp = () => flyToBookmark('hero');
+    window.fernCloseUp = () => flyToBookmark('ferns');
+    window.canopySunbeams = () => flyToBookmark('canopy');
+    window.walkPath = () => flyToBookmark('walk');
+
+    function onKeyDown(e) {
+      keysDown[e.code] = true;
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        isAutoOrbiting = false;
+        animatingCamera = false;
+        document.getElementById('btnOrbit').classList.remove('active');
+      }
+    }
+
+    function onKeyUp(e) {
+      keysDown[e.code] = false;
+    }
+
+    // Double-click raycast focus
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    function onDoubleClick(e) {
+      const rect = canvas.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(forestGroup.children, true);
+
+      if (intersects.length > 0) {
+        const hit = intersects[0];
+        const hitPoint = hit.point;
+
+        animStartPos.copy(camera.position);
+        animEndPos.copy(camera.position);
+        animStartTarget.copy(controls.target);
+        animEndTarget.copy(hitPoint);
+        animStartFov = camera.fov;
+        animEndFov = camera.fov;
+        animProgress = 0;
+        animatingCamera = true;
+      }
+    }
+
+    function updateKeyboardNavigation(delta) {
+      if (!controls) return;
+
+      const speed = keysDown['ShiftLeft'] || keysDown['ShiftRight'] ? 12.0 : 4.5;
+      const moveDistance = speed * delta;
+
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+
+      const side = new THREE.Vector3();
+      side.crossVectors(camera.up, forward).normalize();
+
+      let moved = false;
+      const moveDelta = new THREE.Vector3();
+
+      if (keysDown['KeyW'] || keysDown['ArrowUp']) {
+        moveDelta.addScaledVector(forward, moveDistance);
+        moved = true;
+      }
+      if (keysDown['KeyS'] || keysDown['ArrowDown']) {
+        moveDelta.addScaledVector(forward, -moveDistance);
+        moved = true;
+      }
+      if (keysDown['KeyA'] || keysDown['ArrowLeft']) {
+        moveDelta.addScaledVector(side, moveDistance);
+        moved = true;
+      }
+      if (keysDown['KeyD'] || keysDown['ArrowRight']) {
+        moveDelta.addScaledVector(side, -moveDistance);
+        moved = true;
+      }
+      if (keysDown['KeyE'] || keysDown['Space']) {
+        moveDelta.y += moveDistance;
+        moved = true;
+      }
+      if (keysDown['KeyQ'] || keysDown['KeyC']) {
+        moveDelta.y -= moveDistance;
+        moved = true;
+      }
+
+      if (moved) {
+        camera.position.add(moveDelta);
+        controls.target.add(moveDelta);
+
+        if (camera.position.y < 0.8) {
+          camera.position.y = 0.8;
+        }
+      }
+    }
+
+    function loadModel(path) {
+      document.getElementById('hudStatus').textContent = 'LOADING 3D GLB & PBR TEXTURES...';
+      const LoaderClass = THREE.GLTFLoader || (window.THREE && window.THREE.GLTFLoader) || window.GLTFLoader;
+      if (!LoaderClass) {
+        console.error('GLTFLoader not available');
+        document.getElementById('hudStatus').textContent = 'LOADER ERROR';
+        return;
+      }
+
+      // 1. Preload Photo-Derived High-Definition PBR Texture Sets
+      const texLoader = new THREE.TextureLoader();
+      const basePath = (window.location.protocol === 'file:') ? 'http://localhost:5173/textures/' : 'textures/';
+
+      const maxAniso = (renderer && renderer.capabilities) ? renderer.capabilities.getMaxAnisotropy() : 16;
+      function loadPbrTex(filename, repeatU, repeatV) {
+        const tex = texLoader.load(basePath + filename);
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(repeatU, repeatV);
+        tex.anisotropy = maxAniso;
+        return tex;
+      }
+
+      const barkAlbedo = loadPbrTex('photo_redwood_bark_albedo.png', 2.0, 6.0);
+      const barkNormal = loadPbrTex('photo_redwood_bark_normal.png', 2.0, 6.0);
+      const barkOrm    = loadPbrTex('photo_redwood_bark_orm.png', 2.0, 6.0);
+
+      const floorAlbedo = loadPbrTex('photo_forest_floor_albedo.png', 12.0, 12.0);
+      const floorNormal = loadPbrTex('photo_forest_floor_normal.png', 12.0, 12.0);
+      const floorOrm    = loadPbrTex('photo_forest_floor_orm.png', 12.0, 12.0);
+
+      const canopyAlbedo = loadPbrTex('photo_canopy_albedo.png', 3.0, 3.0);
+      const canopyNormal = loadPbrTex('photo_canopy_normal.png', 3.0, 3.0);
+
+      const mossAlbedo = loadPbrTex('photo_moss_albedo.png', 4.0, 4.0);
+      const mossNormal = loadPbrTex('photo_moss_normal.png', 4.0, 4.0);
+
+      const fernAlbedo = loadPbrTex('photo_fern_albedo.png', 2.0, 2.0);
+      const fernNormal = loadPbrTex('photo_fern_normal.png', 2.0, 2.0);
+      const fernOrm    = loadPbrTex('photo_fern_orm.png', 2.0, 2.0);
+
+      // Algorithmic Living Foliage & Subsurface Scattering (SSS) Shader Injector
+      function applyLivingFoliageKernel(mat, sssColorHex = 0xffe888, sssIntensity = 0.70) {
+        mat.onBeforeCompile = (shader) => {
+          shader.uniforms.uSunPos = { value: SUN_POSITION };
+          shader.uniforms.uSssColor = { value: new THREE.Color(sssColorHex) };
+          shader.uniforms.uSssIntensity = { value: sssIntensity };
+
+          shader.vertexShader = `
+            varying vec3 vWorldNormalVec;
+            varying vec3 vWorldPosVec;
+            ${shader.vertexShader}
+          `.replace(
+            '#include <worldpos_vertex>',
+            `#include <worldpos_vertex>
+             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
+             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+          );
+
+          shader.fragmentShader = `
+            uniform vec3 uSunPos;
+            uniform vec3 uSssColor;
+            uniform float uSssIntensity;
+            varying vec3 vWorldNormalVec;
+            varying vec3 vWorldPosVec;
+            ${shader.fragmentShader}
+          `.replace(
+            '#include <dithering_fragment>',
+            `#include <dithering_fragment>
+             vec3 lVec = normalize(uSunPos - vWorldPosVec);
+             vec3 vVec = normalize(cameraPosition - vWorldPosVec);
+
+             // 1. High-Frequency Leaf Flutter Micro-Normal (Cellular Planar Tilts)
+             float flutter = sin(vWorldPosVec.x * 28.0) * cos(vWorldPosVec.z * 28.0 + vWorldPosVec.y * 22.0) * 0.32;
+             vec3 flutterNorm = normalize(vWorldNormalVec + vec3(flutter * 0.35, 0.0, flutter * 0.35));
+
+             // 2. Deep Evergreen Under-Canopy Self-Shadowing
+             if (vWorldNormalVec.y < -0.18) {
+               float underFactor = clamp((-vWorldNormalVec.y - 0.18) / 0.52, 0.0, 1.0);
+               vec3 deepGreen = vec3(0.12, 0.28, 0.08); // Deep shaded evergreen foliage
+               gl_FragColor.rgb = mix(gl_FragColor.rgb, deepGreen, underFactor * 0.55);
+             }
+
+             // 3. Half-Lambert Wrap Subsurface Transmission
+             float wrapL = max(0.0, (dot(-flutterNorm, lVec) + 0.38) / 1.38);
+             float fwdScatter = pow(max(0.0, dot(vVec, -lVec)), 3.2) * 0.55;
+             vec3 sssTrans = uSssColor * (wrapL * 0.88 + fwdScatter) * uSssIntensity;
+             gl_FragColor.rgb += sssTrans * gl_FragColor.rgb;
+
+             // 4. Waxy Cuticle Specular Glint
+             vec3 halfVec = normalize(lVec + vVec);
+             float specGlint = pow(max(0.0, dot(flutterNorm, halfVec)), 32.0);
+             gl_FragColor.rgb += vec3(1.0, 0.98, 0.88) * specGlint * 0.32;
+
+             // 5. Atmospheric Solar Airlight Dissolution (Contre-Jour Edge Softening)
+             float sunAlignment = max(0.0, dot(vVec, -lVec));
+             float airlightMelt = pow(sunAlignment, 4.0) * 0.22;
+             gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.92, 0.72), airlightMelt);
+
+             // 6. Multi-Scale Procedural Shader Noise (Macro Structural Grain, Meso Distress, Micro Roughness Jitter)
+             float macroGrain = sin(vWorldPosVec.x * 0.65) * cos(vWorldPosVec.z * 0.65);
+             gl_FragColor.rgb *= (1.0 + 0.08 * macroGrain);
+
+             float mesoDistress = sin(vWorldPosVec.x * 16.0 + vWorldPosVec.y * 14.0) * cos(vWorldPosVec.z * 18.0);
+             gl_FragColor.rgb *= (1.0 - 0.06 * max(0.0, mesoDistress));
+
+             float microJitter = fract(sin(dot(vWorldPosVec.xz * 95.0, vec2(12.9898, 78.233))) * 43758.5453);
+             gl_FragColor.rgb *= (0.94 + 0.12 * microJitter);`
+          );
+        };
+      }
+
+      // Specular Sun Rim Lighting on Bark & Fallen Logs (Contre-Jour Edge Glow)
+      function applyBarkSunRimShader(mat, rimStrength = 0.45) {
+        mat.onBeforeCompile = (shader) => {
+          shader.uniforms.uSunPos = { value: SUN_POSITION };
+          shader.uniforms.uRimStrength = { value: rimStrength };
+          shader.vertexShader = `
+            varying vec3 vWorldNormalVec;
+            varying vec3 vWorldPosVec;
+            ${shader.vertexShader}
+          `.replace(
+            '#include <worldpos_vertex>',
+            `#include <worldpos_vertex>
+             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
+             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+          );
+          shader.fragmentShader = `
+            uniform vec3 uSunPos;
+            uniform float uRimStrength;
+            varying vec3 vWorldNormalVec;
+            varying vec3 vWorldPosVec;
+            ${shader.fragmentShader}
+          `.replace(
+            '#include <dithering_fragment>',
+            `#include <dithering_fragment>
+             vec3 lVec = normalize(uSunPos - vWorldPosVec);
+             vec3 vVec = normalize(cameraPosition - vWorldPosVec);
+             // 1. Procedural Sun Rim Lighting (Contre-Jour Edge Glow)
+             float rimAngle = 1.0 - max(0.0, dot(vWorldNormalVec, vVec));
+             float sunFacing = max(0.0, dot(vWorldNormalVec, lVec));
+             float rimLight = pow(rimAngle, 3.2) * (0.35 + 0.65 * sunFacing) * uRimStrength;
+             vec3 rimColor = vec3(1.0, 0.94, 0.80) * rimLight;
+             gl_FragColor.rgb += rimColor;
+
+             // 2. Multi-Scale Procedural Shader Noise on Bark & Ground
+             float macroBark = sin(vWorldPosVec.x * 0.45) * cos(vWorldPosVec.z * 0.45);
+             float mesoBark = sin(vWorldPosVec.y * 24.0 + vWorldPosVec.x * 6.0) * cos(vWorldPosVec.z * 8.0);
+             float microBark = fract(sin(dot(vWorldPosVec.xy * 85.0, vec2(12.9898, 78.233))) * 43758.5453);
+             gl_FragColor.rgb *= (1.0 + 0.10 * macroBark);
+             gl_FragColor.rgb *= (0.92 + 0.16 * microBark);
+
+             // 3. Procedural Edge Wear (Pointiness / Curvature Peak Scuffing)
+             float pointiness = clamp((microBark - 0.5) * 2.0 + (mesoBark > 0.35 ? 0.65 : 0.0), 0.0, 1.0);
+             float edgeWear = pow(pointiness, 2.5) * 0.45;
+             vec3 wornHeartwood = vec3(0.55, 0.38, 0.24); // Lighter scuffed heartwood
+             gl_FragColor.rgb = mix(gl_FragColor.rgb, wornHeartwood, edgeWear);
+
+             // 4. Crevice Grime (Ambient Occlusion & Concave Valley Dirt)
+             if (mesoBark < -0.22) {
+               float grimeIntensity = clamp((-mesoBark - 0.22) / 0.55, 0.0, 1.0);
+               vec3 creviceGrime = vec3(0.07, 0.05, 0.03); // Moist dark organic humus
+               gl_FragColor.rgb = mix(gl_FragColor.rgb, creviceGrime, grimeIntensity * 0.70);
+             }
+
+             // 5. Inverted Layer Weight Fresnel Mask & Upward-Facing Dust Accumulation
+             float upwardPlane = pow(max(0.0, vWorldNormalVec.y), 2.8);
+             float invertedFresnel = pow(1.0 - clamp(abs(dot(vWorldNormalVec, vVec)), 0.0, 1.0), 2.8);
+             float settledDustMask = clamp(upwardPlane * 0.75 + invertedFresnel * 0.35, 0.0, 0.70);
+             vec3 settledDustColor = vec3(0.70, 0.66, 0.56); // Spore dust, lint, and needle silt
+             gl_FragColor.rgb = mix(gl_FragColor.rgb, settledDustColor, settledDustMask * 0.28);`
+          );
+        };
+      }
+
+      const loader = new LoaderClass();
+      loader.load(path, (gltf) => {
+        while (forestGroup.children.length > 0) {
+          forestGroup.remove(forestGroup.children[0]);
+        }
+
+        let vertCount = 0;
+        let triCount = 0;
+
+        gltf.scene.traverse((child) => {
+          if (child.isMesh) {
+            vertCount += child.geometry.attributes.position.count;
+            if (child.geometry.index) {
+              triCount += child.geometry.index.count / 3;
+            } else {
+              triCount += child.geometry.attributes.position.count / 3;
+            }
+
+            const name = child.name || (child.material ? child.material.name : '');
+
+            if (name.includes('Trunk') || name.includes('Log') || name.includes('Bark')) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              child.material.map = barkAlbedo;
+              child.material.normalMap = barkNormal;
+              child.material.normalScale = new THREE.Vector2(2.6, 2.6);
+              child.material.roughnessMap = barkOrm;
+              child.material.roughness = 0.88;
+              child.material.metalness = 0.02;
+              applyBarkSunRimShader(child.material, 0.45);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Floor')) {
+              child.castShadow = false;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              child.material.map = floorAlbedo;
+              child.material.normalMap = floorNormal;
+              child.material.normalScale = new THREE.Vector2(2.0, 2.0);
+              child.material.roughnessMap = floorOrm;
+              child.material.roughness = 0.92;
+              child.material.metalness = 0.01;
+              applyBarkSunRimShader(child.material, 0.22);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Canopy') || name.includes('Foliage')) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              // Pure vivid chlorophyll vertex colors without grey texture map washing
+              child.material.map = null;
+              child.material.normalMap = null;
+              child.material.roughness = 0.40;
+              child.material.metalness = 0.01;
+              child.material.doubleSided = true;
+              child.material.alphaTest = 0.0;
+              applyLivingFoliageKernel(child.material, 0xfff080, 0.90);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Fern')) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              child.material.map = fernAlbedo;
+              child.material.normalMap = fernNormal;
+              child.material.normalScale = new THREE.Vector2(1.8, 1.8);
+              child.material.roughnessMap = fernOrm;
+              child.material.roughness = 0.42;
+              child.material.metalness = 0.01;
+              child.material.doubleSided = true;
+              child.material.alphaTest = 0.35;
+              applyLivingFoliageKernel(child.material, 0xaaf442, 0.85);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Undergrowth') || name.includes('Moss') || name.includes('Grass')) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.material.vertexColors = true;
+              child.material.map = mossAlbedo;
+              child.material.normalMap = mossNormal;
+              child.material.normalScale = new THREE.Vector2(1.6, 1.6);
+              child.material.roughness = 0.65;
+              child.material.metalness = 0.01;
+              child.material.doubleSided = true;
+              child.material.alphaTest = 0.30;
+              applyLivingFoliageKernel(child.material, 0x98e850, 0.60);
+              child.material.needsUpdate = true;
+            } else if (name.includes('Sunbeam') || name.includes('GodRay')) {
+              child.castShadow = false;
+              child.receiveShadow = false;
+              if (volumetricSunbeamMaterial) {
+                child.material = volumetricSunbeamMaterial;
+              }
+            }
+          }
+        });
+
+        forestGroup.add(gltf.scene);
+
+        document.getElementById('hudVerts').textContent = vertCount.toLocaleString();
+        document.getElementById('hudTris').textContent = Math.round(triCount).toLocaleString();
+        document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+
+        window.__renderReady = true;
+      }, undefined, (err) => {
+        console.error('Error loading forest GLB from ' + path + ':', err);
+        if (path.startsWith('http://')) {
+          console.log('Retrying with relative path models/forest_hyperreal.glb');
+          loadModel('models/forest_hyperreal.glb');
+        } else {
+          document.getElementById('hudStatus').textContent = 'LOAD FAILED';
+        }
+      });
+    }
+
+    function onWindowResize() {
+      const width = canvas.parentElement.clientWidth || 800;
+      const height = canvas.parentElement.clientHeight || 600;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      if (postTarget) {
+        postTarget.setSize(width, height);
+      }
+      if (postMaterial) {
+        postMaterial.uniforms.uResolution.value.set(width, height);
+      }
+    }
+
+    let lastTime = performance.now();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const now = performance.now();
+      const delta = Math.min((now - lastTime) / 1000.0, 0.1);
+      lastTime = now;
+
+      // Update Volumetric God Rays Time Uniform
+      if (volumetricSunbeamMaterial) {
+        volumetricSunbeamMaterial.uniforms.uTime.value = now * 0.001;
+      }
+
+      // Update Dust & Spore Particles
+      if (dustParticles) {
+        dustParticles.material.uniforms.uTime.value = now * 0.001;
+      }
+
+      // Smooth camera fly animation
+      if (animatingCamera) {
+        animProgress += delta * 1.8;
+        if (animProgress >= 1.0) {
+          animProgress = 1.0;
+          animatingCamera = false;
+        }
+
+        const t = animProgress * animProgress * (3.0 - 2.0 * animProgress);
+        camera.position.lerpVectors(animStartPos, animEndPos, t);
+        if (controls) {
+          controls.target.lerpVectors(animStartTarget, animEndTarget, t);
+        }
+        camera.fov = THREE.MathUtils.lerp(animStartFov, animEndFov, t);
+        camera.updateProjectionMatrix();
+      }
+
+      updateKeyboardNavigation(delta);
+
+      if (isAutoOrbiting && controls) {
+        orbitAngle += 0.005;
+        const currentRadius = camera.position.distanceTo(controls.target);
+        camera.position.x = controls.target.x + Math.sin(orbitAngle) * currentRadius;
+        camera.position.z = controls.target.z + Math.cos(orbitAngle) * currentRadius;
+      }
+
+      if (controls) {
+        controls.update();
+      }
+
+      const camEl = document.getElementById('hudCamPos');
+      if (camEl) {
+        camEl.textContent = `[${camera.position.x.toFixed(1)}, ${camera.position.y.toFixed(1)}, ${camera.position.z.toFixed(1)}]`;
+      }
+
+      // Project Sun Position to Screen Coordinates for Post-Processing
+      if (postMaterial && camera) {
+        const sunWorld = SUN_POSITION.clone();
+        const sunNdc = sunWorld.project(camera);
+        const sunScreenX = sunNdc.x * 0.5 + 0.5;
+        const sunScreenY = sunNdc.y * 0.5 + 0.5;
+        const isSunInFront = sunNdc.z > 0.0 && sunNdc.z < 1.0;
+
+        postMaterial.uniforms.uSunScreenPos.value.set(sunScreenX, sunScreenY);
+        postMaterial.uniforms.uSunOnScreen.value = isSunInFront ? 1.0 : 0.0;
+        postMaterial.uniforms.uTime.value = now * 0.001;
+      }
+
+      // Render Scene Through Optical Camera Compositor
+      if (postTarget && postScene && postCamera) {
+        renderer.setRenderTarget(postTarget);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(null);
+        renderer.render(postScene, postCamera);
+      } else {
+        renderer.render(scene, camera);
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', initThree);
+    } else {
+      initThree();
+    }
+  </script>
+</body>
+</html>

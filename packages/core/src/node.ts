@@ -738,8 +738,7 @@ export {
     type VideoTo4DPerformerOptions,
     type VideoTo4DPerformerResult,
     type SilhouetteExtractionResult,
-    type CanonicalGaussiansResult,
-    SMPLX_22_JOINTS
+    type CanonicalGaussiansResult
 } from './node/spatial/VideoTo4DPerformerPipelineService';
 export {
     CharacterClothingMorphology,

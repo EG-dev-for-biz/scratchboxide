@@ -1,0 +1,1251 @@
+{
+  "version": "1.0.0",
+  "description": "Authoritative Demo Asset Manifest for Scratchbox IDE Showcase Demos",
+  "updatedAt": "2026-10-02T17:30:00Z",
+  "assets": [
+    {
+      "path": "public/camera_demo_assets/person_hero_frame0.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 1552641,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "person_matchmove_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/camera_demo_assets/person_hero_frame0.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/person_hero_frame0.png"
+      ]
+    },
+    {
+      "path": "public/camera_demo_assets/thumb_plaza.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 5562,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "camera_choreography_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/camera_demo_assets/thumb_plaza.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/thumb_plaza.jpg"
+      ]
+    },
+    {
+      "path": "public/forest_reference.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 1571009,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "forest_3d_viewer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/forest_reference.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/forest_reference.png"
+      ]
+    },
+    {
+      "path": "public/images/blockout_textured_frame_00.png",
+      "category": "pbr_texture",
+      "extension": ".png",
+      "sizeBytes": 134,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/blockout_textured_frame_00.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/blockout_textured_frame_00.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_01_f1.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 3730904,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_01_f1.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_01_f1.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_02_f15.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 4190866,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_02_f15.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_02_f15.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_03_f30.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 4040650,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_03_f30.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_03_f30.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_04_f45.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 4008332,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_04_f45.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_04_f45.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_05_f60.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 3902464,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_05_f60.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_05_f60.png"
+      ]
+    },
+    {
+      "path": "public/images/comparison_4k_keyframe_06_f72.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 3707944,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/comparison_4k_keyframe_06_f72.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/comparison_4k_keyframe_06_f72.png"
+      ]
+    },
+    {
+      "path": "public/images/dense_plaza_blockout_kf01_f1.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 122006,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "adaptive_matchmove_studio.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/dense_plaza_blockout_kf01_f1.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/dense_plaza_blockout_kf01_f1.png"
+      ]
+    },
+    {
+      "path": "public/images/dense_plaza_omni_kf01_f1.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 10365883,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "adaptive_matchmove_studio.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/dense_plaza_omni_kf01_f1.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/dense_plaza_omni_kf01_f1.png"
+      ]
+    },
+    {
+      "path": "public/images/lens_split_f0_k000.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 139746,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/lens_split_f0_k000.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/lens_split_f0_k000.jpg"
+      ]
+    },
+    {
+      "path": "public/images/lens_split_f0_k015.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 139607,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/lens_split_f0_k015.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/lens_split_f0_k015.jpg"
+      ]
+    },
+    {
+      "path": "public/images/pantheon_rectilinear_ceiling_1to1.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 2032394,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "google_360_panorama_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/pantheon_rectilinear_ceiling_1to1.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/pantheon_rectilinear_ceiling_1to1.png"
+      ]
+    },
+    {
+      "path": "public/images/plaza_wireframe_transparent_overlay.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 23750,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/plaza_wireframe_transparent_overlay.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_wireframe_transparent_overlay.png"
+      ]
+    },
+    {
+      "path": "public/images/real_omni_frame_36.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 1008233,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/real_omni_frame_36.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/real_omni_frame_36.png"
+      ]
+    },
+    {
+      "path": "public/images/real_tile_stage1_feature_matching.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 2204070,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/real_tile_stage1_feature_matching.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/real_tile_stage1_feature_matching.png"
+      ]
+    },
+    {
+      "path": "public/images/start_frame_01_omni.png",
+      "category": "image_plate",
+      "extension": ".png",
+      "sizeBytes": 2047975,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/images/start_frame_01_omni.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/start_frame_01_omni.png"
+      ]
+    },
+    {
+      "path": "public/models/alpine_ridge_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 551226,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/alpine_ridge_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/alpine_ridge_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/art_deco_concourse_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 9443842,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/art_deco_concourse_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/art_deco_concourse_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test1_raw_photogrammetry_melted_tree.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 44768,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test1_raw_photogrammetry_melted_tree.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test1_raw_photogrammetry_melted_tree.glb"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test2_vegetation_detection_anchors.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 47216,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test2_vegetation_detection_anchors.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test2_vegetation_detection_anchors.glb"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test3_space_colonization_procedural_tree.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 556888,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test3_space_colonization_procedural_tree.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test3_space_colonization_procedural_tree.glb"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test4_transferred_envelope_normals.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 1112248,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test4_transferred_envelope_normals.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test4_transferred_envelope_normals.glb"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test5_clinging_ivy_facade.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 717608,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test5_clinging_ivy_facade.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test5_clinging_ivy_facade.glb"
+      ]
+    },
+    {
+      "path": "public/models/botanical_tests/test6_integrated_streetscape_replacement.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 583188,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/botanical_tests/test6_integrated_streetscape_replacement.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test6_integrated_streetscape_replacement.glb"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_foliage_texture_hero_1k_albedo.png",
+      "category": "pbr_texture",
+      "extension": ".png",
+      "sizeBytes": 2716098,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_foliage_texture_hero_1k_albedo.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_foliage_texture_hero_1k_albedo.png"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_foliage_texture_hero_1k_alpha.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 105078,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_foliage_texture_hero_1k_alpha.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_foliage_texture_hero_1k_alpha.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_rome_textured.glb",
+      "category": "3d_mesh",
+      "extension": ".glb",
+      "sizeBytes": 24126928,
+      "hydrationStrategy": "procedural_mesh",
+      "usedByDemos": [
+        "geobox_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_rome_textured.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_rome_textured.glb"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_1k_albedo.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 561623,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_1k_albedo.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_1k_albedo.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_1k_ao.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 545551,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_1k_ao.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_1k_ao.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_1k_normal.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 407308,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_1k_normal.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_1k_normal.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_1k_orm.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 1001607,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_1k_orm.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_1k_orm.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_1k_roughness.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 448185,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html",
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_1k_roughness.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_1k_roughness.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_nano2_4k_delta.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 964284,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_nano2_4k_delta.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_nano2_4k_delta.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_nano_upscale.png",
+      "category": "pbr_texture",
+      "extension": ".png",
+      "sizeBytes": 1935397,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_nano_upscale.png",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_nano_upscale.png"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_orig.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 81668,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_orig.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_orig.jpg"
+      ]
+    },
+    {
+      "path": "public/models/colosseum_stone_texture_39_shape_grounded.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 1392176,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "nano_banana_texture_upscale_experiment.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/colosseum_stone_texture_39_shape_grounded.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_stone_texture_39_shape_grounded.jpg"
+      ]
+    },
+    {
+      "path": "public/models/cyberpunk_megacity_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 9716237,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/cyberpunk_megacity_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/cyberpunk_megacity_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/esb_100k.splat",
+      "category": "gaussian_splat",
+      "extension": ".splat",
+      "sizeBytes": 3276800,
+      "hydrationStrategy": "procedural_splat",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/esb_100k.splat",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/esb_100k.splat"
+      ]
+    },
+    {
+      "path": "public/models/kyoto_bamboo_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 9499796,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/kyoto_bamboo_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/kyoto_bamboo_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/leaf_tests/leaf_test1_ovate_simple.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 19704,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/leaf_tests/leaf_test1_ovate_simple.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/leaf_test1_ovate_simple.glb"
+      ]
+    },
+    {
+      "path": "public/models/leaf_tests/leaf_test2_serrated.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 24444,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/leaf_tests/leaf_test2_serrated.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/leaf_test2_serrated.glb"
+      ]
+    },
+    {
+      "path": "public/models/leaf_tests/leaf_test3_lobed_oak_maple.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 31420,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/leaf_tests/leaf_test3_lobed_oak_maple.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/leaf_test3_lobed_oak_maple.glb"
+      ]
+    },
+    {
+      "path": "public/models/leaf_tests/leaf_test4_mtree_twig_cluster.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 135496,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/leaf_tests/leaf_test4_mtree_twig_cluster.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/leaf_test4_mtree_twig_cluster.glb"
+      ]
+    },
+    {
+      "path": "public/models/leaf_tests/leaf_test5_space_colonization_detailed_tree.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 2839160,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/leaf_tests/leaf_test5_space_colonization_detailed_tree.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/leaf_test5_space_colonization_detailed_tree.glb"
+      ]
+    },
+    {
+      "path": "public/models/manhattan_skyline.splat",
+      "category": "gaussian_splat",
+      "extension": ".splat",
+      "sizeBytes": 9344064,
+      "hydrationStrategy": "procedural_splat",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/manhattan_skyline.splat",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/manhattan_skyline.splat"
+      ]
+    },
+    {
+      "path": "public/models/manhattan_sunset_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 4147939,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/manhattan_sunset_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/manhattan_sunset_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/pantheon_atrium_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 16237012,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/pantheon_atrium_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/pantheon_atrium_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/performer_4dgs/demos/10331522/canonical_frame.jpg",
+      "category": "pbr_texture",
+      "extension": ".jpg",
+      "sizeBytes": 627691,
+      "hydrationStrategy": "procedural_texture",
+      "usedByDemos": [
+        "video_to_4d_performer_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/performer_4dgs/demos/10331522/canonical_frame.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/canonical_frame.jpg"
+      ]
+    },
+    {
+      "path": "public/models/plaza_colonnade_group.splat",
+      "category": "gaussian_splat",
+      "extension": ".splat",
+      "sizeBytes": 34490496,
+      "hydrationStrategy": "procedural_splat",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/plaza_colonnade_group.splat",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_colonnade_group.splat"
+      ]
+    },
+    {
+      "path": "public/models/plaza_colonnade_group.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 11681753,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/plaza_colonnade_group.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_colonnade_group.spz"
+      ]
+    },
+    {
+      "path": "public/models/plaza_hotel_camera_path.json",
+      "category": "metadata_json",
+      "extension": ".json",
+      "sizeBytes": 157233,
+      "hydrationStrategy": "json_spec",
+      "usedByDemos": [
+        "adaptive_matchmove_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/plaza_hotel_camera_path.json",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_camera_path.json"
+      ]
+    },
+    {
+      "path": "public/models/san_marco_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 3106850,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/san_marco_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/san_marco_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/shibuya_cyber.splat",
+      "category": "gaussian_splat",
+      "extension": ".splat",
+      "sizeBytes": 8082336,
+      "hydrationStrategy": "procedural_splat",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/shibuya_cyber.splat",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/shibuya_cyber.splat"
+      ]
+    },
+    {
+      "path": "public/models/shibuya_neon_360.spz",
+      "category": "compressed_splat",
+      "extension": ".spz",
+      "sizeBytes": 4193392,
+      "hydrationStrategy": "procedural_spz",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/shibuya_neon_360.spz",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/shibuya_neon_360.spz"
+      ]
+    },
+    {
+      "path": "public/models/smpl_real_data_side_by_side.glb",
+      "category": "3d_mesh",
+      "extension": ".glb",
+      "sizeBytes": 32289508,
+      "hydrationStrategy": "procedural_mesh",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/smpl_real_data_side_by_side.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/smpl_real_data_side_by_side.glb"
+      ]
+    },
+    {
+      "path": "public/models/test_conformal1_asymmetric_street_tree.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 53893864,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/test_conformal1_asymmetric_street_tree.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test_conformal1_asymmetric_street_tree.glb"
+      ]
+    },
+    {
+      "path": "public/models/test_conformal2_dense_shrub.glb",
+      "category": "botanical_mesh",
+      "extension": ".glb",
+      "sizeBytes": 9573560,
+      "hydrationStrategy": "procedural_veggie",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/test_conformal2_dense_shrub.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test_conformal2_dense_shrub.glb"
+      ]
+    },
+    {
+      "path": "public/models/test_conformal3_envelope_alignment.glb",
+      "category": "3d_mesh",
+      "extension": ".glb",
+      "sizeBytes": 53941720,
+      "hydrationStrategy": "procedural_mesh",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/test_conformal3_envelope_alignment.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test_conformal3_envelope_alignment.glb"
+      ]
+    },
+    {
+      "path": "public/models/test_conformal4_raw_scans.glb",
+      "category": "3d_mesh",
+      "extension": ".glb",
+      "sizeBytes": 79468,
+      "hydrationStrategy": "procedural_mesh",
+      "usedByDemos": [
+        "botanical_visualizer.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/models/test_conformal4_raw_scans.glb",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/test_conformal4_raw_scans.glb"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_00.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 182835,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_00.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_00.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_01.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 216080,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_01.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_01.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_02.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 243475,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_02.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_02.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_03.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 255641,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_03.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_03.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_04.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 248044,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_04.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_04.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_05.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 248119,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_05.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_05.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_06.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 235312,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_06.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_06.jpg"
+      ]
+    },
+    {
+      "path": "public/storyboards_plaza/beat_07.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 207223,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/storyboards_plaza/beat_07.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/beat_07.jpg"
+      ]
+    },
+    {
+      "path": "public/test_images/sydney_opera_house.jpg",
+      "category": "image_plate",
+      "extension": ".jpg",
+      "sizeBytes": 82320,
+      "hydrationStrategy": "procedural_image",
+      "usedByDemos": [
+        "geobox_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/test_images/sydney_opera_house.jpg",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/sydney_opera_house.jpg"
+      ]
+    },
+    {
+      "path": "public/tilesets/colosseum/colosseum_survey_112_stations.json",
+      "category": "metadata_json",
+      "extension": ".json",
+      "sizeBytes": 115498,
+      "hydrationStrategy": "json_spec",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/tilesets/colosseum/colosseum_survey_112_stations.json",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_survey_112_stations.json"
+      ]
+    },
+    {
+      "path": "public/tilesets/colosseum/colosseum_survey_40_stations.json",
+      "category": "metadata_json",
+      "extension": ".json",
+      "sizeBytes": 47447,
+      "hydrationStrategy": "json_spec",
+      "usedByDemos": [
+        "spatial_photoreal_3dgs_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/tilesets/colosseum/colosseum_survey_40_stations.json",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/colosseum_survey_40_stations.json"
+      ]
+    },
+    {
+      "path": "public/videos/eloise_blockout.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 4035140,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/eloise_blockout.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/eloise_blockout.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/eloise_omni.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 5877707,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "plaza_matchmove_eloise.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/eloise_omni.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/eloise_omni.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/google_tiles_omni_restyled.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 43750271,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html",
+        "s4d_multi_gallery.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/google_tiles_omni_restyled.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/google_tiles_omni_restyled.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/google_tiles_textured_blockout_camera.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 8758226,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html",
+        "asset_demo_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/google_tiles_textured_blockout_camera.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/google_tiles_textured_blockout_camera.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/interaction_input_video.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 1243464,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "depthbox_image_to_3dgs.html",
+        "video_branching_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/interaction_input_video.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/interaction_input_video.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/plaza_hotel_blockout_camera.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 668106,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html",
+        "plaza_matchmove_demo.html",
+        "depthbox_image_to_3dgs.html",
+        "asset_demo_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/plaza_hotel_blockout_camera.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_blockout_camera.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/plaza_hotel_comparison_15s_720p.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 3362072,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "camera_choreography_studio.html",
+        "video_branching_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/plaza_hotel_comparison_15s_720p.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_comparison_15s_720p.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/plaza_hotel_omni_15s_720p.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 6740586,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "plaza_matchmove_demo.html",
+        "camera_choreography_studio.html",
+        "video_branching_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/plaza_hotel_omni_15s_720p.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_omni_15s_720p.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/plaza_hotel_omni_restyled.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 43750271,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html",
+        "asset_demo_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/plaza_hotel_omni_restyled.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_omni_restyled.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/plaza_hotel_vs_omni_comparison.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 44067682,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "asset_demo_studio.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/plaza_hotel_vs_omni_comparison.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/plaza_hotel_vs_omni_comparison.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/s4d_alpine_blockout_ref.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 1611747,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "depthbox_image_to_3dgs.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/s4d_alpine_blockout_ref.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/s4d_alpine_blockout_ref.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/s4d_manhattan_blockout_ref.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 1697707,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html",
+        "depthbox_image_to_3dgs.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/s4d_manhattan_blockout_ref.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/s4d_manhattan_blockout_ref.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/s4d_manhattan_omni_synthesis.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 1871400,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "vfx_plate_anti_drift_demo.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/s4d_manhattan_omni_synthesis.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/s4d_manhattan_omni_synthesis.mp4"
+      ]
+    },
+    {
+      "path": "public/videos/s4d_shibuya_blockout_ref.mp4",
+      "category": "video_plate",
+      "extension": ".mp4",
+      "sizeBytes": 1600337,
+      "hydrationStrategy": "procedural_video",
+      "usedByDemos": [
+        "depthbox_image_to_3dgs.html"
+      ],
+      "mirrors": [
+        "https://storage.googleapis.com/scratchbox-demo-assets/videos/s4d_shibuya_blockout_ref.mp4",
+        "https://github.com/scratchbox/demo-assets/releases/download/v1.0.0/s4d_shibuya_blockout_ref.mp4"
+      ]
+    }
+  ]
+}

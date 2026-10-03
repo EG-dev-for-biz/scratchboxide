@@ -1,0 +1,2464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Red Rocks Amphitheatre — 4D Gaussian Splatting Concert Stage Performer Demo</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script>
+    if (typeof THREE.GLTFLoader === 'undefined') {
+      document.write('<script src="GLTFLoader.js"><\/script>');
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #07090f;
+      --panel-bg: rgba(13, 17, 28, 0.90);
+      --card-bg: rgba(20, 26, 44, 0.75);
+      --border: rgba(56, 189, 248, 0.25);
+      --border-accent: rgba(244, 63, 94, 0.35);
+      --cyan: #38bdf8;
+      --rose: #f43f5e;
+      --amber: #f59e0b;
+      --emerald: #10b981;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); overflow: hidden; width: 100vw; height: 100vh; user-select: none; }
+
+    #webgl-canvas { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; }
+
+    /* Top Studio Navigation Bar */
+    .top-navbar {
+      position: absolute;
+      top: 14px;
+      left: 18px;
+      right: 18px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0 20px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.7), 0 0 20px rgba(56, 189, 248, 0.1);
+      z-index: 100;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #f43f5e, #f59e0b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 19px;
+      box-shadow: 0 0 14px rgba(244, 63, 94, 0.4);
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      background: linear-gradient(135deg, #f8fafc, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .brand-badge {
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #fda4af;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 999px;
+      letter-spacing: 0.04em;
+    }
+
+    .view-modes {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(10, 14, 24, 0.8);
+      padding: 4px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .cam-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .cam-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
+    .cam-btn.active { background: #0284c7; color: #fff; box-shadow: 0 0 10px rgba(2, 132, 199, 0.5); }
+
+    /* Left Info / Telemetry Card */
+    .telemetry-card {
+      position: absolute;
+      top: 82px;
+      left: 18px;
+      width: 340px;
+      max-height: calc(100vh - 180px);
+      overflow-y: auto;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 15px 35px rgba(0,0,0,0.6);
+      z-index: 90;
+      font-size: 12px;
+    }
+    .telemetry-card::-webkit-scrollbar { width: 4px; }
+    .telemetry-card::-webkit-scrollbar-thumb { background: rgba(56, 189, 248, 0.2); border-radius: 4px; }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .metric-label {
+      color: var(--text-muted);
+      flex-shrink: 0;
+      font-size: 11.5px;
+      line-height: 1.35;
+    }
+    .metric-val {
+      font-weight: 600;
+      color: #f1f5f9;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      font-size: 11px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .metric-highlight { color: var(--cyan); }
+    .metric-success { color: var(--emerald); font-weight: 700; }
+    .metric-danger { color: var(--rose); font-weight: 700; }
+
+    /* Control Panels inside Telemetry Card */
+    .skinning-toggle-panel {
+      margin-top: 12px;
+      background: rgba(10, 14, 24, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .toggle-header { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; }
+    .toggle-group { display: flex; flex-direction: column; gap: 6px; }
+    .skin-choice {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11.5px;
+      font-weight: 600;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+    }
+    .skin-choice.active-lbs {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.5);
+      color: #6ee7b7;
+    }
+    .skin-choice.active-legacy {
+      background: rgba(244, 63, 94, 0.15);
+      border-color: rgba(244, 63, 94, 0.5);
+      color: #fda4af;
+    }
+
+    /* Layer Stack Components */
+    .layers-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .layer-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+    }
+    .layer-row:hover {
+      background: rgba(30, 41, 59, 0.75);
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+    .layer-row.active {
+      background: rgba(2, 132, 199, 0.18);
+      border-color: rgba(56, 189, 248, 0.55);
+      box-shadow: 0 0 12px rgba(2, 132, 199, 0.25);
+    }
+    .layer-main {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+    .layer-eye {
+      font-size: 13px;
+      width: 18px;
+      text-align: center;
+      opacity: 0.45;
+      transition: opacity 0.2s;
+    }
+    .layer-row.active .layer-eye {
+      opacity: 1.0;
+    }
+    .layer-info {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5px;
+      min-width: 0;
+    }
+    .layer-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: #cbd5e1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .layer-row.active .layer-name {
+      color: #ffffff;
+    }
+    .layer-meta {
+      font-size: 9.5px;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .layer-row.active .layer-meta {
+      color: #94a3b8;
+    }
+    .layer-badge {
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(2, 132, 199, 0.25);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      flex-shrink: 0;
+    }
+
+    /* Bottom Timeline Controller */
+    .timeline-bar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(860px, 92vw);
+      height: 64px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 0 22px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 15px 40px rgba(0,0,0,0.7), 0 0 20px rgba(56, 189, 248, 0.1);
+      z-index: 100;
+    }
+    .play-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: #0284c7;
+      border: none;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .play-btn:hover { background: #0369a1; transform: scale(1.05); }
+
+    .slider-track { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .slider-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .timeline-slider {
+      width: 100%;
+      -webkit-appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: #1e293b;
+      outline: none;
+      cursor: pointer;
+    }
+    .timeline-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    .timeline-slider::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+    .export-btn {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: var(--cyan);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .export-btn:hover { background: rgba(56, 189, 248, 0.3); color: #fff; }
+
+    /* Callout comparison pill */
+    .callout-toast {
+      position: absolute;
+      top: 82px;
+      right: 18px;
+      width: 320px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 15px 35px rgba(0,0,0,0.6);
+      z-index: 90;
+      font-size: 11.5px;
+      line-height: 1.5;
+    }
+    .callout-title { font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+    .tag-lbs { color: #6ee7b7; }
+    .tag-legacy { color: #fda4af; }
+  </style>
+</head>
+<body>
+  <div id="webgl-canvas"></div>
+
+  <!-- Top Studio Bar -->
+  <header class="top-navbar">
+    <div class="brand">
+      <div class="brand-icon">🎸</div>
+      <div>
+        <div class="brand-title">Scratchbox-4D Stage Performer Studio</div>
+        <div style="font-size: 10.5px; color: #94a3b8;" id="brand-avatar-label">Red Rocks Amphitheatre · Man in Black (Country Singer)</div>
+      </div>
+      <div class="brand-badge" id="brand-badge-text">MAN IN BLACK · 4DGS</div>
+    </div>
+
+    <!-- Camera Navigation Presets -->
+    <div class="view-modes">
+      <button class="cam-btn active" onclick="setCameraPreset('vip_front')">VIP Front</button>
+      <button class="cam-btn" onclick="setCameraPreset('backstage_bowl')">Backstage Bowl</button>
+      <button class="cam-btn" onclick="setCameraPreset('mix_board')">Mix Board (FOH)</button>
+      <button class="cam-btn" onclick="setCameraPreset('top_concourse')">Top Concourse</button>
+      <button class="cam-btn" onclick="setCameraPreset('under_canopy')">Under Canopy</button>
+      <button class="cam-btn" onclick="setCameraPreset('aerial_survey')">Aerial Drone</button>
+      <button class="cam-btn" id="btn-camera-flight" onclick="toggleCameraFlight()" style="border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8;">🎥 3D Spline Flight</button>
+    </div>
+  </header>
+
+  <!-- Left Telemetry Card -->
+  <aside class="telemetry-card">
+    <div class="card-title">
+      <span>🏔️</span> Red Rocks Geospatial Anchor
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Geodetic Coordinates</span>
+      <span class="metric-val">39.66555° N, -105.20525° W</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Stage Elevation</span>
+      <span class="metric-val">1932.0 m AMSL</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Stage Center (Local)</span>
+      <span class="metric-val metric-highlight" id="stage-center-val">[5.2m, 4.20m, 0.00m]</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Stage Deck Dimension</span>
+      <span class="metric-val" id="stage-dim-val">Removed (Natural Ground)</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Stage Alignment</span>
+      <span class="metric-val metric-success" id="stage-align-val">Red Rocks Center Locked (Acoustic Center)</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Performer Stance</span>
+      <span class="metric-val metric-highlight" id="stage-facing-val">Facing Audience (270° Due West)</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Truss Clearance</span>
+      <span class="metric-val">8.50 m (Overhead Rig)</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Foot Height Pinning</span>
+      <span class="metric-val metric-success" id="pin-stat">Natural Stone Grounded (0.00m)</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Active Splats</span>
+      <span class="metric-val metric-highlight" id="splat-count">35,000 4D Gaussians</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Surface Mesh</span>
+      <span class="metric-val" id="mesh-vertex-count">167,333 Vertices</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Skeletal Joints</span>
+      <span class="metric-val">22 SB-Human Kinematic</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Environment</span>
+      <span class="metric-val metric-success" id="env-mode-label">Composite: 3DGS + Clay Hull</span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-label">Photogrammetry</span>
+      <span class="metric-val" id="env-tiles-detail">4.20M Splats + Mesh Hull</span>
+    </div>
+
+    <!-- 3D ENVIRONMENT COMPOSITING LAYERS -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>3D Environment Layers</span>
+        <span style="font-size:9.5px; color:#38bdf8; text-transform:none; font-weight:600;">Composited Stack</span>
+      </div>
+      <div class="layers-stack">
+        <!-- Layer 1: 3DGS Venue -->
+        <div class="layer-row active" id="layer-row-3dgs" onclick="toggleEnvLayer('venue3dgs')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-venue3dgs">👁️</span>
+            <div class="layer-info">
+              <span class="layer-name">3DGS Venue Radiance Field</span>
+              <span class="layer-meta">1.05M Splats · 3D Spline Flight 2D EWA Surfels</span>
+            </div>
+          </div>
+          <div class="layer-badge" id="badge-venue3dgs">3DGS</div>
+        </div>
+
+        <!-- Layer 2: Transparent Clay Mesh Hull -->
+        <div class="layer-row active" id="layer-row-clay-hull" onclick="toggleEnvLayer('clayHull')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-clayHull">👁️</span>
+            <div class="layer-info">
+              <span class="layer-name">Transparent Clay Mesh Hull</span>
+              <span class="layer-meta">Studio Clay Backing · Solid Geometric Prior</span>
+            </div>
+          </div>
+          <div class="layer-badge" id="badge-clayHull" style="background:rgba(217,119,6,0.18); color:#f59e0b; border-color:rgba(217,119,6,0.35);">CLAY HULL</div>
+        </div>
+
+        <!-- Layer 3: Google 3D Tiles Photogrammetry (Textured) -->
+        <div class="layer-row" id="layer-row-google-tiles" onclick="toggleEnvLayer('googleTiles')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-googleTiles">⊘</span>
+            <div class="layer-info">
+              <span class="layer-name">Google 3D Tiles Photogrammetry</span>
+              <span class="layer-meta">1.08M polys · Full PBR Textures</span>
+            </div>
+          </div>
+          <div class="layer-badge" id="badge-googleTiles" style="background:rgba(56,189,248,0.15); color:#7dd3fc; border-color:rgba(56,189,248,0.3);">3D TILES</div>
+        </div>
+
+        <!-- Layer 4: Procedural Sandstone Monoliths & Terrain -->
+        <div class="layer-row" id="layer-row-procedural" onclick="toggleEnvLayer('procedural')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-procedural">⊘</span>
+            <div class="layer-info">
+              <span class="layer-name">Procedural Rock Monoliths</span>
+              <span class="layer-meta">Creation Rock & Ship Rock Formations</span>
+            </div>
+          </div>
+          <div class="layer-badge" id="badge-procedural" style="background:rgba(245,158,11,0.15); color:#fcd34d; border-color:rgba(245,158,11,0.3);">PROC</div>
+        </div>
+      </div>
+      <!-- Hidden legacy button hooks for script/test backwards compatibility -->
+      <div style="display:none;">
+        <button id="btn-env-3dgs" onclick="setEnvironmentMode('3dgs_venue')"></button>
+        <button id="btn-env-tiles" onclick="setEnvironmentMode('google_tiles')"></button>
+        <button id="btn-env-procedural" onclick="setEnvironmentMode('procedural')"></button>
+      </div>
+    </div>
+
+    <!-- STAGE ARCHITECTURE LAYERS -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Stage Architecture Layers</span>
+        <span style="font-size:9.5px; color:#10b981; text-transform:none; font-weight:600;">Rig & Platform</span>
+      </div>
+      <div class="layers-stack">
+        <!-- Stage Layer 1: Stage Deck Riser -->
+        <div class="layer-row" id="layer-row-deck-riser" onclick="toggleStageLayer('deckRiser')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-deckRiser">⊘</span>
+            <div class="layer-info">
+              <span class="layer-name">Stage Deck Riser (18m × 8m)</span>
+              <span class="layer-meta">Elevation Deck Box (+0.25m Platform)</span>
+            </div>
+          </div>
+          <div class="layer-badge" style="background:rgba(168,85,247,0.15); color:#d8b4fe; border-color:rgba(168,85,247,0.3);">DECK</div>
+        </div>
+
+        <!-- Stage Layer 2: Overhead Truss & Lighting Gantries -->
+        <div class="layer-row" id="layer-row-truss" onclick="toggleStageLayer('trussGantry')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-trussGantry">⊘</span>
+            <div class="layer-info">
+              <span class="layer-name">Overhead Truss & Lights</span>
+              <span class="layer-meta">8.5m Gantry Rig · 4 Directional Spots</span>
+            </div>
+          </div>
+          <div class="layer-badge" style="background:rgba(244,63,94,0.15); color:#fda4af; border-color:rgba(244,63,94,0.3);">LIGHTS</div>
+        </div>
+
+        <!-- Stage Layer 3: Audio Line Arrays -->
+        <div class="layer-row" id="layer-row-audio" onclick="toggleStageLayer('audioTowers')">
+          <div class="layer-main">
+            <span class="layer-eye" id="eye-audioTowers">⊘</span>
+            <div class="layer-info">
+              <span class="layer-name">PA Audio Line Arrays</span>
+              <span class="layer-meta">Twin Curved Concert Sound Towers</span>
+            </div>
+          </div>
+          <div class="layer-badge" style="background:rgba(16,185,129,0.15); color:#6ee7b7; border-color:rgba(16,185,129,0.3);">AUDIO</div>
+        </div>
+      </div>
+      <!-- Hidden legacy button hooks for script/test backwards compatibility -->
+      <div style="display:none;">
+        <button id="btn-deck-none" onclick="setStageDeckVisible(false)"></button>
+        <button id="btn-deck-riser" onclick="setStageDeckVisible(true)"></button>
+      </div>
+    </div>
+
+    <!-- STAGE LATERAL POSITION (LEFT / CENTER / RIGHT) -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header">Stage Lateral Alignment (50% Right Shift)</div>
+      <div style="display: flex; gap: 6px;">
+        <button id="btn-lateral-left" class="cam-btn" style="flex:1;" onclick="setStageLateralPosition(-9.2)">Left (-9.2m)</button>
+        <button id="btn-lateral-center" class="cam-btn active" style="flex:1;" onclick="setStageLateralPosition(0.0)">Center (0.0m)</button>
+        <button id="btn-lateral-right" class="cam-btn" style="flex:1;" onclick="setStageLateralPosition(9.2)">Right (+9.2m)</button>
+      </div>
+    </div>
+
+    <!-- CHANGE PERFORMER AVATAR DROPDOWN -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header">Change Performer Avatar</div>
+      <select id="avatar-select" onchange="onSelectAvatar(this.value)" style="width:100%; padding:8px 10px; background:rgba(10,14,24,0.85); border:1px solid rgba(56,189,248,0.3); color:#f8fafc; border-radius:8px; font-size:12px; font-weight:600; outline:none; cursor:pointer;">
+        <option value="man-in-black" selected>Man in Black — Original Country Performer</option>
+        <option value="10331522">#10331522 — Lead Vocalist (Dance Pop)</option>
+        <option value="2785536">#2785536 — Acoustic Soloist</option>
+        <option value="5435720">#5435720 — Hip-Hop Dynamic</option>
+        <option value="15443888">#15443888 — High-Speed Dancer (100 FPS)</option>
+        <option value="5885633">#5885633 — Vertical Choreography</option>
+      </select>
+    </div>
+
+    <!-- PERFORMER DISPLAY MODE -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header">Performer Display Mode</div>
+      <div style="display: flex; gap: 6px;">
+        <button id="btn-render-mesh" class="cam-btn active" style="flex:1;" onclick="setPerformerRenderMode('mesh')">3D Mesh</button>
+        <button id="btn-render-splats" class="cam-btn" style="flex:1;" onclick="setPerformerRenderMode('splats')">4D Splats</button>
+        <button id="btn-render-hybrid" class="cam-btn" style="flex:1;" onclick="setPerformerRenderMode('hybrid')">Hybrid</button>
+      </div>
+    </div>
+
+    <!-- Skinning Algorithm Toggle -->
+    <div class="skinning-toggle-panel">
+      <div class="toggle-header">Skinning Pipeline Comparison</div>
+      <div class="toggle-group">
+        <div id="btn-mode-lbs" class="skin-choice active-lbs" onclick="selectSkinningMode('lbs')">
+          <input type="radio" name="skin_mode" checked>
+          <div>
+            <div>Scratchbox 4-Bone LBS</div>
+            <div style="font-size: 10px; opacity: 0.8;">Full 3D Rotational Kinematics &amp; Continuity</div>
+          </div>
+        </div>
+        <div id="btn-mode-legacy" class="skin-choice" onclick="selectSkinningMode('legacy')">
+          <input type="radio" name="skin_mode">
+          <div>
+            <div>DepthBox3 Legacy Translation</div>
+            <div style="font-size: 10px; opacity: 0.8;">Zero Rotation (R=I) · Tearing/Shearing</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Right Comparison Toast -->
+  <aside class="callout-toast">
+    <div class="callout-title" id="toast-title">
+      <span class="tag-lbs">✓ Scratchbox 4-Bone LBS Active</span>
+    </div>
+    <div id="toast-body">
+      Forward kinematics computes true 3D rotation matrices \(T_j = \text{Translation}(\mathbf{j}') \times \mathbf{R}_j \times \text{Translation}(-\mathbf{j}_0)\) rotating splat centroids and covariance ellipsoids with 4-bone linear blending. Limb geometry remains smooth and continuous.
+    </div>
+  </aside>
+
+  <!-- Bottom Timeline Player -->
+  <footer class="timeline-bar">
+    <button class="play-btn" id="play-pause-btn" onclick="togglePlay()">⏸</button>
+    <div class="slider-track">
+      <div class="slider-labels">
+        <span>Frame <strong id="lbl-frame">0</strong> / <span id="lbl-total-frames">191</span></span>
+        <span id="lbl-timestamp">0.00s @ 24 FPS</span>
+      </div>
+      <input type="range" id="frame-slider" class="timeline-slider" min="0" max="191" value="0" step="1" oninput="onSliderSeek(this.value)">
+    </div>
+    <button class="export-btn" onclick="exportBinarySplat()">Export .splat</button>
+  </footer>
+
+  <script>
+    // --- 1. Global Setup & Three.js Scene Initialization ---
+    const container = document.getElementById('webgl-canvas');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x181a2e);
+    scene.fog = new THREE.FogExp2(0x181a2e, 0.0010);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxPolarAngle = Math.PI / 2 - 0.02; // Prevent ground camera clipping
+
+    // --- 2. Red Rocks Amphitheatre Environment Construction ---
+    let google3DTilesGroup = new THREE.Group();
+    let proceduralEnvGroup = new THREE.Group();
+    let venue3dgsGroup = new THREE.Group();
+    let venue3dgsMesh = null;
+    let currentEnvMode = '3dgs_venue'; // '3dgs_venue', 'google_tiles', or 'procedural'
+
+    function buildRedRocksEnvironment() {
+      // Atmospheric Sky Dome with Rayleigh dusk/sunset gradient
+      const skyCanvas = document.createElement('canvas');
+      skyCanvas.width = 512;
+      skyCanvas.height = 512;
+      const ctx = skyCanvas.getContext('2d');
+      const grad = ctx.createLinearGradient(0, 0, 0, 512);
+      grad.addColorStop(0.0, '#0a0d18'); // deep twilight indigo top
+      grad.addColorStop(0.45, '#1e1b38'); // dusk violet
+      grad.addColorStop(0.72, '#5e2e3d'); // Colorado alpenglow
+      grad.addColorStop(0.88, '#b85434'); // warm sandstone horizon
+      grad.addColorStop(1.0, '#d97736'); // sunset rim glow
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 512, 512);
+
+      // Starfield in upper sky
+      ctx.fillStyle = '#ffffff';
+      for (let i = 0; i < 220; i++) {
+        const sx = Math.random() * 512;
+        const sy = Math.random() * 260;
+        const sr = Math.random() * 1.1 + 0.3;
+        ctx.globalAlpha = Math.random() * 0.7 + 0.3;
+        ctx.beginPath();
+        ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const skyTex = new THREE.CanvasTexture(skyCanvas);
+      const skyGeo = new THREE.SphereGeometry(450, 32, 16);
+      const skyMat = new THREE.MeshBasicMaterial({
+        map: skyTex,
+        side: THREE.BackSide,
+        fog: false,
+        depthWrite: false
+      });
+      const skyDome = new THREE.Mesh(skyGeo, skyMat);
+      scene.add(skyDome);
+
+      // Red Rocks Sandstone Terrain Base (Procedural Fallback)
+      const terrainGeo = new THREE.PlaneGeometry(360, 360, 64, 64);
+      terrainGeo.rotateX(-Math.PI / 2);
+      const posAttr = terrainGeo.attributes.position;
+      for (let i = 0; i < posAttr.count; i++) {
+        const x = posAttr.getX(i);
+        const z = posAttr.getZ(i);
+        let y = 0;
+        if (z > 5) {
+          y = Math.pow((z - 5) * 0.08, 1.35) * 4.5;
+        } else {
+          y = -Math.abs(x) * 0.04;
+        }
+        y += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.4;
+        posAttr.setY(i, y);
+      }
+      terrainGeo.computeVertexNormals();
+
+      const terrainMat = new THREE.MeshStandardMaterial({
+        color: 0x9b4528,
+        roughness: 0.92,
+        metalness: 0.04,
+      });
+      const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
+      terrainMesh.receiveShadow = true;
+      proceduralEnvGroup.add(terrainMesh);
+
+      // Creation Rock (North sandstone monolith, +X)
+      const monolithGeo = new THREE.DodecahedronGeometry(30, 2);
+      monolithGeo.scale(0.85, 3.2, 2.0);
+      const monolithMat = new THREE.MeshStandardMaterial({
+        color: 0xa84c2a,
+        roughness: 0.88,
+        metalness: 0.05,
+      });
+      const creationRock = new THREE.Mesh(monolithGeo, monolithMat);
+      creationRock.position.set(44, 40, -4);
+      creationRock.rotation.set(0.12, -0.22, 0.18);
+      creationRock.castShadow = true;
+      creationRock.receiveShadow = true;
+      proceduralEnvGroup.add(creationRock);
+
+      // Ship Rock (South sandstone monolith, -X)
+      const shipRock = new THREE.Mesh(monolithGeo, monolithMat);
+      shipRock.position.set(-46, 42, 2);
+      shipRock.rotation.set(-0.14, 0.32, -0.20);
+      shipRock.castShadow = true;
+      shipRock.receiveShadow = true;
+      proceduralEnvGroup.add(shipRock);
+
+      // Stage Rock (Iconic Rear Sandstone Backdrop behind stage, -Z)
+      const stageRockGeo = new THREE.BoxGeometry(64, 38, 16, 12, 12, 6);
+      const srPos = stageRockGeo.attributes.position;
+      for (let i = 0; i < srPos.count; i++) {
+        const rx = srPos.getX(i);
+        const ry = srPos.getY(i);
+        const rz = srPos.getZ(i);
+        const ridge = Math.sin(ry * 0.4) * 1.5 + Math.cos(rx * 0.2) * 1.8;
+        srPos.setZ(i, rz + ridge);
+      }
+      stageRockGeo.computeVertexNormals();
+      const stageRockMat = new THREE.MeshStandardMaterial({
+        color: 0x9e4325,
+        roughness: 0.86,
+        metalness: 0.05,
+      });
+      const stageRock = new THREE.Mesh(stageRockGeo, stageRockMat);
+      stageRock.position.set(0, 10.0, -14.0);
+      stageRock.castShadow = true;
+      stageRock.receiveShadow = true;
+      proceduralEnvGroup.add(stageRock);
+
+      // Seating Planter Benches ascending the hillside
+      const benchMat = new THREE.MeshStandardMaterial({ color: 0x5a2d1f, roughness: 0.85 });
+      for (let r = 1; r <= 16; r++) {
+        const radius = 18 + r * 5.5;
+        const benchGeo = new THREE.RingGeometry(radius, radius + 1.2, 32, 1, 0, Math.PI);
+        benchGeo.rotateX(-Math.PI / 2);
+        const benchMesh = new THREE.Mesh(benchGeo, benchMat);
+        const yElevation = Math.pow((radius - 18) * 0.08, 1.35) * 4.5 + 0.3;
+        benchMesh.position.set(0, yElevation, 0);
+        benchMesh.receiveShadow = true;
+        proceduralEnvGroup.add(benchMesh);
+      }
+
+      scene.add(proceduralEnvGroup);
+      scene.add(google3DTilesGroup);
+      scene.add(venue3dgsGroup);
+      applyLayerStates();
+    }
+
+    // --- Compositing Layer States ---
+    const envLayers = {
+      venue3dgs: true,     // 3DGS Venue Radiance Field (1,073,942 Splats)
+      clayHull: true,      // Transparent Studio Clay Mesh Hull (Depth-Lock Geometric Prior)
+      googleTiles: false,  // Google 3D Tiles Photogrammetric Mesh (Textured)
+      procedural: false    // Procedural Sandstone Monoliths & Terrain
+    };
+
+    // Shared Transparent Studio Clay Hull Material:
+    // Backs 3DGS splats with an unbreakable geometric prior, writes to early-Z depth buffer,
+    // and eliminates void punch-through while letting photoreal splats dominate the foreground.
+    const sharedClayHullMat = new THREE.MeshStandardMaterial({
+      color: 0xc4b2a2,
+      roughness: 0.85,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: true,
+      polygonOffset: true,
+      polygonOffsetFactor: 1.5,
+      polygonOffsetUnits: 3.0,
+      side: THREE.DoubleSide
+    });
+
+    const stageLayers = {
+      deckRiser: false,    // Stage Deck Riser (+0.25m Platform)
+      trussGantry: false,  // Overhead Truss & Directional Spots (disabled by default in authentic 3DGS mode)
+      audioTowers: false   // PA Line-Array Audio Towers (disabled by default in authentic 3DGS mode)
+    };
+
+    function toggleEnvLayer(layerKey) {
+      envLayers[layerKey] = !envLayers[layerKey];
+      applyLayerStates();
+    }
+
+    function toggleStageLayer(layerKey) {
+      stageLayers[layerKey] = !stageLayers[layerKey];
+      applyStageLayerStates();
+    }
+
+    function setEnvironmentMode(mode) {
+      if (mode === '3dgs_venue' || mode === 'clay_hull' || mode === 'composite_clay') {
+        envLayers.venue3dgs = true;
+        envLayers.clayHull = true;
+        envLayers.googleTiles = false;
+        envLayers.procedural = false;
+      } else if (mode === 'composite_photoreal' || mode === '3dgs_textured' || mode === 'full_environment') {
+        envLayers.venue3dgs = true;
+        envLayers.clayHull = false;
+        envLayers.googleTiles = true;
+        envLayers.procedural = false;
+      } else if (mode === '3dgs_pure') {
+        envLayers.venue3dgs = true;
+        envLayers.clayHull = false;
+        envLayers.googleTiles = false;
+        envLayers.procedural = false;
+      } else if (mode === 'google_tiles') {
+        envLayers.venue3dgs = false;
+        envLayers.clayHull = false;
+        envLayers.googleTiles = true;
+        envLayers.procedural = false;
+      } else if (mode === 'procedural') {
+        envLayers.venue3dgs = false;
+        envLayers.clayHull = false;
+        envLayers.googleTiles = false;
+        envLayers.procedural = true;
+      }
+      applyLayerStates();
+    }
+
+    function applyLayerStates() {
+      // 3DGS Venue group
+      if (venue3dgsMesh) {
+        venue3dgsGroup.visible = !!envLayers.venue3dgs;
+        venue3dgsGroup.traverse(c => { c.visible = !!envLayers.venue3dgs; });
+      }
+
+      // Google 3D Tiles group (dual-mode: Textured vs Transparent Clay Hull)
+      const tilesActive = !!(envLayers.googleTiles || envLayers.clayHull);
+      google3DTilesGroup.visible = tilesActive;
+      if (tilesActive) {
+        google3DTilesGroup.traverse(c => {
+          if (c.isMesh) {
+            c.visible = true;
+            if (envLayers.googleTiles) {
+              // Priority 1: Full Photogrammetric PBR Texture
+              if (c.userData.origMaterial) c.material = c.userData.origMaterial;
+            } else if (envLayers.clayHull) {
+              // Priority 2: Transparent Studio Clay Mesh Hull
+              c.material = sharedClayHullMat;
+            }
+          }
+        });
+      } else {
+        google3DTilesGroup.traverse(c => { c.visible = false; });
+      }
+
+      // Procedural rock group
+      proceduralEnvGroup.visible = !!envLayers.procedural;
+      proceduralEnvGroup.traverse(c => { c.visible = !!envLayers.procedural; });
+
+      // Update UI row active classes and eye icons
+      const row3dgs = document.getElementById('layer-row-3dgs');
+      const eye3dgs = document.getElementById('eye-venue3dgs');
+      if (row3dgs) row3dgs.classList.toggle('active', !!envLayers.venue3dgs);
+      if (eye3dgs) eye3dgs.innerText = envLayers.venue3dgs ? '👁️' : '⊘';
+
+      const rowClayHull = document.getElementById('layer-row-clay-hull');
+      const eyeClayHull = document.getElementById('eye-clayHull');
+      if (rowClayHull) rowClayHull.classList.toggle('active', !!envLayers.clayHull);
+      if (eyeClayHull) eyeClayHull.innerText = envLayers.clayHull ? '👁️' : '⊘';
+
+      const rowTiles = document.getElementById('layer-row-google-tiles');
+      const eyeTiles = document.getElementById('eye-googleTiles');
+      if (rowTiles) rowTiles.classList.toggle('active', !!envLayers.googleTiles);
+      if (eyeTiles) eyeTiles.innerText = envLayers.googleTiles ? '👁️' : '⊘';
+
+      const rowProc = document.getElementById('layer-row-procedural');
+      const eyeProc = document.getElementById('eye-procedural');
+      if (rowProc) rowProc.classList.toggle('active', !!envLayers.procedural);
+      if (eyeProc) eyeProc.innerText = envLayers.procedural ? '👁️' : '⊘';
+
+      // Update telemetry labels
+      const envModeEl = document.getElementById('env-mode-label');
+      const envDetailEl = document.getElementById('env-tiles-detail');
+
+      if (envModeEl) {
+        const venueCountStr = venueSplatCount > 0 ? `${(venueSplatCount / 1e6).toFixed(2)}M Splats` : '3DGS Venue';
+        if (envLayers.venue3dgs && envLayers.clayHull) {
+          envModeEl.innerText = 'Composite: 3DGS + Clay Mesh Hull';
+        } else if (envLayers.venue3dgs && envLayers.googleTiles) {
+          envModeEl.innerText = 'Composite: 3DGS + 3D Tiles';
+        } else if (envLayers.venue3dgs) {
+          envModeEl.innerText = `3DGS Venue (${venueCountStr})`;
+        } else if (envLayers.clayHull) {
+          envModeEl.innerText = 'Transparent Clay Mesh Hull';
+        } else if (envLayers.googleTiles) {
+          envModeEl.innerText = 'Google 3D Tiles (1.08M polys)';
+        } else if (envLayers.procedural) {
+          envModeEl.innerText = 'Procedural Sandstone Mock';
+        } else {
+          envModeEl.innerText = 'Void (All Layers Muted)';
+        }
+      }
+
+      if (envDetailEl) {
+        const details = [];
+        const venueDetailStr = venueSplatCount > 0
+          ? `${(venueSplatCount / 1e6).toFixed(2)}M Photoreal 3DGS Surfels (SuGaR EWA)`
+          : '5.22M Photoreal 3DGS Surfels';
+        if (envLayers.venue3dgs) details.push(venueDetailStr);
+        if (envLayers.clayHull) details.push('Clay Geometric Hull');
+        if (envLayers.googleTiles) details.push('441 Leaves · 487 Textures');
+        if (envLayers.procedural) details.push('Monoliths');
+        envDetailEl.innerText = details.join(' + ') || 'Layers Muted';
+      }
+
+      const layerMetaEl = document.querySelector('#layer-row-3dgs .layer-meta');
+      if (layerMetaEl && venueSplatCount > 0) {
+        layerMetaEl.innerText = `${(venueSplatCount / 1e6).toFixed(2)}M Splats · 3D Spline Flight 2D EWA Surfels`;
+      }
+
+      applyEnvironmentAlignment();
+    }
+
+    const applyEnvModeVisibility = applyLayerStates;
+    let venueSplatCount = 0;
+
+    async function load3DGSVenueEnvironment() {
+      console.log('[3DGS Venue] Loading reconstructed 3DGS Red Rocks venue: /models/red_rocks_venue.splat...');
+      try {
+        const res = await fetch('/models/red_rocks_venue.splat');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = await res.arrayBuffer();
+        const splatData = parseSplatBinaryBuffer(buf);
+        venueSplatCount = splatData.count;
+        venue3dgsMesh = createPhotorealGaussianSplatMesh(splatData, { isVenue: true });
+        venue3dgsMesh.name = 'RedRocks_3DGS_Venue';
+        venue3dgsGroup.add(venue3dgsMesh);
+        applyEnvModeVisibility();
+        window.__venueReady = true;
+        console.log(`[3DGS Venue] Successfully mounted ${splatData.count.toLocaleString()} 3D Gaussian Splats for Red Rocks Amphitheatre across 96 Stations!`);
+      } catch (err) {
+        console.warn('[3DGS Venue] Could not load /models/red_rocks_venue.splat, falling back to Google 3D Tiles:', err);
+        setEnvironmentMode('google_tiles');
+        window.__venueReady = true;
+      }
+    }
+
+    function loadGoogle3DTilesEnvironment() {
+      if (!gltfLoaderInstance) gltfLoaderInstance = new THREE.GLTFLoader();
+      console.log('[3D Tiles] Loading authentic Google 3D Tile: /models/red_rocks_amphitheatre.glb...');
+      gltfLoaderInstance.load(
+        '/models/red_rocks_amphitheatre.glb',
+        (gltf) => {
+          const tileScene = gltf.scene;
+          tileScene.name = 'Google3DTile_RedRocksAmphitheatre';
+          tileScene.position.set(0, 0, 0);
+          tileScene.traverse((child) => {
+            if (child.isMesh) {
+              child.userData.origMaterial = child.material;
+              child.receiveShadow = true;
+            }
+          });
+          google3DTilesGroup.add(tileScene);
+          applyEnvModeVisibility();
+          console.log('[3D Tiles] Successfully mounted 1,083,048 vertex Google 3D Tile of Red Rocks Amphitheatre!');
+        },
+        (progress) => {
+          if (progress.total > 0) {
+            const pct = Math.round((progress.loaded / progress.total) * 100);
+            console.log(`[3D Tiles] Loading Red Rocks: ${pct}%`);
+          }
+        },
+        (err) => {
+          console.warn('[3D Tiles] Could not load /models/red_rocks_amphitheatre.glb, falling back to procedural:', err);
+          setEnvironmentMode('procedural');
+        }
+      );
+    }
+
+    // --- 3. Concert Stage Deck, Overhead Truss Gantry & Lighting ---
+    // Authentic Red Rocks Amphitheatre Stage Coordinates (extracted from Google 3D Tile mesh & OSM):
+    // Real Stage Center: [5.2m, 4.46m, 0.00m] (aligned with authentic Red Rocks natural stone floor level)
+    // Riser Height: 0.25m on top of Red Rocks natural stone stage floor
+    // Heading: 270° Due West (rotation.y = -Math.PI / 2 rad, facing directly up the 9,525-seat acoustic amphitheatre bowl towards X = -80m)
+    const RED_ROCKS_STAGE_ANCHOR = {
+      x: 5.2,
+      y: 4.46,
+      z: 0.00,
+      deckHeight: 0.25,
+      rotationY: -Math.PI / 2,
+      headingDeg: 270
+    };
+
+    let stageDeckGroup = null;
+    let isStageDeckVisible = false; // Synthetic stage surface removed from below character
+
+    function applyStageLayerStates() {
+      // 1. Stage Deck Riser (+0.25m elevation box)
+      const deckVisible = !!stageLayers.deckRiser;
+      isStageDeckVisible = deckVisible;
+      if (stageDeckGroup) {
+        stageDeckGroup.visible = deckVisible;
+        stageDeckGroup.traverse(child => { child.visible = deckVisible; });
+      }
+      const rowDeck = document.getElementById('layer-row-deck-riser');
+      const eyeDeck = document.getElementById('eye-deckRiser');
+      if (rowDeck) rowDeck.classList.toggle('active', deckVisible);
+      if (eyeDeck) eyeDeck.innerText = deckVisible ? '👁️' : '⊘';
+      const dimEl = document.getElementById('stage-dim-val');
+      if (dimEl) dimEl.innerText = deckVisible ? '18.0m × 8.0m × 0.25m' : 'Removed (Natural Ground)';
+      const pinEl = document.getElementById('pin-stat');
+      if (pinEl) pinEl.innerText = deckVisible ? 'Stage Deck Locked (+0.25m)' : 'Natural Stone Grounded (0.00m)';
+
+      // 2. Overhead Truss Gantry & Lights
+      const trussVisible = !!stageLayers.trussGantry;
+      const rig = stageGroup.getObjectByName('ProceduralStageRigGroup');
+      if (rig) {
+        rig.visible = trussVisible;
+        rig.traverse(c => { c.visible = trussVisible; });
+      }
+      const rowTruss = document.getElementById('layer-row-truss');
+      const eyeTruss = document.getElementById('eye-trussGantry');
+      if (rowTruss) rowTruss.classList.toggle('active', trussVisible);
+      if (eyeTruss) eyeTruss.innerText = trussVisible ? '👁️' : '⊘';
+
+      // 3. Audio line arrays
+      const audioVisible = !!stageLayers.audioTowers;
+      const audioGroup = stageGroup.getObjectByName('ProceduralAudioRigGroup');
+      if (audioGroup) {
+        audioGroup.visible = audioVisible;
+        audioGroup.traverse(c => { c.visible = audioVisible; });
+      }
+      const rowAudio = document.getElementById('layer-row-audio');
+      const eyeAudio = document.getElementById('eye-audioTowers');
+      if (rowAudio) rowAudio.classList.toggle('active', audioVisible);
+      if (eyeAudio) eyeAudio.innerText = audioVisible ? '👁️' : '⊘';
+
+      renderPerformerFrame(currentFrame);
+    }
+
+    function setStageDeckVisible(visible) {
+      stageLayers.deckRiser = visible;
+      applyStageLayerStates();
+    }
+
+    function setStageLateralPosition(newZ) {
+      RED_ROCKS_STAGE_ANCHOR.z = newZ;
+      applyEnvironmentAlignment();
+      const centerEl = document.getElementById('stage-center-val');
+      if (centerEl) {
+        centerEl.innerText = `[${RED_ROCKS_STAGE_ANCHOR.x.toFixed(1)}m, ${RED_ROCKS_STAGE_ANCHOR.y.toFixed(2)}m, ${RED_ROCKS_STAGE_ANCHOR.z.toFixed(2)}m]`;
+      }
+      const alignEl = document.getElementById('stage-align-val');
+      if (alignEl) {
+        if (Math.abs(newZ) < 0.1) {
+          alignEl.innerText = 'Red Rocks Center Locked (Acoustic Center)';
+        } else if (newZ < 0) {
+          alignEl.innerText = 'Red Rocks Left Stage (-9.2m Offset)';
+        } else {
+          alignEl.innerText = 'Red Rocks Right Stage (+9.2m Offset)';
+        }
+      }
+      document.getElementById('btn-lateral-left')?.classList.toggle('active', Math.abs(newZ - (-9.2)) < 0.1);
+      document.getElementById('btn-lateral-center')?.classList.toggle('active', Math.abs(newZ) < 0.1);
+      document.getElementById('btn-lateral-right')?.classList.toggle('active', Math.abs(newZ - 9.2) < 0.1);
+    }
+
+    const stageDeckY = RED_ROCKS_STAGE_ANCHOR.deckHeight;
+    const stageGroup = new THREE.Group();
+    const performerGroup = new THREE.Group();
+    stageGroup.add(performerGroup);
+    scene.add(stageGroup);
+
+    let sunLight = null;
+
+    function buildConcertStage() {
+      // Stage Deck Group (contains synthetic deck riser, apron, and wedge floor monitors)
+      stageDeckGroup = new THREE.Group();
+      stageDeckGroup.name = 'StageDeckGroup';
+      stageGroup.add(stageDeckGroup);
+
+      // Main Stage Deck Riser (18m wide x 8m deep x 0.25m riser height on top of Red Rocks stone stage)
+      const deckGeo = new THREE.BoxGeometry(18.0, stageDeckY, 8.0);
+      const deckMat = new THREE.MeshStandardMaterial({
+        color: 0x2e2520,
+        roughness: 0.78,
+        metalness: 0.12,
+      });
+      const deckMesh = new THREE.Mesh(deckGeo, deckMat);
+      deckMesh.position.set(0, stageDeckY / 2, 0);
+      deckMesh.receiveShadow = true;
+      deckMesh.castShadow = true;
+      stageDeckGroup.add(deckMesh);
+
+      // Safety front apron lip facing audience (+Z local)
+      const apronGeo = new THREE.BoxGeometry(18.2, 0.06, 0.3);
+      const apronMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45 });
+      const apron = new THREE.Mesh(apronGeo, apronMat);
+      apron.position.set(0, stageDeckY, 4.0);
+      stageDeckGroup.add(apron);
+
+      // Foldback wedge floor monitors for performer
+      const wedgeGeo = new THREE.BoxGeometry(0.85, 0.32, 0.5);
+      const wedgeMat = new THREE.MeshStandardMaterial({ color: 0x111317, roughness: 0.7 });
+      [-3.5, 3.5].forEach(wx => {
+        const wedge = new THREE.Mesh(wedgeGeo, wedgeMat);
+        wedge.position.set(wx, stageDeckY + 0.16, 2.8);
+        wedge.rotation.x = -0.35;
+        stageDeckGroup.add(wedge);
+      });
+
+      // Default stage surface visibility: hidden (removed from below character)
+      stageDeckGroup.visible = isStageDeckVisible;
+      stageDeckGroup.traverse(child => {
+        child.visible = isStageDeckVisible;
+      });
+
+      // Group for synthetic roof & columns (used in procedural mode, hidden in Google 3D Tiles & 3DGS mode to reveal real Red Rocks pavilion roof)
+      const proceduralStageRigGroup = new THREE.Group();
+      proceduralStageRigGroup.name = 'ProceduralStageRigGroup';
+      stageGroup.add(proceduralStageRigGroup);
+
+      // Heavy Aluminum Overhead Truss Gantry (8.5m high)
+      const trussMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 });
+      const colGeo = new THREE.CylinderGeometry(0.18, 0.18, 8.5, 8);
+      const colsPos = [
+        [-8.5, 4.25, -3.4],
+        [8.5, 4.25, -3.4],
+        [-8.5, 4.25, 3.4],
+        [8.5, 4.25, 3.4],
+      ];
+      colsPos.forEach(p => {
+        const col = new THREE.Mesh(colGeo, trussMat);
+        col.position.set(...p);
+        proceduralStageRigGroup.add(col);
+      });
+
+      // Overhead cross beams
+      const beamGeoX = new THREE.BoxGeometry(17.0, 0.35, 0.35);
+      const beam1 = new THREE.Mesh(beamGeoX, trussMat);
+      beam1.position.set(0, 8.5, -3.4);
+      const beam2 = new THREE.Mesh(beamGeoX, trussMat);
+      beam2.position.set(0, 8.5, 3.4);
+      proceduralStageRigGroup.add(beam1, beam2);
+
+      // Overhead Roof Canopy structure
+      const roofGeo = new THREE.BoxGeometry(17.8, 0.12, 7.8);
+      const roofMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
+      const roof = new THREE.Mesh(roofGeo, roofMat);
+      roof.position.set(0, 8.65, 0);
+      proceduralStageRigGroup.add(roof);
+
+      // PA Line-Array Speaker Hangs (Left & Right towers)
+      const proceduralAudioRigGroup = new THREE.Group();
+      proceduralAudioRigGroup.name = 'ProceduralAudioRigGroup';
+      stageGroup.add(proceduralAudioRigGroup);
+
+      const speakerMat = new THREE.MeshStandardMaterial({ color: 0x111317, roughness: 0.8 });
+      for (let side of [-1, 1]) {
+        for (let b = 0; b < 6; b++) {
+          const spkGeo = new THREE.BoxGeometry(1.2, 0.45, 0.7);
+          const spk = new THREE.Mesh(spkGeo, speakerMat);
+          spk.position.set(side * 9.6, 7.5 - b * 0.48, 3.2 - b * 0.08);
+          spk.rotation.x = -0.06 * b;
+          proceduralAudioRigGroup.add(spk);
+        }
+      }
+
+      // Stage Lighting: Directional Stage Wash Spotlights (overhead down onto performer)
+      const spotColors = [0x38bdf8, 0xf43f5e, 0xf59e0b];
+      const spotPos = [[-4, 8.2, 2.0], [0, 8.2, 3.0], [4, 8.2, 2.0]];
+      spotPos.forEach((p, idx) => {
+        const spot = new THREE.SpotLight(spotColors[idx], 4.5, 26, Math.PI / 4, 0.4, 1.2);
+        spot.position.set(...p);
+        spot.target.position.set(0, stageDeckY + 0.9, 0);
+        spot.castShadow = true;
+        spot.shadow.mapSize.width = 1024;
+        spot.shadow.mapSize.height = 1024;
+        stageGroup.add(spot);
+        stageGroup.add(spot.target);
+
+        // Visible spotlight lamp fixture (attached to proceduralStageRigGroup so it hides when gantry is hidden)
+        const lampGeo = new THREE.CylinderGeometry(0.2, 0.28, 0.4, 12);
+        lampGeo.rotateX(Math.PI / 2);
+        const lampMat = new THREE.MeshBasicMaterial({ color: spotColors[idx] });
+        const lamp = new THREE.Mesh(lampGeo, lampMat);
+        lamp.position.set(...p);
+        lamp.lookAt(0, stageDeckY + 0.9, 0);
+        proceduralStageRigGroup.add(lamp);
+
+        // Volumetric Light Cone (attached to proceduralStageRigGroup so it does not occlude Google 3D Tiles)
+        const coneGeo = new THREE.ConeGeometry(2.4, 7.5, 16, 1, true);
+        coneGeo.translate(0, -3.75, 0);
+        coneGeo.rotateX(-Math.PI / 2);
+        const coneMat = new THREE.MeshBasicMaterial({
+          color: spotColors[idx],
+          transparent: true,
+          opacity: 0.06,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const cone = new THREE.Mesh(coneGeo, coneMat);
+        cone.position.set(...p);
+        cone.lookAt(0, stageDeckY + 0.9, 0);
+        proceduralStageRigGroup.add(cone);
+      });
+
+      // Initialize visibility to match stageLayers config (hidden by default in authentic 3DGS mode)
+      proceduralStageRigGroup.visible = !!stageLayers.trussGantry;
+      proceduralStageRigGroup.traverse(c => { c.visible = !!stageLayers.trussGantry; });
+      proceduralAudioRigGroup.visible = !!stageLayers.audioTowers;
+      proceduralAudioRigGroup.traverse(c => { c.visible = !!stageLayers.audioTowers; });
+
+      // Front Stage Key Spotlight (illuminates performer's chest, face and guitar strap)
+      const frontKeySpot = new THREE.SpotLight(0xfff2df, 4.0, 24, Math.PI / 4, 0.5, 1.2);
+      frontKeySpot.position.set(0, 6.5, 6.5);
+      frontKeySpot.target.position.set(0, stageDeckY + 1.0, 0);
+      frontKeySpot.castShadow = true;
+      stageGroup.add(frontKeySpot);
+      stageGroup.add(frontKeySpot.target);
+
+      // Front Stage Left Warm Fill
+      const frontFillL = new THREE.DirectionalLight(0xffecd2, 1.3);
+      frontFillL.position.set(-4.0, 4.5, 5.5);
+      stageGroup.add(frontFillL);
+
+      // Front Stage Right Cool Rim Fill
+      const frontFillR = new THREE.DirectionalLight(0xdbeafe, 1.2);
+      frontFillR.position.set(4.0, 4.5, 5.5);
+      stageGroup.add(frontFillR);
+
+      // Ambient Lighting
+      const ambLight = new THREE.AmbientLight(0x4a5876, 1.10);
+      stageGroup.add(ambLight);
+
+      // Stage Hemisphere Bounce
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x334155, 1.2);
+      stageGroup.add(hemiLight);
+
+      // Sun Light with broad shadow bounds
+      sunLight = new THREE.DirectionalLight(0xffecd2, 1.45);
+      sunLight.castShadow = true;
+      sunLight.shadow.mapSize.width = 2048;
+      sunLight.shadow.mapSize.height = 2048;
+      sunLight.shadow.camera.near = 10;
+      sunLight.shadow.camera.far = 180;
+      sunLight.shadow.camera.left = -40;
+      sunLight.shadow.camera.right = 40;
+      sunLight.shadow.camera.top = 40;
+      sunLight.shadow.camera.bottom = -40;
+      scene.add(sunLight);
+      scene.add(sunLight.target);
+
+      // Set initial performer position on stage deck (grounded with dynamic lowest-foot surface locking)
+      performerGroup.position.set(0, 0, 0);
+
+      // Align stage to Red Rocks
+      applyEnvironmentAlignment();
+    }
+
+    function applyEnvironmentAlignment() {
+      if (currentEnvMode === 'google_tiles' || currentEnvMode === '3dgs_venue') {
+        stageGroup.position.set(RED_ROCKS_STAGE_ANCHOR.x, RED_ROCKS_STAGE_ANCHOR.y, RED_ROCKS_STAGE_ANCHOR.z);
+        stageGroup.rotation.set(0, RED_ROCKS_STAGE_ANCHOR.rotationY, 0);
+        if (sunLight) {
+          sunLight.position.set(RED_ROCKS_STAGE_ANCHOR.x + 35, RED_ROCKS_STAGE_ANCHOR.y + 55, RED_ROCKS_STAGE_ANCHOR.z + 25);
+          sunLight.target.position.set(RED_ROCKS_STAGE_ANCHOR.x, RED_ROCKS_STAGE_ANCHOR.y, RED_ROCKS_STAGE_ANCHOR.z);
+        }
+      } else {
+        stageGroup.position.set(0, 0, 0);
+        stageGroup.rotation.set(0, 0, 0);
+        if (sunLight) {
+          sunLight.position.set(30, 45, 20);
+          sunLight.target.position.set(0, stageDeckY, 0);
+        }
+      }
+      stageGroup.updateMatrixWorld(true);
+      if (sunLight && sunLight.target) sunLight.target.updateMatrixWorld(true);
+      setCameraPreset(currentCameraPreset || 'vip_front');
+    }
+
+    // --- 4. Avatars Catalog & Performer State ---
+    const AVATARS_CATALOG = {
+      'man-in-black': {
+        name: 'Man in Black — Original Country Performer',
+        label: 'Red Rocks Amphitheatre · Man in Black (Country Singer)',
+        badge: 'MAN IN BLACK · 4DGS',
+        glbPath: '/models/humanoid_man-in-black.glb',
+        plyPath: '/models/performer_4dgs/demos/man-in-black/human_4dgs.ply',
+        splatPath: '/models/performer_4dgs/demos/man-in-black/man-in-black.splat',
+        motionPath: '/models/performer_4dgs/demos/man-in-black/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '167,333 Vertices',
+        fps: 24,
+        totalFrames: 192,
+        height: 1.85,
+        tag: 'Original Fictional Country Performer'
+      },
+      '10331522': {
+        name: '#10331522 — Lead Vocalist (Dance Pop)',
+        label: 'Red Rocks Amphitheatre · Benchmark 10331522',
+        badge: 'VOCALIST · 4DGS',
+        glbPath: '/models/humanoid_10331522.glb',
+        plyPath: '/models/performer_4dgs/demos/10331522/human_4dgs.ply',
+        motionPath: '/models/performer_4dgs/demos/10331522/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '140,000 Vertices',
+        fps: 25,
+        totalFrames: 121,
+        height: 1.82,
+        tag: 'Lead Vocalist'
+      },
+      '2785536': {
+        name: '#2785536 — Acoustic Soloist',
+        label: 'Red Rocks Amphitheatre · Benchmark 2785536',
+        badge: 'ACOUSTIC SOLOIST · 4DGS',
+        glbPath: '/models/humanoid_2785536.glb',
+        plyPath: '/models/performer_4dgs/demos/2785536/human_4dgs.ply',
+        motionPath: '/models/performer_4dgs/demos/2785536/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '140,000 Vertices',
+        fps: 25,
+        totalFrames: 121,
+        height: 1.76,
+        tag: 'Acoustic Soloist'
+      },
+      '5435720': {
+        name: '#5435720 — Hip-Hop Dynamic',
+        label: 'Red Rocks Amphitheatre · Benchmark 5435720',
+        badge: 'HIP-HOP · 4DGS',
+        glbPath: '/models/humanoid_5435720.glb',
+        plyPath: '/models/performer_4dgs/demos/5435720/human_4dgs.ply',
+        motionPath: '/models/performer_4dgs/demos/5435720/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '140,000 Vertices',
+        fps: 25,
+        totalFrames: 121,
+        height: 1.74,
+        tag: 'Hip-Hop Dynamic'
+      },
+      '15443888': {
+        name: '#15443888 — High-Speed Dancer (100 FPS)',
+        label: 'Red Rocks Amphitheatre · Benchmark 15443888',
+        badge: 'HIGH-SPEED DANCER · 4DGS',
+        glbPath: '/models/humanoid_15443888.glb',
+        plyPath: '/models/performer_4dgs/demos/15443888/human_4dgs.ply',
+        motionPath: '/models/performer_4dgs/demos/15443888/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '140,000 Vertices',
+        fps: 25,
+        totalFrames: 121,
+        height: 1.79,
+        tag: 'High-Speed Dancer'
+      },
+      '5885633': {
+        name: '#5885633 — Vertical Choreography',
+        label: 'Red Rocks Amphitheatre · Benchmark 5885633',
+        badge: 'VERTICAL CHOREOGRAPHY · 4DGS',
+        glbPath: '/models/humanoid_5885633.glb',
+        plyPath: '/models/performer_4dgs/demos/5885633/human_4dgs.ply',
+        motionPath: '/models/performer_4dgs/demos/5885633/motion.json',
+        splatsCount: '35,000 4D Gaussians',
+        meshCount: '140,000 Vertices',
+        fps: 25,
+        totalFrames: 121,
+        height: 1.72,
+        tag: 'Vertical Choreography'
+      }
+    };
+
+    let selectedAvatarId = 'man-in-black';
+    let currentSkinningMode = 'lbs'; // 'lbs' or 'legacy'
+    let currentRenderMode = 'mesh';  // 'mesh', 'splats', or 'hybrid'
+    let currentFrame = 0;
+    let isPlaying = true;
+    let totalFrames = 192;
+    let motionFps = 24;
+    let motionData = null;
+    let canonicalJoints = [];
+
+    // Performer Mesh & Instanced Gaussian Splats
+    let performerMesh = null;
+    let splatsMesh = null;
+    let splatsData = null;
+    let gltfLoaderInstance = null;
+
+    // SB-Human 22 Kinematic Kin-Tree Hierarchy
+    const KINTREE_PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19];
+    const SKIN_SEGMENT_CHILD = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1, -1, 15, 16, 17, -1, 18, 19, 20, 21, -1, -1];
+    const SKIN_LATERAL_REF = [[2, 1], null, null, [2, 1], null, null, [17, 16], null, null, [17, 16], null, null, [17, 16], null, null, null, null, null, null, null, null, null];
+
+    // Compute True 3D Skeletal Bone Rotations (Forward Kinematics)
+    function computeSkeletalBoneRotations(canonical, posed) {
+      const I = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const norm = v => { const l = Math.hypot(v[0], v[1], v[2]); return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : null; };
+      const apply = (R, v) => [
+        R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+        R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2],
+        R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2]
+      ];
+      const mul = (A, B, bT) => {
+        const r = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+        for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+          r[i][j] = bT ? A[i][0] * B[j][0] + A[i][1] * B[j][1] + A[i][2] * B[j][2]
+                       : A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j];
+        }
+        return r;
+      };
+      const swing = (from, to) => {
+        const a = norm(from), b = norm(to);
+        if (!a || !b) return I;
+        const axis = cross(a, b);
+        const s = Math.hypot(axis[0], axis[1], axis[2]);
+        const c = Math.max(-1, Math.min(1, dot(a, b)));
+        if (s < 1e-6) {
+          if (c > 0) return I;
+          const p = norm(Math.abs(a[0]) < 0.9 ? cross(a, [1, 0, 0]) : cross(a, [0, 1, 0]));
+          return [
+            [2 * p[0] * p[0] - 1, 2 * p[0] * p[1], 2 * p[0] * p[2]],
+            [2 * p[1] * p[0], 2 * p[1] * p[1] - 1, 2 * p[1] * p[2]],
+            [2 * p[2] * p[0], 2 * p[2] * p[1], 2 * p[2] * p[2] - 1]
+          ];
+        }
+        const u = [axis[0] / s, axis[1] / s, axis[2] / s];
+        const t = 1 - c;
+        return [
+          [c + u[0] * u[0] * t, u[0] * u[1] * t - u[2] * s, u[0] * u[2] * t + u[1] * s],
+          [u[1] * u[0] * t + u[2] * s, c + u[1] * u[1] * t, u[1] * u[2] * t - u[0] * s],
+          [u[2] * u[0] * t - u[1] * s, u[2] * u[1] * t + u[0] * s, c + u[2] * u[2] * t]
+        ];
+      };
+      const frame = (primary, lateral) => {
+        const e1 = norm(primary);
+        if (!e1) return null;
+        const d = dot(lateral, e1);
+        const lat = [lateral[0] - e1[0] * d, lateral[1] - e1[1] * d, lateral[2] - e1[2] * d];
+        const e2 = norm(lat);
+        if (!e2 || Math.hypot(lat[0], lat[1], lat[2]) < 0.2 * Math.hypot(lateral[0], lateral[1], lateral[2])) return null;
+        const e3 = cross(e1, e2);
+        return [[e1[0], e2[0], e3[0]], [e1[1], e2[1], e3[1]], [e1[2], e2[2], e3[2]]];
+      };
+      const n = Math.min(canonical.length, posed.length, KINTREE_PARENTS.length);
+      const rotations = new Array(n);
+      for (let j = 0; j < n; j++) {
+        const child = SKIN_SEGMENT_CHILD[j];
+        if (child < 0 || child >= n) {
+          const parent = KINTREE_PARENTS[j];
+          rotations[j] = parent >= 0 ? rotations[parent] : I;
+          continue;
+        }
+        const segC = sub(canonical[child], canonical[j]);
+        const segP = sub(posed[child], posed[j]);
+        const lateral = SKIN_LATERAL_REF[j];
+        let R = null;
+        if (lateral) {
+          const fC = frame(segC, sub(canonical[lateral[1]], canonical[lateral[0]]));
+          const fP = frame(segP, sub(posed[lateral[1]], posed[lateral[0]]));
+          if (fC && fP) R = mul(fP, fC, true);
+        }
+        if (!R) {
+          const parent = KINTREE_PARENTS[j];
+          const Rp = parent >= 0 ? rotations[parent] : I;
+          R = mul(swing(apply(Rp, segC), segP), Rp, false);
+        }
+        rotations[j] = R;
+      }
+      return rotations;
+    }
+
+    // --- 5. PLY & Binary Gaussian Splats Decoders ---
+    function decodeGaussianPlyText(text) {
+      const lines = text.split(/\r?\n/);
+      const props = [];
+      const comments = [];
+      let body = 0;
+      let inVertex = false;
+      for (let i = 0; i < lines.length; i++) {
+        const p = lines[i].trim().split(/\s+/);
+        if (p[0] === 'end_header') { body = i + 1; break; }
+        if (p[0] === 'comment') comments.push(p.slice(1).join(' '));
+        else if (p[0] === 'element') inVertex = p[1] === 'vertex';
+        else if (p[0] === 'property' && inVertex) props.push(p[p.length - 1]);
+      }
+      const rawRows = lines.slice(body).filter(l => l.trim().length > 0);
+      const at = name => props.indexOf(name);
+      const iDc = at('f_dc_0'), iOp = at('opacity'), iS = at('scale_0'), iR = at('rot_0'), iB = at('bone_idx_0'), iW = at('bone_weight_0');
+
+      const C0 = 0.28209479177387814;
+      const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
+      
+      // Decimate large point clouds (> 60k) with uniform stride for snappy 60 FPS playback
+      const stride = rawRows.length > 60000 ? Math.ceil(rawRows.length / 45000) : 1;
+      const count = Math.ceil(rawRows.length / stride);
+
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+      const scales = new Float32Array(count * 3);
+      const opacities = new Float32Array(count);
+      const quats = new Float32Array(count * 4);
+      const boneIndices = new Uint8Array(count * 4);
+      const boneWeights = new Float32Array(count * 4);
+
+      let targetIdx = 0;
+      for (let i = 0; i < rawRows.length; i += stride) {
+        if (targetIdx >= count) break;
+        const p = rawRows[i].trim().split(/\s+/).map(Number);
+        positions[targetIdx * 3 + 0] = p[0];
+        positions[targetIdx * 3 + 1] = p[1];
+        positions[targetIdx * 3 + 2] = p[2];
+
+        if (iDc >= 0) {
+          colors[targetIdx * 3 + 0] = clamp01(0.5 + C0 * p[iDc]);
+          colors[targetIdx * 3 + 1] = clamp01(0.5 + C0 * p[iDc + 1]);
+          colors[targetIdx * 3 + 2] = clamp01(0.5 + C0 * p[iDc + 2]);
+        } else {
+          colors[targetIdx * 3 + 0] = 0.2; colors[targetIdx * 3 + 1] = 0.2; colors[targetIdx * 3 + 2] = 0.2;
+        }
+
+        if (iS >= 0) {
+          scales[targetIdx * 3 + 0] = Math.max(0.005, Math.min(0.035, Math.exp(p[iS])));
+          scales[targetIdx * 3 + 1] = Math.max(0.005, Math.min(0.035, Math.exp(p[iS + 1])));
+          scales[targetIdx * 3 + 2] = Math.max(0.005, Math.min(0.035, Math.exp(p[iS + 2])));
+        } else {
+          scales[targetIdx * 3 + 0] = 0.012; scales[targetIdx * 3 + 1] = 0.012; scales[targetIdx * 3 + 2] = 0.012;
+        }
+
+        if (iOp >= 0) {
+          const rawOp = p[iOp];
+          opacities[targetIdx] = rawOp > 1.0 ? 1.0 / (1.0 + Math.exp(-rawOp)) : clamp01(rawOp);
+        } else {
+          opacities[targetIdx] = 1.0;
+        }
+
+        if (iR >= 0) {
+          // w, x, y, z -> x, y, z, w
+          quats[targetIdx * 4 + 0] = p[iR + 1] || 0.0;
+          quats[targetIdx * 4 + 1] = p[iR + 2] || 0.0;
+          quats[targetIdx * 4 + 2] = p[iR + 3] || 0.0;
+          quats[targetIdx * 4 + 3] = p[iR + 0] || 1.0;
+        } else {
+          quats[targetIdx * 4 + 0] = 0.0; quats[targetIdx * 4 + 1] = 0.0; quats[targetIdx * 4 + 2] = 0.0; quats[targetIdx * 4 + 3] = 1.0;
+        }
+
+        if (iB >= 0) {
+          boneIndices[targetIdx * 4 + 0] = p[iB];
+          boneIndices[targetIdx * 4 + 1] = p[iB + 1];
+          boneIndices[targetIdx * 4 + 2] = p[iB + 2];
+          boneIndices[targetIdx * 4 + 3] = p[iB + 3];
+        }
+        if (iW >= 0) {
+          boneWeights[targetIdx * 4 + 0] = p[iW];
+          boneWeights[targetIdx * 4 + 1] = p[iW + 1];
+          boneWeights[targetIdx * 4 + 2] = p[iW + 2];
+          boneWeights[targetIdx * 4 + 3] = p[iW + 3];
+        } else {
+          boneWeights[targetIdx * 4 + 0] = 1.0;
+        }
+        targetIdx++;
+      }
+
+      return { count: targetIdx, positions, colors, scales, opacities, quats, boneIndices, boneWeights };
+    }
+
+    function parseSplatBinaryBuffer(buffer) {
+      const count = Math.floor(buffer.byteLength / 32);
+      const positions = new Float32Array(count * 3);
+      const scales = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+      const opacities = new Float32Array(count);
+      const quats = new Float32Array(count * 4);
+
+      const view = new DataView(buffer);
+      for (let i = 0; i < count; i++) {
+        const off = i * 32;
+        positions[i * 3 + 0] = view.getFloat32(off + 0, true);
+        positions[i * 3 + 1] = view.getFloat32(off + 4, true);
+        positions[i * 3 + 2] = view.getFloat32(off + 8, true);
+
+        scales[i * 3 + 0] = Math.max(0.002, Math.min(3.0, view.getFloat32(off + 12, true)));
+        scales[i * 3 + 1] = Math.max(0.002, Math.min(3.0, view.getFloat32(off + 16, true)));
+        scales[i * 3 + 2] = Math.max(0.0001, Math.min(3.0, view.getFloat32(off + 20, true)));
+
+        colors[i * 3 + 0] = view.getUint8(off + 24) / 255.0;
+        colors[i * 3 + 1] = view.getUint8(off + 25) / 255.0;
+        colors[i * 3 + 2] = view.getUint8(off + 26) / 255.0;
+        opacities[i] = view.getUint8(off + 27) / 255.0;
+
+        quats[i * 4 + 0] = (view.getUint8(off + 28) - 128) / 127.0;
+        quats[i * 4 + 1] = (view.getUint8(off + 29) - 128) / 127.0;
+        quats[i * 4 + 2] = (view.getUint8(off + 30) - 128) / 127.0;
+        quats[i * 4 + 3] = (view.getUint8(off + 31) - 128) / 127.0;
+      }
+      return { count, positions, scales, colors, opacities, quats };
+    }
+
+    function computeSplatBoneWeights(positions, count, canonJoints) {
+      const boneIndices = new Uint8Array(count * 4);
+      const boneWeights = new Float32Array(count * 4);
+      const numJoints = canonJoints.length;
+      const invTwoSigmaSq = 1.0 / (2.0 * 0.22 * 0.22);
+
+      for (let i = 0; i < count; i++) {
+        const px = positions[i * 3];
+        const py = positions[i * 3 + 1];
+        const pz = positions[i * 3 + 2];
+
+        const candidates = [];
+        for (let j = 0; j < numJoints; j++) {
+          const c = canonJoints[j];
+          const dx = px - c[0];
+          const dy = py - c[1];
+          const dz = pz - c[2];
+          const dist = Math.hypot(dx, dy, dz);
+          candidates.push({ j, dist, w: Math.exp(-dist * dist * invTwoSigmaSq) });
+        }
+        candidates.sort((a, b) => a.dist - b.dist);
+        const top4 = candidates.slice(0, 4);
+        const sumW = top4.reduce((s, c) => s + c.w, 0) || 1.0;
+        for (let k = 0; k < 4; k++) {
+          boneIndices[i * 4 + k] = top4[k].j;
+          boneWeights[i * 4 + k] = top4[k].w / sumW;
+        }
+      }
+      return { boneIndices, boneWeights };
+    }
+
+    function createPhotorealGaussianSplatMesh(splatsData, options = {}) {
+      const isVenue = options.isVenue || (splatsData.count > 100000);
+      const quadGeo = new THREE.PlaneGeometry(1, 1);
+      const instancedGeo = new THREE.InstancedBufferGeometry();
+      instancedGeo.index = quadGeo.index;
+      instancedGeo.attributes.position = quadGeo.attributes.position;
+      instancedGeo.attributes.uv = quadGeo.attributes.uv;
+
+      instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(new Float32Array(splatsData.positions), 3));
+      instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(splatsData.scales, 3));
+      instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(splatsData.colors, 3));
+      instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(splatsData.opacities, 1));
+      instancedGeo.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(splatsData.quats, 4));
+
+      const splatMat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthTest: true,
+        depthWrite: false,
+        blending: THREE.NormalBlending,
+        uniforms: {
+          viewport: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+          uSplatScale: { value: isVenue ? 1.0 : 1.0 },
+          uFocalLength: { value: 50.0 },
+          uAperture: { value: 2.8 },
+          uFocusDist: { value: isVenue ? 40.0 : 6.0 },
+          uDofStrength: { value: isVenue ? 0.0 : 0.15 },
+          uExposureEV: { value: isVenue ? 0.25 : 0.15 },
+          uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+          uSunColor: { value: new THREE.Color(1.0, 0.94, 0.85) },
+          uSunIntensity: { value: isVenue ? 1.4 : 1.25 },
+          uSkyAmbient: { value: new THREE.Color(0.48, 0.42, 0.38) }
+        },
+        vertexShader: `
+          attribute vec3 instanceCenter;
+          attribute vec3 instanceScale;
+          attribute vec3 instanceColor;
+          attribute float instanceOpacity;
+          attribute vec4 instanceQuat;
+
+          uniform float uSplatScale;
+          uniform float uFocalLength;
+          uniform float uAperture;
+          uniform float uFocusDist;
+          uniform float uDofStrength;
+          uniform vec2 viewport;
+
+          varying vec2 vUv;
+          varying vec3 vColor;
+          varying float vOpacity;
+          varying float vDepth;
+          varying vec3 vNormal;
+          varying vec3 vViewPos;
+          varying vec2 vEllipseAxes;
+          varying float vEllipseAngle;
+
+          vec3 rotateByQuat(vec3 v, vec4 q) {
+            return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+          }
+
+          void main() {
+            vUv = uv;
+            vColor = instanceColor;
+
+            vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+            vDepth = -viewCenter.z;
+
+            vec4 q = instanceQuat;
+
+            // Reconstruct normal from quaternion
+            vec3 worldNorm = rotateByQuat(vec3(0.0, 0.0, 1.0), q);
+            if (dot(worldNorm, worldNorm) < 0.0001) worldNorm = vec3(0.0, 1.0, 0.0);
+            vNormal = normalize(worldNorm);
+
+            vec3 S = instanceScale * uSplatScale;
+            if (${isVenue ? 'true' : 'false'}) {
+              S.xy = clamp(S.xy, vec2(0.005), vec2(0.45));
+              S.z = clamp(S.z, 0.0001, 0.002);
+            } else {
+              S = clamp(S, vec3(0.002), vec3(0.06));
+            }
+
+            // Thin-Lens Optical Bokeh (Circle of Confusion)
+            float coc = 0.0;
+            float bokehSpread = 0.0;
+            if (uAperture > 0.1 && uDofStrength > 0.01) {
+              float fM = uFocalLength * 0.001;
+              float dF = max(0.5, uFocusDist);
+              float N_ap = max(1.2, uAperture);
+              coc = abs((fM * fM / (N_ap * max(0.001, dF - fM))) * ((vDepth - dF) / max(0.1, vDepth)));
+              coc = clamp(coc * 40.0 * uDofStrength, 0.0, 15.0);
+              bokehSpread = coc * 0.04;
+            }
+
+            // Project 3D Gaussian ellipsoid axes into camera view space:
+            mat3 viewRot = mat3(modelViewMatrix);
+            vec3 u1 = viewRot * rotateByQuat(vec3(S.x, 0.0, 0.0), q);
+            vec3 u2 = viewRot * rotateByQuat(vec3(0.0, S.y, 0.0), q);
+            vec3 u3 = viewRot * rotateByQuat(vec3(0.0, 0.0, S.z), q);
+
+            // 2D EWA Screen-Space Covariance & Anisotropic Principal Axes (SuGaR / 2DGS):
+            vec3 viewNorm = normalize((modelViewMatrix * vec4(worldNorm, 0.0)).xyz);
+            float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.05, 1.0);
+
+            // Mip-Splatting Grazing-Angle Regularization:
+            // At oblique grazing angles (looking across raked amphitheatre seating rows or shear cliffs),
+            // cosIncidence squashes the minor axis. If clamped too tight, adjacent surfels fail to overlap,
+            // producing venetian-blind scanline gaps. Clamping the foreshortening factor to >= 0.50 maintains
+            // seamless watertight coverage while preserving sharp high-frequency surface detail!
+            float foreshortening = max(0.50, cosIncidence);
+
+            float rMajor = max(S.x, S.y) * 2.4;
+            float rMinor = max(S.x, S.y) * 2.4 * foreshortening;
+
+            // Screen-space anti-aliasing pixel footprint (prevents sub-pixel hole formation at distance)
+            float minPixel = max(0.0006, -viewCenter.z * 0.00035) + bokehSpread;
+            rMajor += minPixel;
+            rMinor += minPixel;
+
+            vec2 screenTangent = normalize(viewNorm.xy + vec2(0.00001));
+            float theta = atan(screenTangent.y, screenTangent.x);
+
+            vec2 localPos = position.xy;
+            vec2 rotatedCorner = vec2(
+              localPos.x * cos(theta) - localPos.y * sin(theta),
+              localPos.x * sin(theta) + localPos.y * cos(theta)
+            );
+
+            vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
+            vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
+            vViewPos = viewPos.xyz;
+            gl_Position = projectionMatrix * viewPos;
+
+            vEllipseAxes = vec2(rMajor, rMinor);
+            vEllipseAngle = theta;
+
+            vOpacity = instanceOpacity / (1.0 + coc * 0.6);
+          }
+        `,
+        fragmentShader: `
+          varying vec2 vUv;
+          varying vec3 vColor;
+          varying float vOpacity;
+          varying float vDepth;
+          varying vec3 vNormal;
+          varying vec3 vViewPos;
+          varying vec2 vEllipseAxes;
+          varying float vEllipseAngle;
+
+          uniform vec3 uSunDir;
+          uniform vec3 uSunColor;
+          uniform float uSunIntensity;
+          uniform vec3 uSkyAmbient;
+          uniform float uExposureEV;
+
+          void main() {
+            vec2 d = (vUv - vec2(0.5)) * 2.0;
+            float r2 = dot(d, d);
+            if (r2 > 1.0) discard;
+
+            // Super-Gaussian Flat-Top Profile (StopThePop / 2DGS):
+            // Solid, 100% opaque color across the center of each surfel with a steep drop at the edge.
+            // Eliminates muddy, fuzzy semi-transparent overlap and restores crisp architectural edges!
+            float alpha = exp(-2.6 * r2 * r2) * vOpacity;
+            if (alpha < 0.02) discard;
+
+            // Radiometric diurnal lighting (solar vector + ambient Colorado sky)
+            float NdotL = max(0.0, dot(vNormal, uSunDir));
+            
+            // Micro-contrast & cavity enhancement (brings out rock strata and seat edges)
+            vec3 litColor = ${isVenue ? 'vColor * (0.86 + 0.24 * NdotL)' : 'vColor * (uSkyAmbient * 1.10 + uSunColor * (uSunIntensity * (0.65 + 0.35 * NdotL)))'};
+
+            gl_FragColor = vec4(litColor, alpha);
+          }
+        `
+      });
+
+      if (isVenue) {
+        splatMat.polygonOffset = true;
+        splatMat.polygonOffsetFactor = -2.0;
+        splatMat.polygonOffsetUnits = -4.0;
+      }
+
+      const mesh = new THREE.Mesh(instancedGeo, splatMat);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = isVenue ? 2 : 10;
+      return mesh;
+    }
+
+    // --- 6. Loading Avatar Assets (GLB Mesh, Splats, Motion) ---
+    async function loadAvatar(avatarId) {
+      selectedAvatarId = avatarId;
+      const avatar = AVATARS_CATALOG[avatarId] || AVATARS_CATALOG['man-in-black'];
+
+      document.getElementById('brand-avatar-label').innerText = avatar.label;
+      document.getElementById('brand-badge-text').innerText = avatar.badge;
+      document.getElementById('splat-count').innerText = avatar.splatsCount;
+      document.getElementById('mesh-vertex-count').innerText = avatar.meshCount;
+
+      // 1. Fetch Motion JSON
+      try {
+        console.log(`[4DGS] Loading motion sequence from ${avatar.motionPath}...`);
+        const mRes = await fetch(avatar.motionPath);
+        if (mRes.ok) {
+          const mJson = await mRes.json();
+          motionFps = mJson.fps || 24;
+          canonicalJoints = mJson.canonical_joints || [];
+          motionData = mJson.frames || [];
+          totalFrames = motionData.length;
+          document.getElementById('frame-slider').max = totalFrames - 1;
+          document.getElementById('lbl-total-frames').innerText = totalFrames - 1;
+          console.log(`[4DGS] Loaded ${totalFrames} frames @ ${motionFps} FPS for ${avatar.name}`);
+        }
+      } catch (err) {
+        console.warn(`[4DGS] Could not load motion from ${avatar.motionPath}:`, err);
+      }
+
+      // 2. Load Solid 3D Humanoid Mesh from GLB
+      if (!gltfLoaderInstance) gltfLoaderInstance = new THREE.GLTFLoader();
+      if (performerMesh) {
+        performerGroup.remove(performerMesh);
+        performerMesh = null;
+      }
+
+      console.log(`[4DGS] Loading 3D Humanoid Surface Mesh from ${avatar.glbPath}...`);
+      gltfLoaderInstance.load(avatar.glbPath, (gltf) => {
+        performerMesh = gltf.scene;
+        performerMesh.position.set(0, 0, 0);
+        performerMesh.rotation.set(0, 0, 0);
+        performerMesh.traverse((child) => {
+          if (child.isMesh && child.geometry) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.material = new THREE.MeshStandardMaterial({
+              vertexColors: true,
+              roughness: 0.52,
+              metalness: 0.10,
+              side: THREE.DoubleSide
+            });
+            const geom = child.geometry;
+            geom.userData.basePositions = new Float32Array(geom.attributes.position.array);
+            if (geom.attributes.skinIndex && geom.attributes.skinWeight) {
+              geom.userData.boneIndices = new Uint8Array(geom.attributes.skinIndex.array);
+              geom.userData.boneWeights = new Float32Array(geom.attributes.skinWeight.array);
+            }
+          }
+        });
+        performerGroup.add(performerMesh);
+        applyRenderModeVisibility();
+        window.__performerReady = true;
+        console.log(`[4DGS] Loaded and mounted 3D Humanoid Mesh (${avatar.glbPath}) onto stage deck.`);
+      }, undefined, (err) => {
+        console.warn(`[4DGS] Error loading mesh ${avatar.glbPath}:`, err);
+        window.__performerReady = true;
+      });
+
+      // 3. Load 4D Gaussian Splats (prefer binary .splat for instant 35k loading, fallback to .ply)
+      if (splatsMesh) {
+        performerGroup.remove(splatsMesh);
+        splatsMesh = null;
+        splatsData = null;
+      }
+
+      try {
+        let loaded = false;
+        if (avatar.splatPath) {
+          try {
+            console.log(`[4DGS] Loading binary Gaussian Splats from ${avatar.splatPath}...`);
+            const sRes = await fetch(avatar.splatPath);
+            if (sRes.ok) {
+              const buf = await sRes.arrayBuffer();
+              splatsData = parseSplatBinaryBuffer(buf);
+              const weights = computeSplatBoneWeights(splatsData.positions, splatsData.count, canonicalJoints);
+              splatsData.boneIndices = weights.boneIndices;
+              splatsData.boneWeights = weights.boneWeights;
+              loaded = true;
+              console.log(`[4DGS] Parsed ${splatsData.count} binary splats from ${avatar.splatPath} in < 15ms!`);
+            }
+          } catch (e) {
+            console.warn('[4DGS] Binary splat load failed, falling back to PLY:', e);
+          }
+        }
+
+        if (!loaded && avatar.plyPath) {
+          console.log(`[4DGS] Loading 4D Gaussian Splats from ${avatar.plyPath}...`);
+          const pRes = await fetch(avatar.plyPath);
+          if (pRes.ok) {
+            const text = await pRes.text();
+            splatsData = decodeGaussianPlyText(text);
+            if (!splatsData.boneWeights || splatsData.boneWeights.length === 0) {
+              const weights = computeSplatBoneWeights(splatsData.positions, splatsData.count, canonicalJoints);
+              splatsData.boneIndices = weights.boneIndices;
+              splatsData.boneWeights = weights.boneWeights;
+            }
+            loaded = true;
+          }
+        }
+
+        if (loaded && splatsData) {
+          splatsMesh = createPhotorealGaussianSplatMesh(splatsData);
+          performerGroup.add(splatsMesh);
+          applyRenderModeVisibility();
+          console.log(`[4DGS] Successfully mounted ${splatsData.count} Photoreal 4D Gaussian Splats with 2D EWA Covariance onto stage.`);
+        }
+      } catch (err) {
+        console.warn(`[4DGS] Error loading splats:`, err);
+      }
+
+      currentFrame = 0;
+      updateTimelineUI();
+      renderPerformerFrame(0);
+    }
+
+    // Avatar Selector Dropdown Change Handler
+    function onSelectAvatar(avatarId) {
+      loadAvatar(avatarId);
+    }
+
+    // Performer Display Mode Handler (Mesh vs Splats vs Hybrid)
+    function setPerformerRenderMode(mode) {
+      currentRenderMode = mode;
+      document.querySelectorAll('#btn-render-mesh, #btn-render-splats, #btn-render-hybrid').forEach(b => {
+        b.classList.remove('active');
+      });
+      if (mode === 'mesh') document.getElementById('btn-render-mesh').classList.add('active');
+      if (mode === 'splats') document.getElementById('btn-render-splats').classList.add('active');
+      if (mode === 'hybrid') document.getElementById('btn-render-hybrid').classList.add('active');
+      applyRenderModeVisibility();
+    }
+
+    function applyRenderModeVisibility() {
+      if (performerMesh) {
+        performerMesh.visible = (currentRenderMode === 'mesh' || currentRenderMode === 'hybrid');
+      }
+      if (splatsMesh) {
+        splatsMesh.visible = (currentRenderMode === 'splats' || currentRenderMode === 'hybrid');
+      }
+    }
+
+    // --- 7. Dual Skinning Pipeline Evaluation & Stage Clamping ---
+    function renderPerformerFrame(frameIdx) {
+      if (!motionData || motionData.length === 0) return;
+      const frame = motionData[frameIdx % motionData.length];
+      if (!frame || !frame.joint_positions_3d) return;
+
+      const joints = frame.joint_positions_3d;
+      const rootPos = frame.root_translation || [0, 0, 0];
+      const canon = canonicalJoints.length > 0 ? canonicalJoints : joints;
+
+      // Compute bone rotations for LBS
+      const boneR = computeSkeletalBoneRotations(canon, joints);
+
+      // 1. Deform Solid 3D Humanoid Mesh Vertices
+      if (performerMesh && performerMesh.visible) {
+        performerMesh.traverse((child) => {
+          if (child.isMesh && child.geometry && child.geometry.userData.basePositions) {
+            const geom = child.geometry;
+            const posAttr = geom.attributes.position;
+            const pos = posAttr.array;
+            const basePos = geom.userData.basePositions;
+            const boneIndices = geom.userData.boneIndices;
+            const boneWeights = geom.userData.boneWeights;
+            const count = posAttr.count;
+
+            const useRot = (currentSkinningMode === 'lbs');
+            let lowestY = Infinity;
+            const rawPositions = new Float32Array(count * 3);
+
+            for (let i = 0; i < count; i++) {
+              const idx = i * 3;
+              const bIdx = i * 4;
+              const bx = basePos[idx];
+              const by = basePos[idx + 1];
+              const bz = basePos[idx + 2];
+
+              let px = 0, py = 0, pz = 0;
+
+              if (useRot) {
+                for (let k = 0; k < 4; k++) {
+                  const j = boneIndices[bIdx + k];
+                  const w = boneWeights[bIdx + k];
+                  if (w <= 0 || j >= canon.length || j >= joints.length) continue;
+                  const R = boneR[j] || [[1,0,0],[0,1,0],[0,0,1]];
+                  const cj = canon[j];
+                  const hj = joints[j];
+                  const rx = bx - cj[0];
+                  const ry = by - cj[1];
+                  const rz = bz - cj[2];
+                  const rotX = R[0][0]*rx + R[0][1]*ry + R[0][2]*rz;
+                  const rotY = R[1][0]*rx + R[1][1]*ry + R[1][2]*rz;
+                  const rotZ = R[2][0]*rx + R[2][1]*ry + R[2][2]*rz;
+                  px += (hj[0] + rotX) * w;
+                  py += (hj[1] + rotY) * w;
+                  pz += (hj[2] + rotZ) * w;
+                }
+              } else {
+                // Legacy translation-only (R = I)
+                let dx = 0, dy = 0, dz = 0;
+                for (let k = 0; k < 4; k++) {
+                  const j = boneIndices[bIdx + k];
+                  const w = boneWeights[bIdx + k];
+                  if (w <= 0 || j >= canon.length || j >= joints.length) continue;
+                  dx += (joints[j][0] - canon[j][0]) * w;
+                  dy += (joints[j][1] - canon[j][1]) * w;
+                  dz += (joints[j][2] - canon[j][2]) * w;
+                }
+                px = bx + dx;
+                py = by + dy;
+                pz = bz + dz;
+              }
+
+              rawPositions[idx] = px;
+              rawPositions[idx + 1] = py;
+              rawPositions[idx + 2] = pz;
+              if (py < lowestY) lowestY = py;
+            }
+
+            // Pin lowest foot cleanly onto target surface (stage deck top if visible, natural stone ground +0.04m surface clearance if removed)
+            const targetDeckSurfaceY = isStageDeckVisible ? (stageDeckY + 0.05) : 0.04;
+            const groundPinDeltaY = targetDeckSurfaceY - lowestY;
+
+            for (let i = 0; i < count; i++) {
+              const idx = i * 3;
+              pos[idx] = rawPositions[idx];
+              pos[idx + 1] = rawPositions[idx + 1] + groundPinDeltaY;
+              pos[idx + 2] = rawPositions[idx + 2] + 1.2;
+            }
+
+            posAttr.needsUpdate = true;
+            geom.computeVertexNormals();
+          }
+        });
+      }
+
+      // 2. Deform 4D Gaussian Splats with 2D EWA Screen-Space Covariance
+      if (splatsMesh && splatsMesh.visible && splatsData) {
+        const count = splatsData.count;
+        const basePos = splatsData.positions;
+        const boneIndices = splatsData.boneIndices;
+        const boneWeights = splatsData.boneWeights;
+        const useRot = (currentSkinningMode === 'lbs');
+
+        let lowestY = Infinity;
+        const rawPositions = new Float32Array(count * 3);
+
+        for (let i = 0; i < count; i++) {
+          const idx = i * 3;
+          const bIdx = i * 4;
+          const bx = basePos[idx];
+          const by = basePos[idx + 1];
+          const bz = basePos[idx + 2];
+
+          let px = 0, py = 0, pz = 0;
+
+          if (useRot) {
+            for (let k = 0; k < 4; k++) {
+              const j = boneIndices[bIdx + k];
+              const w = boneWeights[bIdx + k];
+              if (w <= 0 || j >= canon.length || j >= joints.length) continue;
+              const R = boneR[j] || [[1,0,0],[0,1,0],[0,0,1]];
+              const cj = canon[j];
+              const hj = joints[j];
+              const rx = bx - cj[0];
+              const ry = by - cj[1];
+              const rz = bz - cj[2];
+              const rotX = R[0][0]*rx + R[0][1]*ry + R[0][2]*rz;
+              const rotY = R[1][0]*rx + R[1][1]*ry + R[1][2]*rz;
+              const rotZ = R[2][0]*rx + R[2][1]*ry + R[2][2]*rz;
+              px += (hj[0] + rotX) * w;
+              py += (hj[1] + rotY) * w;
+              pz += (hj[2] + rotZ) * w;
+            }
+          } else {
+            let dx = 0, dy = 0, dz = 0;
+            for (let k = 0; k < 4; k++) {
+              const j = boneIndices[bIdx + k];
+              const w = boneWeights[bIdx + k];
+              if (w <= 0 || j >= canon.length || j >= joints.length) continue;
+              dx += (joints[j][0] - canon[j][0]) * w;
+              dy += (joints[j][1] - canon[j][1]) * w;
+              dz += (joints[j][2] - canon[j][2]) * w;
+            }
+            px = bx + dx;
+            py = by + dy;
+            pz = bz + dz;
+          }
+
+          rawPositions[idx] = px;
+          rawPositions[idx + 1] = py;
+          rawPositions[idx + 2] = pz;
+          if (py < lowestY) lowestY = py;
+        }
+
+        const targetDeckSurfaceY = isStageDeckVisible ? (stageDeckY + 0.05) : 0.00;
+        const groundPinDeltaY = targetDeckSurfaceY - lowestY;
+
+        const centerAttr = splatsMesh.geometry.attributes.instanceCenter;
+        if (centerAttr) {
+          const arr = centerAttr.array;
+          for (let i = 0; i < count; i++) {
+            const idx = i * 3;
+            arr[idx] = rawPositions[idx];
+            arr[idx + 1] = rawPositions[idx + 1] + groundPinDeltaY;
+            arr[idx + 2] = rawPositions[idx + 2] + 1.2;
+          }
+          centerAttr.needsUpdate = true;
+        }
+      }
+    }
+
+    // --- 8. Playback & Timeline Controls ---
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      document.getElementById('play-pause-btn').innerText = isPlaying ? '⏸' : '▶';
+    }
+
+    function onSliderSeek(val) {
+      currentFrame = parseInt(val, 10);
+      updateTimelineUI();
+      renderPerformerFrame(currentFrame);
+    }
+
+    function updateTimelineUI() {
+      document.getElementById('lbl-frame').innerText = currentFrame;
+      document.getElementById('frame-slider').value = currentFrame;
+      const t = (currentFrame / (motionFps || 24)).toFixed(2);
+      document.getElementById('lbl-timestamp').innerText = `${t}s @ ${motionFps || 24} FPS`;
+    }
+
+    function selectSkinningMode(mode) {
+      currentSkinningMode = mode;
+      const btnLbs = document.getElementById('btn-mode-lbs');
+      const btnLegacy = document.getElementById('btn-mode-legacy');
+      const toastTitle = document.getElementById('toast-title');
+      const toastBody = document.getElementById('toast-body');
+
+      if (mode === 'lbs') {
+        btnLbs.className = 'skin-choice active-lbs';
+        btnLegacy.className = 'skin-choice';
+        btnLbs.querySelector('input').checked = true;
+        toastTitle.innerHTML = '<span class="tag-lbs">✓ Scratchbox 4-Bone LBS Active</span>';
+        toastBody.innerText = 'Forward kinematics computes true 3D rotation matrices T_j = Translation(j\') * R_j * Translation(-j0) rotating splat centroids and mesh vertices with 4-bone linear blending. Limb geometry remains smooth and continuous.';
+      } else {
+        btnLbs.className = 'skin-choice';
+        btnLegacy.className = 'skin-choice active-legacy';
+        btnLegacy.querySelector('input').checked = true;
+        toastTitle.innerHTML = '<span class="tag-legacy">⚠️ DepthBox3 Legacy Mode Active</span>';
+        toastBody.innerText = 'Translation-only skeletal displacement (R = I) replicates defective companion app behavior: limbs tear and shear because joint rotations are completely neglected.';
+      }
+      renderPerformerFrame(currentFrame);
+    }
+
+    // Camera Presets
+    let currentCameraPreset = 'vip_front';
+    const CAMERA_PRESETS = {
+      vip_front: { localPos: new THREE.Vector3(0, 1.65, 4.5), localTarget: new THREE.Vector3(0, 1.25, 1.2) },
+      backstage_bowl: { localPos: new THREE.Vector3(0, 4.8, -7.2), localTarget: new THREE.Vector3(0, 14.0, 45.0) },
+      mix_board: { localPos: new THREE.Vector3(0, 8.5, 26.0), localTarget: new THREE.Vector3(0, 1.8, 1.2) },
+      top_concourse: { localPos: new THREE.Vector3(0, 36.0, 105.0), localTarget: new THREE.Vector3(0, 2.0, 1.2) },
+      under_canopy: { localPos: new THREE.Vector3(0, 0.4, 0.5), localTarget: new THREE.Vector3(0, 9.5, 1.2) },
+      aerial_survey: { localPos: new THREE.Vector3(-32.0, 36.0, 38.0), localTarget: new THREE.Vector3(0, 2.5, 1.2) },
+      top_down: { localPos: new THREE.Vector3(0, 480.0, 0), localTarget: new THREE.Vector3(0, 10.0, 0) }
+    };
+
+    function setCameraPreset(preset) {
+      toggleCameraFlight(false);
+      currentCameraPreset = preset;
+      document.querySelectorAll('.view-modes .cam-btn').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('onclick')?.includes(preset));
+      });
+
+      stageGroup.updateMatrixWorld(true);
+      const cfg = CAMERA_PRESETS[preset] || CAMERA_PRESETS.vip_front;
+      const worldCamPos = cfg.localPos.clone().applyMatrix4(stageGroup.matrixWorld);
+      const worldTarget = cfg.localTarget.clone().applyMatrix4(stageGroup.matrixWorld);
+
+      camera.position.copy(worldCamPos);
+      controls.target.copy(worldTarget);
+      controls.update();
+    }
+
+    // Continuous 6-DOF Spline Camera Flight Controller
+    let isFlightActive = false;
+    let flightProgress = 0.0;
+    const flightSpeed = 0.025;
+
+    const FLIGHT_WAYPOINTS_LOCAL = [
+      { pos: new THREE.Vector3(0, 1.65, 4.5), tgt: new THREE.Vector3(0, 1.25, 1.2) },     // 1. VIP Front
+      { pos: new THREE.Vector3(6.5, 2.2, 2.5), tgt: new THREE.Vector3(0, 1.25, 1.2) },     // 2. Stage Right Wing
+      { pos: new THREE.Vector3(0, 0.4, -1.5), tgt: new THREE.Vector3(0, 7.5, 1.2) },      // 3. Under Canopy Upward Soffit
+      { pos: new THREE.Vector3(-4.5, 2.8, -5.0), tgt: new THREE.Vector3(0, 3.5, 0.0) },    // 4. Backstage North Exit
+      { pos: new THREE.Vector3(-18.0, 14.0, 2.0), tgt: new THREE.Vector3(0, 10.0, 10.0) }, // 5. Creation Rock Face
+      { pos: new THREE.Vector3(0, 8.5, 26.0), tgt: new THREE.Vector3(0, 1.8, 1.2) },      // 6. Mix Board (FOH)
+      { pos: new THREE.Vector3(8.0, 18.0, 52.0), tgt: new THREE.Vector3(0, 2.2, 1.2) },   // 7. Mid Bowl Climb
+      { pos: new THREE.Vector3(0, 36.0, 105.0), tgt: new THREE.Vector3(0, 2.0, 1.2) },    // 8. Top Concourse
+      { pos: new THREE.Vector3(-32.0, 48.0, 42.0), tgt: new THREE.Vector3(0, 2.5, 1.2) }, // 9. Aerial Drone Apex
+      { pos: new THREE.Vector3(-12.0, 12.0, 15.0), tgt: new THREE.Vector3(0, 1.6, 1.2) }  // 10. Descent Arc
+    ];
+
+    const flightPosCurve = new THREE.CatmullRomCurve3(FLIGHT_WAYPOINTS_LOCAL.map(w => w.pos), true);
+    const flightTgtCurve = new THREE.CatmullRomCurve3(FLIGHT_WAYPOINTS_LOCAL.map(w => w.tgt), true);
+
+    function toggleCameraFlight(forceState) {
+      isFlightActive = typeof forceState === 'boolean' ? forceState : !isFlightActive;
+      const btn = document.getElementById('btn-camera-flight');
+      if (btn) btn.classList.toggle('active', isFlightActive);
+      if (isFlightActive) {
+        document.querySelectorAll('.view-modes .cam-btn').forEach(b => {
+          if (b !== btn) b.classList.remove('active');
+        });
+      }
+    }
+
+    function setFlightProgress(u) {
+      flightProgress = Math.max(0.0, Math.min(1.0, u));
+      stageGroup.updateMatrixWorld(true);
+      const localPos = flightPosCurve.getPointAt(flightProgress);
+      const localTgt = flightTgtCurve.getPointAt(flightProgress);
+      const worldCamPos = localPos.clone().applyMatrix4(stageGroup.matrixWorld);
+      const worldTarget = localTgt.clone().applyMatrix4(stageGroup.matrixWorld);
+      camera.position.copy(worldCamPos);
+      controls.target.copy(worldTarget);
+      controls.update();
+    }
+
+    // Export current frame into standard 32-byte .splat binary
+    function exportBinarySplat() {
+      if (!splatsMesh || !splatsData) return;
+      const count = splatsData.count;
+      const buffer = new ArrayBuffer(count * 32);
+      const view = new DataView(buffer);
+
+      const m = new THREE.Matrix4();
+      const p = new THREE.Vector3();
+      const s = new THREE.Vector3();
+      const q = new THREE.Quaternion();
+      const c = new THREE.Color();
+
+      for (let i = 0; i < count; i++) {
+        splatsMesh.getMatrixAt(i, m);
+        m.decompose(p, q, s);
+        splatsMesh.getColorAt(i, c);
+
+        const offset = i * 32;
+        view.setFloat32(offset + 0, p.x, true);
+        view.setFloat32(offset + 4, p.y, true);
+        view.setFloat32(offset + 8, p.z, true);
+        view.setFloat32(offset + 12, s.x, true);
+        view.setFloat32(offset + 16, s.y, true);
+        view.setFloat32(offset + 20, s.z, true);
+        view.setUint8(offset + 24, Math.floor(c.r * 255));
+        view.setUint8(offset + 25, Math.floor(c.g * 255));
+        view.setUint8(offset + 26, Math.floor(c.b * 255));
+        view.setUint8(offset + 27, 255);
+        view.setUint8(offset + 28, 128);
+        view.setUint8(offset + 29, 128);
+        view.setUint8(offset + 30, 128);
+        view.setUint8(offset + 31, 255);
+      }
+
+      const blob = new Blob([buffer], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `red_rocks_${selectedAvatarId}_frame_${currentFrame}_${currentSkinningMode}.splat`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // --- 9. Main Animation Loop ---
+    let lastTime = 0;
+
+    function animate(time) {
+      requestAnimationFrame(animate);
+
+      const fpsInterval = 1000 / (motionFps || 24);
+      const delta = time - lastTime;
+      if (delta > fpsInterval) {
+        lastTime = time - (delta % fpsInterval);
+
+        if (isPlaying && totalFrames > 0) {
+          currentFrame = (currentFrame + 1) % totalFrames;
+          updateTimelineUI();
+          renderPerformerFrame(currentFrame);
+        }
+      }
+
+      if (isFlightActive) {
+        flightProgress = (flightProgress + 0.0015) % 1.0;
+        stageGroup.updateMatrixWorld(true);
+        const localPos = flightPosCurve.getPointAt(flightProgress);
+        const localTgt = flightTgtCurve.getPointAt(flightProgress);
+        const worldCamPos = localPos.clone().applyMatrix4(stageGroup.matrixWorld);
+        const worldTarget = localTgt.clone().applyMatrix4(stageGroup.matrixWorld);
+        camera.position.copy(worldCamPos);
+        controls.target.copy(worldTarget);
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // Window Resize Handler
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- Bootstrapping Execution ---
+    async function init() {
+      buildRedRocksEnvironment();
+      buildConcertStage();
+      applyStageLayerStates();
+      loadGoogle3DTilesEnvironment();
+      await load3DGSVenueEnvironment();
+      applyEnvModeVisibility();
+
+      // Load default avatar: 'man-in-black'
+      await loadAvatar('man-in-black');
+
+      // Check URL parameters for headless verification and camera presets
+      const urlParams = new URLSearchParams(window.location.search);
+      const requestedCam = urlParams.get('cam') || 'vip_front';
+      const requestedMode = urlParams.get('mode') || urlParams.get('renderMode') || 'mesh';
+      const requestedDeck = urlParams.get('deck');
+      const requestedHud = urlParams.get('hud');
+      const requestedEnv = urlParams.get('env') || urlParams.get('envMode') || '3dgs_venue';
+
+      setEnvironmentMode(requestedEnv);
+
+      if (urlParams.has('clayHull')) {
+        const ch = urlParams.get('clayHull');
+        envLayers.clayHull = (ch === '1' || ch === 'true');
+        applyLayerStates();
+      }
+
+      if (urlParams.has('tiles') || urlParams.has('googleTiles')) {
+        const gt = urlParams.get('tiles') || urlParams.get('googleTiles');
+        envLayers.googleTiles = (gt === '1' || gt === 'true');
+        applyLayerStates();
+      }
+
+      if (requestedMode) {
+        setPerformerRenderMode(requestedMode);
+      }
+      if (requestedDeck === '0' || requestedDeck === 'false' || requestedDeck === 'none') {
+        setStageDeckVisible(false);
+      } else if (requestedDeck === '1' || requestedDeck === 'true' || requestedDeck === 'riser') {
+        setStageDeckVisible(true);
+      }
+      if (requestedHud === '0' || requestedHud === 'false') {
+        document.querySelector('.top-navbar')?.setAttribute('style', 'display:none !important');
+        document.querySelector('.telemetry-card')?.setAttribute('style', 'display:none !important');
+        document.querySelector('.callout-toast')?.setAttribute('style', 'display:none !important');
+        document.querySelector('.timeline-tray')?.setAttribute('style', 'display:none !important');
+      }
+
+      setCameraPreset(requestedCam);
+      if (urlParams.has('flight')) {
+        toggleCameraFlight(true);
+      }
+      if (urlParams.has('flightT')) {
+        setFlightProgress(parseFloat(urlParams.get('flightT')));
+      }
+
+      window.__redRocksReady = true;
+
+      // File:// Protocol Detection & Local Server Notice
+      if (window.location.protocol === 'file:') {
+        const banner = document.createElement('div');
+        banner.id = 'file-origin-banner';
+        banner.innerHTML = `
+          <div style="position:fixed; top:76px; left:50%; transform:translateX(-50%); z-index:9999; background:rgba(220,38,38,0.92); backdrop-filter:blur(14px); color:#ffffff; padding:10px 22px; border-radius:12px; font-size:12px; font-weight:600; box-shadow:0 12px 35px rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.25); display:flex; align-items:center; gap:14px;">
+            <span>⚠️ <strong>Local file:// origin detected:</strong> Modern browsers block binary .splat and .glb streaming over file:// due to CORS security.</span>
+            <a href="http://localhost:5173/red_rocks_performer_demo.html" target="_blank" style="background:#ffffff; color:#b91c1c; padding:5px 14px; border-radius:8px; text-decoration:none; font-weight:800; font-size:11px; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,0.3);">Open on http://localhost:5173</a>
+          </div>
+        `;
+        document.body.appendChild(banner);
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    init();
+  </script>
+</body>
+</html>

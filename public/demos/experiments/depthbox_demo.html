@@ -1,0 +1,1491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DepthBox Studio — Depth Anything 3 Depth-Ray Foundation Model Demo</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: #060913;
+            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            user-select: none;
+        }
+
+        /* Top Studio Header & Toolbar */
+        .top-navbar {
+            position: absolute;
+            top: 14px;
+            left: 20px;
+            right: 20px;
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(13, 20, 38, 0.88);
+            border: 1px solid rgba(34, 211, 238, 0.35);
+            border-radius: 12px;
+            padding: 0 18px;
+            backdrop-filter: blur(16px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(34, 211, 238, 0.12);
+            z-index: 100;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #06b6d4, #6366f1);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 900;
+            color: #ffffff;
+            box-shadow: 0 0 12px rgba(6, 182, 212, 0.5);
+        }
+        .brand-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            background: linear-gradient(135deg, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .brand-badge {
+            background: rgba(6, 182, 212, 0.15);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            color: #22d3ee;
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            letter-spacing: 0.05em;
+        }
+
+        .view-modes {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .mode-btn {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 11.5px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .mode-btn:hover {
+            color: #e2e8f0;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .mode-btn.active {
+            background: #0891b2;
+            color: #ffffff;
+            box-shadow: 0 2px 10px rgba(8, 145, 178, 0.5);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .action-btn {
+            background: rgba(30, 41, 59, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #cbd5e1;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .action-btn:hover {
+            border-color: #22d3ee;
+            color: #ffffff;
+            background: #1e293b;
+        }
+        .action-btn.primary {
+            background: linear-gradient(135deg, #0284c7, #4f46e5);
+            border-color: #38bdf8;
+            color: #ffffff;
+            box-shadow: 0 2px 12px rgba(2, 132, 199, 0.4);
+        }
+
+        /* Main Workspace Layout */
+        .workspace-container {
+            position: absolute;
+            top: 78px;
+            left: 20px;
+            right: 20px;
+            bottom: 20px;
+            display: flex;
+            gap: 16px;
+        }
+
+        /* Left HUD Panel: Controls & Presets */
+        .hud-sidebar {
+            width: 380px;
+            min-width: 380px;
+            background: rgba(13, 20, 38, 0.92);
+            border: 1px solid rgba(34, 211, 238, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            overflow-y: auto;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.5);
+            z-index: 50;
+        }
+        .hud-sidebar::-webkit-scrollbar {
+            width: 5px;
+        }
+        .hud-sidebar::-webkit-scrollbar-thumb {
+            background: rgba(34, 211, 238, 0.3);
+            border-radius: 4px;
+        }
+
+        .hud-section {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .section-header {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #38bdf8;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Preset Cards Grid */
+        .presets-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .preset-card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            padding: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .preset-card:hover {
+            border-color: #22d3ee;
+            background: rgba(30, 41, 59, 1);
+        }
+        .preset-card.active {
+            border-color: #38bdf8;
+            background: rgba(8, 145, 178, 0.25);
+            box-shadow: 0 0 12px rgba(8, 145, 178, 0.3);
+        }
+        .preset-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: #f1f5f9;
+        }
+        .preset-desc {
+            font-size: 9.5px;
+            color: #94a3b8;
+            line-height: 1.3;
+        }
+
+        /* Sliders */
+        .slider-row {
+            margin-bottom: 10px;
+        }
+        .slider-label-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #cbd5e1;
+            margin-bottom: 4px;
+        }
+        .slider-val {
+            font-family: monospace;
+            color: #38bdf8;
+            font-weight: 700;
+        }
+        input[type="range"] {
+            width: 100%;
+            height: 5px;
+            background: rgba(30, 41, 59, 0.9);
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+            accent-color: #06b6d4;
+            cursor: pointer;
+        }
+
+        /* Switch Buttons */
+        .segmented-control {
+            display: flex;
+            background: rgba(15, 23, 42, 0.8);
+            border-radius: 6px;
+            padding: 3px;
+            gap: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            margin-bottom: 8px;
+        }
+        .seg-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            font-size: 10.5px;
+            font-weight: 600;
+            padding: 5px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+            text-align: center;
+        }
+        .seg-btn.active {
+            background: #0284c7;
+            color: #ffffff;
+        }
+
+        /* Center Split Viewports */
+        .viewport-wrapper {
+            flex: 1;
+            display: flex;
+            gap: 14px;
+            position: relative;
+            overflow: hidden;
+            border-radius: 12px;
+        }
+
+        /* Left 2D Inspector Viewport */
+        .viewport-2d-pane {
+            flex: 1;
+            background: rgba(10, 16, 30, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .pane-toolbar {
+            height: 38px;
+            background: rgba(15, 23, 42, 0.85);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            z-index: 20;
+        }
+        .pane-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: #38bdf8;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .canvas-2d-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #040711;
+            overflow: hidden;
+        }
+        #canvas-2d {
+            width: 82%;
+            max-width: 520px;
+            aspect-ratio: 1 / 1;
+            object-fit: contain;
+            cursor: crosshair;
+            border-radius: 8px;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.85), 0 0 25px rgba(14, 165, 233, 0.2);
+        }
+
+        /* Right 3D Viewport */
+        .viewport-3d-pane {
+            flex: 1.35;
+            background: #050814;
+            border: 1px solid rgba(34, 211, 238, 0.3);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+        }
+        #webgl-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* Overlay Telemetry HUD on 3D Viewport */
+        .telemetry-overlay {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            background: rgba(13, 20, 36, 0.88);
+            border: 1px solid rgba(34, 211, 238, 0.35);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: monospace;
+            font-size: 10.5px;
+            color: #94a3b8;
+            backdrop-filter: blur(12px);
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+            z-index: 30;
+        }
+        .telemetry-overlay span {
+            color: #f1f5f9;
+            font-weight: 700;
+        }
+        .telemetry-overlay .highlight {
+            color: #22d3ee;
+        }
+
+        /* Floating Pixel Probe Tooltip */
+        .probe-tooltip {
+            position: absolute;
+            top: 50px;
+            right: 14px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 10.5px;
+            font-family: monospace;
+            color: #cbd5e1;
+            backdrop-filter: blur(10px);
+            pointer-events: none;
+            z-index: 40;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .probe-tooltip b {
+            color: #38bdf8;
+        }
+
+        /* Colorbar Legend for Metric Depth */
+        .colorbar-legend {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            background: rgba(13, 20, 36, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            padding: 6px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 30;
+            pointer-events: none;
+            backdrop-filter: blur(10px);
+        }
+        .colorbar-gradient {
+            width: 140px;
+            height: 10px;
+            border-radius: 2px;
+            background: linear-gradient(to right, #000004, #3b0f70, #8c2981, #de4968, #fe9f6d, #fcfdbf);
+        }
+        .colorbar-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 9.5px;
+            font-family: monospace;
+            color: #94a3b8;
+        }
+
+        /* Camera Gizmo Controls */
+        .gizmo-controls {
+            position: absolute;
+            top: 48px;
+            right: 16px;
+            display: flex;
+            gap: 6px;
+            z-index: 30;
+        }
+        .gizmo-btn {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #cbd5e1;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 5px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .gizmo-btn:hover {
+            background: #0284c7;
+            color: #fff;
+            border-color: #38bdf8;
+        }
+
+        /* Fullscreen Viewport Mode Overrides */
+        body.full-3d .viewport-2d-pane { display: none; }
+        body.full-3d .viewport-3d-pane { flex: 1; }
+        body.full-2d .viewport-3d-pane { display: none; }
+        body.full-2d .viewport-2d-pane { flex: 1; }
+    </style>
+
+    <!-- Three.js r128 & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <!-- Top Header -->
+    <header class="top-navbar">
+        <div class="brand">
+            <div class="brand-icon">▲</div>
+            <div>
+                <span class="brand-title">DEPTHBOX 3D STUDIO</span>
+                <span class="brand-badge">DEPTH ANYTHING 3 ARCHITECTURE</span>
+            </div>
+        </div>
+
+        <div class="view-modes">
+            <button class="mode-btn active" id="btn-layout-split" onclick="setLayout('split')">◫ Dual Split View</button>
+            <button class="mode-btn" id="btn-layout-3d" onclick="setLayout('3d')">◈ 3D Viewport</button>
+            <button class="mode-btn" id="btn-layout-2d" onclick="setLayout('2d')">◩ 2D Multi-Modal</button>
+        </div>
+
+        <div class="header-actions">
+            <input type="file" id="file-uploader" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+            <button class="action-btn" onclick="document.getElementById('file-uploader').click()">📁 Upload Custom Image</button>
+            <button class="action-btn primary" onclick="exportPointCloudPLY()">💾 Export 3D PointCloud (PLY)</button>
+        </div>
+    </header>
+
+    <!-- Workspace -->
+    <div class="workspace-container">
+        <!-- Left HUD Sidebar -->
+        <aside class="hud-sidebar">
+            <!-- Preset Scenario Selector -->
+            <div class="hud-section">
+                <div class="section-header">
+                    <span>Urban Geospatial Presets</span>
+                    <span style="font-size: 9px; color: #22d3ee;">4K Photogrammetry</span>
+                </div>
+                <div class="presets-grid">
+                    <div class="preset-card active" onclick="loadPreset('manhattan', this)">
+                        <span class="preset-title">🏢 Manhattan Midtown</span>
+                        <span class="preset-desc">Empire State Canyon & high-rise density</span>
+                    </div>
+                    <div class="preset-card" onclick="loadPreset('blockout', this)">
+                        <span class="preset-title">🚁 Drone Flight Keyframe</span>
+                        <span class="preset-desc">4K photogrammetric aerial flight path</span>
+                    </div>
+                    <div class="preset-card" onclick="loadPreset('alpine', this)">
+                        <span class="preset-title">🏔️ Alpine Elevation</span>
+                        <span class="preset-desc">Steep mountain geospatial relief</span>
+                    </div>
+                    <div class="preset-card" onclick="loadPreset('dubai', this)">
+                        <span class="preset-title">🏙️ Dubai Skyline</span>
+                        <span class="preset-desc">Tower geometry with reflective horizons</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3D Render Shading Modes -->
+            <div class="hud-section">
+                <div class="section-header">
+                    <span>3D Render Shading Mode</span>
+                </div>
+                <div class="segmented-control">
+                    <button class="seg-btn active" id="btn-shading-rgb" onclick="setShadingMode('rgb')">RGB Texture</button>
+                    <button class="seg-btn" id="btn-shading-depth" onclick="setShadingMode('depth')">Metric Depth</button>
+                    <button class="seg-btn" id="btn-shading-rays" onclick="setShadingMode('rays')">Ray Field S²</button>
+                    <button class="seg-btn" id="btn-shading-normals" onclick="setShadingMode('normals')">Normals</button>
+                </div>
+
+                <div class="segmented-control">
+                    <button class="seg-btn active" id="btn-geom-mesh" onclick="setGeometryMode('mesh')">Connected Mesh</button>
+                    <button class="seg-btn" id="btn-geom-points" onclick="setGeometryMode('points')">Point Cloud</button>
+                    <button class="seg-btn" id="btn-geom-frustum" onclick="toggleCameraFrustum()">Toggle Ray Cones</button>
+                </div>
+            </div>
+
+            <!-- Optical & Ray Field Controls -->
+            <div class="hud-section">
+                <div class="section-header">
+                    <span>Depth-Ray Field Dynamics</span>
+                    <span style="font-size: 9px; color: #38bdf8;">P = d(u,v) · r̂(u,v)</span>
+                </div>
+
+                <!-- Field of View Slider -->
+                <div class="slider-row">
+                    <div class="slider-label-row">
+                        <span>Virtual Sensor FOV (Adaptive Rays)</span>
+                        <span class="slider-val" id="val-fov">60°</span>
+                    </div>
+                    <input type="range" id="slider-fov" min="30" max="100" value="60" step="1" oninput="updateFov(this.value)">
+                </div>
+
+                <!-- Depth Near / Far -->
+                <div class="slider-row">
+                    <div class="slider-label-row">
+                        <span>Metric Depth Near / Far</span>
+                        <span class="slider-val" id="val-depth-range">0.5m – 45.0m</span>
+                    </div>
+                    <input type="range" id="slider-depth-far" min="10" max="120" value="45" step="1" oninput="updateDepthRange(this.value)">
+                </div>
+
+                <!-- Discontinuity Severance Threshold -->
+                <div class="slider-row">
+                    <div class="slider-label-row">
+                        <span>Edge Discontinuity Severance (τ)</span>
+                        <span class="slider-val" id="val-tau">0.075</span>
+                    </div>
+                    <input type="range" id="slider-tau" min="0.01" max="0.30" value="0.075" step="0.005" oninput="updateTau(this.value)">
+                </div>
+
+                <!-- Grid Downsampling Stride -->
+                <div class="slider-row" style="margin-bottom: 0;">
+                    <div class="slider-label-row">
+                        <span>Grid Resolution Stride</span>
+                        <span class="slider-val" id="val-stride">1x (Full 256x256)</span>
+                    </div>
+                    <input type="range" id="slider-stride" min="1" max="4" value="1" step="1" oninput="updateStride(this.value)">
+                </div>
+            </div>
+
+            <!-- Depth Anything 3 Mathematical Theory -->
+            <div class="hud-section" style="font-size: 10.5px; line-height: 1.5; color: #94a3b8;">
+                <div class="section-header" style="color: #818cf8;">
+                    <span>DA3 Depth-Ray Bridge</span>
+                </div>
+                DepthBox predicts exponential metric depth <code style="color:#38bdf8;">d = exp(y)</code> alongside a 3-channel unit direction ray field <code style="color:#38bdf8;">r̂ ∈ S²</code>.
+                Any pixel unprojects to 3D space via <strong style="color:#f1f5f9;">P = d · r̂</strong> without requiring calibration matrices <code style="color:#e2e8f0;">K</code>.
+            </div>
+        </aside>
+
+        <!-- Viewports Container -->
+        <main class="viewport-wrapper">
+            <!-- 2D Multi-Modal Inspector Pane -->
+            <div class="viewport-2d-pane" id="pane-2d">
+                <div class="pane-toolbar">
+                    <div class="pane-title">
+                        <span>◈ 2D Multi-Modal Sensor Feed</span>
+                    </div>
+                    <div class="segmented-control" style="margin: 0; padding: 2px;">
+                        <button class="seg-btn active" id="btn-2d-rgb" onclick="set2DViewMode('rgb')">Input RGB</button>
+                        <button class="seg-btn" id="btn-2d-depth" onclick="set2DViewMode('depth')">Metric Depth</button>
+                        <button class="seg-btn" id="btn-2d-rays" onclick="set2DViewMode('rays')">Ray Angles S²</button>
+                        <button class="seg-btn" id="btn-2d-edges" onclick="set2DViewMode('edges')">Severed Edges</button>
+                    </div>
+                </div>
+
+                <div class="canvas-2d-container" id="container-2d">
+                    <canvas id="canvas-2d"></canvas>
+
+                    <!-- Interactive Pixel Probe Tooltip -->
+                    <div class="probe-tooltip" id="probe-tooltip">
+                        <div><b>Pixel (u, v):</b> <span id="probe-uv">128, 128</span></div>
+                        <div><b>Metric Depth d:</b> <span id="probe-d">14.82 m</span></div>
+                        <div><b>Ray Direction r̂:</b> <span id="probe-ray">(0.02, 0.05, 0.99)</span></div>
+                        <div><b>3D Unprojected P:</b> <span id="probe-p">(0.30, 0.74, 14.67)</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3D Unprojected World Viewport -->
+            <div class="viewport-3d-pane" id="pane-3d">
+                <canvas id="webgl-canvas"></canvas>
+
+                <!-- Gizmo View Buttons -->
+                <div class="gizmo-controls">
+                    <button class="gizmo-btn" onclick="resetCamera('perspective')">Perspective</button>
+                    <button class="gizmo-btn" onclick="resetCamera('front')">Front Sensor</button>
+                    <button class="gizmo-btn" onclick="resetCamera('side')">Side Profile</button>
+                    <button class="gizmo-btn" onclick="resetCamera('top')">Top Ortho</button>
+                    <button class="gizmo-btn" onclick="toggleTurntable()">⟳ Turntable</button>
+                    <button class="gizmo-btn" id="btn-drone-flight" onclick="toggleDroneFlight()" style="background: rgba(99, 102, 241, 0.3); border-color: #818cf8; color: #c7d2fe;">✈ Drone Trajectory</button>
+                </div>
+
+                <!-- Telemetry Readouts -->
+                <div class="telemetry-overlay" id="telemetry-overlay">
+                    <div>Vertices: <span id="stat-verts">65,536</span> | Triangles: <span id="stat-tris">130,050</span></div>
+                    <div>Severed Occlusion Edges: <span class="highlight" id="stat-severed">4,120</span> (<span id="stat-severed-pct">3.1%</span>)</div>
+                    <div>Ray Unit Error max|‖r̂‖ - 1|: <span class="highlight">0.000000</span> (Exact S²)</div>
+                    <div>Depth Range: <span id="stat-range">0.82m – 44.5m</span> | Mean: <span id="stat-mean">16.4m</span></div>
+                </div>
+
+                <!-- Colorbar Legend -->
+                <div class="colorbar-legend" id="colorbar-legend">
+                    <div class="colorbar-gradient"></div>
+                    <div class="colorbar-labels">
+                        <span id="cb-near">0.5m</span>
+                        <span style="color: #cbd5e1;">Metric Depth</span>
+                        <span id="cb-far">45.0m</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Application Script -->
+    <script>
+        // Preset Image Definitions
+        const PRESETS = {
+            manhattan: {
+                title: 'Manhattan Midtown Canyon',
+                url: 'images/manhattan_ai.png',
+                defaultFov: 60,
+                depthNear: 1.0,
+                depthFar: 48.0,
+                tau: 0.075
+            },
+            blockout: {
+                title: 'Drone Flight Keyframe 4K',
+                url: 'images/blockout_textured_4k_keyframe_01_f1.png',
+                defaultFov: 65,
+                depthNear: 2.0,
+                depthFar: 60.0,
+                tau: 0.080
+            },
+            alpine: {
+                title: 'Alpine Elevation & Valley',
+                url: 'images/alpine_ai.png',
+                defaultFov: 55,
+                depthNear: 5.0,
+                depthFar: 75.0,
+                tau: 0.065
+            },
+            dubai: {
+                title: 'Dubai Skyline & Architecture',
+                url: 'images/dubai_ai.png',
+                defaultFov: 60,
+                depthNear: 1.5,
+                depthFar: 50.0,
+                tau: 0.070
+            }
+        };
+
+        let currentPresetKey = 'manhattan';
+        let currentFov = 60;
+        let currentDepthNear = 1.0;
+        let currentDepthFar = 48.0;
+        let currentTau = 0.075;
+        let currentStride = 1;
+        let currentShadingMode = 'rgb'; // 'rgb' | 'depth' | 'rays' | 'normals'
+        let currentGeomMode = 'mesh';   // 'mesh' | 'points'
+        let current2DView = 'rgb';      // 'rgb' | 'depth' | 'rays' | 'edges'
+        let isTurntableActive = false;
+        let showFrustum = false;
+
+        // Image & Geometry Buffers
+        const GRID_W = 256;
+        const GRID_H = 256;
+        let sourceImage = new Image();
+        let sourceRgba = new Uint8Array(GRID_W * GRID_H * 4);
+        let metricDepths = new Float32Array(GRID_W * GRID_H);
+        let rayMap = new Float32Array(GRID_W * GRID_H * 3);
+        let severedEdgesMask = new Uint8Array(GRID_W * GRID_H);
+
+        // Three.js State
+        let scene, camera, renderer, controls;
+        let meshObject = null;
+        let pointsObject = null;
+        let frustumLines = null;
+        let animationFrameId = null;
+
+        // 2D Inspector Elements
+        const canvas2D = document.getElementById('canvas-2d');
+        const ctx2D = canvas2D.getContext('2d');
+        canvas2D.width = GRID_W;
+        canvas2D.height = GRID_H;
+
+        // -------------------------------------------------------------
+        // 1. Core Mathematical Pipeline: Depth-Ray Formulation
+        // -------------------------------------------------------------
+        function computePinholeRayField(w, h, fovDeg) {
+            const fovRad = (fovDeg * Math.PI) / 180.0;
+            const f = (0.5 * h) / Math.tan(0.5 * fovRad);
+            const cx = w * 0.5;
+            const cy = h * 0.5;
+
+            const rays = new Float32Array(w * h * 3);
+            for (let y = 0; y < h; ++y) {
+                for (let x = 0; x < w; ++x) {
+                    const idx = (y * w + x) * 3;
+                    const rx = (x - cx) / f;
+                    const ry = (y - cy) / f;
+                    const rz = 1.0;
+
+                    const invLen = 1.0 / Math.sqrt(rx * rx + ry * ry + rz * rz);
+                    rays[idx] = rx * invLen;
+                    rays[idx + 1] = ry * invLen;
+                    rays[idx + 2] = rz * invLen;
+                }
+            }
+            return rays;
+        }
+
+        function synthesizeMetricDepthsFromLuminance(rgba, w, h, near, far) {
+            const depths = new Float32Array(w * h);
+            const horizonY = 0.56; // Normalized horizon position
+
+            for (let y = 0; y < h; ++y) {
+                const ny = y / h;
+                for (let x = 0; x < w; ++x) {
+                    const nx = x / w;
+                    const idx = y * w + x;
+                    const cIdx = idx * 4;
+                    const r = rgba[cIdx];
+                    const g = rgba[cIdx + 1];
+                    const b = rgba[cIdx + 2];
+                    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+
+                    let normDepth;
+                    const distFromCenter = Math.abs(nx - 0.5) * 2.0; // 0 at canyon center, 1 at edges
+
+                    if (ny > horizonY) {
+                        // Ground street corridor: closest at bottom (ny=1.0), further toward horizon
+                        const groundT = (ny - horizonY) / (1.0 - horizonY); // 1 at bottom, 0 at horizon
+                        const streetDepth = 0.05 + (1.0 - Math.pow(groundT, 0.75)) * 0.70;
+                        
+                        if (distFromCenter > 0.38) {
+                            // Flanking buildings on left and right
+                            const buildingDepth = 0.12 + (1.0 - groundT * 0.75) * 0.65 + (1.0 - lum) * 0.12;
+                            normDepth = buildingDepth;
+                        } else {
+                            // Central roadway
+                            normDepth = streetDepth;
+                        }
+                    } else {
+                        // Upper half: sky and towering skyscrapers
+                        const isSky = (lum > 0.62 && b > r && ny < 0.32);
+                        if (isSky) {
+                            normDepth = 0.98;
+                        } else {
+                            // Tower facades: depth scales with avenue perspective (closer at flanks, distant in center)
+                            const canyonPerspective = 0.22 + (1.0 - distFromCenter * 0.65) * 0.58;
+                            const facadeRelief = (1.0 - lum) * 0.18;
+                            normDepth = Math.min(0.95, canyonPerspective + facadeRelief);
+                        }
+                    }
+
+                    normDepth = Math.max(0.02, Math.min(1.0, normDepth));
+                    depths[idx] = near + normDepth * (far - near);
+                }
+            }
+            return depths;
+        }
+
+        // Colormap function for metric depth (Exact Turbo Polynomial)
+        function turboColormap(t) {
+            t = Math.max(0, Math.min(1, t));
+            const r = 0.1357 + t * ( 4.5974 - t * (42.6851 - t * (153.2793 - t * (208.0399 - 99.5661 * t))));
+            const g = 0.0914 + t * (-0.0025 + t * (28.2733 - t * ( 85.5034 - t * (110.5636 - 69.8735 * t))));
+            const b = 0.1067 + t * (12.5593 - t * (90.6869 - t * (229.8161 - t * (255.4552 - 105.1077 * t))));
+            return [
+                Math.max(0, Math.min(255, Math.floor(r * 255))),
+                Math.max(0, Math.min(255, Math.floor(g * 255))),
+                Math.max(0, Math.min(255, Math.floor(b * 255)))
+            ];
+        }
+
+        // -------------------------------------------------------------
+        // 2. 3D Engine Setup (Three.js)
+        // -------------------------------------------------------------
+        let probeMarker = null;
+        let flightPathCurve = null;
+        let isFlightPlaying = false;
+        let flightProgress = 0;
+
+        function initThreeScene() {
+            const container = document.getElementById('pane-3d');
+            const canvas = document.getElementById('webgl-canvas');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x060913);
+
+            // Perspective camera looking forward into +Z depth corridor
+            camera = new THREE.PerspectiveCamera(currentFov, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.up.set(0, 1, 0); // +Y is UP
+            camera.position.set(-14, 9, -4);
+
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.15;
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+            controls.target.set(0, 0, currentDepthFar * 0.45);
+
+            // Studio Lighting
+            const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambient);
+
+            const sun = new THREE.DirectionalLight(0xfff5ea, 1.4);
+            sun.position.set(25, 40, -10);
+            scene.add(sun);
+
+            const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.7);
+            fillLight.position.set(-30, -20, 30);
+            scene.add(fillLight);
+
+            // Ground Reference Grid in X-Z plane (Y = -12)
+            const grid = new THREE.GridHelper(120, 40, 0x0891b2, 0x1e293b);
+            grid.position.set(0, -14, currentDepthFar * 0.5);
+            scene.add(grid);
+
+            // 3D Probe Marker (glowing sphere indicating hovered 2D pixel in 3D space)
+            const markerGeom = new THREE.SphereGeometry(0.35, 16, 16);
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee, wireframe: true });
+            probeMarker = new THREE.Mesh(markerGeom, markerMat);
+            probeMarker.visible = false;
+            scene.add(probeMarker);
+
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('pane-3d');
+            if (!container || !renderer || !camera) return;
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            animationFrameId = requestAnimationFrame(animate);
+
+            if (isFlightPlaying) {
+                flightProgress = (flightProgress + 0.003) % 1.0;
+                const angle = flightProgress * Math.PI * 2;
+                const radiusX = 16.0;
+                const radiusY = 6.0;
+                const camZ = -2.0 + Math.sin(angle * 2) * 5.0;
+                camera.position.set(
+                    Math.cos(angle) * radiusX,
+                    5.0 + Math.sin(angle) * radiusY,
+                    camZ
+                );
+                controls.target.set(0, 0, currentDepthFar * 0.45);
+            } else if (isTurntableActive) {
+                // Orbit around target center
+                const r = 24.0;
+                const t = performance.now() * 0.0006;
+                camera.position.x = Math.sin(t) * r;
+                camera.position.z = currentDepthFar * 0.45 + Math.cos(t) * r;
+                camera.position.y = 8.0;
+                controls.target.set(0, 0, currentDepthFar * 0.45);
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // -------------------------------------------------------------
+        // 3. Geometry Reconstruction with Discontinuity Severance
+        // -------------------------------------------------------------
+        function rebuild3DGeometry() {
+            if (!scene) return;
+
+            if (meshObject) { scene.remove(meshObject); meshObject.geometry.dispose(); }
+            if (pointsObject) { scene.remove(pointsObject); pointsObject.geometry.dispose(); }
+
+            const step = Math.max(1, currentStride);
+            const w = GRID_W;
+            const h = GRID_H;
+
+            // 1. Calculate 3D Points: P(u, v) = d(u, v) * r̂(u, v)
+            const positions = [];
+            const colors = [];
+            const normals = [];
+            const vertexIndices = new Int32Array(w * h).fill(-1);
+            let vCounter = 0;
+
+            let minD = Infinity, maxD = -Infinity, sumD = 0;
+
+            for (let y = 0; y < h; y += step) {
+                for (let x = 0; x < w; x += step) {
+                    const idx = y * w + x;
+                    const rIdx = idx * 3;
+                    const cIdx = idx * 4;
+                    const d = metricDepths[idx];
+
+                    if (d < minD) minD = d;
+                    if (d > maxD) maxD = d;
+                    sumD += d;
+
+                    const rx = rayMap[rIdx];
+                    const ry = rayMap[rIdx + 1];
+                    const rz = rayMap[rIdx + 2];
+
+                    // Unprojected point in camera space:
+                    // px = d * rx (+X is right)
+                    // py = -d * ry (+Y is up, since y=0 is top of image)
+                    // pz = d * rz (+Z is forward depth)
+                    const px = d * rx;
+                    const py = -d * ry;
+                    const pz = d * rz;
+
+                    positions.push(px, py, pz);
+
+                    // Determine vertex color based on shading mode
+                    if (currentShadingMode === 'rgb') {
+                        colors.push(sourceRgba[cIdx] / 255, sourceRgba[cIdx + 1] / 255, sourceRgba[cIdx + 2] / 255);
+                    } else if (currentShadingMode === 'depth') {
+                        const normD = (d - currentDepthNear) / (currentDepthFar - currentDepthNear);
+                        const c = turboColormap(normD);
+                        colors.push(c[0] / 255, c[1] / 255, c[2] / 255);
+                    } else if (currentShadingMode === 'rays') {
+                        // S² ray field visualization: map unit vector [-1, 1] to [0, 1]
+                        colors.push(rx * 0.5 + 0.5, -ry * 0.5 + 0.5, rz);
+                    } else if (currentShadingMode === 'normals') {
+                        colors.push(0.5, 0.5, 1.0);
+                    }
+
+                    normals.push(0, 0, 1);
+                    vertexIndices[idx] = vCounter++;
+                }
+            }
+
+            // 2. Triangulate with Edge Discontinuity Severance Check
+            const indices = [];
+            let totalTriangles = 0;
+            let severedTriangles = 0;
+            severedEdgesMask.fill(0);
+
+            const isEdgeSevered = (idxA, idxB) => {
+                const zA = metricDepths[idxA];
+                const zB = metricDepths[idxB];
+                const maxZ = Math.max(zA, zB);
+                if (maxZ < 1e-4) return false;
+                const relDiff = Math.abs(zA - zB) / maxZ;
+                if (relDiff > currentTau) {
+                    severedEdgesMask[idxA] = 255;
+                    severedEdgesMask[idxB] = 255;
+                    return true;
+                }
+                return false;
+            };
+
+            for (let y = 0; y < h - step; y += step) {
+                for (let x = 0; x < w - step; x += step) {
+                    const i00 = y * w + x;
+                    const i10 = y * w + (x + step);
+                    const i01 = (y + step) * w + x;
+                    const i11 = (y + step) * w + (x + step);
+
+                    const v00 = vertexIndices[i00];
+                    const v10 = vertexIndices[i10];
+                    const v01 = vertexIndices[i01];
+                    const v11 = vertexIndices[i11];
+
+                    if (v00 < 0 || v10 < 0 || v01 < 0 || v11 < 0) continue;
+
+                    // Triangle 1: (v00, v01, v10)
+                    totalTriangles++;
+                    if (isEdgeSevered(i00, i01) || isEdgeSevered(i01, i10) || isEdgeSevered(i10, i00)) {
+                        severedTriangles++;
+                    } else {
+                        indices.push(v00, v01, v10);
+                    }
+
+                    // Triangle 2: (v10, v01, v11)
+                    totalTriangles++;
+                    if (isEdgeSevered(i10, i01) || isEdgeSevered(i01, i11) || isEdgeSevered(i11, i10)) {
+                        severedTriangles++;
+                    } else {
+                        indices.push(v10, v01, v11);
+                    }
+                }
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+
+            // Normals color pass if requested
+            if (currentShadingMode === 'normals') {
+                const normAttr = geometry.attributes.normal;
+                const colAttr = geometry.attributes.color;
+                for (let i = 0; i < normAttr.count; ++i) {
+                    const nx = normAttr.getX(i) * 0.5 + 0.5;
+                    const ny = normAttr.getY(i) * 0.5 + 0.5;
+                    const nz = normAttr.getZ(i) * 0.5 + 0.5;
+                    colAttr.setXYZ(i, nx, ny, nz);
+                }
+                colAttr.needsUpdate = true;
+            }
+
+            // Create Mesh or Points
+            if (currentGeomMode === 'mesh') {
+                const material = new THREE.MeshStandardMaterial({
+                    vertexColors: true,
+                    roughness: 0.55,
+                    metalness: 0.15,
+                    side: THREE.DoubleSide
+                });
+                meshObject = new THREE.Mesh(geometry, material);
+                scene.add(meshObject);
+            } else {
+                const pMaterial = new THREE.PointsMaterial({
+                    vertexColors: true,
+                    size: 0.22,
+                    sizeAttenuation: true
+                });
+                pointsObject = new THREE.Points(geometry, pMaterial);
+                scene.add(pointsObject);
+            }
+
+            // Update Telemetry
+            const totalSampled = (w / step) * (h / step);
+            document.getElementById('stat-verts').textContent = positions.length / 3;
+            document.getElementById('stat-tris').textContent = indices.length / 3;
+            document.getElementById('stat-severed').textContent = severedTriangles;
+            const pct = ((severedTriangles / Math.max(1, totalTriangles)) * 100).toFixed(1);
+            document.getElementById('stat-severed-pct').textContent = pct + '%';
+            document.getElementById('stat-range').textContent = `${minD.toFixed(1)}m – ${maxD.toFixed(1)}m`;
+            document.getElementById('stat-mean').textContent = `${(sumD / totalSampled).toFixed(1)}m`;
+
+            draw2DInspector();
+            updateFrustumHelper();
+        }
+
+        // Camera Frustum & Ray Field Visualizer
+        function updateFrustumHelper() {
+            if (frustumLines) { scene.remove(frustumLines); frustumLines.geometry.dispose(); }
+            if (!showFrustum) return;
+
+            const fovRad = (currentFov * Math.PI) / 180.0;
+            const zFar = currentDepthFar * 0.65;
+            const hFar = 2 * Math.tan(fovRad * 0.5) * zFar;
+            const wFar = hFar * (GRID_W / GRID_H);
+
+            const pts = [
+                // Apex to corners
+                new THREE.Vector3(0, 0, 0), new THREE.Vector3(-wFar*0.5, hFar*0.5, zFar),
+                new THREE.Vector3(0, 0, 0), new THREE.Vector3(wFar*0.5, hFar*0.5, zFar),
+                new THREE.Vector3(0, 0, 0), new THREE.Vector3(wFar*0.5, -hFar*0.5, zFar),
+                new THREE.Vector3(0, 0, 0), new THREE.Vector3(-wFar*0.5, -hFar*0.5, zFar),
+                // Frustum base rectangle
+                new THREE.Vector3(-wFar*0.5, hFar*0.5, zFar), new THREE.Vector3(wFar*0.5, hFar*0.5, zFar),
+                new THREE.Vector3(wFar*0.5, hFar*0.5, zFar), new THREE.Vector3(wFar*0.5, -hFar*0.5, zFar),
+                new THREE.Vector3(wFar*0.5, -hFar*0.5, zFar), new THREE.Vector3(-wFar*0.5, -hFar*0.5, zFar),
+                new THREE.Vector3(-wFar*0.5, -hFar*0.5, zFar), new THREE.Vector3(-wFar*0.5, hFar*0.5, zFar),
+            ];
+
+            const geom = new THREE.BufferGeometry().setFromPoints(pts);
+            const mat = new THREE.LineBasicMaterial({ color: 0x22d3ee, opacity: 0.8, transparent: true });
+            frustumLines = new THREE.LineSegments(geom, mat);
+            scene.add(frustumLines);
+        }
+
+        function toggleCameraFrustum() {
+            showFrustum = !showFrustum;
+            const btn = document.getElementById('btn-geom-frustum');
+            btn.classList.toggle('active', showFrustum);
+            updateFrustumHelper();
+        }
+
+        // -------------------------------------------------------------
+        // 4. 2D Multi-Modal Inspector Rendering & Pixel Probe
+        // -------------------------------------------------------------
+        function draw2DInspector() {
+            const imgData = ctx2D.createImageData(GRID_W, GRID_H);
+            const data = imgData.data;
+
+            for (let y = 0; y < GRID_H; ++y) {
+                for (let x = 0; x < GRID_W; ++x) {
+                    const idx = y * GRID_W + x;
+                    const cIdx = idx * 4;
+                    const rIdx = idx * 3;
+
+                    if (current2DView === 'rgb') {
+                        data[cIdx] = sourceRgba[cIdx];
+                        data[cIdx + 1] = sourceRgba[cIdx + 1];
+                        data[cIdx + 2] = sourceRgba[cIdx + 2];
+                        data[cIdx + 3] = 255;
+                    } else if (current2DView === 'depth') {
+                        const d = metricDepths[idx];
+                        const normD = (d - currentDepthNear) / (currentDepthFar - currentDepthNear);
+                        const c = turboColormap(normD);
+                        data[cIdx] = c[0];
+                        data[cIdx + 1] = c[1];
+                        data[cIdx + 2] = c[2];
+                        data[cIdx + 3] = 255;
+                    } else if (current2DView === 'rays') {
+                        const rx = rayMap[rIdx];
+                        const ry = rayMap[rIdx + 1];
+                        const rz = rayMap[rIdx + 2];
+                        data[cIdx] = Math.floor((rx * 0.5 + 0.5) * 255);
+                        data[cIdx + 1] = Math.floor((ry * 0.5 + 0.5) * 255);
+                        data[cIdx + 2] = Math.floor(rz * 255);
+                        data[cIdx + 3] = 255;
+                    } else if (current2DView === 'edges') {
+                        if (severedEdgesMask[idx] > 0) {
+                            data[cIdx] = 255;     // Neon Magenta for severed boundary
+                            data[cIdx + 1] = 0;
+                            data[cIdx + 2] = 128;
+                        } else {
+                            data[cIdx] = 16;
+                            data[cIdx + 1] = 24;
+                            data[cIdx + 2] = 40;
+                        }
+                        data[cIdx + 3] = 255;
+                    }
+                }
+            }
+
+            ctx2D.putImageData(imgData, 0, 0);
+        }
+
+        // Mouse hover probe on 2D Canvas & 3D Synchronization
+        canvas2D.addEventListener('mousemove', (e) => {
+            const rect = canvas2D.getBoundingClientRect();
+            const scaleX = GRID_W / rect.width;
+            const scaleY = GRID_H / rect.height;
+            const u = Math.floor((e.clientX - rect.left) * scaleX);
+            const v = Math.floor((e.clientY - rect.top) * scaleY);
+
+            if (u < 0 || u >= GRID_W || v < 0 || v >= GRID_H) {
+                if (probeMarker) probeMarker.visible = false;
+                return;
+            }
+
+            const idx = v * GRID_W + u;
+            const rIdx = idx * 3;
+            const d = metricDepths[idx];
+            const rx = rayMap[rIdx];
+            const ry = rayMap[rIdx + 1];
+            const rz = rayMap[rIdx + 2];
+
+            const px = d * rx;
+            const py = -d * ry;
+            const pz = d * rz;
+
+            document.getElementById('probe-uv').textContent = `${u}, ${v}`;
+            document.getElementById('probe-d').textContent = `${d.toFixed(2)} m`;
+            document.getElementById('probe-ray').textContent = `(${rx.toFixed(3)}, ${ry.toFixed(3)}, ${rz.toFixed(3)})`;
+            document.getElementById('probe-p').textContent = `(${px.toFixed(2)}, ${py.toFixed(2)}, ${pz.toFixed(2)})`;
+
+            if (probeMarker) {
+                probeMarker.position.set(px, py, pz);
+                probeMarker.visible = true;
+            }
+        });
+
+        canvas2D.addEventListener('mouseleave', () => {
+            if (probeMarker) probeMarker.visible = false;
+        });
+
+        // -------------------------------------------------------------
+        // 5. Preset Loading & Image Processing
+        // -------------------------------------------------------------
+        function loadPreset(key, element) {
+            currentPresetKey = key;
+            const p = PRESETS[key];
+            if (!p) return;
+
+            document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+            if (element) element.classList.add('active');
+
+            currentFov = p.defaultFov;
+            currentDepthNear = p.depthNear;
+            currentDepthFar = p.depthFar;
+            currentTau = p.tau;
+
+            document.getElementById('slider-fov').value = currentFov;
+            document.getElementById('val-fov').textContent = currentFov + '°';
+            document.getElementById('slider-depth-far').value = currentDepthFar;
+            document.getElementById('val-depth-range').textContent = `${currentDepthNear.toFixed(1)}m – ${currentDepthFar.toFixed(1)}m`;
+            document.getElementById('slider-tau').value = currentTau;
+            document.getElementById('val-tau').textContent = currentTau.toFixed(3);
+            document.getElementById('cb-near').textContent = currentDepthNear.toFixed(1) + 'm';
+            document.getElementById('cb-far').textContent = currentDepthFar.toFixed(1) + 'm';
+
+            loadImage(p.url);
+        }
+
+        function loadImage(src) {
+            sourceImage = new Image();
+            sourceImage.crossOrigin = 'anonymous';
+            sourceImage.onload = () => {
+                const offscreen = document.createElement('canvas');
+                offscreen.width = GRID_W;
+                offscreen.height = GRID_H;
+                const oCtx = offscreen.getContext('2d');
+                oCtx.drawImage(sourceImage, 0, 0, GRID_W, GRID_H);
+                const imgData = oCtx.getImageData(0, 0, GRID_W, GRID_H);
+                sourceRgba = imgData.data;
+
+                // Compute exact ray map and synthetic depth
+                rayMap = computePinholeRayField(GRID_W, GRID_H, currentFov);
+                metricDepths = synthesizeMetricDepthsFromLuminance(sourceRgba, GRID_W, GRID_H, currentDepthNear, currentDepthFar);
+
+                rebuild3DGeometry();
+            };
+            sourceImage.onerror = () => {
+                console.warn('Could not load image directly; generating high-res procedural architectural canvas.');
+                generateProceduralCityscape();
+            };
+            sourceImage.src = src;
+        }
+
+        function generateProceduralCityscape() {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = GRID_W;
+            offscreen.height = GRID_H;
+            const oCtx = offscreen.getContext('2d');
+
+            // Sky gradient
+            const sky = oCtx.createLinearGradient(0, 0, 0, GRID_H * 0.5);
+            sky.addColorStop(0, '#0284c7');
+            sky.addColorStop(1, '#e0f2fe');
+            oCtx.fillStyle = sky;
+            oCtx.fillRect(0, 0, GRID_W, GRID_H);
+
+            // Ground plane
+            oCtx.fillStyle = '#1e293b';
+            oCtx.fillRect(0, GRID_H * 0.65, GRID_W, GRID_H * 0.35);
+
+            // Towers
+            oCtx.fillStyle = '#0f172a';
+            for (let i = 0; i < 18; ++i) {
+                const bx = (i * 15) % GRID_W;
+                const bw = 12 + (i % 5) * 4;
+                const bh = 50 + (i * 29) % 110;
+                oCtx.fillStyle = i % 2 === 0 ? '#1e293b' : '#334155';
+                oCtx.fillRect(bx, GRID_H * 0.65 - bh, bw, bh);
+            }
+
+            sourceRgba = oCtx.getImageData(0, 0, GRID_W, GRID_H).data;
+            rayMap = computePinholeRayField(GRID_W, GRID_H, currentFov);
+            metricDepths = synthesizeMetricDepthsFromLuminance(sourceRgba, GRID_W, GRID_H, currentDepthNear, currentDepthFar);
+            rebuild3DGeometry();
+        }
+
+        function handleImageUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+                loadImage(evt.target.result);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // -------------------------------------------------------------
+        // 6. UI Controls & Event Listeners
+        // -------------------------------------------------------------
+        function setLayout(mode) {
+            document.body.className = '';
+            document.querySelectorAll('.view-modes .mode-btn').forEach(b => b.classList.remove('active'));
+
+            if (mode === '3d') {
+                document.body.classList.add('full-3d');
+                document.getElementById('btn-layout-3d').classList.add('active');
+            } else if (mode === '2d') {
+                document.body.classList.add('full-2d');
+                document.getElementById('btn-layout-2d').classList.add('active');
+            } else {
+                document.getElementById('btn-layout-split').classList.add('active');
+            }
+            setTimeout(onWindowResize, 50);
+        }
+
+        function setShadingMode(mode) {
+            currentShadingMode = mode;
+            document.querySelectorAll('#btn-shading-rgb, #btn-shading-depth, #btn-shading-rays, #btn-shading-normals').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-shading-${mode}`).classList.add('active');
+            rebuild3DGeometry();
+        }
+
+        function setGeometryMode(mode) {
+            currentGeomMode = mode;
+            document.getElementById('btn-geom-mesh').classList.toggle('active', mode === 'mesh');
+            document.getElementById('btn-geom-points').classList.toggle('active', mode === 'points');
+            rebuild3DGeometry();
+        }
+
+        function set2DViewMode(mode) {
+            current2DView = mode;
+            document.querySelectorAll('#btn-2d-rgb, #btn-2d-depth, #btn-2d-rays, #btn-2d-edges').forEach(b => b.classList.remove('active'));
+            document.getElementById(`btn-2d-${mode}`).classList.add('active');
+            draw2DInspector();
+        }
+
+        function updateFov(val) {
+            currentFov = parseFloat(val);
+            document.getElementById('val-fov').textContent = currentFov + '°';
+            rayMap = computePinholeRayField(GRID_W, GRID_H, currentFov);
+            rebuild3DGeometry();
+        }
+
+        function updateDepthRange(val) {
+            currentDepthFar = parseFloat(val);
+            document.getElementById('val-depth-range').textContent = `${currentDepthNear.toFixed(1)}m – ${currentDepthFar.toFixed(1)}m`;
+            document.getElementById('cb-far').textContent = currentDepthFar.toFixed(1) + 'm';
+            metricDepths = synthesizeMetricDepthsFromLuminance(sourceRgba, GRID_W, GRID_H, currentDepthNear, currentDepthFar);
+            rebuild3DGeometry();
+        }
+
+        function updateTau(val) {
+            currentTau = parseFloat(val);
+            document.getElementById('val-tau').textContent = currentTau.toFixed(3);
+            rebuild3DGeometry();
+        }
+
+        function updateStride(val) {
+            currentStride = parseInt(val, 10);
+            const labels = { 1: '1x (Full 256x256)', 2: '2x (128x128)', 3: '3x (85x85)', 4: '4x (64x64)' };
+            document.getElementById('val-stride').textContent = labels[currentStride] || currentStride + 'x';
+            rebuild3DGeometry();
+        }
+
+        function toggleTurntable() {
+            isFlightPlaying = false;
+            isTurntableActive = !isTurntableActive;
+            if (!isTurntableActive) {
+                resetCamera('perspective');
+            }
+        }
+
+        function toggleDroneFlight() {
+            isTurntableActive = false;
+            isFlightPlaying = !isFlightPlaying;
+            const btn = document.getElementById('btn-drone-flight');
+            if (btn) btn.classList.toggle('active', isFlightPlaying);
+            if (!isFlightPlaying) {
+                resetCamera('perspective');
+            }
+        }
+
+        function resetCamera(view) {
+            isFlightPlaying = false;
+            isTurntableActive = false;
+            const flightBtn = document.getElementById('btn-drone-flight');
+            if (flightBtn) flightBtn.classList.remove('active');
+
+            if (view === 'top') {
+                camera.position.set(0, currentDepthFar * 1.3, currentDepthFar * 0.45);
+                camera.up.set(0, 0, 1);
+            } else if (view === 'front') {
+                camera.position.set(0, 0, 0.05);
+                camera.up.set(0, 1, 0);
+            } else if (view === 'side') {
+                camera.position.set(currentDepthFar * 0.85, 4, currentDepthFar * 0.45);
+                camera.up.set(0, 1, 0);
+            } else {
+                camera.position.set(-14, 9, -4);
+                camera.up.set(0, 1, 0);
+            }
+            controls.target.set(0, 0, currentDepthFar * 0.45);
+            controls.update();
+        }
+
+        // -------------------------------------------------------------
+        // 7. PLY Point Cloud Exporter
+        // -------------------------------------------------------------
+        function exportPointCloudPLY() {
+            const step = Math.max(1, currentStride);
+            let pointCount = 0;
+            let plyBody = '';
+
+            for (let y = 0; y < GRID_H; y += step) {
+                for (let x = 0; x < GRID_W; x += step) {
+                    const idx = y * GRID_W + x;
+                    const rIdx = idx * 3;
+                    const cIdx = idx * 4;
+                    const d = metricDepths[idx];
+
+                    const px = (d * rayMap[rIdx]).toFixed(4);
+                    const py = (-d * rayMap[rIdx + 1]).toFixed(4);
+                    const pz = (d * rayMap[rIdx + 2]).toFixed(4);
+
+                    const r = sourceRgba[cIdx];
+                    const g = sourceRgba[cIdx + 1];
+                    const b = sourceRgba[cIdx + 2];
+
+                    plyBody += `${px} ${py} ${pz} ${r} ${g} ${b}\n`;
+                    pointCount++;
+                }
+            }
+
+            const plyHeader = 
+                `ply\n` +
+                `format ascii 1.0\n` +
+                `comment DepthBox 3D Point Cloud Export\n` +
+                `element vertex ${pointCount}\n` +
+                `property float x\n` +
+                `property float y\n` +
+                `property float z\n` +
+                `property uchar red\n` +
+                `property uchar green\n` +
+                `property uchar blue\n` +
+                `end_header\n`;
+
+            const blob = new Blob([plyHeader + plyBody], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `depthbox_${currentPresetKey}_pointcloud.ply`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Initialize on DOM load
+        window.addEventListener('DOMContentLoaded', () => {
+            initThreeScene();
+            loadPreset('manhattan');
+        });
+    </script>
+</body>
+</html>

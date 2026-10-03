@@ -202,8 +202,6 @@ struct HandPcaSubspace {
             +0.8510f, +0.2769f, -0.0915f, // 12: Thumb1
             -0.4998f, +0.0266f, +0.0529f, // 13: Thumb2
             +0.5356f, +0.0460f, -0.2774f  // 14: Thumb3
-        };
-        static constexpr auto& SMPLX_HANDS_MEAN_L = SBHUMAN_HANDS_MEAN_L;
         meanPose = SBHUMAN_HANDS_MEAN_L;
 
         for (size_t c = 0; c < NUM_COMPONENTS; ++c) {

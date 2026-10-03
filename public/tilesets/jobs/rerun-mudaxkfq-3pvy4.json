@@ -1,0 +1,1246 @@
+{
+  "id": "rerun-mudaxkfq-3pvy4",
+  "kind": "rerun-pipeline",
+  "status": "done",
+  "progress": 1,
+  "message": "Complete! Fused 30,913,317 splats.",
+  "createdAt": 1790119502774,
+  "updatedAt": 1790119893706,
+  "request": {
+    "location": "colosseum",
+    "activeModel": "colosseum_clay",
+    "forceRebake": true,
+    "clean": false,
+    "reusePlates": true,
+    "use2dgs": true,
+    "shDegree": 0,
+    "sigmaScale": 1,
+    "voxelSizeMeters": 0.025,
+    "surveyPreset": "interior-pilot-40",
+    "cameraCount": 40
+  },
+  "result": {
+    "success": true,
+    "stations": [
+      {
+        "stationId": 1,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1473354,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 1",
+        "positionLocalENU": [
+          0,
+          10.254,
+          110
+        ],
+        "forwardVector": [
+          0,
+          -0.03865966046809485,
+          -0.9992524359002041
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_01",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001.splat"
+      },
+      {
+        "stationId": 2,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1151370,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 2",
+        "positionLocalENU": [
+          54.99999999999999,
+          26.099,
+          95.26279441628826
+        ],
+        "forwardVector": [
+          -0.4918522438455147,
+          -0.17979288333115295,
+          -0.8519130761571881
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_02",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002.splat"
+      },
+      {
+        "stationId": 3,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1071375,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 3",
+        "positionLocalENU": [
+          95.26279441628824,
+          13.797,
+          55.000000000000014
+        ],
+        "forwardVector": [
+          -0.8638565381572474,
+          -0.07072841468581195,
+          -0.49874780484630515
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_03",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003.splat"
+      },
+      {
+        "stationId": 4,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1334002,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 4",
+        "positionLocalENU": [
+          110,
+          13.914,
+          6.735557395310443e-15
+        ],
+        "forwardVector": [
+          -0.9974201842286469,
+          -0.07178423290174445,
+          -6.107437180102877e-17
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_04",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004.splat"
+      },
+      {
+        "stationId": 5,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1896954,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 5",
+        "positionLocalENU": [
+          95.26279441628826,
+          36.027,
+          -54.99999999999998
+        ],
+        "forwardVector": [
+          -0.8354416922045529,
+          -0.26340635002822343,
+          0.48234248588653483
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_05",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005.splat"
+      },
+      {
+        "stationId": 6,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1559698,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 6",
+        "positionLocalENU": [
+          54.99999999999999,
+          41.65,
+          -95.26279441628826
+        ],
+        "forwardVector": [
+          -0.4756314844677856,
+          -0.3083808747829257,
+          0.8238178967776121
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_06",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006.splat"
+      },
+      {
+        "stationId": 7,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1020677,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 7",
+        "positionLocalENU": [
+          1.3471114790620885e-14,
+          40.409,
+          -110
+        ],
+        "forwardVector": [
+          -1.1687690942883826e-16,
+          -0.29861905261854926,
+          0.9543723913720473
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_07",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007.splat"
+      },
+      {
+        "stationId": 8,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 921142,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 8",
+        "positionLocalENU": [
+          -54.99999999999997,
+          11.986,
+          -95.26279441628827
+        ],
+        "forwardVector": [
+          0.4992607658696843,
+          -0.054357618167687256,
+          0.8647450127120435
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_08",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008.splat"
+      },
+      {
+        "stationId": 9,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1083284,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 9",
+        "positionLocalENU": [
+          -95.26279441628823,
+          13.953,
+          -55.00000000000005
+        ],
+        "forwardVector": [
+          0.8637692314884365,
+          -0.07213611886681326,
+          0.4986973983175655
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_09",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009.splat"
+      },
+      {
+        "stationId": 10,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 847436,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 10",
+        "positionLocalENU": [
+          -110,
+          3.5,
+          -2.0206672185931328e-14
+        ],
+        "forwardVector": [
+          0.9997418355449427,
+          0.02272140535329415,
+          1.8364959583107202e-16
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_10",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010.splat"
+      },
+      {
+        "stationId": 11,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1801574,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 11",
+        "positionLocalENU": [
+          -95.26279441628824,
+          13.448,
+          55.000000000000014
+        ],
+        "forwardVector": [
+          0.8640456874665106,
+          -0.06757760941342462,
+          -0.49885701025092527
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_11",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011.splat"
+      },
+      {
+        "stationId": 12,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1213206,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 12",
+        "positionLocalENU": [
+          -55.00000000000005,
+          3.5,
+          95.26279441628822
+        ],
+        "forwardVector": [
+          0.4998709177724719,
+          0.022721405353294158,
+          -0.8658018268080047
+        ],
+        "name": "AMPHITHEATRE_TIER_1_STREET_STATION_12",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012.splat"
+      },
+      {
+        "stationId": 13,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1568187,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 13",
+        "positionLocalENU": [
+          49.748846207461675,
+          20,
+          120.10433922646727
+        ],
+        "forwardVector": [
+          -0.3826381524226294,
+          0.015382795043203983,
+          -0.9237702170600953
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_13",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013.splat"
+      },
+      {
+        "stationId": 14,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1108925,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 14",
+        "positionLocalENU": [
+          120.10433922646727,
+          20,
+          49.74884620746168
+        ],
+        "forwardVector": [
+          -0.9237702170600951,
+          0.01538279504320398,
+          -0.38263815242262933
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_14",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014.splat"
+      },
+      {
+        "stationId": 15,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1079237,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 15",
+        "positionLocalENU": [
+          120.10433922646727,
+          38.462,
+          -49.74884620746167
+        ],
+        "forwardVector": [
+          -0.9165581568581403,
+          -0.12564394343198515,
+          0.37965081927432837
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_15",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015.splat"
+      },
+      {
+        "stationId": 16,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1642642,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 16",
+        "positionLocalENU": [
+          49.74884620746169,
+          31.765,
+          -120.10433922646727
+        ],
+        "forwardVector": [
+          -0.3816080629590992,
+          -0.07491498403118806,
+          0.921283361106783
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_16",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016.splat"
+      },
+      {
+        "stationId": 17,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1575460,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 17",
+        "positionLocalENU": [
+          -49.74884620746165,
+          34.175,
+          -120.10433922646729
+        ],
+        "forwardVector": [
+          0.38101566953391797,
+          -0.09325854269733695,
+          0.9198531968654504
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_17",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017.splat"
+      },
+      {
+        "stationId": 18,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1013719,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 18",
+        "positionLocalENU": [
+          -120.10433922646725,
+          20,
+          -49.748846207461746
+        ],
+        "forwardVector": [
+          0.9237702170600951,
+          0.015382795043203983,
+          0.38263815242262994
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_18",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018.splat"
+      },
+      {
+        "stationId": 19,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1330771,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 19",
+        "positionLocalENU": [
+          -120.10433922646726,
+          29.744,
+          49.7488462074617
+        ],
+        "forwardVector": [
+          0.9222442064038637,
+          -0.05947264345783103,
+          -0.38200605811249266
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_19",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019.splat"
+      },
+      {
+        "stationId": 20,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 1362141,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 20",
+        "positionLocalENU": [
+          -49.74884620746175,
+          20,
+          120.10433922646725
+        ],
+        "forwardVector": [
+          0.38263815242263,
+          0.015382795043203983,
+          -0.9237702170600951
+        ],
+        "name": "AMPHITHEATRE_TIER_2_FACADE_STATION_20",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020.splat"
+      },
+      {
+        "stationId": 21,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 558450,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 21",
+        "positionLocalENU": [
+          150,
+          38,
+          9.184850993605149e-15
+        ],
+        "forwardVector": [
+          -0.9992009587217894,
+          0.039968038348871575,
+          -6.11834127901803e-17
+        ],
+        "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_21",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021.splat"
+      },
+      {
+        "stationId": 22,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 618353,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 22",
+        "positionLocalENU": [
+          1.8369701987210297e-14,
+          38,
+          -150
+        ],
+        "forwardVector": [
+          -1.223668255803606e-16,
+          0.039968038348871575,
+          0.9992009587217894
+        ],
+        "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_22",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022.splat"
+      },
+      {
+        "stationId": 23,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 799612,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 23",
+        "positionLocalENU": [
+          -150,
+          38,
+          -2.7554552980815446e-14
+        ],
+        "forwardVector": [
+          0.9992009587217894,
+          0.039968038348871575,
+          1.835502383705409e-16
+        ],
+        "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_23",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023.splat"
+      },
+      {
+        "stationId": 24,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": false,
+        "splatCount": 878564,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024_blockout.png",
+        "qc": {
+          "passed": true,
+          "overlapPercent": 95,
+          "residualPx": 1,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0,
+          "deltaPositionM": 0
+        },
+        "prompt": "Photorealistic view of station 24",
+        "positionLocalENU": [
+          -3.6739403974420595e-14,
+          38,
+          150
+        ],
+        "forwardVector": [
+          2.447336511607212e-16,
+          0.039968038348871575,
+          -0.9992009587217894
+        ],
+        "name": "AMPHITHEATRE_TIER_3_ATTIC_STATION_24",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024.splat"
+      },
+      {
+        "stationId": 25,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 359037,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_025_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_025_blockout.png",
+        "qc": {
+          "overlapPercent": 56.82887600665034,
+          "residualPx": 0.9747415820867082,
+          "deltaYawDeg": 0.06998315359339813,
+          "deltaPitchDeg": 0.08522217530692444,
+          "deltaPositionM": 0.026250000000000107,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890104, 12.492512, facing 113°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890104,12.492512,0a,400d,35y,113h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Camera lock: 24mm lens, 73.7° horizontal field of view, pitch 20.4°, 4.5 m above ground; the horizon sits at 94% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          25.868626910316028,
+          4.47375,
+          10.715136106222516
+        ],
+        "forwardVector": [
+          0.86576674795288,
+          0.35033089072813756,
+          0.35737404094411224
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_25",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_025.splat"
+      },
+      {
+        "stationId": 26,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 997368,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_026_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_026_blockout.png",
+        "qc": {
+          "overlapPercent": 51.143170269649715,
+          "residualPx": 1.1211888812325326,
+          "deltaYawDeg": 0.052759638214183724,
+          "deltaPitchDeg": 0.04163242978998127,
+          "deltaPositionM": 0.03750000000000142,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890296, 12.492512, facing 68°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890296,12.492512,0a,400d,35y,68h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 21 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 24mm lens, 73.7° horizontal field of view, pitch 20.4°, 4.5 m above ground; the horizon sits at 94% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          25.831126910316026,
+          4.5,
+          -10.715136106222513
+        ],
+        "forwardVector": [
+          0.8652450655563138,
+          0.3496182187936034,
+          -0.3593300399605335
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_26",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_026.splat"
+      },
+      {
+        "stationId": 27,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1521650,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_027_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_027_blockout.png",
+        "qc": {
+          "overlapPercent": 47.46646026214426,
+          "residualPx": 1.177947725236393,
+          "deltaYawDeg": 0.06766206253428209,
+          "deltaPitchDeg": 0.03889583020039211,
+          "deltaPositionM": 0,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890433, 12.492329, facing 158°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890433,12.492329,0a,400d,35y,158h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 7 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 24mm lens, 73.7° horizontal field of view, pitch -14.2°, 0.1 m above ground; the horizon sits at 20% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          10.715136106222516,
+          22.089,
+          -25.868626910316028
+        ],
+        "forwardVector": [
+          0.3699748031768863,
+          -0.24487112325238652,
+          -0.8961901461248827
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_27",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_027.splat"
+      },
+      {
+        "stationId": 28,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1200435,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_028_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_028_blockout.png",
+        "qc": {
+          "overlapPercent": 48.69782614931834,
+          "residualPx": 1.1564630241429166,
+          "deltaYawDeg": 0.07065508285904798,
+          "deltaPitchDeg": 0.08455099899267537,
+          "deltaPositionM": 0.02288729177950156,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890433, 12.492071, facing 338°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890433,12.492071,0a,400d,35y,338h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 15 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 24mm lens, 73.7° horizontal field of view, pitch 20.4°, 4.5 m above ground; the horizon sits at 94% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -10.696386106222509,
+          4.4868749999999995,
+          -25.86862691031603
+        ],
+        "forwardVector": [
+          -0.3594996486408503,
+          0.3503199188455631,
+          -0.8648907197369753
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_28",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_028.splat"
+      },
+      {
+        "stationId": 29,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 552687,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_029_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_029_blockout.png",
+        "qc": {
+          "overlapPercent": 53.49252140691849,
+          "residualPx": 1.0552989686882794,
+          "deltaYawDeg": 0.06998315359339813,
+          "deltaPitchDeg": 0.08522217530693155,
+          "deltaPositionM": 0.026250000000000107,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890296, 12.491888, facing 293°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890296,12.491888,0a,400d,35y,293h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Camera lock: 24mm lens, 73.7° horizontal field of view, pitch 20.4°, 4.5 m above ground; the horizon sits at 94% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -25.868626910316024,
+          4.47375,
+          -10.715136106222529
+        ],
+        "forwardVector": [
+          -0.8657667479528801,
+          0.35033089072813745,
+          -0.3573740409441126
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_29",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_029.splat"
+      },
+      {
+        "stationId": 30,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1464932,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_030_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_030_blockout.png",
+        "qc": {
+          "overlapPercent": 39.795350457918474,
+          "residualPx": 1.2804439516483948,
+          "deltaYawDeg": 0.06507893346770288,
+          "deltaPitchDeg": 0.14052700861956424,
+          "deltaPositionM": 0.05437500000000077,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890104, 12.491888, facing -67°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890104,12.491888,0a,400d,35y,-67h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 43 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 24mm lens, 73.7° horizontal field of view, pitch -40.5°, 17 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -25.831126910316023,
+          39,
+          10.71513610622252
+        ],
+        "forwardVector": [
+          -0.7034162697112051,
+          -0.6478932374554643,
+          0.2923010509133526
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_30",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_030.splat"
+      },
+      {
+        "stationId": 31,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 928792,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_031_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_031_blockout.png",
+        "qc": {
+          "overlapPercent": 50.21788287996647,
+          "residualPx": 1.090208532703111,
+          "deltaYawDeg": 0.09134312899288943,
+          "deltaPitchDeg": 0.08762603334898955,
+          "deltaPositionM": 0.03750000000000142,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.889967, 12.492071, facing -22°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.889967,12.492071,0a,400d,35y,-22h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Camera lock: 24mm lens, 73.7° horizontal field of view, pitch -26.3°, 6.8 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -10.71513610622253,
+          28.847,
+          25.831126910316023
+        ],
+        "forwardVector": [
+          -0.3420851047657852,
+          -0.44128622051812655,
+          0.8296048774435992
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_31",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_031.splat"
+      },
+      {
+        "stationId": 32,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1708977,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_032_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_032_blockout.png",
+        "qc": {
+          "overlapPercent": 42.682677482241836,
+          "residualPx": 1.2417450623958706,
+          "deltaYawDeg": 0.1063453851442091,
+          "deltaPitchDeg": 0.08329148378957996,
+          "deltaPositionM": 0.016129359875706982,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.889967, 12.492329, facing 23°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.889967,12.492329,0a,400d,35y,23h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 12 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 24mm lens, 73.7° horizontal field of view, pitch -32.9°, 11.2 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          10.705761106222518,
+          33.178,
+          25.868626910316028
+        ],
+        "forwardVector": [
+          0.3229367653248469,
+          -0.5424139380654137,
+          0.7755636436772254
+        ],
+        "name": "AMPHITHEATRE_TIER_4_ARENA_FLOOR_STATION_32",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_032.splat"
+      },
+      {
+        "stationId": 33,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1199162,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_033_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_033_blockout.png",
+        "qc": {
+          "overlapPercent": 38.349318533555,
+          "residualPx": 1.2953598968137656,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0.0380773106817589,
+          "deltaPositionM": 0.07500000000000284,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890200, 12.492863, facing 270°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890200,12.492863,0a,400d,35y,270h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 73 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -8.5°, 20 m above ground; the horizon sits at 29% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          54.925,
+          20,
+          3.3677786976552213e-15
+        ],
+        "forwardVector": [
+          -0.9890347177483231,
+          -0.1476831983960761,
+          -6.028658540119934e-17
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_33",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_033.splat"
+      },
+      {
+        "stationId": 34,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1488942,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_034_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_034_blockout.png",
+        "qc": {
+          "overlapPercent": 21.864844865943247,
+          "residualPx": 1.5564920249293626,
+          "deltaYawDeg": 0.08357628965632102,
+          "deltaPitchDeg": 0.08308080913910487,
+          "deltaPositionM": 0.04393265442697561,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890550, 12.492669, facing -45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890550,12.492669,0a,400d,35y,-45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 67 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -25.2°, 15.4 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          38.90962296526011,
+          37.431125,
+          -38.92837296526011
+        ],
+        "forwardVector": [
+          -0.639391703120294,
+          -0.4242218302418667,
+          0.6412597669643485
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_34",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_034.splat"
+      },
+      {
+        "stationId": 35,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1471041,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_035_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_035_blockout.png",
+        "qc": {
+          "overlapPercent": 19.685900018269244,
+          "residualPx": 1.5931508720051497,
+          "deltaYawDeg": 0,
+          "deltaPitchDeg": 0.07268628373870811,
+          "deltaPositionM": 0.056250000000005684,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890695, 12.492200, facing 180°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890695,12.492200,0a,400d,35y,180h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 66 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -8.5°, 20 m above ground; the horizon sits at 29% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          6.735557395310443e-15,
+          20,
+          -55.056250000000006
+        ],
+        "forwardVector": [
+          -1.2008539891227676e-16,
+          -0.14708575443452548,
+          0.989123743948363
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_35",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_035.splat"
+      },
+      {
+        "stationId": 36,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1114401,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_036_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_036_blockout.png",
+        "qc": {
+          "overlapPercent": 39.40167174418359,
+          "residualPx": 1.2693178687962956,
+          "deltaYawDeg": 0.05377701663667267,
+          "deltaPitchDeg": 0.07326936263281603,
+          "deltaPositionM": 0.016129359875703058,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890550, 12.491731, facing 135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890550,12.491731,0a,400d,35y,135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 77 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -8.5°, 20 m above ground; the horizon sits at 29% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -38.88149796526011,
+          19.986875,
+          -38.89087296526012
+        ],
+        "forwardVector": [
+          0.7000733201588212,
+          -0.14707568846422128,
+          0.6987603940297276
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_36",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_036.splat"
+      },
+      {
+        "stationId": 37,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1375411,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_037_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_037_blockout.png",
+        "qc": {
+          "overlapPercent": 28.482107953269075,
+          "residualPx": 1.4542229589424531,
+          "deltaYawDeg": 0.052213745446579196,
+          "deltaPitchDeg": 0.08012232823785581,
+          "deltaPositionM": 0.006562500000001137,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.890200, 12.491537, facing 90°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.890200,12.491537,0a,400d,35y,90h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 23 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -34.7°, 27.5 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -55,
+          49.489,
+          -1.0103336092965664e-14
+        ],
+        "forwardVector": [
+          0.8230430039069054,
+          -0.5679785657564563,
+          -0.0007500407562133405
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_37",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_037.splat"
+      },
+      {
+        "stationId": 38,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1442055,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_038_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_038_blockout.png",
+        "qc": {
+          "overlapPercent": 22.378488916250394,
+          "residualPx": 1.5577685709043074,
+          "deltaYawDeg": 0.15321687605990064,
+          "deltaPitchDeg": 0.12579068631249513,
+          "deltaPositionM": 0.04577458355900312,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.889850, 12.491731, facing 45°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.889850,12.491731,0a,400d,35y,45h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 20 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -8.5°, 20 m above ground; the horizon sits at 29% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          -38.89087296526012,
+          20.02625,
+          38.9283729652601
+        ],
+        "forwardVector": [
+          0.6971797701910692,
+          -0.15051126551342978,
+          -0.7009184881210325
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_38",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_038.splat"
+      },
+      {
+        "stationId": 39,
+        "accepted": false,
+        "attempts": 3,
+        "usedReference": true,
+        "splatCount": 0,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_039_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_039_blockout.png",
+        "qc": {
+          "overlapPercent": 15.078902717946544,
+          "residualPx": 1.669255333221823,
+          "deltaYawDeg": 14.411984375377187,
+          "deltaPitchDeg": 6.064515559489911,
+          "deltaPositionM": 1.513127968811625,
+          "passed": false,
+          "reason": "yaw moved 14.41 deg (> 0.5); pitch moved 6.06 deg (> 0.5); position moved 1.51 m (> 0.8)"
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.889705, 12.492200, facing 0°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.889705,12.492200,0a,400d,35y,0h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 19 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -8.5°, 20 m above ground; the horizon sits at 29% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          0.7499999999999866,
+          18.880000000000003,
+          55.6875
+        ],
+        "forwardVector": [
+          -0.2486619385637104,
+          -0.04303089273294285,
+          -0.9676340127239964
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_39"
+      },
+      {
+        "stationId": 40,
+        "accepted": true,
+        "attempts": 1,
+        "usedReference": true,
+        "splatCount": 1358683,
+        "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_040_beautified.png",
+        "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_040_blockout.png",
+        "qc": {
+          "overlapPercent": 36.02405023633542,
+          "residualPx": 1.3460078082148133,
+          "deltaYawDeg": 0.09158368590760801,
+          "deltaPitchDeg": 0.03012266446383194,
+          "deltaPositionM": 0.022887291779499667,
+          "passed": true
+        },
+        "prompt": "Transform this photorealistic 3D tiles rendering of Rome Colosseum (camera at coordinates 41.889850, 12.492669, facing -135°) into a photorealistic photograph. Map reference: https://earth.google.com/web/@41.889850,12.492669,0a,400d,35y,-135h,45t,0r. This is a real location — the reference image shows the actual 3D-rendered buildings, streets, and terrain at these exact coordinates. CRITICAL FRAMING RULES — non-negotiable: (1) Output MUST use exactly 16:9 aspect ratio, matching the reference image canvas. (2) Preserve the EXACT same camera angle, pitch, yaw, viewpoint, composition, focal length, and field of view as the reference. (3) Every building, street, and rooftop must stay in the same on-image position — do not pan, zoom, crop, recompose, or change the horizon line. (4) Do not invent or add buildings, landmarks, or features that are not visible in the reference. Add realistic textures, materials, atmospheric haze, natural lighting, and fine architectural detail to make this look like a real photograph taken from this exact vantage point. Subject distance: approximately 28 meters from camera (use this for depth-of-field, focus, and aerial-perspective haze). Camera lock: 28mm lens, 65.5° horizontal field of view, pitch -34.1°, 26.7 m above ground; the horizon sits at 0% of the frame height from the top. Sun: azimuth 8° clockwise from north, elevation -48° above the horizon; cast shadows accordingly. Consistency lock: the second image is the same scene already photographed from a neighbouring vantage point and re-projected into this view; keep its materials, colours, weathering and lighting exactly, and only synthesise the regions marked white in the third image (mask). This must read as another frame of the same reference photograph.",
+        "positionLocalENU": [
+          38.9096229652601,
+          48.671125,
+          38.89087296526012
+        ],
+        "forwardVector": [
+          -0.5867163876989772,
+          -0.5601086520749821,
+          -0.5848437212420171
+        ],
+        "name": "AMPHITHEATRE_TIER_5_CAVEA_SEATING_STATION_40",
+        "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_040.splat"
+      }
+    ],
+    "fusedSplatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/fused.splat",
+    "fusedSplatCount": 30913317,
+    "tilesetPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/tileset.json",
+    "metaPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/tileset.meta.json",
+    "cropBox": {
+      "min": [
+        -115,
+        -0.5,
+        -115
+      ],
+      "max": [
+        115,
+        50,
+        115
+      ]
+    },
+    "durationMs": 390398,
+    "tilesetUrl": "/tilesets/colosseum/tileset.json",
+    "locationName": "Rome Colosseum"
+  }
+}

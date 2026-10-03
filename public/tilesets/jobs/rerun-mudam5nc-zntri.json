@@ -1,0 +1,24 @@
+{
+  "id": "rerun-mudam5nc-zntri",
+  "kind": "rerun-pipeline",
+  "status": "error",
+  "progress": 1,
+  "message": "Cannot beautify station 25: no StationImageGenerator was supplied and no cached plate exists on disk at /Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_025_beautified.png",
+  "createdAt": 1790118970392,
+  "updatedAt": 1790119004717,
+  "request": {
+    "location": "colosseum",
+    "activeModel": "colosseum_clay",
+    "forceRebake": true,
+    "clean": false,
+    "reusePlates": true,
+    "use2dgs": true,
+    "shDegree": 0,
+    "sigmaScale": 1,
+    "voxelSizeMeters": 0.025,
+    "surveyPreset": "watertight-112",
+    "cameraCount": 112
+  },
+  "result": null,
+  "error": "Command failed: /Users/eligreen/dev/scratchbox-ide-master/node_modules/.bin/vite-node /Users/eligreen/dev/scratchbox-ide-master/scripts/run_survey_pipeline_cli.ts --job-file /Users/eligreen/dev/scratchbox-ide-master/public/tilesets/jobs/rerun-mudam5nc-zntri.json\n[SurveyPipeline] Pipeline failed: Cannot beautify station 25: no StationImageGenerator was supplied and no cached plate exists on disk at /Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_025_beautified.png\n"
+}

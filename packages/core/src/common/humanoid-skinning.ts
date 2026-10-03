@@ -33,10 +33,6 @@ export const SBHUMAN22_LATERAL_REF: Array<[number, number] | null> = [
     [17, 16], null, null, null, null, null, null, null, null, null
 ];
 
-// Backward compatibility aliases
-export const SMPLX22_PARENTS = SBHUMAN22_PARENTS;
-export const SMPLX22_SEGMENT_CHILD = SBHUMAN22_SEGMENT_CHILD;
-export const SMPLX22_LATERAL_REF = SBHUMAN22_LATERAL_REF;
 
 const IDENTITY: Mat3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 

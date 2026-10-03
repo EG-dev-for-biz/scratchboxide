@@ -4,8 +4,8 @@
   "name": "Live-Action VFX Plate Coordination & Real-Time Anti-Drift Demo",
   "description": "Production-grade demo project demonstrating 6-DOF camera solve matchmove, Brown-Conrady optical lens distortion conforming, NOAA solar ephemeris lighting lock, and foreground actor depth holdouts against authentic 4K live-action video plates.",
   "version": "1.0.0",
-  "createdAt": "2026-09-18T08:00:00.000Z",
-  "updatedAt": "2026-09-18T09:30:00.000Z",
+  "createdAt": "2026-09-28T08:00:00.000Z",
+  "updatedAt": "2026-09-28T09:30:00.000Z",
   "timeline": {
     "title": "VFX Plate Anti-Drift Studio Demo",
     "subtitle": "Real-time 6-DOF matchmove, NOAA ephemeris sun lock, Brown-Conrady distortion & holdout matte on authentic 4K plates",

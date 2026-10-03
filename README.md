@@ -14,7 +14,6 @@
 Scratchbox IDE is a standalone React 18 + Vite 5 + Electron 38 workspace backed by a
 local Express API. All product code lives in two npm workspaces: the first-party
 library `@scratchbox/core` (`packages/core/`) and the desktop/web shell (`desktop-app/`).
-The former Eclipse Theia shell has been removed entirely.
 
 ## Quick start
 

@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DepthBox 360° Spatial Studio | Omnidirectional 3DGS World Experience</title>
+    <!-- Three.js & Controls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        :root {
+            --bg-base: #030712;
+            --panel-bg: rgba(11, 15, 25, 0.88);
+            --panel-border: rgba(56, 189, 248, 0.22);
+            --accent-cyan: #38bdf8;
+            --accent-magenta: #ec4899;
+            --accent-gold: #fbbf24;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-base);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: var(--text-main);
+        }
+
+        #webgl-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        #webgl-canvas:active {
+            cursor: grabbing;
+        }
+
+        /* Top Header Navigation */
+        #top-bar {
+            position: absolute;
+            top: 16px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--panel-border);
+            padding: 10px 18px;
+            border-radius: 12px;
+            pointer-events: auto;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+        }
+
+        .logo-glyph {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #0284c7, #ec4899);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            font-size: 14px;
+            color: white;
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.5);
+        }
+
+        .brand-title {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: #fff;
+        }
+
+        .brand-sub {
+            font-size: 11px;
+            color: var(--accent-cyan);
+            font-family: ui-monospace, monospace;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            pointer-events: auto;
+        }
+
+        .action-btn {
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--panel-border);
+            color: #e2e8f0;
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+        }
+
+        .action-btn:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(56, 189, 248, 0.15);
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .badge-live {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 6px;
+            font-family: ui-monospace, monospace;
+        }
+
+        /* 360° Compass Strip HUD */
+        #compass-hud {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 440px;
+            height: 52px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--panel-border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            z-index: 40;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+            pointer-events: none;
+        }
+
+        #compass-tape-container {
+            width: 100%;
+            height: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #compass-tape {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            transition: transform 0.05s linear;
+            font-family: ui-monospace, monospace;
+            font-size: 11px;
+            font-weight: 700;
+            color: #94a3b8;
+        }
+
+        .compass-mark {
+            display: inline-block;
+            width: 50px;
+            text-align: center;
+        }
+
+        .compass-mark.cardinal {
+            color: var(--accent-cyan);
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        #compass-needle {
+            position: absolute;
+            top: 2px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 20px;
+            background: var(--accent-magenta);
+            box-shadow: 0 0 8px var(--accent-magenta);
+            z-index: 10;
+        }
+
+        #compass-readout {
+            font-size: 10px;
+            font-family: ui-monospace, monospace;
+            color: #cbd5e1;
+            letter-spacing: 0.1em;
+            margin-top: 2px;
+        }
+
+        /* Bottom Quick Cardinal Jump Bar */
+        #cardinal-bar {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--panel-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 40;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
+        }
+
+        .cardinal-btn {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #e2e8f0;
+            padding: 7px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .cardinal-btn:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(56, 189, 248, 0.2);
+            color: #fff;
+        }
+
+        .cardinal-btn.active {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.35), rgba(236, 72, 153, 0.25));
+            border-color: var(--accent-cyan);
+            color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+        }
+
+        /* Left Studio Control Drawer */
+        #studio-drawer {
+            position: absolute;
+            top: 86px;
+            left: 20px;
+            width: 320px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--panel-border);
+            border-radius: 14px;
+            padding: 16px;
+            z-index: 40;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            max-height: calc(100vh - 130px);
+            overflow-y: auto;
+        }
+
+        .drawer-section-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--accent-cyan);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .world-preset-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .world-preset-item {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 9px 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .world-preset-item:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(56, 189, 248, 0.12);
+        }
+
+        .world-preset-item.active {
+            border-color: var(--accent-cyan);
+            background: linear-gradient(90deg, rgba(56, 189, 248, 0.2), rgba(236, 72, 153, 0.1));
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+        }
+
+        .preset-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .preset-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .preset-desc {
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .preset-badge {
+            font-size: 9px;
+            font-family: ui-monospace, monospace;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-cyan);
+        }
+
+        /* Sliders */
+        .control-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #cbd5e1;
+        }
+
+        .control-val {
+            font-family: ui-monospace, monospace;
+            color: var(--accent-cyan);
+            font-weight: 600;
+        }
+
+        .slider-input {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.15);
+            outline: none;
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            cursor: pointer;
+            box-shadow: 0 0 8px var(--accent-cyan);
+        }
+
+        /* Hotspot Overlay */
+        .poi-beacon {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            z-index: 30;
+            pointer-events: auto;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        .poi-beacon:hover {
+            transform: translate(-50%, -50%) scale(1.1);
+        }
+
+        .poi-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 12px var(--accent-cyan);
+            animation: pulse-ring 2s infinite;
+        }
+
+        .poi-label {
+            background: rgba(11, 15, 25, 0.85);
+            border: 1px solid var(--panel-border);
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #f1f5f9;
+            white-space: nowrap;
+            backdrop-filter: blur(8px);
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7); }
+            70% { transform: scale(1.2); box-shadow: 0 0 0 8px rgba(56, 189, 248, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+        }
+
+        /* Toast HUD */
+        #toast {
+            position: absolute;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid var(--accent-cyan);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            z-index: 60;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
+        }
+
+        #toast.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(4px);
+        }
+    </style>
+</head>
+<body>
+    <!-- WebGL Canvas for 360 3DGS -->
+    <canvas id="webgl-canvas"></canvas>
+
+    <!-- Top Navigation Bar -->
+    <div id="top-bar">
+        <div class="header-brand">
+            <div class="logo-glyph">360</div>
+            <div>
+                <div class="brand-title">DEPTHBOX 360° SPATIAL STUDIO</div>
+                <div class="brand-sub">Omnidirectional Volumetric 3DGS &bull; Omnidirectional Spatial Radiance Field</div>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <div class="badge-live" id="stat-splat-count">1,048,576 SPLATS</div>
+            <div class="badge-live" id="stat-fps">60 FPS</div>
+            <a href="depthbox_image_to_3dgs.html" class="action-btn" style="background: linear-gradient(135deg, rgba(6, 182, 212, 0.25), rgba(99, 102, 241, 0.25)); border-color: #38bdf8; color: #38bdf8;">
+                <span>📷</span> 2D Photo → 3DGS
+            </a>
+            <a href="depthbox_3dgs_world.html" class="action-btn">
+                <span>◀</span> Drone Flight Studio
+            </a>
+            <button class="action-btn" id="btn-snapshot">
+                <span>📸</span> Capture 360
+            </button>
+        </div>
+    </div>
+
+    <!-- 360° Compass Strip HUD -->
+    <div id="compass-hud">
+        <div id="compass-tape-container">
+            <div id="compass-needle"></div>
+            <div id="compass-tape">
+                <!-- Repeated dynamically in script for wrap-around -->
+            </div>
+        </div>
+        <div id="compass-readout">HEADING: 000° NORTH &bull; PITCH: +00.0°</div>
+    </div>
+
+    <!-- Left Studio Control Drawer -->
+    <div id="studio-drawer">
+        <div class="drawer-section-title">
+            <span>360 World Environments</span>
+            <span style="font-size:9px; color:#64748b;">NATIVE C++20</span>
+        </div>
+
+        <div class="world-preset-list">
+            <div class="world-preset-item active" data-world="san_marco">
+                <div class="preset-info">
+                    <div class="preset-title">🏛️ Piazza San Marco 360</div>
+                    <div class="preset-desc">Basilica, Campanile & Doge's Palace</div>
+                </div>
+                <div class="preset-badge">1.05M SPLATS</div>
+            </div>
+
+            <div class="world-preset-item" data-world="cyber_shibuya">
+                <div class="preset-info">
+                    <div class="preset-title">🌆 Cyber Shibuya 360</div>
+                    <div class="preset-desc">4 Corner Towers & 360 LED Screens</div>
+                </div>
+                <div class="preset-badge">1.05M SPLATS</div>
+            </div>
+
+            <div class="world-preset-item" data-world="alpine">
+                <div class="preset-info">
+                    <div class="preset-title">🏔️ Alpine Summit 360</div>
+                    <div class="preset-desc">Mountain Ridges & Glacial Valley Basin</div>
+                </div>
+                <div class="preset-badge">500K SPLATS</div>
+            </div>
+        </div>
+
+        <div class="drawer-section-title" style="margin-top:4px;">
+            <span>Camera Optics & Field of View</span>
+        </div>
+
+        <div class="control-row">
+            <div class="control-header">
+                <span>Lens FOV / Projection</span>
+                <span class="control-val" id="val-fov">75° (Standard)</span>
+            </div>
+            <input type="range" class="slider-input" id="slider-fov" min="30" max="140" value="75" step="1">
+        </div>
+
+        <div class="control-row">
+            <div class="control-header">
+                <span>Inside Walk Speed</span>
+                <span class="control-val" id="val-speed">3.5 m/s</span>
+            </div>
+            <input type="range" class="slider-input" id="slider-speed" min="1.0" max="10.0" value="3.5" step="0.5">
+        </div>
+
+        <div class="control-row">
+            <div class="control-header">
+                <span>360° Auto-Pan Speed</span>
+                <span class="control-val" id="val-pan-speed">1.5 °/s</span>
+            </div>
+            <input type="range" class="slider-input" id="slider-pan-speed" min="0.2" max="6.0" value="1.5" step="0.1">
+        </div>
+
+        <div class="drawer-section-title" style="margin-top:4px;">
+            <span>360 Equirectangular Ingestion</span>
+        </div>
+
+        <button class="action-btn" id="btn-upload-pano" style="width:100%; justify-content:center;">
+            <span>📁</span> Upload 360 Panorama (2:1)
+        </button>
+        <input type="file" id="pano-file-input" accept="image/*,.splat" style="display:none;">
+
+        <div style="font-size:10px; color:#64748b; line-height:1.4;">
+            Navigation: Click + drag to look 360° around. WASD keys to walk inside the courtyard. Space/Shift for height.
+        </div>
+    </div>
+
+    <!-- Bottom Quick Cardinal Jump Bar -->
+    <div id="cardinal-bar">
+        <button class="cardinal-btn active" data-yaw="0" data-pitch="0">
+            <span>🏛️</span> [N] Basilica (0°)
+        </button>
+        <button class="cardinal-btn" data-yaw="90" data-pitch="12">
+            <span>🔔</span> [E] Campanile (90°)
+        </button>
+        <button class="cardinal-btn" data-yaw="180" data-pitch="0">
+            <span>👑</span> [S] Palace (180°)
+        </button>
+        <button class="cardinal-btn" data-yaw="270" data-pitch="0">
+            <span>⛵</span> [W] Arcades (270°)
+        </button>
+        <button class="cardinal-btn" data-yaw="0" data-pitch="65">
+            <span>☁️</span> [▲] Zenith (+65°)
+        </button>
+        <button class="cardinal-btn" data-yaw="0" data-pitch="-65">
+            <span>🏛️</span> [▼] Pavement (-65°)
+        </button>
+        <button class="cardinal-btn" id="btn-auto-pan">
+            <span>⚡</span> 360° Auto-Pan
+        </button>
+    </div>
+
+    <!-- Interactive 3D POI Hotspots Container -->
+    <div id="poi-container"></div>
+
+    <!-- Dynamic HUD Toast -->
+    <div id="toast">✨ 360° VOLUMETRIC OMNIDIRECTIONAL GAUSSIAN SPACE READY</div>
+
+    <script>
+        // ====================================================================
+        // 1. WebGL & Scene Setup
+        // ====================================================================
+        const canvas = document.getElementById('webgl-canvas');
+        const renderer = new THREE.WebGLRenderer({
+            canvas,
+            antialias: true,
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        // Inside-Out Camera placed at human eye height (0, 1.7, 0)
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+        camera.position.set(0, 1.7, 0);
+
+        // Navigation state
+        let currentYaw = 0;   // degrees: 0 = North (-Z), 90 = East (+X), 180 = South (+Z), 270 = West (-X)
+        let currentPitch = 0; // degrees: -85 (down) to +85 (up)
+        let targetYaw = 0;
+        let targetPitch = 0;
+
+        let isDragging = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        let autoPanEnabled = false;
+        let autoPanSpeed = 1.5; // degrees per second
+        let walkSpeed = 3.5;
+
+        // Keys state for WASD walking
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        // ====================================================================
+        // 2. High-Performance 3DGS Instanced Mesh & Shader (2D EWA Ellipses)
+        // ====================================================================
+        const splatUniforms = {
+            viewport: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+            uSplatScale: { value: 1.0 },
+            uAtmosphere: { value: 0 }
+        };
+
+        const splatVertexShader = `
+            attribute vec3 instanceCenter;
+            attribute vec3 instanceScale;
+            attribute vec3 instanceColor;
+            attribute float instanceOpacity;
+            attribute vec4 instanceQuat;
+
+            uniform float uSplatScale;
+
+            varying vec2 vUv;
+            varying vec3 vColor;
+            varying float vOpacity;
+
+            void main() {
+                vUv = uv;
+                vColor = instanceColor;
+
+                // View-space center
+                vec4 viewCenter = modelViewMatrix * vec4(instanceCenter, 1.0);
+
+                // Decode surfel normal from quaternion
+                vec4 q = instanceQuat;
+                vec3 localNorm = vec3(
+                    2.0 * (q.x * q.z + q.w * q.y),
+                    2.0 * (q.y * q.z - q.w * q.x),
+                    1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+                );
+                if (dot(localNorm, localNorm) < 0.001) localNorm = vec3(0.0, 0.0, 1.0);
+
+                vec3 viewNorm = normalize((modelViewMatrix * vec4(localNorm, 0.0)).xyz);
+                float cosIncidence = clamp(abs(dot(viewNorm, vec3(0.0, 0.0, 1.0))), 0.25, 1.0);
+
+                vec3 S = instanceScale * uSplatScale;
+                float rMajor = max(S.x, S.y) * 2.5;
+                float rMinor = min(S.x, S.y) * 2.5 * cosIncidence;
+
+                // Screen tangent rotation
+                vec2 screenTangent = normalize(viewNorm.xy + vec2(0.0001));
+                float theta = atan(screenTangent.y, screenTangent.x);
+
+                vec2 localPos = position.xy;
+                vec2 rotatedCorner = vec2(
+                    localPos.x * cos(theta) - localPos.y * sin(theta),
+                    localPos.x * sin(theta) + localPos.y * cos(theta)
+                );
+
+                vec2 screenOffset = vec2(rotatedCorner.x * rMajor, rotatedCorner.y * rMinor);
+                vec4 viewPos = viewCenter + vec4(screenOffset, 0.0, 0.0);
+                gl_Position = projectionMatrix * viewPos;
+
+                vOpacity = instanceOpacity;
+            }
+        `;
+
+        const splatFragmentShader = `
+            precision highp float;
+            varying vec2 vUv;
+            varying vec3 vColor;
+            varying float vOpacity;
+
+            void main() {
+                // 2D Gaussian Radial Falloff
+                vec2 center = vUv - vec2(0.5);
+                float r2 = dot(center, center) * 4.0;
+                if (r2 > 1.0) discard;
+
+                float alpha = exp(-0.5 * r2 * 4.0) * vOpacity;
+
+                // ACES Filmic Tone Mapping
+                vec3 col = vColor;
+                col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
+
+                gl_FragColor = vec4(clamp(col, 0.0, 1.0), alpha);
+            }
+        `;
+
+        const splatMaterial = new THREE.ShaderMaterial({
+            vertexShader: splatVertexShader,
+            fragmentShader: splatFragmentShader,
+            uniforms: splatUniforms,
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending
+        });
+
+        let currentSplatMesh = null;
+        const baseQuad = new THREE.PlaneGeometry(1, 1);
+
+        function createInstancedMeshFromSplats(splats) {
+            if (currentSplatMesh) {
+                scene.remove(currentSplatMesh);
+                currentSplatMesh.geometry.dispose();
+            }
+
+            const count = splats.length;
+            const instancedGeo = new THREE.InstancedBufferGeometry();
+            instancedGeo.index = baseQuad.index;
+            instancedGeo.attributes.position = baseQuad.attributes.position;
+            instancedGeo.attributes.uv = baseQuad.attributes.uv;
+
+            const instanceCenter = new Float32Array(count * 3);
+            const instanceScale = new Float32Array(count * 3);
+            const instanceColor = new Float32Array(count * 3);
+            const instanceOpacity = new Float32Array(count);
+            const instanceQuat = new Float32Array(count * 4);
+
+            for (let i = 0; i < count; i++) {
+                const s = splats[i];
+
+                instanceCenter[i * 3 + 0] = s.position[0];
+                instanceCenter[i * 3 + 1] = s.position[1];
+                instanceCenter[i * 3 + 2] = s.position[2];
+
+                instanceScale[i * 3 + 0] = s.scale[0];
+                instanceScale[i * 3 + 1] = s.scale[1];
+                instanceScale[i * 3 + 2] = s.scale[2];
+
+                const col = s.colorRgb || [1, 1, 1];
+                instanceColor[i * 3 + 0] = col[0];
+                instanceColor[i * 3 + 1] = col[1];
+                instanceColor[i * 3 + 2] = col[2];
+
+                instanceOpacity[i] = s.opacity !== undefined ? s.opacity : 1.0;
+
+                const q = s.quaternion || [0, 0, 0, 1];
+                instanceQuat[i * 4 + 0] = q[0];
+                instanceQuat[i * 4 + 1] = q[1];
+                instanceQuat[i * 4 + 2] = q[2];
+                instanceQuat[i * 4 + 3] = q[3];
+            }
+
+            instancedGeo.setAttribute('instanceCenter', new THREE.InstancedBufferAttribute(instanceCenter, 3));
+            instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(instanceScale, 3));
+            instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(instanceColor, 3));
+            instancedGeo.setAttribute('instanceOpacity', new THREE.InstancedBufferAttribute(instanceOpacity, 1));
+            instancedGeo.setAttribute('instanceQuat', new THREE.InstancedBufferAttribute(instanceQuat, 4));
+
+            currentSplatMesh = new THREE.Mesh(instancedGeo, splatMaterial);
+            currentSplatMesh.frustumCulled = false;
+            scene.add(currentSplatMesh);
+
+            document.getElementById('stat-splat-count').textContent = `${count.toLocaleString()} SPLATS`;
+        }
+
+        // ====================================================================
+        // 3. Binary .splat File Loader & Parser (32-byte Flat Format)
+        // ====================================================================
+        async function loadSplatDataset(url) {
+            showToast(`Loading 360° Volumetric Gaussian Space...`);
+            try {
+                const response = await fetch(url);
+                const arrayBuf = await response.arrayBuffer();
+                const BYTES_PER_SPLAT = 32;
+                const numSplats = Math.floor(arrayBuf.byteLength / BYTES_PER_SPLAT);
+
+                const posView = new Float32Array(arrayBuf);
+                const byteView = new Uint8Array(arrayBuf);
+
+                const splats = [];
+                for (let i = 0; i < numSplats; i++) {
+                    const fOffset = i * 8; // 8 floats per 32 bytes
+                    const bOffset = i * 32;
+
+                    const px = posView[fOffset + 0];
+                    const py = posView[fOffset + 1];
+                    const pz = posView[fOffset + 2];
+
+                    const sx = posView[fOffset + 3];
+                    const sy = posView[fOffset + 4];
+                    const sz = posView[fOffset + 5];
+
+                    const r = byteView[bOffset + 24] / 255.0;
+                    const g = byteView[bOffset + 25] / 255.0;
+                    const b = byteView[bOffset + 26] / 255.0;
+                    const a = byteView[bOffset + 27] / 255.0;
+
+                    const qx = (byteView[bOffset + 28] / 255.0 - 0.5) * 2.0;
+                    const qy = (byteView[bOffset + 29] / 255.0 - 0.5) * 2.0;
+                    const qz = (byteView[bOffset + 30] / 255.0 - 0.5) * 2.0;
+                    const qw = (byteView[bOffset + 31] / 255.0 - 0.5) * 2.0;
+
+                    splats.push({
+                        position: [px, py, pz],
+                        scale: [sx, sy, sz],
+                        colorRgb: [r, g, b],
+                        opacity: a,
+                        quaternion: [qx, qy, qz, qw]
+                    });
+                }
+
+                createInstancedMeshFromSplats(splats);
+                showToast(`✨ ${numSplats.toLocaleString()} 3D GAUSSIANS STREAMED`);
+            } catch (err) {
+                console.error("Failed to load splat file:", err);
+                showToast("Fallback: Procedural 360 World Synthesis");
+                generateFallback360World();
+            }
+        }
+
+        // Procedural Fallback if network blocked
+        function generateFallback360World() {
+            const splats = [];
+            const yawSteps = 360;
+            const pitchSteps = 180;
+            const eyeH = 1.7;
+
+            for (let py = 0; py < pitchSteps; py++) {
+                const v = py / (pitchSteps - 1);
+                const pitch = (0.5 - v) * Math.PI * 0.94;
+                const cosP = Math.cos(pitch);
+                const sinP = Math.sin(pitch);
+
+                for (let px = 0; px < yawSteps; px++) {
+                    const u = px / yawSteps;
+                    const yaw = (u * 2.0 - 1.0) * Math.PI;
+
+                    const rx = Math.sin(yaw) * cosP;
+                    const ry = sinP;
+                    const rz = -Math.cos(yaw) * cosP;
+
+                    let px3D, py3D, pz3D;
+                    let color = [0.8, 0.8, 0.8];
+
+                    if (ry < -0.02) {
+                        const t = (0.0 - eyeH) / ry;
+                        px3D = rx * t; py3D = 0; pz3D = rz * t;
+                        color = [0.4, 0.4, 0.4];
+                    } else {
+                        const dist = 32.0;
+                        px3D = rx * dist; py3D = eyeH + ry * dist; pz3D = rz * dist;
+                        color = ry > 0.3 ? [0.3, 0.6, 0.9] : [0.85, 0.8, 0.75];
+                    }
+
+                    splats.push({
+                        position: [px3D, py3D, pz3D],
+                        scale: [0.15, 0.15, 0.04],
+                        colorRgb: color,
+                        opacity: 1.0,
+                        quaternion: [0, 0, 0, 1]
+                    });
+                }
+            }
+            createInstancedMeshFromSplats(splats);
+        }
+
+        // ====================================================================
+        // 4. 360° Compass Strip Renderer & Orientation HUD
+        // ====================================================================
+        const compassTape = document.getElementById('compass-tape');
+        const compassReadout = document.getElementById('compass-readout');
+
+        function setupCompass() {
+            // Build a repeating strip from 0 to 720 degrees to allow seamless wrapping
+            const marks = [];
+            for (let deg = -180; deg <= 540; deg += 15) {
+                const normDeg = ((deg % 360) + 360) % 360;
+                let label = `${normDeg}°`;
+                let isCard = false;
+
+                if (normDeg === 0) { label = 'N'; isCard = true; }
+                else if (normDeg === 45) { label = 'NE'; isCard = true; }
+                else if (normDeg === 90) { label = 'E'; isCard = true; }
+                else if (normDeg === 135) { label = 'SE'; isCard = true; }
+                else if (normDeg === 180) { label = 'S'; isCard = true; }
+                else if (normDeg === 225) { label = 'SW'; isCard = true; }
+                else if (normDeg === 270) { label = 'W'; isCard = true; }
+                else if (normDeg === 315) { label = 'NW'; isCard = true; }
+
+                marks.push(`<span class="compass-mark ${isCard ? 'cardinal' : ''}">${label}</span>`);
+            }
+            compassTape.innerHTML = marks.join('');
+        }
+        setupCompass();
+
+        function updateCompassHUD() {
+            const normYaw = ((currentYaw % 360) + 360) % 360;
+            // 50px per 15 degrees = 3.333px per degree
+            const pxPerDeg = 50 / 15;
+            const offset = -(normYaw + 180) * pxPerDeg;
+            compassTape.style.transform = `translateX(${offset}px)`;
+
+            let cardName = 'NORTH';
+            if (normYaw >= 22.5 && normYaw < 67.5) cardName = 'NORTH-EAST';
+            else if (normYaw >= 67.5 && normYaw < 112.5) cardName = 'EAST';
+            else if (normYaw >= 112.5 && normYaw < 157.5) cardName = 'SOUTH-EAST';
+            else if (normYaw >= 157.5 && normYaw < 202.5) cardName = 'SOUTH';
+            else if (normYaw >= 202.5 && normYaw < 247.5) cardName = 'SOUTH-WEST';
+            else if (normYaw >= 247.5 && normYaw < 292.5) cardName = 'WEST';
+            else if (normYaw >= 292.5 && normYaw < 337.5) cardName = 'NORTH-WEST';
+
+            const pitchSign = currentPitch >= 0 ? '+' : '';
+            compassReadout.textContent = `HEADING: ${String(Math.round(normYaw)).padStart(3, '0')}° ${cardName} \u2022 PITCH: ${pitchSign}${currentPitch.toFixed(1)}°`;
+        }
+
+        // ====================================================================
+        // 5. 360 Mouse & Touch Navigation
+        // ====================================================================
+        canvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+        });
+
+        window.addEventListener('mouseup', () => isDragging = false);
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const deltaX = e.clientX - lastMouseX;
+            const deltaY = e.clientY - lastMouseY;
+            lastMouseX = e.clientX;
+            lastMouseY = e.clientY;
+
+            // Sensitivity factor
+            const sens = 0.22;
+            targetYaw -= deltaX * sens;
+            targetPitch += deltaY * sens;
+
+            // Clamp pitch to avoid gimbal flipping
+            targetPitch = Math.max(-85, Math.min(85, targetPitch));
+        });
+
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                lastMouseX = e.touches[0].clientX;
+                lastMouseY = e.touches[0].clientY;
+            }
+        });
+
+        window.addEventListener('touchend', () => isDragging = false);
+
+        window.addEventListener('touchmove', (e) => {
+            if (!isDragging || e.touches.length !== 1) return;
+            const deltaX = e.touches[0].clientX - lastMouseX;
+            const deltaY = e.touches[0].clientY - lastMouseY;
+            lastMouseX = e.touches[0].clientX;
+            lastMouseY = e.touches[0].clientY;
+
+            targetYaw -= deltaX * 0.25;
+            targetPitch += deltaY * 0.25;
+            targetPitch = Math.max(-85, Math.min(85, targetPitch));
+        });
+
+        // ====================================================================
+        // 6. Interactive 3D POI Hotspots
+        // ====================================================================
+        const POIS = [
+            { id: 'poi-basilica', title: "St. Mark's Basilica", pos: [0, 8, -27], yaw: 0, pitch: 8 },
+            { id: 'poi-campanile', title: "Campanile Belfry", pos: [22, 28, -8], yaw: 90, pitch: 35 },
+            { id: 'poi-palace', title: "Doge's Palace", pos: [0, 6, 25], yaw: 180, pitch: 4 },
+            { id: 'poi-arcades', title: "Procuratie Arcades", pos: [-23, 4, 0], yaw: 270, pitch: 2 },
+            { id: 'poi-fountain', title: "Verona Marble Fountain", pos: [0, 1.2, -6], yaw: 0, pitch: -8 }
+        ];
+
+        const poiContainer = document.getElementById('poi-container');
+
+        function setupPOIs() {
+            poiContainer.innerHTML = '';
+            POIS.forEach(poi => {
+                const beacon = document.createElement('div');
+                beacon.className = 'poi-beacon';
+                beacon.id = poi.id;
+                beacon.innerHTML = `
+                    <div class="poi-dot"></div>
+                    <div class="poi-label">${poi.title}</div>
+                `;
+                beacon.addEventListener('click', () => {
+                    targetYaw = poi.yaw;
+                    targetPitch = poi.pitch;
+                    showToast(`Gliding to ${poi.title}`);
+                });
+                poiContainer.appendChild(beacon);
+            });
+        }
+        setupPOIs();
+
+        const tempVec = new THREE.Vector3();
+        function updatePOIs() {
+            POIS.forEach(poi => {
+                const el = document.getElementById(poi.id);
+                if (!el) return;
+
+                tempVec.set(poi.pos[0], poi.pos[1], poi.pos[2]);
+                tempVec.project(camera);
+
+                // If behind camera, hide
+                if (tempVec.z > 1.0) {
+                    el.style.display = 'none';
+                    return;
+                }
+
+                const screenX = (tempVec.x * 0.5 + 0.5) * window.innerWidth;
+                const screenY = (-tempVec.y * 0.5 + 0.5) * window.innerHeight;
+
+                el.style.display = 'flex';
+                el.style.left = `${screenX}px`;
+                el.style.top = `${screenY}px`;
+            });
+        }
+
+        // ====================================================================
+        // 7. UI Controls & Event Listeners
+        // ====================================================================
+        // Cardinal Buttons
+        document.querySelectorAll('.cardinal-btn[data-yaw]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.cardinal-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                targetYaw = parseFloat(btn.dataset.yaw);
+                targetPitch = parseFloat(btn.dataset.pitch);
+                showToast(`Orienting to ${btn.textContent.trim()}`);
+            });
+        });
+
+        // 360 Auto-Pan Toggle
+        const btnAutoPan = document.getElementById('btn-auto-pan');
+        btnAutoPan.addEventListener('click', () => {
+            autoPanEnabled = !autoPanEnabled;
+            btnAutoPan.classList.toggle('active', autoPanEnabled);
+            showToast(autoPanEnabled ? '⚡ 360° AUTO-PAN ACTIVE' : '360° AUTO-PAN PAUSED');
+        });
+
+        // World Presets
+        document.querySelectorAll('.world-preset-item').forEach(item => {
+            item.addEventListener('click', () => {
+                document.querySelectorAll('.world-preset-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+
+                const world = item.dataset.world;
+                if (world === 'san_marco') {
+                    loadSplatDataset('models/world_360_san_marco.splat');
+                } else if (world === 'cyber_shibuya') {
+                    loadSplatDataset('models/world_360_cyber_shibuya.splat');
+                } else if (world === 'alpine') {
+                    generateFallback360World();
+                }
+            });
+        });
+
+        // Sliders
+        const sliderFov = document.getElementById('slider-fov');
+        sliderFov.addEventListener('input', (e) => {
+            const fov = parseFloat(e.target.value);
+            camera.fov = fov;
+            camera.updateProjectionMatrix();
+            document.getElementById('val-fov').textContent = fov > 110 ? `${fov}° (Fisheye)` : `${fov}°`;
+        });
+
+        const sliderSpeed = document.getElementById('slider-speed');
+        sliderSpeed.addEventListener('input', (e) => {
+            walkSpeed = parseFloat(e.target.value);
+            document.getElementById('val-speed').textContent = `${walkSpeed.toFixed(1)} m/s`;
+        });
+
+        const sliderPanSpeed = document.getElementById('slider-pan-speed');
+        sliderPanSpeed.addEventListener('input', (e) => {
+            autoPanSpeed = parseFloat(e.target.value);
+            document.getElementById('val-pan-speed').textContent = `${autoPanSpeed.toFixed(1)} °/s`;
+        });
+
+        // Snapshot Button
+        document.getElementById('btn-snapshot').addEventListener('click', () => {
+            const dataUrl = canvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.download = `depthbox_360_heading_${Math.round(currentYaw)}deg.png`;
+            a.href = dataUrl;
+            a.click();
+            showToast('📸 360° SNAPSHOT SAVED');
+        });
+
+        // Upload Panorama
+        const panoUploadBtn = document.getElementById('btn-upload-pano');
+        const panoFileInput = document.getElementById('pano-file-input');
+        panoUploadBtn.addEventListener('click', () => panoFileInput.click());
+
+        panoFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (file.name.endsWith('.splat')) {
+                const reader = new FileReader();
+                reader.onload = (re) => {
+                    const arrayBuf = re.target.result;
+                    // parse arrayBuf ...
+                    showToast(`Ingested ${file.name}`);
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                const reader = new FileReader();
+                reader.onload = (re) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        showToast(`Unprojecting 360° Equirectangular Panorama...`);
+                        unprojectPanoImage(img);
+                    };
+                    img.src = re.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function unprojectPanoImage(img) {
+            const c = document.createElement('canvas');
+            c.width = 360;
+            c.height = 180;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, 360, 180);
+            const imgData = ctx.getImageData(0, 0, 360, 180).data;
+
+            const splats = [];
+            for (let y = 0; y < 180; y += 2) {
+                const pitch = (0.5 - y / 180) * Math.PI;
+                const cosP = Math.cos(pitch);
+                const sinP = Math.sin(pitch);
+
+                for (let x = 0; x < 360; x += 2) {
+                    const yaw = (x / 360 * 2.0 - 1.0) * Math.PI;
+                    const rx = Math.sin(yaw) * cosP;
+                    const ry = sinP;
+                    const rz = -Math.cos(yaw) * cosP;
+
+                    const idx = (y * 360 + x) * 4;
+                    const r = imgData[idx] / 255;
+                    const g = imgData[idx + 1] / 255;
+                    const b = imgData[idx + 2] / 255;
+
+                    const depth = ry < -0.05 ? Math.min(30, 1.7 / -ry) : 35.0;
+                    splats.push({
+                        position: [rx * depth, 1.7 + ry * depth, rz * depth],
+                        scale: [0.2, 0.2, 0.05],
+                        colorRgb: [r, g, b],
+                        opacity: 1.0,
+                        quaternion: [0, 0, 0, 1]
+                    });
+                }
+            }
+            createInstancedMeshFromSplats(splats);
+            showToast(`✨ Custom 360° Panorama Unprojected`);
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('visible');
+            clearTimeout(window._toastTimeout);
+            window._toastTimeout = setTimeout(() => t.classList.remove('visible'), 2800);
+        }
+
+        // ====================================================================
+        // 8. Main Render & Animation Loop
+        // ====================================================================
+        let lastTime = performance.now();
+        let frameCount = 0;
+        let lastFpsUpdate = performance.now();
+
+        function animate(now) {
+            requestAnimationFrame(animate);
+
+            const dt = Math.min(0.1, (now - lastTime) / 1000);
+            lastTime = now;
+
+            // FPS Counter
+            frameCount++;
+            if (now - lastFpsUpdate > 500) {
+                const fps = Math.round((frameCount * 1000) / (now - lastFpsUpdate));
+                document.getElementById('stat-fps').textContent = `${fps} FPS`;
+                frameCount = 0;
+                lastFpsUpdate = now;
+            }
+
+            // Auto-pan
+            if (autoPanEnabled) {
+                targetYaw += autoPanSpeed * dt;
+            }
+
+            // Smooth rotational damping
+            currentYaw += (targetYaw - currentYaw) * 0.12;
+            currentPitch += (targetPitch - currentPitch) * 0.12;
+
+            // Apply camera Euler rotation (Inside-Out)
+            const radYaw = THREE.MathUtils.degToRad(-currentYaw);
+            const radPitch = THREE.MathUtils.degToRad(currentPitch);
+            camera.rotation.set(0, 0, 0);
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = radYaw;
+            camera.rotation.x = radPitch;
+
+            // WASD Inside Walking
+            const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), radYaw);
+            const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), radYaw);
+
+            const moveStep = walkSpeed * dt;
+            if (keys['KeyW'] || keys['ArrowUp']) camera.position.addScaledVector(forward, moveStep);
+            if (keys['KeyS'] || keys['ArrowDown']) camera.position.addScaledVector(forward, -moveStep);
+            if (keys['KeyA'] || keys['ArrowLeft']) camera.position.addScaledVector(right, -moveStep);
+            if (keys['KeyD'] || keys['ArrowRight']) camera.position.addScaledVector(right, moveStep);
+            if (keys['Space']) camera.position.y += moveStep * 0.8;
+            if (keys['ShiftLeft'] || keys['ShiftRight']) camera.position.y = Math.max(0.5, camera.position.y - moveStep * 0.8);
+
+            // Radial collision boundary with surrounding buildings (radius < 22m)
+            const rDist = Math.hypot(camera.position.x, camera.position.z);
+            if (rDist > 22.0) {
+                camera.position.x *= 22.0 / rDist;
+                camera.position.z *= 22.0 / rDist;
+            }
+
+            updateCompassHUD();
+            updatePOIs();
+
+            renderer.render(scene, camera);
+        }
+
+        // Window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            splatUniforms.viewport.value.set(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize: Load default 360 world
+        loadSplatDataset('models/world_360_san_marco.splat');
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>

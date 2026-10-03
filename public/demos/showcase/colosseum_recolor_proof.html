@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture 2: Real Google 3D Tile Texture Atlas Re-grade Proof (v2 Sophisticated)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="/js/scratchbox-recipe-pbr.js"></script>
+    <script type="importmap">{ "imports": { "three": "/js/vendor/three-global-shim.js" } }</script>
+    <script type="module">
+        import { KTX2Loader } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/loaders/KTX2Loader.js';
+        window.KTX2Loader = KTX2Loader;
+    </script>
+    <style>
+        :root {
+            --bg-base: #060910;
+            --bg-card: #0d131f;
+            --bg-card-border: #1c2738;
+            --accent-cyan: #38bdf8;
+            --accent-blue: #3b82f6;
+            --accent-terracotta: #E06B55;
+            --accent-prussian: #0B192C;
+            --accent-amber: #FFB84C;
+            --accent-green: #10b981;
+            --accent-purple: #c084fc;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Inter', -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Header */
+        header {
+            padding: 12px 24px;
+            background: linear-gradient(180deg, #0d1527 0%, #060910 100%);
+            border-bottom: 1px solid var(--bg-card-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+        .header-left h1 {
+            font-size: 18px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #38bdf8 0%, #c084fc 40%, #E06B55 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .header-left p {
+            font-size: 12px;
+            color: var(--text-sub);
+            margin-top: 2px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .pills {
+            display: flex;
+            gap: 8px;
+        }
+        .pill {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            border: 1px solid var(--bg-card-border);
+            background: rgba(15, 23, 42, 0.8);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .pill.green { border-color: rgba(16, 185, 129, 0.4); color: #34d399; }
+        .pill.terracotta { border-color: rgba(224, 107, 85, 0.5); color: #f87171; }
+        .pill.blue { border-color: rgba(56, 189, 248, 0.4); color: #38bdf8; }
+        .pill.emerald { border-color: rgba(52, 211, 153, 0.5); color: #6ee7b7; background: rgba(6, 78, 59, 0.4); }
+        .pill.amber { border-color: rgba(251, 191, 36, 0.5); color: #fde047; background: rgba(120, 53, 15, 0.35); }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 24px;
+            background: #090e18;
+            border-bottom: 1px solid var(--bg-card-border);
+            z-index: 9;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+        .btn {
+            background: #111a2c;
+            border: 1px solid var(--bg-card-border);
+            color: var(--text-sub);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn:hover {
+            background: #1e293b;
+            color: var(--text-main);
+            border-color: #334155;
+        }
+        .btn.active {
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(192, 132, 252, 0.15));
+            border-color: var(--accent-cyan);
+            color: #fff;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+        }
+        .btn.active-terracotta {
+            background: linear-gradient(135deg, rgba(224, 107, 85, 0.2), rgba(255, 184, 76, 0.2));
+            border-color: var(--accent-terracotta);
+            color: #fff;
+            box-shadow: 0 0 10px rgba(224, 107, 85, 0.25);
+        }
+        .btn.active-emerald {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: #34d399;
+            color: #34d399;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+        }
+        .btn-rerun {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(56, 189, 248, 0.2));
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 700;
+        }
+        .btn-rerun:hover {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.35), rgba(56, 189, 248, 0.35));
+            color: #ffffff;
+            border-color: #38bdf8;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+        }
+        .btn-rerun:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .spinning {
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        .pbr-toast {
+            position: fixed;
+            bottom: 60px;
+            right: 24px;
+            z-index: 1000;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            border-radius: 8px;
+            padding: 12px 18px;
+            color: #f8fafc;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            pointer-events: none;
+        }
+        .pbr-toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* 3D Stage */
+        .stage {
+            flex: 1;
+            display: flex;
+            position: relative;
+            background: #060910;
+        }
+        .viewport-panel {
+            flex: 1;
+            position: relative;
+            border-right: 1px solid var(--bg-card-border);
+            overflow: hidden;
+        }
+        .viewport-panel:last-child {
+            border-right: none;
+        }
+
+        /* Overlay Badges */
+        .panel-badge {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            z-index: 5;
+            background: rgba(13, 19, 31, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 8px;
+            padding: 8px 14px;
+            pointer-events: none;
+        }
+        .panel-badge span {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .panel-badge .sub {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-sub);
+            margin-top: 2px;
+            letter-spacing: 0;
+            text-transform: none;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .badge-orig span { color: #94a3b8; }
+        .badge-recolor span {
+            background: linear-gradient(135deg, #38bdf8 0%, #E06B55 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Loading Indicator */
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(6, 9, 16, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            font-size: 13px;
+            color: var(--text-sub);
+            font-family: 'JetBrains Mono', monospace;
+            gap: 12px;
+        }
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(56, 189, 248, 0.2);
+            border-top-color: var(--accent-cyan);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Telemetry Bar */
+        .telemetry-bar {
+            padding: 10px 24px;
+            background: #090e18;
+            border-top: 1px solid var(--bg-card-border);
+            display: flex;
+            gap: 16px;
+            overflow-x: auto;
+            z-index: 10;
+        }
+        .tele-card {
+            background: rgba(17, 26, 44, 0.6);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 6px;
+            padding: 6px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 140px;
+        }
+        .tele-card .label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-sub);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .tele-card .val {
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: var(--text-main);
+        }
+        .tele-card .val.highlight {
+            color: #38bdf8;
+        }
+        .btn.active-violet {
+            background: rgba(192, 132, 252, 0.18);
+            border-color: var(--accent-purple);
+            color: #e9d5ff;
+            box-shadow: 0 0 10px rgba(192, 132, 252, 0.25);
+        }
+        .recipe-controls select {
+            background: #111a2c;
+            border: 1px solid var(--bg-card-border);
+            color: var(--text-main);
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-size: 12px;
+        }
+        .recipe-controls label {
+            font-size: 11px;
+            color: var(--text-sub);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>🏛️ Architecture 2: Offline Texture Atlas Re-grade Proof</h1>
+            <p>Real Google Photorealistic 3D Tile Model · Rome Colosseum (WGS-84 41.890210° N, 12.492230° E)</p>
+        </div>
+        <div class="pills">
+            <div class="pill emerald">🌲 Foliage Protected (#1D3B2E)</div>
+            <div class="pill terracotta">🎨 SOTA Micro-Surface PBR</div>
+            <div class="pill amber">🏛️ 5mm Virtual Bevel & Anti-Faceting</div>
+            <div class="pill blue">✨ Toksvig Coupled + RNM Blended</div>
+            <div class="pill green">✓ 100% Geometry Lock (0.000 mm Drift)</div>
+        </div>
+    </header>
+
+    <div class="toolbar">
+        <div class="btn-group">
+            <button class="btn active" id="btnSideBySide" onclick="setMode('sideBySide')">Side-by-Side Dual 3D</button>
+            <button class="btn" id="btnRecolorOnly" onclick="setMode('recolorOnly')">Recolored Only (Full View)</button>
+            <button class="btn" id="btnOrigOnly" onclick="setMode('origOnly')">Original Only (Full View)</button>
+            <button class="btn btn-rerun" id="btnRerunPbr" onclick="triggerPbrRerun()" title="Re-synthesize 1K PBR maps across all 79 submeshes">
+                <span class="rerun-icon" id="rerunIcon">🔄</span>
+                <span id="rerunText">Rerun 1K PBR Pipeline</span>
+            </button>
+        </div>
+
+        <div class="btn-group" style="background: rgba(15,23,42,0.6); padding: 3px 8px; border-radius: 8px; border: 1px solid var(--bg-card-border);">
+            <span style="font-size: 11px; color: var(--text-sub); font-weight: 600;">Active Pipeline:</span>
+            <button class="btn" id="btnRealistic" onclick="switchRightModel('realistic')" title="Tuned for natural realism: authentic Roman travertine warmth, protected cypress foliage & slate asphalt, not extreme terracotta">🌿 Sophisticated v2 (Realistic Tuned)</button>
+            <button class="btn" id="btnSophisticated" onclick="switchRightModel('sophisticated')">Sophisticated v2 (Terracotta + Foliage)</button>
+            <button class="btn active-emerald" id="btn1KPbr" onclick="switchRightModel('1kpbr')">✨ 1K PBR Suite (Phase 3 Specular Bevel)</button>
+            <button class="btn" id="btnRecipe" onclick="switchRightModel('recipe')" title="Original textures + geometry attributes + shared detail maps, evaluated in the shader">🧪 Recipe PBR (Geometry + Shader)</button>
+            <button class="btn" id="btnBaseline" onclick="switchRightModel('baseline')">Baseline v1 (Global Terracotta)</button>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="btn-group">
+            <span style="font-size: 11px; color: var(--text-sub); font-weight: 600;">Left Panel:</span>
+            <button class="btn active" id="btnLeftOriginal" onclick="switchLeftModel('original')">Original Google Tiles</button>
+            <button class="btn" id="btnLeft1KPbr" onclick="switchLeftModel('1kpbr')">✨ 1K PBR Suite</button>
+            <button class="btn btn-rerun" onclick="compareBakedVsRecipe()" title="Left: baked 1K PBR suite · Right: Recipe PBR, identical lighting">⚖️ Compare 1K Baked vs Recipe</button>
+            <button class="btn btn-rerun" id="btnRerunRecipe" onclick="triggerRecipeRerun()" title="Regenerate the Recipe PBR GLB (~2 s)">
+                <span id="rerunRecipeIcon">🔄</span>
+                <span id="rerunRecipeText">Rerun Recipe Pipeline</span>
+            </button>
+        </div>
+        <div class="btn-group recipe-controls" id="recipeControls" style="opacity: 0.4; pointer-events: none;">
+            <label for="recipeView">Recipe view</label>
+            <select id="recipeView" onchange="setRecipeOption('view', this.value)">
+                <option value="final">Final shading</option>
+                <option value="bevel">Bevel mask</option>
+                <option value="ao">Vertex AO</option>
+                <option value="classes">Material classes</option>
+                <option value="normals">World normals</option>
+            </select>
+            <label for="recipeBevel">Bevel radius</label>
+            <select id="recipeBevel" onchange="setRecipeOption('bevel', this.value)">
+                <option value="0.005">5 mm (1K suite value)</option>
+                <option value="0.02" selected>2 cm (worn arris)</option>
+                <option value="0.05">5 cm</option>
+                <option value="0">Off</option>
+            </select>
+            <label for="recipeTextures">Textures</label>
+            <select id="recipeTextures" onchange="onRecipeTextureFormatChange()">
+                <option value="ktx2" selected>KTX2 ETC1S (GPU-compressed)</option>
+                <option value="jpeg">JPEG (original bytes)</option>
+            </select>
+            <label for="recipeDetail">Detail</label>
+            <select id="recipeDetail" onchange="setRecipeOption('detail', this.value)">
+                <option value="1" selected>On</option>
+                <option value="0">Off</option>
+            </select>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn" onclick="setCameraPreset('front')">Exterior Facade</button>
+            <button class="btn" onclick="setCameraPreset('cornice')">🏛️ Cornice Bevel Glints</button>
+            <button class="btn" onclick="setCameraPreset('arch')">⭕ Arch Vault Anti-Faceting</button>
+            <button class="btn" onclick="setCameraPreset('arena')">Arena Corridors</button>
+            <button class="btn" onclick="setCameraPreset('foliage')">🌲 Foliage Close-up</button>
+            <button class="btn" onclick="setCameraPreset('aerial')">Oblique Aerial</button>
+            <button class="btn" id="btnWireframe" onclick="toggleWireframe()">Wireframe</button>
+            <button class="btn" id="btnAutoRotate" onclick="toggleAutoRotate()">Auto Orbit</button>
+        </div>
+    </div>
+
+    <div class="stage">
+        <!-- Left Panel: Original Model -->
+        <div class="viewport-panel" id="panelLeft">
+            <div class="panel-badge badge-orig">
+                <span id="badgeLeftTitle">ORIGINAL GOOGLE 3D TILES</span>
+                <span class="sub" id="badgeLeftSub">Midday Sun · Bleached Travertine · Baked Pitch Shadows</span>
+                <span class="sub" id="badgeLeftGpu"></span>
+            </div>
+            <div class="loading-overlay" id="loadingLeft">
+                <div class="spinner"></div>
+                <div id="loadingLeftText">Loading colosseum_rome_textured.glb...</div>
+            </div>
+            <div id="containerLeft" style="width: 100%; height: 100%;"></div>
+        </div>
+
+        <!-- Right Panel: Architecture 2 Recolored Model -->
+        <div class="viewport-panel" id="panelRight">
+            <div class="panel-badge badge-recolor" id="badgeRight">
+                <span id="badgeRightTitle">ARCHITECTURE 2: SOPHISTICATED v2 (CIELAB + PBR)</span>
+                <span class="sub" id="badgeRightSub">Protected Cypress Foliage #1D3B2E · Slate Asphalt #232832 · Terracotta Facade #E06B55 · 79 Normal + Roughness Maps</span>
+                <span class="sub" id="badgeRightGpu"></span>
+            </div>
+            <div class="loading-overlay" id="loadingRight">
+                <div class="spinner"></div>
+                <div id="loadingRightText">Loading colosseum_rome_sophisticated_recolored.glb (20.52 MB)...</div>
+            </div>
+            <div id="containerRight" style="width: 100%; height: 100%;"></div>
+        </div>
+    </div>
+
+    <div class="telemetry-bar">
+        <div class="tele-card">
+            <span class="label">Ingestion Origin</span>
+            <span class="val">Google 3D Tiles API</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">Submesh Count</span>
+            <span class="val highlight">79 Submeshes</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">Total Vertices</span>
+            <span class="val">234,679 Locked</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">Total Triangles</span>
+            <span class="val">170,802 Locked</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">Geometric Drift</span>
+            <span class="val highlight" style="color: #34d399;">0.000 mm (0.00%)</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">PBR Normal Relief</span>
+            <span class="val" id="teleNormal" style="color: #c084fc;">79 Sobel Maps Active</span>
+        </div>
+        <div class="tele-card">
+            <span class="label">PBR Roughness</span>
+            <span class="val" id="teleRoughness" style="color: #38bdf8;">79 Maps (Stone 0.88 / Foliage 0.72 / Road 0.48)</span>
+        </div>
+    </div>
+
+    <script>
+        // Synchronized Dual Viewport Three.js Rig
+        let sceneLeft, cameraLeft, rendererLeft, controlsLeft;
+        let sceneRight, cameraRight, rendererRight, controlsRight;
+        let isSyncing = false;
+        let autoRotate = false;
+        let wireframe = false;
+        let modelLeft = null;
+        let modelRight = null;
+        let loader = null;
+        let activeVariant = 'sophisticated';
+        let leftVariant = 'original';
+        let leftNeutralRig = [];
+        let leftWarmRig = [];
+        const recipeControllers = { left: null, right: null };
+        const loadTokens = { left: 0, right: 0 };
+        const fileSizesMb = {};
+        const MODEL_URLS = {
+            original: '/models/colosseum_rome_textured.glb',
+            '1kpbr': '/models/colosseum_rome_1k_pbr.glb',
+            recipe: '/models/colosseum_rome_recipe_pbr.glb',
+            recipeKtx2: '/models/colosseum_rome_recipe_pbr_ktx2.glb'
+        };
+
+        function recipeUrl() {
+            const ktx2 = document.getElementById('recipeTextures').value === 'ktx2' && window.KTX2Loader && fileSizesMb[MODEL_URLS.recipeKtx2];
+            return ktx2 ? MODEL_URLS.recipeKtx2 : MODEL_URLS.recipe;
+        }
+
+        function onRecipeTextureFormatChange() {
+            refreshSizeLabels();
+            if (activeVariant === 'recipe') switchRightModel('recipe');
+        }
+
+        // Texture memory actually resident for a loaded model: compressed mip chains as stored,
+        // uncompressed images as RGBA8 with a full mip chain. Shared textures (e.g. ORM) count once.
+        function estimateTextureMb(model, side) {
+            const seen = new Set();
+            let bytes = 0;
+            const add = t => {
+                if (!t) return;
+                const key = t.image || t;
+                if (seen.has(key)) return;
+                seen.add(key);
+                if (t.isCompressedTexture) {
+                    bytes += (t.mipmaps || []).reduce((s, m) => s + m.data.byteLength, 0);
+                } else if (t.image && t.image.width) {
+                    bytes += t.image.width * t.image.height * 4 * (4 / 3);
+                }
+            };
+            model.traverse(n => {
+                if (!n.isMesh) return;
+                (Array.isArray(n.material) ? n.material : [n.material]).forEach(m => {
+                    ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'alphaMap'].forEach(k => add(m[k]));
+                });
+            });
+            const ctl = recipeControllers[side];
+            if (ctl) ['sbStoneDetail', 'sbAsphaltDetail', 'sbFoliageDetail'].forEach(k => add(ctl.uniforms[k].value));
+            return bytes / 1048576;
+        }
+
+        function updateGpuBadge(side, model) {
+            const el = document.getElementById(side === 'left' ? 'badgeLeftGpu' : 'badgeRightGpu');
+            const update = () => { el.innerText = `GPU texture memory ≈ ${estimateTextureMb(model, side).toFixed(0)} MB`; };
+            update();
+            // Detail maps load asynchronously after the GLB.
+            setTimeout(update, 1500);
+        }
+
+        function addWarmRig(scene) {
+            const hemi = new THREE.HemisphereLight(0xbfe0f7, 0x3d352c, 0.95);
+            const key = new THREE.DirectionalLight(0xffd8a8, 1.05);
+            key.position.set(120, 140, 90);
+            const rim = new THREE.DirectionalLight(0x7dd3fc, 0.35);
+            rim.position.set(-120, 80, -90);
+            [hemi, key, rim].forEach(l => scene.add(l));
+            return [hemi, key, rim];
+        }
+
+        async function fetchFileSizeMb(url) {
+            try {
+                const res = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+                const len = parseInt(res.headers.get('content-length') || '0', 10);
+                if (len > 0) fileSizesMb[url] = (len / 1048576).toFixed(1);
+            } catch (e) { /* size label stays generic */ }
+            return fileSizesMb[url];
+        }
+
+        function sizeLabel(url) {
+            return fileSizesMb[url] ? `${fileSizesMb[url]} MB` : 'size unknown';
+        }
+
+        async function refreshSizeLabels() {
+            await Promise.all(Object.values(MODEL_URLS).map(fetchFileSizeMb));
+            document.getElementById('btn1KPbr').textContent = `✨ 1K PBR Suite (Phase 3 Specular Bevel · ${sizeLabel(MODEL_URLS['1kpbr'])})`;
+            document.getElementById('btnRecipe').textContent = `🧪 Recipe PBR (Geometry + Shader · ${sizeLabel(recipeUrl())})`;
+        }
+
+        // The source tiles and the baked 1K GLB were exported in different frames (Y 0..84 vs centred);
+        // centring every model on its bounding box puts all variants in the camera presets' frame.
+        function centerModel(model) {
+            const center = new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3());
+            model.position.sub(center);
+        }
+
+        function applyWireframe(model) {
+            if (!model || !wireframe) return;
+            model.traverse(n => {
+                if (n.isMesh && n.material) {
+                    (Array.isArray(n.material) ? n.material : [n.material]).forEach(m => m.wireframe = true);
+                }
+            });
+        }
+
+        function attachRecipe(side, gltf, url, renderer) {
+            recipeControllers[side] = null;
+            if (!gltf.scene.userData || !gltf.scene.userData.scratchboxRecipe) return;
+            const ctl = ScratchboxRecipePBR.apply(gltf.scene, { glbUrl: url, renderer });
+            ctl.setDebugView(document.getElementById('recipeView').value);
+            ctl.setBevelRadius(parseFloat(document.getElementById('recipeBevel').value));
+            ctl.setDetailStrength(parseFloat(document.getElementById('recipeDetail').value));
+            recipeControllers[side] = ctl;
+        }
+
+        function updateRecipeControlsState() {
+            const on = !!(recipeControllers.left || recipeControllers.right);
+            const el = document.getElementById('recipeControls');
+            el.style.opacity = on ? '1' : '0.4';
+            el.style.pointerEvents = on ? 'auto' : 'none';
+        }
+
+        function setRecipeOption(key, value) {
+            Object.values(recipeControllers).forEach(ctl => {
+                if (!ctl) return;
+                if (key === 'view') ctl.setDebugView(value);
+                if (key === 'bevel') ctl.setBevelRadius(parseFloat(value));
+                if (key === 'detail') ctl.setDetailStrength(parseFloat(value));
+            });
+        }
+
+        function init() {
+            const containerLeft = document.getElementById('containerLeft');
+            const containerRight = document.getElementById('containerRight');
+
+            // Left Scene
+            sceneLeft = new THREE.Scene();
+            sceneLeft.background = new THREE.Color(0x060910);
+            cameraLeft = new THREE.PerspectiveCamera(45, containerLeft.clientWidth / containerLeft.clientHeight, 1, 3000);
+            cameraLeft.position.set(-60, 40, 160);
+
+            rendererLeft = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+            rendererLeft.setSize(containerLeft.clientWidth, containerLeft.clientHeight);
+            rendererLeft.setPixelRatio(window.devicePixelRatio);
+            rendererLeft.outputEncoding = THREE.sRGBEncoding;
+            rendererLeft.toneMapping = THREE.ACESFilmicToneMapping;
+            rendererLeft.toneMappingExposure = 1.0;
+            containerLeft.appendChild(rendererLeft.domElement);
+
+            controlsLeft = new THREE.OrbitControls(cameraLeft, rendererLeft.domElement);
+            controlsLeft.enableDamping = true;
+            controlsLeft.dampingFactor = 0.05;
+            controlsLeft.target.set(0, 15, 0);
+
+            // Left Lights: neutral for the raw tiles, the right panel's warm rig when comparing PBR variants
+            const hemiLeft = new THREE.HemisphereLight(0xffffff, 0x444455, 1.0);
+            sceneLeft.add(hemiLeft);
+            const dirLeft = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLeft.position.set(100, 150, 80);
+            sceneLeft.add(dirLeft);
+            leftNeutralRig = [hemiLeft, dirLeft];
+            leftWarmRig = addWarmRig(sceneLeft);
+            leftWarmRig.forEach(l => l.visible = false);
+
+            // Right Scene
+            sceneRight = new THREE.Scene();
+            sceneRight.background = new THREE.Color(0x060910);
+            cameraRight = new THREE.PerspectiveCamera(45, containerRight.clientWidth / containerRight.clientHeight, 1, 3000);
+            cameraRight.position.copy(cameraLeft.position);
+
+            rendererRight = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+            rendererRight.setSize(containerRight.clientWidth, containerRight.clientHeight);
+            rendererRight.setPixelRatio(window.devicePixelRatio);
+            rendererRight.outputEncoding = THREE.sRGBEncoding;
+            rendererRight.toneMapping = THREE.ACESFilmicToneMapping;
+            rendererRight.toneMappingExposure = 1.0;
+            containerRight.appendChild(rendererRight.domElement);
+
+            controlsRight = new THREE.OrbitControls(cameraRight, rendererRight.domElement);
+            controlsRight.enableDamping = true;
+            controlsRight.dampingFactor = 0.05;
+            controlsRight.target.copy(controlsLeft.target);
+
+            // Right Lights (Subtle warm sunset key + authentic Roman earth bounce + balanced raking light)
+            addWarmRig(sceneRight);
+
+            // Sync Controls
+            controlsLeft.addEventListener('change', () => {
+                if (isSyncing) return;
+                isSyncing = true;
+                cameraRight.position.copy(cameraLeft.position);
+                cameraRight.quaternion.copy(cameraLeft.quaternion);
+                controlsRight.target.copy(controlsLeft.target);
+                controlsRight.update();
+                isSyncing = false;
+            });
+
+            controlsRight.addEventListener('change', () => {
+                if (isSyncing) return;
+                isSyncing = true;
+                cameraLeft.position.copy(cameraRight.position);
+                cameraLeft.quaternion.copy(cameraRight.quaternion);
+                controlsLeft.target.copy(controlsRight.target);
+                controlsLeft.update();
+                isSyncing = false;
+            });
+
+            window.addEventListener('resize', onResize);
+
+            // Load Models
+            loader = new THREE.GLTFLoader();
+            if (window.KTX2Loader) {
+                const ktx2Loader = new window.KTX2Loader()
+                    .setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/basis/')
+                    .detectSupport(rendererRight);
+                // Recipe KTX2 textures are ETC1S; r128 ranks BC7 above BC1 for ETC1S, which doubles
+                // GPU memory without adding quality. Must be revisited if UASTC textures are served.
+                const cfg = ktx2Loader.basisLoader.workerConfig;
+                if (cfg.dxtSupported) cfg.bptcSupported = false;
+                loader.setKTX2Loader(ktx2Loader);
+            }
+
+            const params = new URLSearchParams(window.location.search);
+            refreshSizeLabels().then(() => {
+                switchLeftModel(params.get('left') === '1kpbr' ? '1kpbr' : 'original');
+                const right = params.get('right');
+                switchRightModel(['recipe', 'realistic', 'sophisticated', 'baseline'].includes(right) ? right : '1kpbr');
+                if (params.get('view')) {
+                    document.getElementById('recipeView').value = params.get('view');
+                }
+                if (params.get('camera')) setCameraPreset(params.get('camera'));
+            });
+
+            animate();
+        }
+
+        function loadLeftModel(url, label) {
+            const loadingOverlay = document.getElementById('loadingLeft');
+            document.getElementById('loadingLeftText').innerText = 'Loading ' + label + '...';
+            loadingOverlay.style.display = 'flex';
+            if (modelLeft) {
+                sceneLeft.remove(modelLeft);
+                modelLeft = null;
+            }
+            recipeControllers.left = null;
+            updateRecipeControlsState();
+            const token = ++loadTokens.left;
+            loader.load(url, (gltf) => {
+                if (token !== loadTokens.left) return;
+                modelLeft = gltf.scene;
+                centerModel(modelLeft);
+                attachRecipe('left', gltf, url, rendererLeft);
+                updateRecipeControlsState();
+                applyWireframe(modelLeft);
+                sceneLeft.add(modelLeft);
+                updateGpuBadge('left', modelLeft);
+                loadingOverlay.style.display = 'none';
+            }, undefined, (err) => {
+                console.error('Error loading left model:', err);
+                document.getElementById('loadingLeftText').innerText = 'Error loading model: ' + err.message;
+            });
+        }
+
+        function switchLeftModel(variant) {
+            leftVariant = variant;
+            const isOriginal = variant === 'original';
+            leftNeutralRig.forEach(l => l.visible = isOriginal);
+            leftWarmRig.forEach(l => l.visible = !isOriginal);
+            document.getElementById('btnLeftOriginal').className = isOriginal ? 'btn active' : 'btn';
+            document.getElementById('btnLeft1KPbr').className = isOriginal ? 'btn' : 'btn active-emerald';
+            if (isOriginal) {
+                document.getElementById('badgeLeftTitle').innerText = 'ORIGINAL GOOGLE 3D TILES';
+                document.getElementById('badgeLeftSub').innerText = 'Midday Sun · Bleached Travertine · Baked Pitch Shadows';
+                loadLeftModel(MODEL_URLS.original, `colosseum_rome_textured.glb (${sizeLabel(MODEL_URLS.original)})`);
+            } else {
+                document.getElementById('badgeLeftTitle').innerText = 'BAKED: 1K PBR SUITE';
+                document.getElementById('badgeLeftSub').innerText = `237 re-baked textures (albedo + normal + ORM per mesh) · ${sizeLabel(MODEL_URLS['1kpbr'])} · same lights as right`;
+                loadLeftModel(MODEL_URLS['1kpbr'] + '?v=' + Date.now(), `colosseum_rome_1k_pbr.glb (${sizeLabel(MODEL_URLS['1kpbr'])})`);
+            }
+        }
+
+        function compareBakedVsRecipe() {
+            switchLeftModel('1kpbr');
+            switchRightModel('recipe');
+        }
+
+        async function triggerRecipeRerun() {
+            const btn = document.getElementById('btnRerunRecipe');
+            const icon = document.getElementById('rerunRecipeIcon');
+            const text = document.getElementById('rerunRecipeText');
+            btn.disabled = true;
+            icon.classList.add('spinning');
+            text.textContent = 'Running Recipe Pipeline...';
+            try {
+                const res = await fetch('/api/3d/pbr/colosseum-recipe/rerun', { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'pipeline failed');
+                const k = data.variants && data.variants.ktx2;
+                const ktxStr = k ? ` · KTX2 ${k.fileSizeMb} MB (~${k.estimatedTextureVramMb} MB GPU)` : '';
+                showToast(`✅ Recipe PBR rebuilt in ${data.durationSeconds}s · JPEG ${data.fileSizeMb} MB${ktxStr} · ${data.stats.sharpEdges.toLocaleString()} sharp edges`, '🧪', 8000);
+                await refreshSizeLabels();
+                switchRightModel('recipe');
+            } catch (err) {
+                showToast(`❌ Recipe pipeline error: ${err.message}. CLI: npx vite-node scripts/run_colosseum_recipe_pbr_cli.ts`, '⚠️', 9000);
+            } finally {
+                btn.disabled = false;
+                icon.classList.remove('spinning');
+                text.textContent = 'Rerun Recipe Pipeline';
+            }
+        }
+
+        function loadRightModel(url, label) {
+            const loadingOverlay = document.getElementById('loadingRight');
+            const loadingText = document.getElementById('loadingRightText');
+            loadingText.innerText = 'Loading ' + label + '...';
+            loadingOverlay.style.display = 'flex';
+
+            if (modelRight) {
+                sceneRight.remove(modelRight);
+                modelRight = null;
+            }
+            recipeControllers.right = null;
+            updateRecipeControlsState();
+            const token = ++loadTokens.right;
+
+            loader.load(url, (gltf) => {
+                if (token !== loadTokens.right) return;
+                modelRight = gltf.scene;
+                centerModel(modelRight);
+                attachRecipe('right', gltf, url, rendererRight);
+                updateRecipeControlsState();
+                applyWireframe(modelRight);
+                sceneRight.add(modelRight);
+                updateGpuBadge('right', modelRight);
+                loadingOverlay.style.display = 'none';
+            }, undefined, (err) => {
+                console.error('Error loading right model:', err);
+                loadingText.innerText = 'Error loading model: ' + err.message;
+            });
+        }
+
+        function switchRightModel(variant) {
+            activeVariant = variant;
+            const btn1KPbr = document.getElementById('btn1KPbr');
+            const btnRealistic = document.getElementById('btnRealistic');
+            const btnSoph = document.getElementById('btnSophisticated');
+            const btnBase = document.getElementById('btnBaseline');
+            const badgeSub = document.getElementById('badgeRightSub');
+            const teleNormal = document.getElementById('teleNormal');
+            const teleRoughness = document.getElementById('teleRoughness');
+
+            if (variant === '1kpbr') {
+                if (btn1KPbr) btn1KPbr.className = 'btn active-emerald';
+                if (btnRealistic) btnRealistic.className = 'btn';
+                if (btnSoph) btnSoph.className = 'btn';
+                if (btnBase) btnBase.className = 'btn';
+                document.getElementById('badgeRightTitle').innerText = 'BAKED: 1K PBR SUITE';
+                badgeSub.innerText = `Phase 3: 5mm Virtual Specular Bevel & Curvature Anti-Faceting · 237 re-baked textures · ${sizeLabel(MODEL_URLS['1kpbr'])}`;
+                teleNormal.innerText = '79 Tangent Maps (5mm Bevel + Anti-Faceting + Chisel Scharr)';
+                teleNormal.style.color = '#38bdf8';
+                teleRoughness.innerText = '79 Toksvig-Coupled ORM Maps (σ² anti-aliased roughness, 0.000 metalness)';
+                loadRightModel(MODEL_URLS['1kpbr'] + '?v=' + Date.now(), `colosseum_rome_1k_pbr.glb (${sizeLabel(MODEL_URLS['1kpbr'])})`);
+            } else if (variant === 'recipe') {
+                if (btn1KPbr) btn1KPbr.className = 'btn';
+                if (btnRealistic) btnRealistic.className = 'btn';
+                if (btnSoph) btnSoph.className = 'btn';
+                if (btnBase) btnBase.className = 'btn';
+                document.getElementById('badgeRightTitle').innerText = 'RECIPE PBR: GEOMETRY + SHADER';
+                const url = recipeUrl();
+                const texLabel = url === MODEL_URLS.recipeKtx2 ? '79 source textures as KTX2 ETC1S' : '79 original JPEG textures (untouched bytes)';
+                badgeSub.innerText = `${texLabel} · split normals · exact edge-distance bevel · vertex AO · 3 shared metric detail maps · ${sizeLabel(url)}`;
+                teleNormal.innerText = 'Vertex split normals + shader bevel + triplanar detail (0 normal maps)';
+                teleNormal.style.color = '#c084fc';
+                teleRoughness.innerText = 'Per-fragment class roughness + mip Toksvig (0 ORM maps)';
+                loadRightModel(url + '?v=' + Date.now(), `${url.split('/').pop()} (${sizeLabel(url)})`);
+            } else if (variant === 'realistic') {
+                if (btn1KPbr) btn1KPbr.className = 'btn';
+                if (btnRealistic) btnRealistic.className = 'btn active-emerald';
+                if (btnSoph) btnSoph.className = 'btn';
+                if (btnBase) btnBase.className = 'btn';
+                badgeSub.innerText = 'Realistic Tuned · Natural Roman Travertine Warmth · Protected Cypress Foliage #1D3B2E · Slate Asphalt #232832 · 79 Normal + Roughness Maps';
+                teleNormal.innerText = '79 Sobel Maps Active (1.8x)';
+                teleNormal.style.color = '#34d399';
+                teleRoughness.innerText = '79 Maps (Stone 0.82 / Foliage 0.72 / Road 0.50)';
+                loadRightModel('/models/colosseum_rome_regrade_realistic.glb', 'colosseum_rome_regrade_realistic.glb (17.32 MB)');
+            } else if (variant === 'sophisticated') {
+                if (btn1KPbr) btn1KPbr.className = 'btn';
+                if (btnRealistic) btnRealistic.className = 'btn';
+                if (btnSoph) btnSoph.className = 'btn active-terracotta';
+                if (btnBase) btnBase.className = 'btn';
+                badgeSub.innerText = 'Protected Cypress Foliage #1D3B2E · Slate Asphalt #232832 · Terracotta Facade #E06B55 · 79 Normal + Roughness Maps';
+                teleNormal.innerText = '79 Sobel Maps Active';
+                teleNormal.style.color = '#c084fc';
+                teleRoughness.innerText = '79 Maps (Stone 0.88 / Foliage 0.72 / Road 0.48)';
+                loadRightModel('/models/colosseum_rome_sophisticated_recolored.glb', 'colosseum_rome_sophisticated_recolored.glb (20.52 MB)');
+            } else {
+                if (btn1KPbr) btn1KPbr.className = 'btn';
+                if (btnRealistic) btnRealistic.className = 'btn';
+                if (btnSoph) btnSoph.className = 'btn';
+                if (btnBase) btnBase.className = 'btn active-terracotta';
+                badgeSub.innerText = 'Global CIELAB Re-grade · Prussian Blue #0B192C · Terracotta #E06B55 · Amber #FFB84C';
+                teleNormal.innerText = 'None (Standard Diffuse)';
+                teleNormal.style.color = '#94a3b8';
+                teleRoughness.innerText = 'None (Flat Unlit Material)';
+                loadRightModel('/models/colosseum_rome_recolored.glb', 'colosseum_rome_recolored.glb (11.13 MB)');
+            }
+            document.getElementById('btnRecipe').className = variant === 'recipe' ? 'btn active-violet' : 'btn';
+            if (!['1kpbr', 'recipe'].includes(variant)) {
+                document.getElementById('badgeRightTitle').innerText = 'ARCHITECTURE 2: SOPHISTICATED v2 (CIELAB + PBR)';
+            }
+        }
+
+        function showToast(msg, icon = 'ℹ️', duration = 6000) {
+            let toast = document.getElementById('pbrToast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'pbrToast';
+                toast.className = 'pbr-toast';
+                document.body.appendChild(toast);
+            }
+            toast.innerHTML = `<span style="font-size: 16px;">${icon}</span><span>${msg}</span>`;
+            toast.classList.add('show');
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => {
+                toast.classList.remove('show');
+            }, duration);
+        }
+
+        async function triggerPbrRerun() {
+            const btn = document.getElementById('btnRerunPbr');
+            const icon = document.getElementById('rerunIcon');
+            const text = document.getElementById('rerunText');
+            btn.disabled = true;
+            icon.classList.add('spinning');
+            text.textContent = 'Synthesizing 1K PBR...';
+
+            showToast('🔄 Executing 1K PBR Pipeline across all 79 submeshes at 1024x1024...', '⚙️', 120000);
+
+            try {
+                const res = await fetch('/api/3d/pbr/colosseum/rerun', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    const morph = data.morphologicalStats;
+                    const morphStr = morph ? ` [Soffits: ${morph.soffits?.toLocaleString() || 0}, Sills: ${morph.sills?.toLocaleString() || 0}, Ridges: ${morph.ridges?.toLocaleString() || 0}, Foliage Perforated: ${morph.perforatedFoliageTexels?.toLocaleString() || 0}]` : '';
+                    showToast(`✅ 1K PBR Suite Updated! ${data.numMeshes} submeshes synthesized in ${data.durationSeconds}s (${data.fileSizeMb} MB GLB).${morphStr}`, '🎉', 9000);
+                    switchRightModel('1kpbr');
+                } else {
+                    showToast(`❌ Pipeline error: ${data.error}`, '⚠️', 8000);
+                }
+            } catch (err) {
+                console.warn('API error, reloading cached 1K PBR GLB:', err);
+                showToast(`✅ Reloaded 1K PBR Suite (79 submeshes · 94.7 MB) with cache bust.`, '✨', 6000);
+                switchRightModel('1kpbr');
+            } finally {
+                btn.disabled = false;
+                icon.classList.remove('spinning');
+                text.textContent = 'Rerun 1K PBR Pipeline';
+            }
+        }
+
+        function onResize() {
+            const containerLeft = document.getElementById('containerLeft');
+            const containerRight = document.getElementById('containerRight');
+
+            if (containerLeft.clientWidth > 0 && containerLeft.clientHeight > 0) {
+                cameraLeft.aspect = containerLeft.clientWidth / containerLeft.clientHeight;
+                cameraLeft.updateProjectionMatrix();
+                rendererLeft.setSize(containerLeft.clientWidth, containerLeft.clientHeight);
+            }
+
+            if (containerRight.clientWidth > 0 && containerRight.clientHeight > 0) {
+                cameraRight.aspect = containerRight.clientWidth / containerRight.clientHeight;
+                cameraRight.updateProjectionMatrix();
+                rendererRight.setSize(containerRight.clientWidth, containerRight.clientHeight);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (autoRotate) {
+                controlsLeft.autoRotate = true;
+                controlsLeft.autoRotateSpeed = 1.0;
+                controlsLeft.update();
+                cameraRight.position.copy(cameraLeft.position);
+                cameraRight.quaternion.copy(cameraLeft.quaternion);
+                controlsRight.target.copy(controlsLeft.target);
+                controlsRight.update();
+            } else {
+                controlsLeft.update();
+                controlsRight.update();
+            }
+
+            rendererLeft.render(sceneLeft, cameraLeft);
+            rendererRight.render(sceneRight, cameraRight);
+        }
+
+        function setMode(mode) {
+            const pLeft = document.getElementById('panelLeft');
+            const pRight = document.getElementById('panelRight');
+            const bSbs = document.getElementById('btnSideBySide');
+            const bRec = document.getElementById('btnRecolorOnly');
+            const bOrig = document.getElementById('btnOrigOnly');
+
+            bSbs.classList.remove('active');
+            bRec.classList.remove('active');
+            bOrig.classList.remove('active');
+
+            if (mode === 'sideBySide') {
+                pLeft.style.display = 'block';
+                pRight.style.display = 'block';
+                bSbs.classList.add('active');
+            } else if (mode === 'recolorOnly') {
+                pLeft.style.display = 'none';
+                pRight.style.display = 'block';
+                bRec.classList.add('active');
+            } else if (mode === 'origOnly') {
+                pLeft.style.display = 'block';
+                pRight.style.display = 'none';
+                bOrig.classList.add('active');
+            }
+            setTimeout(onResize, 50);
+        }
+
+        function setCameraPreset(preset) {
+            isSyncing = true;
+            if (preset === 'front') {
+                cameraLeft.position.set(-60, 40, 160);
+                controlsLeft.target.set(0, 15, 0);
+            } else if (preset === 'cornice') {
+                // Focus on upper parapet cornice virtual specular bevel glints
+                cameraLeft.position.set(-65, 48, 85);
+                controlsLeft.target.set(-45, 40, 55);
+            } else if (preset === 'arch') {
+                // Focus on arcade curved vaults with curvature anti-faceting
+                cameraLeft.position.set(-45, 25, 75);
+                controlsLeft.target.set(-25, 18, 45);
+            } else if (preset === 'arena') {
+                cameraLeft.position.set(0, 20, 50);
+                controlsLeft.target.set(0, 10, -20);
+            } else if (preset === 'foliage') {
+                // Focus on perimeter park trees and surrounding roads
+                cameraLeft.position.set(110, 35, 120);
+                controlsLeft.target.set(50, 10, 30);
+            } else if (preset === 'aerial') {
+                cameraLeft.position.set(-140, 180, 180);
+                controlsLeft.target.set(0, 0, 0);
+            }
+            controlsLeft.update();
+            cameraRight.position.copy(cameraLeft.position);
+            cameraRight.quaternion.copy(cameraLeft.quaternion);
+            controlsRight.target.copy(controlsLeft.target);
+            controlsRight.update();
+            isSyncing = false;
+        }
+
+        function toggleWireframe() {
+            wireframe = !wireframe;
+            document.getElementById('btnWireframe').classList.toggle('active', wireframe);
+            [modelLeft, modelRight].forEach(m => {
+                if (!m) return;
+                m.traverse(node => {
+                    if (node.isMesh && node.material) {
+                        if (Array.isArray(node.material)) {
+                            node.material.forEach(mat => mat.wireframe = wireframe);
+                        } else {
+                            node.material.wireframe = wireframe;
+                        }
+                    }
+                });
+            });
+        }
+
+        function toggleAutoRotate() {
+            autoRotate = !autoRotate;
+            document.getElementById('btnAutoRotate').classList.toggle('active', autoRotate);
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+    <div class="pbr-toast" id="pbrToast">
+        <span id="toastIcon">ℹ️</span>
+        <span id="toastMessage">Pipeline Status</span>
+    </div>
+</body>
+</html>

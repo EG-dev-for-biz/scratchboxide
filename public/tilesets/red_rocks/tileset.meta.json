@@ -1,0 +1,407 @@
+{
+  "generator": "architectural-photoreal-generator",
+  "mode": "chained",
+  "anchor": {
+    "lat": 39.66555,
+    "lng": -105.20525,
+    "elevationMeters": 1932,
+    "headingDeg": 285,
+    "formattedAddress": "Red Rocks Amphitheatre"
+  },
+  "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/red_rocks_amphitheatre.glb",
+  "eyeHeight": -1922.415,
+  "cropBox": {
+    "min": [
+      -75,
+      -0.5,
+      -75
+    ],
+    "max": [
+      75,
+      55,
+      75
+    ]
+  },
+  "fusedSplatCount": 481395,
+  "voxelSizeMeters": 0.08,
+  "stations": [
+    {
+      "stationId": 1,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 387889,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_001.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_001_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_001_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 1",
+      "positionLocalENU": [
+        5.2,
+        6.66,
+        21.700000000000003
+      ],
+      "forwardVector": [
+        0,
+        -0.046034095349948706,
+        -0.9989398690938869
+      ],
+      "name": "ORBIT_TIER_1_STATION_01"
+    },
+    {
+      "stationId": 2,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 320712,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_002.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_002_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_002_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 2",
+      "positionLocalENU": [
+        14.615277138851013,
+        6.66,
+        19.5510244334825
+      ],
+      "forwardVector": [
+        -0.4334237655560597,
+        -0.046034095349948706,
+        -0.9000137229601101
+      ],
+      "name": "ORBIT_TIER_1_STATION_02"
+    },
+    {
+      "stationId": 3,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 463590,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_003.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_003_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_003_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 3",
+      "positionLocalENU": [
+        22.165743169556247,
+        6.66,
+        13.529728700334521
+      ],
+      "forwardVector": [
+        -0.781002638750093,
+        -0.0460340953499487,
+        -0.6228288210501367
+      ],
+      "name": "ORBIT_TIER_1_STATION_03"
+    },
+    {
+      "stationId": 4,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 456432,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_004.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_004_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_004_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 4",
+      "positionLocalENU": [
+        26.355935694345575,
+        6.66,
+        4.828704266852024
+      ],
+      "forwardVector": [
+        -0.9738943609708872,
+        -0.0460340953499487,
+        -0.22228503263697022
+      ],
+      "name": "ORBIT_TIER_1_STATION_04"
+    },
+    {
+      "stationId": 5,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 509412,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_005.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_005_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_005_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 5",
+      "positionLocalENU": [
+        26.355935694345575,
+        6.66,
+        -4.8287042668520215
+      ],
+      "forwardVector": [
+        -0.9738943609708872,
+        -0.0460340953499487,
+        0.22228503263697008
+      ],
+      "name": "ORBIT_TIER_2_STATION_05"
+    },
+    {
+      "stationId": 6,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 468084,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_006.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_006_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_006_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 6",
+      "positionLocalENU": [
+        22.16574316955625,
+        6.66,
+        -13.529728700334518
+      ],
+      "forwardVector": [
+        -0.7810026387500935,
+        -0.04603409534994872,
+        0.6228288210501367
+      ],
+      "name": "ORBIT_TIER_2_STATION_06"
+    },
+    {
+      "stationId": 7,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 452741,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_007.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_007_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_007_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 7",
+      "positionLocalENU": [
+        14.615277138851017,
+        6.66,
+        -19.551024433482496
+      ],
+      "forwardVector": [
+        -0.4334237655560598,
+        -0.0460340953499487,
+        0.9000137229601098
+      ],
+      "name": "ORBIT_TIER_2_STATION_07"
+    },
+    {
+      "stationId": 8,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 323497,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_008.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_008_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_008_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 8",
+      "positionLocalENU": [
+        5.200000000000003,
+        6.66,
+        -21.700000000000003
+      ],
+      "forwardVector": [
+        -1.2434497875801754e-16,
+        -0.046034095349948706,
+        0.9989398690938869
+      ],
+      "name": "ORBIT_TIER_2_STATION_08"
+    },
+    {
+      "stationId": 9,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 397249,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_009.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_009_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_009_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 9",
+      "positionLocalENU": [
+        -4.21527713885101,
+        6.66,
+        -19.5510244334825
+      ],
+      "forwardVector": [
+        0.4334237655560595,
+        -0.046034095349948706,
+        0.9000137229601101
+      ],
+      "name": "ORBIT_TIER_3_STATION_09"
+    },
+    {
+      "stationId": 10,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 375459,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_010.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_010_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_010_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 10",
+      "positionLocalENU": [
+        -11.765743169556249,
+        6.66,
+        -13.529728700334523
+      ],
+      "forwardVector": [
+        0.781002638750093,
+        -0.0460340953499487,
+        0.6228288210501368
+      ],
+      "name": "ORBIT_TIER_3_STATION_10"
+    },
+    {
+      "stationId": 11,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 26634,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_011.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_011_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_011_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 11",
+      "positionLocalENU": [
+        -15.955935694345577,
+        6.66,
+        -4.828704266852027
+      ],
+      "forwardVector": [
+        0.9738943609708872,
+        -0.0460340953499487,
+        0.2222850326369703
+      ],
+      "name": "ORBIT_TIER_3_STATION_11"
+    },
+    {
+      "stationId": 12,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 51589,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_012.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_012_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/red_rocks/stations/station_012_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 12",
+      "positionLocalENU": [
+        -15.95593569434558,
+        6.66,
+        4.828704266852
+      ],
+      "forwardVector": [
+        0.9738943609708877,
+        -0.0460340953499487,
+        -0.22228503263696908
+      ],
+      "name": "ORBIT_TIER_3_STATION_12"
+    }
+  ],
+  "tiles": {
+    "tileCount": 27,
+    "levels": 4,
+    "tileBytes": 5953628
+  },
+  "createdAt": "2026-10-03T00:42:45.376Z"
+}

@@ -275,7 +275,7 @@ describe('GoogleTileDistrictCrawler: real leaf-tile district extraction', () => 
             radiusMeters: 250,
             dilateMeters: 40,
             leaves: [{ id: 'tile-abc', geometricError: 2.01, box: enuBox([0, 0, 0], [8, 8, 8]) }],
-            fetchedAt: '2026-09-24T20:00:00.000Z'
+            fetchedAt: '2026-09-28T20:00:00.000Z'
         });
         const onDisk = fs.readFileSync(glbPath);
         expect(manifest.glb.sha256).toBe(crypto.createHash('sha256').update(onDisk).digest('hex'));
@@ -286,7 +286,7 @@ describe('GoogleTileDistrictCrawler: real leaf-tile district extraction', () => 
         expect(reread.frame.localToEcef).toHaveLength(16);
         expect(reread.extent.verticalExtent).toBe('unbounded');
         expect(reread.attribution).toContain('Google');
-        expect(reread.time.fetchedAt).toBe('2026-09-24T20:00:00.000Z');
+        expect(reread.time.fetchedAt).toBe('2026-09-28T20:00:00.000Z');
         expect(reread.source.tiles[0].id).toBe('tile-abc');
         expect(reread.source.tiles[0].box).toHaveLength(12);
     });

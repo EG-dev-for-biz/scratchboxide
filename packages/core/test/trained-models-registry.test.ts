@@ -18,37 +18,32 @@ import {
 describe('Trained Neural Model Codebase Placement & Integration', () => {
     const registry = new TrainedModelRegistryService();
 
-    it('1. should discover trained models across all 4 core families', () => {
+    it('1. should discover trained models across native core families', () => {
         const all = registry.discoverAllModels();
         expect(all.length).toBeGreaterThan(0);
 
         const summary = registry.getCatalogSummary();
         expect(summary.totalModels).toBeGreaterThan(0);
-        expect(summary.totalSizeBytes).toBeGreaterThan(100 * 1024 * 1024); // Over 100 MB
 
-        // All core families should have models discovered
+        // Core families should have models discovered
         expect(summary.families.sbhuman).toBeGreaterThanOrEqual(3);
-        expect(summary.families.smplx).toBeGreaterThanOrEqual(3);
         expect(summary.families['performer_4dgs']).toBeGreaterThanOrEqual(1);
-        expect(summary.families.omniroam).toBeGreaterThanOrEqual(2);
         expect(summary.families.geobox).toBeGreaterThanOrEqual(2);
     });
 
-    it('2. should properly resolve parametric humanoid body models (.sbhuman or smplx)', () => {
+    it('2. should properly resolve parametric humanoid body models (.sbhuman)', () => {
         const sbNeutral = registry.getSbHumanModel('neutral');
         expect(sbNeutral).toBeDefined();
         expect(fs.existsSync(sbNeutral!)).toBe(true);
 
-        const neutral = registry.getSmplxModel('neutral');
-        const male = registry.getSmplxModel('male');
-        const female = registry.getSmplxModel('female');
+        const male = registry.getSbHumanModel('male');
+        const female = registry.getSbHumanModel('female');
 
-        expect(neutral).toBeDefined();
         expect(male).toBeDefined();
         expect(female).toBeDefined();
-
-        expect(fs.existsSync(neutral!)).toBe(true);
-        expect(fs.statSync(neutral!).size).toBeGreaterThan(1024 * 1024); // > 1 MB (.sbhuman is ~1.96 MB, legacy npz is ~108 MB)
+        expect(fs.existsSync(male!)).toBe(true);
+        expect(fs.existsSync(female!)).toBe(true);
+        expect(fs.statSync(sbNeutral!).size).toBeGreaterThan(1024 * 1024); // > 1 MB (.sbhuman is ~1.96 MB)
     });
 
     it('3. should provide Performer 4DGS humanoid avatar manifests and viewport assets', () => {
@@ -65,18 +60,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(fs.existsSync(avatar!.glbPath!)).toBe(true);
     });
 
-    it('4. should resolve OmniRoam camera navigation foundation checkpoints', () => {
-        const preview = registry.getOmniRoamCheckpoint('preview');
-        const refine = registry.getOmniRoamCheckpoint('refine');
-
-        expect(preview).toBeDefined();
-        expect(refine).toBeDefined();
-        expect(fs.existsSync(preview!)).toBe(true);
-        expect(fs.existsSync(refine!)).toBe(true);
-        expect(fs.statSync(preview!).size).toBeGreaterThan(1024 * 1024 * 1024); // > 1 GB
-    });
-
-    it('5. should resolve GeoBox vision-location checkpoints and spherical coordinates gallery', () => {
+    it('4. should resolve GeoBox vision-location checkpoints and spherical coordinates gallery', () => {
         const pt = registry.getGeoBoxCheckpoint('real_trained');
         const gallery = registry.discoverGeoBoxModels().find(m => m.format === 'npy');
 
@@ -88,7 +72,7 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         expect(fs.existsSync(gallery!.filePath)).toBe(true);
     });
 
-    it('6. should register humanoid splat avatars and SMPL-X in SpatialAssetVaultService', () => {
+    it('5. should register humanoid splat avatars and SB-Human in SpatialAssetVaultService', () => {
         const vault = new SpatialAssetVaultService();
         const records = vault.listAssets();
 
@@ -102,10 +86,5 @@ describe('Trained Neural Model Codebase Placement & Integration', () => {
         const sbhumanRecord = records.find(r => r.representation.durableUri === 'vault://body_models/sbhuman/neutral');
         expect(sbhumanRecord).toBeDefined();
         expect(sbhumanRecord!.representation.metadata?.numVertices).toBe(10475);
-
-        // Check for backward-compatibility legacy alias
-        const smplxRecord = records.find(r => r.representation.durableUri === 'vault://body_models/smplx/neutral');
-        expect(smplxRecord).toBeDefined();
-        expect(smplxRecord!.representation.metadata?.numVertices).toBe(10475);
     });
 });

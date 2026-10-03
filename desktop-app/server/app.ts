@@ -339,6 +339,24 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const publicRoot = path.resolve(process.cwd(), 'public');
     if (fs.existsSync(publicRoot)) {
         app.use(express.static(publicRoot));
+        const demosShowcase = path.join(publicRoot, 'demos', 'showcase');
+        if (fs.existsSync(demosShowcase)) {
+            app.use(express.static(demosShowcase));
+        }
+        const demosExperiments = path.join(publicRoot, 'demos', 'experiments');
+        if (fs.existsSync(demosExperiments)) {
+            app.use(express.static(demosExperiments));
+        }
+    }
+
+    // Trigger asynchronous background asset hydration for showcase demos
+    const hydratorScript = path.resolve(process.cwd(), 'scripts', 'hydrate_demo_assets.cjs');
+    if (fs.existsSync(hydratorScript)) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-process, @typescript-eslint/no-require-imports
+            const { fork } = require('child_process');
+            fork(hydratorScript, ['--quiet'], { stdio: 'ignore' });
+        } catch {}
     }
 
     app.use(createLaunchTokenMiddleware(launchToken));

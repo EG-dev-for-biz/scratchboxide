@@ -1,0 +1,779 @@
+{
+  "generator": "google-nano-banana",
+  "mode": "chained",
+  "anchor": {
+    "lat": 41.8902,
+    "lng": 12.4922,
+    "elevationMeters": 22,
+    "headingDeg": 0,
+    "formattedAddress": "Colosseum, Rome"
+  },
+  "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/colosseum_grounded.glb",
+  "eyeHeight": 23.314,
+  "cropBox": {
+    "min": [
+      -115,
+      -0.5,
+      -115
+    ],
+    "max": [
+      115,
+      50,
+      115
+    ]
+  },
+  "fusedSplatCount": 2223461,
+  "voxelSizeMeters": 0.05,
+  "stations": [
+    {
+      "stationId": 1,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 223228,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_001_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 1",
+      "positionLocalENU": [
+        97.24,
+        48.5,
+        63.05
+      ],
+      "forwardVector": [
+        -0.9982132409812641,
+        -0.05975220104465313,
+        0
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_01"
+    },
+    {
+      "stationId": 2,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 272465,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_002_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 2",
+      "positionLocalENU": [
+        55.65,
+        42.86,
+        163.46
+      ],
+      "forwardVector": [
+        -0.7069634069759124,
+        -0.02013659340654426,
+        -0.7069634069759125
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_02"
+    },
+    {
+      "stationId": 3,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 210794,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_003_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 3",
+      "positionLocalENU": [
+        -44.76,
+        48.91,
+        205.05
+      ],
+      "forwardVector": [
+        0,
+        -0.06262332218858033,
+        -0.9980372335329305
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_03"
+    },
+    {
+      "stationId": 4,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 198577,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_004_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 4",
+      "positionLocalENU": [
+        -145.17,
+        40.14,
+        163.46
+      ],
+      "forwardVector": [
+        0.7071064375282522,
+        -0.0009859067946813634,
+        -0.7071064375282523
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_04"
+    },
+    {
+      "stationId": 5,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 175086,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_005_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 5",
+      "positionLocalENU": [
+        -186.76,
+        32,
+        63.05
+      ],
+      "forwardVector": [
+        0.9984167811167356,
+        0.05624883273897102,
+        0
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_05"
+    },
+    {
+      "stationId": 6,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 149379,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_006_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 6",
+      "positionLocalENU": [
+        -145.17,
+        38.6,
+        -37.36
+      ],
+      "forwardVector": [
+        0.7070724178370689,
+        0.00985859361589379,
+        0.7070724178370689
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_06"
+    },
+    {
+      "stationId": 7,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 220727,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_007_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 7",
+      "positionLocalENU": [
+        -44.76,
+        50.77,
+        -78.95
+      ],
+      "forwardVector": [
+        0,
+        -0.07562785867874203,
+        0.9971361125702288
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_07"
+    },
+    {
+      "stationId": 8,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 317475,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_008_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 8",
+      "positionLocalENU": [
+        55.65,
+        71.23,
+        -37.36
+      ],
+      "forwardVector": [
+        -0.6906023948024081,
+        -0.2147944705674655,
+        0.6906023948024081
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_08"
+    },
+    {
+      "stationId": 9,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 265635,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_009_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 9",
+      "positionLocalENU": [
+        43.63,
+        68,
+        151.44
+      ],
+      "forwardVector": [
+        -0.6922902706523215,
+        -0.2036378214386283,
+        -0.6922902706523215
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_09"
+    },
+    {
+      "stationId": 10,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 472879,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_010_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 10",
+      "positionLocalENU": [
+        -133.15,
+        68,
+        151.44
+      ],
+      "forwardVector": [
+        0.6922902706523216,
+        -0.2036378214386283,
+        -0.6922902706523215
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_10"
+    },
+    {
+      "stationId": 11,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 78308,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_011_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 11",
+      "positionLocalENU": [
+        -133.15,
+        68,
+        -25.34
+      ],
+      "forwardVector": [
+        0.6922902706523216,
+        -0.2036378214386283,
+        0.6922902706523215
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_11"
+    },
+    {
+      "stationId": 12,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 281383,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_012_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 12",
+      "positionLocalENU": [
+        43.63,
+        68,
+        -25.34
+      ],
+      "forwardVector": [
+        -0.6922902706523215,
+        -0.2036378214386283,
+        0.6922902706523215
+      ],
+      "name": "ORBIT_TIER_1_STREET_STATION_12"
+    },
+    {
+      "stationId": 13,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 372123,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_013_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 13",
+      "positionLocalENU": [
+        25.24,
+        115,
+        133.05
+      ],
+      "forwardVector": [
+        -0.5364811656675431,
+        -0.6514414154534451,
+        -0.5364811656675432
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_13"
+    },
+    {
+      "stationId": 14,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 200589,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_014_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 14",
+      "positionLocalENU": [
+        -114.76,
+        115,
+        -6.95
+      ],
+      "forwardVector": [
+        0.5364811656675432,
+        -0.6514414154534452,
+        0.5364811656675432
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_14"
+    },
+    {
+      "stationId": 15,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 299096,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_015_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 15",
+      "positionLocalENU": [
+        -72.76,
+        36.16,
+        63.05
+      ],
+      "forwardVector": [
+        0.997827007678615,
+        -0.06588825955465134,
+        0
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_15"
+    },
+    {
+      "stationId": 16,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 171903,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_016_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 16",
+      "positionLocalENU": [
+        -16.76,
+        38.34,
+        63.05
+      ],
+      "forwardVector": [
+        -0.9949744461191824,
+        -0.10012917441897812,
+        0
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_16"
+    },
+    {
+      "stationId": 17,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 322853,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_017_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 17",
+      "positionLocalENU": [
+        -72.01950448382854,
+        88.986875,
+        -44.17605380494205
+      ],
+      "forwardVector": [
+        0.24458834473460878,
+        -0.3322200192191081,
+        0.910937100161169
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_17"
+    },
+    {
+      "stationId": 18,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 301702,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_018_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 18",
+      "positionLocalENU": [
+        -150.19230380494201,
+        89,
+        33.94049551617137
+      ],
+      "forwardVector": [
+        0.9112407989015936,
+        -0.33213927791920783,
+        0.24356458379758938
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_18"
+    },
+    {
+      "stationId": 19,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 187463,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_019_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 19",
+      "positionLocalENU": [
+        -121.55529932111352,
+        88.9934375,
+        140.68467432111348
+      ],
+      "forwardVector": [
+        0.6665233986027913,
+        -0.3320286395007675,
+        -0.6674605169343383
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_19"
+    },
+    {
+      "stationId": 20,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 259881,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_020_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 20",
+      "positionLocalENU": [
+        -35.285407817907995,
+        166.895,
+        113.89979371094716
+      ],
+      "forwardVector": [
+        -0.008592190214252806,
+        -0.9984904732942824,
+        -0.054248953979613844
+      ],
+      "name": "ORBIT_TIER_2_FACADE_STATION_20"
+    },
+    {
+      "stationId": 21,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 310247,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_021_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 21",
+      "positionLocalENU": [
+        -97.50937499999995,
+        64.9934375,
+        -168.87495373796557
+      ],
+      "forwardVector": [
+        0.4851279323082704,
+        -0.24764686734489277,
+        0.838642902783159
+      ],
+      "name": "ORBIT_TIER_3_AERIAL_STATION_21"
+    },
+    {
+      "stationId": 22,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 78348,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_022_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 22",
+      "positionLocalENU": [
+        -19.812494013543564,
+        166.86875,
+        16.207660742204872
+      ],
+      "forwardVector": [
+        -0.02510805646124877,
+        -0.9984694936342446,
+        0.04927733538366338
+      ],
+      "name": "ORBIT_TIER_3_AERIAL_STATION_22"
+    },
+    {
+      "stationId": 23,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 69771,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_023_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 23",
+      "positionLocalENU": [
+        -80.18955262170047,
+        167.05249999999998,
+        25.770447378299522
+      ],
+      "forwardVector": [
+        0.03815220425508396,
+        -0.9985433483935271,
+        0.03815220425508432
+      ],
+      "name": "ORBIT_TIER_3_AERIAL_STATION_23"
+    },
+    {
+      "stationId": 24,
+      "accepted": true,
+      "attempts": 1,
+      "usedReference": false,
+      "splatCount": 106939,
+      "splatPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024.splat",
+      "imagePath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024_beautified.png",
+      "blockoutPath": "/Users/eligreen/dev/scratchbox-ide-master/public/tilesets/colosseum/stations/station_024_blockout.png",
+      "qc": {
+        "passed": false,
+        "overlapPercent": null,
+        "residualPx": null,
+        "deltaYawDeg": null,
+        "deltaPitchDeg": null,
+        "deltaPositionM": null,
+        "reason": "cached plate reused; QC not re-run"
+      },
+      "prompt": "Photorealistic view of station 24",
+      "positionLocalENU": [
+        -89.75233925779514,
+        166.92125000000001,
+        86.14750598645642
+      ],
+      "forwardVector": [
+        0.04901642454229242,
+        -0.998485670261966,
+        -0.024975115747521263
+      ],
+      "name": "ORBIT_TIER_3_AERIAL_STATION_24"
+    }
+  ],
+  "tiles": {
+    "tileCount": 144,
+    "levels": 5,
+    "tileBytes": 23185372
+  },
+  "createdAt": "2026-10-03T01:04:14.265Z"
+}

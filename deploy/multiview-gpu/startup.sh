@@ -1,7 +1,7 @@
 #!/bin/bash
 # GCE startup script for one multi-view job (submitted by MultiviewCloudService).
 # Instance metadata: job-id, bucket, clip, views-per-layer, layer-pitches, refine-iters.
-# Reads gs://<bucket>/runtime/multiview-src.tgz, gs://<bucket>/models/body_models/smplx and
+# Reads gs://<bucket>/runtime/multiview-src.tgz, gs://<bucket>/models/body_models/sbhuman and
 # gs://<bucket>/jobs/<job-id>/{input.mp4,scripts/}; writes status.json, log.txt and output/ back to
 # the job prefix, then deletes this instance.
 set -euo pipefail
@@ -48,7 +48,7 @@ mkdir -p models/body_models input out
 MODEL_CACHE="gs://$BUCKET/runtime/models"
 status setup "pulling cached weights"
 gsutil -q -m rsync -r "$MODEL_CACHE" models/ || true
-gsutil -q -m cp -r "gs://$BUCKET/models/body_models/smplx" models/body_models/
+gsutil -q -m cp -r "gs://$BUCKET/models/body_models/sbhuman" models/body_models/ 2>/dev/null || true
 gsutil -q cp "$JOBURI/input.mp4" "input/$CLIP.mp4"
 gsutil -q -m cp -r "$JOBURI/scripts" .
 python3 -m venv venv
@@ -59,22 +59,22 @@ export CUDA_HOME=/usr/local/cuda PATH="/usr/local/cuda/bin:$PWD/venv/bin:$PATH"
 venv/bin/python -c "import torch; assert torch.cuda.is_available(); print('cuda', torch.cuda.get_device_name(0))"
 # Downloads anything the cache lacks and creates GVHMR's checkpoint/body-model links (also needed
 # when inference is skipped via reuse-from).
-venv/bin/python -c "from fdanyone.download import ensure_smplx, ensure_models; ensure_smplx('models', 'third_party/GVHMR'); ensure_models('models', 'third_party/GVHMR')" || true
+venv/bin/python -c "from performer_4d.download import ensure_models; ensure_models('models', 'third_party/GVHMR')" || true
 
 # Diffusion output is staged to GCS as soon as it exists so later failures never repeat it;
 # reuse-from=<job-id> resumes from another job's stage.
 STAGE_SRC="$JOBURI/stage"
 [ -n "$REUSE" ] && STAGE_SRC="gs://$BUCKET/jobs/$REUSE/stage"
-if gsutil -q stat "$STAGE_SRC/fdanyone/$CLIP/cameras.json"; then
+if gsutil -q stat "$STAGE_SRC/performer_4d/$CLIP/cameras.json"; then
   status inference "reusing staged multi-view videos from $STAGE_SRC"
-  mkdir -p data/fdanyone data/gvhmr/results
-  gsutil -q -m cp -r "$STAGE_SRC/fdanyone/$CLIP" data/fdanyone/
+  mkdir -p data/performer_4d data/gvhmr/results
+  gsutil -q -m cp -r "$STAGE_SRC/performer_4d/$CLIP" data/performer_4d/
   gsutil -q -m cp -r "$STAGE_SRC/gvhmr/$CLIP" data/gvhmr/results/
 else
   status inference "Multi-view diffusion ($VIEWS views/layer, pitches $PITCHES)"
   venv/bin/python inference.py --video_path "input/$CLIP.mp4" --views_per_layer "$VIEWS" \
     --layer_pitches "$PITCHES" --data_dir data --model_dir models
-  gsutil -q -m cp -r "data/fdanyone/$CLIP" "$JOBURI/stage/fdanyone/"
+  gsutil -q -m cp -r "data/performer_4d/$CLIP" "$JOBURI/stage/performer_4d/"
   gsutil -q -m cp -r "data/gvhmr/results/$CLIP" "$JOBURI/stage/gvhmr/"
 fi
 
@@ -87,13 +87,13 @@ venv/bin/python scripts/run_gvhmr.py --video "input/$CLIP.mp4" --out-dir out --d
 
 status refine "animatable Gaussian avatar training ($ITERS iterations)"
 venv/bin/python scripts/refine_multiview_avatar.py --body out/gvhmr_body.json \
-  --result-dir "data/fdanyone/$CLIP" --source out/gvhmr_input.mp4 --out-dir out/refined \
-  --birefnet models/birefnet --fdanyone-root . --iters "$ITERS"
+  --result-dir "data/performer_4d/$CLIP" --source out/gvhmr_input.mp4 --out-dir out/refined \
+  --birefnet models/birefnet --performer_4d-root . --iters "$ITERS"
 
 status upload "uploading results"
 gsutil -q -m cp out/gvhmr_body.json "$JOBURI/output/"
-gsutil -q -m cp -r out/refined "data/fdanyone/$CLIP/cameras.json" "data/fdanyone/$CLIP/metadata.json" \
-  "data/fdanyone/$CLIP/videos" "$JOBURI/output/"
+gsutil -q -m cp -r out/refined "data/performer_4d/$CLIP/cameras.json" "data/performer_4d/$CLIP/metadata.json" \
+  "data/performer_4d/$CLIP/videos" "$JOBURI/output/"
 # Only wait for the cache sync: a bare `wait` would also wait on the tee log process substitution.
 wait "$CACHE_SYNC_PID" || true
 status done "complete"

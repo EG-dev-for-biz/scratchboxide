@@ -247,8 +247,8 @@ async function run4DMultimodalDocumentTests() {
     assert.ok(unifiedCss.includes('.sb-location-prompt-disclosure .sb-prompt-summary:focus-visible'), 'Location prompt summary exposes visible keyboard focus');
     assert.ok(unifiedCss.includes('@media (max-width: 560px)'), 'Location card footer has a narrow responsive breakpoint');
     assert.ok(unifiedCss.includes('@media (prefers-reduced-motion: reduce)'), 'Location card honors reduced-motion preferences');
-    assert.ok(unifiedCss.includes('body.theia-light .sb-doc-location-card .sb-location-caption-area'), 'Location card has scoped light-theme caption contrast');
-    assert.ok(unifiedCss.includes('body.theia-light .sb-location-zoom-action'), 'Location Zoom has a light-theme contrast override');
+    assert.ok(unifiedCss.includes('body.sb-light .sb-doc-location-card .sb-location-caption-area'), 'Location card has scoped light-theme caption contrast');
+    assert.ok(unifiedCss.includes('body.sb-light .sb-location-zoom-action'), 'Location Zoom has a light-theme contrast override');
     assert.ok(!primitiveSource.includes('4D Spatial Anchor'), 'Location restyle does not reintroduce gimmicky 4D labels');
     console.log('  ✓ Test 12 Passed: Location cards are isolated, responsive, accessible, and theme-safe.');
 
