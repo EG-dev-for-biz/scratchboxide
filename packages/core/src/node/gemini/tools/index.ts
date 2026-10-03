@@ -22,9 +22,11 @@ export * from './adaptive-matchmove-tools';
 export * from './botanical-tree-tools';
 export * from './lighting-tools';
 export * from './universal-3d-structure-tools';
+export * from './python-3d-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
+import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers } from './nano-banana-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS, algorithmicUvHandlers } from './algorithmic-uv-tools';
@@ -81,6 +83,7 @@ import {
 export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...CANVAS_TOOL_DECLARATIONS,
     ...WORKSPACE_TOOL_DECLARATIONS,
+    ...PYTHON_3D_TOOL_DECLARATIONS,
     ...GOOGLE_3D_TILES_TOOL_DECLARATIONS,
     ...BOTANICAL_TREE_TOOL_DECLARATIONS,
     ...PANORAMA_TOOL_DECLARATIONS,
@@ -108,6 +111,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
 export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...canvasHandlers,
     ...workspaceHandlers,
+    ...python3DHandlers,
     ...google3DTilesHandlers,
     ...panoramaHandlers,
     ...utdraHandlers,
