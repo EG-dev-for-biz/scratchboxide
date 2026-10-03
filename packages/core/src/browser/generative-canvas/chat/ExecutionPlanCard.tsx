@@ -99,7 +99,7 @@ export const ExecutionPlanCard: React.FC<ExecutionPlanCardProps> = ({
                     </span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                         {card.deliverables.map((deliv, idx) => (
-                            <div key={idx} style={{
+                            <div key={`deliv-${deliv}-${idx}`} style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '6px',
