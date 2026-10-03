@@ -24,7 +24,7 @@ import {
 } from '../canvas-icons';
 import { ArtifactStageProps } from './artifact-stage-props';
 
-/** Artifact tab strip on the left of the canvas card header (Cursor / VS Code style). */
+/** Artifact tab strip on the left of the canvas card header (Studio / VS Code style). */
 export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
     const { activeArtifact, layoutMode, docReadOnly, canvasArtifactTabs, getArtifactIcon, getCanvasHeaderLabel, handleSelectArtifactTab, handleCloseArtifactTab, handleCreateNewSandboxTab } = props;
     const activeTabRef = React.useRef<HTMLDivElement>(null);
@@ -40,7 +40,7 @@ export const CanvasTabsBar: React.FC<ArtifactStageProps> = props => {
         {canvasArtifactTabs.length === 0 && (
             <span className="sb-doc-card-title-tag" style={{ fontSize: '12px', fontWeight: 600, padding: '0 12px' }}>{getCanvasHeaderLabel()}</span>
         )}
-        {/* Cursor-Grade Editor Tabs */}
+        {/* Studio Editor Tabs */}
         <div 
             className="sb-canvas-tabs-container" 
             style={{ display: 'flex', alignItems: 'center', height: '100%', flex: '1 1 auto', overflowX: 'auto', scrollbarWidth: 'none' }}

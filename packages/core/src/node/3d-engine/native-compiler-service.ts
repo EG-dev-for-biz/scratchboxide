@@ -210,7 +210,7 @@ export class NativeCppCompilerService {
             usePch = false;
         }
 
-        // Cursor-grade compilation cache: SHA-256 binary replay with SDK header mtime validation
+        // High-performance compilation cache: SHA-256 binary replay with SDK header mtime validation
         const cacheDir = path.join(outputDir, '.cache');
         if (!fs.existsSync(cacheDir)) {
             fs.mkdirSync(cacheDir, { recursive: true });

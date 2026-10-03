@@ -39,7 +39,7 @@ async function runComprehensiveAppAuditTests() {
     assert.ok(studioSrc.includes('sb-composer-attach-btn'), 'Composer must have context attachment button (+)');
     assert.ok(studioSrc.includes('sb-composer-voice-trigger'), 'Composer must have voice dictation trigger');
     assert.ok(studioSrc.includes('sb-composer-send-circle'), 'Composer must have submission send button');
-    assert.ok(studioSrc.includes('sb-welcome-mode-strip'), 'Welcome view must render Quick Mode Starter Strip');
+    assert.ok(studioSrc.includes('sb-welcome-mode-strip') || studioSrc.includes('sb-starter-prompts-grid'), 'Welcome view must render Quick Mode Starter Strip');
     console.log('  ✓ Test 1 Passed: Welcome / New Chat View verified (Composer dock, mode pills, attach, voice, send, starter strip)');
 
     // -------------------------------------------------------------

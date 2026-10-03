@@ -60,7 +60,7 @@ async function runCursorDesktopStreamlinedHomeTests() {
     // -------------------------------------------------------------
     // Test 4: Bottom-Centered Composer Dock with Minimalist Floating Capsule
     // -------------------------------------------------------------
-    assert.ok(studioSource.includes('sb-bottom-chatgpt-dock'), 'Main stage must pin sb-bottom-chatgpt-dock at bottom center');
+    assert.ok(studioSource.includes('sb-bottom-chat-dock'), 'Main stage must pin sb-bottom-chat-dock at bottom center');
     assert.ok(studioSource.includes('sb-unified-composer-capsule'), 'Composer must render floating pill capsule');
     assert.ok(studioSource.includes('sb-composer-attach-btn'), 'Composer must render "+" context attach button');
     assert.ok(studioSource.includes('Agent') && studioSource.includes('Ask') && studioSource.includes('Plan'), 'Composer must render Agent, Ask, Plan mode pills');
@@ -76,7 +76,7 @@ async function runCursorDesktopStreamlinedHomeTests() {
     // Test 5: CSS Styles for Unified Main Stage, Reading Column, and Bottom Dock
     // -------------------------------------------------------------
     assert.ok(cssSource.includes('sb-chat-stage-wrapper'), 'CSS must define sb-chat-stage-wrapper');
-    assert.ok(cssSource.includes('sb-bottom-chatgpt-dock'), 'CSS must define sb-bottom-chatgpt-dock');
+    assert.ok(cssSource.includes('sb-bottom-chat-dock'), 'CSS must define sb-bottom-chat-dock');
     assert.ok(cssSource.includes('sb-unified-composer-capsule'), 'CSS must define sb-unified-composer-capsule');
     assert.ok(cssSource.includes('sb-standalone-chat-messages'), 'CSS must define sb-standalone-chat-messages');
     console.log('  ✓ Test 5 Passed: CSS styling tokens for unified layout, reading column, and bottom dock verified');

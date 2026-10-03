@@ -893,7 +893,7 @@ export const ArtifactContainer: React.FC<ArtifactContainerProps> = ({
 
     return (
         <div className={`sb-artifact-container ${isExpanded ? 'sb-artifact-expanded' : ''}`}>
-            {/* Unified ChatGPT Canvas Header Bar */}
+            {/* Unified Canvas Header Bar */}
             <div className="sb-artifact-topbar">
                 {/* Left: Minimal Monochrome SVG Icon + Document Title + Fork Button */}
                 <div className="sb-artifact-meta">
@@ -1138,7 +1138,7 @@ export const ArtifactContainer: React.FC<ArtifactContainerProps> = ({
                 {renderPrimitiveContent()}
             </div>
 
-            {/* Floating ChatGPT Canvas Quick-Actions Pill (Bottom-Right) */}
+            {/* Floating Canvas Quick-Actions Pill (Bottom-Right) */}
             {onPromptAction && viewMode === 'visual' && (
                 <div className="sb-canvas-floating-quick-bar">
                     <button

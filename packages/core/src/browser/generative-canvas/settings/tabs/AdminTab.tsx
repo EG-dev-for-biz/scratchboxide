@@ -462,6 +462,7 @@ export const AdminTab: React.FC = () => {
                         <button
                             key={tab.id}
                             type="button"
+                            className="sb-btn sb-segment-btn"
                             style={{
                                 fontSize: '11px',
                                 fontWeight: selectedCategory === tab.id ? 600 : 500,
@@ -554,6 +555,7 @@ export const AdminTab: React.FC = () => {
                                 <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                                     <button
                                         type="button"
+                                        className="sb-btn sb-btn-primary"
                                         style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -669,6 +671,7 @@ export const AdminTab: React.FC = () => {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                                     <button
                                         type="button"
+                                        className="sb-btn sb-btn-primary"
                                         style={{
                                             display: 'inline-flex',
                                             alignItems: 'center',
@@ -697,6 +700,7 @@ export const AdminTab: React.FC = () => {
                                     </button>
                                     <button
                                         type="button"
+                                        className="sb-btn sb-icon-button"
                                         title="Open in new window / external browser"
                                         style={{
                                             display: 'inline-flex',

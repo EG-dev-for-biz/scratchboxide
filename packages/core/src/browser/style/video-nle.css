@@ -12,14 +12,14 @@
    ========================================================================== */
 
 /* 1. Parent Card Light-Theme Override (Prevent stark white backgrounds) */
-body.sb-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper),
-.sb-chatgpt-document-card:has(.sb-video-stage-wrapper) {
+body.sb-light .sb-stage-document-card:has(.sb-video-stage-wrapper),
+.sb-stage-document-card:has(.sb-video-stage-wrapper) {
     background: #090a0f !important;
     border: 1px solid rgba(255, 255, 255, 0.08) !important;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75) !important;
 }
 
-body.sb-light .sb-chatgpt-document-card:has(.sb-video-stage-wrapper) .sb-document-card-header {
+body.sb-light .sb-stage-document-card:has(.sb-video-stage-wrapper) .sb-document-card-header {
     background: #101118 !important;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
     color: #f1f5f9 !important;

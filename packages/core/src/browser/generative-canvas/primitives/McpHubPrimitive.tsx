@@ -491,9 +491,9 @@ export const McpHubPrimitive: React.FC<McpHubPrimitiveProps> = ({
                         type="button"
                         className="sb-btn sb-btn-secondary sb-btn-sm"
                         onClick={handleOpenImportModal}
-                        title="Auto-discover & import MCP configurations from Claude Desktop and Cursor"
+                        title="Auto-discover & import MCP configurations from Claude Desktop and external IDEs"
                     >
-                        <span>⚡ Import Claude / Cursor</span>
+                        <span>⚡ Import External MCP</span>
                     </button>
                     <button
                         className="sb-btn sb-btn-primary sb-btn-sm"
@@ -928,7 +928,7 @@ export const McpHubPrimitive: React.FC<McpHubPrimitiveProps> = ({
                             <div className="sb-modal-title-group">
                                 <h3>Auto-Import External MCP Configurations</h3>
                                 <p className="text-xs text-zinc-400">
-                                    Discovered configurations from Claude Desktop (<code>claude_desktop_config.json</code>) and Cursor (<code>~/.cursor/mcp.json</code>).
+                                    Discovered configurations from Claude Desktop (<code>claude_desktop_config.json</code>) and external configurations.
                                 </p>
                             </div>
                             <button
@@ -944,13 +944,13 @@ export const McpHubPrimitive: React.FC<McpHubPrimitiveProps> = ({
                             {isDiscoveringExt ? (
                                 <div className="text-center py-8 text-zinc-400 space-y-2">
                                     <div className="sb-step-spinner" style={{ margin: '0 auto', width: '24px', height: '24px' }} />
-                                    <div>Scanning system paths for Claude Desktop &amp; Cursor MCP configs...</div>
+                                    <div>Scanning system paths for external MCP configs...</div>
                                 </div>
                             ) : discoveredSources.length === 0 || discoveredSources.every(s => s.servers.length === 0) ? (
                                 <div className="p-6 rounded-xl bg-zinc-900/60 border border-zinc-800 text-center space-y-3">
                                     <div className="text-zinc-300 font-medium">No external MCP server configurations found</div>
                                     <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                                        Checked standard paths: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> and <code>~/.cursor/mcp.json</code>.
+                                        Checked standard paths: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> and <code>~/.scratchbox/mcp.json</code>.
                                     </p>
                                     <button
                                         type="button"

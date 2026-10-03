@@ -2705,7 +2705,7 @@ export default function App() {
 
             {/* Main Editor Work Area: Vibecode AI Chat | Code Editor | Live Preview */}
             <div className="sb-ide-main-split">
-                {/* Left Side: Vibecode AI Chat Assistant Panel (Cursor-Grade Interface) */}
+                {/* Left Side: Vibecode AI Chat Assistant Panel (Studio Interface) */}
                 {!hideInternalChat && isAiChatOpen && (
                     <div className="sb-ide-chat-panel animate-fadeIn">
                         {/* Conversation Stream */}
@@ -2776,7 +2776,7 @@ export default function App() {
                                             </div>
                                         )}
 
-                                        {/* Cursor Message Action Footer */}
+                                        {/* Message Action Footer */}
                                         <div className="sb-cursor-msg-footer">
                                             <div className="sb-cursor-footer-actions">
                                                 <button
@@ -2874,7 +2874,7 @@ export default function App() {
                             </button>
                         </div>
 
-                        {/* Cursor-Grade Composer Box */}
+                        {/* Studio Composer Box */}
                         <div className="sb-cursor-composer-wrapper">
                             <div className="sb-cursor-composer-container">
                                 <textarea
@@ -2923,7 +2923,7 @@ export default function App() {
                                 </div>
                             </div>
 
-                            {/* Cursor Bottom Status Row */}
+                            {/* Studio Bottom Status Row */}
                             <div className="sb-cursor-bottom-status">
                                 <span className="sb-cursor-env-label" onClick={() => onPromptAction && onPromptAction('Open workspace preferences')}>This Mac ▾</span>
                                 <span className={`sb-cursor-status-spinner ${isVibecoding ? 'animate-spin text-blue-400' : ''}`}>○</span>
@@ -3076,7 +3076,7 @@ export default function App() {
 
                         {/* Editor Code Area with Line Numbers and IDE Syntax Highlighting */}
                         <div className="sb-ide-code-viewport" style={{ position: 'relative' }}>
-                            {/* Floating Cursor Inline Quick Edit (⌘K) Bar */}
+                            {/* Floating Inline Quick Edit (⌘K) Bar */}
                             {isQuickEditOpen && (
                                 <div className="sb-inline-quick-edit-bar animate-popover">
                                     <div className="flex items-center gap-2 w-full">

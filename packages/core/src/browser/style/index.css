@@ -2,6 +2,18 @@
 @import "./video-nle.css";
 
 /* ==========================================================================
+   Scratchbox Core Brand Tokens & Typographic Font Stack
+   ========================================================================== */
+:root {
+    --sb-surface-obsidian: #171717;
+    --sb-surface-graphite: #212121;
+    --sb-brand-blue: #2563eb;
+    --sb-system-blue: #3b82f6;
+    --sb-font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Geist", "Inter", sans-serif;
+    --sb-font-mono: "SF Mono", "Geist Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ==========================================================================
    Replit-style Suggestions / Drafts Column & Checklist Spring Animation
    ========================================================================== */
 
@@ -466,10 +478,10 @@ body.sb-light .sb-kanban-drafts-hint-text {
 }
 
 /* ==========================================================================
-   ChatGPT-Style Live Streaming Text & Document Canvas Population Tokens
+   Live Streaming Text & Document Canvas Population Tokens
    ========================================================================== */
 
-/* Live Streaming ChatGPT Blinking Caret / Block Cursor */
+/* Live Streaming Blinking Caret / Block Caret */
 .sb-chat-streaming-cursor {
     display: inline-block;
     width: 7px;

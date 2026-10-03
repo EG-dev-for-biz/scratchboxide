@@ -67,7 +67,7 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
     const { activeArtifact, layoutMode, isSidebarOpen, setIsSidebarOpen, documentPaneState, setDocumentPaneState, isConversationMenuOpen, setIsConversationMenuOpen, conversationMenuRef, handleClearCurrentConversation, handleExportConversationMarkdown, handleCreateWorkspaceFile, getCanvasReopenIcon, getCanvasReopenLabel, getCanvasReopenTabTitle, showToast, openSettingsToTab, activeWorkspace, onOpenSpotlight } = props;
 
     return (
-    <header className="sb-chatgpt-topbar">
+    <header className="sb-studio-topbar">
         <div className="sb-topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '140px' }}>
             {!isSidebarOpen && (
                 <>
@@ -93,7 +93,7 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
             )}
         </div>
 
-        {/* Cursor-Grade Center Command Search Pill */}
+        {/* Center Command Search Pill */}
         <div className="sb-topbar-center" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, maxWidth: '520px' }}>
             <button
                 type="button"

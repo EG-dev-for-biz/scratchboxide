@@ -128,7 +128,7 @@ async function runHeadless3DWorkspaceTests() {
     assert.ok(cssSource.includes('.sb-scene3d-primitive-container'), 'Must style 3d scene primitive container');
     assert.ok(cssSource.includes('.sb-3d-minimal-badge'), 'Must style floating 3d glass badge');
     assert.ok(cssSource.includes('.sb-3d-play-mini-btn'), 'Must style floating 3d mini play button');
-    assert.ok(cssSource.includes('.sb-bottom-chatgpt-dock.sb-layout-3d'), 'Must position composer dock cleanly above 3D timeline');
+    assert.ok(cssSource.includes('.sb-bottom-chat-dock.sb-layout-3d'), 'Must position composer dock cleanly above 3D timeline');
     console.log('  ✓ Test 4 Passed: 3D Workspace styling codified with high contrast and dark/light theme support.');
 
     // -------------------------------------------------------------

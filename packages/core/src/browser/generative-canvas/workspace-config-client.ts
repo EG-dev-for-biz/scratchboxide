@@ -250,7 +250,7 @@ export class WorkspaceConfigClient {
     }
 
     /**
-     * Auto-discover external MCP configurations from Claude Desktop and Cursor.
+     * Auto-discover external MCP configurations from Claude Desktop and external IDEs.
      */
     async discoverExternalMcp(): Promise<DiscoveredExternalMcpSource[]> {
         try {

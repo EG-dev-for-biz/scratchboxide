@@ -58,7 +58,7 @@ async function runCursorLayoutTests() {
     console.log('  ✓ Test 6 Passed: Workspace files display typed icons and relative timestamps');
 
     // Test 7: Unified Bottom-Middle Chat Composer Placement Across ALL Surfaces
-    assert.ok(source.includes('sb-bottom-chatgpt-dock'), 'Must render bottom-centered chat dock across all surfaces');
+    assert.ok(source.includes('sb-bottom-chat-dock'), 'Must render bottom-centered chat dock across all surfaces');
     assert.ok(source.includes('sb-unified-composer-capsule'), 'Must render unified composer capsule');
     assert.ok(source.includes('handleSurfaceAiPrompt') || source.includes('handleSendMessage'), 'Must implement AI mutation handler across all surfaces');
     assert.ok(!source.includes('sb-ide-main-split'), 'Must eliminate disparate left-sidebar chat split');

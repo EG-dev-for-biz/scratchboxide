@@ -247,7 +247,7 @@ export class WorkspaceConfigService {
     }
 
     /**
-     * Discovers external MCP configuration files from Claude Desktop and Cursor.
+     * Discovers external MCP configuration files from Claude Desktop and external IDEs.
      */
     async discoverExternalMcpConfigs(
         customPaths?: { claudePath?: string; cursorPath?: string }
@@ -275,12 +275,12 @@ export class WorkspaceConfigService {
             servers: claudeServers
         });
 
-        // 2. Cursor config path (~/.cursor/mcp.json)
+        // 2. External config path (~/.cursor/mcp.json)
         const cursorPath = customPaths?.cursorPath || path.join(os.homedir(), '.cursor', 'mcp.json');
         const cursorServers = await this.parseExternalMcpJson(cursorPath, 'cursor');
         sources.push({
             source: 'cursor',
-            sourceLabel: 'Cursor IDE',
+            sourceLabel: 'External IDE',
             path: cursorPath,
             exists: cursorServers.length > 0 || (await fs.pathExists(cursorPath)),
             servers: cursorServers
@@ -290,7 +290,7 @@ export class WorkspaceConfigService {
     }
 
     /**
-     * Parses Claude Desktop or Cursor MCP JSON into typed McpServerItem array.
+     * Parses Claude Desktop or external MCP JSON into typed McpServerItem array.
      */
     private async parseExternalMcpJson(
         filePath: string,
@@ -308,7 +308,7 @@ export class WorkspaceConfigService {
             for (const [key, val] of Object.entries(rawServers)) {
                 const srv = val as any;
                 const serverId = `mcp-ext-${source}-${key.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-                const humanName = `${key} (${source === 'claude_desktop' ? 'Claude' : 'Cursor'})`;
+                const humanName = source === 'claude_desktop' ? `${key} (Claude)` : `${key} (External)`;
                 const category = this.inferMcpCategory(key, srv);
                 const accentColor = this.inferMcpAccent(category);
 
@@ -340,7 +340,7 @@ export class WorkspaceConfigService {
                     name: humanName,
                     tagline: srv.command
                         ? `${srv.command} ${(srv.args || []).join(' ')}`
-                        : (srv.url || `Imported from ${source === 'claude_desktop' ? 'Claude Desktop' : 'Cursor'}`),
+                        : (srv.url || `Imported from ${source === 'claude_desktop' ? 'Claude Desktop' : 'External Config'}`),
                     category,
                     status: 'available',
                     latencyMs: 18,

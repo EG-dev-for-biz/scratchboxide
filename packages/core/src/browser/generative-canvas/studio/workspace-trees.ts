@@ -12,11 +12,11 @@ export type { FileTreeNode };
 
 export const SCRATCHBOX_TREE: FileTreeNode[] = [
     {
-        name: '.cursor',
-        path: '.cursor',
+        name: '.scratchbox',
+        path: '.scratchbox',
         isFolder: true,
         children: [
-            { name: 'rules.json', path: '.cursor/rules.json', isFolder: false }
+            { name: 'rules.json', path: '.scratchbox/rules.json', isFolder: false }
         ]
     },
     {
@@ -84,11 +84,11 @@ export const SCRATCHBOX_TREE: FileTreeNode[] = [
 
 export const POSE_3D_TREE: FileTreeNode[] = [
     {
-        name: '.cursor',
-        path: '.cursor',
+        name: '.scratchbox',
+        path: '.scratchbox',
         isFolder: true,
         children: [
-            { name: 'rules.json', path: '.cursor/rules.json', isFolder: false }
+            { name: 'rules.json', path: '.scratchbox/rules.json', isFolder: false }
         ]
     },
     {

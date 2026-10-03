@@ -692,7 +692,7 @@ export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBr
 };
 
 /**
- * Sleek ChatGPT-Style Code Block with language badge, copy button, syntax styling, and CLI guardrail actions.
+ * Sleek Code Block with language badge, copy button, syntax styling, and CLI guardrail actions.
  */
 export const ChatCodeBlock: React.FC<{
     language: string;
@@ -872,7 +872,7 @@ export const ChatCodeBlock: React.FC<{
 };
 
 /**
- * Compact, Elegant Cupertino / ChatGPT-style Thinking & Reasoning Disclosure
+ * Compact, Elegant Cupertino-style Thinking & Reasoning Disclosure
  */
 export const ThinkingDisclosure: React.FC<{
     thinkingText?: string;
@@ -1025,7 +1025,7 @@ export const AgentExecutionStepper: React.FC<{
 };
 
 /**
- * Stylish ChatGPT-style blinking block cursor / caret for active token streams.
+ * Stylish blinking block cursor / caret for active token streams.
  */
 export const StreamingCursor: React.FC<{ className?: string }> = ({ className = '' }) => (
     <span className={`sb-chat-streaming-cursor animate-pulse ${className}`} title="Streaming...">

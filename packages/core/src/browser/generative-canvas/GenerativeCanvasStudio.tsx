@@ -876,7 +876,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { handleClearCurrentConversation, handleDeleteSession, handleExportConversationMarkdown, handleNewChat, handleSelectSession, openSettingsToTab } = useSessionHandlers({ activeArtifact, activeSession, activeWorkspace, artifactHistory, currentSessionId, handleSwitchMode, inputRef, layoutMode, messages, openModal, saveCurrentSessionViewState, sessionViewStateCacheRef, sessions, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setInputValue, setIsConversationMenuOpen, setIsSidebarOpen, setLayoutMode, setLiveThinkingText, setMessages, setSessions, setSettingsInitialTab, showToast });
 
-    // Coordinated Global Keyboard Shortcuts (Cursor / VS Code standard)
+    // Coordinated Global Keyboard Shortcuts (Studio / VS Code standard)
     React.useEffect(() => {
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
             const isCmdOrCtrl = e.metaKey || e.ctrlKey;
@@ -1341,7 +1341,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     return (
         <StudioProvider store={chatStore} actions={studioActions} state={studioStateSnapshot}>
         <div
-            className={`sb-chatgpt-studio-app sb-density-${appearanceConfig.canvasDensity} sb-blur-${appearanceConfig.glassBlur}`}
+            className={`sb-studio-app sb-density-${appearanceConfig.canvasDensity} sb-blur-${appearanceConfig.glassBlur}`}
             onDragOver={handleGlobalDragOver}
             onDragLeave={handleGlobalDragLeave}
             onDrop={handleGlobalDrop}
@@ -1378,7 +1378,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             <WorkspaceSidebar {...sidebarProps} />
 
             {/* Main Stage Workspace Area */}
-            <main className="sb-chatgpt-main-stage" style={{ position: 'relative' }}>
+            <main className="sb-studio-main-stage" style={{ position: 'relative' }}>
                 {/* Floating Sidebar Open Button when sidebar is collapsed */}
                 {!isSidebarOpen && (
                     <button
@@ -1416,7 +1416,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 {/* Body Content */}
                 <div className="sb-main-surface-container">
                     {layoutMode === 'chat' ? (
-                        /* Unified Main Stage & ChatGPT / Modern Cursor Layout */
+                        /* Unified Main Stage & Modern Studio Layout */
                         <div className="sb-chat-stage-wrapper animate-fadeIn">
                             <div className="sb-chat-stage-content">
                                 {messages.length === 0 ? (
@@ -1484,7 +1484,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                             </div>
 
                             {/* Floating Bottom-Centered Composer Dock */}
-                            <div className="sb-bottom-chatgpt-dock">
+                            <div className="sb-bottom-chat-dock">
                                 <Composer {...composerProps} inSplitPane={false} />
 
                                 {/* System Footer Note */}
@@ -1570,7 +1570,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             />
 
                                             {/* Specifically docked beneath the left chat pane in the split-layout */}
-                                            <div className="sb-bottom-chatgpt-dock" style={{
+                                            <div className="sb-bottom-chat-dock" style={{
                                                 position: 'absolute',
                                                 bottom: '16px',
                                                 left: '50%',

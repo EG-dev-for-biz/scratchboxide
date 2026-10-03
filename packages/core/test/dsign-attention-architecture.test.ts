@@ -76,7 +76,7 @@ async function runDsignAttentionArchitectureTests() {
     const studioContent = readStudioSources();
     
     assert.ok(
-        studioContent.includes('sb-chatgpt-topbar') || studioContent.includes('sb-topbar-right'),
+        studioContent.includes('sb-studio-topbar') || studioContent.includes('sb-topbar-right'),
         'Top bar must establish a primary orienting landmark'
     );
     assert.ok(

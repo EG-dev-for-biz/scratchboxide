@@ -68,14 +68,14 @@ export const WorkspaceTab: React.FC = () => {
 
             <div className="sb-cursor-section-block">
                 <div className="sb-cursor-section-header flex items-center justify-between">
-                    <span>Project Directives (.scratchbox/rules/*.md &amp; .cursorrules)</span>
+                    <span>Project Directives (.scratchbox/rules/*.md)</span>
                     <span className="sb-badge-unified sb-badge-zinc font-mono">{workspaceRules.length} rules</span>
                 </div>
                 <div className="sb-cursor-group-card">
                     {workspaceRules.length === 0 ? (
                         <div className="sb-cursor-row-item">
                             <div className="sb-cursor-row-desc">
-                                No custom rules found in <code>.scratchbox/rules/</code>. Create <code>SCRATCHBOX.md</code> or <code>.cursorrules</code> to add directives.
+                                No custom rules found in <code>.scratchbox/rules/</code>. Create <code>SCRATCHBOX.md</code> or <code>AGENTS.md</code> to add directives.
                             </div>
                         </div>
                     ) : (

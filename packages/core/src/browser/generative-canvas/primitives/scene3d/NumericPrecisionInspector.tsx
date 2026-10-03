@@ -284,7 +284,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                     <button
                         type="button"
                         onClick={onToggleOpen}
-                        className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
+                        className="sb-btn sb-icon-button p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-all"
                         title="Close Inspector"
                     >
                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -300,7 +300,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                 <button
                     type="button"
                     onClick={() => setActiveTab('transform')}
-                    className={`py-1 rounded-md font-semibold transition-all ${
+                    className={`sb-btn sb-segment-btn py-1 rounded-md font-semibold transition-all ${
                         activeTab === 'transform'
                             ? 'bg-blue-600/30 text-blue-300 border border-blue-500/40 shadow-sm'
                             : 'text-zinc-400 hover:text-zinc-200'
@@ -311,7 +311,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                 <button
                     type="button"
                     onClick={() => setActiveTab('hierarchy')}
-                    className={`py-1 rounded-md font-semibold transition-all ${
+                    className={`sb-btn sb-segment-btn py-1 rounded-md font-semibold transition-all ${
                         activeTab === 'hierarchy'
                             ? 'bg-blue-600/30 text-blue-300 border border-blue-500/40 shadow-sm'
                             : 'text-zinc-400 hover:text-zinc-200'
@@ -450,7 +450,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                             <button
                                 type="button"
                                 onClick={handleResetTransform}
-                                className="w-full py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-zinc-300 font-semibold transition-all"
+                                className="sb-btn sb-btn-secondary w-full py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/5 text-[10px] text-zinc-300 font-semibold transition-all"
                             >
                                 Reset Transform (Origin)
                             </button>
@@ -562,7 +562,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                                         key={shape}
                                         type="button"
                                         onClick={() => handleAddPrimitive(shape)}
-                                        className="py-1 px-1.5 rounded bg-white/5 hover:bg-white/10 border border-white/5 text-[9px] text-zinc-300 font-semibold capitalize text-center transition-all"
+                                        className="sb-btn sb-btn-ghost py-1 px-1.5 rounded bg-white/5 hover:bg-white/10 border border-white/5 text-[9px] text-zinc-300 font-semibold capitalize text-center transition-all"
                                     >
                                         +{shape}
                                     </button>
@@ -608,7 +608,7 @@ export const NumericPrecisionInspector: React.FC<NumericPrecisionInspectorProps>
                                                         e.stopPropagation();
                                                         handleDeleteMesh(mesh.id || mesh.name || '');
                                                     }}
-                                                    className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 transition-all"
+                                                    className="sb-btn sb-icon-button p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 transition-all"
                                                     title="Delete mesh"
                                                 >
                                                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

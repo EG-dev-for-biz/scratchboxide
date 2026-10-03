@@ -348,7 +348,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         Plugins, MCPs, Skills, and Rules have moved to Customize
                                     </div>
                                     <div className="sb-cursor-banner-subtitle">
-                                        We've introduced a new home for all the ways to customize Cursor.
+                                        We've introduced a new home for all the ways to customize Scratchbox.
                                     </div>
                                 </div>
                                 <div className="sb-cursor-banner-actions">

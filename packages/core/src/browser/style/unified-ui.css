@@ -11,7 +11,7 @@
 
 /* ==========================================================================
    Scratchbox Unified Design System & Component Library (unified-ui.css)
-   Minimalist ChatGPT & Modern Refined Aesthetic: Monochrome, Restrained & Refined
+   Minimalist Studio & Modern Refined Aesthetic: Monochrome, Restrained & Refined
    ========================================================================== */
 
 :root {
@@ -38,7 +38,7 @@
     --sb-btn-spring: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
     --sb-btn-active-scale: scale(0.97);
 
-    /* Minimalist High-Contrast Button Palette (ChatGPT Dark Mode Defaults) */
+    /* Minimalist High-Contrast Button Palette (Dark Mode Defaults) */
     --sb-btn-primary-bg: #ffffff;
     --sb-btn-primary-bg-hover: #ececec;
     --sb-btn-primary-bg-active: #dcdcdc;
@@ -136,7 +136,7 @@ body.sb-light {
    Studio Container & Viewport Flex Hierarchy
    ========================================================================== */
 
-.sb-chatgpt-studio-app {
+.sb-studio-app {
     display: flex;
     width: 100vw;
     height: 100vh;
@@ -147,8 +147,8 @@ body.sb-light {
     position: relative;
 }
 
-aside.sb-chatgpt-sidebar,
-.sb-chatgpt-sidebar {
+aside.sb-studio-sidebar,
+.sb-studio-sidebar {
     display: flex;
     flex-direction: column;
     width: 260px;
@@ -163,14 +163,14 @@ aside.sb-chatgpt-sidebar,
     user-select: none;
 }
 
-body.sb-light aside.sb-chatgpt-sidebar,
-body.sb-light .sb-chatgpt-sidebar {
+body.sb-light aside.sb-studio-sidebar,
+body.sb-light .sb-studio-sidebar {
     background: var(--sb-surface-bg, #f5f5f7);
     border-right: 1px solid var(--sb-surface-border, rgba(0, 0, 0, 0.06));
 }
 
-aside.sb-chatgpt-sidebar.sb-sidebar-collapsed,
-.sb-chatgpt-sidebar.sb-sidebar-collapsed {
+aside.sb-studio-sidebar.sb-sidebar-collapsed,
+.sb-studio-sidebar.sb-sidebar-collapsed {
     width: 0;
     min-width: 0;
     transform: translateX(-100%);
@@ -178,8 +178,8 @@ aside.sb-chatgpt-sidebar.sb-sidebar-collapsed,
     border-right: none;
 }
 
-main.sb-chatgpt-main-stage,
-.sb-chatgpt-main-stage {
+main.sb-studio-main-stage,
+.sb-studio-main-stage {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -1582,7 +1582,7 @@ body.sb-light .sb-glass-card {
 .sb-console-error .sb-console-msg { color: #fca5a5; }
 
 /* =========================================================================
-   Cursor-Style Sidebar Layout & Navigation Hierarchy
+   Studio Sidebar Layout & Navigation Hierarchy
    ========================================================================= */
 
 /* Sidebar Top Header & Traffic Lights */
@@ -1604,7 +1604,7 @@ body.sb-light .sb-sidebar-top-header {
 .sb-sidebar-top-brand-group {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
     min-width: 0;
 }
 
@@ -1650,43 +1650,41 @@ body.sb-light .sb-sidebar-top-header {
 .sb-sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
     user-select: none;
     cursor: default;
 }
 
 .sb-brand-logo-icon {
-    width: 18px;
-    height: 18px;
-    min-width: 18px;
-    border-radius: 5px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2px;
-    overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    background: transparent;
+    border: none;
+    padding: 0;
     box-sizing: border-box;
+    flex-shrink: 0;
 }
 
 .sb-brand-logo-icon img {
     width: 100%;
     height: 100%;
     object-fit: contain;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
 }
 
-body.sb-light .sb-brand-logo-icon {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
+body.sb-light .sb-brand-logo-icon img {
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
 }
 
 .sb-brand-logo-title {
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 700;
     color: var(--sb-text-label, #f4f4f5);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.015em;
     line-height: 1;
 }
 
@@ -1696,8 +1694,8 @@ body.sb-light .sb-brand-logo-title {
 
 .sb-brand-logo-badge {
     font-size: 9px;
-    font-weight: 800;
-    padding: 1px 5px;
+    font-weight: 700;
+    padding: 1.5px 5.5px;
     border-radius: 4px;
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.16);
@@ -1766,8 +1764,8 @@ body.sb-light .sb-btn-icon-xs:hover {
 }
 
 /* Sidebar Open / Collapsed States */
-aside.sb-chatgpt-sidebar.sb-sidebar-open,
-.sb-chatgpt-sidebar.sb-sidebar-open {
+aside.sb-studio-sidebar.sb-sidebar-open,
+.sb-studio-sidebar.sb-sidebar-open {
     width: 260px;
     min-width: 260px;
     transform: translateX(0);
@@ -2442,7 +2440,7 @@ body.sb-light .sb-cursor-dot-active {
     color: #2563eb;
 }
 
-/* Cursor-Style Centered Landing Context Strip & Actions */
+/* Studio Centered Landing Context Strip & Actions */
 .sb-cursor-context-selector-row {
     display: flex;
     align-items: center;
@@ -2848,8 +2846,8 @@ body.sb-light .sb-topbar-conversation-menu {
     color: var(--sb-text-label) !important;
 }
 
-/* ChatGPT / Modern Studio TopBar */
-.sb-chatgpt-topbar {
+/* Modern Studio TopBar */
+.sb-studio-topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2864,7 +2862,7 @@ body.sb-light .sb-topbar-conversation-menu {
     user-select: none;
 }
 
-body.sb-light .sb-chatgpt-topbar {
+body.sb-light .sb-studio-topbar {
     background: var(--sb-surface-bg, #f5f5f7);
     border-bottom-color: var(--sb-surface-border, rgba(0, 0, 0, 0.06));
 }
@@ -3092,7 +3090,7 @@ body.sb-light .sb-starter-chip:hover {
 }
 
 /* ==========================================================================
-   High-Fidelity Full IDE Code Editor Interface (Cursor / VSCode Style)
+   High-Fidelity Full IDE Code Editor Interface (Studio / VSCode Style)
    ========================================================================== */
 
 .sb-ide-code-container {
@@ -4037,7 +4035,7 @@ body.sb-light .sb-ide-chat-close-btn:hover {
     box-sizing: border-box;
 }
 
-/* User Message Card (Cursor Style) */
+/* User Message Card */
 .sb-cursor-user-card {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -4103,7 +4101,7 @@ body.sb-light .sb-cursor-action-icon-btn:hover {
     word-break: break-word;
 }
 
-/* Assistant Message Stream (Cursor Style) */
+/* Assistant Message Stream */
 .sb-cursor-assistant-card {
     display: flex;
     flex-direction: column;
@@ -4193,7 +4191,7 @@ body.sb-light .sb-cursor-code-pill {
     color: var(--sb-text-label);
 }
 
-/* Cursor File Diff Summary Card */
+/* File Diff Summary Card */
 .sb-cursor-diff-card {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.07);
@@ -4501,7 +4499,7 @@ body.sb-light .sb-cursor-context-scroll-btn:hover {
     color: #0f172a;
 }
 
-/* Cursor Composer Container */
+/* Studio Composer Container */
 .sb-cursor-composer-wrapper {
     flex-shrink: 0;
     padding: 12px;
@@ -4993,7 +4991,7 @@ body.sb-light .sb-kanban-card-draft .sb-kanban-card-desc {
 }
 
 /* ==========================================================================
-   Cursor Mode Selector & Status HUD Badges
+   Studio Mode Selector & Status HUD Badges
    ========================================================================== */
 
 .sb-cursor-mode-selector {
@@ -5051,7 +5049,7 @@ body.sb-light .sb-kanban-card-draft .sb-kanban-card-desc {
 }
 
 /* ==========================================================================
-   Cursor Interactive Tool Step Badges
+   Interactive Tool Step Badges
    ========================================================================== */
 
 .sb-cursor-tool-steps-group {
@@ -5155,8 +5153,384 @@ body.sb-light .sb-kanban-card-draft .sb-kanban-card-desc {
     margin-left: 4px;
 }
 
+/* Chat Message Headers & Bubbles */
+.sb-drawer-msg-row {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.04));
+    transition: background 0.15s ease;
+}
+
+body.sb-light .sb-drawer-msg-row {
+    border-bottom-color: var(--sb-surface-border, rgba(0, 0, 0, 0.05));
+}
+
+.sb-drawer-msg-row.sb-msg-user-row {
+    background: rgba(255, 255, 255, 0.015);
+}
+
+body.sb-light .sb-drawer-msg-row.sb-msg-user-row {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.sb-chat-bubble-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    width: 100%;
+}
+
+.sb-bubble-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+    user-select: none;
+}
+
+.sb-bubble-sender {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--sb-text-label, #f4f4f5);
+    letter-spacing: -0.01em;
+}
+
+body.sb-light .sb-bubble-sender {
+    color: #0f172a;
+}
+
+.sb-bubble-time {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--sb-text-tertiary, #71717a);
+}
+
+body.sb-light .sb-bubble-time {
+    color: #94a3b8;
+}
+
+.sb-bubble-skills-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.sb-bubble-skill-tag {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.22);
+    color: #93c5fd;
+    letter-spacing: 0.01em;
+}
+
+body.sb-light .sb-bubble-skill-tag {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(59, 130, 246, 0.2);
+    color: #2563eb;
+}
+
+/* Inline Tool Execution Cards */
+.sb-chat-inline-mcp-card {
+    margin: 8px 0;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    overflow: hidden;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    box-sizing: border-box;
+}
+
+.sb-chat-inline-mcp-card:hover {
+    background: rgba(255, 255, 255, 0.045);
+    border-color: rgba(255, 255, 255, 0.13);
+}
+
+body.sb-light .sb-chat-inline-mcp-card {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.sb-light .sb-chat-inline-mcp-card:hover {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+.sb-inline-mcp-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    gap: 8px;
+    user-select: none;
+}
+
+.sb-inline-mcp-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+
+.sb-mcp-pulse-dot {
+    width: 6px;
+    height: 6px;
+    min-width: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    flex-shrink: 0;
+}
+
+.sb-status-running .sb-mcp-pulse-dot {
+    background: #3b82f6;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.8);
+    animation: sb-pulse 1.4s infinite ease-in-out;
+}
+
+.sb-status-failed .sb-mcp-pulse-dot {
+    background: #ef4444;
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+.sb-inline-mcp-title {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--sb-text-label, #e4e4e7);
+    font-family: var(--sb-font-mono, "SF Mono", Monaco, Menlo, monospace);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.sb-light .sb-inline-mcp-title {
+    color: #1e293b;
+}
+
+.sb-inline-mcp-status {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1.5px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.sb-inline-mcp-status.sb-status-completed {
+    color: #34d399;
+    background: rgba(52, 211, 153, 0.1);
+    border: 1px solid rgba(52, 211, 153, 0.22);
+}
+
+body.sb-light .sb-inline-mcp-status.sb-status-completed {
+    color: #059669;
+    background: rgba(5, 150, 105, 0.08);
+    border-color: rgba(5, 150, 105, 0.2);
+}
+
+.sb-inline-mcp-status.sb-status-running {
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.1);
+    border: 1px solid rgba(96, 165, 250, 0.22);
+}
+
+body.sb-light .sb-inline-mcp-status.sb-status-running {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.2);
+}
+
+.sb-inline-mcp-status.sb-status-failed {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.22);
+}
+
+body.sb-light .sb-inline-mcp-status.sb-status-failed {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.2);
+}
+
+.sb-inline-mcp-steps {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.12);
+}
+
+body.sb-light .sb-inline-mcp-steps {
+    border-top-color: rgba(0, 0, 0, 0.06);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.sb-inline-mcp-step-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--sb-text-secondary, #a1a1aa);
+    gap: 8px;
+}
+
+body.sb-light .sb-inline-mcp-step-item {
+    color: #475569;
+}
+
+.sb-inline-step-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sb-step-icon-state {
+    font-size: 10px;
+    opacity: 0.85;
+}
+
+.sb-inline-step-dur {
+    font-size: 10px;
+    color: var(--sb-text-tertiary, #71717a);
+    font-family: var(--sb-font-mono, monospace);
+    flex-shrink: 0;
+}
+
+.sb-inline-mcp-output-card {
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    font-family: var(--sb-font-mono, monospace);
+    font-size: 10.5px;
+    color: #d4d4d8;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.45;
+}
+
+body.sb-light .sb-inline-mcp-output-card {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #334155;
+}
+
+/* Google Search Grounding Card */
+.sb-chat-inline-grounding-card {
+    margin: 8px 0;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+body.sb-light .sb-chat-inline-grounding-card {
+    background: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+.sb-inline-grounding-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.sb-inline-grounding-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sb-grounding-pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3b82f6;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.6);
+}
+
+.sb-inline-grounding-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--sb-text-label, #f4f4f5);
+}
+
+body.sb-light .sb-inline-grounding-title {
+    color: #0f172a;
+}
+
+.sb-inline-grounding-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    color: #60a5fa;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.sb-grounding-queries-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.sb-grounding-query-pill {
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--sb-text-secondary, #a1a1aa);
+}
+
+.sb-grounding-sources-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.sb-grounding-source-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    color: #93c5fd;
+    text-decoration: none;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.08);
+    border: 1px solid rgba(59, 130, 246, 0.18);
+    transition: all 0.15s ease;
+}
+
+.sb-grounding-source-chip:hover {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #bfdbfe;
+}
+
 /* ==========================================================================
-   Cursor-Style Desktop Settings Window & No-Icon Navigation
+   Desktop Settings Window & No-Icon Navigation
    ========================================================================== */
 
 @keyframes sb-fade-in {
@@ -5537,10 +5911,11 @@ body.sb-light .sb-cursor-user-name {
     flex: 1;
     height: 100%;
     overflow-y: auto;
-    padding: 24px 32px 32px 32px;
+    padding: 28px 36px 36px 36px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    align-items: center;
     background: #141416;
 }
 
@@ -5559,6 +5934,9 @@ body.sb-light .sb-cursor-settings-main {
     border-radius: 10px;
     margin-bottom: 20px;
     gap: 16px;
+    max-width: 720px;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .sb-cursor-banner-title {
@@ -5617,6 +5995,8 @@ body.sb-light .sb-cursor-settings-main {
     gap: 18px;
     max-width: 720px;
     width: 100%;
+    box-sizing: border-box;
+    margin: 0 auto;
 }
 
 .sb-cursor-content-title {
@@ -5738,7 +6118,7 @@ body.sb-light .sb-cursor-row-btn:hover {
     color: #000000;
 }
 
-/* Apple Green Cursor Toggle Switch */
+/* Apple Green Studio Toggle Switch */
 .sb-cursor-toggle {
     width: 36px;
     height: 20px;
@@ -5773,7 +6153,7 @@ body.sb-light .sb-cursor-row-btn:hover {
     transform: translateX(16px);
 }
 
-/* Cursor Select Dropdown */
+/* Studio Select Dropdown */
 .sb-cursor-select-dropdown {
     height: 26px;
     padding: 0 8px;
@@ -5793,7 +6173,7 @@ body.sb-light .sb-cursor-select-dropdown {
     color: #18181b;
 }
 
-/* Cursor Stepper */
+/* Studio Stepper */
 .sb-cursor-stepper {
     display: inline-flex;
     align-items: center;
@@ -5845,7 +6225,7 @@ body.sb-light .sb-stepper-val {
     color: #18181b;
 }
 
-/* Cursor Slider */
+/* Studio Slider */
 .sb-cursor-slider {
     -webkit-appearance: none;
     appearance: none;
@@ -5877,7 +6257,7 @@ body.sb-light .sb-cursor-slider {
     transform: scale(1.15);
 }
 
-/* Cursor Text Input */
+/* Studio Text Input */
 .sb-cursor-text-input {
     height: 26px;
     padding: 0 8px;
@@ -5900,7 +6280,7 @@ body.sb-light .sb-cursor-text-input {
     color: #18181b;
 }
 
-/* Scoped Full-Width Form Controls for Cursor Settings */
+/* Scoped Full-Width Form Controls for Studio Settings */
 .sb-cursor-settings-window .sb-form-group {
     display: flex;
     flex-direction: column;
@@ -6313,7 +6693,7 @@ body.sb-light .sb-cursor-tool-card:hover {
 }
 
 /* ==========================================================================
-   Streamlined Cursor-Grade Dashboard & Welcome Center Stage
+   Streamlined Studio Dashboard & Welcome Center Stage
    ========================================================================== */
 
 .sb-welcome-mode-strip {
@@ -6613,7 +6993,7 @@ body.sb-light .sb-metric-desc {
 }
 
 /* ==========================================================================
-   Cursor Inline Quick Edit (⌘K) Floating Bar & Diff Actions
+   Inline Quick Edit (⌘K) Floating Bar & Diff Actions
    ========================================================================== */
 
 .sb-inline-quick-edit-bar {
@@ -6695,7 +7075,7 @@ body.sb-light .sb-quick-edit-input {
 }
 
 /* ==========================================================================
-   Cursor Desktop Streamlined Dual-Pane Home Layout
+   Desktop Streamlined Dual-Pane Home Layout
    ========================================================================== */
 
 .sb-cursor-dual-pane-stage {
@@ -6953,7 +7333,7 @@ body.sb-light .sb-cursor-changes-title {
 }
 
 /* ==========================================================================
-   Unified ChatGPT & Modern Cursor Layout (Bottom-Centered Composer & Clean Stream)
+   Unified Modern Studio & Refined Composer Layout (Bottom-Centered Composer & Clean Stream)
    ========================================================================== */
 
 .sb-chat-stage-wrapper {
@@ -7053,7 +7433,7 @@ body.sb-light .sb-chat-empty-hero-title {
 }
 
 /* Bottom Floating Composer Dock */
-.sb-bottom-chatgpt-dock {
+.sb-bottom-chat-dock {
     position: absolute;
     bottom: 24px;
     left: 50%;
@@ -7067,7 +7447,7 @@ body.sb-light .sb-chat-empty-hero-title {
     box-sizing: border-box;
 }
 
-.sb-bottom-chatgpt-dock.sb-layout-3d {
+.sb-bottom-chat-dock.sb-layout-3d {
     bottom: 24px !important;
 }
 
@@ -8510,7 +8890,7 @@ body.sb-light .sb-3d-budget-btn {
    6. Document Canvas & Markdown Spec Primitive Light/Dark Theme System
    ========================================================================== */
 
-.sb-chatgpt-document-card {
+.sb-stage-document-card {
     background: var(--sb-surface-card, #1c1c1e);
     border: 1px solid var(--sb-ui-card-border, rgba(255, 255, 255, 0.08));
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -8540,7 +8920,7 @@ body.sb-light .sb-3d-budget-btn {
 }
 
 /* Document Card Scoped Styling */
-body.sb-light .sb-chatgpt-document-card {
+body.sb-light .sb-stage-document-card {
     background: #ffffff !important;
     border: 1px solid rgba(0, 0, 0, 0.08) !important;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06) !important;
@@ -9289,7 +9669,7 @@ body.sb-light .sb-selection-popover-pill:hover {
 }
 
 /* ==========================================================================
-   ChatGPT-Style Live Streaming Text & Document Canvas Population Tokens
+   Live Streaming Text & Document Canvas Population Tokens
    ========================================================================== */
 
 @keyframes sb-cursor-blink {
@@ -9312,7 +9692,7 @@ body.sb-light .sb-selection-popover-pill:hover {
     }
 }
 
-/* Live Streaming ChatGPT Blinking Caret / Block Cursor */
+/* Live Streaming Blinking Caret / Block Caret */
 .sb-chat-streaming-cursor {
     display: inline-block;
     width: 7px;
@@ -9414,7 +9794,7 @@ body.sb-light .sb-doc-section-streaming {
 
 /* ==========================================================================
    Google Drive & Google Docs Integration Styles (unified-ui.css)
-   Apple HIG Liquid Glass & Cursor-Grade Micro-Interactions
+   Apple HIG Liquid Glass & Studio Micro-Interactions
    ========================================================================== */
 
 .sb-gdrive-modal-backdrop {
@@ -10846,7 +11226,7 @@ body.sb-light .sb-video-keyframe-chip {
 }
 
 /* =========================================================================
-   Interactive Web Browser Canvas Primitive (Apple HIG & Cursor Style)
+   Interactive Web Browser Canvas Primitive (Apple HIG & Studio Style)
    ========================================================================= */
 
 .sb-browser-primitive-container {
@@ -12785,7 +13165,7 @@ body.sb-light .sb-doc-toc-item:hover {
    Scratchbox Studio Canvas Header & Controls
    ========================================================================== */
 /* ==========================================================================
-   Cursor-Grade Editor Tabs (.sb-canvas-tabs-container & .sb-canvas-tab)
+   Studio Editor Tabs (.sb-canvas-tabs-container & .sb-canvas-tab)
    ========================================================================== */
 .sb-canvas-tabs-container,
 .sb-antigravity-tabs-container {

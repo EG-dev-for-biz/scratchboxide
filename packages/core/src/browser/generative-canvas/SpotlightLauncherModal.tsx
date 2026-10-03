@@ -163,7 +163,7 @@ export const SpotlightLauncherModal: React.FC<SpotlightLauncherModalProps> = ({
         {
             id: 'act-open-mcp-importer',
             title: '1-Click MCP Auto-Importer',
-            subtitle: 'Auto-discover configs from Claude Desktop & Cursor',
+            subtitle: 'Auto-discover configs from Claude Desktop & external IDEs',
             category: 'AI Tools',
             icon: <IconMcp size={15} className="text-indigo-400" />,
             onExecute: () => {

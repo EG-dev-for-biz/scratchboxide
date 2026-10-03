@@ -384,7 +384,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     </div>
                 )}
 
-                {/* Cupertino / ChatGPT Style Thinking Disclosure */}
+                {/* Cupertino Style Thinking Disclosure */}
                 {!isUser && msg.thinkingText && (
                     <ThinkingDisclosure
                         thinkingText={msg.thinkingText}
@@ -445,7 +445,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     />
                 )}
 
-                {/* Structured Interactive Question Clarification Card (Cursor-grade) */}
+                {/* Structured Interactive Question Clarification Card (Studio) */}
                 {msg.questionCard && (
                     <QuestionCard
                         card={msg.questionCard}
@@ -462,7 +462,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     />
                 )}
 
-                {/* Structured Execution Confirmation Plan Card (Cursor-grade) */}
+                {/* Structured Execution Confirmation Plan Card (Studio) */}
                 {msg.executionPlanCard && (
                     <ExecutionPlanCard
                         card={msg.executionPlanCard}
@@ -483,7 +483,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     />
                 )}
 
-                {/* High-Design ChatGPT Canvas Style Artifact Card with Version & Quick Actions */}
+                {/* High-Design Canvas Style Artifact Card with Version & Quick Actions */}
                 {(() => {
                     const effectiveArtifacts = (msg.artifacts && msg.artifacts.length > 0)
                         ? msg.artifacts

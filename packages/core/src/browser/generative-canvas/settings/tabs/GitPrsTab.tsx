@@ -99,14 +99,14 @@ export const GitPrsTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Branch Prefix</div>
-                            <div className="sb-cursor-row-desc">Prefix for new branches created by Agent (e.g., cursor/, username/)</div>
+                            <div className="sb-cursor-row-desc">Prefix for new branches created by Agent (e.g., scratchbox/, username/)</div>
                         </div>
                         <input
                             type="text"
                             className="sb-cursor-text-input"
                             value={branchPrefix}
                             onChange={e => setBranchPrefix(e.target.value)}
-                            placeholder="cursor/"
+                            placeholder="scratchbox/"
                         />
                     </div>
                 </div>

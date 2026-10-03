@@ -40,16 +40,16 @@ async function runLayoutModeTests() {
     assert.strictEqual(isLegacySplitAllowed('split'), false, 'Legacy split mode must not be allowed');
     console.log('  ✓ Test 3 Passed: Legacy split mode successfully rejected');
 
-    // Test 4: Verify ChatGPT-style Split Layout for Document Editing
+    // Test 4: Verify Studio-style Split Layout for Document Editing
     const studioTsxPath = path.resolve(__dirname, '../src/browser/generative-canvas/GenerativeCanvasStudio.tsx');
     assert.ok(fs.existsSync(studioTsxPath), 'GenerativeCanvasStudio.tsx must exist');
     const source = readStudioSources();
 
     assert.ok(source.includes('sb-document-split-container'), 'Must render side-by-side flex split layout container');
-    assert.ok(source.includes('sb-chatgpt-document-card'), 'Must wrap MarkdownDocumentPrimitive in ChatGPT-style document workspace frame');
+    assert.ok(source.includes('sb-stage-document-card'), 'Must wrap MarkdownDocumentPrimitive in studio document workspace frame');
     assert.ok(source.includes('docReadOnly'), 'Must track document read-only edit state');
     assert.ok(source.includes('triggerMarkdownExport'), 'Must support document markdown export download');
-    console.log('  ✓ Test 4 Passed: Side-by-side split view, ChatGPT-style document card, and sync/export state verified');
+    console.log('  ✓ Test 4 Passed: Side-by-side split view, studio-style document card, and sync/export state verified');
 
     console.log('\n🎉 ALL LAYOUT MODE TESTS PASSED SUCCESSFULLY!');
 }

@@ -8,7 +8,7 @@ import {
 import { ChatMessage } from '../src/browser/generative-canvas/canvas-types';
 
 async function runChatMarkdownTests() {
-    console.log('🧪 Running ChatGPT Chat Stream, Markdown & Code Block Test Suite...');
+    console.log('🧪 Running Chat Stream, Markdown & Code Block Test Suite...');
 
     // Test 1: Code Block Extraction with Language Detection
     const sampleAssistantMessage = `Here is how you configure the Gemini 3.7 Flash subagent:

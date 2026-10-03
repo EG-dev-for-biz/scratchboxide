@@ -19,7 +19,7 @@ import {
 } from '../canvas-types';
 
 /**
- * Builds a Cursor-grade structured Markdown explanation for any generated canvas artifact.
+ * Builds a Studio structured Markdown explanation for any generated canvas artifact.
  * Describes what was created, technical architecture & pipeline specs, and clear viewport navigation controls.
  */
 export function buildArtifactExplanationMarkdown(artifact: CanvasArtifact, prompt?: string): string {

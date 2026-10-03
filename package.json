@@ -23,7 +23,7 @@
     "sbox": "node packages/cli/bin/sbox.js",
     "serve": "node scripts/serve_public.js",
     "start": "npm --prefix desktop-app start",
-    "proxy:cursor": "node scripts/vertex_cursor_proxy.mjs",
+    "proxy:vertex": "node scripts/vertex_proxy.mjs",
     "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/cli && tsc --noEmit -p desktop-app && tsc --noEmit -p desktop-app/tsconfig.electron.json",
     "lint": "eslint packages/core/src desktop-app/src desktop-app/server desktop-app/electron --report-unused-disable-directives",
     "test": "vitest run",

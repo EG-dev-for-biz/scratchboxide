@@ -149,7 +149,7 @@ app.whenReady().then(async () => {
         console.log('Rendering Antigravity Coding Execution & Verification Loop...');
         await win.webContents.executeJavaScript(`
             (() => {
-                const stage = document.querySelector('.sb-chatgpt-main-stage');
+                const stage = document.querySelector('.sb-studio-main-stage');
                 const scrollArea = document.querySelector('.sb-chat-split-scroll') || stage;
 
                 // Replace empty hero with realistic active conversation
@@ -274,8 +274,8 @@ app.whenReady().then(async () => {
         fs.writeFileSync(path.join(SCREENSHOTS_DIR, '04_antigravity_agent_execution_and_verification.png'), img4.toPNG());
         console.log('Saved 04_antigravity_agent_execution_and_verification.png');
 
-        // 5. Render FIM Inline Autocomplete (Cursor Tab) View
-        console.log('Setting up Screenshot 5: Cursor Tab FIM Autocomplete...');
+        // 5. Render FIM Inline Autocomplete View
+        console.log('Setting up Screenshot 5: FIM Tab Autocomplete...');
         await win.webContents.executeJavaScript(`
             (() => {
                 const scrollArea = document.querySelector('.sb-chat-scroll-area') || document.body;
@@ -289,7 +289,7 @@ app.whenReady().then(async () => {
                             <span style="font-weight: 600; font-size: 14px; color: #fff;">Scratchbox IDE</span>
                             <span style="font-size: 12px; color: #71717a;">/</span>
                             <span style="font-size: 12px; color: #a1a1aa; font-family: monospace;">packages/core/src/cart/cart-service.ts</span>
-                            <span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; padding: 1px 7px; border-radius: 4px; font-weight: 500;">Cursor Tab Active</span>
+                            <span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 11px; padding: 1px 7px; border-radius: 4px; font-weight: 500;">Tab Autocomplete Active</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: #a1a1aa;">
                             <span style="display: flex; align-items: center; gap: 6px;"><span style="width: 8px; height: 8px; border-radius: 50%; background: #10b981;"></span> gemini-2.5-flash (42ms)</span>
@@ -310,7 +310,7 @@ app.whenReady().then(async () => {
                             <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #60a5fa;">calculateSubtotal</span>(<span style="color: #fdba74;">items</span>: <span style="color: #93c5fd;">CartItem</span>[]): <span style="color: #93c5fd;">number</span> {</div>
                             <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #c084fc;">let</span> <span style="color: #e2e8f0;">subtotal</span> = <span style="color: #f472b6;">0</span>;</div>
                             <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #c084fc;">for</span> (<span style="color: #c084fc;">const</span> <span style="color: #e2e8f0;">item</span> <span style="color: #c084fc;">of</span> <span style="color: #fdba74;">items</span>) {</div>
-                            <!-- Active Line with Cursor and Ghost Text -->
+                            <!-- Active Line with Caret and Ghost Text -->
                             <div style="background: rgba(59, 130, 246, 0.08); margin: 0 -28px; padding: 0 28px; border-left: 2px solid #3b82f6;">
                                 <span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span style="display: inline-block; width: 2px; height: 16px; background: #60a5fa; vertical-align: middle; animation: blink 1s infinite; margin-right: 1px;"></span><span style="color: #94a3b8; opacity: 0.85; font-style: italic; background: rgba(59, 130, 246, 0.12); padding: 1px 4px; border-radius: 3px;">subtotal += item.price * (item.quantity ?? 1);</span>
                             </div>
@@ -320,10 +320,10 @@ app.whenReady().then(async () => {
                             <div>}</div>
                         </div>
 
-                        <!-- Floating Cursor Tab Badge -->
+                        <!-- Floating Autocomplete Badge -->
                         <div style="position: absolute; bottom: 28px; right: 32px; background: #18191f; border: 1px solid #383b47; border-radius: 8px; padding: 8px 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
                             <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #60a5fa;">
-                                <span style="font-size: 14px;">⚡</span> Cursor Tab Autocomplete
+                                <span style="font-size: 14px;">⚡</span> Tab Autocomplete
                             </div>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <kbd style="background: #27272a; color: #fff; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-family: monospace; border: 1px solid #3f3f46;">Tab</kbd>
@@ -340,10 +340,10 @@ app.whenReady().then(async () => {
         `);
         await new Promise(r => setTimeout(r, 600));
 
-        console.log('Capturing Screenshot 5: Cursor Tab FIM Autocomplete...');
+        console.log('Capturing Screenshot 5: Tab FIM Autocomplete...');
         const img5 = await win.webContents.capturePage();
-        fs.writeFileSync(path.join(SCREENSHOTS_DIR, '05_cursor_tab_fim_autocomplete.png'), img5.toPNG());
-        console.log('Saved 05_cursor_tab_fim_autocomplete.png');
+        fs.writeFileSync(path.join(SCREENSHOTS_DIR, '05_tab_fim_autocomplete.png'), img5.toPNG());
+        console.log('Saved 05_tab_fim_autocomplete.png');
 
         // 6. Render Prompt-to-Code ⌘K Inline Edit Bar View
         console.log('Setting up Screenshot 6: Prompt-to-Code ⌘K Inline Edit...');
@@ -422,8 +422,8 @@ app.whenReady().then(async () => {
 
         console.log('Capturing Screenshot 6: Prompt-to-Code ⌘K Inline Edit...');
         const img6 = await win.webContents.capturePage();
-        fs.writeFileSync(path.join(SCREENSHOTS_DIR, '06_cursor_quick_edit_k.png'), img6.toPNG());
-        console.log('Saved 06_cursor_quick_edit_k.png');
+        fs.writeFileSync(path.join(SCREENSHOTS_DIR, '06_quick_edit_k.png'), img6.toPNG());
+        console.log('Saved 06_quick_edit_k.png');
 
         // 7. Render Multi-File Atomic Diff Review & Hunk-By-Hunk UI
         console.log('Setting up Screenshot 7: Multi-File Atomic Diff Hunk-by-Hunk Review...');

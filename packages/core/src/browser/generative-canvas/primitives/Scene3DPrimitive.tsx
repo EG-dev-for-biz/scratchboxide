@@ -1732,19 +1732,21 @@ int main(int argc, char** argv) {
         
         const clampedX = Math.max(-20, Math.min(20, x));
         const clampedZ = Math.max(-20, Math.min(20, z));
-        const clampedY = getProceduralBinnedHeight(clampedX, clampedZ, refAlt);
+        const clampedY = 0;
         
         return new THREE.Vector3(clampedX, clampedY, clampedZ);
     }, [lat, lng, elevation]);
 
     const updatePinsAndRoute = React.useCallback(() => {
-        if (!threeSceneRef.current || !hasGeoCoordinates || !geoGroupRef.current) return;
+        if (!threeSceneRef.current || !geoGroupRef.current) return;
         const geoGroup = geoGroupRef.current;
 
         if (pinAMeshRef.current) { geoGroup.remove(pinAMeshRef.current); pinAMeshRef.current = null; }
         if (pinBMeshRef.current) { geoGroup.remove(pinBMeshRef.current); pinBMeshRef.current = null; }
         if (routePathMeshRef.current) { geoGroup.remove(routePathMeshRef.current); routePathMeshRef.current = null; }
         if (droneMeshRef.current) { geoGroup.remove(droneMeshRef.current); droneMeshRef.current = null; }
+
+        if (!hasGeoCoordinates || !isRoutingActive) return;
 
         const latA = parseFloat(pinALat) || 37.7920;
         const lngA = parseFloat(pinALng) || -122.4050;
@@ -1772,8 +1774,7 @@ int main(int argc, char** argv) {
             const px = pinAPos.x + t_val * (pinBPos.x - pinAPos.x);
             const pz = pinAPos.z + t_val * (pinBPos.z - pinAPos.z);
             const heightArc = Math.sin(t_val * Math.PI) * 4.0;
-            const terrainHeight = getProceduralBinnedHeight(px, pz, parseFloat(elevation) || 15.2);
-            const py = terrainHeight + 0.25 + heightArc;
+            const py = 0.25 + heightArc;
             curvePoints.push(new THREE.Vector3(px, py, pz));
         }
         const routeGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
@@ -1787,119 +1788,38 @@ int main(int argc, char** argv) {
         geoGroup.add(routeLine);
         routePathMeshRef.current = routeLine;
 
-        if (isRoutingActive) {
-            const drone = createDroneMesh();
-            drone.position.copy(pinAPos);
-            geoGroup.add(drone);
-            droneMeshRef.current = drone;
-        }
-    }, [hasGeoCoordinates, pinALat, pinALng, pinBLat, pinBLng, isRoutingActive, elevation, projectCoords]);
+        const drone = createDroneMesh();
+        drone.position.copy(pinAPos);
+        geoGroup.add(drone);
+        droneMeshRef.current = drone;
+    }, [hasGeoCoordinates, pinALat, pinALng, pinBLat, pinBLng, isRoutingActive, projectCoords]);
 
     React.useEffect(() => {
         updatePinsAndRoute();
     }, [updatePinsAndRoute]);
 
     // ---------------------------------------------------------
-    // Geographic Procedural Map Generation
+    // Geospatial Routing & Pins Management (Mock terrain removed)
     // ---------------------------------------------------------
-    const generateProceduralGeoCity = React.useCallback((scene: THREE.Scene, _latitude: number, _longitude: number, elevVal: number) => {
-        if (geoGroupRef.current) {
-            scene.remove(geoGroupRef.current);
-        }
-
-        const geoGroup = new THREE.Group();
-        geoGroupRef.current = geoGroup;
-
-        const terrainSize = 40;
-        const terrainSegments = 60;
-        const terrainGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
-        terrainGeo.rotateX(-Math.PI / 2);
-
-        const positions = terrainGeo.attributes.position as THREE.BufferAttribute;
-        for (let i = 0; i < positions.count; i++) {
-            const x = positions.getX(i);
-            const z = positions.getZ(i);
-            const distanceToBay = x + 15;
-            let y = Math.sin(x * 0.1) * Math.cos(z * 0.1) * 3.5;
-            y += Math.sin(x * 0.05 + z * 0.05) * 5.0;
-
-            if (distanceToBay < -5) {
-                y = -2.0 + Math.sin(z * 0.2) * 0.2;
-            } else if (distanceToBay < 5) {
-                y *= (distanceToBay + 5) / 10;
-            }
-
-            const rawHeight = y + elevVal * 0.05 - 1.5;
-            positions.setY(i, Math.round(rawHeight / 0.4) * 0.4);
-        }
-        terrainGeo.computeVertexNormals();
-
-        let terrainMat: THREE.Material;
-        if (renderMode === 'wireframe') {
-            terrainMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
-        } else if (renderMode === 'solid') {
-            terrainMat = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide });
-        } else if (renderMode === 'shaded') {
-            terrainMat = new THREE.MeshLambertMaterial({ color: 0x112b20, side: THREE.DoubleSide });
-        } else {
-            terrainMat = new THREE.MeshStandardMaterial({
-                color: 0x141a29,
-                roughness: 0.6,
-                metalness: 0.9,
-                side: THREE.DoubleSide,
-                flatShading: true
-            });
-        }
-
-        const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
-        geoGroup.add(terrainMesh);
-
-        // Water Plane on Bay Side
-        const waterGeo = new THREE.PlaneGeometry(20, 40);
-        waterGeo.rotateX(-Math.PI / 2);
-        const waterMat = new THREE.MeshStandardMaterial({
-            color: 0x00a2ff,
-            roughness: 0.1,
-            metalness: 0.8,
-            transparent: true,
-            opacity: 0.7,
-            emissive: 0x003366
-        });
-        const waterMesh = new THREE.Mesh(waterGeo, waterMat);
-        waterMesh.position.set(-15, -1.8, 0);
-        geoGroup.add(waterMesh);
-
-        scene.add(geoGroup);
-
-        if (customGridHelperRef.current) {
-            customGridHelperRef.current.visible = false;
-        }
-
-        setTimeout(() => {
-            updatePinsAndRoute();
-        }, 0);
-    }, [renderMode, updatePinsAndRoute]);
-
     React.useEffect(() => {
-        if (threeSceneRef.current) {
-            if (hasGeoCoordinates) {
-                generateProceduralGeoCity(
-                    threeSceneRef.current,
-                    parseFloat(lat) || 37.7900,
-                    parseFloat(lng) || -122.4000,
-                    parseFloat(elevation) || 15.2
-                );
-            } else {
-                if (geoGroupRef.current) {
-                    threeSceneRef.current.remove(geoGroupRef.current);
-                    geoGroupRef.current = null;
-                }
-                if (customGridHelperRef.current) {
-                    customGridHelperRef.current.visible = true;
-                }
+        if (!threeSceneRef.current) return;
+        if (hasGeoCoordinates && isRoutingActive) {
+            if (!geoGroupRef.current) {
+                const geoGroup = new THREE.Group();
+                geoGroupRef.current = geoGroup;
+                threeSceneRef.current.add(geoGroup);
+            }
+            updatePinsAndRoute();
+        } else {
+            if (geoGroupRef.current) {
+                threeSceneRef.current.remove(geoGroupRef.current);
+                geoGroupRef.current = null;
+            }
+            if (customGridHelperRef.current) {
+                customGridHelperRef.current.visible = true;
             }
         }
-    }, [hasGeoCoordinates, lat, lng, elevation, generateProceduralGeoCity]);
+    }, [hasGeoCoordinates, isRoutingActive, updatePinsAndRoute]);
 
     // ---------------------------------------------------------
     // Viewport Lifecycle: renderer stack is created ONCE per mount; scene content is
@@ -2184,8 +2104,7 @@ int main(int argc, char** argv) {
                     const ppx = pinAPos.x + tNorm * (pinBPos.x - pinAPos.x);
                     const ppz = pinAPos.z + tNorm * (pinBPos.z - pinAPos.z);
                     const heightArc = Math.sin(tNorm * Math.PI) * 4.0;
-                    const terrainHeight = getProceduralBinnedHeight(ppx, ppz, parseFloat(elevationRef.current) || 15.2);
-                    droneMeshRef.current.position.set(ppx, terrainHeight + 0.25 + heightArc, ppz);
+                    droneMeshRef.current.position.set(ppx, 0.25 + heightArc, ppz);
                     droneMeshRef.current.rotation.y = (now / 100) * playbackSpeedRef.current;
                 }
 
@@ -3799,7 +3718,7 @@ int main(int argc, char** argv) {
                 <button
                     type="button"
                     onClick={() => setIsTimelineDrawerOpen(!isTimelineDrawerOpen)}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
+                    className={`sb-btn sb-floating-pill flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
                         isTimelineDrawerOpen
                             ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
                             : 'bg-zinc-800/80 text-zinc-300 border-white/10 hover:bg-zinc-700/80'
@@ -3832,7 +3751,7 @@ int main(int argc, char** argv) {
                             <button
                                 type="button"
                                 onClick={() => setTimelineSnapping(!timelineSnapping)}
-                                className={`px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors ${
+                                className={`sb-btn sb-segment-btn px-2 py-0.5 rounded text-[10.5px] font-medium border transition-colors ${
                                     timelineSnapping
                                         ? 'bg-blue-600/30 text-blue-300 border-blue-500/40'
                                         : 'bg-zinc-800 text-zinc-400 border-zinc-700'
@@ -3855,7 +3774,7 @@ int main(int argc, char** argv) {
                             <button
                                 type="button"
                                 onClick={() => setIsTimelineDrawerOpen(false)}
-                                className="p-0.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                                className="sb-btn sb-icon-button p-0.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
                                 title="Close Timeline Drawer"
                             >
                                 <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

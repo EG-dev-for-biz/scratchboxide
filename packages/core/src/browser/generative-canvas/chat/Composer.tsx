@@ -308,7 +308,7 @@ export const Composer: React.FC<ComposerProps> = ({
             </div>
         )}
 
-        {/* Authentic Cursor-Grade Composer Main Row */}
+        {/* Authentic Studio Composer Main Row */}
         <div className="sb-composer-main-row">
             {/* Left: '+' Tools / Skills / File Attach button and Mode Selector */}
             <div className="sb-composer-left-actions">

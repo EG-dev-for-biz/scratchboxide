@@ -194,7 +194,7 @@ async function runUnifiedStylingAuditTests() {
     assert.ok(totalButtonsFound >= 300, `Expected at least 300 audited buttons across the application, but found ${totalButtonsFound}`);
     console.log(`  ✓ Test 6 Passed: Full code audit verified exactly ${totalButtonsFound} buttons across ${tsxFiles.length} source components`);
 
-    // Test 7: Minimalist ChatGPT Neutral Color Palette Verification
+    // Test 7: Minimalist Neutral Color Palette Verification
     assert.ok(
         unifiedCss.includes('--sb-btn-primary-bg: #ffffff') || unifiedCss.includes('--sb-btn-primary-bg: #f8fafc'),
         'Primary button background in unified-ui.css should use minimalist high-contrast white'
@@ -205,9 +205,9 @@ async function runUnifiedStylingAuditTests() {
     );
     assert.ok(
         indexCss.includes('#212121') || indexCss.includes('#171717'),
-        'index.css should define ChatGPT dark graphite surface colors (#212121 or #171717)'
+        'index.css should define dark graphite surface colors (#212121 or #171717)'
     );
-    console.log('  ✓ Test 7 Passed: Minimalist ChatGPT neutral color palette & high-contrast button styling verified');
+    console.log('  ✓ Test 7 Passed: Minimalist neutral color palette & high-contrast button styling verified');
 
     // Test 8: Scratchbox.ai (www.scratchbox.ai) Brand Colors & Font Styling
     assert.ok(

@@ -160,7 +160,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                             onClick={() => fetchGitStatus()}
                             disabled={isGitLoading}
                             title="Refresh Git Status"
-                            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors disabled:opacity-50"
+                            className="sb-btn sb-icon-button p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors disabled:opacity-50"
                         >
                             <IconRefresh size={16} className={isGitLoading ? 'animate-spin text-emerald-400' : ''} />
                         </button>
@@ -168,7 +168,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                             type="button"
                             onClick={onClose}
                             title="Close (Esc)"
-                            className="p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
+                            className="sb-btn sb-icon-button p-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
                         >
                             <IconClose size={16} />
                         </button>
@@ -193,7 +193,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                         <button
                                             type="button"
                                             onClick={() => handleUnstageFile()}
-                                            className="text-[11px] text-zinc-400 hover:text-amber-400 lowercase hover:underline"
+                                            className="sb-btn sb-btn-inline text-[11px] text-zinc-400 hover:text-amber-400 lowercase hover:underline"
                                         >
                                             Unstage all
                                         </button>
@@ -233,7 +233,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                                                 handleUnstageFile(f.path);
                                                             }}
                                                             title="Unstage this file"
-                                                            className="opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-amber-500/20 text-zinc-300 hover:text-amber-300 transition-opacity"
+                                                            className="sb-btn sb-btn-inline opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-amber-500/20 text-zinc-300 hover:text-amber-300 transition-opacity"
                                                         >
                                                             -
                                                         </button>
@@ -258,7 +258,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                         <button
                                             type="button"
                                             onClick={() => handleStageFile()}
-                                            className="text-[11px] text-zinc-400 hover:text-emerald-400 lowercase hover:underline"
+                                            className="sb-btn sb-btn-inline text-[11px] text-zinc-400 hover:text-emerald-400 lowercase hover:underline"
                                         >
                                             Stage all
                                         </button>
@@ -298,7 +298,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                                                 handleStageFile(f.path);
                                                             }}
                                                             title="Stage this file"
-                                                            className="opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-emerald-500/20 text-zinc-300 hover:text-emerald-300 transition-opacity"
+                                                            className="sb-btn sb-btn-inline opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-emerald-500/20 text-zinc-300 hover:text-emerald-300 transition-opacity"
                                                         >
                                                             +
                                                         </button>
@@ -333,7 +333,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                                                 handleStageFile(path);
                                                             }}
                                                             title="Stage untracked file"
-                                                            className="opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-emerald-500/20 text-zinc-300 hover:text-emerald-300 transition-opacity"
+                                                            className="sb-btn sb-btn-inline opacity-0 group-hover:opacity-100 px-1 py-0.5 rounded text-[10px] bg-zinc-800 hover:bg-emerald-500/20 text-zinc-300 hover:text-emerald-300 transition-opacity"
                                                         >
                                                             +
                                                         </button>
@@ -364,7 +364,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                     type="button"
                                     onClick={onCommitSubmit}
                                     disabled={!commitMessage.trim() || isCommitting || stagedCount === 0}
-                                    className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm inline-flex items-center gap-1.5"
+                                    className="sb-btn sb-btn-primary px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm inline-flex items-center gap-1.5"
                                 >
                                     {isCommitting ? (
                                         <IconRefresh size={12} className="animate-spin" />
@@ -400,7 +400,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => handleUnstageFile(selectedFile.path)}
-                                                className="px-2.5 py-1 rounded text-xs bg-zinc-800 hover:bg-amber-500/20 text-zinc-200 hover:text-amber-300 border border-zinc-700/60 transition-colors"
+                                                className="sb-btn sb-btn-secondary px-2.5 py-1 rounded text-xs bg-zinc-800 hover:bg-amber-500/20 text-zinc-200 hover:text-amber-300 border border-zinc-700/60 transition-colors"
                                             >
                                                 Unstage File
                                             </button>
@@ -408,7 +408,7 @@ export const GitReviewModal: React.FC<GitReviewModalProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => handleStageFile(selectedFile.path)}
-                                                className="px-2.5 py-1 rounded text-xs bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40 transition-colors"
+                                                className="sb-btn sb-btn-primary px-2.5 py-1 rounded text-xs bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40 transition-colors"
                                             >
                                                 Stage File
                                             </button>

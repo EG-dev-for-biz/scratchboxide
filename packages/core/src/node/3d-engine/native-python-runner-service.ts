@@ -45,7 +45,7 @@ export interface PythonExecutionResult {
  * NativePythonRunnerService
  *
  * Executes Python 3D scene generation scripts powered by Scratchbox C++20 engine
- * nanobind bindings. Allows AI coding assistants (Codex, Cursor, Claude, Antigravity)
+ * nanobind bindings. Allows AI coding assistants (Codex, Claude, Antigravity)
  * to construct complex 3D scenes using high-level Python abstractions (mirroring Blender bpy)
  * while executing at native C++20 speed and streaming glTF 2.0 (.glb) into the canvas viewport.
  */

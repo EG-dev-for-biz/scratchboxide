@@ -46,7 +46,7 @@ export const CodeIntelligenceTab: React.FC = () => {
                     <div className="sb-cursor-row-item">
                         <div className="sb-cursor-row-info">
                             <div className="sb-cursor-row-title">Hierarchical Scratchbox Ignore</div>
-                            <div className="sb-cursor-row-desc">Apply .scratchboxignore / .cursorignore files to all subdirectories. Changing this setting requires restarting Scratchbox.</div>
+                            <div className="sb-cursor-row-desc">Apply .scratchboxignore files to all subdirectories. Changing this setting requires restarting Scratchbox.</div>
                         </div>
                         <button
                             type="button"

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Vertex AI <-> OpenAI Compatibility Bridge for Cursor & Scratchbox IDE
+ * Vertex AI <-> OpenAI Compatibility Bridge for Scratchbox IDE
  * 
- * Allows Cursor (and Scratchbox IDE) to use your Google Cloud Vertex AI account
+ * Allows Scratchbox IDE and external coding clients to use your Google Cloud Vertex AI account
  * as an OpenAI-compatible endpoint for coding models:
  *   - gemini-2.5-pro (High-reasoning architecture & complex refactoring)
  *   - gemini-2.5-flash (Ultra-low latency streaming coding assistant)
@@ -10,14 +10,14 @@
  *   - claude-3-5-sonnet-v2@20241022 (Anthropic on Vertex AI Model Garden)
  *   - codestral-2501 (Mistral Code on Vertex AI Model Garden)
  * 
- * Cursor Configuration:
+ * Client Configuration:
  *   1. Settings -> Models:
  *      - Check/enable "Override OpenAI Base URL"
  *      - Base URL: http://127.0.0.1:4000/v1
  *      - OpenAI API Key: sk-vertex-local (any placeholder)
  *   2. Under Models:
  *      - Click "+ Add model" and enter: "gemini-2.5-flash" or "gemini-2.5-pro" or "claude-3-7-sonnet"
- *   3. Select the model in Cursor Chat, Composer, or Inline Edit!
+ *   3. Select the model in Chat, Composer, or Inline Edit!
  */
 
 import http from 'http';
@@ -158,7 +158,7 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-  // GET /v1/models (Used by Cursor model picker & test connection)
+  // GET /v1/models (Used by model picker & test connection)
   if (req.method === 'GET' && (url.pathname === '/v1/models' || url.pathname === '/models')) {
     const models = [
       { id: 'gemini-2.5-flash', object: 'model', owned_by: 'google-vertex' },
@@ -185,7 +185,7 @@ const server = http.createServer(async (req, res) => {
         const projectId = config.creds.project_id;
         const location = config.location;
 
-        console.log(`[VertexProxy] 📥 Incoming Cursor request: model="${rawModel}" stream=${stream}`);
+        console.log(`[VertexProxy] 📥 Incoming request: model="${rawModel}" stream=${stream}`);
 
         // Route: Anthropic Claude on Vertex AI Model Garden
         if (rawModel.toLowerCase().includes('claude')) {
@@ -426,7 +426,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`   Project ID: ${config.creds.project_id}`);
   console.log(`   Region:     ${config.location}`);
   console.log(`----------------------------------------------------------------`);
-  console.log(`Configure in Cursor:`);
+  console.log(`Configure in Scratchbox IDE or compatible client:`);
   console.log(`   1. Settings -> Models:`);
   console.log(`      - Enable "Override OpenAI Base URL"`);
   console.log(`      - Set to: http://127.0.0.1:${PORT}/v1`);

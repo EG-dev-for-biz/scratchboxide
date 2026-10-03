@@ -84,7 +84,7 @@ export const AgentsTab: React.FC = () => {
                             value={defaultAgentModel}
                             onChange={e => setDefaultAgentModel(e.target.value)}
                         >
-                            <option value="cursor-default">Scratchbox Default</option>
+                            <option value="scratchbox-default">Scratchbox Default</option>
                             <option value="high-reasoning">High Reasoning Engine</option>
                             <option value="fast">Fast Intelligence</option>
                         </select>

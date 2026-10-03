@@ -399,7 +399,7 @@ export class GeminiClient {
     }
 
     /**
-     * Complete code in-line using Fill-In-The-Middle (Cursor Tab / Copilot style).
+     * Complete code in-line using Fill-In-The-Middle (Tab Autocomplete style).
      */
     async completeFim(request: FimCompletionRequest): Promise<FimCompletionResponse> {
         try {

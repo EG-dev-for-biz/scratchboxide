@@ -478,7 +478,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                 </div>
                             )}
 
-                            {/* Cursor-Style Interactive Tool Execution Steps */}
+                            {/* Studio Interactive Tool Execution Steps */}
                             {!isFirstInit && (
                                 <div className="sb-cursor-tool-steps-group">
                                     {(msg.steps && msg.steps.length > 0 ? msg.steps : [
@@ -515,7 +515,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                 </div>
                             )}
 
-                            {/* Cursor Diff / Change Badge */}
+                            {/* Diff / Change Badge */}
                             {!isFirstInit && (
                                 <div className="sb-cursor-diff-card">
                                     <div className="sb-cursor-diff-header">
@@ -583,7 +583,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                 </div>
                             )}
 
-                            {/* Cursor Message Action Footer */}
+                            {/* Message Action Footer */}
                             <div className="sb-cursor-msg-footer">
                                 <div className="sb-cursor-footer-actions">
                                     <button
@@ -681,7 +681,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                 </div>
             )}
 
-            {/* Cursor-Grade Pinned Bottom Composer */}
+            {/* Studio Pinned Bottom Composer */}
             <div className="sb-cursor-composer-wrapper" style={{ position: 'relative' }}>
                 {/* Context Pills Bar Above Input */}
                 <div className="sb-cursor-context-bar">
@@ -703,7 +703,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                             1 Terminal
                         </button>
                         <span className="sb-cursor-indexing-badge" title="Project codebase embedded & indexed">● Codebase Indexed</span>
-                        <span className="sb-cursor-rules-badge" title=".scratchbox/rules & .cursorrules active">3 Rules Active</span>
+                        <span className="sb-cursor-rules-badge" title=".scratchbox/rules active">3 Rules Active</span>
                     </div>
                     <button
                         type="button"
@@ -852,7 +852,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                     </div>
                 </div>
 
-                {/* Cursor Bottom Status Row */}
+                {/* Studio Bottom Status Row */}
                 <div className="sb-cursor-bottom-status">
                     <span className="sb-cursor-env-label">This Mac ▾</span>
                     <span className={`sb-cursor-status-spinner ${isGenerating ? 'animate-spin text-blue-400' : ''}`}>○</span>

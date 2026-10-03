@@ -46,9 +46,11 @@ build/
 /*.mp4
 
 # Temporary experiment scratch directories
+temp_*/
 temp_unwrap_rewrap/
 temp-artifacts/
 **/temp-artifacts/
+public/icons
 .chrome-profile/
 .tmp_chrome/
 .tmp_chrome_vis/
@@ -66,6 +68,8 @@ packages/.temp-cli-test-*/
 *.mp4
 *.webm
 *.mov
+*.depth.f32
+*.rgb
 
 # Public media and runtime caches (keep HTML demos, JS scripts, JSON manifests, and SVGs tracked)
 public/**/*.glb

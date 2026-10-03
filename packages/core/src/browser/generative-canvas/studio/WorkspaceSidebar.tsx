@@ -160,7 +160,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
     }, []);
 
     return (
-    <aside className={`sb-chatgpt-sidebar ${isSidebarOpen ? 'sb-sidebar-open' : 'sb-sidebar-collapsed'}`}>
+    <aside className={`sb-studio-sidebar ${isSidebarOpen ? 'sb-sidebar-open' : 'sb-sidebar-collapsed'}`}>
         {/* Sidebar Top Controls: Window Traffic Lights, Brand & Navigation */}
         <div className="sb-sidebar-top-header">
             <div className="sb-sidebar-top-brand-group">

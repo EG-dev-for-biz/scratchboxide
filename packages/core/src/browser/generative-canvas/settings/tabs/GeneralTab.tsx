@@ -232,7 +232,7 @@ export const GeneralTab: React.FC = () => {
                             <div className="sb-cursor-row-title">Custom Project Rules</div>
                             <div className="sb-cursor-row-desc">
                                 {workspaceRules.length > 0
-                                    ? `${workspaceRules.length} active rule${workspaceRules.length > 1 ? 's' : ''} loaded from .scratchbox/rules/ and .cursorrules`
+                                    ? `${workspaceRules.length} active rule${workspaceRules.length > 1 ? 's' : ''} loaded from .scratchbox/rules/`
                                     : 'Manage custom project directives and system instructions'}
                             </div>
                         </div>

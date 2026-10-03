@@ -30,8 +30,8 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
         background: 'transparent',
         minWidth: 0,
     }}>
-        {/* ChatGPT-style document/canvas workspace frame / card wrapper */}
-        <div className="sb-chatgpt-document-card sb-glass-card" style={{
+        {/* Studio document/canvas workspace frame / card wrapper */}
+        <div className="sb-stage-document-card sb-glass-card" style={{
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
