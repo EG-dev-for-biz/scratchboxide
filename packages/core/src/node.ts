@@ -63,7 +63,13 @@ export {
     type PythonExecutionResult,
     type PythonExecutionAsset
 } from './node/3d-engine/native-python-runner-service';
-export { PhotorealismEvaluator } from './node/3d-engine/photorealism-evaluator';
+export {
+    PhotorealismEvaluator,
+    StyleConformalQualityEvaluator,
+    type StyleConformalMetricReport,
+    type StyleQualityEvaluationOptions,
+    type Target3DStyle
+} from './node/3d-engine/photorealism-evaluator';
 export { PhotorealTileCleanupService, TileCleanupOptions, TileCleanupMetrics, TileCleanupResult } from './node/3d-engine/tile-cleanup-service';
 export {
     MeshletPipelineService,
