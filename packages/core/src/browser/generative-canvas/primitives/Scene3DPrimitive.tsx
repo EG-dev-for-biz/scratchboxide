@@ -2480,12 +2480,13 @@ int main(int argc, char** argv) {
         };
     }, [wantsWasmMesh, renderMode]);
 
-    // ---- 5b. Native C++ Generated GLB Ingestion (Streaming 3D AST) ---------------
+    // ---- 5b. Native C++ / Python Generated GLB Ingestion (Streaming 3D AST) ---------------
     React.useEffect(() => {
         const stack = stackRef.current;
-        if (!stack || !sceneData.cppGenerator?.glbBase64) return;
+        const glbBase64 = sceneData.pythonGenerator?.glbBase64 || sceneData.cppGenerator?.glbBase64;
+        if (!stack || !glbBase64) return;
         try {
-            const b64 = sceneData.cppGenerator.glbBase64;
+            const b64 = glbBase64;
             const binaryStr = typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
             const bytes = new Uint8Array(binaryStr.length);
             for (let i = 0; i < binaryStr.length; i++) {
@@ -2527,12 +2528,12 @@ int main(int argc, char** argv) {
                 cameraRotationRef.current = { theta: 0.72, phi: 1.12, distance: 23.3 };
                 refreshEntities();
             }, (err) => {
-                console.warn('[C++ GLB Loader Error]:', err);
+                console.warn('[3D Engine GLB Loader Error]:', err);
             });
         } catch (e) {
-            console.warn('[C++ GLB Ingestion Error]:', e);
+            console.warn('[3D Engine GLB Ingestion Error]:', e);
         }
-    }, [sceneData.cppGenerator?.glbBase64]);
+    }, [sceneData.pythonGenerator?.glbBase64, sceneData.cppGenerator?.glbBase64]);
 
     // ---- 5c. External Model & Gaussian Splat Objects Ingestion (sceneData.objects[].content.durableUri, sceneData.splatUrl) ----
     React.useEffect(() => {

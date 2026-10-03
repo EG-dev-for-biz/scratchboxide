@@ -867,6 +867,18 @@ export interface Scene3DData {
         glbPath?: string;
         diagnostics?: any[];
     };
+    pythonGenerator?: {
+        enabled?: boolean;
+        sourceCode?: string;
+        filename?: string;
+        lastCompiledTimeMs?: number;
+        lastExecutionDurationMs?: number;
+        vertexCount?: number;
+        triangleCount?: number;
+        glbBase64?: string;
+        glbPath?: string;
+        diagnostics?: any[];
+    };
     fallbackTier2ComfyUi?: {
         triggered: boolean;
         goal?: string;
