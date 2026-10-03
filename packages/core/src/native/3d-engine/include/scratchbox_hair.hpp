@@ -13,6 +13,7 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_pbr.hpp"
+#include "scratchbox_spz.hpp"
 
 #include <vector>
 #include <cmath>
@@ -168,6 +169,152 @@ public:
             g.p1 = root + norm * (L * 0.28f) + flow * (L * 0.12f);
             g.p2 = root + norm * (L * 0.20f) + flow * (L * 0.55f) + Vec3(0, -L * 0.35f, 0);
             g.tip = root + flow * (L * 0.85f) + Vec3(0, -L * 0.65f, 0);
+
+            guides.push_back(g);
+        }
+
+        return guides;
+    }
+
+    /**
+     * Generate guide curves conformal to arbitrary surface positions and normals.
+     * Fully ADA-compliant: accepts any arbitrary topology or mesh vertices/normals.
+     */
+    static std::vector<HairGuide> generateSurfaceGuides(
+        const std::vector<Vec3>& surfacePositions,
+        const std::vector<Vec3>& surfaceNormals,
+        const HairGroomConfig& config,
+        const Vec3& flowDirection = Vec3(0.0f, 0.0f, 0.0f)
+    ) {
+        std::vector<HairGuide> guides;
+        if (surfacePositions.empty() || surfacePositions.size() != surfaceNormals.size()) {
+            return guides;
+        }
+
+        uint32_t targetCount = std::min<uint32_t>(config.guideCount, static_cast<uint32_t>(surfacePositions.size()));
+        guides.reserve(targetCount);
+
+        std::mt19937 rng(1337);
+        std::uniform_real_distribution<float> distJitter(-0.08f, 0.08f);
+
+        float step = static_cast<float>(surfacePositions.size()) / static_cast<float>(targetCount);
+        bool hasFlow = flowDirection.length() > 1e-4f;
+
+        for (uint32_t i = 0; i < targetCount; ++i) {
+            size_t idx = static_cast<size_t>(i * step);
+            if (idx >= surfacePositions.size()) idx = surfacePositions.size() - 1;
+
+            Vec3 root = surfacePositions[idx];
+            Vec3 norm = surfaceNormals[idx].normalized();
+            if (norm.length() < 1e-4f) norm = Vec3(0, 1, 0);
+
+            Vec3 flow;
+            if (hasFlow) {
+                flow = (flowDirection - norm * flowDirection.dot(norm)).normalized();
+                if (flow.length() < 1e-4f) flow = norm;
+            } else {
+                flow = norm; // Pure outward normal
+            }
+
+            float L = config.length * (1.0f + distJitter(rng));
+
+            HairGuide g;
+            g.root = root;
+            g.normal = norm;
+            g.length = L;
+
+            if (hasFlow) {
+                g.p1 = root + norm * (L * 0.28f) + flow * (L * 0.12f);
+                g.p2 = root + norm * (L * 0.20f) + flow * (L * 0.55f) + Vec3(0, -L * 0.35f, 0);
+                g.tip = root + flow * (L * 0.85f) + Vec3(0, -L * 0.65f, 0);
+            } else {
+                // Conformal outward bristling
+                g.p1 = root + norm * (L * 0.33f);
+                g.p2 = root + norm * (L * 0.66f);
+                g.tip = root + norm * L;
+            }
+
+            guides.push_back(g);
+        }
+
+        return guides;
+    }
+
+    /**
+     * Generate guide curves on a continuous radial harmonic surface.
+     * Fully ADA-compliant: continuous parameters (radius, frequency m, amplitude A, axial taper)
+     * smoothly morph across spheres (A=0), stars (m=5, A=0.45), lobed creatures, and teardrops.
+     */
+    static std::vector<HairGuide> generateHarmonicGuides(
+        const Vec3& center,
+        float baseRadius,
+        int harmonicFrequency,
+        float harmonicAmplitude,
+        const HairGroomConfig& config,
+        float axialTaper = 0.0f
+    ) {
+        std::vector<HairGuide> guides;
+        guides.reserve(config.guideCount);
+
+        std::mt19937 rng(1337);
+        std::uniform_real_distribution<float> distTheta(0.05f, PI - 0.05f);
+        std::uniform_real_distribution<float> distPhi(0.0f, TWO_PI);
+        std::uniform_real_distribution<float> distJitter(-0.08f, 0.08f);
+
+        for (uint32_t i = 0; i < config.guideCount; ++i) {
+            float theta = distTheta(rng);
+            float phi = distPhi(rng);
+
+            // Continuous radial harmonic equation: r = R * (1 + A * cos(m * phi) * sin(theta)) * (1 - taper * cos(theta))
+            float harmonicFactor = (harmonicFrequency > 0 && std::abs(harmonicAmplitude) > 1e-5f)
+                ? (harmonicAmplitude * std::cos(static_cast<float>(harmonicFrequency) * phi) * std::sin(theta))
+                : 0.0f;
+            float taperFactor = 1.0f - axialTaper * std::cos(theta);
+            float r = baseRadius * (1.0f + harmonicFactor) * taperFactor;
+
+            Vec3 unitDir(
+                std::sin(theta) * std::cos(phi),
+                std::cos(theta),
+                std::sin(theta) * std::sin(phi)
+            );
+
+            Vec3 root = center + unitDir * r;
+
+            // Finite-difference surface normal to account for harmonic modulation
+            float dTheta = 0.01f;
+            float dPhi = 0.01f;
+
+            auto sampleSurface = [&](float th, float ph) -> Vec3 {
+                float hf = (harmonicFrequency > 0 && std::abs(harmonicAmplitude) > 1e-5f)
+                    ? (harmonicAmplitude * std::cos(static_cast<float>(harmonicFrequency) * ph) * std::sin(th))
+                    : 0.0f;
+                float tf = 1.0f - axialTaper * std::cos(th);
+                float rad = baseRadius * (1.0f + hf) * tf;
+                return center + Vec3(
+                    std::sin(th) * std::cos(ph),
+                    std::cos(th),
+                    std::sin(th) * std::sin(ph)
+                ) * rad;
+            };
+
+            Vec3 pTheta = sampleSurface(theta + dTheta, phi);
+            Vec3 pPhi = sampleSurface(theta, phi + dPhi);
+            Vec3 tanTheta = pTheta - root;
+            Vec3 tanPhi = pPhi - root;
+            Vec3 norm = tanPhi.cross(tanTheta).normalized();
+            if (norm.length() < 1e-4f || norm.dot(unitDir) < 0.0f) {
+                norm = unitDir;
+            }
+
+            float L = config.length * (1.0f + distJitter(rng));
+
+            HairGuide g;
+            g.root = root;
+            g.normal = norm;
+            g.length = L;
+            g.p1 = root + norm * (L * 0.33f);
+            g.p2 = root + norm * (L * 0.66f);
+            g.tip = root + norm * L;
 
             guides.push_back(g);
         }
@@ -561,6 +708,129 @@ public:
         mesh.material.doubleSided = true;
 
         return mesh;
+    }
+};
+
+// ============================================================================
+// 6. ANALYTICAL FORWARD GAUSSIAN SPLAT GENERATOR & SPZ EXPORTER
+// ============================================================================
+
+class HairSplatBuilder {
+public:
+    /**
+     * Analytically project hair strands into anisotropic 3D Gaussian Splats.
+     * Maps strand segments directly into 3D Gaussians oriented along strand tangents,
+     * with anisotropic scale matching strand diameter and segment length.
+     * Closed-form, zero neural training, zero 2D rendering.
+     */
+    static std::vector<spz::GaussianSplat> buildStrandSplats(
+        const std::vector<HairStrand>& strands,
+        float splatScaleMultiplier = 1.0f,
+        float baseOpacity = 0.92f,
+        const Vec3& customBaseColor = Vec3(-1.0f, -1.0f, -1.0f),
+        const Vec3& customTipColor = Vec3(-1.0f, -1.0f, -1.0f)
+    ) {
+        std::vector<spz::GaussianSplat> splats;
+        size_t totalSplats = 0;
+        for (const auto& s : strands) {
+            if (s.vertices.size() >= 2) {
+                totalSplats += s.vertices.size() - 1;
+            }
+        }
+        splats.reserve(totalSplats);
+
+        const Vec3 canonicalAxis(0.0f, 0.0f, 1.0f);
+
+        for (const auto& strand : strands) {
+            size_t n = strand.vertices.size();
+            if (n < 2) continue;
+
+            for (size_t i = 0; i < n - 1; ++i) {
+                const auto& v0 = strand.vertices[i];
+                const auto& v1 = strand.vertices[i + 1];
+
+                Vec3 midPos = (v0.position + v1.position) * 0.5f;
+                Vec3 dir = v1.position - v0.position;
+                float segLen = dir.length();
+                if (segLen < 1e-6f) continue;
+                Vec3 unitDir = dir * (1.0f / segLen);
+
+                // Closed-form quaternion rotating canonical +Z (0, 0, 1) to unitDir
+                float dot = canonicalAxis.dot(unitDir);
+                Quat rot;
+                if (dot > 0.999999f) {
+                    rot = Quat::identity();
+                } else if (dot < -0.999999f) {
+                    rot = Quat(1.0f, 0.0f, 0.0f, 0.0f);
+                } else {
+                    Vec3 cross = canonicalAxis.cross(unitDir);
+                    rot = Quat(cross.x, cross.y, cross.z, 1.0f + dot).normalized();
+                }
+
+                float avgWidth = (v0.width + v1.width) * 0.5f * splatScaleMultiplier;
+                // Anisotropic covariance: elongated along tangent Z, slender on X/Y
+                float scaleZ = std::max(segLen * 0.58f, 0.0005f);
+                float scaleXY = std::max(avgWidth * 0.65f, 0.0003f);
+
+                // Color interpolation along strand (melanin or custom gradient)
+                float tMid = (v0.u + v1.u) * 0.5f;
+                Vec3 color;
+                if (customBaseColor.x >= 0.0f && customTipColor.x >= 0.0f) {
+                    color = customBaseColor * (1.0f - tMid) + customTipColor * tMid;
+                } else {
+                    color = strand.baseColor;
+                }
+
+                spz::GaussianSplat gs;
+                gs.position = midPos;
+                gs.scale = Vec3(scaleXY, scaleXY, scaleZ);
+                gs.rotation = rot;
+                gs.color = color;
+                gs.opacity = baseOpacity;
+
+                splats.push_back(gs);
+            }
+        }
+        return splats;
+    }
+
+    /**
+     * Encode strands directly into Niantic SPZ v2 compressed buffer.
+     */
+    static std::vector<uint8_t> buildSpz(
+        const std::vector<HairStrand>& strands,
+        float splatScaleMultiplier = 1.0f,
+        float baseOpacity = 0.92f,
+        const Vec3& customBaseColor = Vec3(-1.0f, -1.0f, -1.0f),
+        const Vec3& customTipColor = Vec3(-1.0f, -1.0f, -1.0f)
+    ) {
+        auto splats = buildStrandSplats(strands, splatScaleMultiplier, baseOpacity, customBaseColor, customTipColor);
+        return spz::SpzCodec::encode(splats);
+    }
+
+    /**
+     * Save splats directly to an SPZ file on disk.
+     */
+    static bool saveToSpzFile(
+        const std::string& filepath,
+        const std::vector<spz::GaussianSplat>& splats
+    ) {
+        auto bytes = spz::SpzCodec::encode(splats);
+        if (bytes.empty()) return false;
+        std::ofstream out(filepath, std::ios::binary);
+        if (!out.is_open()) return false;
+        out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        return out.good();
+    }
+
+    /**
+     * Save splats directly to standard binary PLY format.
+     */
+    static bool saveToPlyFile(
+        const std::string& filepath,
+        const std::vector<spz::GaussianSplat>& splats
+    ) {
+        return spz::PlyCodec::saveToPlyFile(filepath, splats);
     }
 };
 
