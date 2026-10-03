@@ -33,6 +33,7 @@ io = _native.io
 
 # Core Types
 Mesh = geometry.Mesh
+Scene = geometry.Mesh
 PbrMaterial = geometry.PbrMaterial
 Vec2 = math.Vec2
 Vec3 = math.Vec3
@@ -68,10 +69,19 @@ def create_studio_pedestal(radius=4.0, height=0.25, bevel_radius=0.04, bevel=Non
     b = bevel if bevel is not None else bevel_radius
     return _orig_create_pedestal(float(radius), float(height), float(b), int(segments))
 
+def create_promenade(width=40.0, depth=30.0, height=0.6, steps=3, material='granite', color=None):
+    c = color if color is not None else Vec4(0.82, 0.80, 0.77, 1.0)
+    box = create_box(width=width, height=height, depth=depth, color=c)
+    box.translate(0, float(height) * 0.5, 0)
+    return box
+
 # Attach ergonomic helpers to geometry submodule
+geometry.Scene = geometry.Mesh
 geometry.create_box = create_box
 geometry.create_cube = create_cube
 geometry.create_studio_pedestal = create_studio_pedestal
+geometry.create_pedestal = create_studio_pedestal
+geometry.create_promenade = create_promenade
 
 # Polymorphic Mesh transforms (accept 3 floats, tuple/list, or Vec3)
 _orig_mesh_translate = Mesh.translate
@@ -259,6 +269,8 @@ io.export_glb = export_glb
 io.save_glb = export_glb
 io.write_glb = export_glb
 
+create_pedestal = create_studio_pedestal
+
 __all__ = [
     "math",
     "geometry",
@@ -267,6 +279,7 @@ __all__ = [
     "composer",
     "io",
     "Mesh",
+    "Scene",
     "PbrMaterial",
     "Vec2",
     "Vec3",
@@ -277,6 +290,8 @@ __all__ = [
     "create_box",
     "create_cube",
     "create_studio_pedestal",
+    "create_pedestal",
+    "create_promenade",
     "create_building",
     "create_tree",
     "create_ivy",

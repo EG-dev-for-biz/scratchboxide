@@ -237,8 +237,17 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 
             if (pythonScript && !pythonGlbBase64) {
                 try {
+                    console.log('[mount_canvas_primitive] Executing procedural Python script, source length:', pythonScript.length);
                     const runner = NativePythonRunnerService.getInstance();
                     const res = await runner.runScript(pythonScript);
+                    console.log('[mount_canvas_primitive] Python runner result:', {
+                        success: res.success,
+                        executionTimeMs: res.executionTimeMs,
+                        glbBase64Length: res.glbBase64?.length,
+                        glbPath: res.glbPath,
+                        errorDetails: res.errorDetails,
+                        stderr: res.stderr ? res.stderr.slice(0, 300) : undefined
+                    });
                     if (res.success && res.glbBase64) {
                         pythonGlbBase64 = res.glbBase64;
                         pythonGlbPath = res.glbPath;
