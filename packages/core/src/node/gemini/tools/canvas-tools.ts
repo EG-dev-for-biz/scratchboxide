@@ -10,6 +10,8 @@
 import type { CanvasArtifact, PrimitiveType, ArtifactData, VideoTimelineData, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
 import { synthesizeContextualVideoTimeline } from '../../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
+import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
+import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
 import type { ToolDeclaration, ToolHandler } from './types';
 
 function asString(val: unknown): string {
@@ -135,7 +137,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
 ];
 
 export const canvasHandlers: Record<string, ToolHandler> = {
-    mount_canvas_primitive(args, _ctx) {
+    async mount_canvas_primitive(args, _ctx) {
         let primitiveType = (asString(args.primitiveType) || '3d-scene') as PrimitiveType;
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
@@ -171,6 +173,62 @@ export const canvasHandlers: Record<string, ToolHandler> = {
 
             const p = payload && typeof payload === 'object' ? (payload as any) : {};
 
+            let pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python;
+            let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64;
+            let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
+
+            if (pythonScript && !pythonGlbBase64) {
+                try {
+                    const runner = NativePythonRunnerService.getInstance();
+                    const res = await runner.runScript(pythonScript);
+                    if (res.success && res.glbBase64) {
+                        pythonGlbBase64 = res.glbBase64;
+                        pythonGlbPath = res.glbPath;
+                    }
+                } catch (e) {
+                    console.warn('[mount_canvas_primitive] Error executing python script:', e);
+                }
+            }
+
+            let cppSource = p.cppGenerator?.sourceCode || p.cppSource;
+            let cppGlbBase64 = p.cppGenerator?.glbBase64 || (!pythonGlbBase64 ? p.glbBase64 : undefined);
+            let cppGlbPath = p.cppGenerator?.glbPath;
+
+            if (cppSource && !cppGlbBase64 && !pythonGlbBase64) {
+                try {
+                    const compiler = NativeCppCompilerService.getInstance();
+                    const compRes = await compiler.compileSource(cppSource);
+                    if (compRes.success && compRes.binaryPath) {
+                        const execRes = await compiler.executeBinary(compRes.binaryPath);
+                        if (execRes.success && execRes.glbBase64) {
+                            cppGlbBase64 = execRes.glbBase64;
+                            cppGlbPath = execRes.glbPath;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[mount_canvas_primitive] Error compiling C++ source:', e);
+                }
+            }
+
+            const pyGenerator = (pythonGlbBase64 || pythonScript) ? {
+                enabled: true,
+                filename: 'procedural_scene.py',
+                sourceCode: pythonScript || p.pythonGenerator?.sourceCode || '',
+                glbBase64: pythonGlbBase64,
+                glbPath: pythonGlbPath,
+                lastCompiledTimeMs: Date.now()
+            } : (p.pythonGenerator || contextual3D.pythonGenerator);
+
+            const cppGen = (cppGlbBase64 || cppSource) ? {
+                enabled: true,
+                filename: 'world_generator.cpp',
+                sourceCode: cppSource || p.cppGenerator?.sourceCode || '',
+                glbBase64: cppGlbBase64,
+                glbPath: cppGlbPath,
+                vertexCount: p.cppGenerator?.vertexCount || 50000,
+                triangleCount: p.cppGenerator?.triangleCount || 30000
+            } : (p.cppGenerator || contextual3D.cppGenerator);
+
             payload = {
                 ...contextual3D,
                 ...p,
@@ -189,7 +247,9 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                     ...(contextual3D.features || {}),
                     ...(p.features || {})
                 },
-                cppGenerator: p.cppGenerator || contextual3D.cppGenerator
+                cppGenerator: cppGen,
+                pythonGenerator: pyGenerator,
+                mesh: p.mesh || (contextual3D as any).mesh
             };
             title = p.title && p.title !== '4D Scene Workspace' ? p.title : (contextual3D.title || title);
             summary = p.subtitle || contextual3D.subtitle || summary;

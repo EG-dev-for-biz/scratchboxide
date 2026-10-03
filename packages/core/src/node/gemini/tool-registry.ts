@@ -69,6 +69,8 @@ import {
     avatar4dgsHandlers,
     UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS,
     universal3DStructureHandlers,
+    PYTHON_3D_TOOL_DECLARATIONS,
+    python3DHandlers,
     COMFYUI_TOOL_DECLARATIONS,
     comfyuiHandlers,
     LENS_TOOL_DECLARATIONS,
@@ -492,7 +494,7 @@ export function buildToolDeclarations(
     if (request.enableGoogleSearch !== false) {
         tools.push({ googleSearch: {} });
     }
-    const is3DSceneRequest = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|mesh\s*shaping|sculpt|flower|garden|plant|flora|botan/i.test(request.prompt || '');
+    const is3DSceneRequest = /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|mesh\s*shaping|sculpt|flower|garden|plant|flora|botan|procedural|scratchbox|blender|building|plaza|architecture/i.test(request.prompt || '');
     if (request.enableCodeExecution && !is3DSceneRequest) {
         tools.push({ codeExecution: {} });
     }
@@ -568,6 +570,9 @@ export function createDefaultToolRegistry(): ToolRegistry {
     }
     for (const decl of UNIVERSAL_3D_STRUCTURE_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, universal3DStructureHandlers[decl.name], 'workspace');
+    }
+    for (const decl of PYTHON_3D_TOOL_DECLARATIONS) {
+        registry.register(decl.name, decl, python3DHandlers[decl.name], 'workspace');
     }
     for (const decl of COMFYUI_TOOL_DECLARATIONS) {
         registry.register(decl.name, decl, comfyuiHandlers[decl.name], 'comfyui');
