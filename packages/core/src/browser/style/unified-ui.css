@@ -8661,40 +8661,82 @@ body.sb-light textarea.sb-composer-main-input:focus-visible {
     display: block !important;
 }
 
-/* Bottom-Left Minimal Floating Scene Telemetry Badge */
+/* Top-Right Floating Scene Telemetry Badge Container (Apple HIG HUD) */
 .sb-3d-minimal-badge-container {
     position: absolute !important;
-    bottom: 16px !important;
-    top: auto !important;
-    left: 16px !important;
+    top: 14px !important;
+    right: 14px !important;
+    bottom: auto !important;
+    left: auto !important;
     z-index: 20 !important;
-    pointer-events: none !important;
+    pointer-events: auto !important;
     display: flex !important;
     align-items: center !important;
     gap: 8px !important;
     flex-wrap: nowrap !important;
-    max-width: calc(45% - 24px) !important;
+    max-width: calc(60% - 24px) !important;
 }
 
 .sb-3d-minimal-badge {
     pointer-events: auto !important;
     display: inline-flex !important;
     align-items: center !important;
-    gap: 8px !important;
-    padding: 6px 14px !important;
+    gap: 6px !important;
+    height: 26px !important;
+    padding: 0 10px !important;
     border-radius: 9999px !important;
-    background: rgba(18, 18, 22, 0.75) !important;
+    background: rgba(18, 18, 22, 0.8) !important;
     backdrop-filter: blur(24px) saturate(180%) !important;
     -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
     border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    font-size: 12px !important;
+    font-size: 11px !important;
     font-weight: 500 !important;
     color: #f4f4f5 !important;
-    box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    user-select: none !important;
 }
 
 .sb-3d-minimal-badge .text-zinc-200 {
     color: #f4f4f5 !important;
+}
+
+.sb-3d-fsr-btn {
+    pointer-events: auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    height: 26px !important;
+    padding: 0 10px !important;
+    border-radius: 9999px !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    background: rgba(18, 18, 22, 0.8) !important;
+    backdrop-filter: blur(24px) saturate(180%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    color: #e4e4e7 !important;
+    cursor: pointer !important;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+    box-sizing: border-box !important;
+    user-select: none !important;
+    white-space: nowrap !important;
+}
+
+.sb-3d-fsr-btn:hover {
+    background: rgba(39, 39, 42, 0.85) !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
+    color: #ffffff !important;
+}
+
+.sb-3d-fsr-btn.active {
+    background: rgba(76, 5, 25, 0.75) !important;
+    border-color: rgba(244, 63, 94, 0.5) !important;
+    color: #fecdd3 !important;
+    box-shadow: 0 0 12px rgba(244, 63, 94, 0.3) !important;
 }
 
 .sb-3d-budget-btn {
@@ -8702,7 +8744,8 @@ body.sb-light textarea.sb-composer-main-input:focus-visible {
     display: inline-flex !important;
     align-items: center !important;
     gap: 6px !important;
-    padding: 3px 10px !important;
+    padding: 0 10px !important;
+    height: 26px !important;
     border-radius: 9999px !important;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
     font-size: 10px !important;
@@ -8717,6 +8760,8 @@ body.sb-light textarea.sb-composer-main-input:focus-visible {
     transition: all 0.15s ease !important;
     font-variant-numeric: tabular-nums !important;
     user-select: none !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
 }
 
 .sb-3d-budget-btn:hover {
@@ -9094,6 +9139,39 @@ body.sb-light .sb-3d-budget-btn {
 
 .sb-3d-play-mini-btn:active {
     transform: scale(0.95) !important;
+}
+
+.sb-3d-tracks-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px !important;
+    height: 26px !important;
+    padding: 0 11px !important;
+    border-radius: 9999px !important;
+    font-size: 11px !important;
+    font-weight: 550 !important;
+    color: #d4d4d8 !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    cursor: pointer !important;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    user-select: none !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+}
+
+.sb-3d-tracks-btn:hover {
+    background: rgba(255, 255, 255, 0.15) !important;
+    color: #ffffff !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+.sb-3d-tracks-btn.active {
+    background: rgba(37, 99, 235, 0.45) !important;
+    color: #bfdbfe !important;
+    border-color: rgba(59, 130, 246, 0.6) !important;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.4) !important;
 }
 
 /* Text elements & monospace metrics for 4D Scene Primitive */

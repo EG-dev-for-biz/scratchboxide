@@ -3653,11 +3653,7 @@ int main(int argc, char** argv) {
                         setSceneData(updated);
                         onUpdate?.(updated);
                     }}
-                    className={`sb-btn sb-btn-xs flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-mono shadow-md transition-all shrink-0 ${
-                        sceneData.metadata?.postprocessing?.fsr?.enabled
-                            ? 'bg-rose-950/70 hover:bg-rose-900/80 text-rose-200 border border-rose-500/50 shadow-rose-900/30'
-                            : 'bg-[#121216]/80 hover:bg-zinc-800 text-zinc-300 border border-white/10'
-                    }`}
+                    className={`sb-3d-fsr-btn ${sceneData.metadata?.postprocessing?.fsr?.enabled ? 'active' : ''}`}
                     title="Toggle AMD FidelityFX Super Resolution 1.0 (EASU + RCAS)"
                 >
                     <span className="text-rose-400 font-bold">⚡</span>
@@ -3731,11 +3727,7 @@ int main(int argc, char** argv) {
                 <button
                     type="button"
                     onClick={() => setIsTimelineDrawerOpen(!isTimelineDrawerOpen)}
-                    className={`sb-btn sb-floating-pill flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-all ${
-                        isTimelineDrawerOpen
-                            ? 'bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-500/20'
-                            : 'bg-zinc-800/80 text-zinc-300 border-white/10 hover:bg-zinc-700/80'
-                    }`}
+                    className={`sb-3d-tracks-btn ${isTimelineDrawerOpen ? 'active' : ''}`}
                     title={isTimelineDrawerOpen ? 'Collapse Animation Timeline' : 'Open Animation Timeline Tracks'}
                 >
                     <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

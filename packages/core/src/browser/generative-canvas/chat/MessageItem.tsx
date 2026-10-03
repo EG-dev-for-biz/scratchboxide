@@ -33,6 +33,56 @@ export interface MessageItemProps {
     checkpointFeedbackValue: string;
 }
 
+const GroupedMcpExecutions: React.FC<{ executions: any[] }> = ({ executions }) => {
+    const [isExpanded, setIsExpanded] = React.useState(false);
+
+    if (!executions || executions.length === 0) return null;
+
+    if (executions.length === 1) {
+        return <InlineMcpCard exec={executions[0]} />;
+    }
+
+    const allCompleted = executions.every(e => e.status === 'completed');
+    const hasRunning = executions.some(e => e.status === 'running');
+    const hasFailed = executions.some(e => e.status === 'failed');
+
+    const statusClass = hasFailed ? 'failed' : hasRunning ? 'running' : 'completed';
+    const statusText = hasFailed ? 'Failed' : hasRunning ? 'Running…' : `✓ ${executions.length} Completed`;
+
+    return (
+        <div className="sb-grouped-mcp-container">
+            <button
+                type="button"
+                className="sb-grouped-mcp-summary-bar"
+                onClick={() => setIsExpanded(prev => !prev)}
+                title={isExpanded ? 'Collapse tool actions' : 'Expand tool actions'}
+            >
+                <div className="sb-grouped-mcp-left">
+                    <span className="sb-mcp-pulse-dot" />
+                    <span className="sb-grouped-mcp-label">
+                        {executions.length} Tool Actions {allCompleted ? 'Completed' : 'Executed'}
+                    </span>
+                    <span className="sb-grouped-mcp-chevron">
+                        {isExpanded ? '▾' : '▸'}
+                    </span>
+                </div>
+                <div className="sb-grouped-mcp-right">
+                    <span className={`sb-grouped-mcp-status ${statusClass}`}>
+                        {statusText}
+                    </span>
+                </div>
+            </button>
+            {isExpanded && (
+                <div className="sb-grouped-mcp-list">
+                    {executions.map((exec, idx) => (
+                        <InlineMcpCard key={`${exec.id || 'exec'}-${idx}`} exec={exec} />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const InlineMcpCard: React.FC<{ exec: any }> = ({ exec }) => {
     // Default to collapsed state to save vertical space; users can expand on click
     const [isExpanded, setIsExpanded] = React.useState(false);
@@ -507,30 +557,48 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                                         }}
                                         title={`Click to view v${art.version || 1} on ${targetMode.toUpperCase()} surface`}
                                     >
-                                        <div className="sb-chip-icon-box">
-                                            {getPrimitiveIcon(art.type)}
+                                        <div className="sb-chip-main-row">
+                                            <div className="sb-chip-icon-box">
+                                                {getPrimitiveIcon(art.type)}
+                                            </div>
+                                            <div className="sb-chip-info">
+                                                <span className="sb-chip-title">{art.title}</span>
+                                                <span className="sb-chip-subtitle">
+                                                    {getPrimitiveLabel(art.type)}
+                                                </span>
+                                            </div>
+                                            <div className="sb-chip-badge-wrap">
+                                                {isCurrent ? (
+                                                    <span className="sb-chip-badge sb-badge-active" title="Currently active version">
+                                                        Active (v{art.version || 1})
+                                                    </span>
+                                                ) : (
+                                                    <span className="sb-chip-badge" title={`Historical version snapshot v${art.version || 1} — click to view`}>
+                                                        v{art.version || 1}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
-                                        <div className="sb-chip-info">
-                                            <span className="sb-chip-title">{art.title}</span>
-                                            <span className="sb-chip-subtitle">
-                                                {getPrimitiveLabel(art.type)} · {actionLabel}
-                                            </span>
-                                        </div>
-                                        <div className="sb-chip-actions flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                                        <div className="sb-chip-actions-row" onClick={e => e.stopPropagation()}>
                                             <button
                                                 type="button"
-                                                className="sb-btn sb-btn-xs sb-chip-action-btn"
+                                                className="sb-chip-action-btn sb-chip-primary-btn"
                                                 onClick={() => {
                                                     handleSelectVersion(art);
                                                 }}
                                                 title={`Open ${art.title} in Canvas`}
                                             >
-                                                {actionLabel}
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                                    <polyline points="15 3 21 3 21 9" />
+                                                    <line x1="10" y1="14" x2="21" y2="3" />
+                                                </svg>
+                                                <span>{actionLabel}</span>
                                             </button>
                                             {(targetMode === '3d' || art.type === '3d-scene' || (art.type as string) === 'gaussian-splat' || (art.type as string) === '4d-performer') && (
                                                 <button
                                                     type="button"
-                                                    className="sb-btn sb-btn-xs sb-chip-action-btn flex items-center gap-1 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 text-[11px] font-medium px-2 py-0.5 rounded transition-all"
+                                                    className="sb-chip-action-btn sb-chip-export-btn"
                                                     onClick={() => {
                                                         handleSelectVersion(art);
                                                         setTimeout(() => {
@@ -539,24 +607,13 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                                                     }}
                                                     title="Export 3D Scene as standardized binary glTF (.glb)"
                                                 >
-                                                    <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                                                         <polyline points="7 10 12 15 17 10" />
                                                         <line x1="12" y1="15" x2="12" y2="3" />
                                                     </svg>
                                                     <span>Export GLB</span>
                                                 </button>
-                                            )}
-                                        </div>
-                                        <div className="sb-chip-badge-wrap">
-                                            {isCurrent ? (
-                                                <span className="sb-chip-badge sb-badge-active" title="Currently active version">
-                                                    Active (v{art.version || 1})
-                                                </span>
-                                            ) : (
-                                                <span className="sb-chip-badge" title={`Historical version snapshot v${art.version || 1} — click to view`}>
-                                                    v{art.version || 1}
-                                                </span>
                                             )}
                                         </div>
                                     </div>
@@ -567,9 +624,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                 })()}
 
                 {/* Inline MCP & CLI Tool Execution Cards with Structured Outputs */}
-                {msg.mcpExecutions && msg.mcpExecutions.map((exec, idx) => (
-                    <InlineMcpCard key={`${exec.id || 'exec'}-${idx}`} exec={exec} />
-                ))}
+                {msg.mcpExecutions && msg.mcpExecutions.length > 0 && (
+                    <GroupedMcpExecutions executions={msg.mcpExecutions} />
+                )}
 
                 {/* Inline Google Search Grounding & Citations Card */}
                 {msg.groundingMetadata && ((msg.groundingMetadata.webSearchQueries && msg.groundingMetadata.webSearchQueries.length > 0) || (msg.groundingMetadata.groundingChunks && msg.groundingMetadata.groundingChunks.length > 0)) && (
