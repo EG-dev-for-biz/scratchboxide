@@ -344,21 +344,15 @@ export function synthesizeVideoTimelineFallback(text: string, activeArtifact: Ca
 
 export function synthesize3DFallback(text: string, lower: string, activeArtifact: CanvasArtifact | undefined, messages: ChatMessage[], docContentExtract: string | undefined): FallbackResult {
     const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
-    const isAdvanced3DFeature = /\b(?:3dgs|survey\s*stations?|survey\s*synthesis|radiance\s*fields?|splat\s*generation|geobox|camera\s*resection(?:ing)?|resect\s*(?:camera|image|photo|pose)|optical\s*center\s*(?:resection|solve)|solvepnp|utdra|uldra|tile\s*decomposition|rectif(?:y|ication)\s*(?:algorithm|tile|facade|shaft)|bridge\s*curtain\s*wall|algorithmic\s*uv|uv\s*(?:un)?wrap|biophysical\s*(?:pbr|synthesis)|travertine\s*cavitation|calcite\s*bedding|living\s*model\s*of\s*the\s*world|s4d\s*world|s4d\s*model|clay\s*blockout\s*flight|blockout\s*runner|4d\s*performer|4dgs\s*avatar|wan2\.2|humanoid\s*avatar\s*4d|dynamic\s*performer|dynamic\s*avatar|procedural\s*(?:3d|scene|geometry|generation)|3d\s*engine(?:\s*coding)?|engine\s*coding|c\+\+20(?:\s*engine)?|sanctuary\s*of\s*synthesis|marching\s*cubes|fastnoise|ragdoll|xpbd|bvh|rtao)\b/i.test(text);
-
-    if (isAdvanced3DFeature) {
-        const baseArtifact = isExisting3D ? activeArtifact! : synthesizeFresh3DScene(text, activeArtifact, messages, docContentExtract, false).artifact;
-        return mutateExisting3DScene(text, lower, baseArtifact!);
-    }
-
-    const isMutationDirective = !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
+    const isNewSceneDirective = /\b(?:build|make|create|generate|render|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
+    const isMutationDirective = !isNewSceneDirective && !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
     const isTopicChange = !isMutationDirective && /lexington|concord|1776|battle|revolution|city|metropolis|urban|solar|planet|orbit|molecular|physics|atom|dna|room|blueprint|interior|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|aircraft|plane|flight|building|landscape|terrain|nature|ocean|forest|robot|character|mesh|model|splat|gaussian|3dgs|radiance\s*field|overpass|viaduct|highway|interchange|matterhorn|alpine|chalet|ziggurat|etemenanki|babylon|mesopotamia/i.test(text);
-    const isNewSceneDirective = !isMutationDirective && /\b(?:build|make|create|generate|render|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
-    const isFreshSceneRequest = !isExisting3D || (!isMutationDirective && (isNewSceneDirective || isTopicChange));
+    const isFreshSceneRequest = !isExisting3D || isNewSceneDirective || isTopicChange || !isMutationDirective;
 
     if (isFreshSceneRequest) {
         return synthesizeFresh3DScene(text, activeArtifact, messages, docContentExtract, false);
     }
+
     return mutateExisting3DScene(text, lower, activeArtifact!);
 }
 

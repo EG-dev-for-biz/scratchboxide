@@ -596,7 +596,6 @@ export class StreamingEngine {
                 const callId = toolCall.id || `call-${Date.now()}`;
                 const toolResult = { id: callId, name: toolName, result: resultPayload };
                 onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
-                onEvent({ type: 'mcp_result', mcpExecution: exec, toolResult, modelUsed: model });
 
                 toolResponseParts.push({
                     functionResponse: {

@@ -575,7 +575,13 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                         });
                     }
                     if (event.mcpExecution) {
-                        streamExecs.push(event.mcpExecution);
+                        const execId = event.mcpExecution.id;
+                        const existingIdx = streamExecs.findIndex(e => e.id === execId);
+                        if (existingIdx >= 0) {
+                            streamExecs[existingIdx] = event.mcpExecution;
+                        } else {
+                            streamExecs.push(event.mcpExecution);
+                        }
                         setMcpExecutions(prev => [event.mcpExecution!, ...prev.filter(e => e.id !== event.mcpExecution!.id)]);
                         const stepId = event.mcpExecution.id || `mcp-step-${Date.now()}`;
                         const toolName = event.mcpExecution.toolName || 'MCP Tool';

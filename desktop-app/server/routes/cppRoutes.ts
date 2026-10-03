@@ -10,7 +10,7 @@
 import { Request, Response, Router } from 'express';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import { NativeCppCompilerService } from '../../../packages/core/src/node';
+import { NativeCppCompilerService, NativePythonRunnerService } from '../../../packages/core/src/node';
 import { RouteContext } from './types';
 
 export function createCppRouter(cppCompiler: NativeCppCompilerService, ctx: RouteContext): Router {
@@ -89,6 +89,24 @@ export function createCppRouter(cppCompiler: NativeCppCompilerService, ctx: Rout
             sendError(res, err);
         }
     });
+
+    const handlePythonRun = async (req: Request, res: Response) => {
+        try {
+            const { script, timeoutMs } = req.body || {};
+            if (!script || typeof script !== 'string') {
+                res.status(400).json({ error: 'Missing "script" parameter' });
+                return;
+            }
+            const runner = NativePythonRunnerService.getInstance();
+            const result = await runner.runScript(script, { timeoutMs: timeoutMs || 30000 });
+            res.json(result);
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    };
+
+    router.post('/python/run', handlePythonRun);
+    router.post('/run-python', handlePythonRun);
 
     return router;
 }

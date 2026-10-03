@@ -1376,6 +1376,30 @@ int main(int argc, char** argv) {
         onUpdate?.(next);
     }, [onUpdate, sceneDataRef]);
 
+    // Sync external data prop updates into sceneData
+    React.useEffect(() => {
+        if (!data) return;
+        setSceneData(prev => {
+            const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
+            const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
+            const hasNewObjects = data.objects && data.objects !== prev.objects;
+            const hasNewTitle = data.title && data.title !== prev.title;
+            const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
+                              (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
+            if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb) {
+                return prev;
+            }
+            return {
+                ...prev,
+                ...data,
+                pythonGenerator: data.pythonGenerator ?? prev.pythonGenerator,
+                cppGenerator: data.cppGenerator ?? prev.cppGenerator,
+                objects: data.objects ?? prev.objects,
+                customMeshes: data.customMeshes ?? prev.customMeshes
+            };
+        });
+    }, [data]);
+
     // ---------------------------------------------------------
     // Object Selection, Focus & Outliner Helpers
     // ---------------------------------------------------------
@@ -2479,6 +2503,36 @@ int main(int argc, char** argv) {
             wasmPositionAttrRef.current = null;
         };
     }, [wantsWasmMesh, renderMode]);
+
+    // ---- 5a-bis. Auto-compile Procedural Python Script if GLB missing ----
+    React.useEffect(() => {
+        const pyGen = sceneData.pythonGenerator;
+        if (!pyGen?.sourceCode || pyGen.glbBase64) return;
+        let isCancelled = false;
+        fetch('/3d/python/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ script: pyGen.sourceCode })
+        })
+            .then(res => res.json())
+            .then(resData => {
+                if (isCancelled || !resData?.success || !resData?.glbBase64) return;
+                setSceneData(prev => ({
+                    ...prev,
+                    pythonGenerator: {
+                        ...prev.pythonGenerator,
+                        ...pyGen,
+                        glbBase64: resData.glbBase64,
+                        glbPath: resData.glbPath,
+                        lastCompiledTimeMs: Date.now()
+                    }
+                }));
+            })
+            .catch(err => {
+                console.warn('[Scene3DPrimitive] Background Python compile error:', err);
+            });
+        return () => { isCancelled = true; };
+    }, [sceneData.pythonGenerator?.sourceCode]);
 
     // ---- 5b. Native C++ / Python Generated GLB Ingestion (Streaming 3D AST) ---------------
     React.useEffect(() => {

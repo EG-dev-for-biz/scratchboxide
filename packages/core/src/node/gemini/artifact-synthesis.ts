@@ -2830,7 +2830,7 @@ export function parseOrSynthesizeArtifact(
                         droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || contextualSynthesized.droneRoute,
                         cppGenerator: data?.cppGenerator || (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator)),
                         pythonGenerator: (() => {
-                            let pyGen = data?.pythonGenerator || (isTopicChange ? undefined : active3DData?.pythonGenerator);
+                            let pyGen = data?.pythonGenerator || (isTopicChange ? contextualSynthesized.pythonGenerator : (active3DData?.pythonGenerator || contextualSynthesized.pythonGenerator));
                             if (pyGen?.sourceCode && !pyGen.glbBase64) {
                                 try {
                                     const runner = NativePythonRunnerService.getInstance();

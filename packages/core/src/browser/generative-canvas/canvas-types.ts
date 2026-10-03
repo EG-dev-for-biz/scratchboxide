@@ -1621,14 +1621,13 @@ export const DEFAULT_MCP_SERVERS: McpServerItem[] = [
         name: 'Stripe Payments',
         tagline: 'Live access to balances, invoices, customer subscriptions & payment flows.',
         category: 'Payments',
-        status: 'connected',
+        status: 'available',
         latencyMs: 14,
         toolsCount: 6,
-        isEnabled: true,
+        isEnabled: false,
         accentColor: 'indigo',
         endpoint: 'mcp://api.stripe.com/v1',
         authType: 'API Key',
-        lastActive: 'Just now',
         tools: [
             {
                 id: 'stripe-get-balance',
@@ -1658,14 +1657,13 @@ export const DEFAULT_MCP_SERVERS: McpServerItem[] = [
         name: 'GitHub Repository',
         tagline: 'Live sync with pull requests, commit history, branch changes & issue triage.',
         category: 'Code & Git',
-        status: 'connected',
+        status: 'available',
         latencyMs: 22,
         toolsCount: 8,
-        isEnabled: true,
+        isEnabled: false,
         accentColor: 'purple',
         endpoint: 'mcp://api.github.com/v3',
         authType: 'OAuth',
-        lastActive: '1m ago',
         tools: [
             {
                 id: 'github-list-prs',

@@ -84,7 +84,7 @@ export class McpBridge {
         const args = toolCall.args || {};
         const timestamp = timestampNow();
         const isStripe = toolName.includes('stripe') || toolName.includes('balance');
-        const isGithub = toolName.includes('github') || toolName.includes('pr') || toolName.includes('pull_request');
+        const isGithub = toolName.includes('github') || toolName === 'list_pull_requests' || toolName === 'inspect_diff';
         const isStudio = toolName.includes('scene3d') || toolName.includes('image') || toolName.includes('video') || toolName.includes('scout') || toolName.includes('studio') || toolName.includes('location');
         const isLens = toolName.startsWith('lens_') || toolName.includes('lens');
 
@@ -153,27 +153,24 @@ export class McpBridge {
             return {
                 id: `exec-${Date.now()}`,
                 mcpServerId: 'mcp-github',
-                mcpName: 'GitHub Enterprise',
+                mcpName: 'GitHub Repository',
                 toolName,
-                humanTitle: 'Fetch Pull Requests & Release Status (GitHub MCP)',
-                status: 'completed',
+                humanTitle: `GitHub Tool: ${toolName}`,
+                status: 'failed',
                 timestamp,
                 steps: [
-                    { id: 's1', title: 'Query repository pull requests & CI/CD workflow runs', status: 'done', durationMs: 19 },
-                    { id: 's2', title: 'Parse open reviews, labels, and blocker checks', status: 'done', durationMs: 27 },
-                    { id: 's3', title: 'Synthesize Kanban stage synchronization', status: 'done', durationMs: 11 }
+                    { id: 's1', title: `Dispatch ${toolName} to GitHub MCP Bridge`, status: 'done', durationMs: 12 },
+                    { id: 's2', title: 'Check GitHub OAuth connection status', status: 'error', durationMs: 8 }
                 ],
-                summaryResult: 'Fetched 6 active PRs and 2 pending reviews.',
+                summaryResult: 'GitHub MCP server is not connected. Use native workspace tools (git status, git diff) or connect GitHub OAuth in Settings.',
                 humanFriendlyOutput: {
-                    cardType: 'table',
-                    title: 'Active GitHub Pull Requests',
-                    headers: ['PR #', 'Title', 'Author', 'CI Status'],
-                    rows: [
-                        ['#142', 'feat: AI Studio Engine Reasoning integration', 'scratchbox-ai', 'Passing'],
-                        ['#141', 'perf: Liquid Glass 28px blur tokens', 'scratchbox-design', 'Passing'],
-                        ['#140', 'fix: MCP tool telemetry streaming', 'scratchbox-core', 'Review Required']
+                    cardType: 'status-card',
+                    title: `GitHub MCP Disconnected: ${toolName}`,
+                    items: [
+                        { label: 'Status', value: 'Not Connected', color: 'rose' },
+                        { label: 'Action', value: 'Use workspace git tools', color: 'indigo' }
                     ],
-                    note: 'Synced with main branch origin.'
+                    note: 'GitHub OAuth not configured in Settings.'
                 }
             };
         }
