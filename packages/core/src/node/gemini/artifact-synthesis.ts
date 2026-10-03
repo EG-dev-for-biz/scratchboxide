@@ -2841,7 +2841,7 @@ export function parseOrSynthesizeArtifact(
                                             enabled: true,
                                             glbBase64: res.glbBase64,
                                             glbPath: res.glbPath,
-                                            compiledAt: new Date().toISOString()
+                                            lastCompiledTimeMs: Date.now()
                                         };
                                     }
                                 } catch (e) {
@@ -3157,7 +3157,7 @@ export function parseOrSynthesizeArtifact(
                 sourceCode: scriptSource,
                 glbBase64,
                 glbPath,
-                compiledAt: new Date().toISOString()
+                lastCompiledTimeMs: Date.now()
             }
         };
 
