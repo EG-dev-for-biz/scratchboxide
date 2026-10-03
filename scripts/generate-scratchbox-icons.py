@@ -11,7 +11,9 @@ import subprocess
 
 def main():
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    source_img = os.path.join(root_dir, 'ScratchboxIDE logo/ScratchboxIDE.png')
+    canonical_img = os.path.join(root_dir, 'assets/brand/ScratchboxIDE.png')
+    legacy_img = os.path.join(root_dir, 'ScratchboxIDE logo/ScratchboxIDE.png')
+    source_img = canonical_img if os.path.exists(canonical_img) else legacy_img
     
     if not os.path.exists(source_img):
         print(f"Error: master source image not found at {source_img}", file=sys.stderr)

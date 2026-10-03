@@ -6,12 +6,14 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+      - 'assets/brand/**'
       - 'ScratchboxIDE logo/**'
   pull_request:
     branches: [master, main]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+      - 'assets/brand/**'
       - 'ScratchboxIDE logo/**'
   workflow_dispatch:
 

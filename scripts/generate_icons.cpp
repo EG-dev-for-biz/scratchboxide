@@ -213,7 +213,7 @@ int main(int argc, char* argv[]) {
     CGImageRef img512 = renderSquareLogo(srcImg, 512);
 
     // 1. Primary repository logo directories
-    writePNG(img1024, rootDir + "/ScratchboxIDE logo/ScratchboxIDE.png");
+    writePNG(img1024, rootDir + "/assets/brand/ScratchboxIDE.png");
     writePNG(img512, rootDir + "/packages/core/src/browser/icons/ScratchboxIDE.png");
     writePNG(img512, rootDir + "/desktop-app/public/icons/ScratchboxIDE.png");
     writePNG(img512, rootDir + "/desktop-app/resources/icon.png");

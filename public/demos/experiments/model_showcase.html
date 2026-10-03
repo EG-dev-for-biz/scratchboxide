@@ -417,7 +417,7 @@
     </div>
   </nav>
 
-  <!-- 3D Three.js Viewport (Performer 4DGS / SB-Human / OmniRoam) -->
+  <!-- 3D Three.js Viewport (Performer 4DGS / SB-Human / Omni Spatial Synthesis) -->
   <div id="viewport-container"></div>
 
   <!-- GeoBox Embedded Google Maps Viewport -->
@@ -445,7 +445,7 @@
     <div class="model-pills">
       <div class="pill active" onclick="switchModel('performer')">Performer 4DGS</div>
       <div class="pill" onclick="switchModel('sbhuman')">SB-Human (Neutral/M/F)</div>
-      <div class="pill" onclick="switchModel('omniroam')">OmniRoam (Preview/Refine)</div>
+      <div class="pill" onclick="switchModel('omni_synthesis')">Omni Video Synthesis (Preview/Refine)</div>
       <div class="pill" onclick="switchModel('geobox')">GeoBox (Vision-Location)</div>
     </div>
 
@@ -689,10 +689,10 @@
     // Three.js Model Groups
     const humanoidGroup = new THREE.Group();
     const sbhumanGroup = new THREE.Group();
-    const omniroamGroup = new THREE.Group();
+    const omniSynthesisGroup = new THREE.Group();
     scene.add(humanoidGroup);
     scene.add(sbhumanGroup);
-    scene.add(omniroamGroup);
+    scene.add(omniSynthesisGroup);
 
     // 1. Load Performer 4DGS Humanoid Model
     const loader = new THREE.GLTFLoader();
@@ -759,7 +759,7 @@
     sbhumanGroup.add(sbhumanBody);
     sbhumanGroup.visible = false;
 
-    // 3. Build OmniRoam 3D Blockout Monolith
+    // 3. Build Omni 3D Blockout Monolith
     const omniMat = new THREE.MeshStandardMaterial({
       color: 0x475569,
       roughness: 0.3,
@@ -768,11 +768,11 @@
     });
     const omniTower = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 0.8), omniMat);
     omniTower.position.y = 1.1;
-    omniroamGroup.add(omniTower);
+    omniSynthesisGroup.add(omniTower);
     const omniSpire = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.6, 8), omniMat);
     omniSpire.position.y = 2.5;
-    omniroamGroup.add(omniSpire);
-    omniroamGroup.visible = false;
+    omniSynthesisGroup.add(omniSpire);
+    omniSynthesisGroup.visible = false;
 
     // Window Resize
     window.addEventListener('resize', () => {
@@ -786,11 +786,11 @@
       requestAnimationFrame(animate);
       controls.update();
 
-      if (activeModel === 'sbhuman' || activeModel === 'smplx') {
+      if (activeModel === 'sbhuman') {
         const time = Date.now() * 0.002;
         head.rotation.y = Math.sin(time * 0.5) * 0.15;
         torso.scale.y = 1 + Math.sin(time) * 0.02;
-      } else if (activeModel === 'omniroam') {
+      } else if (activeModel === 'omni_synthesis') {
         omniTower.rotation.y += 0.003;
         omniSpire.rotation.y += 0.003;
       }
@@ -838,8 +838,8 @@
         hudActions.style.display = 'none';
 
         humanoidGroup.visible = (modelKey === 'performer');
-        sbhumanGroup.visible = (modelKey === 'sbhuman' || modelKey === 'smplx');
-        omniroamGroup.visible = (modelKey === 'omniroam');
+        sbhumanGroup.visible = (modelKey === 'sbhuman');
+        omniSynthesisGroup.visible = (modelKey === 'omni_synthesis');
 
         if (modelKey === 'performer') {
           pills[0].classList.add('active');
@@ -857,7 +857,7 @@
           `;
           camera.position.set(0, 1.2, 3.0);
           controls.target.set(0, 1.0, 0);
-        } else if (modelKey === 'sbhuman' || modelKey === 'smplx') {
+        } else if (modelKey === 'sbhuman') {
           pills[1].classList.add('active');
           hudTitle.innerHTML = 'SB-Human Expressive Kinematics';
           hudBadge.className = 'badge green';
@@ -872,9 +872,9 @@
           `;
           camera.position.set(0, 1.1, 2.5);
           controls.target.set(0, 1.0, 0);
-        } else if (modelKey === 'omniroam') {
+        } else if (modelKey === 'omni_synthesis') {
           pills[2].classList.add('active');
-          hudTitle.innerHTML = 'OmniRoam 1.1 Neural Video Synthesis';
+          hudTitle.innerHTML = 'Omni 1.1 Spatial Video Synthesis';
           hudBadge.className = 'badge';
           hudBadge.innerHTML = 'Google 3D Tiles Photogrammetry + Omni Restyling';
           hudContent.innerHTML = `

@@ -33,6 +33,7 @@ build/
 *.safetensors
 
 # Transient root artifacts and binary pipeline outputs
+/ScratchboxIDE logo
 /*.glb
 /*.gltf
 /*.ply
@@ -98,7 +99,13 @@ data/s4d_dataset/
 __pycache__/
 data/test_pilot_multiscene/
 
+# Virtual environments
+.venv/
+venv/
+
 # Compiled binaries of scripts/*.cpp
 scripts/run_smpl_tree
 scripts/station_to_splats
 scripts/scratchbox_uv_pipeline
+scripts/run_sb_veggie
+scripts/run_tile_cleanup_pipeline
