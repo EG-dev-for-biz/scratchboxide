@@ -1,6 +1,33 @@
 # Scratchbox IDE Agent Directives
 
 
+## Adaptive Domain Architecture (ADA) & Open-Domain Universality Directive (Mandatory Pre-Flight Planning Gate)
+
+### Rule: Always Run the ADA Audit Before Planning or Writing Code
+Before proposing any architectural plan, designing schema contracts, routing tool calls, or writing implementation code, the agent MUST perform an ADA pre-flight audit against the Core ADA Pillars:
+
+1. **The Alien Planet Test (Zero Closed Taxonomies)**:
+   - Ask: *Can an entity the developer never conceived of (e.g., "a bioluminescent geothermal mycelium forest inside a hollow asteroid with liquid methane geysers" or "a subterranean hyperloop terminal with ferroconcrete caissons") be represented without editing TypeScript or C++ source?*
+   - If representing a novel concept requires adding an enum variant, a union member, or editing a switch-case statement, the architecture is broken and MUST be refactored into continuous dimensional parameters.
+   - **Strict Prohibition on Closed Enums**: Never declare `type Domain = 'arctic' | 'desert' | 'space' | 'urban'`.
+   - **Open-Ended Extension Idiom**: Diagnostic strings and hints must use open literals: `type Topology = 'plateau' | 'canyon' | (string & {})`. Execution logic must NEVER branch on string matches.
+
+2. **Prohibition on Taxonomic Regex Dictionaries (The LLM is the Domain Engine)**:
+   - **Never Accumulate Noun Dictionaries**: Never write regex trees like `if (/aqueduct|colonnade|arch|monument|pillar|vault|citadel|castle/i.test(prompt))` or `if (/snow|arctic/i.test(prompt))` to route execution or gate tool access.
+   - Spatial and generative intent must be recognized through **dimensional verbs of fabrication/modeling** (`build`, `model`, `construct`, `sculpt`, `extrude`, `carve`, `assemble`, `render`, `synthesize`, `shape`) coupled with physical/structural descriptors, NEVER exhaustive lookup tables of human artifacts.
+   - **Never Starve the Model of Creative Tools**: Never withhold workspace, canvas, or spatial tools from Gemini based on keyword misses. The LLM's latent semantic space is the domain engine.
+
+3. **Continuous Physical Schemas over Taxonomic Presets**:
+   - Systems must project semantic reasoning into continuous physical fields (`peakReliefMeters`, `sharpnessExponent`, `fenestrationBayWidthMeters`, `roughness`, `turbidity`, `albedo`), never fixed presets.
+
+4. **Ephemeral Compilation & Zero Code Proliferation**:
+   - Zero static scene `.cpp` files (`arctic_outpost.cpp`, `desert_temple.cpp`).
+   - Procedural C++20 code must be synthesized on the fly via `Adaptive3DSceneSynthesizer` and compiled ephemerally through `NativeCppCompilerService`.
+
+5. **Analytical Forward Mapping over Inverse Photogrammetry**:
+   - Hair, fur, feathers, and volumetric grooms must be generated via direct analytical forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`), NEVER circular multi-camera inverse 3DGS training.
+
+
 ## Two-Tier Problem-Solving Directive (VFX, 3D & Generative Tasks)
 
 ### Rule: App Capabilities First -> ComfyUI Service Fallback

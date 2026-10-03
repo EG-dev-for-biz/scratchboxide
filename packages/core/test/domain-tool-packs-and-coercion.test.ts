@@ -254,7 +254,6 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
         });
 
         it('activates 3D and workspace tools for novel 3D prompts not containing legacy keywords', () => {
-            // "Roman aqueduct with water arches" contains NO words from the legacy regex
             const req: GeminiGenerateRequest = {
                 prompt: 'Create a stone Roman aqueduct with water arches and colonnades'
             };
@@ -269,6 +268,30 @@ describe('Domain Tool Packs, Capability Resolution & Argument Coercion', () => {
             expect(names).toContain('mount_canvas_primitive');
             expect(names).toContain('google_3d_tiles_get_clay');
             expect(names).toContain('mesh_apply_deformers');
+        });
+
+        it('satisfies the ADA Alien Planet Test for unpredicted alien and architectural biomes without noun dictionaries', () => {
+            const alienPrompts = [
+                'Construct a subterranean hyperloop terminal with ferroconcrete caissons',
+                'Forge a crystalline orbital tether station on Titan',
+                'Model a bioluminescent geothermal cavern with liquid methane rivers',
+                'Build an ancient stepped ziggurat with obsidian basalt obelisks'
+            ];
+
+            for (const prompt of alienPrompts) {
+                const res = resolveDomainToolPacks({ prompt });
+                expect(res.capabilityResolution?.taskDomain).toBe('3d');
+                expect(res.packs).toContain('geospatial_3d');
+                expect(res.packs).toContain('mesh_surface');
+                expect(res.packs).toContain('core_workspace');
+
+                const req: GeminiGenerateRequest = { prompt };
+                const configs = buildToolDeclarations(req, registry);
+                expect(configs).toBeDefined();
+                const fnConfig = configs!.find(c => 'functionDeclarations' in c) as any;
+                const toolNames = fnConfig.functionDeclarations.map((d: any) => d.name);
+                expect(toolNames).toContain('mount_canvas_primitive');
+            }
         });
     });
 });

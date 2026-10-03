@@ -119,10 +119,22 @@ export class TaskCapabilityResolver {
             return 'vfx';
         }
 
-        // 3D & XR
-        if (
-            /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|building|architecture|architectural|facade|roof|mansard|pedestal|space\s*colonization|courtyard|plaza|townhouse|blender|aqueduct|colonnade|arch\b|arches|monument|pillar|column|dome|spire|vault|rotunda|gazebo|temple|sanctuary|citadel|castle|bridge/i.test(lower)
-        ) {
+        // 3D & XR (Adaptive Domain Architecture: Physical/Spatial Synthesis & Dimensional Representations)
+        // 1. Explicit 3D representations, rendering engines, and geospatial/optical formats:
+        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender/i.test(lower);
+
+        if (hasExplicit3DTerms) {
+            return '3d';
+        }
+
+        // 2. Open-Domain Spatial Synthesis (ADA):
+        // Detect dimensional fabrication verbs operating on structural/spatial envelopes or physical materials
+        // rather than closed taxonomies of specific human or alien architectural nouns.
+        const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(lower);
+        const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization)\b/i.test(lower);
+        const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow)\b/i.test(lower);
+
+        if (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) {
             return '3d';
         }
 

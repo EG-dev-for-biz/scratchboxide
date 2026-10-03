@@ -4,6 +4,16 @@ This rule governs both the internal agentic engineering loop (Gemini CLI / Antig
 
 ---
 
+## 0. Adaptive Domain Architecture (ADA) Pre-Flight Planning Gate
+- **Always Run the ADA Audit Before Planning**:
+  1. *The Alien Planet Test*: Can an unpredicted alien/novel biome or structure be represented without editing TypeScript/C++ source code?
+  2. *Zero Closed Taxonomies*: Never declare closed enum genres (`type Domain = 'arctic' | 'desert'`). Use continuous physical schemas.
+  3. *Prohibition on Regex Noun Dictionaries*: Never match ad-hoc noun lists (`aqueduct|colonnade|arch|citadel...`) to route execution. The LLM is the domain engine.
+  4. *Zero Static Scene Files*: All procedural 3D code is synthesized dynamically in memory via `Adaptive3DSceneSynthesizer` and compiled ephemerally via Apple Clang (`-std=c++20 -O3`).
+  5. *Zero Tool Starvation*: Never withhold workspace or spatial tool packs based on keyword misses.
+
+---
+
 ## 1. Two-Tier Architecture Principles
 
 1. **User Tier: Scratchbox CLI (`sbox`)**
