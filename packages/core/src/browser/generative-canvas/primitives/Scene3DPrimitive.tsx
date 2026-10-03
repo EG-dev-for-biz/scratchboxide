@@ -2567,6 +2567,38 @@ int main(int argc, char** argv) {
         return () => { isCancelled = true; };
     }, [sceneData.pythonGenerator?.sourceCode]);
 
+    // ---- 5a-ter. Auto-compile Procedural C++20 Script if GLB missing ----
+    React.useEffect(() => {
+        const cppGen = sceneData.cppGenerator;
+        if (!cppGen?.sourceCode || cppGen.glbBase64) return;
+        let isCancelled = false;
+        fetch('/3d/compile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourceCode: cppGen.sourceCode })
+        })
+            .then(res => res.json())
+            .then(resData => {
+                if (isCancelled || !resData?.success || !resData?.glbBase64) return;
+                setSceneData(prev => ({
+                    ...prev,
+                    cppGenerator: {
+                        ...prev.cppGenerator,
+                        ...cppGen,
+                        glbBase64: resData.glbBase64,
+                        glbPath: resData.glbPath,
+                        vertexCount: resData.vertexCount,
+                        triangleCount: resData.triangleCount,
+                        lastCompiledTimeMs: Date.now()
+                    }
+                }));
+            })
+            .catch(err => {
+                console.warn('[Scene3DPrimitive] Background C++ compile error:', err);
+            });
+        return () => { isCancelled = true; };
+    }, [sceneData.cppGenerator?.sourceCode]);
+
     // ---- 5b. Native C++ / Python Generated GLB Ingestion (Streaming 3D AST) ---------------
     React.useEffect(() => {
         const stack = stackRef.current;

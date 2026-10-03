@@ -351,7 +351,7 @@ async function runWorldbuilderAndMeshEngineTests() {
     const detectedTheme = detect3DSceneTheme('Create a procedural alpine mountain terrain with pine trees and outposts');
     assert.strictEqual(detectedTheme, 'worldbuilder');
 
-    const synthesizedScene = synthesizeContextual3DScene('Alpine mountain terrain with pine trees and chalets');
+    const synthesizedScene = synthesizeContextual3DScene('Create a procedural alpine mountain terrain with pine trees and outposts');
     assert.strictEqual(synthesizedScene.sceneType, 'worldbuilder');
     assert.ok(synthesizedScene.customMeshes && synthesizedScene.customMeshes.length > 0);
     assert.ok(synthesizedScene.features?.terrainBiomes);

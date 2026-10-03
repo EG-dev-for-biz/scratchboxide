@@ -3187,6 +3187,56 @@ onFrame((time, delta) => {
 });
 `;
 
+        const pythonCitySource = `import scratchbox as sb
+
+scene = sb.geometry.Mesh("${(title || 'CityMetropolis').replace(/[^a-zA-Z0-9]/g, '')}")
+
+# 1. Base promenade & street grid
+grid_base = sb.geometry.create_studio_pedestal(radius=50.0, height=0.5, bevel=0.06, segments=64)
+grid_base.material = sb.geometry.PbrMaterial.bitumen_asphalt()
+scene.merge(grid_base)
+
+# 2. Central Financial Spire with flat parapet and deep window reveals
+tower_alpha = sb.create_building(
+    width=16.0, depth=16.0, floors=7, floor_height=3.6,
+    ground_floor_height=4.8, plinth_height=0.8,
+    bay_width=3.2, window_width=1.9, window_height=2.3, window_recess_depth=0.28,
+    roof='flat_parapet', name='FinancialSpireAlpha'
+)
+tower_alpha.translate(0, 0.5, -4.0)
+scene.merge(tower_alpha)
+
+# 3. Flanking West Arcology high-rise with hip roof
+tower_beta = sb.create_building(
+    width=14.0, depth=18.0, floors=5, floor_height=3.4,
+    ground_floor_height=4.2, plinth_height=0.6,
+    bay_width=2.8, window_width=1.6, window_height=2.0, window_recess_depth=0.24,
+    roof='hip', roof_pitch_degrees=28.0, name='ArcologyWest'
+)
+tower_beta.translate(-16.0, 0.5, -6.0)
+scene.merge(tower_beta)
+
+# 4. Flanking East civic high-rise with mansard roof
+tower_gamma = sb.create_building(
+    width=20.0, depth=12.0, floors=4, floor_height=3.5,
+    ground_floor_height=4.4, plinth_height=0.6,
+    bay_width=3.0, window_width=1.8, window_height=2.2, window_recess_depth=0.25,
+    roof='mansard', roof_pitch_degrees=36.0, name='CivicPlazaEast'
+)
+tower_gamma.translate(16.0, 0.5, 6.0)
+scene.merge(tower_gamma)
+
+# 5. Avenue shade trees along promenade
+avenue_trees = [(-8.0, 0.5, 12.0), (8.0, 0.5, 12.0), (-16.0, 0.5, 14.0), (16.0, 0.5, 14.0)]
+for tx, ty, tz in avenue_trees:
+    tree = sb.create_tree(attractor_count=110, crown_center=(0, 4.8, 0), crown_extents=(2.4, 3.4, 2.4))
+    tree.translate(tx, ty, tz)
+    scene.merge(tree)
+
+# 6. Stream binary glTF 2.0
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+
         return {
             title,
             subtitle,
@@ -3232,7 +3282,14 @@ onFrame((time, delta) => {
                 }
             ],
             customScript,
-            code: customScript
+            code: customScript,
+            pythonGenerator: {
+                enabled: true,
+                filename: 'procedural_city.py',
+                sourceCode: pythonCitySource,
+                vertexCount: 38000,
+                triangleCount: 24000
+            }
         };
     }
 
@@ -3796,7 +3853,41 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                         preset: 'black_onyx'
                     }
                 }
-            ]
+            ],
+            pythonGenerator: {
+                enabled: true,
+                filename: 'procedural_universal_assembly.py',
+                sourceCode: `import scratchbox as sb
+
+scene = sb.geometry.Mesh("UniversalSpatialAssembly")
+
+# 1. Precision studio pedestal with bevel
+pedestal = sb.geometry.create_studio_pedestal(radius=8.0, height=0.35, bevel=0.06, segments=64)
+pedestal.material = sb.geometry.PbrMaterial.stone_limestone()
+scene.merge(pedestal)
+
+# 2. Primary architectural / sculptural core with recessed window reveals
+core = sb.create_building(
+    width=6.0, depth=6.0, floors=2, floor_height=2.4,
+    ground_floor_height=2.8, plinth_height=0.35,
+    bay_width=2.0, window_width=1.2, window_height=1.5, window_recess_depth=0.22,
+    roof='mansard', roof_pitch_degrees=32.0, name='HeroAssembly'
+)
+core.translate(0, 0.35, 0)
+core.tessellate_and_displace(tessellation_factor=1, displacement_scale=0.02, noise_freq=32.0, noise_amp=0.008)
+scene.merge(core)
+
+# 3. Flanking botanical organic accents
+accent_tree = sb.create_tree(attractor_count=90, crown_center=(0, 3.2, 0), crown_extents=(1.6, 2.2, 1.6))
+accent_tree.translate(4.2, 0.35, -2.5)
+scene.merge(accent_tree)
+
+# 4. Stream binary glTF 2.0
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`,
+                vertexCount: 32000,
+                triangleCount: 22000
+            }
         };
     }
 

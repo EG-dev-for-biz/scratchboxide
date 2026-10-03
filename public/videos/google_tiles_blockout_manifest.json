@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-03T20:28:00.632Z",
+  "timestamp": "2026-10-03T21:52:09.426Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_clay_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/google_tiles_clay_area.glb",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/data/colmap_vector_export/test_clay/eiffel_test_clay.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_frame_00.png",
   "storyboardPaths": [
@@ -20,10 +20,10 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 41.89021,
-    "lng": 12.492231,
-    "elevation": 15,
-    "landmarkName": "Coordinates (41.890210, 12.492231)"
+    "lat": 48.8584,
+    "lng": 2.2945,
+    "elevation": 35,
+    "landmarkName": "Eiffel Tower, Paris"
   },
   "errorTarget": 0.5,
   "renderMode": "clay",
@@ -56,7 +56,7 @@
   "collisionAudit": {
     "enabled": true,
     "violationsDetected": 0,
-    "minClearanceMeters": 45,
+    "minClearanceMeters": 65,
     "maxElevationAdjustment": 0,
     "pathAdjusted": false,
     "auditPassed": true
