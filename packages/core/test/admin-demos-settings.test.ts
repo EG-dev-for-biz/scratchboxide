@@ -33,7 +33,8 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         expect(adminSrc).toContain('PRELOADED_SHOWCASE_DEMOS');
         expect(adminSrc).toContain('handleLaunchInAppDemo');
 
-        // Check the 9 core user-provided visualizer/studios are cataloged:
+        // Check the core user-provided visualizer/studios are cataloged:
+        expect(adminSrc).toContain('next_gen_astra_viewport_studio.html');
         expect(adminSrc).toContain('nanite_meshlet_pathtracing_studio.html');
         expect(adminSrc).toContain('colosseum_recolor_proof.html');
         expect(adminSrc).toContain('spatial_photoreal_3dgs_demo.html');
@@ -69,6 +70,7 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
 
     it('7. Cataloged standalone HTML demo studios exist in public directory', () => {
         const requiredFiles = [
+            'next_gen_astra_viewport_studio.html',
             'nanite_meshlet_pathtracing_studio.html',
             'colosseum_recolor_proof.html',
             'spatial_photoreal_3dgs_demo.html',

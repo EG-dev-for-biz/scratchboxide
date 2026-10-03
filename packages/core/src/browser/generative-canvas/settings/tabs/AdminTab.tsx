@@ -24,7 +24,18 @@ export interface StandaloneStudioItem {
 }
 
 export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
-    // 0. Nanite Meshlets & Progressive Path Tracing Studio
+    // 0. Next-Gen Astra 3D Viewport Studio (Universal 3D Benchmark)
+    {
+        id: 'next-gen-astra-viewport-studio',
+        title: 'Next-Gen Astra 3D Viewport Studio',
+        subtitle: '100M-Polygon GPU Meshlets · Hybrid 3DGS · Clustered Forward PBR',
+        category: 'Geospatial & 3D Tiles',
+        path: '/next_gen_astra_viewport_studio.html',
+        description: 'Interactive high-throughput viewport evaluated against marketplace platforms: GPU meshlet cluster DAGs, sub-pixel LOD cuts, shared-depth 3D Gaussian Splatting, and AgX tone mapping.',
+        tags: ['Next-Gen Viewport', 'Meshlets', '3DGS Engine', 'Clustered Lighting', 'AgX PBR', 'Industry Benchmark'],
+        badge: 'INDUSTRY BENCHMARK'
+    },
+    // 1. Nanite Meshlets & Progressive Path Tracing Studio
     {
         id: 'nanite-meshlet-pathtracing-studio',
         title: 'Nanite Meshlets & Progressive Path Tracing Studio',

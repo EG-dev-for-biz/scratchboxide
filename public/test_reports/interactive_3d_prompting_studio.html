@@ -203,22 +203,27 @@
     .btn-synthesize:hover { opacity: 0.92; }
     .btn-synthesize:active { transform: scale(0.98); }
 
-    .preset-chips {
+    .prompt-actions-row {
       display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
+      gap: 8px;
     }
-    .chip {
+    .btn-tool {
+      flex: 1;
       background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 6px;
-      padding: 5px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: #94a3b8;
       font-size: 11px;
-      color: #cbd5e1;
+      font-weight: 600;
+      padding: 7px 10px;
       cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
       transition: all 0.15s;
     }
-    .chip:hover {
+    .btn-tool:hover {
       background: rgba(56, 189, 248, 0.12);
       border-color: rgba(56, 189, 248, 0.35);
       color: #38bdf8;
@@ -364,26 +369,57 @@
         <div class="prompt-box-wrap">
           <label class="input-label">Natural Language Prompt</label>
           <textarea id="prompt-input" class="prompt-input" placeholder="Enter any 3D prompt (e.g. Modern architectural palais complex with mansard crown...)">Modern municipal architecture palais complex with mansard crown, colonnade portico, and promenade shade trees</textarea>
-          <button class="btn-synthesize" onclick="synthesizeFromPrompt()">
+          <button id="btn-synthesize" class="btn-synthesize" onclick="synthesizeFromPrompt()">
             <span>✨</span> Synthesize & Build 3D Scene
           </button>
         </div>
 
+        <div class="prompt-actions-row">
+          <button class="btn-tool" onclick="inspireRandomPrompt()" title="Generate a novel, open-domain 3D concept prompt">
+            <span>🎲</span> Inspire Prompt
+          </button>
+          <button class="btn-tool" onclick="clearPrompt()" title="Clear prompt input">
+            <span>✕</span> Clear
+          </button>
+        </div>
+
         <div>
-          <label class="input-label">Verified Test Suite Presets</label>
-          <div class="preset-chips">
-            <div class="chip" onclick="loadPreset('arch')">🏛️ Civic Architecture</div>
-            <div class="chip" onclick="loadPreset('cyberpunk')">🌃 Cyberpunk City</div>
-            <div class="chip" onclick="loadPreset('hypercar')">🏎️ Cyber Roadster</div>
-            <div class="chip" onclick="loadPreset('battlefield')">⚔️ Lexington 1776</div>
-            <div class="chip" onclick="loadPreset('rover')">🪐 Mars Rover Jezero</div>
-            <div class="chip" onclick="loadPreset('alien')">🍄 Mycelium Asteroid</div>
+          <label class="input-label">Continuous ADA Physical Fields</label>
+          <div class="telemetry-card">
+            <div class="telemetry-row">
+              <span class="tel-key">Verticality Bias</span>
+              <span class="tel-val" id="field-verticality">1.0x</span>
+            </div>
+            <div class="telemetry-row">
+              <span class="tel-key">Footprint Span</span>
+              <span class="tel-val" id="field-horizontality">36.0m</span>
+            </div>
+            <div class="telemetry-row">
+              <span class="tel-key">Spatial Symmetry</span>
+              <span class="tel-val blue" id="field-symmetry">Bilateral</span>
+            </div>
+            <div class="telemetry-row">
+              <span class="tel-key">Material Palette</span>
+              <span class="tel-val emerald" id="field-palette">Limestone & Bronze</span>
+            </div>
+            <div class="telemetry-row">
+              <span class="tel-key">Domain Mode</span>
+              <span class="tel-val purple">Open-Domain (Zero Presets)</span>
+            </div>
           </div>
         </div>
 
         <div>
           <label class="input-label">Synthesis Telemetry & Invariants</label>
           <div class="telemetry-card">
+            <div class="telemetry-row">
+              <span class="tel-key">Engine Kernel</span>
+              <span class="tel-val emerald" id="tel-engine">C++20 nanobind (Scratchbox)</span>
+            </div>
+            <div class="telemetry-row">
+              <span class="tel-key">Generation Time</span>
+              <span class="tel-val blue" id="tel-time">--</span>
+            </div>
             <div class="telemetry-row">
               <span class="tel-key">Domain Intent</span>
               <span class="tel-val emerald" id="tel-intent">3D Spatial Synthesis</span>
@@ -394,19 +430,19 @@
             </div>
             <div class="telemetry-row">
               <span class="tel-key">Geometric Fidelity</span>
-              <span class="tel-val" id="tel-mesh-count">8 PBR Meshes</span>
+              <span class="tel-val" id="tel-mesh-count">High-Detail Procedural</span>
             </div>
             <div class="telemetry-row">
               <span class="tel-key">Total Vertices</span>
-              <span class="tel-val" id="tel-vertices">1,824 Verts</span>
+              <span class="tel-val" id="tel-vertices">-- Verts</span>
             </div>
             <div class="telemetry-row">
               <span class="tel-key">Total Triangles</span>
-              <span class="tel-val" id="tel-triangles">3,648 Tris</span>
+              <span class="tel-val" id="tel-triangles">-- Tris</span>
             </div>
             <div class="telemetry-row">
               <span class="tel-key">Standoff Camera</span>
-              <span class="tel-val purple" id="tel-camera">Auto-Framed (42.0m)</span>
+              <span class="tel-val purple" id="tel-camera">Auto-Framed</span>
             </div>
             <div class="telemetry-row">
               <span class="tel-key">ADA Invariant</span>
@@ -460,14 +496,49 @@
     let isTurntable = true;
     let currentShadingMode = 'pbr';
 
-    const PRESETS = {
-      arch: "Modern municipal architecture palais complex with mansard crown, colonnade portico, and promenade shade trees",
-      cyberpunk: "build a 3d cyberpunk metropolis with neon skyscrapers, flying highway corridors, and elevated glass towers",
-      hypercar: "3d sports car vehicle simulation with aerodynamic carbon chassis and alloy wheels",
-      battlefield: "build a 3d scene for the Battle of Lexington 1776 with militia firing line, meetinghouse, and stone walls",
-      rover: "Perseverance rover traversing red Martian dunes in Jezero crater with rocky outcroppings",
-      alien: "Construct a bioluminescent geothermal mycelium forest inside a hollow asteroid with liquid methane geysers"
-    };
+    const INSPIRATION_PROMPTS = [
+      "Subterranean geothermal hyperloop terminal with ferroconcrete caissons and glowing amber transit corridors",
+      "Bioluminescent geothermal mycelium forest inside a hollow asteroid with liquid methane geysers",
+      "Floating sky sanctuary with white marble colonnades, gilded celestial domes, and cascading aqueducts",
+      "Ancient Mesopotamian stepped ziggurat with lapis lazuli glazed portals and bronze fire braziers",
+      "Cybernetic orbital defense station with solar radiator arrays, ion thrusters, and telemetry communications masts",
+      "Art deco coastal lighthouse fortress with faceted brass lantern room and granite breakwater caissons",
+      "Post-apocalyptic solar refinery citadel with geodesic dome habitats and rust-patinated pipe conduits",
+      "Minimalist brutalist concrete amphitheater with cantilevered observation terraces and reflection basin",
+      "Alien crystal hive on an icy moon with towering amethyst spires and glowing cyan energy fissures",
+      "Steampunk clocktower with exposed bronze gears, copper pressure vessels, and steam exhaust funnels",
+      "Submerged atlantis research observatory with ribbed titanium hulls, coral accretions, and green beacon lamps",
+      "Japanese cyber-pagoda with curved tiered eaves, holographic neon lanterns, and stone garden pedestal",
+      "Medieval highland fortress citadel with crenellated stone towers, arched portcullis, and timber scaffolds",
+      "Volcanic obsidian forge with lava conduits, basalt anvil monoliths, and glowing magma chambers",
+      "Modern desert research pavilion with tension fabric canopies, rammed earth walls, and solar shade louvers",
+      "Orbital space elevator tether anchor platform with magnetic induction rings and counterweight spires",
+      "Gothic alpine cathedral with flying buttresses, lancet arch portals, and verdigris copper spire",
+      "Futuristic autonomous agricultural biodome with hydroponic spiral towers and aeroponic misting rings",
+      "Deep sea hydrothermal vent station with reinforced bathysphere hulls, titanium truss pylons, and robotic arms",
+      "Renaissance astronomical observatory with rotating brass astrolabes, armillary spheres, and marble arcades",
+      "Cyberpunk floating transit terminal with holographic signage billboards, landing pads, and skybridge corridors",
+      "Ancient sunken ruins of Alexandria with collapsed doric columns, sphinx pedestals, and marine algae growth",
+      "Modular lunar habitat base with regolith shielding berms, photovoltaic solar wings, and airlock modules",
+      "Monolithic brutalist museum of modern art with dramatic concrete cantilevers and recessed courtyards",
+      "Bioluminescent abyssal trench outpost with crystalline pressure domes and emerald bioluminescent algae lanterns"
+    ];
+
+    let lastInspireIndex = -1;
+    function inspireRandomPrompt() {
+      let nextIndex;
+      do {
+        nextIndex = Math.floor(Math.random() * INSPIRATION_PROMPTS.length);
+      } while (nextIndex === lastInspireIndex && INSPIRATION_PROMPTS.length > 1);
+      lastInspireIndex = nextIndex;
+      document.getElementById('prompt-input').value = INSPIRATION_PROMPTS[nextIndex];
+      synthesizeFromPrompt();
+    }
+
+    function clearPrompt() {
+      document.getElementById('prompt-input').value = '';
+      document.getElementById('prompt-input').focus();
+    }
 
     function initThree() {
       const container = document.getElementById('viewport-container');
@@ -563,99 +634,548 @@
     }
 
     // -------------------------------------------------------------
-    // Procedural Scene Synthesis Engine (Mirroring Core TS)
+    // Open-Domain Procedural 3D Synthesis Engine (ADA Zero Presets)
     // -------------------------------------------------------------
+    function hashString(str) {
+      let hash = 2166136261 >>> 0;
+      for (let i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function mulberry32(seed) {
+      let s = seed >>> 0;
+      return function() {
+        s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function hslToHex(h, s, l) {
+      l = Math.max(0, Math.min(1, l));
+      s = Math.max(0, Math.min(1, s));
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color);
+      };
+      return (f(0) << 16) | (f(8) << 8) | f(4);
+    }
+
+    function extractSubject(prompt) {
+      let cleaned = prompt
+        .replace(/^(build|create|generate|make|construct|model|render|sculpt|design|visualize|synthesize)\s+(a|an|the)?\s*/i, '')
+        .replace(/^(a|an|the)\s+/i, '')
+        .replace(/^3d\s+(scene|model|world|space)\s+(of|for)?\s*/i, '')
+        .trim();
+      if (!cleaned) return 'Procedural Structure';
+      const parts = cleaned.split(/,|\.|\bwith\b|\bin\b|\bat\b|\bfeaturing\b/i);
+      let subject = parts[0].trim();
+      return subject.charAt(0).toUpperCase() + subject.slice(1);
+    }
+
+    function scoreKeywords(text, keywords) {
+      let score = 0;
+      for (const kw of keywords) {
+        const regex = new RegExp(`\\b${kw}\\b`, 'i');
+        if (regex.test(text)) score += 1;
+      }
+      return score;
+    }
+
     function synthesizeSceneContract(prompt) {
       const text = prompt.toLowerCase();
+      const subject = extractSubject(prompt);
+      const seed = hashString(prompt);
+      const rng = mulberry32(seed);
 
-      // Theme Classification Precedence (matching procedural-3d-synthesizer.ts)
-      let theme = 'general';
-      let title = 'Procedural 3D Scene';
-      let meshes = [];
+      // Continuous Semantic Analysis
+      const vertScore = scoreKeywords(text, ['tower','spire','skyscraper','mast','tall','vertical','high','peak','obelisk','column','pillar','tree','cathedral','lighthouse','pagoda','steeple','elevation','elevated','apex']);
+      const horizScore = scoreKeywords(text, ['plaza','promenade','field','street','flat','plateau','caisson','terrace','corridor','basin','dock','harbor','trench','courtyard','sanctuary','pavilion','amphitheater','runway','station']);
+      const organicScore = scoreKeywords(text, ['tree','forest','fungi','mushroom','mycelium','coral','moss','plant','growth','biological','asteroid','cave','rock','organic','leaf','branch','spore','tendril','crystal','biome','geothermal','geyser','nature','garden','algae']);
+      const techScore = scoreKeywords(text, ['cyber','space','satellite','station','engine','reactor','solar','terminal','hyperloop','robot','chassis','thruster','substation','antenna','neon','holographic','steampunk','gear','pipe','hull','radiator','induction','airlock','gantry']);
+      const monumentScore = scoreKeywords(text, ['temple','ziggurat','ancient','monument','palais','palace','colonnade','citadel','fortress','castle','cathedral','pyramid','arch','monolith','ruin','amphitheater','arcades','sanctuary','roman','grecian']);
+      const luminousScore = scoreKeywords(text, ['glow','glowing','bioluminescent','phosphor','neon','lantern','beacon','plasma','flame','fire','energy','light','laser','magma','amber','lapis','radiant']);
+      const aquaticScore = scoreKeywords(text, ['water','sea','ocean','aqueduct','marine','hydro','submerged','liquid','methane','basin','reflection','fissure','trench','dock','canal','cascading']);
 
-      if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing line|bunker hill|siege/i.test(text)) {
-        theme = 'battlefield';
-        title = 'Historical Battlefield & 1776 Reconstruction';
-        meshes = [
-          { id: 'bf-ground', name: 'Lexington Green Rolling Turf', type: 'cylinder', pos: [0, 0.2, 0], scale: [36, 0.4, 36], color: 0x2d4a22, rough: 0.88, metal: 0.0, tier: 'primary' },
-          { id: 'bf-meetinghouse', name: 'Colonial Meetinghouse & Belfry', type: 'box', pos: [-10, 5, -8], scale: [12, 10, 14], color: 0xefede8, rough: 0.72, metal: 0.05, tier: 'primary' },
-          { id: 'bf-steeple', name: 'Meetinghouse Bell Tower Steeple', type: 'cone', pos: [-10, 13, -8], scale: [4.5, 7, 4.5], color: 0x475569, rough: 0.5, metal: 0.2, tier: 'secondary' },
-          { id: 'bf-stonewall', name: 'Glacial Granite Boundary Wall', type: 'box', pos: [2, 0.8, 6], scale: [24, 1.2, 1.4], color: 0x78716c, rough: 0.9, metal: 0.02, tier: 'secondary' },
-          { id: 'bf-militia-line', name: 'Buckman Tavern Militia Firing Line', type: 'box', pos: [-2, 1.5, 9], scale: [18, 2.2, 1.8], color: 0x475569, rough: 0.6, metal: 0.1, tier: 'tertiary' },
-          { id: 'bf-redcoats', name: 'British Regulars Royal Infantry Column', type: 'box', pos: [8, 1.5, -4], scale: [16, 2.2, 2.2], color: 0xb91c1c, rough: 0.5, metal: 0.1, tier: 'tertiary' },
-          { id: 'bf-elm-1', name: 'Historic Freedom Elm', type: 'sphere', pos: [-16, 6, 8], scale: [4.2, 5.5, 4.2], color: 0x15803d, rough: 0.85, metal: 0.0, tier: 'tertiary' },
-          { id: 'bf-elm-2', name: 'Colonial Common Oak', type: 'sphere', pos: [14, 5, 12], scale: [3.8, 4.8, 3.8], color: 0x166534, rough: 0.85, metal: 0.0, tier: 'tertiary' }
-        ];
-      } else if (/city|metropolis|skyline|skyscraper|urban|cyberpunk/i.test(text)) {
-        theme = 'city';
-        title = 'Cyberpunk Metropolis & Skyline Corridor';
-        const glbUrl = '/test_output/procedural_city_skyline.glb';
-        meshes = [
-          { id: 'city-tower-1', name: 'Neo-Tokyo Mega Corporate Spire', type: 'box', pos: [-8, 15, -6], scale: [8, 30, 8], color: 0x1e293b, rough: 0.3, metal: 0.85, tier: 'primary' },
-          { id: 'city-tower-2', name: 'Holographic Broadcast Citadel', type: 'box', pos: [7, 18, -4], scale: [10, 36, 10], color: 0x0f172a, rough: 0.25, metal: 0.9, tier: 'primary' },
-          { id: 'city-tower-3', name: 'Skyway Commercial Tower', type: 'box', pos: [0, 11, 10], scale: [7, 22, 7], color: 0x334155, rough: 0.4, metal: 0.7, tier: 'secondary' },
-          { id: 'city-bridge', name: 'Suspended Skybridge Arterial', type: 'box', pos: [-0.5, 16, -5], scale: [14, 2.2, 3], color: 0x38bdf8, rough: 0.2, metal: 0.95, tier: 'secondary' },
-          { id: 'city-pod-1', name: 'Autonomous Transit Vehicle', type: 'box', pos: [-2, 19, -5], scale: [2.5, 1.2, 1.5], color: 0xf43f5e, rough: 0.3, metal: 0.8, tier: 'tertiary' },
-          { id: 'city-pod-2', name: 'Hover Cargo Freighter', type: 'box', pos: [4, 24, 2], scale: [4.5, 1.8, 2.2], color: 0xa855f7, rough: 0.2, metal: 0.85, tier: 'tertiary' }
-        ];
-        return { theme, title, meshes, glbUrl };
-      } else if (/car|vehicle|automobile|truck|sports\s*car|sedan|roadster|hypercar/i.test(text)) {
-        theme = 'vehicle';
-        title = 'High-Performance 3D Vehicle Simulation';
-        meshes = [
-          { id: 'veh-chassis', name: 'Aerodynamic Monocoque Chassis', type: 'box', pos: [0, 1.4, 0], scale: [4.8, 1.1, 2.1], color: 0x0284c7, rough: 0.2, metal: 0.9, tier: 'primary' },
-          { id: 'veh-cabin', name: 'Panoramic Low-Drag Glass Canopy', type: 'box', pos: [-0.3, 2.2, 0], scale: [2.5, 0.85, 1.6], color: 0x0f172a, rough: 0.1, metal: 0.95, tier: 'primary' },
-          { id: 'veh-splitter', name: 'Carbon Fiber Ground-Effect Splitter', type: 'box', pos: [2.3, 0.4, 0], scale: [0.8, 0.15, 2.0], color: 0x18181b, rough: 0.4, metal: 0.6, tier: 'secondary' },
-          { id: 'veh-wing', name: 'Active Aerodynamic Rear Wing', type: 'box', pos: [-2.2, 2.1, 0], scale: [0.6, 0.1, 2.2], color: 0x18181b, rough: 0.3, metal: 0.7, tier: 'secondary' },
-          { id: 'veh-wheel-fl', name: 'Forged Monoblock Alloy Wheel (FL)', type: 'cylinder', pos: [1.5, 0.7, 1.1], scale: [1.2, 0.5, 1.2], color: 0x27272a, rough: 0.35, metal: 0.8, tier: 'tertiary' },
-          { id: 'veh-wheel-fr', name: 'Forged Monoblock Alloy Wheel (FR)', type: 'cylinder', pos: [1.5, 0.7, -1.1], scale: [1.2, 0.5, 1.2], color: 0x27272a, rough: 0.35, metal: 0.8, tier: 'tertiary' },
-          { id: 'veh-wheel-rl', name: 'Forged Monoblock Alloy Wheel (RL)', type: 'cylinder', pos: [-1.5, 0.7, 1.1], scale: [1.3, 0.6, 1.3], color: 0x27272a, rough: 0.35, metal: 0.8, tier: 'tertiary' },
-          { id: 'veh-wheel-rr', name: 'Forged Monoblock Alloy Wheel (RR)', type: 'cylinder', pos: [-1.5, 0.7, -1.1], scale: [1.3, 0.6, 1.3], color: 0x27272a, rough: 0.35, metal: 0.8, tier: 'tertiary' }
-        ];
-      } else if (/rover|perseverance|curiosity|jezero|mars/i.test(text)) {
-        theme = 'rover';
-        title = 'Mars Exploration Rover & Topographic Terrain';
-        meshes = [
-          { id: 'rov-dune', name: 'Jezero Crater Ochre Dune Bed', type: 'cylinder', pos: [0, 0.2, 0], scale: [32, 0.4, 32], color: 0x9a3412, rough: 0.95, metal: 0.0, tier: 'primary' },
-          { id: 'rov-body', name: 'Avionics Core Equipment Deck', type: 'box', pos: [0, 2.0, 0], scale: [3.2, 1.5, 2.2], color: 0xe2e8f0, rough: 0.45, metal: 0.6, tier: 'primary' },
-          { id: 'rov-mast', name: 'SuperCam Remote Sensing Mast', type: 'cylinder', pos: [0.8, 3.5, 0], scale: [0.3, 2.4, 0.3], color: 0x64748b, rough: 0.4, metal: 0.7, tier: 'secondary' },
-          { id: 'rov-arm', name: 'PIXL Robotic Turret Arm', type: 'box', pos: [1.8, 1.6, 0.8], scale: [1.6, 0.4, 0.4], color: 0x94a3b8, rough: 0.4, metal: 0.75, tier: 'secondary' },
-          { id: 'rov-wheel-1', name: 'Titanium Cleated Wheel FL', type: 'cylinder', pos: [1.6, 0.8, 1.4], scale: [1.0, 0.5, 1.0], color: 0x475569, rough: 0.6, metal: 0.8, tier: 'tertiary' },
-          { id: 'rov-wheel-2', name: 'Titanium Cleated Wheel FR', type: 'cylinder', pos: [1.6, 0.8, -1.4], scale: [1.0, 0.5, 1.0], color: 0x475569, rough: 0.6, metal: 0.8, tier: 'tertiary' },
-          { id: 'rov-wheel-3', name: 'Titanium Cleated Wheel RL', type: 'cylinder', pos: [-1.6, 0.8, 1.4], scale: [1.0, 0.5, 1.0], color: 0x475569, rough: 0.6, metal: 0.8, tier: 'tertiary' },
-          { id: 'rov-wheel-4', name: 'Titanium Cleated Wheel RR', type: 'cylinder', pos: [-1.6, 0.8, -1.4], scale: [1.0, 0.5, 1.0], color: 0x475569, rough: 0.6, metal: 0.8, tier: 'tertiary' }
-        ];
-      } else if (/bioluminescent|mycelium|asteroid|geyser|alien|methane/i.test(text)) {
-        theme = 'alien_world';
-        title = 'Alien Planet: Geothermal Mycelium Biome';
-        meshes = [
-          { id: 'alien-crust', name: 'Ferro-Nickel Asteroid Interior Bedrock', type: 'cylinder', pos: [0, 0.2, 0], scale: [34, 0.6, 34], color: 0x1e1b4b, rough: 0.85, metal: 0.2, tier: 'primary' },
-          { id: 'alien-trunk-1', name: 'Colossal Bioluminescent Fungal Stipe', type: 'cylinder', pos: [-4, 6.5, -3], scale: [3.5, 13, 3.5], color: 0x06b6d4, rough: 0.35, metal: 0.1, tier: 'primary' },
-          { id: 'alien-cap-1', name: 'Phosphorescent Mycelium Canopy', type: 'cone', pos: [-4, 14, -3], scale: [11, 4.5, 11], color: 0x3b82f6, rough: 0.25, metal: 0.05, tier: 'primary' },
-          { id: 'alien-trunk-2', name: 'Secondary Phosphor Stipe', type: 'cylinder', pos: [6, 4.5, 4], scale: [2.5, 9, 2.5], color: 0x8b5cf6, rough: 0.35, metal: 0.1, tier: 'secondary' },
-          { id: 'alien-cap-2', name: 'Secondary Luminescent Pileus', type: 'cone', pos: [6, 9.8, 4], scale: [7.5, 3.2, 7.5], color: 0xa855f7, rough: 0.25, metal: 0.05, tier: 'secondary' },
-          { id: 'alien-geyser', name: 'Liquid Methane Cryovolcanic Vent', type: 'cylinder', pos: [0, 1.2, 8], scale: [4.5, 2.4, 4.5], color: 0x0284c7, rough: 0.2, metal: 0.8, tier: 'tertiary' },
-          { id: 'alien-spores', name: 'Floating Bioluminescent Spore Cluster', type: 'sphere', pos: [-1, 10, 2], scale: [2.0, 2.0, 2.0], color: 0x34d399, rough: 0.1, metal: 0.0, tier: 'tertiary' }
-        ];
-      } else {
-        // Architecture (Default & Primary PBR Synthesis)
-        theme = 'architecture';
-        title = 'Modern Municipal Palais & Architectural Promenade';
-        const glbUrl = '/test_output/monumental_civic_plaza.glb';
-        meshes = [
-          { id: 'arch-promenade', name: 'Limestone Promenade Pedestal', type: 'cylinder', pos: [0, 0.35, 0], scale: [30.0, 0.7, 30.0], color: 0xdcd6cd, rough: 0.82, metal: 0.05, tier: 'primary' },
-          { id: 'arch-central-hall', name: 'Central Palais Complex', type: 'box', pos: [0, 8.0, -5.0], scale: [22.0, 14.6, 14.0], color: 0xefede8, rough: 0.65, metal: 0.12, tier: 'primary' },
-          { id: 'arch-central-roof', name: 'Mansard Architectural Crown', type: 'cone', pos: [0, 17.5, -5.0], scale: [18.0, 5.5, 12.0], color: 0x475569, rough: 0.45, metal: 0.4, tier: 'secondary' },
-          { id: 'arch-east-wing', name: 'East Wing Pavilion', type: 'box', pos: [-16.0, 6.0, 0], scale: [12.0, 10.6, 10.0], color: 0xe2e8f0, rough: 0.7, metal: 0.08, tier: 'secondary' },
-          { id: 'arch-west-wing', name: 'West Wing Pavilion', type: 'box', pos: [16.0, 6.0, 0], scale: [12.0, 10.6, 10.0], color: 0xe2e8f0, rough: 0.7, metal: 0.08, tier: 'secondary' },
-          { id: 'arch-portico-colonnade', name: 'Monumental Colonnade Portico', type: 'box', pos: [0, 3.5, 3.0], scale: [14.0, 5.0, 2.5], color: 0xf8fafc, rough: 0.5, metal: 0.15, tier: 'tertiary' },
-          { id: 'arch-tree-east', name: 'Botanical Promenade Shade Tree', type: 'sphere', pos: [-8.0, 4.5, 9.0], scale: [3.2, 4.0, 3.2], color: 0x22c55e, rough: 0.8, metal: 0.0, tier: 'tertiary' },
-          { id: 'arch-tree-west', name: 'Botanical Promenade Shade Tree', type: 'sphere', pos: [8.0, 4.5, 9.0], scale: [3.2, 4.0, 3.2], color: 0x16a34a, rough: 0.8, metal: 0.0, tier: 'tertiary' }
-        ];
-        return { theme, title, meshes, glbUrl };
+      // Continuous ADA Physical Fields
+      const verticalityBias = Math.min(3.2, Math.max(0.65, 1.0 + (vertScore - horizScore) * 0.45 + (rng() - 0.5) * 0.25));
+      const footprintSpan = Math.round(28 + Math.min(26, horizScore * 5 + rng() * 10));
+
+      let symmetry = 'Bilateral';
+      if (/radial|circular|ring|rotunda|orbit|round|hexagonal|satellite|spore|geodesic|hive|pagoda|dome/i.test(text) || (organicScore > 1 && rng() > 0.4)) {
+        symmetry = 'Radial';
+      } else if (/asymmetric|canyon|rover|trench|excavation|ruin|outpost/i.test(text) || rng() < 0.25) {
+        symmetry = 'Asymmetric';
       }
 
-      return { theme, title, meshes };
+      // Continuous Material Synthesis
+      let primaryColor, secondaryColor, accentColor;
+      let primaryRough = 0.65, primaryMetal = 0.15;
+      let secondaryRough = 0.45, secondaryMetal = 0.35;
+      let accentRough = 0.2, accentMetal = 0.5;
+      let paletteName = 'Adaptive PBR';
+
+      if (/marble|limestone|travertine|palais/i.test(text)) {
+        primaryColor = 0xefede8; primaryRough = 0.72; primaryMetal = 0.05;
+        secondaryColor = 0x475569; secondaryRough = 0.45; secondaryMetal = 0.4;
+        accentColor = 0xeab308; accentRough = 0.22; accentMetal = 0.95;
+        paletteName = 'Limestone & Gilded Bronze';
+      } else if (/concrete|ferroconcrete|brutalist/i.test(text)) {
+        primaryColor = 0x64748b; primaryRough = 0.88; primaryMetal = 0.04;
+        secondaryColor = 0x334155; secondaryRough = 0.75; secondaryMetal = 0.12;
+        accentColor = 0xf59e0b; accentRough = 0.25; accentMetal = 0.6;
+        paletteName = 'Ferroconcrete & Amber Accents';
+      } else if (/granite|basalt|obsidian|slate/i.test(text)) {
+        primaryColor = 0x1e293b; primaryRough = 0.8; primaryMetal = 0.2;
+        secondaryColor = 0x0f172a; secondaryRough = 0.6; secondaryMetal = 0.5;
+        accentColor = 0x06b6d4; accentRough = 0.15; accentMetal = 0.3;
+        paletteName = 'Basalt Monolith & Cyan Fissures';
+      } else if (/gold|gilded|brass/i.test(text)) {
+        primaryColor = 0x475569; primaryRough = 0.5; primaryMetal = 0.2;
+        secondaryColor = 0xd97706; secondaryRough = 0.25; secondaryMetal = 0.92;
+        accentColor = 0xfef08a; accentRough = 0.15; accentMetal = 0.98;
+        paletteName = 'Polished Brass & Slate';
+      } else if (/copper|bronze|steampunk/i.test(text)) {
+        primaryColor = 0x78716c; primaryRough = 0.7; primaryMetal = 0.25;
+        secondaryColor = 0xb45309; secondaryRough = 0.35; secondaryMetal = 0.88;
+        accentColor = 0x38bdf8; accentRough = 0.2; accentMetal = 0.6;
+        paletteName = 'Patinated Bronze & Copper';
+      } else if (/steel|titanium|cyber|space|terminal|hyperloop/i.test(text)) {
+        primaryColor = 0x334155; primaryRough = 0.35; primaryMetal = 0.85;
+        secondaryColor = 0x1e293b; secondaryRough = 0.25; secondaryMetal = 0.92;
+        accentColor = 0x38bdf8; accentRough = 0.15; accentMetal = 0.7;
+        paletteName = 'Titanium Alloy & Luminescent Cyan';
+      } else if (/mycelium|fungi|mushroom|asteroid|bioluminescent/i.test(text)) {
+        primaryColor = 0x1e1b4b; primaryRough = 0.85; primaryMetal = 0.15;
+        secondaryColor = 0x06b6d4; secondaryRough = 0.35; secondaryMetal = 0.1;
+        accentColor = 0xa855f7; accentRough = 0.25; accentMetal = 0.05;
+        paletteName = 'Asteroid Crust & Phosphor Fungi';
+      } else if (/ziggurat|temple|ancient|mesopotamia/i.test(text)) {
+        primaryColor = 0xd97706; primaryRough = 0.85; primaryMetal = 0.04;
+        secondaryColor = 0x0284c7; secondaryRough = 0.45; secondaryMetal = 0.15;
+        accentColor = 0xf59e0b; accentRough = 0.25; accentMetal = 0.85;
+        paletteName = 'Sunstone Adobe & Lapis Portals';
+      } else {
+        // Continuous Seeded Color Wheel Generation
+        const baseHue = Math.floor(rng() * 360);
+        primaryColor = hslToHex(baseHue, 0.25 + rng() * 0.25, 0.42 + rng() * 0.25);
+        secondaryColor = hslToHex((baseHue + 35 + rng() * 45) % 360, 0.35, 0.35 + rng() * 0.25);
+        accentColor = hslToHex((baseHue + 180 + (rng() - 0.5) * 40) % 360, 0.85, 0.55);
+        paletteName = `Harmonic Spectrum (Hue ${baseHue}°)`;
+      }
+
+      const hasEmissive = luminousScore > 0 || /bioluminescent|neon|glow|plasma|laser|beacon|lantern|fire/i.test(text);
+      const emissiveIntensity = hasEmissive ? (2.2 + luminousScore * 0.8) : 0;
+      const emissiveColor = hasEmissive ? accentColor : 0x000000;
+
+      // Inferred Archetype Label
+      let archetype = 'Architectural Compound';
+      if (organicScore > 1) archetype = 'Organic Radial Biome';
+      else if (techScore > 1 && verticalityBias > 1.3) archetype = 'Cybernetic Spire Corridor';
+      else if (techScore > 1) archetype = 'High-Tech Modular Station';
+      else if (monumentScore > 1 && /ziggurat|pyramid/i.test(text)) archetype = 'Stepped Monumental Complex';
+      else if (monumentScore > 1) archetype = 'Colonnade Monumental Hall';
+      else if (verticalityBias > 1.6) archetype = 'Metropolitan Spire';
+
+      // 70-20-10 Hierarchical Procedural Mesh Synthesis
+      const meshes = [];
+
+      // -------------------------------------------------------------
+      // TIER 1: PRIMARY (70% Context & Core Massing)
+      // -------------------------------------------------------------
+      // 1. Foundation Plinth / Ground Terrace
+      const plinthShape = symmetry === 'Radial' ? 'cylinder' : 'box';
+      const plinthHeight = Math.max(0.6, 0.8 + rng() * 0.6);
+      meshes.push({
+        id: 'primary-foundation-plinth',
+        name: `${subject} Foundation Plinth`,
+        type: plinthShape,
+        pos: [0, plinthHeight / 2, 0],
+        scale: [footprintSpan, plinthHeight, footprintSpan],
+        color: primaryColor,
+        rough: Math.min(0.95, primaryRough + 0.1),
+        metal: primaryMetal,
+        tier: 'primary'
+      });
+
+      // 2. Stepped Podium Sub-Basin
+      const podiumWidth = footprintSpan * 0.82;
+      const podiumHeight = 0.5;
+      meshes.push({
+        id: 'primary-stepped-podium',
+        name: `${subject} Stepped Podium Terrace`,
+        type: plinthShape,
+        pos: [0, plinthHeight + podiumHeight / 2, 0],
+        scale: [podiumWidth, podiumHeight, podiumWidth],
+        color: secondaryColor,
+        rough: secondaryRough,
+        metal: secondaryMetal,
+        tier: 'primary'
+      });
+
+      // 3. Central Mass / Edifice / Silhouette
+      const baseY = plinthHeight + podiumHeight;
+      if (organicScore > 1) {
+        // Colossal Organic Stipes & Trunks
+        const stipeHeight = 13.0 * verticalityBias;
+        meshes.push({
+          id: 'primary-organic-trunk-1',
+          name: `${subject} Colossal Stipe Trunk`,
+          type: 'cylinder',
+          pos: [-3.5, baseY + stipeHeight / 2, -2],
+          scale: [3.8, stipeHeight, 3.8],
+          color: secondaryColor,
+          rough: 0.35,
+          metal: 0.1,
+          tier: 'primary'
+        });
+        meshes.push({
+          id: 'primary-organic-canopy-1',
+          name: `${subject} Primary Spore Canopy`,
+          type: 'cone',
+          pos: [-3.5, baseY + stipeHeight + 2.2, -2],
+          scale: [12.5, 5.0, 12.5],
+          color: primaryColor,
+          rough: 0.25,
+          metal: 0.05,
+          tier: 'primary'
+        });
+        const stipe2Height = 9.0 * verticalityBias;
+        meshes.push({
+          id: 'primary-organic-trunk-2',
+          name: `${subject} Secondary Organic Stipe`,
+          type: 'cylinder',
+          pos: [5.5, baseY + stipe2Height / 2, 3.5],
+          scale: [2.6, stipe2Height, 2.6],
+          color: secondaryColor,
+          rough: 0.35,
+          metal: 0.1,
+          tier: 'secondary'
+        });
+        meshes.push({
+          id: 'secondary-organic-canopy-2',
+          name: `${subject} Luminescent Pileus`,
+          type: 'cone',
+          pos: [5.5, baseY + stipe2Height + 1.8, 3.5],
+          scale: [8.5, 3.6, 8.5],
+          color: accentColor,
+          rough: 0.2,
+          metal: 0.05,
+          emissive: emissiveColor,
+          emissiveIntensity: emissiveIntensity * 0.8,
+          tier: 'secondary'
+        });
+      } else if (monumentScore > 1 && /ziggurat|pyramid|ancient/i.test(text)) {
+        // Stepped Ziggurat Terraces
+        const tier1H = 4.0;
+        meshes.push({
+          id: 'primary-ziggurat-tier1',
+          name: `${subject} Stepped Ziggurat Tier 1`,
+          type: 'box',
+          pos: [0, baseY + tier1H / 2, 0],
+          scale: [24, tier1H, 24],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'primary'
+        });
+        const tier2H = 3.8;
+        meshes.push({
+          id: 'primary-ziggurat-tier2',
+          name: `${subject} Stepped Ziggurat Tier 2`,
+          type: 'box',
+          pos: [0, baseY + tier1H + tier2H / 2, 0],
+          scale: [18, tier2H, 18],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'primary'
+        });
+        const tier3H = 3.6;
+        meshes.push({
+          id: 'secondary-ziggurat-sanctuary',
+          name: `${subject} High Summit Sanctuary`,
+          type: 'box',
+          pos: [0, baseY + tier1H + tier2H + tier3H / 2, 0],
+          scale: [11.5, tier3H, 11.5],
+          color: secondaryColor,
+          rough: secondaryRough,
+          metal: secondaryMetal,
+          tier: 'secondary'
+        });
+      } else if (verticalityBias > 1.4) {
+        // High-Rise Spire / Megastructure Tower
+        const towerHeight = 22.0 * verticalityBias;
+        const towerWidth = 9.0;
+        meshes.push({
+          id: 'primary-tower-core',
+          name: `${subject} Central Spire Core`,
+          type: symmetry === 'Radial' ? 'cylinder' : 'box',
+          pos: [0, baseY + towerHeight / 2, 0],
+          scale: [towerWidth, towerHeight, towerWidth],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'primary'
+        });
+        // Upper Crown Section
+        const crownHeight = 8.0 * verticalityBias;
+        meshes.push({
+          id: 'secondary-spire-crown',
+          name: `${subject} Architectural Needle Spire`,
+          type: 'cone',
+          pos: [0, baseY + towerHeight + crownHeight / 2, 0],
+          scale: [towerWidth * 0.7, crownHeight, towerWidth * 0.7],
+          color: secondaryColor,
+          rough: secondaryRough,
+          metal: secondaryMetal,
+          tier: 'secondary'
+        });
+      } else {
+        // Versatile Monumental / Architectural Hall
+        const hallWidth = 20.0;
+        const hallHeight = 12.0;
+        const hallDepth = 14.0;
+        meshes.push({
+          id: 'primary-central-hall',
+          name: `${subject} Central Hall Complex`,
+          type: 'box',
+          pos: [0, baseY + hallHeight / 2, -2.0],
+          scale: [hallWidth, hallHeight, hallDepth],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'primary'
+        });
+        // Mansard / Hip Roof Crown
+        const roofHeight = 5.2;
+        meshes.push({
+          id: 'secondary-roof-crown',
+          name: `${subject} Mansard Roof Crown`,
+          type: 'cone',
+          pos: [0, baseY + hallHeight + roofHeight / 2, -2.0],
+          scale: [hallWidth * 0.9, roofHeight, hallDepth * 0.9],
+          color: secondaryColor,
+          rough: secondaryRough,
+          metal: secondaryMetal,
+          tier: 'secondary'
+        });
+      }
+
+      // -------------------------------------------------------------
+      // TIER 2: SECONDARY (20% Form Articulations & Sub-Structures)
+      // -------------------------------------------------------------
+      if (symmetry === 'Radial') {
+        // Radial Perimeter Pylons / Satellites (4 nodes at 90-degree offsets)
+        const pylonRadius = footprintSpan * 0.38;
+        const pylonHeight = 7.0 * verticalityBias;
+        for (let i = 0; i < 4; i++) {
+          const theta = (i * Math.PI) / 2;
+          const px = Math.cos(theta) * pylonRadius;
+          const pz = Math.sin(theta) * pylonRadius;
+          meshes.push({
+            id: `secondary-radial-pylon-${i + 1}`,
+            name: `${subject} Orbital Pylon ${i + 1}`,
+            type: 'cylinder',
+            pos: [px, baseY + pylonHeight / 2, pz],
+            scale: [2.2, pylonHeight, 2.2],
+            color: secondaryColor,
+            rough: secondaryRough,
+            metal: secondaryMetal,
+            tier: 'secondary'
+          });
+        }
+        // Magnetic / Energy Confinement Torus Ring
+        if (techScore > 0 || hasEmissive) {
+          meshes.push({
+            id: 'secondary-energy-torus',
+            name: `${subject} Confinement Ring Torus`,
+            type: 'torus',
+            pos: [0, baseY + 9.0 * verticalityBias, 0],
+            scale: [pylonRadius * 0.85, 0.75, 0],
+            color: accentColor,
+            rough: 0.2,
+            metal: 0.9,
+            emissive: emissiveColor,
+            emissiveIntensity: emissiveIntensity,
+            tier: 'secondary'
+          });
+        }
+      } else if (symmetry === 'Bilateral') {
+        // East and West Symmetrical Wings
+        const wingWidth = 10.0;
+        const wingHeight = 8.5;
+        const wingDepth = 9.0;
+        const wingOffset = 15.0;
+        meshes.push({
+          id: 'secondary-east-wing',
+          name: `${subject} East Pavilion Wing`,
+          type: 'box',
+          pos: [-wingOffset, baseY + wingHeight / 2, -1.0],
+          scale: [wingWidth, wingHeight, wingDepth],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'secondary'
+        });
+        meshes.push({
+          id: 'secondary-west-wing',
+          name: `${subject} West Pavilion Wing`,
+          type: 'box',
+          pos: [wingOffset, baseY + wingHeight / 2, -1.0],
+          scale: [wingWidth, wingHeight, wingDepth],
+          color: primaryColor,
+          rough: primaryRough,
+          metal: primaryMetal,
+          tier: 'secondary'
+        });
+        // Monumental Colonnade Portico / Entry Bay
+        meshes.push({
+          id: 'secondary-colonnade-portico',
+          name: `${subject} Colonnade Portico`,
+          type: 'box',
+          pos: [0, baseY + 3.2, 5.0],
+          scale: [12.0, 4.8, 2.5],
+          color: secondaryColor,
+          rough: secondaryRough,
+          metal: secondaryMetal,
+          tier: 'secondary'
+        });
+      } else {
+        // Asymmetric Cantilevered Annexe & Skybridge
+        const annexeW = 12.0;
+        const annexeH = 6.5;
+        meshes.push({
+          id: 'secondary-cantilever-annexe',
+          name: `${subject} Cantilever Observation Wing`,
+          type: 'box',
+          pos: [-11.0, baseY + annexeH / 2, -6.0],
+          scale: [annexeW, annexeH, 8.0],
+          color: secondaryColor,
+          rough: secondaryRough,
+          metal: secondaryMetal,
+          tier: 'secondary'
+        });
+        meshes.push({
+          id: 'secondary-elevated-skybridge',
+          name: `${subject} Suspended Arterial Skybridge`,
+          type: 'box',
+          pos: [-4.0, baseY + annexeH + 1.2, -4.0],
+          scale: [14.0, 2.0, 2.4],
+          color: accentColor,
+          rough: 0.25,
+          metal: 0.85,
+          tier: 'secondary'
+        });
+      }
+
+      // -------------------------------------------------------------
+      // TIER 3: TERTIARY (10% Micro-Details & Ornaments)
+      // -------------------------------------------------------------
+      // 1. Monumental Entrance Portal
+      meshes.push({
+        id: 'tertiary-entry-portal',
+        name: `${subject} Monumental Entrance Portal`,
+        type: 'box',
+        pos: [0, baseY + 2.4, 6.2],
+        scale: [3.8, 3.8, 1.2],
+        color: 0x0f172a,
+        rough: 0.35,
+        metal: 0.85,
+        tier: 'tertiary'
+      });
+
+      // 2. Luminous Accent Beacons / Lanterns / Core
+      if (hasEmissive || techScore > 0 || monumentScore > 0) {
+        if (symmetry === 'Bilateral') {
+          meshes.push({
+            id: 'tertiary-beacon-east',
+            name: `${subject} Luminous Beacon Pylon (East)`,
+            type: 'sphere',
+            pos: [-6.5, baseY + 4.2, 6.8],
+            scale: [1.2, 1.2, 1.2],
+            color: accentColor,
+            rough: 0.1,
+            metal: 0.1,
+            emissive: emissiveColor || accentColor,
+            emissiveIntensity: emissiveIntensity || 2.5,
+            tier: 'tertiary'
+          });
+          meshes.push({
+            id: 'tertiary-beacon-west',
+            name: `${subject} Luminous Beacon Pylon (West)`,
+            type: 'sphere',
+            pos: [6.5, baseY + 4.2, 6.8],
+            scale: [1.2, 1.2, 1.2],
+            color: accentColor,
+            rough: 0.1,
+            metal: 0.1,
+            emissive: emissiveColor || accentColor,
+            emissiveIntensity: emissiveIntensity || 2.5,
+            tier: 'tertiary'
+          });
+        } else {
+          meshes.push({
+            id: 'tertiary-core-beacon',
+            name: `${subject} Central Plasma Resonance Core`,
+            type: 'sphere',
+            pos: [0, baseY + 7.0 * verticalityBias, 0],
+            scale: [2.0, 2.0, 2.0],
+            color: accentColor,
+            rough: 0.05,
+            metal: 0.05,
+            emissive: emissiveColor || accentColor,
+            emissiveIntensity: emissiveIntensity || 3.0,
+            tier: 'tertiary'
+          });
+        }
+      }
+
+      // 3. Botanical Promenade Shade Trees / Organic Spores
+      if (organicScore > 0 || !techScore) {
+        const treeColor = (organicScore > 1) ? accentColor : 0x16a34a;
+        meshes.push({
+          id: 'tertiary-botanical-tree-east',
+          name: `${subject} Botanical Specimen (East)`,
+          type: 'sphere',
+          pos: [-footprintSpan * 0.32, baseY + 3.8, footprintSpan * 0.28],
+          scale: [3.4, 4.2, 3.4],
+          color: treeColor,
+          rough: 0.8,
+          metal: 0.0,
+          tier: 'tertiary'
+        });
+        meshes.push({
+          id: 'tertiary-botanical-tree-west',
+          name: `${subject} Botanical Specimen (West)`,
+          type: 'sphere',
+          pos: [footprintSpan * 0.32, baseY + 3.8, footprintSpan * 0.28],
+          scale: [3.4, 4.2, 3.4],
+          color: treeColor,
+          rough: 0.8,
+          metal: 0.0,
+          tier: 'tertiary'
+        });
+      }
+
+      return {
+        theme: archetype,
+        subject,
+        title: `${subject} — 3D Procedural Scene`,
+        dimensions: {
+          verticality: verticalityBias,
+          footprint: footprintSpan,
+          symmetry,
+          paletteName
+        },
+        meshes
+      };
     }
 
     function buildThreeMeshes(contract) {
@@ -678,45 +1198,52 @@
       contract.meshes.forEach(m => {
         let geo;
         if (m.type === 'box') {
-          geo = new THREE.BoxGeometry(m.scale[0], m.scale[1], m.scale[2]);
+          geo = new THREE.BoxGeometry(m.scale[0], m.scale[1], m.scale[2], 2, 2, 2);
         } else if (m.type === 'cylinder') {
-          geo = new THREE.CylinderGeometry(m.scale[0] / 2, m.scale[0] / 2, m.scale[1], 32);
+          geo = new THREE.CylinderGeometry(m.scale[0] / 2, m.scale[0] / 2, m.scale[1], 32, 2);
         } else if (m.type === 'cone') {
-          geo = new THREE.ConeGeometry(m.scale[0] / 2, m.scale[1], 32);
+          geo = new THREE.ConeGeometry(m.scale[0] / 2, m.scale[1], 32, 2);
         } else if (m.type === 'sphere') {
           geo = new THREE.SphereGeometry(m.scale[0] / 2, 24, 24);
+        } else if (m.type === 'torus') {
+          geo = new THREE.TorusGeometry(m.scale[0], m.scale[1], 16, 48);
+          geo.rotation.x = Math.PI / 2;
         }
 
-        let mat;
+        const origMat = new THREE.MeshStandardMaterial({
+          color: m.color,
+          roughness: m.rough !== undefined ? m.rough : 0.6,
+          metalness: m.metal !== undefined ? m.metal : 0.1,
+          emissive: m.emissive ? new THREE.Color(m.emissive) : new THREE.Color(0x000000),
+          emissiveIntensity: m.emissiveIntensity || 1.0
+        });
+
+        let activeMat = origMat;
         if (currentShadingMode === 'clay') {
-          mat = new THREE.MeshStandardMaterial({
+          activeMat = new THREE.MeshStandardMaterial({
             color: 0xdcd6cd,
             roughness: 0.82,
             metalness: 0.02
           });
         } else if (currentShadingMode === 'wireframe') {
-          mat = new THREE.MeshBasicMaterial({
-            color: m.color,
+          activeMat = new THREE.MeshBasicMaterial({
+            color: m.color || 0x38bdf8,
             wireframe: true
-          });
-        } else {
-          // PBR Mode
-          mat = new THREE.MeshStandardMaterial({
-            color: m.color,
-            roughness: m.rough,
-            metalness: m.metal
           });
         }
 
-        const mesh = new THREE.Mesh(geo, mat);
+        const mesh = new THREE.Mesh(geo, activeMat);
+        mesh.userData.origMaterial = origMat;
         mesh.position.set(m.pos[0], m.pos[1], m.pos[2]);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.name = m.name;
         sceneMeshGroup.add(mesh);
 
-        totalVerts += geo.attributes.position.count;
-        totalTris += (geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3);
+        const vCount = geo.attributes.position ? geo.attributes.position.count : 0;
+        const tCount = geo.index ? geo.index.count / 3 : vCount / 3;
+        totalVerts += vCount;
+        totalTris += tCount;
 
         // Populate Hierarchy Tree
         const row = document.createElement('div');
@@ -729,14 +1256,23 @@
       });
 
       // Update Telemetry
-      document.getElementById('theme-pill').textContent = `Theme: ${contract.theme.toUpperCase()}`;
+      document.getElementById('theme-pill').textContent = `Subject: ${contract.subject}`;
+      document.getElementById('tel-intent').textContent = 'Open-Domain Spatial ADA';
       document.getElementById('tel-theme').textContent = contract.theme;
-      document.getElementById('tel-mesh-count').textContent = `${contract.meshes.length} PBR Meshes`;
+      document.getElementById('tel-mesh-count').textContent = `${contract.meshes.length} Procedural Meshes`;
       document.getElementById('tel-vertices').textContent = `${totalVerts.toLocaleString()} Verts`;
       document.getElementById('tel-triangles').textContent = `${Math.round(totalTris).toLocaleString()} Tris`;
-    }
 
-    let activeGltfModel = null;
+      // Update Continuous Physical Fields
+      if (contract.dimensions) {
+        document.getElementById('field-verticality').textContent = `${contract.dimensions.verticality.toFixed(2)}x`;
+        document.getElementById('field-horizontality').textContent = `${contract.dimensions.footprint.toFixed(1)}m`;
+        document.getElementById('field-symmetry').textContent = contract.dimensions.symmetry;
+        document.getElementById('field-palette').textContent = contract.dimensions.paletteName;
+      }
+
+      frameCameraToObject(sceneMeshGroup);
+    }
 
     function frameCameraToObject(obj) {
       const bbox = new THREE.Box3().setFromObject(obj);
@@ -758,30 +1294,29 @@
     }
 
     function applyShading(mode) {
-      if (activeGltfModel) {
-        activeGltfModel.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-            if (mode === 'clay') {
-              child.material = new THREE.MeshStandardMaterial({
-                color: 0xdcd6cd,
-                roughness: 0.82,
-                metalness: 0.02
-              });
-            } else if (mode === 'wireframe') {
-              child.material = new THREE.MeshBasicMaterial({
-                color: 0x38bdf8,
-                wireframe: true
-              });
-            } else {
-              if (child.userData.origMaterial) {
-                child.material = child.userData.origMaterial;
-              }
+      sceneMeshGroup.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (mode === 'clay') {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0xdcd6cd,
+              roughness: 0.82,
+              metalness: 0.02
+            });
+          } else if (mode === 'wireframe') {
+            const wireColor = (child.userData.origMaterial && child.userData.origMaterial.color) ? child.userData.origMaterial.color : 0x38bdf8;
+            child.material = new THREE.MeshBasicMaterial({
+              color: wireColor,
+              wireframe: true
+            });
+          } else {
+            if (child.userData.origMaterial) {
+              child.material = child.userData.origMaterial;
             }
           }
-        });
-      }
+        }
+      });
     }
 
     function synthesizeFromPrompt() {
@@ -789,70 +1324,7 @@
       if (!prompt) return;
 
       const contract = synthesizeSceneContract(prompt);
-
-      if (contract.glbUrl && THREE.GLTFLoader) {
-        const loader = new THREE.GLTFLoader();
-        loader.load(contract.glbUrl, (gltf) => {
-          while (sceneMeshGroup.children.length > 0) {
-            const obj = sceneMeshGroup.children[0];
-            if (obj.geometry) obj.geometry.dispose();
-            sceneMeshGroup.remove(obj);
-          }
-
-          activeGltfModel = gltf.scene;
-          let totalVerts = 0;
-          let totalTris = 0;
-          const hierarchyEl = document.getElementById('mesh-hierarchy');
-          hierarchyEl.innerHTML = '';
-
-          activeGltfModel.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-              child.userData.origMaterial = child.material;
-              const vCount = child.geometry.attributes.position ? child.geometry.attributes.position.count : 0;
-              const tCount = child.geometry.index ? child.geometry.index.count / 3 : vCount / 3;
-              totalVerts += vCount;
-              totalTris += tCount;
-
-              const row = document.createElement('div');
-              row.className = 'mesh-tree-item';
-              row.innerHTML = `
-                <span>${child.name || 'Procedural Mesh'}</span>
-                <span class="tier-tag tier-primary">${Math.round(vCount).toLocaleString()}v</span>
-              `;
-              hierarchyEl.appendChild(row);
-            }
-          });
-
-          applyShading(currentShadingMode);
-          sceneMeshGroup.add(activeGltfModel);
-
-          document.getElementById('theme-pill').textContent = `Theme: ${contract.theme.toUpperCase()}`;
-          document.getElementById('tel-theme').textContent = `${contract.theme} (C++20/Python GLB)`;
-          document.getElementById('tel-mesh-count').textContent = `High-Fidelity GLB`;
-          document.getElementById('tel-vertices').textContent = `${totalVerts.toLocaleString()} Verts`;
-          document.getElementById('tel-triangles').textContent = `${Math.round(totalTris).toLocaleString()} Tris`;
-
-          frameCameraToObject(sceneMeshGroup);
-        }, undefined, (err) => {
-          console.warn('GLB load error, fallback to primitives', err);
-          activeGltfModel = null;
-          buildThreeMeshes(contract);
-          frameCameraToObject(sceneMeshGroup);
-        });
-      } else {
-        activeGltfModel = null;
-        buildThreeMeshes(contract);
-        frameCameraToObject(sceneMeshGroup);
-      }
-    }
-
-    function loadPreset(key) {
-      if (PRESETS[key]) {
-        document.getElementById('prompt-input').value = PRESETS[key];
-        synthesizeFromPrompt();
-      }
+      buildThreeMeshes(contract);
     }
 
     function setShadingMode(mode) {
@@ -861,13 +1333,7 @@
       document.getElementById('btn-mode-wire').className = `hud-btn ${mode === 'wireframe' ? 'active' : ''}`;
       document.getElementById('btn-mode-clay').className = `hud-btn ${mode === 'clay' ? 'active' : ''}`;
 
-      if (activeGltfModel) {
-        applyShading(mode);
-      } else {
-        const prompt = document.getElementById('prompt-input').value.trim();
-        const contract = synthesizeSceneContract(prompt);
-        buildThreeMeshes(contract);
-      }
+      applyShading(mode);
     }
 
     function resetCamera() {

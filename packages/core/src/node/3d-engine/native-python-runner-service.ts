@@ -74,11 +74,12 @@ export class NativePythonRunnerService {
             return process.env.SCRATCHBOX_PYTHON;
         }
 
+        const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
         const candidatePaths = [
             path.resolve(process.cwd(), '.venv/bin/python'),
             path.resolve(process.cwd(), '.venv/bin/python3'),
-            path.resolve(__dirname, '../../../../../.venv/bin/python'),
-            path.resolve(__dirname, '../../../../.venv/bin/python'),
+            path.resolve(baseDir, '../../../../../.venv/bin/python'),
+            path.resolve(baseDir, '../../../../.venv/bin/python'),
             '/opt/homebrew/bin/python3',
             '/usr/local/bin/python3',
             'python3'
@@ -96,13 +97,14 @@ export class NativePythonRunnerService {
      * Resolve the directory containing compiled scratchbox_native extension and scratchbox package.
      */
     private resolveModuleDirectory(): string {
+        const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
         const candidateDirs = [
             path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/scratchbox'),
             path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(__dirname, '../../native/3d-engine/scratchbox'),
-            path.resolve(__dirname, '../../native/3d-engine/build_py'),
-            path.resolve(__dirname, '../../../src/native/3d-engine/scratchbox'),
-            path.resolve(__dirname, '../../../src/native/3d-engine/build_py')
+            path.resolve(baseDir, '../../native/3d-engine/scratchbox'),
+            path.resolve(baseDir, '../../native/3d-engine/build_py'),
+            path.resolve(baseDir, '../../../src/native/3d-engine/scratchbox'),
+            path.resolve(baseDir, '../../../src/native/3d-engine/build_py')
         ];
 
         for (const dir of candidateDirs) {

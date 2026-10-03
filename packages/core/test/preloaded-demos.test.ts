@@ -80,11 +80,15 @@ describe('Showcase Preloaded Demos Catalog', () => {
         expect(data.nodes.length).toBeGreaterThanOrEqual(4);
     });
 
-    it('Core engine cockpit demo must feature metric telemetry cards', () => {
-        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-cockpit-dashboard');
+    it('Next-Gen Astra 3D Viewport demo must feature standalone studio artifact and meshlet tags', () => {
+        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-nextgen-astra-viewport');
         expect(demo).toBeDefined();
-        expect(demo?.artifact.type).toBe('metric-dashboard');
+        expect(demo?.category).toBe('3d');
+        expect(demo?.highlightBadge).toBe('INDUSTRY BENCHMARK');
+        expect(demo?.artifact.type).toBe('interactive-browser');
         const data = demo?.artifact.data as any;
-        expect(data.metrics.length).toBeGreaterThanOrEqual(4);
+        expect(data.url).toBe('/next_gen_astra_viewport_studio.html');
+        expect(demo?.tags).toContain('Meshlet Virtualization');
+        expect(demo?.tags).toContain('3D Gaussian Splatting');
     });
 });

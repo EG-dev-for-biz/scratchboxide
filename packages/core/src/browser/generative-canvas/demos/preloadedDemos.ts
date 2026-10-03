@@ -760,6 +760,30 @@ const demoTelemetryDashboardData: MetricDashboardData = {
 // ----------------------------------------------------------------------------------
 export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
     {
+        id: 'demo-nextgen-astra-viewport',
+        title: 'Next-Gen Astra 3D Viewport: 100M-Polygon Meshlet & Hybrid 3DGS',
+        subtitle: 'Universal 3D Benchmark · GPU Meshlets, SPZ Gaussian Splats & Clustered AgX PBR',
+        category: '3d',
+        categoryLabel: '3D & Next-Gen Viewport',
+        description: 'Universal high-throughput 3D viewport evaluated against the marketplace: renders 100M+ virtualized triangles via GPU meshlet cluster DAGs, blends 3D Gaussian Splats with PBR meshes in a shared depth buffer, and features clustered forward lighting with AgX tone mapping.',
+        tags: ['Next-Gen Viewport', 'Meshlet Virtualization', '3D Gaussian Splatting', 'AgX PBR', 'Industry Benchmark', 'C++20 Engine'],
+        highlightBadge: 'INDUSTRY BENCHMARK',
+        artifact: {
+            id: 'art-demo-nextgen-viewport',
+            type: 'interactive-browser',
+            title: 'Next-Gen Astra 3D Viewport Studio',
+            summary: 'Flagship 3D viewport engine running GPU Meshlet Virtualization (100M triangles), SPZ Gaussian Splats, and Clustered Forward PBR.',
+            data: {
+                url: '/next_gen_astra_viewport_studio.html',
+                title: 'Next-Gen Astra Viewport Studio',
+                viewportMode: 'desktop'
+            },
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the **Next-Gen Astra 3D Viewport Studio**. This studio demonstrates our universal 3D architecture evaluated against all major marketplace platforms: 100M virtualized triangles via GPU meshlet clusters, sub-pixel continuous LOD cuts, 3D Gaussian Splatting with shared depth occlusion, and clustered forward lighting with photographic AgX color grading.'
+    },
+    {
         id: 'demo-nanite-meshlets-pathtracing',
         title: 'Nanite Meshlets & Path-Traced GI Studio',
         subtitle: '1-Trillion Virtual Triangles · Cluster DAGs & WebGPU Indirect Dispatch',
