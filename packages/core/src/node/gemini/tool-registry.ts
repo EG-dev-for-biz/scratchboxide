@@ -13,6 +13,13 @@ import { errorMessage } from './gemini-client';
 
 // Re-export all tool types, schemas, declarations, and handlers from domain modules
 export * from './tools';
+export * from './domain-tool-packs';
+import {
+    resolveDomainToolPacks,
+    coerceToolArguments,
+    ALL_TOOL_PACKS,
+    type ToolPackName
+} from './domain-tool-packs';
 
 import {
     type ToolDeclaration,
@@ -192,7 +199,7 @@ const GROUPS: Record<ToolGroup, GroupPresentation> = {
         stepTitle: name => `Invoke ${name} in browser bridge`,
         durationMs: { completed: 45, failed: 12 },
         statusLabel: status => status === 'completed' ? 'success' : 'failed',
-        unknownTool: 'noop',
+        unknownTool: 'fail',
         failurePayload: message => ({ status: 'failed', error: message })
     },
     comfyui: {
@@ -351,9 +358,25 @@ export class ToolRegistry {
             .map(t => sanitizeToolDeclaration(t.declaration));
     }
 
+    /** Declarations focused on targeted domain tool packs. */
+    declarationsForPacks(packs: ToolPackName[]): ToolDeclaration[] {
+        const toolNames = new Set<string>();
+        for (const pack of packs) {
+            const def = ALL_TOOL_PACKS[pack];
+            if (def) {
+                for (const name of def.toolNames) {
+                    toolNames.add(name);
+                }
+            }
+        }
+        return Array.from(this.tools.values())
+            .filter(t => toolNames.has(t.name))
+            .map(t => sanitizeToolDeclaration(t.declaration));
+    }
+
     async dispatch(name: string, args: Record<string, unknown> | undefined, ctx: ToolContext): Promise<ToolExecutionResult> {
-        const safeArgs = args || {};
         const registration = this.tools.get(name);
+        const safeArgs = coerceToolArguments(registration?.declaration, args);
         if (registration) {
             return this.run(registration, safeArgs, ctx);
         }
@@ -443,11 +466,26 @@ export function buildToolDeclarations(
     registry: ToolRegistry,
     mcpDeclarations: ToolDeclaration[] = []
 ): GeminiToolConfig[] | undefined {
+    // 1. Pre-flight Capability Resolution & Domain Tool Packs
+    const { packs, capabilityResolution } = resolveDomainToolPacks({
+        prompt: request.prompt,
+        mode: request.mode,
+        domainHint: (request as any).domainHint,
+        enableWorkspaceTools: request.enableWorkspaceTools,
+        enableComfyUiTools: request.enableComfyUiTools,
+        enableBrowserTools: request.enableBrowserTools,
+        enableLensTools: request.enableLensTools,
+        requestedPacks: (request as any).toolPacks,
+        agent: request.agent
+    });
+
     const isBrowserNeeded = !!(request.enableBrowserTools || request.agent ||
+        packs.includes('browser') ||
         (request.prompt && /browse|click|navigate|page|web|url|http|localhost/i.test(request.prompt)));
 
     const isLensNeeded = request.enableLensTools !== false && (
         request.enableLensTools === true ||
+        packs.includes('lens') ||
         !!(request.prompt && /lens|unproject|lens_project|lens_sync|codebase_lens/i.test(request.prompt))
     );
 
@@ -457,6 +495,14 @@ export function buildToolDeclarations(
         request.mode === 'plan' ||
         request.mode === 'ask' ||
         !!request.agent ||
+        capabilityResolution?.canSolveNatively === true ||
+        capabilityResolution?.taskDomain === '3d' ||
+        capabilityResolution?.taskDomain === 'vfx' ||
+        capabilityResolution?.taskDomain === 'code' ||
+        packs.includes('core_workspace') ||
+        packs.includes('geospatial_3d') ||
+        packs.includes('mesh_surface') ||
+        packs.includes('vfx_video') ||
         !!(request.prompt && /workspace|file|edit|patch|sandbox|compile|diagnostic|symbol|semantic|search|3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|nano.banana|color\s*match|grade\s*match|color\s*transfer|palette|recolor|omni|atmosphere|diurnal|ephemeris|scattering|god_ray|cloud_shadow|aerial_perspective|turbidity|reshape|deform|taper|twist|bend|bulge|sculpt|lattice|comfy|neural|diffusion|matchmove|spline|botanical|avatar|4dgs|performer/i.test(request.prompt))
     );
 
@@ -465,19 +511,42 @@ export function buildToolDeclarations(
         request.mode === 'agent' ||
         request.mode === 'plan' ||
         !!request.agent ||
+        capabilityResolution?.recommendedResolutionRoute === 'tier2-comfyui' ||
+        capabilityResolution?.tier2Fallback?.needed === true ||
+        packs.includes('comfyui') ||
         !!(request.prompt && /comfy|neural|diffusion|trellis|triposr|marigold|lora|checkpoint|cloudrun|workflow|pipeline/i.test(request.prompt))
     );
 
-    const groups: ToolGroup[] = [];
-    if (isWorkspaceNeeded) groups.push('workspace');
-    if (isLensNeeded) groups.push('lens');
-    if (isBrowserNeeded) groups.push('browser');
-    if (isComfyUiNeeded) groups.push('comfyui');
+    let functionDeclarations: ToolDeclaration[];
+
+    // If explicit toolPacks are provided on the request, prioritize the focused pack declarations
+    if ((request as any).toolPacks && Array.isArray((request as any).toolPacks) && (request as any).toolPacks.length > 0) {
+        functionDeclarations = registry.declarationsForPacks((request as any).toolPacks);
+    } else {
+        const groups: ToolGroup[] = [];
+        if (isWorkspaceNeeded) groups.push('workspace');
+        if (isLensNeeded) groups.push('lens');
+        if (isBrowserNeeded) groups.push('browser');
+        if (isComfyUiNeeded) groups.push('comfyui');
+
+        functionDeclarations = groups.length > 0 ? registry.declarations(groups) : [];
+    }
 
     const allFunctionDeclarations: ToolDeclaration[] = [
-        ...(groups.length > 0 ? registry.declarations(groups) : []),
+        ...functionDeclarations,
         ...mcpDeclarations
     ];
+
+    // Guarantee that if capability resolution identified a specific targetTool, it is included
+    if (capabilityResolution?.suggestedNativeAction?.targetTool) {
+        const targetToolName = capabilityResolution.suggestedNativeAction.targetTool;
+        if (!allFunctionDeclarations.some(d => d.name === targetToolName)) {
+            const decl = registry.get(targetToolName)?.declaration;
+            if (decl) {
+                allFunctionDeclarations.push(sanitizeToolDeclaration(decl));
+            }
+        }
+    }
 
     // Scratchbox Canvas Architecture: Ensure declarative canvas mounting is accessible for visual primitive synthesis
     const isCanvasNeeded = request.enableWorkspaceTools !== false && (

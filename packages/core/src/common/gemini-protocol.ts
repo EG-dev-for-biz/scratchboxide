@@ -114,6 +114,8 @@ export interface GeminiGenerateRequest {
     mode?: InteractionMode;
     requirePlanApproval?: boolean;
     autoVerify?: boolean;
+    toolPacks?: Array<'core_workspace' | 'geospatial_3d' | 'mesh_surface' | 'vfx_video' | 'comfyui' | 'lens' | 'browser'>;
+    domainHint?: 'auto' | '3d' | 'vfx' | 'generative' | 'code' | 'general';
 }
 
 export type GeminiStreamEventType =

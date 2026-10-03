@@ -595,14 +595,26 @@ export type {
     LocationObjectAtmosphereResult
 } from './browser/generative-canvas/services/atmosphere';
 
-// Gemini In-App Spatial, Atmosphere & Nano Banana Tools
+// Gemini In-App Spatial, Atmosphere, Nano Banana Tools & Domain Packs
 export {
     ATMOSPHERE_TOOL_DECLARATIONS,
     atmosphereHandlers,
     GEOBOX_PRECISION_TOOL_DECLARATIONS,
     geoboxPrecisionHandlers,
     NANO_BANANA_TOOL_DECLARATIONS,
-    nanoBananaHandlers
+    nanoBananaHandlers,
+    ALL_TOOL_PACKS,
+    CORE_WORKSPACE_PACK,
+    GEOSPATIAL_3D_PACK,
+    MESH_SURFACE_PACK,
+    VFX_VIDEO_PACK,
+    COMFYUI_PACK,
+    LENS_PACK,
+    BROWSER_PACK,
+    resolveDomainToolPacks,
+    coerceToolArguments,
+    type ToolPackName,
+    type ToolPackDefinition
 } from './node/gemini/tool-registry';
 
 // Sophisticated 3D Tile Recoloring Engine v2 (Architecture 2: Atlas Re-grade & PBR Synthesis)

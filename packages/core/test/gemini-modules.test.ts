@@ -131,12 +131,12 @@ test('ToolRegistry registers, declares and dispatches tools with ToolContext', a
     assert.strictEqual(failed.exec.mcpServerId, 'mcp-scratchbox-lens');
     assert.deepStrictEqual(failed.resultPayload, { success: false, error: 'kaboom' });
 
-    // Unknown names with a known prefix fail (workspace/lens) or no-op (browser); others hit the fallback.
+    // Unknown names with a known prefix fail (workspace/lens/browser); others hit the fallback.
     const unknownWs = await registry.dispatch('workspace_nope', {}, ctx);
     assert.strictEqual(unknownWs.exec.status, 'failed');
     assert.match(String(unknownWs.resultPayload.error), /Unknown workspace tool/);
     const unknownBrowser = await registry.dispatch('browser_nope', {}, ctx);
-    assert.strictEqual(unknownBrowser.exec.status, 'completed');
+    assert.strictEqual(unknownBrowser.exec.status, 'failed');
 
     let fallbackSeen = '';
     registry.setFallback(call => {
