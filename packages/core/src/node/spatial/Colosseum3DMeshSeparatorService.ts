@@ -1236,13 +1236,13 @@ export class Colosseum3DMeshSeparatorService {
       return {
         modelName: 'Universal_3D_Separated_Model',
         totalVertices: universal.overallVertexCount,
-        totalSubmeshes: universal.objects.reduce((acc, o) => acc + o.submeshIndices.length, 0),
+        totalSubmeshes: universal.objects.reduce((acc: number, o: any) => acc + o.submeshIndices.length, 0),
         overallBoundingBox: universal.overallBoundingBox,
         overallOrientedBoundingBox: universal.overallOrientedBoundingBox,
-        objects: universal.objects.map(o => ({
+        objects: universal.objects.map((o: any) => ({
           id: o.id,
           name: o.name,
-          category: o.semanticCategory as any,
+          category: (o.category || o.semanticCategory) as any,
           boundingBox: o.boundingBox,
           orientedBoundingBox: o.orientedBoundingBox,
           tightnessGainPercent: o.orientedBoundingBox.tightnessGainPercent,
@@ -1252,7 +1252,7 @@ export class Colosseum3DMeshSeparatorService {
           gemini3DScaleDiscrepancyPercent: 0,
           colorHex: o.colorHex,
           trellisPrompt: o.trellisPrompt,
-          material: o.materialPreset
+          material: (o.material?.baseColor ? o.material : o.materialPreset) as any
         })),
         granularityMode: 'all',
         timestamp: new Date().toISOString(),

@@ -318,6 +318,9 @@ export class Location3DGaussianSplatService {
             beautifyContext.locationName
         );
 
+        const splatUrl = splatMediaObject.content.durableUri || SurveySplatPipelineService.toWebUrl(pipelineResult.fusedSplatPath);
+        const tilesetUrl = SurveySplatPipelineService.toWebUrl(pipelineResult.tilesetPath);
+
         progressReporter(1.0, `3DGS generation complete (${pipelineResult.fusedSplatCount.toLocaleString()} splats)`);
 
         return {

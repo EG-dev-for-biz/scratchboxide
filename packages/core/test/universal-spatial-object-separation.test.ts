@@ -17,7 +17,9 @@ import {
 } from '../src/node/spatial/Universal3DObjectSeparationService';
 
 describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)', () => {
-  const colosseumModelPath = path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
+  const colosseumModelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
+    ? path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb')
+    : path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
 
   it('separates arbitrary 3D geometry into discrete spatial entities without hardcoded presets', async () => {
     const service = new Universal3DObjectSeparationService();

@@ -81,6 +81,9 @@ export interface UniversalSeparatedScene {
     altitudeMeters: number;
   };
   objectCounts?: Record<string, number>;
+  totalEntities: number;
+  overallVertexCount: number;
+  categoryCounts: Record<string, number>;
 }
 
 export interface UniversalSeparationOptions {
@@ -89,6 +92,8 @@ export interface UniversalSeparationOptions {
   granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
   autoDetectSemanticCategories?: boolean;
   minVerticesPerEntity?: number;
+  clusterDistance?: number;
+  mode?: string;
   geoAnchor?: {
     name: string;
     lat: number;
@@ -111,9 +116,33 @@ export interface UniversalSeparationAndSceneResult {
 
 export class Universal3DObjectSeparationService {
   /**
+   * Synchronous / static bridge to separate an arbitrary 3D model (GLB buffer or path).
+   */
+  public static separate3DMesh(
+    glbInput: Buffer | string,
+    options?: Partial<UniversalSeparationOptions>
+  ): UniversalSeparatedScene {
+    const service = new Universal3DObjectSeparationService();
+    const opts: UniversalSeparationOptions = {
+      glbBuffer: Buffer.isBuffer(glbInput) ? glbInput : (options?.glbBuffer ?? undefined),
+      glbPath: typeof glbInput === 'string' ? glbInput : options?.glbPath,
+      clusterDistance: options?.clusterDistance ?? 1.5,
+      ...options
+    };
+    return service.separateSync(opts);
+  }
+
+  /**
    * Separates an arbitrary 3D model (GLB buffer or path) into discrete 3D spatial entities.
    */
   public async separate(options: UniversalSeparationOptions): Promise<UniversalSeparatedScene> {
+    return this.separateSync(options);
+  }
+
+  /**
+   * Synchronous core separation implementation.
+   */
+  public separateSync(options: UniversalSeparationOptions): UniversalSeparatedScene {
     const buffer = options.glbBuffer ?? (options.glbPath ? fs.readFileSync(options.glbPath) : null);
     if (!buffer || buffer.length < 20) {
       throw new Error('Universal3DObjectSeparationService: Invalid GLB buffer or missing glbPath');
@@ -272,7 +301,10 @@ export class Universal3DObjectSeparationService {
       timestamp: new Date().toISOString(),
       sourceAssetPath: options.glbPath,
       geoAnchor: options.geoAnchor,
-      objectCounts
+      objectCounts,
+      totalEntities: objects.length,
+      overallVertexCount: totalVertices,
+      categoryCounts: objectCounts
     };
   }
 

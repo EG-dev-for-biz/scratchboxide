@@ -431,11 +431,11 @@ npx tsx scripts/run_survey_pipeline_cli.ts \
   --radius 130 \
   --out-dir "public/surveys/colosseum_rome"
 
-# 2. Extract multimodal survey passes (Clay, Depth, Normal, Mist)
-npx tsx scripts/render_multimodal_survey_board.cjs
+# 2. Extract multimodal survey passes (Clay, Depth, Normal, Mist) via survey director
+npm run build:core
 
-# 3. Beautify stations via fal.ai FLUX.1 [dev] or Vertex AI
-node scripts/test_fal_flux_colosseum_tile.cjs
+# 3. Beautify stations via Vertex AI / Google Omni
+npm run sbox -- ai-beautify --location "Colosseum, Rome"
 
 # 4. Bake stations into oriented Gaussian splats and fuse into global model
 build/station_to_splats \

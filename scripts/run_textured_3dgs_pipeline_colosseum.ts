@@ -1,5 +1,5 @@
 /**
- * scripts/run_textured_3dgs_pipeline_colosseum.cjs
+ * scripts/run_textured_3dgs_pipeline_colosseum.ts
  *
  * Ground-Truth 1:1 Metric 3DGS Venue Reconstruction Pipeline for Rome Colosseum.
  * Follows the proven Red Rocks benchmark architecture:

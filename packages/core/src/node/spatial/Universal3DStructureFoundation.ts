@@ -1653,6 +1653,7 @@ export class Universal3DStructureFoundation {
       anchor?: GeodeticAnchor;
       numViews?: number;
       resyncPoints?: boolean;
+      pointDensity?: number;
     }
   ): Universal3DStructureFoundation {
     if (glbBuffer.length < 20 || glbBuffer.readUInt32LE(0) !== 0x46546C67) {
@@ -1865,7 +1866,7 @@ export class Universal3DStructureFoundation {
     });
 
     if (options?.resyncPoints !== false) {
-      struct.resynchronizePoints(1500);
+      struct.resynchronizePoints(options?.pointDensity ?? 1500);
     }
 
     return struct;

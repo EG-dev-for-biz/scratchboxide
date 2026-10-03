@@ -455,7 +455,7 @@ export class Calibrated3DGSReconstructionService {
             tilesetResult = await tilesService.convert({
                 inputPath: outSplatPath,
                 outDir: tilesDir,
-                origin: options.anchor ? { lat: options.anchor.lat, lng: options.anchor.lng, alt: options.anchor.elevation } : undefined,
+                origin: options.anchor ? { lat: options.anchor.lat, lng: options.anchor.lng, alt: options.anchor.elevationMeters ?? (options.anchor as any).elevation ?? 0 } : undefined,
                 maxDepth: options.octreeOptions?.maxDepth ?? 5,
                 leafCapacity: options.octreeOptions?.leafCapacity ?? 65536,
                 interiorBudget: options.octreeOptions?.interiorBudget ?? 32768,

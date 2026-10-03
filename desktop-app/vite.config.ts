@@ -105,17 +105,15 @@ export default defineConfig(({ mode }) => {
         ]
       },
       proxy: {
+        '/api': apiProxy(),
         '/gemini': apiProxy(),
         '/workspace': apiProxy(),
         '/media': apiProxy(),
         '/video': apiProxy(),
-        '/api/video': apiProxy(),
         '/3d': apiProxy(),
         '/spatial': apiProxy(),
         '/models': apiProxy(),
-        '/cpp': apiProxy(),
-        '/api/browser': apiProxy(),
-        '/api/tools': apiProxy()
+        '/cpp': apiProxy()
       }
     },
     resolve: {

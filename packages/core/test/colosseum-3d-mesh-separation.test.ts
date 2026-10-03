@@ -19,7 +19,9 @@ import {
 import { OrientedBoundingBoxSolver } from '../src/node/spatial/OrientedBoundingBoxSolver';
 
 describe('Colosseum3DMeshSeparatorService (Direct 3D Mesh Object Separation & OBB)', () => {
-  const modelPath = path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
+  const modelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
+    ? path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb')
+    : path.resolve(__dirname, '../../../public/models/colosseum_clay.glb');
 
   it('verifies the existence and size of the canonical Colosseum 3D model', () => {
     expect(fs.existsSync(modelPath)).toBe(true);

@@ -54,7 +54,9 @@ export class NativeCppCompilerService {
                 path.resolve(__dirname, '../native/3d-engine/include'),
                 path.resolve(__dirname, '../../../src/native/3d-engine/include'),
                 path.resolve(__dirname, '../../core/src/native/3d-engine/include'),
-                path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/include')
+                path.resolve(__dirname, '../../../packages/core/src/native/3d-engine/include'),
+                path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/include'),
+                path.resolve(process.cwd(), '../packages/core/src/native/3d-engine/include')
             ].filter((p): p is string => Boolean(p));
 
             this.sdkIncludePath = candidatePaths.find(p => fs.existsSync(p)) || candidatePaths[0];

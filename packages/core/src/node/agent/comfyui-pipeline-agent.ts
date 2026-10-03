@@ -271,7 +271,7 @@ export class ComfyUiPipelineAgent {
                     });
                 }
             }
-        } else if (isSceneOrEnvironment && capabilityResolution.domain === '3d') {
+        } else if (isSceneOrEnvironment && capabilityResolution.taskDomain === '3d') {
             // Scene creation request without native executor cannot fall back to Trellis
             return {
                 tier: 'tier1-native',
