@@ -157,6 +157,22 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
             return 'glass_shatter';
         }
 
+        // -0.988. Historical Battlefield / Lexington 1776 / Castle Siege (checked before geospatial so Battle of Lexington 1776 is not treated as modern tile)
+        if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing line|bunker hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical scene/i.test(text)) {
+            return 'battlefield';
+        }
+
+        // -0.985. Real-World Geospatially Anchored 3D Map Tiles (Google Photorealistic 3D Tiles)
+        const realWorldLoc = detectRealWorldLocationIntent(prompt, context);
+        if (realWorldLoc && realWorldLoc.isRealWorld) {
+            return 'geospatial';
+        }
+
+        // -0.96. City / Metropolis / Cyberpunk / Urban Street Canyons / Skylines
+        if (/\b(?:city\s*skyline|urban\s*street(?:\s*canyon)?|cyberpunk\s*city|downtown(?:\s*financial)?(?:\s*district)?|skyscrapers?|metropolis)\b/i.test(text)) {
+            return 'city';
+        }
+
         // -0.955. Architecture / Procedural Buildings / Civic Plazas / Mansard & Hip Roofs (checked before nature so architectural scenes with trees match architecture)
         if (/\b(?:building|buildings|architectur(?:e|al)|palais|palace|plaza|promenade|civic|mansard|hip\s*roof|fenestration|create_building|facade|quoin|cornice)\b/i.test(text)) {
             return 'architecture';
@@ -197,17 +213,6 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         // 0.5. Automotive / 3D Vehicle / Car / Sports Car / Truck / Race Car / Hypercar
         if (/\b(?:cars?|vehicles?|automobiles?|trucks?|pickups?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|racers?|formula\s*1?|f1\b|cybertrucks?|roadsters?|speedsters?|hot\s*rods?|evs?|hypercars?|supercars?|convertibles?|vans?)\b/i.test(text)) {
             return 'vehicle';
-        }
-
-        // 1. Historical Battlefield / Lexington / 1776 / Military / Castle Siege
-        if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing line|bunker hill|gettysburg|waterloo|siege|castle|fortress|warfare|historical scene/i.test(text)) {
-            return 'battlefield';
-        }
-
-        // 1.5. Real-World Geospatially Anchored 3D Map Tiles (Google Photorealistic 3D Tiles)
-        const realWorldLoc = detectRealWorldLocationIntent(prompt, context);
-        if (realWorldLoc && realWorldLoc.isRealWorld) {
-            return 'geospatial';
         }
 
         // 2. City / Metropolis / Cyberpunk / Architecture Skyline / Urban
@@ -3513,6 +3518,88 @@ scene.merge(ivy)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
 
+        const customMeshes: NonNullable<Scene3DData['customMeshes']> = [
+            // 1. Elevated stone promenade pedestal
+            {
+                id: 'arch-promenade',
+                name: 'Limestone Promenade Pedestal',
+                type: 'cylinder',
+                position: [0, 0.35, 0],
+                scale: [30.0, 0.7, 30.0],
+                tier: 'primary',
+                material: { color: 0xdcd6cd, roughness: 0.82, metalness: 0.05 }
+            },
+            // 2. Central municipal / administrative hall with rhythmic window reveals
+            {
+                id: 'arch-central-hall',
+                name: 'Central Palais Complex',
+                type: 'box',
+                position: [0, 8.0, -5.0],
+                scale: [22.0, 14.6, 14.0],
+                tier: 'primary',
+                material: { color: 0xefede8, roughness: 0.65, metalness: 0.12 }
+            },
+            // 3. Mansard / Hip Roof Crown
+            {
+                id: 'arch-central-roof',
+                name: 'Mansard Architectural Crown',
+                type: 'cone',
+                position: [0, 17.5, -5.0],
+                scale: [18.0, 5.5, 12.0],
+                tier: 'secondary',
+                material: { color: 0x475569, roughness: 0.45, metalness: 0.4 }
+            },
+            // 4. East Wing
+            {
+                id: 'arch-east-wing',
+                name: 'East Wing Pavilion',
+                type: 'box',
+                position: [-16.0, 6.0, 0],
+                scale: [12.0, 10.6, 10.0],
+                tier: 'secondary',
+                material: { color: 0xe2e8f0, roughness: 0.7, metalness: 0.08 }
+            },
+            // 5. West Wing
+            {
+                id: 'arch-west-wing',
+                name: 'West Wing Pavilion',
+                type: 'box',
+                position: [16.0, 6.0, 0],
+                scale: [12.0, 10.6, 10.0],
+                tier: 'secondary',
+                material: { color: 0xe2e8f0, roughness: 0.7, metalness: 0.08 }
+            },
+            // 6. Colonnade Entrance Portico
+            {
+                id: 'arch-portico-colonnade',
+                name: 'Monumental Colonnade Portico',
+                type: 'box',
+                position: [0, 3.5, 3.0],
+                scale: [14.0, 5.0, 2.5],
+                tier: 'tertiary',
+                material: { color: 0xf8fafc, roughness: 0.5, metalness: 0.15 }
+            },
+            // 7. Botanical Shade Trees
+            {
+                id: 'arch-tree-east',
+                name: 'Botanical Promenade Shade Tree',
+                type: 'sphere',
+                position: [-8.0, 4.5, 9.0],
+                scale: [3.2, 4.0, 3.2],
+                tier: 'tertiary',
+                material: { color: 0x22c55e, roughness: 0.8, metalness: 0.0 }
+            },
+            {
+                id: 'arch-tree-west',
+                name: 'Botanical Promenade Shade Tree',
+                type: 'sphere',
+                position: [8.0, 4.5, 9.0],
+                scale: [3.2, 4.0, 3.2],
+                tier: 'tertiary',
+                material: { color: 0x16a34a, roughness: 0.8, metalness: 0.0 }
+            }
+        ];
+
         return {
             title,
             subtitle,
@@ -3531,6 +3618,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 lighting: 'studio',
                 ground: true
             },
+            customMeshes,
             geoAnchor: realWorldLoc ? {
                 lat: realWorldLoc.lat,
                 lng: realWorldLoc.lng,
