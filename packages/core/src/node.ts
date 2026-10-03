@@ -860,6 +860,21 @@ export {
     type PixelRegion
 } from './node/spatial/StreetViewRestyleService';
 export {
+    projectCubicFacesToErpBuffer,
+    fetchStreetViewPanoMetadata,
+    fetchStreetViewCubicFaces,
+    retrieveAndProjectStreetViewPano,
+    unprojectCubicFacesToPointCloud,
+    parseStreetViewDate,
+    type HistoricalPanoRecord,
+    type StreetViewPanoMetadata,
+    type CubicFacesInput,
+    type ProjectFacesOptions,
+    type ProjectedErpResult,
+    type StreetViewFetchOptions,
+    type StreetViewPointCloudResult
+} from './node/spatial/StreetViewPanoramaProjectionService';
+export {
     OmniVideoService,
     OMNI_VIDEO_MODEL,
     buildBlockoutFirstLastPrompt,
