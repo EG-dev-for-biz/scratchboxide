@@ -1429,102 +1429,6 @@ export interface ArtifactQuickAction {
 // ==========================================
 export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
     {
-        id: 'skill-frontend-designer',
-        name: 'Frontend Designer',
-        tagline: 'Crafts Cupertino-grade UI components with Liquid Glass materials & spring motion.',
-        description: 'Specialized superpower in consumer-grade UI/UX design, Apple Human Interface Guidelines, responsive bento grids, and glassmorphic micro-interactions.',
-        category: 'Design',
-        accentColor: 'blue',
-        tags: ['Apple HIG', 'Liquid Glass', 'UI/UX', 'Micro-Interactions'],
-        isEnabled: true,
-        author: 'Scratchbox Studio',
-        version: '2.4.0',
-        promptStarters: [
-            'Design a high-converting pricing bento grid with Apple Liquid Glass',
-            'Create an executive KPI dashboard card with subtle sparklines'
-        ]
-    },
-    {
-        id: 'skill-apple-hig',
-        name: 'Apple HIG & Motion Specialist',
-        tagline: 'Audits layouts, SF typography hierarchy, and fluid spring micro-interactions.',
-        description: 'Ensures strict alignment with Apple design foundations: 8-pt spacing, semantic Dynamic Type, WCAG 2.2 AA contrast, and tactile spring feedback.',
-        category: 'Design',
-        accentColor: 'indigo',
-        tags: ['8-Pt Grid', 'SF Pro Type', 'Spring Physics', 'Tactile'],
-        isEnabled: true,
-        author: 'Cupertino Lab',
-        version: '1.9.2',
-        promptStarters: [
-            'Audit this visual primitive for 8-pt spacing & contrast compliance',
-            'Enhance all toggle switches with natural spring physics'
-        ]
-    },
-    {
-        id: 'skill-market-analyst',
-        name: 'Market & Competitor Analyst',
-        tagline: 'Synthesizes competitive landscapes, SaaS pricing models & revenue trajectories.',
-        description: 'Transforms market data and business trends into executive summary decks, cohort retention models, and interactive KPI comparisons.',
-        category: 'Analytics',
-        accentColor: 'emerald',
-        tags: ['Market Intel', 'MRR Growth', 'Cohort Analysis', 'SaaS Pricing'],
-        isEnabled: true,
-        author: 'Scratchbox Studio',
-        version: '2.1.0',
-        promptStarters: [
-            'Synthesize a market comparison matrix for modern developer tools',
-            'Build a growth forecast dashboard with MRR and churn metrics'
-        ]
-    },
-    {
-        id: 'skill-copywriter',
-        name: 'Executive Copywriter',
-        tagline: 'Drafts punchy, benefit-driven product copy and strategy documents.',
-        description: 'Writes with crisp Apple-style clarity: confident verbs, minimal jargon, human-centered benefits, and polished executive narratives.',
-        category: 'Writing',
-        accentColor: 'purple',
-        tags: ['Copywriting', 'Executive Briefs', 'Clarity', 'Benefit-Led'],
-        isEnabled: false,
-        author: 'Editorial Team',
-        version: '1.5.0',
-        promptStarters: [
-            'Draft an executive product strategy brief for Scratchbox 2.0',
-            'Rewrite technical feature specs into clear customer benefits'
-        ]
-    },
-    {
-        id: 'skill-cloud-architect',
-        name: 'Full-Stack Cloud Architect',
-        tagline: 'Maps out resilient distributed backend systems, node pipelines & event streams.',
-        description: 'Generates interactive node flow graphs, zero-lockin cloud architectures, database relations, and deployment readiness checklists.',
-        category: 'Engineering',
-        accentColor: 'amber',
-        tags: ['Node Graphs', 'System Design', 'Pipelines', 'Resilience'],
-        isEnabled: false,
-        author: 'Platform Ops',
-        version: '3.0.1',
-        promptStarters: [
-            'Generate an interactive node flow graph for auth & prompt routing',
-            'Create a production launch readiness checklist with security tests'
-        ]
-    },
-    {
-        id: 'skill-research-agent',
-        name: 'AI Research Agent',
-        tagline: 'Synthesizes multi-source knowledge, papers, and structured technical findings.',
-        description: 'Autonomous research superpower capable of distilling complex technical documentation, academic papers, and comparative tradeoffs.',
-        category: 'Research',
-        accentColor: 'cyan',
-        tags: ['Multi-Source', 'Paper Distillation', 'Tradeoffs', 'Synthesis'],
-        isEnabled: false,
-        author: 'AI Research Lab',
-        version: '2.0.0',
-        promptStarters: [
-            'Synthesize the core architecture of Model Context Protocol (MCP)',
-            'Compare vector retrieval vs structured knowledge graphs'
-        ]
-    },
-    {
         id: 'skill-universal-3d-structure',
         name: 'Universal 3D Structure Foundation',
         tagline: 'Single source of truth geometric anchor across solid meshes, 3DGS, cameras, collision envelopes & animations.',
@@ -1566,6 +1470,102 @@ export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
 2. High-Precision Interpolation: Translation and scale evaluate via vector linear interpolation (LERP); rotations evaluate via normalized unit quaternion spherical linear interpolation (SLERP).
 3. glTF 2.0 Binary Animation: Export animation tracks directly into standard binary glTF 2.0 chunks with target paths ("translation", "rotation", "scale").
 4. Video Timeline NLE Bridge: Use toTimelineElement() to mount animation clips to the Video Timeline primitive with dictionary-based keyframe diamonds (offsetSec * pxPerSec) for interactive scrubbing and seeking.`
+    },
+    {
+        id: 'skill-3d-artist',
+        name: 'Master 3D Environmental Artist',
+        tagline: '70-20-10 form hierarchy, botanical morphogenesis, procedural PBR rhytidome & Mie scattering.',
+        description: 'Executes like a senior VFX environmental supervisor to sculpt, proceduralize, and light 3D natural assets with photographic fidelity, transferred envelope foliage normals, and physically-grounded aerial perspective.',
+        category: 'Design',
+        accentColor: 'emerald',
+        tags: ['70-20-10 Hierarchy', 'Procedural PBR', 'Botanical Branching', 'Mie Scattering', 'Envelope Normals'],
+        isEnabled: true,
+        author: 'Scratchbox 3D',
+        version: '1.0.0',
+        promptStarters: [
+            'Generate an ancient mossy oak with botanical branching and fluted root buttresses',
+            'Apply transferred envelope normals and procedural bark shaders to foliage'
+        ]
+    },
+    {
+        id: 'skill-universal-tile-decomposition',
+        name: 'Universal Tile Decomposition (UTDRA)',
+        tagline: 'Classifies 9 macro-geographic domains, rectifies building facades, and excises bridge curtains.',
+        description: 'Universal Tile Decomposition & Rectification Algorithm (UTDRA / ULDRA) via native C++20 engine: segments building crowns, rectifies vertical facade walls, excises planar bridge curtains, and slices elevation datum with zero non-manifold holes.',
+        category: 'Engineering',
+        accentColor: 'blue',
+        tags: ['UTDRA', '3D Tiles', 'Mesh Rectification', 'Bridge Curtain Cleansing', 'C++20 Engine'],
+        isEnabled: true,
+        author: 'Scratchbox Spatial',
+        version: '1.0.0',
+        promptStarters: [
+            'Decompose photogrammetric 3D tile into terrain, building shafts, and architectural crowns',
+            'Excise curtain wall under bridge deck and rectify vertical building facades'
+        ]
+    },
+    {
+        id: 'skill-google-3d-tiles',
+        name: 'Google 3D Tiles & Clay Blockout Engine',
+        tagline: 'Streams photorealistic geodetic tiles and studio clay blockouts (<VIDEO_REF_0>) with zero presets.',
+        description: 'Ingests real-world addresses and geocoordinates directly from Google Maps Photorealistic 3D Tiles in full photogrammetric texture or studio grey clay blockout mode. Guarantees leaf LOD fidelity, 4K screen-space error bounds, and produces standard binary glTF 2.0 (.glb).',
+        category: 'Engineering',
+        accentColor: 'amber',
+        tags: ['Google 3D Tiles', 'Clay Blockout', '<VIDEO_REF_0>', 'glTF 2.0', 'Geodetic'],
+        isEnabled: true,
+        author: 'Scratchbox Spatial',
+        version: '1.0.0',
+        promptStarters: [
+            'Ingest photorealistic 3D tile model for coordinates [37.7749, -122.4194]',
+            'Render studio grey clay blockout flight path for video diffusion conditioning'
+        ]
+    },
+    {
+        id: 'skill-two-tier-problem-solving',
+        name: 'Two-Tier Problem Solving (C++20 + ComfyUI)',
+        tagline: 'Tier 1 Native C++20 Astra 3D & WebGL with transactional failover to Tier 2 Cloud Run ComfyUI.',
+        description: 'Evaluates user goals against Scratchbox native capabilities (C++20 Astra 3D engine, Three.js, Video Timeline, NOAA solar ephemeris) and seamlessly spins up ComfyUI neural pipelines (Trellis, Marigold, AnimateDiff) with automatic failover.',
+        category: 'Engineering',
+        accentColor: 'purple',
+        tags: ['Two-Tier Architecture', 'C++20 Engine', 'ComfyUI Fallback', 'Cloud Run L4 GPU'],
+        isEnabled: true,
+        author: 'Scratchbox Core',
+        version: '1.0.0',
+        promptStarters: [
+            'Assess task capability and execute procedural C++20 generation',
+            'Spin up ComfyUI Trellis pipeline with dynamic node injection for neural 3D synthesis'
+        ]
+    },
+    {
+        id: 'skill-geo-camera-matchmove',
+        name: 'Geo Camera Matchmove & Spline Trajectory',
+        tagline: 'Matches 6-DoF camera solves into real-world geographic coordinates with Catmull-Rom splines.',
+        description: 'Matches 6-DoF camera motion and trajectory from reference video into real-world geographic coordinates, solves Catmull-Rom spline camera paths, renders Google 3D Tiles blockout in 4K UHD (<VIDEO_REF_0>), and compiles synchronized comparisons.',
+        category: 'Design',
+        accentColor: 'rose',
+        tags: ['Camera Matchmove', '6-DoF Solve', 'Catmull-Rom Spline', '<VIDEO_REF_0>', 'VFX'],
+        isEnabled: true,
+        author: 'Scratchbox VFX',
+        version: '1.0.0',
+        promptStarters: [
+            'Solve 6-DoF camera trajectory and match to geodetic landmark coordinates',
+            'Render synchronized 50/50 split comparison for matchmove validation'
+        ]
+    },
+    {
+        id: 'skill-native-mesh-reshaping',
+        name: 'Native C++20 Mesh Reshaper & Deformer',
+        tagline: 'Parametric non-linear deformers, Bernstein FFD lattices & sculpt brushes in sub-milliseconds.',
+        description: 'Reshapes and deforms 3D meshes via natural language prompts or explicit parametric operators using the native C++20 Astra 3D engine (scratchbox_shaper.hpp): non-linear deformers (taper, twist, bend, bulge, squash), Bernstein FFD tensor lattices, and manifold healing.',
+        category: 'Engineering',
+        accentColor: 'cyan',
+        tags: ['Astra 3D Engine', 'FFD Lattices', 'C++20 Deformers', 'Sub-millisecond', 'Manifold Healing'],
+        isEnabled: true,
+        author: 'Scratchbox 3D',
+        version: '1.0.0',
+        promptStarters: [
+            'Apply non-linear taper and twist deformers to mesh vertices',
+            'Deform geometry using a 4x4x4 Bernstein FFD tensor lattice'
+        ]
     }
 ];
 

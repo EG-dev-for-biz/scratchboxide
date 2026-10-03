@@ -103,11 +103,11 @@ async function runUiLogicEnhancementsTestSuite() {
     assert.strictEqual(match1?.suffix, ' and improve styling');
 
     // Test 2.2: Find skill / trigger with multi-word query
-    const text2 = 'I need to /skill Frontend Designer for this component';
-    const match2 = findTriggerMatch(text2, 34);
+    const text2 = 'I need to /skill Master 3D Environmental Artist for this component';
+    const match2 = findTriggerMatch(text2, 47);
     assert.ok(match2, 'Should match skill trigger');
     assert.strictEqual(match2?.type, 'skill');
-    assert.strictEqual(match2?.query, 'skill Frontend Designer');
+    assert.strictEqual(match2?.query, 'skill Master 3D Environmental Artist');
     assert.strictEqual(match2?.prefix, 'I need to ');
     assert.strictEqual(match2?.suffix, ' for this component');
 

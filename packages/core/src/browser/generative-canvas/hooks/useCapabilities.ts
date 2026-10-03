@@ -21,6 +21,15 @@ import { GeminiClient } from '../gemini-client';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 
 
+const REMOVED_LEGACY_SKILL_IDS = new Set([
+    'skill-frontend-designer',
+    'skill-apple-hig',
+    'skill-market-analyst',
+    'skill-copywriter',
+    'skill-cloud-architect',
+    'skill-research-agent'
+]);
+
 export function useCapabilities() {
     // Capabilities & Live Tools state
     const [skills, setSkillsState] = React.useState<SkillItem[]>(() => {
@@ -31,7 +40,14 @@ export function useCapabilities() {
                     const parsed = JSON.parse(saved);
                     if (Array.isArray(parsed) && parsed.length > 0) {
                         const existingIds = new Set(DEFAULT_SKILLS_CATALOG.map(s => s.id));
-                        const uniqueCustom = parsed.filter((s: SkillItem) => !existingIds.has(s.id));
+                        const uniqueCustom = parsed.filter(
+                            (s: SkillItem) => !REMOVED_LEGACY_SKILL_IDS.has(s.id) && !existingIds.has(s.id)
+                        );
+                        if (uniqueCustom.length !== parsed.length) {
+                            try {
+                                localStorage.setItem('scratchbox_custom_skills', JSON.stringify(uniqueCustom));
+                            } catch {}
+                        }
                         return [...uniqueCustom, ...DEFAULT_SKILLS_CATALOG];
                     }
                 }
@@ -74,7 +90,7 @@ export function useCapabilities() {
 
     const persistSkills = React.useCallback((nextSkills: SkillItem[]) => {
         const customSkills = nextSkills.filter(
-            s => s.isCustom || !DEFAULT_SKILLS_CATALOG.some(d => d.id === s.id)
+            s => !REMOVED_LEGACY_SKILL_IDS.has(s.id) && (s.isCustom || !DEFAULT_SKILLS_CATALOG.some(d => d.id === s.id))
         );
         if (typeof localStorage !== 'undefined') {
             try {

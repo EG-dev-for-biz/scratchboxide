@@ -237,7 +237,7 @@ export const SkillsManagerPrimitive: React.FC<SkillsManagerPrimitiveProps> = ({
                         <div>
                             <h2 className="sb-skills-title">AI Skills &amp; Capabilities</h2>
                             <p className="sb-skills-subtitle">
-                                Equip your AI companion with domain skills, Apple HIG standards, and specialized workflows.
+                                Equip your AI companion with domain skills, 3D spatial pipelines, and specialized workflows.
                             </p>
                         </div>
                     </div>
