@@ -2519,13 +2519,18 @@ int main(int argc, char** argv) {
                         }
                     }
                 });
-                scene.add(gltf.scene);
+                // Automatically frame camera around generated procedural geometry
+                const box = new THREE.Box3().setFromObject(gltf.scene);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z, 15);
+                const dist = Math.max(maxDim * 1.25, 24);
                 if (stack.camera) {
-                    stack.camera.position.set(14, 11, 16);
-                    stack.camera.lookAt(0, 1.5, 0);
+                    stack.camera.position.set(center.x + dist * 0.65, center.y + dist * 0.45, center.z + dist * 0.75);
+                    stack.camera.lookAt(center.x, center.y + size.y * 0.2, center.z);
                 }
-                cameraTargetRef.current.set(0, 1.5, 0);
-                cameraRotationRef.current = { theta: 0.72, phi: 1.12, distance: 23.3 };
+                cameraTargetRef.current.set(center.x, center.y + size.y * 0.2, center.z);
+                cameraRotationRef.current = { theta: 0.72, phi: 1.12, distance: dist };
                 refreshEntities();
             }, (err) => {
                 console.warn('[3D Engine GLB Loader Error]:', err);

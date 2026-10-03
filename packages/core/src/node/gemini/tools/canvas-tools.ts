@@ -39,7 +39,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData)'
+                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport.'
                 }
             },
             required: ['primitiveType', 'title', 'payload']
@@ -173,9 +173,68 @@ export const canvasHandlers: Record<string, ToolHandler> = {
 
             const p = payload && typeof payload === 'object' ? (payload as any) : {};
 
-            let pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python;
-            let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64;
-            let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath;
+            let pythonScript = p.pythonGenerator?.sourceCode || p.script || p.pythonScript || p.python || contextual3D.pythonGenerator?.sourceCode;
+            let pythonGlbBase64 = p.pythonGenerator?.glbBase64 || p.glbBase64 || contextual3D.pythonGenerator?.glbBase64;
+            let pythonGlbPath = p.pythonGenerator?.glbPath || p.glbPath || contextual3D.pythonGenerator?.glbPath;
+
+            const isArchPrompt = /\b(?:procedural|building|architecture|palace|palais|hall|wings?|facade|fenestration|mansard|hip\s*roof|gable|plaza|promenade|pedestal|trees?|ivy|botanical|civic|citadel|castle|outpost)\b/i.test(prompt) || /\b(?:procedural|building|architecture|plaza|promenade|civic)\b/i.test(title);
+
+            if (!pythonScript && !pythonGlbBase64 && isArchPrompt) {
+                    pythonScript = `import scratchbox as sb
+
+scene = sb.geometry.Mesh("${(title || 'CivicPlaza').replace(/[^a-zA-Z0-9]/g, '')}")
+
+# 1. Elevated stone promenade pedestal
+promenade = sb.geometry.create_studio_pedestal(radius=30.0, height=0.7, bevel=0.08, segments=64)
+promenade.material = sb.geometry.PbrMaterial.stone_limestone()
+scene.merge(promenade)
+
+# 2. Central municipal hall with Mansard roof & rhythmic window reveals
+central_hall = sb.create_building(
+    width=22.0, depth=14.0, floors=4, floor_height=3.6,
+    ground_floor_height=4.4, plinth_height=0.7,
+    bay_width=3.2, window_width=1.8, window_height=2.2, window_recess_depth=0.26,
+    roof='mansard', roof_pitch_degrees=38.0, roof_overhang=0.8,
+    name='CentralMunicipalPalais'
+)
+central_hall.translate(0, 0.7, -5.0)
+scene.merge(central_hall)
+
+# 3. Flanking East & West wings with Hip roofs
+east_wing = sb.create_building(
+    width=12.0, depth=10.0, floors=3, floor_height=3.4,
+    ground_floor_height=4.0, plinth_height=0.5,
+    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
+    roof='hip', name='EastWing'
+)
+east_wing.translate(-16.0, 0.7, 0.0)
+scene.merge(east_wing)
+
+west_wing = sb.create_building(
+    width=12.0, depth=10.0, floors=3, floor_height=3.4,
+    ground_floor_height=4.0, plinth_height=0.5,
+    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
+    roof='hip', name='WestWing'
+)
+west_wing.translate(16.0, 0.7, 0.0)
+scene.merge(west_wing)
+
+# 4. Botanical Space-Colonization Shade Trees
+tree_coords = [(-8.0, 0.7, 9.0), (8.0, 0.7, 9.0), (-15.0, 0.7, 12.0), (15.0, 0.7, 12.0)]
+for tx, ty, tz in tree_coords:
+    tree = sb.create_tree(attractor_count=130, crown_center=(0, 5, 0), crown_extents=(2.6, 3.8, 2.6))
+    tree.translate(tx, ty, tz)
+    scene.merge(tree)
+
+# 5. Clinging Ivy on East wing foundation
+ivy = sb.create_ivy(root=(-10.0, 0.7, 3.0), obstacle_min=(-16, 0.7, -5), obstacle_max=(-10, 6, 5), max_steps=80)
+scene.merge(ivy)
+
+# 6. Stream binary glTF 2.0
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+`;
+                }
+            }
 
             if (pythonScript && !pythonGlbBase64) {
                 try {
@@ -237,9 +296,11 @@ export const canvasHandlers: Record<string, ToolHandler> = {
                 splatUrl: p.splatUrl || contextual3D.splatUrl,
                 splatTilesetUrl: p.splatTilesetUrl || contextual3D.splatTilesetUrl,
                 splatOptions: p.splatOptions || contextual3D.splatOptions,
-                customMeshes: (p.customMeshes && Array.isArray(p.customMeshes) && p.customMeshes.length > 0)
-                    ? p.customMeshes
-                    : contextual3D.customMeshes,
+                customMeshes: (pyGenerator?.glbBase64 || cppGen?.glbBase64)
+                    ? []
+                    : ((p.customMeshes && Array.isArray(p.customMeshes) && p.customMeshes.length > 0)
+                        ? p.customMeshes
+                        : contextual3D.customMeshes),
                 environment: p.environment || contextual3D.environment,
                 camera: p.camera || contextual3D.camera,
                 objects: (Array.isArray(p.objects) && p.objects.length > 0) ? p.objects : (contextual3D.objects || []),

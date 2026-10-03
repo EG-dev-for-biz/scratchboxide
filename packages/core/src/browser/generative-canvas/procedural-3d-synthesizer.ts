@@ -157,6 +157,11 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
             return 'glass_shatter';
         }
 
+        // -0.955. Architecture / Procedural Buildings / Civic Plazas / Mansard & Hip Roofs (checked before nature so architectural scenes with trees match architecture)
+        if (/\b(?:building|buildings|architectur(?:e|al)|palais|palace|plaza|promenade|civic|mansard|hip\s*roof|fenestration|create_building|facade|quoin|cornice)\b/i.test(text)) {
+            return 'architecture';
+        }
+
         // -0.95. Nature, Ecosystem, Atmospheric Volumetrics, SSS & Triplanar
         if (!/\b(?:worldbuilder|terrain|heightmap)\b/i.test(text) && /\b(?:nature|forest|trees?|l_system|vegetation|foliage|leaves|biome|stratified|cliff\s*strata|rock\s*strata|mountain\s*plateau|atmosphere|volumetric|fog|god\s*rays|mie\s*scattering|subsurface|sss|translucent|triplanar|moss)\b/i.test(text)) {
             return 'nature_atmosphere';
@@ -1979,8 +1984,8 @@ export function applyCreativeLocationCasting(
         }
     }
 
-    // Ensure C++ Procedural Generator conforms to "Lean on C/C++ First for 3D" directive
-    if (!scene.cppGenerator || !scene.cppGenerator.sourceCode) {
+    // Ensure C++ or Python Procedural Generator conforms to 3D directive
+    if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
         const theme = detect3DSceneTheme(prompt, context);
         let cppSource: string;
         if (theme && theme !== 'general' && theme !== 'geospatial') {
@@ -2285,103 +2290,110 @@ function _synthesizeRawContextual3DSceneInner(
             };
         }
 
-        // Extract clay preset preference if specified
-        let clayPreset: ClayPresetId = 'warm-clay';
-        if (/alabaster|white\s*clay|plaster/i.test(prompt)) clayPreset = 'alabaster';
-        else if (/terracotta|brick\s*clay/i.test(prompt)) clayPreset = 'terracotta';
-        else if (/onyx|black\s*clay|dark\s*clay|slate/i.test(prompt)) clayPreset = 'onyx';
-        else if (/studio\s*grey|neutral\s*clay|grey\s*clay/i.test(prompt)) clayPreset = 'studio-grey';
-        else if (/porcelain|ceramic/i.test(prompt)) clayPreset = 'porcelain';
-        else if (/concrete|brutalist/i.test(prompt)) clayPreset = 'concrete';
+        // Only run tile ingest if explicitly requesting Google 3D tile models or geospatial photogrammetry
+        const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astra|nanobind)\b/i.test(prompt);
+        const isExplicitTileIngest = /\b(?:tile|tiles|map\s*data|satellite|photogrammetr|geospatial|real\s*world\s*clay|google\s*maps)\b/i.test(prompt) ||
+            (!isExplicitProcedural && detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
 
-        const tileService = Google3DTileService.getInstance();
-        const tileResult = tileService.ingestTileRegionSync({
-            query: realWorldLoc.landmarkName || realWorldLoc.query,
-            lat: realWorldLoc.lat,
-            lng: realWorldLoc.lng,
-            elevation: realWorldLoc.elevation,
-            clayPreset,
-            detailLevel: 'high',
-            includeBuildings: true,
-            includeTerrain: true
-        });
+        if (isExplicitTileIngest) {
+            // Extract clay preset preference if specified
+            let clayPreset: ClayPresetId = 'warm-clay';
+            if (/alabaster|white\s*clay|plaster/i.test(prompt)) clayPreset = 'alabaster';
+            else if (/terracotta|brick\s*clay/i.test(prompt)) clayPreset = 'terracotta';
+            else if (/onyx|black\s*clay|dark\s*clay|slate/i.test(prompt)) clayPreset = 'onyx';
+            else if (/studio\s*grey|neutral\s*clay|grey\s*clay/i.test(prompt)) clayPreset = 'studio-grey';
+            else if (/porcelain|ceramic/i.test(prompt)) clayPreset = 'porcelain';
+            else if (/concrete|brutalist/i.test(prompt)) clayPreset = 'concrete';
 
-        // For real-world scenes anchored to 3D tiles, Google 3D Tiles provides the persistent real-world
-        // architecture, trees, streets, and terrain. We attach the custom mesh definition and building meshes.
-        const customMeshes: NonNullable<Scene3DData['customMeshes']> = [
-            tileResult.customMeshDefinition,
-            ...(tileResult.buildingMeshes || [])
-        ];
-
-        const sceneTitle = `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
-
-        return {
-            title: sceneTitle,
-            subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult.stats.buildingCount} structures, ${tileResult.stats.vertexCount} vertices, ${clayPreset} PBR shading).`,
-            worldBranch: `real-world/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-            sceneType: 'worldbuilder',
-            renderMode: 'pbr',
-            cameraMode: 'orbit',
-            animation: 'orbit',
-            timeline: {
-                currentTimeMs: 0,
-                durationMs: 20000,
-                isPlaying: true,
-                speed: 1.0,
-                playbackSpeed: 1.0,
-                isLooping: true
-            },
-            camera: {
-                position: [0, 25, 45],
-                target: [0, 2, 0],
-                fov: 45
-            },
-            environment: {
-                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
-                lighting: 'golden_hour',
-                ground: false
-            },
-            geoAnchor: {
+            const tileService = Google3DTileService.getInstance();
+            const tileResult = tileService.ingestTileRegionSync({
+                query: realWorldLoc.landmarkName || realWorldLoc.query,
                 lat: realWorldLoc.lat,
                 lng: realWorldLoc.lng,
                 elevation: realWorldLoc.elevation,
-                elevationSource: 'google_elevation',
-                datum: 'MSL_EGM96',
-                active: true,
-                landmarkName: realWorldLoc.landmarkName
-            },
-            customMeshes,
-            objects: [tileResult.media4DObject],
-            features: {
-                ...baseFeatures,
-                ...(hasAtmosphere ? {
-                    atmosphericScattering: buildHeadlessAtmosphere({
-                        sunElevation: 28,
-                        sunAzimuth: 145,
-                        latitude: realWorldLoc.lat,
-                        longitude: realWorldLoc.lng,
-                        aerialPerspectiveEnabled: true,
-                        inscatteringIntensity: 1.0,
-                        cloudShadowsEnabled: true,
-                        cloudShadowIntensity: 0.65
-                    }),
-                    godRays: hasGodRays
-                } : {})
-            },
-            cppGenerator: {
-                enabled: true,
-                filename: 'world_generator.cpp',
-                sourceCode: generateGeospatialCpp3DSource({
-                    landmarkName: realWorldLoc.landmarkName,
+                clayPreset,
+                detailLevel: 'high',
+                includeBuildings: true,
+                includeTerrain: true
+            });
+
+            // For real-world scenes anchored to 3D tiles, Google 3D Tiles provides the persistent real-world
+            // architecture, trees, streets, and terrain. We attach the custom mesh definition and building meshes.
+            const customMeshes: NonNullable<Scene3DData['customMeshes']> = [
+                tileResult.customMeshDefinition,
+                ...(tileResult.buildingMeshes || [])
+            ];
+
+            const sceneTitle = `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
+
+            return {
+                title: sceneTitle,
+                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult.stats.buildingCount} structures, ${tileResult.stats.vertexCount} vertices, ${clayPreset} PBR shading).`,
+                worldBranch: `real-world/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+                sceneType: 'worldbuilder',
+                renderMode: 'pbr',
+                cameraMode: 'orbit',
+                animation: 'orbit',
+                timeline: {
+                    currentTimeMs: 0,
+                    durationMs: 20000,
+                    isPlaying: true,
+                    speed: 1.0,
+                    playbackSpeed: 1.0,
+                    isLooping: true
+                },
+                camera: {
+                    position: [0, 25, 45],
+                    target: [0, 2, 0],
+                    fov: 45
+                },
+                environment: {
+                    skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
+                    lighting: 'golden_hour',
+                    ground: false
+                },
+                geoAnchor: {
                     lat: realWorldLoc.lat,
                     lng: realWorldLoc.lng,
                     elevation: realWorldLoc.elevation,
-                    clayPreset
-                }),
-                vertexCount: tileResult.stats.vertexCount,
-                triangleCount: tileResult.stats.faceCount
-            }
-        };
+                    elevationSource: 'google_elevation',
+                    datum: 'MSL_EGM96',
+                    active: true,
+                    landmarkName: realWorldLoc.landmarkName
+                },
+                customMeshes,
+                objects: [tileResult.media4DObject],
+                features: {
+                    ...baseFeatures,
+                    ...(hasAtmosphere ? {
+                        atmosphericScattering: buildHeadlessAtmosphere({
+                            sunElevation: 28,
+                            sunAzimuth: 145,
+                            latitude: realWorldLoc.lat,
+                            longitude: realWorldLoc.lng,
+                            aerialPerspectiveEnabled: true,
+                            inscatteringIntensity: 1.0,
+                            cloudShadowsEnabled: true,
+                            cloudShadowIntensity: 0.65
+                        }),
+                        godRays: hasGodRays
+                    } : {})
+                },
+                cppGenerator: {
+                    enabled: true,
+                    filename: 'world_generator.cpp',
+                    sourceCode: generateGeospatialCpp3DSource({
+                        landmarkName: realWorldLoc.landmarkName,
+                        lat: realWorldLoc.lat,
+                        lng: realWorldLoc.lng,
+                        elevation: realWorldLoc.elevation,
+                        clayPreset
+                    }),
+                    vertexCount: tileResult.stats.vertexCount,
+                    triangleCount: tileResult.stats.faceCount
+                }
+            };
+        }
     }
 
     if (theme === 'vehicle') {
@@ -3443,52 +3455,96 @@ onFrame((time, delta) => {
     }
 
     if (theme === 'architecture') {
-        const title = 'Architectural Blueprint & Spatial Interior';
-        const subtitle = '3D structural pavilion, spatial interior layout, structural columns, lighting bays, and holographic blueprint grid.';
+        const isPlazaOrCivic = /plaza|civic|square|forum|promenade|courtyard|esplanade|palais|hall/i.test(prompt);
+        const title = isPlazaOrCivic ? 'Procedural Architectural Civic Plaza' : 'Procedural Architectural Complex';
+        const subtitle = '3D multi-story architecture with rhythmic recessed window reveals, mansard and hip roofs, botanical space-colonization trees, and limestone promenade.';
 
-        const customScript = `
-const arch = createArchitecturalRoomScene(scene, THREE, {
-    showBlueprintGrid: true,
-    showFurniturePlinths: true
-});
+        const pythonSource = `import scratchbox as sb
 
-onFrame((time, delta) => {
-    if (arch && arch.userData && typeof arch.userData.update === 'function') {
-        arch.userData.update(time, delta);
-    }
-});
+scene = sb.geometry.Mesh("${(title || 'CivicPlaza').replace(/[^a-zA-Z0-9]/g, '')}")
+
+# 1. Elevated stone promenade pedestal
+promenade = sb.geometry.create_studio_pedestal(radius=30.0, height=0.7, bevel=0.08, segments=64)
+promenade.material = sb.geometry.PbrMaterial.stone_limestone()
+scene.merge(promenade)
+
+# 2. Central municipal / administrative hall with Mansard roof & rhythmic window reveals
+central_hall = sb.create_building(
+    width=22.0, depth=14.0, floors=4, floor_height=3.6,
+    ground_floor_height=4.4, plinth_height=0.7,
+    bay_width=3.2, window_width=1.8, window_height=2.2, window_recess_depth=0.26,
+    roof='mansard', roof_pitch_degrees=38.0, roof_overhang=0.8,
+    name='CentralMunicipalPalais'
+)
+central_hall.translate(0, 0.7, -5.0)
+scene.merge(central_hall)
+
+# 3. Flanking East & West wings with Hip roofs
+east_wing = sb.create_building(
+    width=12.0, depth=10.0, floors=3, floor_height=3.4,
+    ground_floor_height=4.0, plinth_height=0.5,
+    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
+    roof='hip', name='EastWing'
+)
+east_wing.translate(-16.0, 0.7, 0.0)
+scene.merge(east_wing)
+
+west_wing = sb.create_building(
+    width=12.0, depth=10.0, floors=3, floor_height=3.4,
+    ground_floor_height=4.0, plinth_height=0.5,
+    bay_width=3.0, window_width=1.6, window_height=2.0, window_recess_depth=0.22,
+    roof='hip', name='WestWing'
+)
+west_wing.translate(16.0, 0.7, 0.0)
+scene.merge(west_wing)
+
+# 4. Botanical Space-Colonization Shade Trees
+tree_coords = [(-8.0, 0.7, 9.0), (8.0, 0.7, 9.0), (-15.0, 0.7, 12.0), (15.0, 0.7, 12.0)]
+for tx, ty, tz in tree_coords:
+    tree = sb.create_tree(attractor_count=130, crown_center=(0, 5, 0), crown_extents=(2.6, 3.8, 2.6))
+    tree.translate(tx, ty, tz)
+    scene.merge(tree)
+
+# 5. Clinging Ivy on East wing foundation
+ivy = sb.create_ivy(root=(-10.0, 0.7, 3.0), obstacle_min=(-16, 0.7, -5), obstacle_max=(-10, 6, 5), max_steps=80)
+scene.merge(ivy)
+
+# 6. Stream binary glTF 2.0
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
 
         return {
             title,
             subtitle,
-            worldBranch: 'architecture/pavilion',
+            worldBranch: 'architecture/civic-plaza',
             sceneType: 'architecture',
             renderMode: 'pbr',
             cameraMode: 'orbit',
             animation: 'idle',
             camera: {
-                position: [20, 18, 25],
+                position: [0, 18, 38],
                 target: [0, 4, 0],
                 fov: 50
             },
             environment: {
-                skybox: 'daylight',
-                lighting: 'spotlight',
+                skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'studio',
+                lighting: 'studio',
                 ground: true
             },
-            customMeshes: [
-                {
-                    id: 'mesh-room-floor',
-                    name: 'Polished Concrete Foundation',
-                    type: 'plane',
-                    position: [0, 0, 0],
-                    scale: [30, 30, 1],
-                    material: { color: 0x1e293b, roughness: 0.2, metalness: 0.8 }
-                }
-            ],
-            customScript,
-            code: customScript
+            geoAnchor: realWorldLoc ? {
+                lat: realWorldLoc.lat,
+                lng: realWorldLoc.lng,
+                elevation: realWorldLoc.elevation,
+                elevationSource: 'google_elevation',
+                datum: 'MSL_EGM96',
+                active: true,
+                landmarkName: realWorldLoc.landmarkName
+            } : undefined,
+            pythonGenerator: {
+                enabled: true,
+                filename: 'procedural_architecture.py',
+                sourceCode: pythonSource
+            }
         };
     }
 

@@ -69,6 +69,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             };
         }
 
+        const desc = (typeof args.description === 'string' && args.description.trim()) ? args.description.trim() : 'Procedural 3D Python Scene';
+
         return {
             status: 'completed',
             resultPayload: {
@@ -77,7 +79,39 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 glbBase64: result.glbBase64,
                 executionTimeMs: result.executionTimeMs,
                 stdout: result.stdout,
-                description: args.description || 'Procedural 3D Python Scene'
+                description: desc,
+                artifact: {
+                    id: `artifact-3d-${Date.now()}`,
+                    type: '3d-scene',
+                    title: desc,
+                    summary: `Generated procedural 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`,
+                    data: {
+                        title: desc,
+                        worldBranch: 'procedural/python-scene',
+                        sceneType: 'custom',
+                        renderMode: 'pbr',
+                        cameraMode: 'orbit',
+                        animation: 'orbit',
+                        camera: {
+                            position: [0, 18, 38],
+                            target: [0, 4, 0],
+                            fov: 50
+                        },
+                        environment: {
+                            skybox: 'studio',
+                            lighting: 'studio',
+                            ground: true
+                        },
+                        pythonGenerator: {
+                            enabled: true,
+                            filename: 'procedural_scene.py',
+                            sourceCode: script,
+                            glbBase64: result.glbBase64,
+                            glbPath: result.glbPath,
+                            lastCompiledTimeMs: Date.now()
+                        }
+                    }
+                }
             },
             summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB written to ${result.glbPath}.`
         };
