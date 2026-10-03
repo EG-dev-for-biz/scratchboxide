@@ -93,6 +93,19 @@ When retrieving real-world locations or addresses as 3D models from Google Maps 
    - Runner files are generated uniquely per run (`s4d_tile_blockout_runner_${timestamp}_${rand}.html`) and automatically unlinked upon pipeline completion or process exit.
    - Headless Chrome and FFmpeg executables are auto-discovered across macOS and Linux standard paths.
 
+### Rule: First-Party Google Geospatial Architecture & Zero Generic Plugin Reliance
+When interacting with Google Maps Platform, elevation data, 3D tiles, geocoding, or directions:
+1. **First-Party App Services Only**:
+   - Always use Scratchbox IDE's dedicated internal services and C++20 engine:
+     - `GoogleMapsService` (`packages/core/src/browser/generative-canvas/services/google-maps-service.ts`) for geocoding, routing, nearby places, and elevation with in-memory caching and offline-verified fallbacks.
+     - `Google3DTileService` (`packages/core/src/browser/generative-canvas/services/Google3DTileService.ts`) for full-texture and studio clay glTF 2.0 streaming.
+     - `GoogleElevationService` (`packages/core/src/browser/generative-canvas/services/GoogleElevationService.ts`) for topographic profiling and EGM96 geoid ground truth.
+     - `CreativeLocationCastingService` (`packages/core/src/browser/generative-canvas/services/CreativeLocationCastingService.ts`) for archetype grounding.
+     - `LocalTangentPlane` (`packages/core/src/common/coordinate/LocalTangentPlane.ts`) for WGS-84 <-> ENU Three.js metric space pinning.
+2. **Zero Generic Plugin Skill / MCP Reliance**:
+   - The generic global `google_maps_platform` plugin skill (`.gemini/config/plugins/google_maps_platform/skills/SKILL.md`) is deactivated and MUST NEVER be used or loaded.
+   - Do NOT run generic skill index fetches (e.g. `gstatic.com/googlemapsplatform-agent-skills/index.json`) or append boilerplate compliance appendices intended for vanilla web tutorials. All architecture in Scratchbox IDE is purpose-built, high-performance, and deeply integrated into the C++20 and Three.js canvas kernel.
+
 ### Rule: Google 3D Tiles Clay Mode as Canonical Blockout Runner (<VIDEO_REF_0>)
 When providing 3D spatial blockouts for video generation, camera trajectory conditioning, or generative restyling with Gemini Omni / Vertex AI:
 1. **Google Maps 3D Tiles Clay Mode is Canonical**:
