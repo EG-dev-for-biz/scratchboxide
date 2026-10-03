@@ -79,6 +79,7 @@ public/**/*.mov
 public/tiles/
 public/uploads/
 public/screenshots/
+docs/screenshots/
 public/flight_frames/
 public/visual_proof_locations/
 public/visual_proof_real_tile/
