@@ -984,7 +984,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             }
 
             // 11. ⌘O -> Open Folder / Workspace
-            if (isCmdOrCtrl && keyLower === 'o') {
+            if (isCmdOrCtrl && (keyLower === 'o' || e.key.toLowerCase() === 'o')) {
                 e.preventDefault();
                 if (onOpenFolder) {
                     onOpenFolder();
