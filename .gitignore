@@ -70,6 +70,7 @@ packages/.temp-cli-test-*/
 *.mov
 *.depth.f32
 *.rgb
+*stations_to_fuse.txt
 
 # Public media and runtime caches (keep HTML demos, JS scripts, JSON manifests, and SVGs tracked)
 public/**/*.glb

@@ -161,7 +161,12 @@ export function useComposerGitEnv({
             const res = await fetch(`/git/stage${rootParam}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workspaceRoot: activeWorkspace.path, file })
+                body: JSON.stringify({
+                    workspaceRoot: activeWorkspace.path,
+                    file,
+                    files: file ? [file] : undefined,
+                    all: !file
+                })
             });
             if (res.ok) {
                 showToast(file ? `Staged ${file}` : 'Staged all changes', 'git');
@@ -184,7 +189,12 @@ export function useComposerGitEnv({
             const res = await fetch(`/git/unstage${rootParam}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workspaceRoot: activeWorkspace.path, file })
+                body: JSON.stringify({
+                    workspaceRoot: activeWorkspace.path,
+                    file,
+                    files: file ? [file] : undefined,
+                    all: !file
+                })
             });
             if (res.ok) {
                 showToast(file ? `Unstaged ${file}` : 'Unstaged all changes', 'git');

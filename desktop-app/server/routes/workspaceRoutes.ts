@@ -489,26 +489,44 @@ export function createGitRouter(ctx: RouteContext): Router {
         try {
             const workspaceRoot = resolveWorkspaceRoot(req);
             const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
-            const { files, all } = req.body || {};
+            const { files, file, all } = req.body || {};
 
-            if (all === true) {
+            const requestedFiles: string[] = Array.isArray(files) ? files : (typeof file === 'string' && file ? [file] : []);
+
+            if (all === true || (requestedFiles.length === 0 && !files && !file)) {
                 await runGit(['add', '-A'], targetRoot);
                 res.json({ success: true, stagedAll: true });
                 return;
             }
 
-            if (!Array.isArray(files) || files.length === 0) {
+            if (requestedFiles.length === 0) {
                 res.status(400).json({ error: 'files must be a non-empty array of file paths or specify all: true' });
                 return;
             }
 
-            const safeRelPaths = files.map((f: string) => {
+            const existingRelPaths: string[] = [];
+            const missingRelPaths: string[] = [];
+            for (const f of requestedFiles) {
                 const safeAbs = resolveWithinRoot(targetRoot, String(f));
-                return path.relative(targetRoot, safeAbs);
-            });
+                const rel = path.relative(targetRoot, safeAbs);
+                if (fs.existsSync(safeAbs)) {
+                    existingRelPaths.push(rel);
+                } else {
+                    missingRelPaths.push(rel);
+                }
+            }
 
-            await runGit(['add', '--', ...safeRelPaths], targetRoot);
-            res.json({ success: true, staged: safeRelPaths });
+            if (existingRelPaths.length > 0) {
+                await runGit(['add', '--', ...existingRelPaths], targetRoot);
+            }
+            if (missingRelPaths.length > 0) {
+                try {
+                    await runGit(['rm', '--cached', '--ignore-unmatch', '--', ...missingRelPaths], targetRoot);
+                } catch {
+                    // Ignore unmatch
+                }
+            }
+            res.json({ success: true, staged: existingRelPaths, removed: missingRelPaths });
         } catch (err: any) {
             sendError(res, err);
         }
@@ -518,20 +536,22 @@ export function createGitRouter(ctx: RouteContext): Router {
         try {
             const workspaceRoot = resolveWorkspaceRoot(req);
             const targetRoot = workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : allowedWorkspaceRoots[0];
-            const { files, all } = req.body || {};
+            const { files, file, all } = req.body || {};
 
-            if (all === true) {
+            const requestedFiles: string[] = Array.isArray(files) ? files : (typeof file === 'string' && file ? [file] : []);
+
+            if (all === true || (requestedFiles.length === 0 && !files && !file)) {
                 await runGit(['reset', 'HEAD'], targetRoot);
                 res.json({ success: true, unstagedAll: true });
                 return;
             }
 
-            if (!Array.isArray(files) || files.length === 0) {
+            if (requestedFiles.length === 0) {
                 res.status(400).json({ error: 'files must be a non-empty array of file paths or specify all: true' });
                 return;
             }
 
-            const safeRelPaths = files.map((f: string) => {
+            const safeRelPaths = requestedFiles.map((f: string) => {
                 const safeAbs = resolveWithinRoot(targetRoot, String(f));
                 return path.relative(targetRoot, safeAbs);
             });
