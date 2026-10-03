@@ -1559,10 +1559,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                                 style={{
                                                     flex: 1,
                                                     overflowY: 'auto',
-                                                    padding: '24px 24px 140px 24px',
+                                                    padding: '16px 16px 140px 16px',
                                                     display: 'flex',
                                                     flexDirection: 'column',
-                                                    gap: '16px',
+                                                    gap: '12px',
                                                     width: '100%',
                                                     boxSizing: 'border-box'
                                                 }}

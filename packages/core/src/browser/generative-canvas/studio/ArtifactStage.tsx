@@ -35,7 +35,7 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
-            margin: documentPaneState === 'expanded' ? '12px' : '10px 14px 12px 6px',
+            margin: documentPaneState === 'expanded' ? '10px' : '8px 10px 10px 6px',
             borderRadius: '16px',
             overflow: 'hidden',
             position: 'relative',
