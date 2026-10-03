@@ -37,7 +37,7 @@ let toolsServerInstance: http.Server | null = null;
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_PORT = parseInt(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001', 10);
 const TOOLS_PORT = parseInt(process.env.SCRATCHBOX_TOOLS_PORT || '3002', 10);
-const DEV_RENDERER_URL = 'http://127.0.0.1:3000';
+const DEV_RENDERER_URL = process.env.SCRATCHBOX_RENDERER_URL || `http://${BACKEND_HOST}:${process.env.SCRATCHBOX_WEB_PORT || '3030'}`;
 
 const isDev = (process.env.NODE_ENV === 'development') ||
     (!app.isPackaged && process.env.NODE_ENV !== 'production' && process.env.SCRATCHBOX_STANDALONE !== 'true');
@@ -78,7 +78,26 @@ function attachListenErrorHandler(server: http.Server, label: string, port: numb
     });
 }
 
-function startBackendServer(): Promise<void> {
+function checkPortInUse(port: number, host: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        const client = http.get(`http://${host}:${port}/`, { timeout: 1000 }, () => {
+            resolve(true);
+        });
+        client.on('error', () => resolve(false));
+        client.on('timeout', () => {
+            client.destroy();
+            resolve(false);
+        });
+    });
+}
+
+async function startBackendServer(): Promise<void> {
+    const isApiRunning = await checkPortInUse(BACKEND_PORT, BACKEND_HOST);
+    if (isApiRunning) {
+        console.log(`[Electron] Detected existing backend server on http://${BACKEND_HOST}:${BACKEND_PORT}. Reusing active backend.`);
+        return;
+    }
+
     const rendererDist = resolveRendererDist(__dirname);
     const serverApp = createStandaloneServer({
         port: BACKEND_PORT,
@@ -223,12 +242,19 @@ function createWindow(): void {
 
     const rendererDist = resolveRendererDist(__dirname);
     if (isDev) {
-        mainWindow.loadURL(DEV_RENDERER_URL).catch(() => {
-            if (rendererDist) {
-                console.log('[Electron] Dev server not reachable at ' + DEV_RENDERER_URL + ', falling back to internal server: ' + apiBase);
-                mainWindow?.loadURL(apiBase);
+        const loadDev = async (retries = 10) => {
+            try {
+                await mainWindow?.loadURL(DEV_RENDERER_URL);
+            } catch (err) {
+                if (retries > 0 && mainWindow && !mainWindow.isDestroyed()) {
+                    setTimeout(() => loadDev(retries - 1), 600);
+                } else if (rendererDist && mainWindow && !mainWindow.isDestroyed()) {
+                    console.log('[Electron] Dev server not reachable at ' + DEV_RENDERER_URL + ', falling back to internal server: ' + apiBase);
+                    mainWindow?.loadURL(apiBase);
+                }
             }
-        });
+        };
+        loadDev();
     } else {
         if (!rendererDist) {
             console.error('[Electron] Built renderer not found (desktop-app/dist). Run `npm run build` first.');
