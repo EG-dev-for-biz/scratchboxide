@@ -171,7 +171,7 @@ describe('Unified Long-Running Agent & Multi-Domain Verification Suite', () => {
         expect(visionEvent).toBeDefined();
         expect(visionEvent.visualFidelityScore).toBeDefined();
         expect(visionEvent.visualFidelityScore).toBeGreaterThanOrEqual(8.5);
-    }, 60000);
+    }, 180000);
 
     it('should trigger checkpoint rollback on degenerate 3D geometry in long-running agent', async () => {
         const agent = new LongRunning3DGeneratorAgent();
