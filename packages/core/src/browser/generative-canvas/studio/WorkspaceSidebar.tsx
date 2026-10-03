@@ -161,44 +161,52 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
 
     return (
     <aside className={`sb-chatgpt-sidebar ${isSidebarOpen ? 'sb-sidebar-open' : 'sb-sidebar-collapsed'}`}>
-        {/* Sidebar Top Controls: Window Traffic Lights & Navigation */}
-        <div className="sb-sidebar-top-header" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div className="sb-mac-traffic-lights" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Close window"
-                    className="sb-traffic-light sb-tl-close"
-                    onClick={handleWindowClose}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowClose(); }}
-                    title="Close Window"
-                />
-                <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Minimize window"
-                    className="sb-traffic-light sb-tl-min"
-                    onClick={handleWindowMinimize}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMinimize(); }}
-                    title="Minimize Window"
-                />
-                <span
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Maximize window"
-                    className="sb-traffic-light sb-tl-max"
-                    onClick={handleWindowMaximize}
-                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMaximize(); }}
-                    title="Maximize Window"
-                />
+        {/* Sidebar Top Controls: Window Traffic Lights, Brand & Navigation */}
+        <div className="sb-sidebar-top-header">
+            <div className="sb-sidebar-top-brand-group">
+                <div className="sb-mac-traffic-lights">
+                    <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Close window"
+                        className="sb-traffic-light sb-tl-close"
+                        onClick={handleWindowClose}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowClose(); }}
+                        title="Close Window"
+                    />
+                    <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Minimize window"
+                        className="sb-traffic-light sb-tl-min"
+                        onClick={handleWindowMinimize}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMinimize(); }}
+                        title="Minimize Window"
+                    />
+                    <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Maximize window"
+                        className="sb-traffic-light sb-tl-max"
+                        onClick={handleWindowMaximize}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') handleWindowMaximize(); }}
+                        title="Maximize Window"
+                    />
+                </div>
+                <div className="sb-sidebar-brand" title="Scratchbox IDE">
+                    <div className="sb-brand-logo-icon">
+                        <img src="/icons/ScratchboxIDE-icon.svg" alt="Scratchbox" />
+                    </div>
+                    <span className="sb-brand-logo-title">Scratchbox</span>
+                    <span className="sb-brand-logo-badge">IDE</span>
+                </div>
             </div>
             <div className="flex items-center gap-1">
                 <button
                     type="button"
-                    className="sb-btn sb-btn-ghost sb-btn-icon-xs"
+                    className="sb-sidebar-collapse-btn"
                     onClick={() => setIsSidebarOpen(false)}
                     title="Collapse Sidebar (⌘B)"
-                    style={{ width: '24px', height: '24px', color: '#71717a' }}
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="3" y="3" width="18" height="18" rx="2" />
