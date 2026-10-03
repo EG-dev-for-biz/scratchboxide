@@ -1,0 +1,172 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * Geometric Complexity & Quality Gate (Anti-JS-Primitive Hardening)
+ * 
+ * In strict alignment with Scratchbox IDE Core Directives:
+ * - "Lean on C/C++ First for 3D (C++20 as Geometry Generator, Three.js as Pure Viewport)"
+ * - Prohibition of client-side toy primitives (THREE.BoxGeometry / THREE.CylinderGeometry)
+ * - Minimum geometric entropy & density enforcement (>=25,000 vertices for full scenes)
+ * - Strict Two-Tier Problem Solving (Tier 1 Native C++20 -> Tier 2 ComfyUI GPU)
+ ********************************************************************************/
+
+export interface GeometricMeshSummary {
+    name: string;
+    vertexCount: number;
+    triangleCount: number;
+    generatorType?: string;
+    isPrimitive?: boolean;
+}
+
+export interface GeometricSceneMetrics {
+    totalVertices: number;
+    totalTriangles: number;
+    submeshes: GeometricMeshSummary[];
+    engineKernel?: string;
+}
+
+export interface ComplexityGateOptions {
+    /**
+     * Minimum vertex count threshold for generative 3D scenes.
+     * Default: 25,000 for full procedural scenes.
+     */
+    minVertexCount?: number;
+
+    /**
+     * Minimum triangle count threshold for generative 3D scenes.
+     * Default: 15,000.
+     */
+    minTriangleCount?: number;
+
+    /**
+     * Whether the scene must be decomposed into a multi-mesh hierarchy
+     * (Primary massing, secondary pavilions, tertiary architectural/botanical detail).
+     * Default: true.
+     */
+    requireMultiMeshHierarchy?: boolean;
+
+    /**
+     * Banned generator identifiers or primitive tags.
+     */
+    disallowedGenerators?: string[];
+}
+
+export interface ComplexityGateReport {
+    passed: boolean;
+    totalVertices: number;
+    totalTriangles: number;
+    submeshCount: number;
+    violations: string[];
+    isNativeKernel: boolean;
+}
+
+export class GeometricFidelityViolationError extends Error {
+    public readonly violations: string[];
+    public readonly metrics: GeometricSceneMetrics;
+
+    constructor(message: string, violations: string[], metrics: GeometricSceneMetrics) {
+        super(message);
+        this.name = 'GeometricFidelityViolationError';
+        this.violations = violations;
+        this.metrics = metrics;
+    }
+}
+
+export class GeometricComplexityGate {
+    public static readonly DEFAULT_SCENE_MIN_VERTICES = 25000;
+    public static readonly DEFAULT_SCENE_MIN_TRIANGLES = 15000;
+    public static readonly DEFAULT_SINGLE_ASSET_MIN_VERTICES = 5000;
+
+    public static readonly BANNED_PRIMITIVE_GENERATORS = [
+        'THREE.BoxGeometry',
+        'THREE.CylinderGeometry',
+        'THREE.ConeGeometry',
+        'THREE.SphereGeometry',
+        'ClientSideJsPrimitives',
+        'Tier0PrimitiveFallback'
+    ];
+
+    /**
+     * Evaluates a scene's geometric metrics against the complexity gate.
+     */
+    public static evaluate(
+        metrics: GeometricSceneMetrics,
+        options: ComplexityGateOptions = {}
+    ): ComplexityGateReport {
+        const minVertices = options.minVertexCount ?? this.DEFAULT_SCENE_MIN_VERTICES;
+        const minTriangles = options.minTriangleCount ?? this.DEFAULT_SCENE_MIN_TRIANGLES;
+        const requireMultiMesh = options.requireMultiMeshHierarchy ?? true;
+        const disallowed = options.disallowedGenerators ?? this.BANNED_PRIMITIVE_GENERATORS;
+
+        const violations: string[] = [];
+
+        // 1. Vertex Density Audit
+        if (metrics.totalVertices < minVertices) {
+            violations.push(
+                `Insufficient geometric density: scene has ${metrics.totalVertices.toLocaleString()} vertices, minimum required is ${minVertices.toLocaleString()} vertices. ` +
+                `This indicates a prohibited low-fidelity JavaScript primitive fallback.`
+            );
+        }
+
+        // 2. Triangle Count Audit
+        if (metrics.totalTriangles < minTriangles) {
+            violations.push(
+                `Insufficient polygon resolution: scene has ${metrics.totalTriangles.toLocaleString()} triangles, minimum required is ${minTriangles.toLocaleString()} triangles.`
+            );
+        }
+
+        // 3. Multi-Mesh Hierarchy Audit
+        if (requireMultiMesh && metrics.submeshes.length < 2) {
+            violations.push(
+                `Missing architectural hierarchy: scene contains only ${metrics.submeshes.length} submesh. ` +
+                `The 70-20-10 rule requires distinct primary massing, secondary wings, and tertiary botanical/architectural detail.`
+            );
+        }
+
+        // 4. Banned Primitive Detection
+        for (const submesh of metrics.submeshes) {
+            if (submesh.isPrimitive) {
+                violations.push(`Submesh "${submesh.name}" is flagged as a banned primitive.`);
+            }
+            if (submesh.generatorType && disallowed.includes(submesh.generatorType)) {
+                violations.push(`Submesh "${submesh.name}" uses banned generator: ${submesh.generatorType}.`);
+            }
+        }
+
+        // 5. Engine Kernel Audit
+        const kernel = (metrics.engineKernel || '').toLowerCase();
+        const isNativeKernel = kernel.includes('c++') || kernel.includes('nanobind') || kernel.includes('scratchbox') || kernel.includes('tier 2') || kernel.includes('comfy');
+        if (kernel && !isNativeKernel) {
+            violations.push(
+                `Unsanctioned 3D engine kernel: "${metrics.engineKernel}". Only Native C++20 (Tier 1) or ComfyUI/Cloud Run GPU (Tier 2) are permitted.`
+            );
+        }
+
+        return {
+            passed: violations.length === 0,
+            totalVertices: metrics.totalVertices,
+            totalTriangles: metrics.totalTriangles,
+            submeshCount: metrics.submeshes.length,
+            violations,
+            isNativeKernel
+        };
+    }
+
+    /**
+     * Asserts that a scene passes the complexity gate, throwing an error if it fails.
+     */
+    public static assertFidelity(
+        metrics: GeometricSceneMetrics,
+        options: ComplexityGateOptions = {}
+    ): void {
+        const report = this.evaluate(metrics, options);
+        if (!report.passed) {
+            throw new GeometricFidelityViolationError(
+                `[GeometricComplexityGate] Scene failed geometric fidelity audit with ${report.violations.length} violation(s):\n - ` +
+                report.violations.join('\n - '),
+                report.violations,
+                metrics
+            );
+        }
+    }
+}

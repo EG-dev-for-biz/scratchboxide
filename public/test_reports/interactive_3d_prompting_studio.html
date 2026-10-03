@@ -1178,102 +1178,6 @@
       };
     }
 
-    function buildThreeMeshes(contract) {
-      // Clear previous meshes
-      while (sceneMeshGroup.children.length > 0) {
-        const obj = sceneMeshGroup.children[0];
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-          else obj.material.dispose();
-        }
-        sceneMeshGroup.remove(obj);
-      }
-
-      let totalVerts = 0;
-      let totalTris = 0;
-      const hierarchyEl = document.getElementById('mesh-hierarchy');
-      hierarchyEl.innerHTML = '';
-
-      contract.meshes.forEach(m => {
-        let geo;
-        if (m.type === 'box') {
-          geo = new THREE.BoxGeometry(m.scale[0], m.scale[1], m.scale[2], 2, 2, 2);
-        } else if (m.type === 'cylinder') {
-          geo = new THREE.CylinderGeometry(m.scale[0] / 2, m.scale[0] / 2, m.scale[1], 32, 2);
-        } else if (m.type === 'cone') {
-          geo = new THREE.ConeGeometry(m.scale[0] / 2, m.scale[1], 32, 2);
-        } else if (m.type === 'sphere') {
-          geo = new THREE.SphereGeometry(m.scale[0] / 2, 24, 24);
-        } else if (m.type === 'torus') {
-          geo = new THREE.TorusGeometry(m.scale[0], m.scale[1], 16, 48);
-          geo.rotation.x = Math.PI / 2;
-        }
-
-        const origMat = new THREE.MeshStandardMaterial({
-          color: m.color,
-          roughness: m.rough !== undefined ? m.rough : 0.6,
-          metalness: m.metal !== undefined ? m.metal : 0.1,
-          emissive: m.emissive ? new THREE.Color(m.emissive) : new THREE.Color(0x000000),
-          emissiveIntensity: m.emissiveIntensity || 1.0
-        });
-
-        let activeMat = origMat;
-        if (currentShadingMode === 'clay') {
-          activeMat = new THREE.MeshStandardMaterial({
-            color: 0xdcd6cd,
-            roughness: 0.82,
-            metalness: 0.02
-          });
-        } else if (currentShadingMode === 'wireframe') {
-          activeMat = new THREE.MeshBasicMaterial({
-            color: m.color || 0x38bdf8,
-            wireframe: true
-          });
-        }
-
-        const mesh = new THREE.Mesh(geo, activeMat);
-        mesh.userData.origMaterial = origMat;
-        mesh.position.set(m.pos[0], m.pos[1], m.pos[2]);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.name = m.name;
-        sceneMeshGroup.add(mesh);
-
-        const vCount = geo.attributes.position ? geo.attributes.position.count : 0;
-        const tCount = geo.index ? geo.index.count / 3 : vCount / 3;
-        totalVerts += vCount;
-        totalTris += tCount;
-
-        // Populate Hierarchy Tree
-        const row = document.createElement('div');
-        row.className = 'mesh-tree-item';
-        row.innerHTML = `
-          <span>${m.name}</span>
-          <span class="tier-tag tier-${m.tier}">${m.tier}</span>
-        `;
-        hierarchyEl.appendChild(row);
-      });
-
-      // Update Telemetry
-      document.getElementById('theme-pill').textContent = `Subject: ${contract.subject}`;
-      document.getElementById('tel-intent').textContent = 'Open-Domain Spatial ADA';
-      document.getElementById('tel-theme').textContent = contract.theme;
-      document.getElementById('tel-mesh-count').textContent = `${contract.meshes.length} Procedural Meshes`;
-      document.getElementById('tel-vertices').textContent = `${totalVerts.toLocaleString()} Verts`;
-      document.getElementById('tel-triangles').textContent = `${Math.round(totalTris).toLocaleString()} Tris`;
-
-      // Update Continuous Physical Fields
-      if (contract.dimensions) {
-        document.getElementById('field-verticality').textContent = `${contract.dimensions.verticality.toFixed(2)}x`;
-        document.getElementById('field-horizontality').textContent = `${contract.dimensions.footprint.toFixed(1)}m`;
-        document.getElementById('field-symmetry').textContent = contract.dimensions.symmetry;
-        document.getElementById('field-palette').textContent = contract.dimensions.paletteName;
-      }
-
-      frameCameraToObject(sceneMeshGroup);
-    }
-
     function frameCameraToObject(obj) {
       const bbox = new THREE.Box3().setFromObject(obj);
       const center = new THREE.Vector3();
@@ -1305,9 +1209,8 @@
               metalness: 0.02
             });
           } else if (mode === 'wireframe') {
-            const wireColor = (child.userData.origMaterial && child.userData.origMaterial.color) ? child.userData.origMaterial.color : 0x38bdf8;
             child.material = new THREE.MeshBasicMaterial({
-              color: wireColor,
+              color: 0x38bdf8,
               wireframe: true
             });
           } else {
@@ -1319,12 +1222,133 @@
       });
     }
 
-    function synthesizeFromPrompt() {
-      const prompt = document.getElementById('prompt-input').value.trim();
+    async function synthesizeFromPrompt() {
+      const promptInput = document.getElementById('prompt-input');
+      const prompt = promptInput.value.trim();
       if (!prompt) return;
 
+      const btn = document.getElementById('btn-synthesize');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>⚙</span> Synthesizing C++20...';
+      }
+
+      document.getElementById('tel-vertices').textContent = 'Computing C++...';
+      document.getElementById('tel-triangles').textContent = 'Generating Meshes...';
+
       const contract = synthesizeSceneContract(prompt);
-      buildThreeMeshes(contract);
+      document.getElementById('theme-pill').textContent = `Subject: ${contract.subject}`;
+      document.getElementById('tel-intent').textContent = 'Open-Domain Spatial ADA';
+      document.getElementById('tel-theme').textContent = contract.theme;
+      if (contract.dimensions) {
+        document.getElementById('field-verticality').textContent = `${contract.dimensions.verticality.toFixed(2)}x`;
+        document.getElementById('field-horizontality').textContent = `${contract.dimensions.footprint.toFixed(1)}m`;
+        document.getElementById('field-symmetry').textContent = contract.dimensions.symmetry;
+        document.getElementById('field-palette').textContent = contract.dimensions.paletteName;
+      }
+
+      try {
+        const response = await fetch('/api/synthesize-3d', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt })
+        });
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to synthesize 3D scene');
+        }
+
+        // Load the streamed binary GLB
+        const loader = new THREE.GLTFLoader();
+        loader.load(
+          data.glbUrl + '?t=' + Date.now(),
+          (gltf) => {
+            // Clear previous meshes
+            while (sceneMeshGroup.children.length > 0) {
+              const obj = sceneMeshGroup.children[0];
+              if (obj.geometry) obj.geometry.dispose();
+              if (obj.material) {
+                if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                else obj.material.dispose();
+              }
+              sceneMeshGroup.remove(obj);
+            }
+
+            let totalVerts = 0;
+            let totalTris = 0;
+
+            const hierarchyEl = document.getElementById('mesh-hierarchy');
+            hierarchyEl.innerHTML = '';
+            let meshCount = 0;
+
+            gltf.scene.traverse((child) => {
+              if (child.isMesh) {
+                meshCount++;
+                child.castShadow = true;
+                child.receiveShadow = true;
+                if (!child.userData.origMaterial) {
+                  child.userData.origMaterial = child.material.clone();
+                }
+                const vCount = child.geometry.attributes.position ? child.geometry.attributes.position.count : 0;
+                const tCount = child.geometry.index ? child.geometry.index.count / 3 : vCount / 3;
+                totalVerts += vCount;
+                totalTris += tCount;
+
+                let tier = 'secondary';
+                const name = child.name || `Submesh_${meshCount}`;
+                if (name.includes('Primary') || name.includes('Edifice')) tier = 'primary';
+                else if (name.includes('Tree') || name.includes('Ivy') || name.includes('Foliage')) tier = 'tertiary';
+
+                const row = document.createElement('div');
+                row.className = 'mesh-tree-item';
+                row.innerHTML = `
+                  <span>${name} (${vCount.toLocaleString()}v)</span>
+                  <span class="tier-tag tier-${tier}">${tier}</span>
+                `;
+                hierarchyEl.appendChild(row);
+              }
+            });
+
+            sceneMeshGroup.add(gltf.scene);
+
+            // Apply active shading mode
+            applyShading(currentShadingMode);
+
+            // Update Telemetry
+            const finalVerts = data.vertexCount || totalVerts;
+            const finalTris = data.triangleCount || Math.round(totalTris);
+            document.getElementById('tel-mesh-count').textContent = 'Native C++20 Stream';
+            document.getElementById('tel-vertices').textContent = `${finalVerts.toLocaleString()} Verts`;
+            document.getElementById('tel-triangles').textContent = `${finalTris.toLocaleString()} Tris`;
+            document.getElementById('tel-engine').textContent = data.engine || 'Scratchbox C++20 nanobind';
+            document.getElementById('tel-time').textContent = `${data.executionTimeMs}ms`;
+
+            frameCameraToObject(sceneMeshGroup);
+
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✨</span> Synthesize & Build 3D Scene';
+            }
+          },
+          undefined,
+          (err) => {
+            console.error('GLTFLoader error:', err);
+            document.getElementById('tel-vertices').textContent = 'GLB Load Error';
+            if (btn) {
+              btn.disabled = false;
+              btn.innerHTML = '<span>✨</span> Synthesize & Build 3D Scene';
+            }
+          }
+        );
+      } catch (err) {
+        console.error('Synthesis API error:', err);
+        document.getElementById('tel-vertices').textContent = 'API Error';
+        document.getElementById('tel-triangles').textContent = err.message;
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<span>✨</span> Synthesize & Build 3D Scene';
+        }
+      }
     }
 
     function setShadingMode(mode) {

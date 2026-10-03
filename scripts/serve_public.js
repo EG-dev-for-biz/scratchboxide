@@ -685,11 +685,12 @@ const server = http.createServer((req, res) => {
 import time
 
 start_t = time.time()
-scene = sb.geometry.Mesh("NativeHighDetailScene")
+mesh_list = []
 
 # 1. Beveled architectural base pedestal
 pedestal = sb.geometry.create_studio_pedestal(radius=${Math.max(32.0, width * 1.25)}, height=0.6, bevel=0.08, segments=64)
-scene.merge(pedestal)
+pedestal.name = "Studio_Pedestal"
+mesh_list.append(pedestal)
 
 # 2. Primary edifice with high-density fenestration bays & recessed window reveals
 main_bldg = sb.create_building(
@@ -701,7 +702,7 @@ main_bldg = sb.create_building(
     name="PrimaryEdifice"
 )
 main_bldg.translate(0, 0.6, 0)
-scene.merge(main_bldg)
+mesh_list.append(main_bldg)
 
 # 3. Flanking architectural wings (70-20 Secondary massing)
 wing_width = ${Math.round(width * 0.55 * 10) / 10}
@@ -715,7 +716,7 @@ wing_east = sb.create_building(
     window_recess_depth=0.22, roof="hip", name="EastWing"
 )
 wing_east.translate(${width * 0.72}, 0.6, 0)
-scene.merge(wing_east)
+mesh_list.append(wing_east)
 
 wing_west = sb.create_building(
     width=wing_width, depth=wing_depth, floors=wing_floors, floor_height=3.4,
@@ -724,13 +725,14 @@ wing_west = sb.create_building(
     window_recess_depth=0.22, roof="hip", name="WestWing"
 )
 wing_west.translate(-${width * 0.72}, 0.6, 0)
-scene.merge(wing_west)
+mesh_list.append(wing_west)
 
 ${isStation ? `# 4. Structural Ferroconcrete Caissons & Colonnades
-for x_off in [-14.0, -7.0, 7.0, 14.0]:
+for i, x_off in enumerate([-14.0, -7.0, 7.0, 14.0]):
     caisson = sb.geometry.create_cylinder(radius_top=1.0, radius_bottom=1.2, height=9.0, segments=32)
+    caisson.name = f"Caisson_{i+1}"
     caisson.translate(x_off, 0.6 + 4.5, 9.0)
-    scene.merge(caisson)
+    mesh_list.append(caisson)
 ` : ''}
 
 # 5. Botanical Space Colonization Foliage (10% Tertiary fine detail)
@@ -742,21 +744,25 @@ tree_positions = [
     (0.0, 0.6, ${depth * 0.85})
 ][: ${treeCount}]
 
-for pos in tree_positions:
+for i, pos in enumerate(tree_positions):
     tree = sb.create_tree(attractor_count=120, crown_center=(0, 4.8, 0), crown_extents=(2.4, 3.4, 2.4))
+    tree.name = f"BotanicalTree_{i+1}"
     tree.translate(*pos)
-    scene.merge(tree)
+    mesh_list.append(tree)
 
 ${hasIvy ? `# 6. Clinging Ivy climbing plinths
 ivy = sb.create_ivy(root=(-${width * 0.4}, 0.6, ${depth * 0.5}), obstacle_min=(-${width * 0.5}, 0.6, 0), obstacle_max=(0, 5, ${depth * 0.6}), max_steps=80)
-scene.merge(ivy)
+ivy.name = "ClingingIvy"
+mesh_list.append(ivy)
 ` : ''}
-# 6. Stream valid binary glTF 2.0
+# 7. Stream valid binary glTF 2.0 with separate mesh nodes & materials
 out_path = OUTPUT_GLB_PATH
-sb.io.write_glb(out_path, scene)
+sb.io.write_glb(out_path, mesh_list)
 
-print(f"VERIFICATION_VERTEX_COUNT={scene.vertex_count}")
-print(f"VERIFICATION_TRIANGLE_COUNT={scene.triangle_count}")
+total_v = sum(m.vertex_count for m in mesh_list)
+total_t = sum(m.triangle_count for m in mesh_list)
+print(f"VERIFICATION_VERTEX_COUNT={total_v}")
+print(f"VERIFICATION_TRIANGLE_COUNT={total_t}")
 print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
 `
 

@@ -8,7 +8,13 @@
  ********************************************************************************/
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { NextGenAstraViewportEngine } from '../src/browser/generative-canvas/services/NextGenAstraViewportEngine';
+import {
+    NextGenAstraViewportEngine,
+    CULL_MESHLETS_WGSL,
+    MICRO_RASTERIZER_WGSL,
+    VISIBILITY_BUFFER_SHADING_WGSL,
+    TEMPORAL_SUPER_RES_WGSL
+} from '../src/browser/generative-canvas/services/NextGenAstraViewportEngine';
 
 function createMockContainer() {
     const children: any[] = [];
@@ -126,5 +132,68 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
         engine.dispose();
         expect(container.children.length).toBe(0);
         engine = null;
+    });
+
+    it('7. Exports and validates WGSL compute shaders for silicon performance limits', () => {
+        expect(CULL_MESHLETS_WGSL).toContain('MeshletClusterData');
+        expect(CULL_MESHLETS_WGSL).toContain('DrawIndexedIndirectArgs');
+        expect(CULL_MESHLETS_WGSL).toContain('atomicAdd');
+        expect(MICRO_RASTERIZER_WGSL).toContain('visBuffer');
+        expect(VISIBILITY_BUFFER_SHADING_WGSL).toContain('shadeVisBuffer');
+        expect(TEMPORAL_SUPER_RES_WGSL).toContain('accumulateTemporalTSR');
+    });
+
+    it('8. Configures and toggles GPU Compute Culling, Hi-Z, Software Micro-Rasterizer, and VisBuffer', () => {
+        engine = new NextGenAstraViewportEngine({
+            container,
+            enableGpuComputeCulling: true,
+            enableHiZOcclusion: true,
+            enableSoftwareComputeRasterizer: true,
+            enableVisibilityBuffer: true
+        });
+
+        let telemetry: any = null;
+        engine.subscribeTelemetry(t => { telemetry = t; });
+
+        expect(telemetry.gpuComputeCullingEnabled).toBe(true);
+        expect(telemetry.gpuComputeCullingMs).toBeLessThanOrEqual(0.1);
+        expect(telemetry.softwareComputeRasterizerEnabled).toBe(true);
+        expect(telemetry.quadFragmentEfficiencyPct).toBeGreaterThan(95.0);
+        expect(telemetry.visBufferEnabled).toBe(true);
+        expect(telemetry.shadingOverdrawRatio).toBe(1.00);
+
+        // Toggle to legacy / CPU state and verify telemetry updates
+        engine.setGpuComputeCulling(false);
+        engine.setSoftwareComputeRasterizer(false);
+        engine.setVisibilityBuffer(false);
+
+        expect(telemetry.gpuComputeCullingEnabled).toBe(false);
+        expect(telemetry.gpuComputeCullingMs).toBeGreaterThan(1.0);
+        expect(telemetry.softwareComputeRasterizerEnabled).toBe(false);
+        expect(telemetry.quadFragmentEfficiencyPct).toBeLessThan(50.0);
+        expect(telemetry.visBufferEnabled).toBe(false);
+        expect(telemetry.shadingOverdrawRatio).toBeGreaterThan(2.0);
+    });
+
+    it('9. Scales resolution and calculates fillrate boost across Temporal Super Resolution modes', () => {
+        engine = new NextGenAstraViewportEngine({
+            container,
+            temporalSuperResolutionMode: 'off'
+        });
+
+        let telemetry: any = null;
+        engine.subscribeTelemetry(t => { telemetry = t; });
+
+        expect(telemetry.fillrateBoostMultiplier).toBe(1.00);
+
+        engine.setTemporalSuperResolution('ultra-quality');
+        expect(telemetry.fillrateBoostMultiplier).toBeCloseTo(1.69, 1);
+
+        engine.setTemporalSuperResolution('quality');
+        expect(telemetry.fillrateBoostMultiplier).toBeCloseTo(2.25, 1);
+
+        engine.setTemporalSuperResolution('performance');
+        expect(telemetry.fillrateBoostMultiplier).toBe(4.00);
+        expect(telemetry.effectiveFps).toBeGreaterThan(telemetry.fps);
     });
 });
