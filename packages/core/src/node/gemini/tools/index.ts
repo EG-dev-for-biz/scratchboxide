@@ -54,7 +54,9 @@ import {
     TAPIR_4DGS_TOOL_DECLARATIONS,
     tapir4dgsHandlers,
     AVATAR_4DGS_TOOL_DECLARATIONS,
-    avatar4dgsHandlers
+    avatar4dgsHandlers,
+    ANALYTICAL_GROOM_TOOL_DECLARATIONS,
+    analyticalGroomHandlers
 } from './spatial-tools';
 import { ATMOSPHERE_TOOL_DECLARATIONS, atmosphereHandlers } from './atmosphere-tools';
 import {
@@ -103,6 +105,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...PHYSICAL_CAMERA_TOOL_DECLARATIONS,
     ...TAPIR_4DGS_TOOL_DECLARATIONS,
     ...AVATAR_4DGS_TOOL_DECLARATIONS,
+    ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     ...COMFYUI_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS
@@ -130,6 +133,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...physicalCameraHandlers,
     ...tapir4dgsHandlers,
     ...avatar4dgsHandlers,
+    ...analyticalGroomHandlers,
     ...comfyuiHandlers,
     ...lensHandlers,
     ...browserHandlers,

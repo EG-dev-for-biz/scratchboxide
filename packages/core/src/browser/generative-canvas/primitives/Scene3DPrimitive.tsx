@@ -1392,8 +1392,20 @@ int main(int argc, char** argv) {
             return {
                 ...prev,
                 ...data,
-                pythonGenerator: data.pythonGenerator ?? prev.pythonGenerator,
-                cppGenerator: data.cppGenerator ?? prev.cppGenerator,
+                pythonGenerator: data.pythonGenerator
+                    ? {
+                        ...prev.pythonGenerator,
+                        ...data.pythonGenerator,
+                        glbBase64: data.pythonGenerator.glbBase64 || prev.pythonGenerator?.glbBase64
+                      }
+                    : prev.pythonGenerator,
+                cppGenerator: data.cppGenerator
+                    ? {
+                        ...prev.cppGenerator,
+                        ...data.cppGenerator,
+                        glbBase64: data.cppGenerator.glbBase64 || prev.cppGenerator?.glbBase64
+                      }
+                    : prev.cppGenerator,
                 objects: data.objects ?? prev.objects,
                 customMeshes: data.customMeshes ?? prev.customMeshes
             };

@@ -45,6 +45,15 @@ export { LspDiagnosticFeedbackService } from './node/lsp-diagnostic-feedback-ser
 export { CodebasePatternEngine } from './node/codebase-pattern-engine';
 export { AgentContextCompactor } from './node/agent-context-compactor';
 export { ConversationDiffMemoryService } from './node/conversation-diff-memory-service';
+export {
+    TaskCapabilityResolver,
+    resolveTaskCapability,
+    type TaskCapabilityResult,
+    type TaskDomain,
+    type Tier1Assessment,
+    type Tier2ComfyUiFallback,
+    type ComfyPipelineCategory
+} from './node/agent/task-capability-resolver';
 
 // 3D Native Engine Compiler & Python Runner Services
 export { NativeCppCompilerService } from './node/3d-engine/native-compiler-service';

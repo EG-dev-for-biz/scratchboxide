@@ -49,6 +49,7 @@ import {
 import { isPathError, RouteContext } from './routes/types';
 import { createBrowserRouter } from './routes/browserRoutes';
 import { createGeminiRouter } from './routes/geminiRoutes';
+import { createMemoriesRouter } from './routes/memoriesRoutes';
 import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes';
 import { createCppRouter } from './routes/cppRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
@@ -446,6 +447,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         lspFeedbackService,
         mediaJobs
     }, routeContext));
+    app.use('/memories', createMemoriesRouter(memoriesService, routeContext));
 
     // 3. Workspace & Git Endpoints
     const workspaceRouter = createWorkspaceRouter({

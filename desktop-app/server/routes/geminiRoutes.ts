@@ -15,13 +15,18 @@ import {
     LongRunningAgentService,
     SubagentPoolService,
     UserMemoriesService,
-    MediaGenerationJobService
+    MediaGenerationJobService,
+    ProjectContextGraphService,
+    LspDiagnosticFeedbackService,
+    TaskCapabilityResolver,
+    resolveTaskCapability
 } from '../../../packages/core/src/node';
 import {
     classifyMediaGenerationError,
     MediaGenerationRequest
 } from '../../../packages/core/src/common';
 import { RouteContext } from './types';
+import { createMemoriesRouter } from './memoriesRoutes';
 
 export interface GeminiRouterServices {
     geminiService: GeminiService;
@@ -30,10 +35,33 @@ export interface GeminiRouterServices {
     longRunningAgentService: LongRunningAgentService;
     subagentPoolService: SubagentPoolService;
     memoriesService: UserMemoriesService;
-    contextGraphService: any;
-    lspFeedbackService: any;
+    contextGraphService: ProjectContextGraphService;
+    lspFeedbackService: LspDiagnosticFeedbackService;
     mediaJobs: MediaGenerationJobService;
+    taskCapabilityResolver?: TaskCapabilityResolver;
 }
+
+/** Safely writes an SSE payload, guarding against closed, destroyed, or aborted connections. */
+const safeWriteSse = (targetRes: Response, payload: string, signal?: AbortSignal): boolean => {
+    if (targetRes.destroyed || targetRes.writableEnded || signal?.aborted) return false;
+    try {
+        targetRes.write(payload);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+/** Safely terminates an SSE stream if not already closed or destroyed. */
+const safeEndSse = (targetRes: Response): void => {
+    if (!targetRes.destroyed && !targetRes.writableEnded) {
+        try {
+            targetRes.end();
+        } catch {
+            /* ignore */
+        }
+    }
+};
 
 export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteContext): Router {
     const {
@@ -106,20 +134,18 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
 
         try {
             await geminiService.streamGenerate(req.body, event => {
-                if (!controller.signal.aborted) {
-                    res.write(`data: ${JSON.stringify(event)}\n\n`);
-                }
+                safeWriteSse(res, `data: ${JSON.stringify(event)}\n\n`, controller.signal);
             }, controller.signal);
-            res.write('data: [DONE]\n\n');
-            res.end();
+            safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
+            safeEndSse(res);
         } catch (err: any) {
             if (controller.signal.aborted) {
-                res.end();
+                safeEndSse(res);
                 return;
             }
-            res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`);
-            res.write('data: [DONE]\n\n');
-            res.end();
+            safeWriteSse(res, `data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`, controller.signal);
+            safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
+            safeEndSse(res);
         }
     };
 
@@ -322,18 +348,18 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
             await deepWriteService.runPipeline(
                 { prompt, sessionId, workspaceRoot: safeRoot, activeArtifact, useGoogleSearch },
                 event => {
-                    if (!controller.signal.aborted) {
-                        res.write(`data: ${JSON.stringify(event)}\n\n`);
-                    }
+                    safeWriteSse(res, `data: ${JSON.stringify(event)}\n\n`, controller.signal);
                 },
                 controller.signal
             );
-            res.end();
+            safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
+            safeEndSse(res);
         } catch (err: any) {
             if (!controller.signal.aborted) {
-                res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`);
+                safeWriteSse(res, `data: ${JSON.stringify({ type: 'error', error: err.message || 'Streaming failed' })}\n\n`, controller.signal);
+                safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
             }
-            res.end();
+            safeEndSse(res);
         }
     });
 
@@ -435,20 +461,18 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
         const controller = openSse(req, res);
         try {
             await longRunningAgentService.runAutonomousLoop(sessionId, event => {
-                if (!controller.signal.aborted) {
-                    res.write(`data: ${JSON.stringify(event)}\n\n`);
-                }
+                safeWriteSse(res, `data: ${JSON.stringify(event)}\n\n`, controller.signal);
             }, controller.signal);
-            res.write('data: [DONE]\n\n');
-            res.end();
+            safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
+            safeEndSse(res);
         } catch (err: any) {
             if (controller.signal.aborted) {
-                res.end();
+                safeEndSse(res);
                 return;
             }
-            res.write(`data: ${JSON.stringify({ type: 'error', error: err.message || 'Autonomous agent execution failed' })}\n\n`);
-            res.write('data: [DONE]\n\n');
-            res.end();
+            safeWriteSse(res, `data: ${JSON.stringify({ type: 'error', error: err.message || 'Autonomous agent execution failed' })}\n\n`, controller.signal);
+            safeWriteSse(res, 'data: [DONE]\n\n', controller.signal);
+            safeEndSse(res);
         }
     });
 
@@ -476,180 +500,8 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
         }
     });
 
-    // User Memories Endpoints
-    router.get('/memories', async (req: Request, res: Response) => {
-        try {
-            const { scope, category, categoryGroup, workspaceRoot } = req.query as Record<string, string>;
-            const memories = await memoriesService.listMemories({
-                scope: scope as any,
-                category: category as any,
-                categoryGroup: categoryGroup as any,
-                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
-            });
-            res.json({ success: true, memories });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    const createMemory = async (req: Request, res: Response): Promise<void> => {
-        try {
-            const { category, key, value, scope, workspaceId, workspaceRoot } = req.body || {};
-            if (!category || !key || !value) {
-                res.status(400).json({ success: false, error: 'category, key, and value are required' });
-                return;
-            }
-            const memory = await memoriesService.createMemory({
-                category,
-                key,
-                value,
-                scope,
-                workspaceId,
-                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
-            });
-            res.json({ success: true, memory });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    };
-    router.post('/memories', createMemory);
-    router.post('/memories/create', createMemory);
-
-    router.post('/memories/update', async (req: Request, res: Response) => {
-        try {
-            const { id, category, key, value, workspaceRoot } = req.body || {};
-            if (!id) {
-                res.status(400).json({ success: false, error: 'id is required' });
-                return;
-            }
-            const updated = await memoriesService.updateMemory(id, {
-                category,
-                key,
-                value,
-                workspaceRoot: workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined
-            });
-            if (!updated) {
-                res.status(404).json({ success: false, error: 'Memory not found' });
-                return;
-            }
-            res.json({ success: true, memory: updated });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.post('/memories/delete', async (req: Request, res: Response) => {
-        try {
-            const { id, workspaceRoot } = req.body || {};
-            if (!id) {
-                res.status(400).json({ success: false, error: 'id is required' });
-                return;
-            }
-            const deleted = await memoriesService.deleteMemory(id, workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined);
-            res.json({ success: deleted });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.post('/memories/clear-category', async (req: Request, res: Response) => {
-        try {
-            const { category, workspaceRoot } = req.body || {};
-            if (!category) {
-                res.status(400).json({ success: false, error: 'category is required' });
-                return;
-            }
-            const clearedCount = await memoriesService.clearCategory(category, workspaceRoot ? requireWorkspaceRoot(workspaceRoot) : undefined);
-            res.json({ success: true, clearedCount });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.get('/memories/writing-profiles', async (req: Request, res: Response) => {
-        try {
-            const raw = req.query.workspaceRoot as string | undefined;
-            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
-            const profiles = await memoriesService.listWritingProfiles(workspaceRoot);
-            const activeProfile = await memoriesService.getActiveWritingProfile(workspaceRoot);
-            res.json({ success: true, profiles, activeProfile });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.post('/memories/writing-profiles', async (req: Request, res: Response) => {
-        try {
-            const { action, id, name, stylePrompt, samples, isActive, scope, workspaceRoot: raw } = req.body || {};
-            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
-            if (action === 'set-active' && id) {
-                res.json({ success: await memoriesService.setActiveWritingProfile(id, workspaceRoot) });
-                return;
-            }
-            if (action === 'delete' && id) {
-                res.json({ success: await memoriesService.deleteWritingProfile(id, workspaceRoot) });
-                return;
-            }
-            if ((action === 'create' || !action) && name && stylePrompt) {
-                const profile = await memoriesService.createWritingProfile({ name, stylePrompt, samples, isActive, scope, workspaceRoot });
-                res.json({ success: true, profile });
-                return;
-            }
-            res.status(400).json({ success: false, error: 'Invalid action or parameters for writing profiles' });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.get('/memories/style-preferences', async (req: Request, res: Response) => {
-        try {
-            const raw = req.query.workspaceRoot as string | undefined;
-            const preferences = await memoriesService.listStylePreferences({
-                category: req.query.category as string | undefined,
-                workspaceRoot: raw ? requireWorkspaceRoot(raw) : undefined
-            });
-            res.json({ success: true, preferences });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.post('/memories/style-preferences', async (req: Request, res: Response) => {
-        try {
-            const { action, id, name, description, stylePrompt, category, isDefault, sortOrder, scope, workspaceRoot: raw } = req.body || {};
-            const workspaceRoot = raw ? requireWorkspaceRoot(raw) : undefined;
-            if (action === 'delete' && id) {
-                res.json({ success: await memoriesService.deleteStylePreference(id, workspaceRoot) });
-                return;
-            }
-            if ((action === 'create' || !action) && name && stylePrompt) {
-                const preference = await memoriesService.createStylePreference({
-                    name, description, stylePrompt, category, isDefault, sortOrder, scope, workspaceRoot
-                });
-                res.json({ success: true, preference });
-                return;
-            }
-            res.status(400).json({ success: false, error: 'Invalid action or parameters for style preferences' });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.get('/memories/config', async (_req: Request, res: Response) => {
-        try {
-            res.json({ success: true, config: await memoriesService.getConfig() });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
-
-    router.post('/memories/config', async (req: Request, res: Response) => {
-        try {
-            res.json({ success: true, config: await memoriesService.updateConfig(req.body || {}) });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
+    // User Memories Endpoints (Decoupled Sub-Router)
+    router.use('/memories', createMemoriesRouter(memoriesService, ctx));
 
     // Symbol Graph & AST Query Endpoints
     router.get('/symbols', async (req: Request, res: Response) => {
@@ -735,6 +587,57 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
     router.post('/video/generate', async (req: Request, res: Response) => {
         await startMediaJob({ ...req.body, kind: 'video' }, res, false);
     });
+
+    // Media Generation Job Status Endpoints
+    const getMediaJob = async (req: Request, res: Response): Promise<void> => {
+        try {
+            const raw = (req.query.workspaceRoot as string | undefined) || (req.body && req.body.workspaceRoot);
+            let workspaceRoot: string;
+            try {
+                workspaceRoot = requireWorkspaceRoot(raw);
+            } catch (err: any) {
+                if (isPathError(err)) {
+                    sendError(res, err);
+                    return;
+                }
+                res.status(400).json({ success: false, error: 'workspaceRoot query parameter is required to look up media jobs' });
+                return;
+            }
+            const job = await mediaJobs.get(req.params.id, workspaceRoot);
+            if (!job) {
+                res.status(404).json({ success: false, error: `Job ${req.params.id} not found` });
+                return;
+            }
+            res.json({ success: true, job });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to retrieve media job' });
+        }
+    };
+    router.get('/jobs/:id', getMediaJob);
+    router.get('/media/jobs/:id', getMediaJob);
+
+    // Two-Tier Task Capability Resolution Endpoints
+    const resolveCapability = (req: Request, res: Response): void => {
+        try {
+            const { userGoal, goal, taskGoal, promptContext, domainHint, targetEnvironment } = req.body || {};
+            const effectiveGoal = userGoal || goal || taskGoal;
+            if (!effectiveGoal || typeof effectiveGoal !== 'string') {
+                res.status(400).json({ success: false, error: 'userGoal (or goal/taskGoal) is required' });
+                return;
+            }
+            const resolution = resolveTaskCapability({
+                userGoal: effectiveGoal,
+                promptContext: typeof promptContext === 'string' ? promptContext : undefined,
+                domainHint,
+                targetEnvironment
+            });
+            res.json({ success: true, resolution });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to resolve task capability' });
+        }
+    };
+    router.post('/capability/resolve', resolveCapability);
+    router.post('/resolve-capability', resolveCapability);
 
     return router;
 }

@@ -117,6 +117,25 @@ describe('TaskCapabilityResolver (Two-Tier Problem-Solving Architecture)', () =>
             expect(res.tier2Fallback.needed).toBe(false);
             expect(res.tier2Fallback.suggestedNodes).not.toContain('TrellisUrbanRemeshNode');
         });
+
+        it('resolves procedural buildings and architecture via Python 3D engine (Blender mental model)', () => {
+            const res = TaskCapabilityResolver.resolveTaskCapability(
+                'Create a procedural building with mansard roofs, rhythmic windows, and space-colonization trees using Python scripting'
+            );
+
+            expect(res.recommendedResolutionRoute).toBe('tier1-native');
+            expect(res.tier1Assessment.canSolveNatively).toBe(true);
+            expect(res.tier1Assessment.primaryNativeEngine).toBe('python-3d-engine');
+            expect(res.tier1Assessment.nativeCapabilitiesUsed).toEqual(
+                expect.arrayContaining([
+                    expect.stringContaining('Procedural Python 3D Engine'),
+                    expect.stringContaining('NativePythonRunnerService'),
+                    expect.stringContaining('sb.create_building')
+                ])
+            );
+            expect(res.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('execute_3d_python_script');
+            expect(res.tier2Fallback.needed).toBe(false);
+        });
     });
 
     describe('Tier 2 ComfyUI Fallback Resolution (Resort to ComfyUI if Incapable)', () => {

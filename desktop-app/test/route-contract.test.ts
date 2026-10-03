@@ -44,6 +44,16 @@ test('route contract: every renderer client route reaches a JSON handler', async
         return { status: res.status, json: text ? JSON.parse(text) : null };
     };
 
+    const get = async (route: string): Promise<{ status: number; json: any }> => {
+        const res = await fetch(`${base}${route}`, {
+            method: 'GET',
+            headers: { 'X-Scratchbox-Token': token, 'Connection': 'close' }
+        });
+        const text = await res.text();
+        assert.ok(!text.startsWith('<!DOCTYPE'), `${route} fell through to the SPA/404 page`);
+        return { status: res.status, json: text ? JSON.parse(text) : null };
+    };
+
     try {
         // gemini-client.ts: names that had drifted from the server
         const creds = await post('/gemini/save-credentials', { apiKey: '' });
@@ -61,6 +71,23 @@ test('route contract: every renderer client route reaches a JSON handler', async
         assert.strictEqual(repair.status, 400, 'verify-and-repair must require image + prompt');
         const tts = await post('/gemini/tts', {});
         assert.strictEqual(tts.status, 400, 'tts must require text');
+
+        // Two-Tier Capability Resolution & Media Job Polling
+        const cap = await post('/gemini/capability/resolve', { userGoal: 'procedural mountain terrain with SDF marching cubes' });
+        assert.strictEqual(cap.status, 200, 'capability/resolve must be reachable');
+        assert.strictEqual(cap.json.success, true);
+        assert.strictEqual(cap.json.resolution?.recommendedResolutionRoute, 'tier1-native');
+
+        const job = await get(`/gemini/jobs/missing-job-1234?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
+        assert.strictEqual(job.status, 404, 'gemini/jobs/:id must route and return 404 for missing job');
+
+        const jobWithoutRoot = await get('/gemini/jobs/missing-job-1234');
+        assert.strictEqual(jobWithoutRoot.status, 404, 'gemini/jobs/:id defaults to cwd and returns 404 for missing job');
+
+        // Standalone mounted /memories endpoint
+        const directMemories = await get(`/memories?workspaceRoot=${encodeURIComponent(workspaceRoot)}`);
+        assert.strictEqual(directMemories.status, 200, 'standalone /memories endpoint must be reachable');
+        assert.strictEqual(directMemories.json.success, true);
 
         // workspace-config-client.ts
         const lens = await post('/workspace/write-lens-files', {

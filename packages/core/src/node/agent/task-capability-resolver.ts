@@ -8,12 +8,14 @@
  ********************************************************************************/
 
 import type { ComfyPipelineCategory } from '../../common/comfyui-protocol';
+export type { ComfyPipelineCategory };
 import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 
 export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general';
 
 export type PrimaryNativeEngine =
     | 'cpp-3d-engine'
+    | 'python-3d-engine'
     | 'threejs-webgl'
     | 'vfx-matchmove-nle'
     | 'adaptive-matchmove-calibration'
@@ -36,6 +38,8 @@ export interface Tier1Assessment {
     suggestedNativeAction?: {
         primitiveType?: '3d-scene' | 'video-timeline' | 'live-code-sandbox' | 'markdown-document' | 'node-graph';
         serviceOrTool?: string;
+        targetTool?: string;
+        targetService?: string;
         details?: string;
     };
 }
@@ -71,6 +75,7 @@ export interface CapabilityResolutionResult {
     /** Convenience alias for recommendedResolutionRoute matching TwoTierExecutionResult */
     tier?: 'tier1-native' | 'tier2-comfyui';
     canSolveNatively?: boolean;
+    primaryNativeEngine?: PrimaryNativeEngine;
     nativeCapabilities?: string[];
     suggestedNativeAction?: Tier1Assessment['suggestedNativeAction'];
     /** Convenience alias for tier1Assessment.rationale */
@@ -78,6 +83,8 @@ export interface CapabilityResolutionResult {
     /** Convenience alias for recommended native tool */
     recommendedNativeTool?: string;
 }
+
+export type TaskCapabilityResult = CapabilityResolutionResult;
 
 export interface CapabilityOptions {
     domainHint?: TaskDomain | 'auto';
@@ -114,14 +121,14 @@ export class TaskCapabilityResolver {
 
         // 3D & XR
         if (
-            /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field/i.test(lower)
+            /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|building|architecture|architectural|facade|roof|mansard|pedestal|space\s*colonization|courtyard|plaza|townhouse|blender/i.test(lower)
         ) {
             return '3d';
         }
 
         // Code / Programming
         if (
-            /code|function|class|typescript|refactor|compile|build|test|debug|lint|diagnostics|git|api\s*endpoint|fastapi/i.test(lower)
+            /\bcode\b|function|\bclass\b|typescript|refactor|compile|\bbuild\b|\btest\b|debug|lint|diagnostics|git|api\s*endpoint|fastapi/i.test(lower)
         ) {
             return 'code';
         }
@@ -135,7 +142,7 @@ export class TaskCapabilityResolver {
      * 2. If incapable (neural diffusion, image-to-3D, video restyling, monocular depth), formulates Tier 2 ComfyUI fallback.
      */
     static resolveTaskCapability(
-        taskGoal: string | { userGoal?: string; goal?: string; promptContext?: string; domainHint?: any },
+        taskGoal: string | CapabilityOptions,
         options: CapabilityOptions = {}
     ): CapabilityResolutionResult {
         let goal = '';
@@ -155,7 +162,9 @@ export class TaskCapabilityResolver {
         // Trellis can be used to create discrete objects/props in a scene, but scenes themselves are created in codebase.
         const isSceneOrEnvironment = /scene|urban|city|district|world|environment|street|layout|architecture|building|floorplan|landscape|terrain/i.test(lower);
 
-        const isNeuralImageTo3D = !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
+        const isAnalyticalGroomSplat = /groom|hair\s*strand|fur(?:ry)?(?:\s+(?:creature|star|sphere|monster|animal|surface))?|biophysical\s*(?:hair|groom)|volumetric\s*fur|analytical\s*splat|splat[\s\w-]{0,30}groom|harmonic\s*(?:star|creature)|marschner/i.test(lower);
+
+        const isNeuralImageTo3D = !isAnalyticalGroomSplat && !isSceneOrEnvironment && ((/image-to-3d|photo\s+to\s+3d|picture\s+to\s+mesh|2d\s+to\s+3d|trellis|triposr|sv3d|crm|hunyuan3d/i.test(lower) &&
             !/point\s*correspondence|keypoint|pnp|solvepnp|feature\s*match|optical\s*center|resect/i.test(lower)) ||
             ((lower.includes('image') || lower.includes('photo') || options.hasInputImage) && (lower.includes('reconstruct 3d') || lower.includes('generate 3d mesh') || lower.includes('convert to 3d mesh'))));
 
@@ -176,10 +185,10 @@ export class TaskCapabilityResolver {
         let rationale = '';
         let suggestedNativeAction: Tier1Assessment['suggestedNativeAction'] | undefined;
 
-        const isAdaptiveMatchmove = /adaptive\s*matchmove|calibrat\w*.*keyframe|keyframe.*calibrat|matchmove.*calibrat|calibrat.*matchmove|bundle\s*adjust|camera\s*track|6-?dof\s*resect|hermite\s*spline/i.test(lower);
+        const isAdaptiveMatchmove = /adaptive\s*matchmove|calibrat\w*[\s\w-]{0,60}keyframe|keyframe[\s\w-]{0,60}calibrat|matchmove[\s\w-]{0,60}calibrat|calibrat[\s\w-]{0,60}matchmove|bundle\s*adjust|camera\s*track|6-?dof\s*resect|hermite\s*spline/i.test(lower);
 
         const isFrameMotivatedPerformerPrompt =
-            /build_?frame_?motivated_?performer_?prompt|buildframemotivatedperformerprompt|frame\s*motivated.*(?:prompt|video)|motivated\s*by\s*the\s*frame.*(?:prompt|format)|format.*motivated\s*by/i.test(lower) ||
+            /build_?frame_?motivated_?performer_?prompt|buildframemotivatedperformerprompt|frame\s*motivated[\s\w-]{0,40}(?:prompt|video)|motivated\s*by\s*the\s*frame[\s\w-]{0,40}(?:prompt|format)|format[\s\w-]{0,40}motivated\s*by/i.test(lower) ||
             (opts.promptContext ? /buildframemotivatedperformerprompt|frame_?motivated/i.test(opts.promptContext) : false);
 
         const isWanMultiviewDiffusionExecution =
@@ -188,14 +197,13 @@ export class TaskCapabilityResolver {
             !/prompt\s*only|format\s*prompt|text\s*only|author/i.test(lower)) ||
             (opts.promptContext ? /comfyui_execute_pipeline|wan2\.2/i.test(opts.promptContext) && !/prompt/i.test(lower) : false);
 
-        const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral.*(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist).*(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image).*(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
+        const isNeutralPerformerPrompt = /buildneutralperformerprompt|neutral[\s\w-]{0,40}(?:prompt|video|image|portrait|performer|avatar)|(?:performer|avatar|character|dancer|vocalist)[\s\w-]{0,40}(?:neutral|a[\s-]frame|prompt)|(?:prompt|video|image)[\s\w-]{0,40}(?:neutral|a[\s-]frame)|a[\s-]frame/i.test(lower);
 
         const hasSplatKeyword = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(lower);
-        const isLocationSplat = hasSplatKeyword && (
-            !!detectRealWorldLocationIntent(goal)?.isRealWorld ||
-            /(?:location|landmark|beautif|nano\s*banana|restyle|survey|colosseum|empire|plaza|pantheon|rome|manhattan|esb|eiffel|sydney|taj\s*mahal|central\s*park|times\s*square|acropolis|notre\s*dame|big\s*ben|paris|london|tokyo)/i.test(lower) ||
-            /(?:of|for|at|around|in)\s+[a-z0-9]/i.test(lower)
-        );
+        const hasRealWorldIntent = !!detectRealWorldLocationIntent(goal)?.isRealWorld ||
+            /(?:location|landmark|beautif|nano\s*banana|restyle|survey|real[- ]world|geographic|geodetic|place|city|district|plaza|building|street|monument|park|stadium|bridge|tower|colosseum|empire|pantheon|rome|manhattan|esb|eiffel|sydney|taj\s*mahal|central\s*park|times\s*square|acropolis|notre\s*dame|big\s*ben|paris|london|tokyo)/i.test(lower) ||
+            /(?:of|for|at|around|in)\s+[a-z0-9]/i.test(lower);
+        const isLocationSplat = !isAnalyticalGroomSplat && hasSplatKeyword && hasRealWorldIntent;
 
         if (isWanMultiviewDiffusionExecution) {
             canSolveNatively = false;
@@ -217,6 +225,8 @@ export class TaskCapabilityResolver {
             suggestedNativeAction = {
                 primitiveType: '3d-scene',
                 serviceOrTool: 'location_generate_3dgs or Location3DGaussianSplatService',
+                targetTool: 'location_generate_3dgs',
+                targetService: 'Location3DGaussianSplatService',
                 details: 'Invoke location_generate_3dgs or generateLocation3DGS to autonomously synthesize a high-fidelity 3D Gaussian Splatting scene of the location and mount it into the 3D viewport.'
             };
         } else if (isFrameMotivatedPerformerPrompt) {
@@ -229,6 +239,8 @@ export class TaskCapabilityResolver {
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',
                 serviceOrTool: 'build_frame_motivated_performer_prompt',
+                targetTool: 'build_frame_motivated_performer_prompt',
+                targetService: 'FrameMotivatedPerformerService',
                 details: 'Invoke build_frame_motivated_performer_prompt with referenceFrameRef, subject, wardrobe, and cameraPosition.'
             };
         } else if (isNeutralPerformerPrompt) {
@@ -241,6 +253,8 @@ export class TaskCapabilityResolver {
             suggestedNativeAction = {
                 primitiveType: 'markdown-document',
                 serviceOrTool: 'buildNeutralPerformerPrompt or build_neutral_performer_prompt tool',
+                targetTool: 'build_neutral_performer_prompt',
+                targetService: 'NeutralPerformerStudioService',
                 details: 'Invoke build_neutral_performer_prompt with subject, wardrobe, aspectRatio ("9:16"), kind ("image" or "video"), and isAFramePose (true).'
             };
         } else if (domain === 'vfx') {
@@ -264,6 +278,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'adaptive_matchmove_calibrate_sequence',
+                    targetTool: 'adaptive_matchmove_calibrate_sequence',
+                    targetService: 'AdaptiveMatchmoveCalibrationService',
                     details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
                 };
             } else if (isMatchmoveOrSolar) {
@@ -277,6 +293,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'video-timeline',
                     serviceOrTool: 'VfxPlateMatchmoveService.interpolateCameraSolve & getSolarPosition',
+                    targetTool: 'vfx_solve_matchmove',
+                    targetService: 'VfxPlateMatchmoveService',
                     details: 'Mount video-timeline with cameraSolveTrack and ephemerisAnchor.'
                 };
             } else if (/universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|camera\s*arc\s*animation|slerp\s*camera/i.test(lower)) {
@@ -289,6 +307,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'video-timeline',
                     serviceOrTool: 'universal_3d_structure_animate',
+                    targetTool: 'universal_3d_structure_animate',
+                    targetService: 'Universal3DStructureFoundation',
                     details: 'Invoke universal_3d_structure_animate with mountToVideoTimeline: true to compile keyframe diamonds and mount directly onto video-timeline.'
                 };
             } else if (isNleEditing || isHoldoutMatte) {
@@ -301,6 +321,7 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'video-timeline',
                     serviceOrTool: 'synthesizeContextualVideoTimeline',
+                    targetService: 'VideoTimelineSynthesizer',
                     details: 'Mount video-timeline primitive with custom tracks and holdouts.'
                 };
             } else {
@@ -310,11 +331,28 @@ export class TaskCapabilityResolver {
                 rationale = 'Native video timeline and VFX plate services can orchestrate video elements, 3D layers, and audio tracks.';
             }
         } else if (domain === '3d') {
-            if (isNeuralImageTo3D) {
+            if (isAnalyticalGroomSplat) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'cpp-3d-engine';
+                nativeCapabilities.push('Native C++20 Astra Hair & Biophysical Grooming Engine (scratchbox_hair.hpp)');
+                nativeCapabilities.push('Analytical Forward 3D Gaussian Splatting & Niantic SPZ v2 Exporter (scratchbox_spz.hpp)');
+                nativeCapabilities.push('Continuous Spherical Harmonic Surface Synthesis (Harmonic Radial Modes, Axial Taper)');
+                nativeCapabilities.push('Biophysical Morphology (Voronoi Clumping, Helical Curl, Wave Noise)');
+                nativeCapabilities.push('Marschner Melanin Albedo Pigmentation (Eumelanin / Pheomelanin)');
+                nativeCapabilities.push('In-App Agent Tool: splat_synthesize_analytical_groom');
+                rationale = 'Native Scratchbox C++20 Astra hair engine synthesizes biophysical hair strands, Voronoi clumping, and procedural curl noise, then analytically forward-projects them into anisotropic 3D Gaussian Splats (.spz / .ply / .glb) in milliseconds without slow inverse training or external tools.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'splat_synthesize_analytical_groom or AnalyticalGroomSplatService',
+                    targetTool: 'splat_synthesize_analytical_groom',
+                    targetService: 'AnalyticalGroomSplatService',
+                    details: 'Invoke splat_synthesize_analytical_groom with continuous dimensional parameters (harmonic frequencies, amplitudes, grooming dimensions) to stream binary SPZ directly into 3d-scene.'
+                };
+            } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
                 rationale = 'Single-image to discrete 3D object mesh reconstruction requires a neural generative diffusion model (such as Trellis or TripoSR for isolated props/objects). 3D scenes, urban environments, and architectural layouts are created natively in codebase (Tier 1 C++20 Astra / UniversalArchiBridgeService / Three.js).';
-            } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation.*(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
+            } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation[\s\w-]{0,30}(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Universal 3D Structure Foundation (Universal3DStructureFoundation)');
@@ -327,6 +365,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'universal_3d_structure_create or universal_3d_structure_export',
+                    targetTool: 'universal_3d_structure_create',
+                    targetService: 'Universal3DStructureFoundation',
                     details: 'Invoke universal_3d_structure_create to instantiate canonical anchor, export outward to target format(s), or animate with universal_3d_structure_animate and mount to video-timeline.'
                 };
             } else if (isAdaptiveMatchmove) {
@@ -340,9 +380,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'adaptive_matchmove_calibrate_sequence',
+                    targetTool: 'adaptive_matchmove_calibrate_sequence',
+                    targetService: 'AdaptiveMatchmoveCalibrationService',
                     details: 'Calibrate sequence milestones, optimize Brown-Conrady lens breathing, and synthesize continuous C2 Hermite camera trajectory.'
                 };
-            } else if (/reshape|deform|taper|twist|bend|bulge|squash|shear|sculpt.*mesh|mesh.*shaping|lattice.*deform/i.test(lower)) {
+            } else if (/reshape|deform|taper|twist|bend|bulge|squash|shear|sculpt[\s\w-]{0,30}mesh|mesh[\s\w-]{0,30}shaping|lattice[\s\w-]{0,30}deform/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Native C++20 Astra Mesh Reshaper Engine (scratchbox_shaper.hpp)');
@@ -356,6 +398,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'mesh_reshape_via_prompt or NativeMeshReshaperService',
+                    targetTool: 'mesh_reshape_via_prompt',
+                    targetService: 'NativeMeshReshaperService',
                     details: 'Call mesh_reshape_via_prompt with the user prompt or execute NativeMeshReshaperService.reshapeMesh to deform the mesh and stream binary .glb into 3d-scene.'
                 };
             } else if (/utdra|uldra|tile\s*decomposition|rectif(?:y|ication)|bridge\s*void|underpass\s*void|sutherland\s*-?\s*hodgman|slope\s*stratified|domain\s*probe/i.test(lower)) {
@@ -370,9 +414,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'utdra_decompose_tile or UniversalTileDecompositionService',
+                    targetTool: 'utdra_decompose_tile',
+                    targetService: 'UniversalTileDecompositionService',
                     details: 'Call utdra_decompose_tile / utdra_probe_tile or execute UniversalTileDecompositionService to rectify mesh and stream into 3d-scene primitive.'
                 };
-            } else if (/beautif|nano\s*banana.*(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
+            } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('AI Beautify Location Pipeline (buildBeautifyPrompt)');
@@ -382,9 +428,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
                     serviceOrTool: 'buildBeautifyPrompt or build_beautify_prompt tool',
+                    targetTool: 'build_beautify_prompt',
+                    targetService: 'BeautifyStationService',
                     details: 'Invoke build_beautify_prompt with locationName, coords, heading, and styleSuffix.'
                 };
-            } else if (/algorithmic\s*uv|unwrap.*rewrap|rewrap.*unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
+            } else if (/algorithmic\s*uv|unwrap[\s\w-]{0,30}rewrap|rewrap[\s\w-]{0,30}unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');
@@ -398,9 +446,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'AlgorithmicUvEngine.processGlb or algorithmic_uv_unwrap_rewrap tool',
+                    targetTool: 'algorithmic_uv_unwrap_rewrap',
+                    targetService: 'AlgorithmicUvEngine',
                     details: 'Invoke algorithmic_uv_unwrap_rewrap to enhance 3D model textures and stream binary .glb into 3d-scene primitive.'
                 };
-            } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr).*(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas).*(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
+            } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Sophisticated 3D Tile Recoloring Engine v2 (GlbTextureRecolorService)');
@@ -413,6 +463,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'recolor3DTilesGlb or google_3d_tiles_recolor_glb tool',
+                    targetTool: 'google_3d_tiles_recolor_glb',
+                    targetService: 'GlbTextureRecolorService',
                     details: 'Call recolor3DTilesGlb / google_3d_tiles_recolor_glb to re-grade the 3D tile GLB texture atlas and synthesize PBR maps.'
                 };
             } else if (/photorealistic\s*3d\s*tiles|google\s*(3d\s*)?tiles|real-world\s*3d|city\s*3d|building\s*mesh|geographic\s*coordinates|manhattan\s*3d|earth\s*3d/i.test(lower)) {
@@ -425,9 +477,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'getGoogle3DTilesFullTexture or getGoogle3DTilesClay',
+                    targetTool: 'google_3d_tiles_get_full_texture',
+                    targetService: 'Google3DTileService',
                     details: 'Call google_3d_tiles_get_full_texture / google_3d_tiles_get_clay to ingest high-fidelity 3D object, then mount to 3d-scene.'
                 };
-            } else if (/webxr|geospatial\s*anchor|arcore|gps\s*(?:to|<->|alignment|metric)|metric\s*space\s*alignment|sensor\s*fusion\s*calibration|optical\s*pin\s*calibration|project\s*(?:road|parcel).*webxr/i.test(lower)) {
+            } else if (/webxr|geospatial\s*anchor|arcore|gps\s*(?:to|<->|alignment|metric)|metric\s*space\s*alignment|sensor\s*fusion\s*calibration|optical\s*pin\s*calibration|project\s*(?:road|parcel)[\s\w-]{0,40}webxr/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
                 nativeCapabilities.push('WebXR Geospatial Anchor Bridge (WebXRGeospatialAnchorBridge)');
@@ -440,6 +494,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'WebXRGeospatialAnchorBridge & webxr_geospatial_* tools',
+                    targetTool: 'webxr_align_geospatial',
+                    targetService: 'WebXRGeospatialAnchorBridge',
                     details: 'Use webxr_geospatial_align_coordinates, webxr_geospatial_calibrate, or webxr_geospatial_project_vectors to synchronize geodetic anchors and render into WebXR viewport.'
                 };
             } else if (/lens\s*shader|optical\s*(?:distortion|effect|lens)|lens\s*distortion(?:\s*shader|\s*pass)?|brown-?conrady\s*(?:shader|pass|distortion)|chromatic\s*aberration|barrel\s*distortion|pincushion\s*distortion|anamorphic\s*squeeze/i.test(lower)) {
@@ -454,6 +510,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LensDistortionEffect & optics_configure_lens_distortion tool',
+                    targetTool: 'optics_configure_lens_distortion',
+                    targetService: 'LensDistortionEffect',
                     details: 'Instantiate LensDistortionEffect, apply optical profile or calculate focal coefficients, and chain into post-processing pipeline.'
                 };
             } else if (/geobox|resection|optical\s*center|camera\s*resection|edge\s*overlap|sub-?pixel\s*(?:edge|alignment)|brown-?conrady|image\s*location|localize\s*photo|solvepnp|pnp|2d-to-3d|feature\s*match|pose\s*estimation/i.test(lower)) {
@@ -470,9 +528,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'GeoBoxPrecisionResectionService / SpatialPoseEstimatorService (spatial_solve_pnp / geobox_resect_image_location)',
+                    targetTool: 'spatial_solve_pnp',
+                    targetService: 'GeoBoxPrecisionResectionService',
                     details: 'Invoke spatial_solve_pnp, spatial_match_features_2d_3d, or geobox_resect_image_location to resect photo vantage point and lock camera pose.'
                 };
-            } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting.*3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)|gaffer|rembrandt|butterfly|film\s*noir|cinematic\s*light|photographic\s*light|key-?to-?fill|inverse\s*light/i.test(lower)) {
+            } else if (/atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|match\s*lighting|de-?light|delighting|harmonize\s*lighting|lighting[\s\w-]{0,30}3d\s*object|portal\s*fixture|window\s*(?:illumination|backlight)|gaffer|rembrandt|butterfly|film\s*noir|cinematic\s*light|photographic\s*light|key-?to-?fill|inverse\s*light/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'threejs-webgl';
                 nativeCapabilities.push('Photographic Gaffer Engine (LightingGafferService & sb_configure_gaffer_rig)');
@@ -489,6 +549,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'LocationObjectLightingService & geobox_harmonize_location_lighting / LightingGafferService / lighting_* tools',
+                    targetTool: 'geobox_harmonize_location_lighting',
+                    targetService: 'LocationObjectLightingService',
                     details: 'Invoke lighting_estimate_from_photo or lighting_configure_gaffer_rig, or run lighting_optimize_closed_loop to achieve >=95% photometric correlation.'
                 };
 
@@ -505,7 +567,29 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'Google360PanoramaPipelineService & panorama_* tools',
+                    targetTool: 'panorama_generate_4k',
+                    targetService: 'Google360PanoramaPipelineService',
                     details: 'Invoke panorama_generate_4k, panorama_heal_seam, panorama_reproject_zenith, or panorama_inpaint to synthesize seamless equirectangular environment skyboxes.'
+                };
+            } else if (/python|blender|script|procedural\s*building|mansard|pedestal|space\s*colonization|botanical\s*tree|ivy|roof\s*type|execute_3d_python_script/i.test(lower)) {
+                canSolveNatively = true;
+                primaryNativeEngine = 'python-3d-engine';
+                nativeCapabilities.push('Procedural Python 3D Engine (import scratchbox as sb)');
+                nativeCapabilities.push('NativePythonRunnerService (/3d/python/run endpoint)');
+                nativeCapabilities.push('Blender-Compatible Procedural Scene Graph Mental Model');
+                nativeCapabilities.push('Procedural Architecture (sb.create_building, RoofType.MANSARD, HIP, GABLE, FLAT, DOME)');
+                nativeCapabilities.push('Botanical Space-Colonization Trees & Ivy Generation (sb.create_tree, sb.create_ivy)');
+                nativeCapabilities.push('Studio Pedestals & Custom Geometry (sb.geometry.create_studio_pedestal, sb.Mesh)');
+                nativeCapabilities.push('Google Elevation Ground-Truth Topography & Archetype Anchoring');
+                nativeCapabilities.push('execute_3d_python_script Gemini Agent Tool');
+                nativeCapabilities.push('Streaming Binary glTF 2.0 (.glb) Viewport Integration');
+                rationale = 'Native Scratchbox Python 3D engine leverages a Blender-compatible procedural scripting workflow backed by high-performance C++20 nanobind bindings. It synthesizes complex architectural facades, multi-story buildings, mansard roofs, and botanical nature directly into standard binary .glb chunks in under 1 second.';
+                suggestedNativeAction = {
+                    primitiveType: '3d-scene',
+                    serviceOrTool: 'execute_3d_python_script & NativePythonRunnerService (/3d/python/run)',
+                    targetTool: 'execute_3d_python_script',
+                    targetService: 'NativePythonRunnerService',
+                    details: 'Synthesize procedural Python script using import scratchbox as sb, invoke execute_3d_python_script or mount 3d-scene with pythonGenerator, and stream binary .glb into the Three.js canvas.'
                 };
             } else {
                 canSolveNatively = true;
@@ -520,6 +604,7 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'NativeCppCompilerService & LongRunning3DGeneratorAgent',
+                    targetService: 'NativeCppCompilerService',
                     details: 'Synthesize world_generator.cpp, compile via Clang, and stream binary .glb into 3d-scene primitive.'
                 };
             }
@@ -539,12 +624,14 @@ export class TaskCapabilityResolver {
                 rationale = 'Native Google 360 Panorama Pipeline Service performs 4K monumental synthesis with Laplacian 2-band seam equalization, clean circle-free polar collapse, equirectangular roll-shift inpainting with Imagen 3 / Gemini, and Option A Zenith Reprojection eliminating polar pinch singularities.';
                 suggestedNativeAction = {
                     serviceOrTool: 'panorama_generate_4k or panorama_heal_seam or Google360PanoramaPipelineService',
+                    targetTool: 'panorama_generate_4k',
+                    targetService: 'Google360PanoramaPipelineService',
                     details: 'Invoke panorama_generate_4k, panorama_heal_seam, or panorama_reproject_zenith to seamlessly blend or restore the 360 equirectangular panorama.'
                 };
             } else if (isNeuralImageTo3D || isNeuralVideoRestyle || isMonocularNeuralDepth || isLatentDiffusionInpaint || isExplicitComfyRequest) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-            } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr).*(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas).*(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
+            } else if (/(?:recolor|re-color|grade|re-?grade|texture\s*atlas|material\s*harmoniz|pbr)[\s\w-]{0,40}(?:3d\s*tile|glb|model|photometry|photogrammetr)|(?:3d\s*tile|glb|texture\s*atlas)[\s\w-]{0,40}(?:recolor|re-color|grade|re-?grade|palette|foliage\s*protect|pbr)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Sophisticated 3D Tile Recoloring Engine v2 (GlbTextureRecolorService)');
@@ -557,9 +644,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'recolor3DTilesGlb or google_3d_tiles_recolor_glb tool',
+                    targetTool: 'google_3d_tiles_recolor_glb',
+                    targetService: 'GlbTextureRecolorService',
                     details: 'Call recolor3DTilesGlb / google_3d_tiles_recolor_glb to re-grade the 3D tile GLB texture atlas and synthesize PBR maps.'
                 };
-            } else if (/color\s*match|grade\s*match|match\s*color|colorist|lift.*gamma.*gain|primary\s*wheels|3d\s*lut.*match/i.test(lower)) {
+            } else if (/color\s*match|grade\s*match|match\s*color|colorist|lift[\s\w-]{0,30}gamma[\s\w-]{0,30}gain|primary\s*wheels|3d\s*lut[\s\w-]{0,30}match/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'code-first';
                 nativeCapabilities.push('Hollywood-Grade Color Matching & Grading Engine (ProColorGradeMatchingService)');
@@ -571,9 +660,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'live-code-sandbox',
                     serviceOrTool: 'ProColorGradeMatchingService & pro_color_match_imagery tool',
+                    targetTool: 'pro_color_match_imagery',
+                    targetService: 'ProColorGradeMatchingService',
                     details: 'Invoke pro_color_match_imagery or ProColorGradeMatchingService.matchImages to match grading and export 3D LUTs.'
                 };
-            } else if (/color\s*transfer|extract.*(?:and\s+)?apply.*color|palette\s*(?:transfer|override)|nano\s*banana.*color/i.test(lower)) {
+            } else if (/color\s*transfer|extract[\s\w-]{0,30}(?:and\s+)?apply[\s\w-]{0,30}color|palette\s*(?:transfer|override)|nano\s*banana[\s\w-]{0,30}color/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('Nano Banana Color Transfer Pipeline (Method 2: Extract-then-Apply)');
@@ -583,9 +674,11 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
                     serviceOrTool: 'NanoBananaColorService & nano_banana_transfer_color tool',
+                    targetTool: 'nano_banana_transfer_color',
+                    targetService: 'NanoBananaColorService',
                     details: 'Invoke nano_banana_transfer_color or nano_banana_extract_color_palette / nano_banana_apply_color_palette to transfer color palette with geometry locking.'
                 };
-            } else if (/beautif|nano\s*banana.*(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
+            } else if (/beautif|nano\s*banana[\s\w-]{0,30}(?:prompt|location)|buildbeautifyprompt/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'google-models';
                 nativeCapabilities.push('AI Beautify Location Pipeline (buildBeautifyPrompt)');
@@ -594,6 +687,8 @@ export class TaskCapabilityResolver {
                 suggestedNativeAction = {
                     primitiveType: 'markdown-document',
                     serviceOrTool: 'buildBeautifyPrompt or build_beautify_prompt tool',
+                    targetTool: 'build_beautify_prompt',
+                    targetService: 'BeautifyStationService',
                     details: 'Invoke build_beautify_prompt with locationName, coords, heading, and styleSuffix.'
                 };
             } else {
@@ -605,6 +700,7 @@ export class TaskCapabilityResolver {
                 rationale = 'Native Google generative models (Gemini & Imagen) can handle standard text prompts, multimodal image understanding, and 2D asset synthesis.';
                 suggestedNativeAction = {
                     serviceOrTool: 'generate_image or Gemini multimodal analysis',
+                    targetTool: 'generate_image',
                     details: 'Generate image asset or perform vision analysis natively.'
                 };
             }
@@ -706,6 +802,7 @@ export class TaskCapabilityResolver {
             taskGoal: goal,
             taskDomain: domain,
             canSolveNatively,
+            primaryNativeEngine,
             nativeCapabilities,
             suggestedNativeAction,
             tier1Assessment: {
@@ -725,7 +822,7 @@ export class TaskCapabilityResolver {
 }
 
 export function resolveTaskCapability(
-    taskGoal: string | { userGoal?: string; goal?: string; promptContext?: string; domainHint?: any },
+    taskGoal: string | CapabilityOptions,
     options?: CapabilityOptions
 ): CapabilityResolutionResult {
     return TaskCapabilityResolver.resolveTaskCapability(taskGoal, options);

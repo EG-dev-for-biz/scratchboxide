@@ -18,7 +18,7 @@ export interface ContinuousSurfaceDescriptor {
   /** Metric center in world units [x, y, z]. Default [0, 0, 0]. */
   center?: [number, number, number];
   /** Base radius in metric units. Default 1.0. */
-  baseRadius: number;
+  baseRadius?: number;
   /** Integer azimuthal harmonic frequency (e.g. 5 for 5-pointed star, 0 for sphere, 3 for clover, 8 for starburst). */
   harmonicFrequency?: number;
   /** Continuous harmonic modulation amplitude in [0, 1]. Default 0.0. */

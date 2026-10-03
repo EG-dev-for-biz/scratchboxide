@@ -25,6 +25,27 @@ When a user attempts to accomplish something specific (especially VFX-related, 3
    - If the task is assessed as natively feasible, Tier 1 is attempted first.
    - If Tier 1 encounters an unexpected runtime error (e.g., C++ Clang compilation failure, missing driver, or GPU allocation fault), the pipeline must NEVER fail the user task; it must automatically and transparently fail over to Tier 2 ComfyUI execution.
 
+### Rule: "Capabilities Before Tools" Pre-Flight Pass
+When planning or resolving any user objective:
+1. **First-Principles Problem Formulation**:
+   - Before reaching for external workflows, tool chains, outside applications (such as Blender, external photogrammetry, or multi-app coordination), the agent MUST perform a pre-flight capability resolution pass via `resolve_task_capability`.
+   - Never assume an external application is needed simply because other AI agents (e.g. GPT-6.1 Astra) adopted an external pipeline. Formulate the problem directly in terms of mathematical transformations on 3D representations available natively in Scratchbox IDE.
+
+### Rule: Analytical Forward Splatting over Inverse Photogrammetry (Hair, Fur & Grooms)
+When creating or rendering volumetric fur, hair grooms, feathered surfaces, or star/puffball creatures:
+1. **Never Fall into the Circular Inverse Photogrammetry Anti-Pattern**:
+   - The agent must NEVER adopt the circular trap: Procedural 3D Geometry -> 2D multi-camera synthetic rendering -> multi-image neural 3DGS training (COLMAP / LichtFeld Studio / SuperSplat). This loop is an inverse solver for a problem where the 3D ground truth was already known, introducing 100x compute overhead, loss of geometric coherence, and floating splatter artifacts.
+2. **Canonical Forward Splatting Architecture (`AnalyticalGroomSplatService`)**:
+   - Always formulate grooming and fur as an analytical forward-mapping problem:
+     - **Biophysical Guide Curves**: Formulated via `scratchbox_hair.hpp` (`generateHarmonicGuides` or `generateSurfaceGuides`).
+     - **Morphology & Pigment**: Voronoi clumping, helical curl noise, wave oscillation, and Marschner melanin albedo (eumelanin and pheomelanin).
+     - **Analytical Splat Projection**: Each hair segment directly defines a 3D Gaussian ellipsoid: center at segment midpoint $\mathbf{x}$, orientation quaternion $\mathbf{q}$ rotating $+Z$ into segment tangent $\mathbf{t}$, scale vector $\mathbf{s} = (w, w, L/2)$, and opacity $\alpha$.
+     - **Streaming Serialization**: Encodes directly into Niantic SPZ v2 (`.spz`), Stanford PLY (`.ply`), or surfel GLB (`.glb`) via `scratchbox_spz.hpp` in under 100 milliseconds.
+3. **Adaptive Domain Architecture (ADA) Invariant**:
+   - Grooming and morphology must NEVER use closed shape enums (no `'star_creature' | 'fur_sphere'`).
+   - Surfaces are governed strictly by continuous physical descriptors: spherical harmonic radial functions $r(\theta, \phi) = R(1 + A\cos(m\phi)\sin\theta)(1 - \tau\cos\theta)$ or arbitrary input surface meshes sampled on the fly.
+
+
 
 ## 3D Engine Architecture & Implementation Directive
 

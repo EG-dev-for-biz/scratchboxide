@@ -85,6 +85,7 @@ import {
 } from '../../../browser/generative-canvas/services/spatial/SbTerrainGroundEngine';
 import { Universal3DObjectSeparationService } from '../../spatial/Universal3DObjectSeparationService';
 import { SpatialVisualAlignmentVerificationService } from '../../spatial/SpatialVisualAlignmentVerificationService';
+import { AnalyticalGroomSplatService } from '../../3d-engine/AnalyticalGroomSplatService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -4699,6 +4700,134 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: result as unknown as ToolResultPayload,
             summaryResult: `Synthesized 4D performer "${result.characterId}": ${result.numGaussians} Gaussians rigged with 4-bone LBS, ${result.numFrames} motion frames tracked, anchored at ${result.venueAnchor.venueName} (alt: ${result.venueAnchor.altitudeMsl}m MSL). PLY: ${result.plyPath}, SPLAT: ${result.splatPath}`
+        };
+    }
+};
+
+// ============================================================================
+// Analytical Hair Groom & 3D Gaussian Splat Declarations & Handlers
+// ============================================================================
+
+export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
+    {
+        name: 'splat_synthesize_analytical_groom',
+        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astra hair and SPZ engines. Strictly conforms to Adaptive Domain Architecture (ADA) with continuous dimensional parameters: spherical harmonics (radial frequencies m, amplitudes A, axial taper) or arbitrary surface mesh attachment, Marschner melanin pigmentation, and Voronoi clumping.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: {
+                    type: 'STRING',
+                    description: 'Natural language description of creature, groom, fur, hair or star shape (e.g., "5-pointed star creature with dense golden fur")'
+                },
+                baseRadius: {
+                    type: 'NUMBER',
+                    description: 'Metric base radius in meters (default: 1.0)'
+                },
+                harmonicFrequency: {
+                    type: 'NUMBER',
+                    description: 'Azimuthal harmonic frequency (e.g. 5 for 5-pointed star, 0 for sphere, 3 for clover, 8 for starburst)'
+                },
+                harmonicAmplitude: {
+                    type: 'NUMBER',
+                    description: 'Modulation amplitude in [0, 1] (e.g. 0.45 for distinct lobes/points)'
+                },
+                axialTaper: {
+                    type: 'NUMBER',
+                    description: 'Vertical axial taper in [-1, 1] (e.g. 0.25 for teardrop/egg shape)'
+                },
+                strandCount: {
+                    type: 'NUMBER',
+                    description: 'Number of dense synthesized strands (default: 4096)'
+                },
+                guideCount: {
+                    type: 'NUMBER',
+                    description: 'Number of sparse guide curves (default: 64)'
+                },
+                length: {
+                    type: 'NUMBER',
+                    description: 'Physical strand length in meters (default: 0.22)'
+                },
+                clumping: {
+                    type: 'NUMBER',
+                    description: 'Voronoi cluster tip clumping factor in [0, 1] (default: 0.70)'
+                },
+                curlRadius: {
+                    type: 'NUMBER',
+                    description: 'Helical curl radius in meters (default: 0.010)'
+                },
+                curlFrequency: {
+                    type: 'NUMBER',
+                    description: 'Curl frequency along strand length (default: 3.0)'
+                },
+                eumelanin: {
+                    type: 'NUMBER',
+                    description: 'Marschner dark brown/black pigment in [0, 1] (default: 0.6)'
+                },
+                pheomelanin: {
+                    type: 'NUMBER',
+                    description: 'Marschner red/auburn pigment in [0, 1] (default: 0.2)'
+                },
+                baseColorRgb: {
+                    type: 'ARRAY',
+                    description: 'Optional custom follicle root RGB [r, g, b] in [0, 1]',
+                    items: { type: 'NUMBER' }
+                },
+                tipColorRgb: {
+                    type: 'ARRAY',
+                    description: 'Optional custom strand tip RGB [r, g, b] in [0, 1]',
+                    items: { type: 'NUMBER' }
+                },
+                splatScaleMultiplier: {
+                    type: 'NUMBER',
+                    description: 'Anisotropic splat thickness scaling multiplier (default: 1.0)'
+                },
+                exportFormat: {
+                    type: 'STRING',
+                    description: 'Export format: "spz", "ply", "glb", or "all" (default: "spz")',
+                    enum: ['spz', 'ply', 'glb', 'all']
+                }
+            }
+        }
+    }
+];
+
+export const analyticalGroomHandlers: Record<string, ToolHandler> = {
+    async splat_synthesize_analytical_groom(args) {
+        const prompt = String(args.prompt || 'star creature with dense golden fur');
+        const service = AnalyticalGroomSplatService.getInstance();
+        const contract = service.synthesizeContractFromPrompt(prompt, {
+            surface: {
+                baseRadius: typeof args.baseRadius === 'number' ? args.baseRadius : undefined,
+                harmonicFrequency: typeof args.harmonicFrequency === 'number' ? args.harmonicFrequency : undefined,
+                harmonicAmplitude: typeof args.harmonicAmplitude === 'number' ? args.harmonicAmplitude : undefined,
+                axialTaper: typeof args.axialTaper === 'number' ? args.axialTaper : undefined
+            },
+            groom: {
+                strandCount: typeof args.strandCount === 'number' ? args.strandCount : undefined,
+                guideCount: typeof args.guideCount === 'number' ? args.guideCount : undefined,
+                length: typeof args.length === 'number' ? args.length : undefined,
+                clumping: typeof args.clumping === 'number' ? args.clumping : undefined,
+                curlRadius: typeof args.curlRadius === 'number' ? args.curlRadius : undefined,
+                curlFrequency: typeof args.curlFrequency === 'number' ? args.curlFrequency : undefined,
+                eumelanin: typeof args.eumelanin === 'number' ? args.eumelanin : undefined,
+                pheomelanin: typeof args.pheomelanin === 'number' ? args.pheomelanin : undefined,
+                baseColorRgb: Array.isArray(args.baseColorRgb) ? args.baseColorRgb as [number, number, number] : undefined,
+                tipColorRgb: Array.isArray(args.tipColorRgb) ? args.tipColorRgb as [number, number, number] : undefined
+            },
+            splat: {
+                scaleMultiplier: typeof args.splatScaleMultiplier === 'number' ? args.splatScaleMultiplier : undefined,
+                exportFormat: (args.exportFormat as any) || 'spz'
+            }
+        });
+
+        const result = await service.executeGroomSplat(contract);
+        if (!result.success) {
+            throw new Error(`Failed to synthesize analytical groom splat: ${result.error}`);
+        }
+
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: `Successfully synthesized ${result.splatCount} anisotropic 3D Gaussian Splats from ${result.strandCount} biophysical strands (harmonic freq: ${contract.surface.harmonicFrequency ?? 0}, amplitude: ${contract.surface.harmonicAmplitude ?? 0}) in ${result.executionTimeMs}ms. SPZ: ${result.spzPath || 'N/A'}`
         };
     }
 };
