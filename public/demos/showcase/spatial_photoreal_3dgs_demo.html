@@ -3550,6 +3550,7 @@
         // Inject Photogrammetric De-Lighting & Texture Re-Grade (Sophisticated v2) GLSL Shader Chunk
         function applyBlockoutDelightShader(material, mode = 'clay') {
             if (!material) return;
+            if (mode === 'pbr') return; // Strict guard: 1K PBR materials must NEVER receive procedural brick/cavitation shader chunks
             if (material.userData && material.userData.delightShaderInjected) return;
             if (!material.userData) material.userData = {};
             material.userData.delightShaderInjected = true;
@@ -4765,8 +4766,6 @@
                         if (mode === 'pbr' && o.userData.pbrMaterial && (!state.pbrChannel || state.pbrChannel === 'composite')) {
                             // Exact synchronization with colosseum_recolor_proof.html: restore native GLTF PBR material
                             o.material = o.userData.pbrMaterial;
-                            const mats = Array.isArray(o.material) ? o.material : [o.material];
-                            mats.forEach(m => applyBlockoutDelightShader(m, 'pbr'));
                             o.material.wireframe = false;
                             o.castShadow = true;
                             o.receiveShadow = true;
@@ -8116,7 +8115,8 @@ if __name__ == '__main__':
                                                     m.side = THREE.DoubleSide;
                                                     m.alphaTest = 0.5;
                                                 }
-                                                applyBlockoutDelightShader(m, 'pbr');
+                                                // Authentic 1K PBR Suite: preserve pre-baked travertine textures without procedural brick coursing
+                                                m.needsUpdate = true;
                                             }
                                         });
                                         o.castShadow = true;
@@ -8140,7 +8140,7 @@ if __name__ == '__main__':
                             clayBoundingBox = box;
 
                             // Grounded positioning: If model is already centered and floor-grounded at origin (min.y near 0), place at (0,0,0)
-                            const isPreGrounded = (resolvedGlb.includes('_grounded.glb') || resolvedGlb.includes('_clay.glb')) && Math.abs(box.min.y) < 0.5;
+                            const isPreGrounded = isPbrModel || resolvedGlb.includes('colosseum') || ((resolvedGlb.includes('_grounded.glb') || resolvedGlb.includes('_clay.glb')) && Math.abs(box.min.y) < 0.5);
                             if (isPreGrounded || (Math.abs(box.min.y) < 0.05 && Math.abs(center.x) < 0.1 && Math.abs(center.z) < 0.1)) {
                                 gltf.scene.position.set(0, 0, 0);
                             } else {
@@ -8209,6 +8209,14 @@ if __name__ == '__main__':
                             const sBuf = await sResp.arrayBuffer();
                             const sData = parseSplatArrayBuffer(sBuf);
                             mountSplatData(sData, { isFullScene: false, lod: `${sData.count.toLocaleString()} splats (fused)` });
+                            if (activeSplatMesh) {
+                                activeSplatMesh.position.set(0, 0, 0);
+                                activeSplatMesh.rotation.set(0, 0, 0);
+                                activeSplatMesh.scale.set(1.0, 1.0, 1.0);
+                                activeSplatMesh.updateMatrixWorld(true);
+                            }
+                            splatGroup.position.set(0, 0, 0);
+                            splatGroup.updateMatrixWorld(true);
                             splatGroup.visible = (state.renderMode !== 'clay');
                             const elSplats = document.getElementById('telem-splats');
                             if (elSplats) elSplats.innerText = sData.count.toLocaleString();
@@ -10107,6 +10115,10 @@ if __name__ == '__main__':
                 activeSplatMesh.scale.set(1.0, 1.0, 1.0);
             } else if (modelKey === 'esb_facade') {
                 activeSplatMesh.position.set(0.0, 5.12, 0.0);
+                activeSplatMesh.rotation.set(0, 0, 0);
+                activeSplatMesh.scale.set(1.0, 1.0, 1.0);
+            } else if (modelKey === 'survey_box' || modelKey.includes('colosseum')) {
+                activeSplatMesh.position.set(0.0, 0.0, 0.0);
                 activeSplatMesh.rotation.set(0, 0, 0);
                 activeSplatMesh.scale.set(1.0, 1.0, 1.0);
             }

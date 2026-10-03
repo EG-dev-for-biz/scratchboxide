@@ -126,6 +126,30 @@ function normalizeFaceImage(input: Buffer | Uint8Array | RawFaceImage): RawFaceI
         return input;
     }
     const buf = Buffer.isBuffer(input) ? input : Buffer.from(input);
+    // Check if JPEG header (0xFF 0xD8 0xFF)
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8) {
+        try {
+            const cp = require('child_process');
+            const fs = require('fs');
+            const os = require('os');
+            const path = require('path');
+            const tmpJpg = path.join(os.tmpdir(), `sv_face_${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`);
+            const tmpPng = tmpJpg.replace('.jpg', '.png');
+            fs.writeFileSync(tmpJpg, buf);
+            cp.execSync(`sips -s format png "${tmpJpg}" --out "${tmpPng}"`, { stdio: 'pipe' });
+            const pngBuf = fs.readFileSync(tmpPng);
+            try { fs.unlinkSync(tmpJpg); } catch {}
+            try { fs.unlinkSync(tmpPng); } catch {}
+            const decoded = decodePng(pngBuf);
+            return {
+                width: decoded.width,
+                height: decoded.height,
+                rgba: decoded.rgba
+            };
+        } catch {
+            // fall through to check other formats
+        }
+    }
     // Check if PNG header
     if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
         const decoded = decodePng(buf);
@@ -152,7 +176,7 @@ function normalizeFaceImage(input: Buffer | Uint8Array | RawFaceImage): RawFaceI
         }
         return { width: rgbSide, height: rgbSide, rgba };
     }
-    throw new Error(`Unsupported face image buffer format (byteLength: ${buf.length}). Expected PNG or raw RGBA.`);
+    throw new Error(`Unsupported face image buffer format (byteLength: ${buf.length}). Expected PNG, JPEG or raw RGBA.`);
 }
 
 /**
@@ -333,6 +357,8 @@ export function projectCubicFacesToErpBuffer(
     return { width: W, height: H, rgba: outBuffer, png };
 }
 
+export const DEFAULT_GOOGLE_MAPS_API_KEY = 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+
 /**
  * Historical and Metadata query for Google Street View.
  * Matches spce's HistoricalStreetViewProvider.
@@ -350,7 +376,8 @@ export async function fetchStreetViewPanoMetadata(
     const key = options.apiKey
         || (typeof process !== 'undefined'
             ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || ''
-            : '');
+            : '')
+        || DEFAULT_GOOGLE_MAPS_API_KEY;
 
     if (!key) {
         throw new Error('Google Maps API key is required to query Street View metadata.');
@@ -441,7 +468,8 @@ export async function fetchStreetViewCubicFaces(
     const key = options.apiKey
         || (typeof process !== 'undefined'
             ? process.env?.GOOGLE_MAPS_API_KEY || process.env?.MAP_TILES_API_KEY || ''
-            : '');
+            : '')
+        || DEFAULT_GOOGLE_MAPS_API_KEY;
 
     if (!key) {
         throw new Error('Google Maps API key is required to download Street View cubic faces.');

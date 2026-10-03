@@ -22,7 +22,7 @@
       115
     ]
   },
-  "fusedSplatCount": 2223461,
+  "fusedSplatCount": 1205830,
   "voxelSizeMeters": 0.05,
   "stations": [
     {
@@ -771,9 +771,10 @@
     }
   ],
   "tiles": {
-    "tileCount": 144,
-    "levels": 5,
-    "tileBytes": 23185372
+    "tileCount": 91,
+    "levels": 4,
+    "tileBytes": 13345820
   },
-  "createdAt": "2026-10-03T06:29:15.626Z"
+  "createdAt": "2026-10-03T06:29:15.626Z",
+  "updatedAt": "2026-10-03T20:54:03.417Z"
 }

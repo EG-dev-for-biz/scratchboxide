@@ -341,7 +341,18 @@ const server = http.createServer((req, res) => {
                         .filter(f => f.endsWith('.splat'))
                         .sort();
                     const selectedSplats = allStationSplats.slice(0, Math.min(stationCount, allStationSplats.length));
-                    stationEntries = selectedSplats.map(f => `${path.join(stationsDir, f)} 25.0`);
+                    stationEntries = selectedSplats.map(f => {
+                        let alt = 25.0;
+                        const posePath = path.join(stationsDir, f.replace(/\.splat$/, '.pose.json'));
+                        if (fs.existsSync(posePath)) {
+                            try {
+                                const pData = JSON.parse(fs.readFileSync(posePath, 'utf8'));
+                                if (typeof pData.cameraAltitude === 'number') alt = pData.cameraAltitude;
+                                else if (Array.isArray(pData.eye) && typeof pData.eye[1] === 'number') alt = pData.eye[1];
+                            } catch (_) {}
+                        }
+                        return `${path.join(stationsDir, f)} ${alt}`;
+                    });
                 }
 
                 // Fallback to colosseum stations if landmark doesn't have station folder
@@ -349,7 +360,18 @@ const server = http.createServer((req, res) => {
                     const fallbackDir = path.resolve(PUBLIC_DIR, 'tilesets/colosseum/stations');
                     if (fs.existsSync(fallbackDir)) {
                         const fallbackSplats = fs.readdirSync(fallbackDir).filter(f => f.endsWith('.splat')).sort().slice(0, stationCount);
-                        stationEntries = fallbackSplats.map(f => `${path.join(fallbackDir, f)} 25.0`);
+                        stationEntries = fallbackSplats.map(f => {
+                            let alt = 25.0;
+                            const posePath = path.join(fallbackDir, f.replace(/\.splat$/, '.pose.json'));
+                            if (fs.existsSync(posePath)) {
+                                try {
+                                    const pData = JSON.parse(fs.readFileSync(posePath, 'utf8'));
+                                    if (typeof pData.cameraAltitude === 'number') alt = pData.cameraAltitude;
+                                    else if (Array.isArray(pData.eye) && typeof pData.eye[1] === 'number') alt = pData.eye[1];
+                                } catch (_) {}
+                            }
+                            return `${path.join(fallbackDir, f)} ${alt}`;
+                        });
                     }
                 }
 
@@ -357,24 +379,29 @@ const server = http.createServer((req, res) => {
                 fs.writeFileSync(listPath, stationEntries.join('\n'));
 
                 const landmarkCenters = {
-                    colosseum: [-43.43, 62.53],
+                    colosseum: [-44.76, 63.05],
                     red_rocks: [5.0, 0.0],
                     esb: [0.0, 0.0],
                     arch_constantine: [-139.6, -45.3]
                 };
                 const center = landmarkCenters[landmark] || [0.0, 0.0];
+                const effectiveCropRadius = (landmark === 'colosseum' && cropRadius === 115) ? 125.0 : cropRadius;
 
                 const args = [
                     '--fuse-list', listPath,
                     '--voxel-size', String(voxelSize),
-                    '--crop-radius', String(cropRadius),
+                    '--crop-radius', String(effectiveCropRadius),
                     '--crop-center-x', String(center[0]),
                     '--crop-center-z', String(center[1]),
                     '--normal-prune-cos', String(normalPruneCos),
                     '--out-splat', outSplatPath,
                     '--json'
                 ];
-                if (dropFoliage) args.push('--drop-foliage');
+                if (dropFoliage || landmark === 'colosseum') args.push('--drop-foliage');
+                if (landmark === 'colosseum') {
+                    args.push('--min-y', '18.0');
+                    args.push('--exclude-underside');
+                }
 
                 const t0 = Date.now();
                 const { execFile } = require('child_process');
@@ -444,6 +471,135 @@ const server = http.createServer((req, res) => {
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: err?.message || '3DGS pipeline execution failed' }));
+            }
+        });
+        return;
+    }
+
+    // Handle Google Street View Pano Query & Projection API (spce parity)
+    if (reqPath === '/api/streetview/query' || reqPath === '/api/streetview/pano') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1:5173');
+                let panoId = urlObj.searchParams.get('panoId') || urlObj.searchParams.get('panoid') || '';
+                let q = urlObj.searchParams.get('q') || urlObj.searchParams.get('query') || '';
+                let lat = parseFloat(urlObj.searchParams.get('lat') || '');
+                let lng = parseFloat(urlObj.searchParams.get('lng') || '');
+                const format = urlObj.searchParams.get('format') || 'json';
+                const apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+
+                if (body) {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (!panoId && parsed.panoId) panoId = parsed.panoId;
+                        if (!q && parsed.q) q = parsed.q;
+                        if (isNaN(lat) && typeof parsed.lat === 'number') lat = parsed.lat;
+                        if (isNaN(lng) && typeof parsed.lng === 'number') lng = parsed.lng;
+                    } catch {}
+                }
+
+                // If query is provided, check if query contains panoId or coordinates
+                if (!panoId && q) {
+                    const trimmed = q.trim();
+                    if (trimmed.startsWith('CAoS') || (trimmed.length >= 22 && !trimmed.includes(' '))) {
+                        panoId = trimmed;
+                    } else {
+                        const coordMatch = trimmed.match(/^(-?\d+(\.\d+)?)[,\s]+(-?\d+(\.\d+)?)$/);
+                        if (coordMatch) {
+                            lat = parseFloat(coordMatch[1]);
+                            lng = parseFloat(coordMatch[3]);
+                        }
+                    }
+                }
+
+                // If coordinates provided, query Google Street View Metadata API for pano_id
+                if (!panoId && !isNaN(lat) && !isNaN(lng)) {
+                    try {
+                        const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&source=outdoor&key=${apiKey}`;
+                        const metaRes = await fetch(metaUrl);
+                        if (metaRes.ok) {
+                            const metaData = await metaRes.json();
+                            if (metaData.status === 'OK' && metaData.pano_id) {
+                                panoId = metaData.pano_id;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[StreetViewAPI] Metadata fetch error:', e);
+                    }
+                }
+
+                // Fallback default if no panoId found
+                if (!panoId) {
+                    panoId = 'CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF'; // Shibuya Crossing default
+                }
+
+                const cleanPanoId = panoId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                const outPath = path.resolve(PUBLIC_DIR, 'panoramas', `sv_${cleanPanoId}.png`);
+                const relativeUrl = `/panoramas/sv_${cleanPanoId}.png`;
+
+                // If already projected and cached, return immediately
+                if (!fs.existsSync(outPath)) {
+                    // Project via project_streetview.ts
+                    const { execFileSync } = require('child_process');
+                    const REPO_ROOT = path.resolve(__dirname, '..');
+                    const bin = path.resolve(REPO_ROOT, 'node_modules/.bin/vite-node');
+                    const script = path.resolve(REPO_ROOT, 'scripts/project_streetview.ts');
+                    try {
+                        execFileSync(bin, [script, '--', '--panoId', panoId, '--out', outPath, '--apiKey', apiKey], {
+                            cwd: REPO_ROOT,
+                            timeout: 30000,
+                            stdio: 'pipe'
+                        });
+                    } catch (err) {
+                        console.error('[StreetViewAPI] Projection error:', err?.message || err);
+                    }
+                }
+
+                if (format === 'png' && fs.existsSync(outPath)) {
+                    const imgBuf = fs.readFileSync(outPath);
+                    res.writeHead(200, {
+                        'Content-Type': 'image/png',
+                        'Content-Length': imgBuf.length,
+                        'Cache-Control': 'public, max-age=86400'
+                    });
+                    res.end(imgBuf);
+                    return;
+                }
+
+                // Fetch metadata for UI response
+                let date = '2024-05';
+                let copyright = '© Google';
+                let resLat = !isNaN(lat) ? lat : 35.6595;
+                let resLng = !isNaN(lng) ? lng : 139.7005;
+
+                try {
+                    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?pano=${encodeURIComponent(panoId)}&source=outdoor&key=${apiKey}`;
+                    const metaRes = await fetch(metaUrl);
+                    if (metaRes.ok) {
+                        const m = await metaRes.json();
+                        if (m.date) date = m.date;
+                        if (m.copyright) copyright = m.copyright;
+                        if (m.location?.lat) resLat = m.location.lat;
+                        if (m.location?.lng) resLng = m.location.lng;
+                    }
+                } catch (_) {}
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    panoId,
+                    lat: resLat,
+                    lng: resLng,
+                    date,
+                    copyright,
+                    url: fs.existsSync(outPath) ? relativeUrl : '/panoramas/streetview_shibuya_crossing_4k.png',
+                    embedUrl: `https://www.google.com/maps/embed/v1/streetview?key=${apiKey}&pano=${encodeURIComponent(panoId)}&heading=0&pitch=0&fov=90`
+                }));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Street View processing failed' }));
             }
         });
         return;
