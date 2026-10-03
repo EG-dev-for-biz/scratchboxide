@@ -1162,11 +1162,11 @@
             <div class="glass-panel">
                 <div class="panel-title">
                     <span>Compositing Pipeline</span>
-                    <span id="mode-badge" style="color:#fbbf24;font-size:10px;">CLAY BLOCKOUT ACTIVE</span>
+                    <span id="mode-badge" style="color:#34d399;font-size:10px;">CONTINUOUS SOFT-Z ACTIVE (STEP 3)</span>
                 </div>
                 <div class="btn-grid">
-                    <button class="grid-btn active" id="btn-mode-clay">🏛️ Clay Blockout (Step 1)</button>
-                    <button class="grid-btn" id="btn-mode-softz">✨ Continuous Soft-Z</button>
+                    <button class="grid-btn" id="btn-mode-clay">🏛️ Clay Blockout (Step 1)</button>
+                    <button class="grid-btn active" id="btn-mode-softz">✨ Continuous Soft-Z</button>
                     <button class="grid-btn" id="btn-mode-split">⚡ 50/50 Split View</button>
                     <button class="grid-btn" id="btn-mode-splats">🔮 Splats Only</button>
                     <button class="grid-btn" id="btn-mode-tiles" style="display:none;"></button>
@@ -1179,18 +1179,18 @@
                 <div id="clay-shading-controls" style="margin-top:10px;">
                     <div class="control-row">
                         <span class="control-label">Blockout Surface Mode</span>
-                        <span class="control-value" id="val-blockout-material" style="color:#fbbf24;font-size:10px;font-weight:700;">STUDIO CLAY</span>
+                        <span class="control-value" id="val-blockout-material" style="color:#a855f7;font-size:10px;font-weight:700;">1K PBR SUITE</span>
                     </div>
                     <div class="btn-grid" style="grid-template-columns: repeat(5, 1fr); margin-top:4px; gap:4px;">
-                        <button class="grid-btn active" id="btn-mat-clay" style="padding:4px 2px;font-size:9px;" title="Studio Grey Clay Massing">🏛️ Clay</button>
+                        <button class="grid-btn" id="btn-mat-clay" style="padding:4px 2px;font-size:9px;" title="Studio Grey Clay Massing">🏛️ Clay</button>
                         <button class="grid-btn" id="btn-mat-textured" style="padding:4px 2px;font-size:9px;" title="Photogrammetric Texture">🖼️ Textr</button>
-                        <button class="grid-btn" id="btn-mat-pbr" style="padding:4px 2px;font-size:9px;" title="Roman Travertine PBR Material">💎 PBR</button>
+                        <button class="grid-btn active" id="btn-mat-pbr" style="padding:4px 2px;font-size:9px;" title="Roman Travertine PBR Material">💎 PBR</button>
                         <button class="grid-btn" id="btn-mat-regrade" style="padding:4px 2px;font-size:9px;" title="Sophisticated v2 Texture Re-grade (Tuned Realism)">🎨 Regrade</button>
                         <button class="grid-btn" id="btn-mat-wire" style="padding:4px 2px;font-size:9px;" title="Wireframe Mesh">👁️ Wire</button>
                     </div>
 
                     <!-- PBR Texture Channels Sub-Selector (Interactive channel observation) -->
-                    <div id="pbr-channel-controls" style="margin-top:6px; padding:6px; background:rgba(56, 189, 248, 0.05); border:1px solid rgba(56, 189, 248, 0.2); border-radius:6px; display:none;">
+                    <div id="pbr-channel-controls" style="margin-top:6px; padding:6px; background:rgba(56, 189, 248, 0.05); border:1px solid rgba(56, 189, 248, 0.2); border-radius:6px; display:block;">
                         <div style="font-size:9.5px; font-weight:700; color:var(--text-bright); margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
                             <span>🔍 1K PBR Texture Channel</span>
                             <span id="val-pbr-channel" style="color:#38bdf8; font-weight:700; font-size:9px;">FULL PBR</span>
@@ -3029,11 +3029,11 @@
         <div class="glass-panel">
             <div class="panel-title">
                 <span>Pipeline</span>
-                <span style="color:#a855f7;font-size:10px;">PANORAMA TO 3DGS</span>
+                <span id="pipeline-badge" style="color:#38bdf8;font-size:10px;">GOOGLE 3D TILES SURVEY (16 STATIONS)</span>
             </div>
-            <div style="font-size:11px;line-height:1.5;color:var(--text-muted);">
-                <p>• <strong>Geometry</strong>: per-pixel equirect depth (Depth Anything, floor-prior scale fit) with depth-gradient normals and foreshortening-compensated anisotropic splats.</p>
-                <p style="margin-top:6px;">• <strong>Format</strong>: Niantic-compatible planar SPZ (NGSP v2). WASD walks within the synthesized offset ring.</p>
+            <div style="font-size:11px;line-height:1.5;color:var(--text-muted);" id="pipeline-desc">
+                <p>• <strong>Geometry</strong>: 1K PBR Watertight Travertine (<code>colosseum_rome_1k_pbr.glb</code>, 78.8 MB) with transferred envelope normals + 2.22M Fused 3DGS Radiance Field.</p>
+                <p style="margin-top:6px;">• <strong>Technique</strong>: Continuous Volumetric Soft-Z Interleaving with 2D EWA planar covariance and calibrated travertine stone de-lighting.</p>
             </div>
         </div>
     </div>
@@ -3223,11 +3223,11 @@
     <script>
         // Global State & Configuration
         const state = {
-            activeModel: 'survey_box', // Baseline standard is Google 3D Tiles Survey
-            renderMode: 'clay', // 'clay', 'softz', 'split', 'splats', 'tiles'
+            activeModel: 'colosseum_pbr', // Flagship showcase is Rome Colosseum 1K PBR Suite
+            renderMode: 'softz', // 'clay', 'softz', 'split', 'splats', 'tiles'
             splitComparison: 'blockout_vs_splats', // 'blockout_vs_splats', 'hardz_vs_softz'
             clayShading: 'clay', // 'clay', 'wireframe', 'facets'
-            blockoutMaterial: 'clay', // 'clay', 'textured', 'pbr', 'wireframe', 'facets'
+            blockoutMaterial: 'pbr', // 'clay', 'textured', 'pbr', 'wireframe', 'facets'
             pbrChannel: 'composite', // 'composite', 'albedo', 'normal', 'roughness', 'ao', 'orm', 'alpha'
             blockoutOpacity: 1.0,
             splatsOpacity: 1.0,
@@ -4323,6 +4323,47 @@
             }
             updateDelightUniforms();
         }
+
+        function updatePipelineTelemetry() {
+            const badge = document.getElementById('pipeline-badge');
+            const desc = document.getElementById('pipeline-desc');
+            if (!badge || !desc) return;
+
+            const isColosseum = state.activeModel === 'colosseum_pbr' || state.activeModel === 'colosseum_clay' || (typeof worldMeta !== 'undefined' && worldMeta && worldMeta.landmark === 'colosseum');
+            const isEsb = state.activeModel === 'esb_clay' || (typeof worldMeta !== 'undefined' && worldMeta && worldMeta.landmark === 'esb');
+            const isPanorama = (state.activeModel === 'colonnade' || state.activeModel === 'colonnade_spz' || (state.activeModel && state.activeModel.endsWith('_spz') && !isColosseum && !isEsb));
+
+            if (isColosseum) {
+                badge.innerText = 'GOOGLE 3D TILES SURVEY (16 STATIONS)';
+                badge.style.color = '#38bdf8';
+                desc.innerHTML = `
+                    <p>• <strong>Geometry</strong>: 1K PBR Watertight Travertine (<code>colosseum_rome_1k_pbr.glb</code>, 78.8 MB) with transferred envelope normals + 2.22M Fused 3DGS Radiance Field.</p>
+                    <p style="margin-top:6px;">• <strong>Technique</strong>: Continuous Volumetric Soft-Z Interleaving with 2D EWA planar covariance and calibrated travertine stone de-lighting.</p>
+                `;
+            } else if (isEsb) {
+                badge.innerText = 'GOOGLE 3D TILES SURVEY (EMPIRE STATE)';
+                badge.style.color = '#38bdf8';
+                desc.innerHTML = `
+                    <p>• <strong>Geometry</strong>: Studio clay volumetric massing with Indiana Limestone albedo tint + 3DGS surfels.</p>
+                    <p style="margin-top:6px;">• <strong>Technique</strong>: Dual-pass G-buffer depth map with continuous Soft-Z boundary penetration.</p>
+                `;
+            } else if (isPanorama) {
+                badge.innerText = 'PANORAMA TO 3DGS';
+                badge.style.color = '#a855f7';
+                desc.innerHTML = `
+                    <p>• <strong>Geometry</strong>: per-pixel equirect depth (Depth Anything, floor-prior scale fit) with depth-gradient normals and foreshortening-compensated anisotropic splats.</p>
+                    <p style="margin-top:6px;">• <strong>Format</strong>: Niantic-compatible planar SPZ (NGSP v2). WASD walks within the synthesized offset ring.</p>
+                `;
+            } else {
+                badge.innerText = 'PHOTOREAL 3DGS PIPELINE';
+                badge.style.color = '#34d399';
+                desc.innerHTML = `
+                    <p>• <strong>Geometry</strong>: High-resolution photogrammetric 3D asset + 3D Gaussian Splats radiance field.</p>
+                    <p style="margin-top:6px;">• <strong>Technique</strong>: PBR radiometric lighting, Thin-lens optical bokeh, and Soft-Z depth interleaving.</p>
+                `;
+            }
+        }
+        window.updatePipelineTelemetry = updatePipelineTelemetry;
 
         function setDelightStoneProfile(profileKey) {
             const profile = STONE_ALBEDO_PROFILES[profileKey];
@@ -7792,13 +7833,13 @@ if __name__ == '__main__':
             setupEventListeners();
             setupSplitDivider();
 
-            // Synchronize default diurnal lighting (Midday 12:30: Sun Azimuth 132°, Elevation 49.5°)
+            // Synchronize default diurnal lighting (Sunset 17:40: 1060 mins for Colosseum Sunset Vista)
             if (typeof applyDiurnalTime === 'function') {
-                applyDiurnalTime(state.atmosphere?.ephemerisMinutes || 750);
+                applyDiurnalTime(state.atmosphere?.ephemerisMinutes || 1060);
             }
 
-            // 9. Initial Render Mode: Baseline standard is CLAY MODE as BLOCKOUT (<VIDEO_REF_0>)
-            const initialMode = pageParams.get('mode') || pageParams.get('renderMode') || 'clay';
+            // 9. Initial Render Mode: Default to state.renderMode (Continuous Soft-Z for Photoreal 3DGS)
+            const initialMode = pageParams.get('mode') || pageParams.get('renderMode') || state.renderMode || 'softz';
             setMode(initialMode);
 
             // Synchronously elevate all layers to +15.0m clearance & initialize ground shadow mode
@@ -8118,6 +8159,7 @@ if __name__ == '__main__':
                                 elFormat.innerText = isPbrModel ? `1K PBR SUITE (${Math.round(totalVerts / 1000)}k v)` : `3D TILES CLAY (${Math.round(totalVerts / 1000)}k v)`;
                                 elFormat.style.color = isPbrModel ? '#a855f7' : '#38bdf8';
                             }
+                            updatePipelineTelemetry();
                             resolve();
                         }, undefined, (err) => {
                             console.warn('GLB load failed for', resolvedGlb, err);
@@ -8170,6 +8212,7 @@ if __name__ == '__main__':
                             splatGroup.visible = (state.renderMode !== 'clay');
                             const elSplats = document.getElementById('telem-splats');
                             if (elSplats) elSplats.innerText = sData.count.toLocaleString();
+                            updatePipelineTelemetry();
                         }
                     } catch (e) {
                         console.log('PBR fused.splat fetch fallback', e);
@@ -9868,17 +9911,18 @@ if __name__ == '__main__':
             if (!modelKey) return;
             if (modelKey === 'colosseum_pbr') {
                 state.activeModel = 'colosseum_pbr';
+                state.sunAzimuth = 268;
+                state.sunElevation = 2.1;
+                state.atmosphere.ephemerisMinutes = 1060;
                 if (typeof applyDiurnalTime === 'function') {
-                    applyDiurnalTime(state.atmosphere?.ephemerisMinutes || 750);
-                } else if (typeof calculateApproxSolarEphemeris === 'function') {
-                    state.sunAzimuth = 132;
-                    state.sunElevation = 49.5;
+                    applyDiurnalTime(1060);
                 }
                 await loadSurveyTileset('/tilesets/colosseum/tileset.json', '/models/colosseum_rome_1k_pbr.glb');
-                setMode('clay');
+                setMode('softz');
                 updateBlockoutMaterial('pbr');
                 updatePbrChannel('composite');
                 updateLightingUniforms();
+                updatePipelineTelemetry();
                 const frontBm = cameraBookmarks.sunset || cameraBookmarks.front || cameraBookmarks.golden || cameraBookmarks.survey;
                 if (frontBm && camera && controls) {
                     camera.position.set(frontBm.pos.x, frontBm.pos.y, frontBm.pos.z);
@@ -9890,21 +9934,25 @@ if __name__ == '__main__':
             if (modelKey === 'esb_clay') {
                 await loadSurveyTileset('/tilesets/esb/tileset.json', '/models/esb_grounded.glb');
                 setMode('clay');
+                updatePipelineTelemetry();
                 return;
             }
             if (modelKey === 'colosseum_clay') {
                 await loadSurveyTileset('/tilesets/colosseum/tileset.json', '/models/colosseum_grounded.glb');
                 setMode('clay');
+                updatePipelineTelemetry();
                 return;
             }
             if (modelKey === 'gap_clay') {
                 await loadSurveyTileset('/tilesets/gap/tileset.json', '/models/gap_grounded.glb');
                 setMode('clay');
+                updatePipelineTelemetry();
                 return;
             }
             if (modelKey === 'survey_box') {
                 await loadSurveyTileset('/tilesets/survey_box/tileset.json', '/models/survey_box_ground.glb');
                 setMode('clay');
+                updatePipelineTelemetry();
                 return;
             }
 
@@ -10114,6 +10162,10 @@ if __name__ == '__main__':
             const uData = group.userData;
             const count = uData.splatData.count;
             if (count === 0) return;
+
+            // Fast exit while user is actively manipulating/orbiting camera with mouse/touch to avoid 205ms CPU lockup
+            const isInteracting = (typeof controls !== 'undefined' && controls && controls.state !== -1);
+            if (isInteracting && count > 400000) return;
 
             const now = performance.now();
             // Adaptive sort throttling: cap maximum sort rate to ~8Hz rather than per-frame to preserve 60 FPS render budget
@@ -10620,6 +10672,16 @@ if __name__ == '__main__':
                 const ms = ((timestamp - lastTime) / frameCount).toFixed(1);
                 document.getElementById('telem-fps').innerHTML = `${fps}<span class="unit">fps</span>`;
                 document.getElementById('telem-ms').innerHTML = `${ms}<span class="unit">ms</span>`;
+
+                const elSort = document.getElementById('telem-sort');
+                if (elSort && activeSplatMesh && activeSplatMesh.userData) {
+                    const uData = activeSplatMesh.userData;
+                    const sinceSort = performance.now() - (lastSortTime || 0);
+                    if (sinceSort > 1200 && uData.lastSortMs) {
+                        elSort.innerHTML = `${uData.lastSortMs.toFixed(1)}<span class="unit">ms</span> <span style="font-size:9px;color:#34d399;font-weight:600;">(idle)</span>`;
+                    }
+                }
+
                 frameCount = 0;
                 lastTime = timestamp;
             }
@@ -11534,6 +11596,7 @@ if __name__ == '__main__':
                 overcast: 840,   // 14:00 (clouds)
                 night: 1380      // 23:00
             };
+            window.diurnalPresetMinutes = diurnalPresetMinutes;
 
             function applyDiurnalTime(mins) {
                 state.atmosphere.ephemerisMinutes = mins;
@@ -13386,11 +13449,11 @@ if __name__ == '__main__':
                 } else if (mode === 'splats') {
                     splatGroup.visible = (state.splatsVisible !== false);
                     btnSplats.classList.add('active');
-                    modeBadge.innerText = 'SPLATS ONLY';
-                    modeBadge.style.color = '#a855f7';
+                    modeBadge.innerText = 'RAW SPLATS (BASE MESH OFF)';
+                    modeBadge.style.color = '#ec4899';
                     if (elFormat) {
                         elFormat.innerText = (state.activeModel === 'survey_box') ? '3D TILES (KHR_gs + SPZ2)' : (activeSplatMesh ? '3D TILES + 3DGS (.splat)' : '.SPZ (Niantic)');
-                        elFormat.style.color = '#a855f7';
+                        elFormat.style.color = '#ec4899';
                     }
                     if (elSplats && activeSplatMesh && activeSplatMesh.userData.splatData) {
                         elSplats.innerText = activeSplatMesh.userData.splatData.count.toLocaleString();
@@ -14187,6 +14250,34 @@ if __name__ == '__main__':
                     if (sliderFocus) sliderFocus.value = bm.focusDist;
                     const valFocusDist = document.getElementById('val-focus-dist');
                     if (valFocusDist) valFocusDist.innerText = `${bm.focusDist.toFixed(1)} m`;
+
+                    // Synchronize lighting atmosphere with camera bookmark context
+                    if (bookmarkKey === 'sunset') {
+                        if (typeof applyDiurnalTime === 'function' && typeof diurnalPresetMinutes !== 'undefined' && diurnalPresetMinutes.sunset) {
+                            applyDiurnalTime(diurnalPresetMinutes.sunset);
+                        } else if (typeof lightingProfiles !== 'undefined' && lightingProfiles.sunset) {
+                            state.sunAzimuth = lightingProfiles.sunset.az;
+                            state.sunElevation = lightingProfiles.sunset.el;
+                        }
+                        document.querySelectorAll('[data-lighting]').forEach(b => b.classList.toggle('active', b.dataset.lighting === 'sunset'));
+                        document.querySelectorAll('[data-lighting-preset]').forEach(b => b.classList.toggle('active', b.dataset.lightingPreset === 'sunset'));
+                    } else if (bookmarkKey === 'golden') {
+                        if (typeof applyDiurnalTime === 'function' && typeof diurnalPresetMinutes !== 'undefined' && diurnalPresetMinutes.golden) {
+                            applyDiurnalTime(diurnalPresetMinutes.golden);
+                        } else if (typeof lightingProfiles !== 'undefined' && lightingProfiles.golden) {
+                            state.sunAzimuth = lightingProfiles.golden.az;
+                            state.sunElevation = lightingProfiles.golden.el;
+                        }
+                        document.querySelectorAll('[data-lighting]').forEach(b => b.classList.toggle('active', b.dataset.lighting === 'golden'));
+                        document.querySelectorAll('[data-lighting-preset]').forEach(b => b.classList.toggle('active', b.dataset.lightingPreset === 'golden'));
+                    } else if (bookmarkKey === 'survey' || bookmarkKey === 'aerial' || bookmarkKey === 'floating_aerial' || bookmarkKey === 'floating_side') {
+                        if (typeof applyDiurnalTime === 'function' && typeof diurnalPresetMinutes !== 'undefined' && diurnalPresetMinutes.midday) {
+                            applyDiurnalTime(diurnalPresetMinutes.midday);
+                        }
+                        document.querySelectorAll('[data-lighting]').forEach(b => b.classList.toggle('active', b.dataset.lighting === 'midday'));
+                        document.querySelectorAll('[data-lighting-preset]').forEach(b => b.classList.toggle('active', b.dataset.lightingPreset === 'midday'));
+                    }
+
                     updateDofTelemetry();
                     updateLightingUniforms();
                 }
@@ -14488,6 +14579,11 @@ if __name__ == '__main__':
                         }
                     }
                 });
+            }
+
+            // Sync pipeline telemetry on workbench initialization
+            if (typeof updatePipelineTelemetry === 'function') {
+                updatePipelineTelemetry();
             }
         }
 
