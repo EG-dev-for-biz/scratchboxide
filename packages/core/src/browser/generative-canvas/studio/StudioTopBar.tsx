@@ -68,7 +68,7 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
 
     return (
     <header className="sb-chatgpt-topbar">
-        <div className="sb-topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '140px' }}>
+        <div className="sb-topbar-left" style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '140px' }}>
             {!isSidebarOpen && (
                 <>
                     <button
@@ -82,11 +82,12 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                             <line x1="9" y1="3" x2="9" y2="21" />
                         </svg>
                     </button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: '4px' }}>
-                        <div style={{ width: '20px', height: '20px', minWidth: '20px', borderRadius: '6px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2px', overflow: 'hidden' }}>
-                            <img src="/icons/ScratchboxIDE.png" alt="Scratchbox Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                    <div className="sb-sidebar-brand" style={{ paddingLeft: '2px' }} title="Scratchbox IDE">
+                        <div className="sb-brand-logo-icon">
+                            <img src="/icons/ScratchboxIDE-icon.svg" alt="Scratchbox Logo" />
                         </div>
-                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', letterSpacing: '-0.02em' }}>Scratchbox</span>
+                        <span className="sb-brand-logo-title">Scratchbox</span>
+                        <span className="sb-brand-logo-badge">IDE</span>
                     </div>
                 </>
             )}
