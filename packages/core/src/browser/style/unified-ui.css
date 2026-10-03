@@ -15,8 +15,10 @@
    ========================================================================== */
 
 :root {
-    /* Typography Tokens */
-    --sb-btn-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", -system-ui, sans-serif;
+    /* Apple Human Interface Guidelines Typography Tokens */
+    --sb-font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", -system-ui, sans-serif;
+    --sb-font-mono: "SF Mono", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --sb-btn-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", -system-ui, sans-serif;
     --sb-btn-font-weight: 550;
     --sb-btn-letter-spacing: -0.01em;
     --sb-font-serif: "New York", "Iowan Old Style", "Palatino", "Georgia", "Cambria", serif;
@@ -91,6 +93,27 @@
     --sb-ui-card-border: rgba(255, 255, 255, 0.08);
     --sb-ui-card-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     --sb-ui-glass-blur: blur(24px);
+}
+
+/* ==========================================================================
+   Apple Human Interface Guidelines Base Typography & Text Reset
+   ========================================================================== */
+
+body,
+button,
+input,
+select,
+textarea {
+    font-family: var(--sb-font-stack);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+code,
+kbd,
+samp,
+pre {
+    font-family: var(--sb-font-mono);
 }
 
 /* Light Theme Overrides - Shared with Scratchbox Studio Light Chrome */
@@ -2391,7 +2414,10 @@ body.sb-light .sb-git-branch-pill {
     padding: 6px 10px;
     border-radius: var(--sb-radius-sm);
     color: var(--sb-text-secondary);
-    font-size: 12.5px;
+    font-family: var(--sb-font-stack);
+    font-size: 13px;
+    font-weight: 450;
+    letter-spacing: -0.01em;
     cursor: pointer;
     transition: var(--sb-btn-spring);
     user-select: none;
@@ -2438,6 +2464,85 @@ body.sb-light .sb-workspace-thread-selected {
 
 body.sb-light .sb-cursor-dot-active {
     color: #2563eb;
+}
+
+/* ==========================================================================
+   Workspace File Explorer Tree (.sb-file-tree-node)
+   ========================================================================== */
+
+.sb-file-tree-node-wrapper {
+    display: flex;
+    flex-direction: column;
+}
+
+.sb-file-tree-node {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 26px;
+    padding-right: 8px;
+    border-radius: var(--sb-radius-sm, 5px);
+    color: var(--sb-text-secondary, #a1a1aa);
+    font-family: var(--sb-font-stack);
+    font-size: 12.5px;
+    font-weight: 450;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.sb-file-tree-node:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--sb-text-label, #f4f4f5);
+}
+
+body.sb-light .sb-file-tree-node:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #0f172a;
+}
+
+.sb-file-tree-node-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.sb-file-tree-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    color: var(--sb-text-tertiary, #71717a);
+    flex-shrink: 0;
+}
+
+.sb-file-tree-bullet-placeholder {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.sb-file-tree-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.sb-file-tree-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.sb-file-tree-children {
+    display: flex;
+    flex-direction: column;
 }
 
 /* Studio Centered Landing Context Strip & Actions */
@@ -2697,10 +2802,11 @@ body.sb-light .sb-add-file-dropdown {
 }
 
 .sb-dropdown-header {
-    font-size: 10px;
-    font-weight: 700;
+    font-family: var(--sb-font-stack);
+    font-size: 10.5px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
     color: var(--sb-text-tertiary);
     padding: 4px 8px 6px 8px;
     border-bottom: 1px solid var(--sb-surface-border, rgba(255, 255, 255, 0.06));
@@ -2721,6 +2827,7 @@ body.sb-light .sb-dropdown-header {
     background: transparent;
     cursor: pointer;
     text-align: left;
+    font-family: var(--sb-font-stack);
     transition: var(--sb-btn-spring);
     width: 100%;
 }
@@ -2741,17 +2848,21 @@ body.sb-light .sb-dropdown-item:hover {
 }
 
 .sb-dropdown-item-title {
-    font-size: 12px;
-    font-weight: 600;
+    font-family: var(--sb-font-stack);
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--sb-text-label);
-    line-height: 1.2;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
 }
 
 .sb-dropdown-item-sub {
-    font-size: 10px;
+    font-family: var(--sb-font-stack);
+    font-size: 11px;
+    font-weight: 400;
     color: var(--sb-text-tertiary);
     line-height: 1.2;
-    margin-top: 1px;
+    margin-top: 2px;
 }
 
 .sb-ws-file-icon {
@@ -5191,9 +5302,12 @@ body.sb-light .sb-drawer-msg-row.sb-msg-user-row {
 
 .sb-bubble-sender {
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 600;
     color: var(--sb-text-label, #f4f4f5);
     letter-spacing: -0.01em;
+    display: inline-block;
+    margin-right: 8px;
+    flex-shrink: 0;
 }
 
 body.sb-light .sb-bubble-sender {
@@ -5204,6 +5318,8 @@ body.sb-light .sb-bubble-sender {
     font-size: 11px;
     font-weight: 500;
     color: var(--sb-text-tertiary, #71717a);
+    display: inline-block;
+    flex-shrink: 0;
 }
 
 body.sb-light .sb-bubble-time {
@@ -5232,6 +5348,250 @@ body.sb-light .sb-bubble-skill-tag {
     background: rgba(59, 130, 246, 0.08);
     border-color: rgba(59, 130, 246, 0.2);
     color: #2563eb;
+}
+
+/* ==========================================================================
+   Apple Human Interface Guidelines Chat Typography & Markdown Engine
+   (.sb-bubble-text & .sb-chat-markdown-root)
+   ========================================================================== */
+
+.sb-bubble-text,
+.sb-chat-markdown-root {
+    font-family: var(--sb-font-stack);
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--sb-text-label, #ececec);
+    word-break: break-word;
+    letter-spacing: -0.01em;
+}
+
+body.sb-light .sb-bubble-text,
+body.sb-light .sb-chat-markdown-root {
+    color: #1e293b;
+}
+
+.sb-chat-paragraph {
+    margin: 0 0 10px 0;
+    line-height: 1.6;
+}
+
+.sb-chat-paragraph:last-child {
+    margin-bottom: 0;
+}
+
+.sb-chat-heading {
+    font-family: var(--sb-font-stack);
+    font-weight: 600;
+    color: var(--sb-text-label, #ffffff);
+    margin: 14px 0 6px 0;
+    line-height: 1.35;
+    letter-spacing: -0.015em;
+}
+
+body.sb-light .sb-chat-heading {
+    color: #0f172a;
+}
+
+.sb-chat-heading:first-child {
+    margin-top: 0;
+}
+
+.sb-chat-h1 { font-size: 18px; }
+.sb-chat-h2 { font-size: 16px; }
+.sb-chat-h3 { font-size: 14.5px; }
+.sb-chat-h4 { font-size: 13.5px; }
+.sb-chat-h5 { font-size: 12.5px; }
+.sb-chat-h6 { font-size: 12px; }
+
+.sb-chat-bullet-list,
+.sb-chat-ordered-list {
+    margin: 6px 0 10px 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sb-chat-bullet-list:last-child,
+.sb-chat-ordered-list:last-child {
+    margin-bottom: 0;
+}
+
+.sb-chat-bullet-list {
+    list-style-type: disc;
+}
+
+.sb-chat-ordered-list {
+    list-style-type: decimal;
+}
+
+.sb-chat-list-item {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--sb-text-label, #ececec);
+}
+
+body.sb-light .sb-chat-list-item {
+    color: #1e293b;
+}
+
+.sb-chat-strong {
+    font-weight: 600;
+    color: #ffffff;
+}
+
+body.sb-light .sb-chat-strong {
+    color: #0f172a;
+}
+
+.sb-chat-em {
+    font-style: italic;
+}
+
+.sb-chat-inline-code {
+    font-family: var(--sb-font-mono);
+    font-size: 12px;
+    padding: 1.5px 5.5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #93c5fd;
+}
+
+body.sb-light .sb-chat-inline-code {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #1d4ed8;
+}
+
+.sb-chat-blockquote {
+    margin: 8px 0;
+    padding: 6px 14px;
+    border-left: 3px solid var(--sb-brand-blue, #3b82f6);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 0 6px 6px 0;
+    color: var(--sb-text-secondary, #cbd5e1);
+}
+
+body.sb-light .sb-chat-blockquote {
+    background: rgba(0, 0, 0, 0.03);
+    color: #475569;
+}
+
+.sb-chat-link {
+    color: #60a5fa;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s ease;
+}
+
+.sb-chat-link:hover {
+    color: #93c5fd;
+}
+
+body.sb-light .sb-chat-link {
+    color: #2563eb;
+}
+
+body.sb-light .sb-chat-link:hover {
+    color: #1d4ed8;
+}
+
+/* Chat Code Block Container & Syntax Styling */
+.sb-chat-code-block-container {
+    margin: 12px 0;
+    border-radius: var(--sb-radius-md, 8px);
+    overflow: hidden;
+    background: #161618;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    font-family: var(--sb-font-mono);
+}
+
+body.sb-light .sb-chat-code-block-container {
+    background: #f8fafc;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+.sb-chat-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    user-select: none;
+}
+
+body.sb-light .sb-chat-code-header {
+    background: rgba(0, 0, 0, 0.02);
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+.sb-chat-code-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sb-chat-code-lang {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--sb-text-tertiary, #94a3b8);
+}
+
+.sb-chat-code-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sb-chat-code-body {
+    position: relative;
+    overflow-x: auto;
+}
+
+.sb-chat-code-pre {
+    margin: 0;
+    padding: 12px 14px;
+    font-family: var(--sb-font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: #e2e8f0;
+    white-space: pre;
+    tab-size: 4;
+}
+
+body.sb-light .sb-chat-code-pre {
+    color: #1e293b;
+}
+
+.sb-cli-guardrail-pill {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+}
+
+.sb-guardrail-safe_read {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    color: #34d399;
+}
+
+.sb-guardrail-prompt_confirm {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    color: #fbbf24;
+}
+
+.sb-guardrail-blocked_danger {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #f87171;
 }
 
 /* Inline Tool Execution Cards */
@@ -6075,13 +6435,15 @@ body.sb-light .sb-cursor-settings-search-input {
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 6px 10px;
+    padding: 6.5px 10px;
     background: transparent;
     border: none;
     border-radius: 6px;
     color: #a1a1aa;
-    font-size: 12.5px;
-    font-weight: 400;
+    font-family: var(--sb-font-stack);
+    font-size: 13px;
+    font-weight: 450;
+    letter-spacing: -0.01em;
     cursor: pointer;
     text-align: left;
     transition: background 0.12s ease, color 0.12s ease;
@@ -6089,13 +6451,13 @@ body.sb-light .sb-cursor-settings-search-input {
 
 .sb-cursor-settings-nav-item:hover {
     color: #f4f4f5;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .sb-cursor-settings-nav-item.sb-cursor-nav-item-active {
     color: #ffffff;
     background: rgba(255, 255, 255, 0.09);
-    font-weight: 500;
+    font-weight: 550;
 }
 
 body.sb-light .sb-cursor-settings-nav-item {

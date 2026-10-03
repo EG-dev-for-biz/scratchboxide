@@ -129,7 +129,7 @@ export const StudioTopBar: React.FC<StudioTopBarProps> = props => {
                     </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }}>
-                    <kbd style={{ fontSize: '10px', fontFamily: 'inherit', background: 'rgba(255, 255, 255, 0.08)', padding: '1px 5px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'var(--sb-text-secondary)' }}>⌘P</kbd>
+                    <kbd style={{ fontSize: '10px', fontFamily: 'var(--sb-font-mono)', background: 'rgba(255, 255, 255, 0.08)', padding: '1px 5px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'var(--sb-text-secondary)' }}>⌘P</kbd>
                 </div>
             </button>
         </div>

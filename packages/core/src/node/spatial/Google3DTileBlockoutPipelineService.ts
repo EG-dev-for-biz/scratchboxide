@@ -1981,29 +1981,10 @@ export class Google3DTileBlockoutPipelineService {
           }
         });
         chromeProcess.on('error', (err: any) => {
-          console.warn(`[Google 3D Tiles] Headless Chrome launch error: ${err.message}. Falling back to offline mock.`);
           cleanup();
           try { server.close(); } catch (_) {}
-          this.runOfflineMock(
-            resolvedRequest,
-            cameraPathData,
-            outputVideoPath,
-            outputGlbPath,
-            framesDir,
-            firstFramePath,
-            firstFramePngPath,
-            storyboardsDir,
-            manifestPath,
-            fps,
-            storyboardBeats
-          ).then(resolve).catch(reject);
-        });
-
-        chromeProcess.on('exit', (code: number) => {
-          if (code !== 0 && receivedFrames === 0) {
-            console.warn(`[Google 3D Tiles] Headless Chrome exited with code ${code}. Falling back to offline mock.`);
-            cleanup();
-            try { server.close(); } catch (_) {}
+          if (resolvedRequest.offlineMock) {
+            console.warn(`[Google 3D Tiles] Headless Chrome launch error: ${err.message}. Falling back to offline mock.`);
             this.runOfflineMock(
               resolvedRequest,
               cameraPathData,
@@ -2017,6 +1998,33 @@ export class Google3DTileBlockoutPipelineService {
               fps,
               storyboardBeats
             ).then(resolve).catch(reject);
+          } else {
+            reject(new Error(`[Google 3D Tiles] Headless Chrome launch error: ${err.message}. Ensure Chrome is installed and accessible.`));
+          }
+        });
+
+        chromeProcess.on('exit', (code: number) => {
+          if (code !== 0 && receivedFrames === 0) {
+            cleanup();
+            try { server.close(); } catch (_) {}
+            if (resolvedRequest.offlineMock) {
+              console.warn(`[Google 3D Tiles] Headless Chrome exited with code ${code}. Falling back to offline mock.`);
+              this.runOfflineMock(
+                resolvedRequest,
+                cameraPathData,
+                outputVideoPath,
+                outputGlbPath,
+                framesDir,
+                firstFramePath,
+                firstFramePngPath,
+                storyboardsDir,
+                manifestPath,
+                fps,
+                storyboardBeats
+              ).then(resolve).catch(reject);
+            } else {
+              reject(new Error(`[Google 3D Tiles] Headless Chrome exited with code ${code} without rendering frames.`));
+            }
           }
         });
       });

@@ -241,10 +241,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 type="button"
                                 className="sb-cursor-settings-back-btn"
                                 onClick={onClose}
-                                aria-label="← Back"
+                                aria-label="Back"
                             >
                                 <IconArrowLeft size={14} strokeWidth={2} />
-                                <span>← Back</span>
+                                <span>Back</span>
                             </button>
                         </div>
 

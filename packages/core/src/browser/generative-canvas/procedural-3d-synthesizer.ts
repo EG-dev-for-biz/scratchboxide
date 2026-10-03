@@ -2133,7 +2133,34 @@ function _synthesizeRawContextual3DSceneInner(
     // Specific-first ordering: a historical battlefield theme owns its own geo-anchored scene
     // (Lexington Green, Buckman Tavern, formations) and must not be shadowed by the generic
     // real-world tile path, which would otherwise relabel it as a 'worldbuilder' scene.
-    const realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
+    let realWorldLoc = theme === 'battlefield' ? undefined : detectRealWorldLocationIntent(prompt, context);
+    if (!realWorldLoc && theme !== 'battlefield' && theme !== 'vehicle' && theme !== 'glass_shatter') {
+        const isEnvironmental =
+            theme === 'worldbuilder' ||
+            theme === 'nature_atmosphere' ||
+            theme === 'geospatial' ||
+            theme === 'city' ||
+            theme === 'architecture' ||
+            /\b(?:mountain|alpine|peak|summit|cliff|glacier|volcano|rocky|ridge|canyon|desert|dunes|oasis|valley|forest|woods|jungle|rainforest|meadow|island|coast|beach|fjord|lake|river|waterfall|ruins?|temple|pyramid|monument|acropolis|colosseum|pavilion|villa|city|street|bridge|highway|outpost|facility|proving\s*ground|crater|terrain|landscape|ground|outdoor|earth|geolog(?:y|ical)|biome)\b/i.test(prompt);
+
+        if (isEnvironmental) {
+            const casted = CreativeLocationCastingService.getInstance().castLocation(prompt, {
+                theme,
+                docTitle,
+                docContent: context?.docContent
+            });
+            if (casted && casted.isRealWorld) {
+                realWorldLoc = {
+                    isRealWorld: true,
+                    query: casted.landmarkName,
+                    landmarkName: casted.landmarkName,
+                    lat: casted.lat,
+                    lng: casted.lng,
+                    elevation: casted.elevation
+                };
+            }
+        }
+    }
     if (realWorldLoc && realWorldLoc.isRealWorld) {
         if (isSplatRequested) {
             const locName = realWorldLoc.landmarkName || realWorldLoc.query;
@@ -2343,8 +2370,10 @@ function _synthesizeRawContextual3DSceneInner(
                 vertexCount: tileResult.stats.vertexCount,
                 triangleCount: tileResult.stats.faceCount
             }
+        };
     }
 
+    if (theme === 'vehicle') {
         return synthesizeProceduralVehicleScene(prompt, context);
     }
 

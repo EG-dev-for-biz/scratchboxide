@@ -468,17 +468,17 @@ export default function App() {
  * Deterministically morphs a 3D Scene primitive into a Live Code Sandbox with Three.js scene, shaders, aircraft, and physics.
  */
 export function morphScene3DToSandbox(scene: Scene3DData): LiveCodeSandboxData {
-    const title = scene?.title || '3D Jet Flight Simulation';
+    const isFlight = scene?.sceneType === 'aircraft' || scene?.sceneType === 'flight' || /\b(?:jet|airplane|aircraft|flight)\b/i.test(scene?.title || '');
+    const title = scene?.title || (isFlight ? '3D Jet Flight Simulation' : '3D Spatial Scene');
     const subtitle = scene?.subtitle || 'Live Three.js 3D simulation sandbox';
     const skybox = scene?.environment?.skybox || 'realistic-sky';
     const renderMode = scene?.renderMode || 'pbr';
 
-    const appContent = `import React, { useEffect, useRef } from 'react';
+    const appContent = isFlight ? `import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { createAtmosphericScene } from './scene';
 import { createAirplaneMesh, createArticulatedAircraft } from './aircraft';
 import { updateFlightPhysics, updateContrails } from './physics';
-import { generateBiomeTerrain } from './terrain';
 import { runCustomScript } from './customScript';
 
 export default function App() {
@@ -518,8 +518,20 @@ export default function App() {
         aircraft.position.set(0, 3.5, 0);
         scene.add(aircraft);
 
-        // 3. Procedural terrain
-        const terrain = generateBiomeTerrain(scene, 'alpine');
+        // 3. Ground plane (flat runway / studio floor, zero floating wavy terrain)
+        if (${scene?.environment?.ground !== false}) {
+            const groundGeo = new THREE.PlaneGeometry(300, 300);
+            groundGeo.rotateX(-Math.PI / 2);
+            const groundMat = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                roughness: 0.85,
+                metalness: 0.1
+            });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.position.y = -2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+        }
 
         // 4. Custom script execution hook
         const scriptHook = runCustomScript ? runCustomScript({ scene, camera, renderer, THREE, aircraft }) : null;
@@ -569,7 +581,139 @@ export default function App() {
         <div style={{ position: 'relative', width: '100vw', height: '100vh', background: '#0a0a0f', overflow: 'hidden' }}>
             <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
             <div style={{ position: 'absolute', top: 16, left: 16, padding: '8px 16px', background: 'rgba(0,0,0,0.6)', borderRadius: 20, color: '#38bdf8', fontFamily: 'monospace', fontSize: 12 }}>
-                ✈ ${title} · Live Three.js Engine
+                ✈ \${title} · Live Three.js Engine
+            </div>
+        </div>
+    );
+}
+` : `import React, { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+import { createAtmosphericScene } from './scene';
+import { runCustomScript } from './customScript';
+
+export default function App() {
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const container = containerRef.current;
+        const width = container.clientWidth || 800;
+        const height = container.clientHeight || 600;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(${scene?.camera?.fov || 45}, width / height, 0.1, 1000);
+        camera.position.set(${scene?.camera?.position ? scene.camera.position.join(', ') : '15, 12, 20'});
+        const targetPos = new THREE.Vector3(${scene?.camera?.target ? scene.camera.target.join(', ') : '0, 1.8, 0'});
+        camera.lookAt(targetPos);
+
+        let renderer: THREE.WebGLRenderer | null = null;
+        try {
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+        } catch (e) {
+            console.warn('[WebGL Fallback] WebGL unavailable:', e);
+            const fallbackDiv = document.createElement('div');
+            fallbackDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#94a3b8;font-family:system-ui;text-align:center;padding:24px;background:#090d16;';
+            fallbackDiv.innerHTML = '<div style="font-size:36px;margin-bottom:12px;">🛸</div><div style="font-weight:700;font-size:16px;color:#f8fafc;margin-bottom:6px;">Three.js 3D Sandbox Active</div><div style="font-size:12px;color:#64748b;max-width:300px;">Scene loaded and running. Software 2D canvas active.</div>';
+            container.appendChild(fallbackDiv);
+            return;
+        }
+
+        // 1. Atmosphere, skybox, sun, and god rays
+        const env = createAtmosphericScene(scene, { skybox: '${skybox}', renderMode: '${renderMode}' });
+
+        // 2. Custom meshes / scene geometry
+        ${(scene.customMeshes || []).length > 0 ? `
+        const meshesData = ${JSON.stringify(scene.customMeshes)};
+        meshesData.forEach(m => {
+            let geo: THREE.BufferGeometry;
+            if (m.type === 'sphere') geo = new THREE.SphereGeometry(1, 32, 16);
+            else if (m.type === 'cone') geo = new THREE.ConeGeometry(1, 2, 32);
+            else if (m.type === 'cylinder') geo = new THREE.CylinderGeometry(1, 1, 2, 32);
+            else geo = new THREE.BoxGeometry(1, 1, 1);
+
+            const mat = new THREE.MeshStandardMaterial({
+                color: m.material?.color || 0x38bdf8,
+                roughness: m.material?.roughness ?? 0.5,
+                metalness: m.material?.metalness ?? 0.1
+            });
+            const mesh = new THREE.Mesh(geo, mat);
+            if (m.position) mesh.position.set(m.position[0], m.position[1], m.position[2]);
+            if (m.scale) mesh.scale.set(m.scale[0], m.scale[1], m.scale[2]);
+            scene.add(mesh);
+        });` : `
+        const cubeGeo = new THREE.BoxGeometry(2, 2, 2);
+        const cubeMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.3, metalness: 0.8 });
+        const focalMesh = new THREE.Mesh(cubeGeo, cubeMat);
+        focalMesh.position.set(0, 1, 0);
+        scene.add(focalMesh);
+        `}
+
+        // 3. Clean studio ground plane (if enabled)
+        if (${scene?.environment?.ground !== false}) {
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            groundGeo.rotateX(-Math.PI / 2);
+            const groundMat = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                roughness: 0.85,
+                metalness: 0.1
+            });
+            const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.position.y = 0;
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
+        }
+
+        // 4. Custom script execution hook
+        const scriptHook = runCustomScript ? runCustomScript({ scene, camera, renderer, THREE }) : null;
+
+        let lastTime = performance.now();
+        let animationFrameId: number;
+
+        const animate = (now: number) => {
+            const delta = (now - lastTime) / 1000;
+            lastTime = now;
+            const time = now / 1000;
+
+            if (env && env.update) env.update(time, delta);
+            if (scriptHook && scriptHook.update) scriptHook.update(time, delta);
+
+            camera.lookAt(targetPos);
+            renderer.render(scene, camera);
+            animationFrameId = requestAnimationFrame(animate);
+        };
+
+        animationFrameId = requestAnimationFrame(animate);
+
+        const handleResize = () => {
+            if (!container) return;
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        };
+        window.addEventListener('resize', handleResize);
+
+        return () => {
+            cancelAnimationFrame(animationFrameId);
+            window.removeEventListener('resize', handleResize);
+            if (scriptHook && scriptHook.dispose) scriptHook.dispose();
+            renderer.dispose();
+            if (container.contains(renderer.domElement)) {
+                container.removeChild(renderer.domElement);
+            }
+        };
+    }, []);
+
+    return (
+        <div style={{ position: 'relative', width: '100vw', height: '100vh', background: '#0a0a0f', overflow: 'hidden' }}>
+            <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+            <div style={{ position: 'absolute', top: 16, left: 16, padding: '8px 16px', background: 'rgba(0,0,0,0.6)', borderRadius: 20, color: '#38bdf8', fontFamily: 'monospace', fontSize: 12 }}>
+                🌐 \${title} · Live Three.js Engine
             </div>
         </div>
     );
@@ -655,38 +799,6 @@ export function createAtmosphericScene(scene: THREE.Scene, options: { skybox?: s
     const aircraftContent = AIRCRAFT_HELPERS_SOURCE;
     const physicsContent = FLIGHT_PHYSICS_SOURCE;
 
-    const terrainContent = `import * as THREE from 'three';
-
-export function generateBiomeTerrain(scene: THREE.Scene, biome: 'alpine' | 'canyon' | 'coastal' | 'desert' = 'alpine') {
-    const size = 300;
-    const segments = 64;
-    const geo = new THREE.PlaneGeometry(size, size, segments, segments);
-    geo.rotateX(-Math.PI / 2);
-
-    const pos = geo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i);
-        const z = pos.getZ(i);
-        const d = Math.sqrt(x * x + z * z);
-        let y = Math.sin(x * 0.03) * Math.cos(z * 0.03) * 6.0;
-        y += Math.sin(x * 0.08 + z * 0.06) * 2.5;
-        if (d > 100) y *= (150 - d) / 50;
-        pos.setY(i, y - 8.0);
-    }
-    geo.computeVertexNormals();
-
-    const mat = new THREE.MeshStandardMaterial({
-        color: biome === 'desert' ? 0xd97706 : biome === 'canyon' ? 0x9a3412 : 0x1e3a29,
-        roughness: 0.8,
-        metalness: 0.2,
-        flatShading: true
-    });
-
-    const terrain = new THREE.Mesh(geo, mat);
-    scene.add(terrain);
-    return terrain;
-}
-`;
 
     const shadersContent = `export const AtmosphericScatteringShader = {
     vertexShader: \`
@@ -773,19 +885,17 @@ ${subtitle}
 ### Structure
 - \`App.tsx\`: React canvas mounting with Three.js rendering loop
 - \`scene.ts\`: Atmospheric sky dome, volumetric god rays, and lighting
-- \`aircraft.ts\`: High-fidelity aircraft with articulated ailerons, elevators, rudder, and engines
-- \`physics.ts\`: Aerodynamic kinematics and control surface deflections
-- \`terrain.ts\`: Procedural multi-biome terrain generator
-- \`shaders.ts\`: Custom GLSL shaders
+${isFlight ? `- \`aircraft.ts\`: High-fidelity aircraft with articulated ailerons, elevators, rudder, and engines\n- \`physics.ts\`: Aerodynamic kinematics and control surface deflections\n` : ''}- \`shaders.ts\`: Custom GLSL shaders
 - \`customScript.ts\`: Live user-customizable dynamic Three.js script
 `;
 
     const files: CodeFileTab[] = [
         { id: 'tab-app', name: 'App.tsx', path: 'App.tsx', language: 'react', content: appContent, isEntry: true },
         { id: 'tab-scene', name: 'scene.ts', path: 'scene.ts', language: 'typescript', content: sceneContent },
-        { id: 'tab-aircraft', name: 'aircraft.ts', path: 'aircraft.ts', language: 'typescript', content: aircraftContent },
-        { id: 'tab-physics', name: 'physics.ts', path: 'physics.ts', language: 'typescript', content: physicsContent },
-        { id: 'tab-terrain', name: 'terrain.ts', path: 'terrain.ts', language: 'typescript', content: terrainContent },
+        ...(isFlight ? [
+            { id: 'tab-aircraft', name: 'aircraft.ts', path: 'aircraft.ts', language: 'typescript', content: aircraftContent },
+            { id: 'tab-physics', name: 'physics.ts', path: 'physics.ts', language: 'typescript', content: physicsContent },
+        ] : []),
         { id: 'tab-shaders', name: 'shaders.ts', path: 'shaders.ts', language: 'typescript', content: shadersContent },
         { id: 'tab-custom', name: 'customScript.ts', path: 'customScript.ts', language: 'typescript', content: customScriptContent },
         { id: 'tab-readme', name: 'README.md', path: 'README.md', language: 'markdown', content: readmeContent }

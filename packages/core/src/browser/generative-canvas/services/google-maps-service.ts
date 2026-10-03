@@ -772,27 +772,10 @@ export class GoogleMapsService {
             }
         }
 
-        // 4. Procedural algorithmic hash fallback for arbitrary query names so tests and offline UI never fail
-        let hash = 0;
-        for (let i = 0; i < cleanQuery.length; i++) {
-            hash = (hash << 5) - hash + cleanQuery.charCodeAt(i);
-            hash |= 0;
-        }
-        const pseudoLat = 37.77 + ((Math.abs(hash) % 1000) / 10000);
-        const pseudoLng = -122.42 + (((Math.abs(hash >> 3)) % 1000) / 10000);
-
-        const proceduralResult: GeocodeResult = {
-            lat: Number(pseudoLat.toFixed(4)),
-            lng: Number(pseudoLng.toFixed(4)),
-            formattedAddress: `${cleanQuery}, Earth Reference Anchor`,
-            locationType: 'APPROXIMATE',
-            elevation: 20.0,
-            zoom: 15
-        };
-        this.state.lastResolvedPlace = proceduralResult;
-        this.state.lastQuery = cleanQuery;
-        this.notifyListeners();
-        return proceduralResult;
+        // 4. Strict Zero Procedural Fallback: Throw actionable error instead of inventing fake coordinates
+        throw new Error(
+            `Unable to geocode "${cleanQuery}". Geocoding requires explicit geodetic coordinates ("lat, lng") or an active Google Maps API key (GOOGLE_MAPS_API_KEY). Procedural coordinate hashing is strictly prohibited.`
+        );
     }
 
     /**
