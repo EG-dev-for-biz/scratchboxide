@@ -3175,6 +3175,11 @@
             const isEquirect = (ar >= 1.65 && ar <= 2.25) || (label && (
                 label.toLowerCase().includes('360') ||
                 label.toLowerCase().includes('panorama') ||
+                label.toLowerCase().includes('streetview') ||
+                label.toLowerCase().includes('street') ||
+                label.toLowerCase().includes('shibuya') ||
+                label.toLowerCase().includes('crossing') ||
+                label.toLowerCase().includes('dubai') ||
                 label.toLowerCase().includes('wrap') ||
                 label.toLowerCase().includes('pavilion') ||
                 label.toLowerCase().includes('crystal') ||
@@ -3759,30 +3764,32 @@
 
             const latency = Math.round(performance.now() - startTime);
             document.getElementById('hud-latency').innerText = `${latency} ms`;
+            if (currentStreetViewMeta) {
+                updateStreetViewTelemetryUI(currentStreetViewMeta);
+            }
             updateHUDStatus();
             updateMeridianSplitView();
             updateFlatCanvasView();
         }
 
         function applyNadirCleaning(ctx) {
-            const w = PANO_W;
-            const h = PANO_H;
+            const w = ctx.canvas.width;
+            const h = ctx.canvas.height;
             const startY = Math.floor(h * (1.0 - nadirRatio));
 
             const imgData = ctx.getImageData(0, 0, w, h);
             const data = imgData.data;
 
-            // Inpaint bottom rows with surrounding floor texture
+            // Inpaint bottom rows with surrounding roadway pavement texture
             for (let y = startY; y < h; y++) {
-                const t = (y - startY) / (h - startY);
-                const sampleY = Math.max(0, startY - 10);
+                const sampleY = Math.max(0, startY - 12);
                 const row = y * w * 4;
                 const sampleRow = sampleY * w * 4;
 
                 for (let x = 0; x < w; x++) {
                     const idx = row + x * 4;
                     const sIdx = sampleRow + x * 4;
-                    // Smoothly blend clean floor down into nadir
+                    // Smoothly blend clean pavement down into nadir
                     data[idx] = data[sIdx];
                     data[idx + 1] = data[sIdx + 1];
                     data[idx + 2] = data[sIdx + 2];
@@ -4296,15 +4303,20 @@
             }
 
             const nadirStatus = document.getElementById('hud-nadir-status');
-            if (isNadirRemoved) {
-                nadirStatus.innerText = '✨ INPAINTED & CLEAN';
-                nadirStatus.style.color = 'var(--accent-emerald)';
-            } else if (currentPreset === 'interior') {
-                nadirStatus.innerText = 'CAMERA TRIPOD DETECTED';
-                nadirStatus.style.color = 'var(--accent-magenta)';
-            } else {
-                nadirStatus.innerText = 'CLEAR (NO RIG DETECTED)';
-                nadirStatus.style.color = 'var(--text-main)';
+            if (nadirStatus) {
+                if (isNadirRemoved) {
+                    nadirStatus.innerText = '✨ ROADWAY INPAINTED & CLEAN';
+                    nadirStatus.style.color = 'var(--accent-emerald)';
+                } else if (currentStreetViewMeta) {
+                    nadirStatus.innerText = '🚗 STREET VIEW VEHICLE RIG (-90°)';
+                    nadirStatus.style.color = 'var(--accent-magenta)';
+                } else if (currentPreset === 'interior') {
+                    nadirStatus.innerText = 'CAMERA TRIPOD DETECTED';
+                    nadirStatus.style.color = 'var(--accent-magenta)';
+                } else {
+                    nadirStatus.innerText = 'CLEAR (NO RIG DETECTED)';
+                    nadirStatus.style.color = 'var(--text-main)';
+                }
             }
 
             const resEl = document.getElementById('hud-resolution');
@@ -4322,10 +4334,13 @@
 
             const modelName = document.getElementById('stat-model-name');
             if (modelName) {
-                if (currentCustomImage) {
+                if (currentStreetViewMeta) {
+                    const shortName = currentStreetViewMeta.name.split(',')[0];
+                    modelName.innerText = `Street View: ${shortName}`;
+                } else if (currentCustomImage) {
                     modelName.innerText = `Ingested: ${currentSourceName.slice(0, 20)}`;
                 } else {
-                    modelName.innerText = 'Imagen 3 / Gemini 2.5';
+                    modelName.innerText = 'Google Street View 360';
                 }
             }
 

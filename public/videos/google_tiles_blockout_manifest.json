@@ -1,11 +1,11 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-03T07:11:18.348Z",
+  "timestamp": "2026-10-03T19:56:46.535Z",
   "videoRef": "<VIDEO_REF_0>",
-  "outputVideoPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-clay-runner-test-ttV4yp/clay_canyon_blockout.mp4",
-  "outputGlbPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-clay-runner-test-ttV4yp/clay_canyon_massing.glb",
+  "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_clay_blockout_camera.mp4",
+  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/google_tiles_clay_area.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_first_frame.jpg",
-  "firstFramePngPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-clay-runner-test-ttV4yp/clay_canyon_frame_00.png",
+  "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_frame_00.png",
   "storyboardPaths": [
     "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_clay/beat_00.jpg",
     "/Users/eligreen/dev/scratchbox-ide-master/public/storyboards_clay/beat_01.jpg",
@@ -20,10 +20,10 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 35.6586,
-    "lng": 139.7454,
-    "elevation": 25,
-    "landmarkName": "Tokyo Tower"
+    "lat": 41.89021,
+    "lng": 12.492231,
+    "elevation": 15,
+    "landmarkName": "Coordinates (41.890210, 12.492231)"
   },
   "errorTarget": 0.5,
   "renderMode": "clay",
@@ -56,7 +56,7 @@
   "collisionAudit": {
     "enabled": true,
     "violationsDetected": 0,
-    "minClearanceMeters": 28,
+    "minClearanceMeters": 45,
     "maxElevationAdjustment": 0,
     "pathAdjusted": false,
     "auditPassed": true
