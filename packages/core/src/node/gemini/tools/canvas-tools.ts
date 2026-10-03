@@ -233,7 +233,6 @@ scene.merge(ivy)
 # 6. Stream binary glTF 2.0
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
-                }
             }
 
             if (pythonScript && !pythonGlbBase64) {
