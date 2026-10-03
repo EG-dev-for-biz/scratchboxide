@@ -87,7 +87,6 @@ export const ModelsTab: React.FC = () => {
                             rows={3}
                             value={workspaceSettings.customPromptInstructions || ''}
                             onChange={e => setWorkspaceSettings({ ...workspaceSettings, customPromptInstructions: e.target.value })}
-                            placeholder="e.g. Adhere to Apple Human Interface Guidelines and 8-pt spacing tokens across all UI components."
                         />
                     </div>
 

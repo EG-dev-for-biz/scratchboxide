@@ -311,7 +311,7 @@ export function createInitialSettingsState({ propGoogleSearchGrounding }: Settin
         workspaceSettings: {
         defaultModel: 'gemini-3.7-flash',
         thinkingBudget: 1024,
-        customPromptInstructions: 'Follow Apple Human Interface Guidelines and strict TypeScript typing.',
+        customPromptInstructions: '',
         autoAttachSuperpowers: true
     },
         isSavingWorkspace: false,
