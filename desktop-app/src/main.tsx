@@ -10,6 +10,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { installApiAuth } from '@scratchbox/core/common/api-client-config';
+import '@scratchbox/core/style.css';
 import App from './App';
 
 // Attach the per-launch API token to same-origin API calls before anything fetches.
