@@ -385,5 +385,65 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
             expect(graph.edges.length).toBeGreaterThanOrEqual(3);
             expect(graph.title).toContain("Autonomous Crop");
         });
+
+        it("synthesizes anatomical botanical 3D scene with stem, foliage, calyx, stamen, and radial petals", () => {
+            const flowerScene = synthesizeAdaptive3DScene(
+                "botanical",
+                "English Rose Blossom",
+                "a beautiful blooming rose in a garden with petals and foliage"
+            );
+            expect(flowerScene.customMeshes.length).toBeGreaterThanOrEqual(10); // soil + stem + 2 leaves + calyx + stamen + 6 petals
+            const stem = flowerScene.customMeshes.find(m => m.id === "botanical-stem-primary");
+            expect(stem).toBeDefined();
+            expect(stem?.type).toBe("cylinder");
+
+            const petals = flowerScene.customMeshes.filter(m => m.id.startsWith("botanical-petal-"));
+            expect(petals.length).toBe(6);
+            petals.forEach(p => {
+                expect(p.parentId).toBe("botanical-stem-primary");
+                expect(p.material?.roughness).toBeLessThanOrEqual(0.4);
+            });
+
+            const stamen = flowerScene.customMeshes.find(m => m.id === "botanical-pollen-core");
+            expect(stamen).toBeDefined();
+            expect(stamen?.type).toBe("sphere");
+            expect(stamen?.material?.emissive).toBeDefined();
+        });
+
+        it("synthesizes entity-aware open-ended 3D scene without static 4-primitive fallback", () => {
+            // Vertical bioreactor column
+            const columnScene = synthesizeAdaptive3DScene(
+                "general",
+                "Brewing Fermentation Bioreactor",
+                "industrial fermentation column with cooling jacket and monitoring telemetry"
+            );
+            expect(columnScene.customMeshes.length).toBeGreaterThanOrEqual(4);
+            const columnPrimary = columnScene.customMeshes.find(m => m.id === "adaptive-primary-core");
+            expect(columnPrimary).toBeDefined();
+            expect(columnPrimary?.type).toBe("cylinder");
+            expect(columnPrimary?.name).toContain("Bioreactor Primary Column");
+
+            // Planar chassis
+            const chassisScene = synthesizeAdaptive3DScene(
+                "general",
+                "Autonomous Rover Platform",
+                "heavy duty industrial flatbed chassis platform with telemetry subframe"
+            );
+            const chassisPrimary = chassisScene.customMeshes.find(m => m.id === "adaptive-primary-core");
+            expect(chassisPrimary).toBeDefined();
+            expect(chassisPrimary?.type).toBe("box");
+            expect(chassisPrimary?.name).toContain("Chassis Platform");
+
+            // Spherical sensor orb
+            const orbScene = synthesizeAdaptive3DScene(
+                "general",
+                "Environmental Telemetry Orb",
+                "spherical atmospheric probe sensor core with gimbal ring"
+            );
+            const orbPrimary = orbScene.customMeshes.find(m => m.id === "adaptive-primary-core");
+            expect(orbPrimary).toBeDefined();
+            expect(orbPrimary?.type).toBe("sphere");
+            expect(orbPrimary?.name).toContain("Spherical Core");
+        });
     });
 });

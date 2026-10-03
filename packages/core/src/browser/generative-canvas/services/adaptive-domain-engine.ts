@@ -45,7 +45,7 @@ export function classifyDomain(text: string, context?: string): DomainCategory {
     if (/\b(?:biology|genetics|genomic|genomics|dna|rna|mrna|crispr|cas9|nucleotide|base\s*pair|amino\s*acid|protein|proteomics|enzyme|ribosome|homology|alphafold|plddt|wet\s*lab|assay|sequencing|fasta|fastq|blast|mutation|transcriptome|transcriptomics|cellular|mitochondria|polymerase|ligase|plasmid|cloning|western\s*blot|in\s*vitro|in\s*vivo|in\s*silico|cryo-em|crystallography)\b/i.test(combined)) {
         return 'biology';
     }
-    if (/\b(?:healthcare|medical|clinical|patient|patients|hospital|clinic|therapy|therapeutic|diagnosis|diagnostic|pathology|oncology|cardiology|pharmacology|pharmacokinetic|pharmacodynamics|drug|dosage|dose|pharma|pharmaceutical|biomarker|fda|cohort|double-blind|placebo|adverse\s*event|efficacy|remission|vaccine|immunology|surgery|surgical|physician|arrhythmia|icu|telemetry)\b/i.test(combined)) {
+    if (/\b(?:healthcare|medical|clinical|patient|patients|hospital|clinic|therapy|therapeutic|diagnosis|diagnostic|pathology|oncology|cardiology|pharmacology|pharmacokinetic|pharmacodynamics|drug|dosage|dose|pharma|pharmaceutical|biomarker|fda|cohort|double-blind|placebo|adverse\s*event|efficacy|remission|vaccine|immunology|surgery|surgical|physician|arrhythmia|icu|vital\s*signs|patient\s*telemetry)\b/i.test(combined)) {
         return 'healthcare';
     }
     if (/\b(?:game|gameplay|gamedev|unreal|unity|godot|ragdoll|shader|shaders|rigging|skeletal|collider|hitbox|rigid\s*body|xpbd|pbr|mesh|polygon|polycount|draw\s*call|framerate|fps|level\s*design|inventory|npc|ai\s*navmesh|raymarching|voxel|procedural\s*generation|arcade|mechanics|collision)\b/i.test(combined)) {
@@ -616,13 +616,13 @@ export function synthesizeAdaptive3DScene(
     const { subject, keywords } = extractPromptEntities(title || prompt || rawText, 'Spatial Model');
     const sceneTitle = title || `${subject} - 3D Spatial Scene`;
 
-    const isSpace = effectiveDomain === 'astrophysics' || /space|astro|orbit|planet|celestial|star|nebula|hubble|jwst|kepler/i.test(rawText);
-    const isMicro = effectiveDomain === 'biology' || effectiveDomain === 'healthcare' || /molecular|protein|cell|dna|rna|atom|micro|enzyme|receptor|ligand/i.test(rawText);
-    const isTech = effectiveDomain === 'technology' || effectiveDomain === 'game-dev' || /robot|reactor|quantum|engine|fusion|cyber|chassis|server|chip|hardware|thruster/i.test(rawText);
-    const isGeology = effectiveDomain === 'geology' || /alpine|mountain|valley|matterhorn|canyon|glacier|rock|strata|terrain|geology|cliff|volcano/i.test(rawText);
-    const isHistory = effectiveDomain === 'history' || /ziggurat|temple|ancient|monument|pyramid|mesopotamia|babylon|ruins|excavation|relic/i.test(rawText);
-    const isInfrastructure = effectiveDomain === 'infrastructure' || /highway|overpass|viaduct|bridge|tower|skyline|building|architecture|interchange|flyover/i.test(rawText);
-    const isBotanical = /flower|garden|plant|flora|botan|tree|foliage|petal|leaf|leaves|blossom|bloom|sprout|nature|meadow|rose/i.test(rawText);
+    const isSpace = effectiveDomain === 'astrophysics' || /\b(?:space|astro|orbit|planet|celestial|star|nebula|hubble|jwst|kepler)\b/i.test(rawText);
+    const isMicro = effectiveDomain === 'biology' || effectiveDomain === 'healthcare' || /\b(?:molecular|protein|cell|dna|rna|atom|enzyme|receptor|ligand)\b/i.test(rawText);
+    const isTech = effectiveDomain === 'technology' || effectiveDomain === 'game-dev' || /\b(?:robot|reactor|quantum|engine|fusion|cyber|server|chip|hardware|thruster)\b/i.test(rawText);
+    const isGeology = effectiveDomain === 'geology' || /\b(?:alpine|mountain|valley|matterhorn|canyon|glacier|rock|strata|terrain|geology|cliff|volcano)\b/i.test(rawText);
+    const isHistory = effectiveDomain === 'history' || /\b(?:ziggurat|temple|ancient|monument|pyramid|mesopotamia|babylon|ruins|excavation|relic)\b/i.test(rawText);
+    const isInfrastructure = effectiveDomain === 'infrastructure' || /\b(?:highway|overpass|viaduct|bridge|tower|skyline|building|architecture|interchange|flyover)\b/i.test(rawText);
+    const isBotanical = /\b(?:flower|garden|plant|flora|botan|tree|foliage|petal|leaf|leaves|blossom|bloom|sprout|nature|meadow|rose)\b/i.test(rawText);
 
     let skybox = 'studio';
     let lighting = 'cinematic_3point_studio';
