@@ -11,7 +11,7 @@
 #define SCRATCHBOX_CORE_HPP
 
 #include "scratchbox_engine.hpp"
-#include "scratchbox_infinigen.hpp"
+#include "scratchbox_infiniti.hpp"
 #include "scratchbox_sb_archi.hpp"
 #include "scratchbox_tectonics.hpp"
 #include "scratchbox_plant_builder.hpp"
@@ -60,15 +60,15 @@ struct TerrainOptions {
 struct TerrainSurface {
     ScratchboxMesh mesh;
     TerrainOptions options;
-    infinigen::WarpedTerrainConfig config;
-    infinigen::SoilSimulationResult soil;
+    infiniti::WarpedTerrainConfig config;
+    infiniti::SoilSimulationResult soil;
 
     float sampleHeight(float x, float z) const {
-        return infinigen::DomainWarpedTerrain::sampleHeight(x, z, config);
+        return infiniti::DomainWarpedTerrain::sampleHeight(x, z, config);
     }
 
     Vec3 sampleNormal(float x, float z) const {
-        return infinigen::DomainWarpedTerrain::sampleNormal(x, z, config);
+        return infiniti::DomainWarpedTerrain::sampleNormal(x, z, config);
     }
 
     float sampleSlopeDegrees(float x, float z) const {
@@ -79,7 +79,7 @@ struct TerrainSurface {
 };
 
 /**
- * Synthesizes Princeton Infinigen-grounded domain-warped terrain with
+ * Synthesizes Infiniti-grounded domain-warped terrain with
  * soil machine hydraulic erosion sediment and moisture tracking.
  */
 TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts);

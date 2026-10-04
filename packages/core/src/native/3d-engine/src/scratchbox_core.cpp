@@ -26,7 +26,7 @@ TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts) {
     result.options = opts;
 
     // 1. Configure continuous physical parameters for domain warping
-    infinigen::WarpedTerrainConfig& cfg = result.config;
+    infiniti::WarpedTerrainConfig& cfg = result.config;
     cfg.seed = opts.seed;
     cfg.warpScale = opts.domainWarpScale;
 
@@ -75,7 +75,7 @@ TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts) {
     float stepZ = opts.extentZ / static_cast<float>(res - 1);
 
     // 3. Run Soil Machine Hydrological Simulation
-    infinigen::SoilSimulationConfig soilCfg;
+    infiniti::SoilSimulationConfig soilCfg;
     soilCfg.seed = opts.seed + 777;
     soilCfg.numParticles = std::max(300, opts.hydraulicErosionSteps * 25);
     soilCfg.maxSteps = std::min(60, std::max(15, opts.hydraulicErosionSteps));
@@ -84,10 +84,10 @@ TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts) {
     soilCfg.depositionRate = 0.28f;
 
     auto heightFn = [&](float x, float z) {
-        return infinigen::DomainWarpedTerrain::sampleHeight(x, z, cfg);
+        return infiniti::DomainWarpedTerrain::sampleHeight(x, z, cfg);
     };
 
-    result.soil = infinigen::SoilMachineSedimentTracker::runSimulation(
+    result.soil = infiniti::SoilMachineSedimentTracker::runSimulation(
         res, res, -halfX, -halfZ, stepX, heightFn, soilCfg
     );
 
@@ -111,7 +111,7 @@ TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts) {
             float u = static_cast<float>(ix) / static_cast<float>(res - 1);
 
             float y = heightFn(x, z);
-            Vec3 norm = infinigen::DomainWarpedTerrain::sampleNormal(x, z, cfg);
+            Vec3 norm = infiniti::DomainWarpedTerrain::sampleNormal(x, z, cfg);
 
             // Sample soil metrics
             float sediment = result.soil.sampleSediment(x, z, -halfX, -halfZ, stepX, res, res);

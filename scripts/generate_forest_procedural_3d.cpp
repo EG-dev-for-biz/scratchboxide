@@ -14,7 +14,7 @@
 #include "scratchbox_nature.hpp"
 #include "scratchbox_substrate.hpp"
 #include "scratchbox_botanical_texture.hpp"
-#include "scratchbox_infinigen.hpp"
+#include "scratchbox_infiniti.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -30,7 +30,7 @@ using namespace scratchbox::geometry;
 using namespace scratchbox::botanical;
 using namespace scratchbox::nature;
 using namespace scratchbox::substrate;
-using namespace scratchbox::infinigen;
+using namespace scratchbox::infiniti;
 using math::Vec2;
 using math::Vec3;
 using math::Vec4;
@@ -119,7 +119,7 @@ ScratchboxMesh generateForestFloor(float minX, float maxX, float minZ, float max
     int cols = static_cast<int>((maxX - minX) / step) + 1;
     int rows = static_cast<int>((maxZ - minZ) / step) + 1;
 
-    // Soil Machine Sediment & Moisture Simulation (Infinigen SoilMachine)
+    // Soil Machine Sediment & Moisture Simulation (Infiniti SoilMachine)
     SoilSimulationConfig soilCfg;
     soilCfg.numParticles = 750;
     soilCfg.maxSteps = 28;
@@ -1419,7 +1419,7 @@ int main(int argc, char** argv) {
         allFerns.merge(generateSwordFernClump(Vec3(fx, fy, fz), radius, fronds));
     }
 
-    std::cout << "🌿 Seeding Clustered Fern Colonies across the Landscape (Infinigen Keypoint Cluster Engine)...\n";
+    std::cout << "🌿 Seeding Clustered Fern Colonies across the Landscape (Infiniti Keypoint Cluster Engine)...\n";
     ClusterScatterConfig fernClusterCfg;
     fernClusterCfg.numKeypoints = 12;
     fernClusterCfg.clusterRadius = 3.6f;
@@ -1462,7 +1462,7 @@ int main(int argc, char** argv) {
         allUnderstory.merge(sorrel.toScratchboxMesh());
     }
 
-    std::cout << "☘️ Seeding Clustered Wood Sorrel Mats across Landscape (Infinigen Keypoint Cluster Engine)...\n";
+    std::cout << "☘️ Seeding Clustered Wood Sorrel Mats across Landscape (Infiniti Keypoint Cluster Engine)...\n";
     ClusterScatterConfig sorrelClusterCfg;
     sorrelClusterCfg.numKeypoints = 14;
     sorrelClusterCfg.clusterRadius = 2.4f;

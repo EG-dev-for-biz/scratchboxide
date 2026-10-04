@@ -707,7 +707,7 @@ inline void simulateThermalErosion(
 }
 
 // ============================================================================
-// 5. Detailed Botanical Leaf & Twig Generator (Infinigen / Sapling / MTree)
+// 5. Detailed Botanical Leaf & Twig Generator (Infiniti / Sapling / MTree)
 // ============================================================================
 
 enum class LeafMorphology {

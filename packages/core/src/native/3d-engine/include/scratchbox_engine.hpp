@@ -90,6 +90,7 @@
 #include "scratchbox_tectonic_analyzer.hpp"
 #include "scratchbox_plant_builder.hpp"
 #include "scratchbox_botanical_texture.hpp"
+#include "scratchbox_infiniti.hpp"
 #include "scratchbox_infinigen.hpp"
 #include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_displacement.hpp"
@@ -150,8 +151,9 @@ namespace tct = scratchbox::tectonics;
 namespace tectonics = scratchbox::tectonics;
 namespace pln = scratchbox::plant;
 namespace plant = scratchbox::plant;
-namespace inf = scratchbox::infinigen;
-namespace infinigen = scratchbox::infinigen;
+namespace inf = scratchbox::infiniti;
+namespace infiniti = scratchbox::infiniti;
+namespace infinigen = scratchbox::infiniti;
 
 using namespace scratchbox;
 

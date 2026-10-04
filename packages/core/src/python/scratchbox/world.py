@@ -33,7 +33,7 @@ class World:
         resolution: int = 160
     ) -> Terrain:
         """
-        Synthesizes geological terrain using Princeton Infinigen invariants and
+        Synthesizes geological terrain using Infiniti invariants and
         Soil Machine hydrological sediment tracking.
         """
         import scratchbox_native
