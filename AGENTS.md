@@ -92,7 +92,7 @@ When implementing 3D (scenes, models, procedural geometry, terrain generation, s
    - **Failover Strictly to Tier 2 (ComfyUI / Cloud Run GPU)**: If Tier 1 native C++20 encounters a runtime fault, the pipeline must fail over strictly to Tier 2 ComfyUI neural diffusion/mesh generation. Dropping to flat JavaScript primitives is an unconstitutional "Tier 0" regression.
    - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy (Primary edifice, secondary wings, tertiary botanical/architectural detail). Any generator emitting fewer vertices or un-subdivided primitive boxes must be rejected with `GeometricFidelityViolationError`.
    - **Static Analysis CI Gate (`npm run lint:primitives`)**: The codebase is protected by `scripts/lint_no_js_primitives.js`. Any PR, commit, or agent change that introduces prohibited Three.js primitive constructors into generative viewports will immediately fail the CI build.
-   - **Client-Side Viewport Scope**: Three.js is restricted strictly to pure rendering, camera choreography, post-processing (FSR 1.0), and UI gizmo overlays. It is NEVER the procedural geometry generator.
+   - **Client-Side Viewport Scope**: Three.js is restricted strictly to pure rendering, camera choreography, post-processing, and UI gizmo overlays. It is NEVER the procedural geometry generator.
 
 ### Rule: Dynamic Ephemeral Compilation & Zero Code Proliferation
 When generating procedural 3D scenes, structures, or worlds:

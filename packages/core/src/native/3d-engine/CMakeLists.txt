@@ -22,12 +22,32 @@ endif()
 
 find_package(nanobind CONFIG REQUIRED)
 
+# Pre-compiled C++20 invariant kernel dynamic library (libscratchbox_core)
+add_library(scratchbox_core SHARED
+    src/scratchbox_core.cpp
+)
+
+target_include_directories(scratchbox_core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+if (MSVC)
+    target_compile_options(scratchbox_core PRIVATE /O2)
+else()
+    target_compile_options(scratchbox_core PRIVATE -O3)
+endif()
+
+# Nanobind module linking to pre-compiled scratchbox_core kernel
 nanobind_add_module(scratchbox_native
     bindings/python_bindings.cpp
 )
 
 target_include_directories(scratchbox_native PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(scratchbox_native PRIVATE
+    scratchbox_core
 )
 
 if (MSVC)

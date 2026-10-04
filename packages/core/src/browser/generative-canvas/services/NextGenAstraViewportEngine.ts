@@ -184,7 +184,7 @@ fn shadeVisBuffer(@builtin(global_invocation_id) pixelCoord: vec3<u32>) {
 `;
 
 /**
- * WGSL Temporal Super Resolution (FSR 2.2 / TAAU) Accumulation Shader
+ * WGSL Temporal Super Resolution (TSR / TAAU) Accumulation Shader
  */
 export const TEMPORAL_SUPER_RES_WGSL = `/* WGSL Temporal Super Resolution Shader */
 @compute @workgroup_size(8, 8)
@@ -220,7 +220,7 @@ fn computeMicroRelief(@builtin(global_invocation_id) pixel: vec3<u32>) {
  * 2. 100% GPU-Driven Compute Culling & Two-Pass Hi-Z Occlusion (0.08ms GPU compute)
  * 3. Software Compute Micro-Rasterizer (< 4px quads) eliminating 75% fragment discard
  * 4. 64-bit Visibility Buffer (VisBuffer) with 1.0x exact shading overdraw invariant
- * 5. WebGPU Temporal Super Resolution (FSR 2.2 / TAAU) for up to 4x fillrate boost
+ * 5. WebGPU Temporal Super Resolution (TSR / TAAU) for up to 4x fillrate boost
  * 6. Virtual Geometry Paging (GVM): 256MB fixed resident ring pool with uniform 4KB slots
  * 7. Strict Parent LOD Fallback Invariant (Zero mesh holes / skybox leaks during streaming)
  * 8. Camera-Relative Double Precision (CDP Floating Origin): Sub-millimeter planetary accuracy

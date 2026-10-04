@@ -370,6 +370,8 @@ _Python_INCLUDE_DIR:INTERNAL=/opt/homebrew/opt/python@3.14/Frameworks/Python.fra
 //Python Properties
 _Python_INTERPRETER_PROPERTIES:INTERNAL=Python;3;14;6;64;<none>;cpython-314-darwin;abi3;/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/lib/python3.14;/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14;/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages;/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages
 _Python_INTERPRETER_SIGNATURE:INTERNAL=319aadd6f3f40a9389dd89658d85533d
+//Interpreter reason failure
+_Python_Interpreter_REASON_FAILURE:INTERNAL=
 //NumPy reason failure
 _Python_NumPy_REASON_FAILURE:INTERNAL=
 

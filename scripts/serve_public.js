@@ -30,7 +30,6 @@ const POPULAR_DEMOS = [
     { title: 'Semantic 3D Tile Segmentation & Botanical Engine', path: '/semantic_3d_tile_separation_demo.html', badge: 'SEMANTIC 3D TILE' },
     { title: 'Next-Gen Astro 3D Viewport Studio', path: '/next_gen_astra_viewport_studio.html', badge: 'INDUSTRY BENCHMARK' },
     { title: 'Geographical 3DGS Studio · Real-World Radiance Fields', path: '/geographic_3dgs_studio.html', badge: 'GEOGRAPHIC 3DGS' },
-    { title: 'AMD FidelityFX FSR 1.0 Super Resolution Studio', path: '/fsr_upscaling_demo.html', badge: 'EASU + RCAS' },
     { title: 'Volumetric Fire & Particle Simulation Studio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC FLUID' },
     { title: 'Nanite Meshlets & Path Tracing Studio', path: '/nanite_meshlet_pathtracing_studio.html', badge: 'NANITE WEBGPU' },
     { title: 'Scratchbox Spatial Asset Studio', path: '/asset_demo_studio.html', badge: 'ASSET STUDIO' },
@@ -1598,18 +1597,7 @@ print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
                     return;
                 }
 
-                let finalHtml = htmlContent;
-                // Auto-inject FSR viewport & header overlay script for all 3D demos
-                if (!targetPath.endsWith('fsr_upscaling_demo.html') && !targetPath.includes('fire-explosion.html') && !htmlContent.includes('/fsr_viewport_injector.js')) {
-                    const injection = '\n<script src="/fsr_viewport_injector.js"></script>\n';
-                    if (finalHtml.includes('</body>')) {
-                        finalHtml = finalHtml.replace('</body>', `${injection}</body>`);
-                    } else {
-                        finalHtml += injection;
-                    }
-                }
-
-                const buf = Buffer.from(finalHtml, 'utf8');
+                const buf = Buffer.from(htmlContent, 'utf8');
                 res.writeHead(200, {
                     'Content-Type': contentType,
                     'Content-Length': buf.length,

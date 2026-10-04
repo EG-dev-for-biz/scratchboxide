@@ -117,6 +117,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named scratchbox_core
+
+# Build rule for target.
+scratchbox_core: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 scratchbox_core
+.PHONY : scratchbox_core
+
+# fast build rule for target.
+scratchbox_core/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/build
+.PHONY : scratchbox_core/fast
+
+#=============================================================================
 # Target rules for targets named scratchbox_native
 
 # Build rule for target.
@@ -430,6 +443,30 @@ bindings/python_bindings.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_native.dir/build.make CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.s
 .PHONY : bindings/python_bindings.cpp.s
 
+src/scratchbox_core.o: src/scratchbox_core.cpp.o
+.PHONY : src/scratchbox_core.o
+
+# target to build an object file
+src/scratchbox_core.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.o
+.PHONY : src/scratchbox_core.cpp.o
+
+src/scratchbox_core.i: src/scratchbox_core.cpp.i
+.PHONY : src/scratchbox_core.i
+
+# target to preprocess a source file
+src/scratchbox_core.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.i
+.PHONY : src/scratchbox_core.cpp.i
+
+src/scratchbox_core.s: src/scratchbox_core.cpp.s
+.PHONY : src/scratchbox_core.s
+
+# target to generate assembly for a file
+src/scratchbox_core.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.s
+.PHONY : src/scratchbox_core.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -439,6 +476,7 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... nanobind-static"
+	@echo "... scratchbox_core"
 	@echo "... scratchbox_native"
 	@echo "... Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/src/common.o"
 	@echo "... Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/src/common.i"
@@ -476,6 +514,9 @@ help:
 	@echo "... bindings/python_bindings.o"
 	@echo "... bindings/python_bindings.i"
 	@echo "... bindings/python_bindings.s"
+	@echo "... src/scratchbox_core.o"
+	@echo "... src/scratchbox_core.i"
+	@echo "... src/scratchbox_core.s"
 .PHONY : help
 
 

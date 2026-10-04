@@ -1103,6 +1103,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_bvh.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_camera_reprojector.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_colmap.hpp \
+  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_core.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_delight.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_denoise.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_displacement.hpp \
@@ -1467,6 +1468,8 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_denoise.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_delight.hpp:
+
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_core.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_colmap.hpp:
 

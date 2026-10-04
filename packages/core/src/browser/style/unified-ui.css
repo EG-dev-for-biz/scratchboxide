@@ -9116,43 +9116,6 @@ body.sb-light textarea.sb-composer-main-input:focus-visible {
     color: #f4f4f5 !important;
 }
 
-.sb-3d-fsr-btn {
-    pointer-events: auto !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    gap: 5px !important;
-    height: 26px !important;
-    padding: 0 10px !important;
-    border-radius: 9999px !important;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
-    font-size: 11px !important;
-    font-weight: 500 !important;
-    background: rgba(18, 18, 22, 0.8) !important;
-    backdrop-filter: blur(24px) saturate(180%) !important;
-    -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    color: #e4e4e7 !important;
-    cursor: pointer !important;
-    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
-    box-sizing: border-box !important;
-    user-select: none !important;
-    white-space: nowrap !important;
-}
-
-.sb-3d-fsr-btn:hover {
-    background: rgba(39, 39, 42, 0.85) !important;
-    border-color: rgba(255, 255, 255, 0.22) !important;
-    color: #ffffff !important;
-}
-
-.sb-3d-fsr-btn.active {
-    background: rgba(76, 5, 25, 0.75) !important;
-    border-color: rgba(244, 63, 94, 0.5) !important;
-    color: #fecdd3 !important;
-    box-shadow: 0 0 12px rgba(244, 63, 94, 0.3) !important;
-}
-
 .sb-3d-budget-btn {
     pointer-events: auto !important;
     display: inline-flex !important;

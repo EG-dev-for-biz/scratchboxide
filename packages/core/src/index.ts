@@ -378,18 +378,6 @@ export {
     type ComplexityGateReport
 } from './common/spatial/GeometricComplexityGate';
 
-// AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) Postprocessing
-export {
-    FidelityFXSuperResolution,
-    createFidelityFXSuperResolution,
-    FSRQualityPreset,
-    FSR_PRESET_SCALES,
-    computeInputDimensionsForPreset,
-    EASU_SHADER,
-    RCAS_SHADER,
-    FSR_QUAD_VERT,
-    type FidelityFXSuperResolutionOptions
-} from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
 
 // Procedural Structure SfM & COLMAP Dataset Generator (Types for Browser)
 export type {
@@ -464,4 +452,26 @@ export {
     createIdentityMatrix,
     createTranslationMatrix
 } from './common/spatial/universal-spatial-node';
+
+// Autonomous AI-Native 3D Platform (Blender Alternative)
+export {
+    ProceduralAstGuard,
+    type AstGuardResult,
+    type DynamicUiParameter
+} from './node/3d-engine/ProceduralAstGuard';
+
+export {
+    Procedural3DEngineService,
+    type ProceduralExecutionOptions,
+    type ProceduralExecutionResult,
+    type ProceduralMeshStats
+} from './node/3d-engine/Procedural3DEngineService';
+
+export {
+    HeadlessSnapshotCriticService,
+    type SensorPassAuditResult,
+    type AuditAnomaly,
+    type HeadlessCriticOptions
+} from './node/3d-engine/HeadlessSnapshotCriticService';
+
 

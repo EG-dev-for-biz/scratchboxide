@@ -285,18 +285,6 @@ export {
     AdaptiveDomainParticleService
 } from './browser/generative-canvas/services/spatial/AdaptiveDomainParticleService';
 
-// AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) Postprocessing
-export {
-    FidelityFXSuperResolution,
-    createFidelityFXSuperResolution,
-    FSRQualityPreset,
-    FSR_PRESET_SCALES,
-    computeInputDimensionsForPreset,
-    EASU_SHADER,
-    RCAS_SHADER,
-    FSR_QUAD_VERT,
-    type FidelityFXSuperResolutionOptions
-} from './browser/generative-canvas/services/postprocessing/FidelityFXSuperResolution';
 
 // Procedural Micro-Surface Triplanar PBR Shaders
 export {

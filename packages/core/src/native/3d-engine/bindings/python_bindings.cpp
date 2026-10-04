@@ -14,6 +14,7 @@
 #include <nanobind/stl/pair.h>
 
 #include "scratchbox_engine.hpp"
+#include "scratchbox_core.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -25,9 +26,20 @@ using namespace scratchbox::architecture;
 using namespace scratchbox::nature;
 using namespace scratchbox::composer;
 using namespace scratchbox::io;
+using namespace scratchbox::sb_archi;
+using namespace scratchbox::core;
 
 NB_MODULE(scratchbox_native, m) {
     m.doc() = "Scratchbox Native C++20 3D Engine Python Bindings (powered by nanobind)";
+
+    // Classical Roman Orders
+    nb::enum_<core::RomanOrder>(m, "RomanOrder")
+        .value("Tuscan", core::RomanOrder::Tuscan)
+        .value("Doric", core::RomanOrder::Doric)
+        .value("Ionic", core::RomanOrder::Ionic)
+        .value("Corinthian", core::RomanOrder::Corinthian)
+        .value("Composite", core::RomanOrder::Composite)
+        .value("AtticPilaster", core::RomanOrder::AtticPilaster);
 
     // ========================================================================
     // 1. MATH SUBMODULE
@@ -231,6 +243,41 @@ NB_MODULE(scratchbox_native, m) {
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);
     }, "config"_a, "name"_a = "ProceduralBuilding");
+
+    m_arch.attr("RomanOrder") = m.attr("RomanOrder");
+
+    m_arch.def("generate_peripteral_temple", [](
+        const std::string& archetype,
+        core::RomanOrder order,
+        float footprint_length,
+        float footprint_width,
+        int column_count_x,
+        int column_count_y,
+        float column_height,
+        float plinth_height,
+        uint32_t seed
+    ) {
+        core::TempleOptions opts;
+        opts.archetype = archetype;
+        opts.order = order;
+        opts.footprintLength = footprint_length;
+        opts.footprintWidth = footprint_width;
+        opts.columnCountX = column_count_x;
+        opts.columnCountY = column_count_y;
+        opts.columnHeight = column_height;
+        opts.plinthHeight = plinth_height;
+        opts.seed = seed;
+        return core::buildClassicalTemple(opts);
+    }, "archetype"_a = "roman_peripteral",
+       "order"_a = core::RomanOrder::Corinthian,
+       "footprint_length"_a = 42.0f,
+       "footprint_width"_a = 24.0f,
+       "column_count_x"_a = 8,
+       "column_count_y"_a = 14,
+       "column_height"_a = 7.5f,
+       "plinth_height"_a = 1.4f,
+       "seed"_a = 1337,
+       "Construct an authentic Vitruvian classical temple with peripteral colonnade and gable roof");
 
     // ========================================================================
     // 4. NATURE & BOTANICAL SUBMODULE (Mtree & IvyGen)
@@ -460,4 +507,114 @@ NB_MODULE(scratchbox_native, m) {
     m_plant.def("create_decaying_nurse_log", [](const Vec3& start, const Vec3& end, float radius) {
         return plant::PlantPresets::createDecayingNurseLog(start, end, radius);
     }, "start"_a = Vec3(-2, 0, 0), "end"_a = Vec3(2, 0, 0), "radius"_a = 0.5f, "Create decaying nurse log with polypore shelves");
+
+    // ========================================================================
+    // 9. CORE INVARIANT KERNEL (GeoMorph, ArchiMorph, Sensor Passes)
+    // ========================================================================
+    auto m_core = m.def_submodule("core", "Pre-compiled C++20 invariant kernel (GeoMorph, ArchiMorph, Sensors)");
+
+    nb::class_<core::TerrainOptions>(m_core, "TerrainOptions")
+        .def(nb::init<>())
+        .def_rw("extent_x", &core::TerrainOptions::extentX)
+        .def_rw("extent_z", &core::TerrainOptions::extentZ)
+        .def_rw("resolution", &core::TerrainOptions::resolution)
+        .def_rw("archetype", &core::TerrainOptions::archetype)
+        .def_rw("domain_warp_scale", &core::TerrainOptions::domainWarpScale)
+        .def_rw("hydraulic_erosion_steps", &core::TerrainOptions::hydraulicErosionSteps)
+        .def_rw("seed", &core::TerrainOptions::seed);
+
+    nb::class_<core::TerrainSurface>(m_core, "TerrainSurface")
+        .def_rw("mesh", &core::TerrainSurface::mesh)
+        .def("sample_height", &core::TerrainSurface::sampleHeight, "x"_a, "z"_a)
+        .def("sample_normal", &core::TerrainSurface::sampleNormal, "x"_a, "z"_a)
+        .def("sample_slope_degrees", &core::TerrainSurface::sampleSlopeDegrees, "x"_a, "z"_a);
+
+    m_core.def("generate_geological_terrain", [](
+        float extent_x, float extent_z, int resolution,
+        const std::string& archetype, float domain_warp_scale,
+        int hydraulic_erosion_steps, uint32_t seed
+    ) {
+        core::TerrainOptions opts;
+        opts.extentX = extent_x;
+        opts.extentZ = extent_z;
+        opts.resolution = resolution;
+        opts.archetype = archetype;
+        opts.domainWarpScale = domain_warp_scale;
+        opts.hydraulicErosionSteps = hydraulic_erosion_steps;
+        opts.seed = seed;
+        return core::generateGeologicalTerrain(opts);
+    }, "extent_x"_a = 250.0f, "extent_z"_a = 250.0f, "resolution"_a = 160,
+       "archetype"_a = "alpine_karst", "domain_warp_scale"_a = 1.85f,
+       "hydraulic_erosion_steps"_a = 35, "seed"_a = 1337,
+       "Synthesizes domain-warped terrain with hydraulic sediment and moisture tracking");
+
+    nb::class_<core::TempleOptions>(m_core, "TempleOptions")
+        .def(nb::init<>())
+        .def_rw("archetype", &core::TempleOptions::archetype)
+        .def_rw("order", &core::TempleOptions::order)
+        .def_rw("footprint_length", &core::TempleOptions::footprintLength)
+        .def_rw("footprint_width", &core::TempleOptions::footprintWidth)
+        .def_rw("column_count_x", &core::TempleOptions::columnCountX)
+        .def_rw("column_count_y", &core::TempleOptions::columnCountY)
+        .def_rw("column_height", &core::TempleOptions::columnHeight)
+        .def_rw("plinth_height", &core::TempleOptions::plinthHeight)
+        .def_rw("stone_color", &core::TempleOptions::stoneColor)
+        .def_rw("seed", &core::TempleOptions::seed);
+
+    m_core.def("build_classical_temple", &core::buildClassicalTemple, "opts"_a = core::TempleOptions());
+
+    nb::class_<core::SensorPassesOptions>(m_core, "SensorPassesOptions")
+        .def(nb::init<>())
+        .def_rw("width", &core::SensorPassesOptions::width)
+        .def_rw("height", &core::SensorPassesOptions::height)
+        .def_rw("camera_position", &core::SensorPassesOptions::cameraPosition)
+        .def_rw("camera_target", &core::SensorPassesOptions::cameraTarget)
+        .def_rw("fov_degrees", &core::SensorPassesOptions::fovDegrees)
+        .def_rw("samples_per_pixel", &core::SensorPassesOptions::samplesPerPixel)
+        .def_rw("seed", &core::SensorPassesOptions::seed);
+
+    nb::class_<core::SensorPassesResult>(m_core, "SensorPassesResult")
+        .def_ro("width", &core::SensorPassesResult::width)
+        .def_ro("height", &core::SensorPassesResult::height)
+        .def_ro("rgb_beauty", &core::SensorPassesResult::rgbBeauty)
+        .def_ro("linear_depth", &core::SensorPassesResult::linearDepth)
+        .def_ro("surface_normals", &core::SensorPassesResult::surfaceNormals)
+        .def_ro("geometry_coverage", &core::SensorPassesResult::geometryCoverage)
+        .def_ro("render_ms", &core::SensorPassesResult::renderMs)
+        .def_ro("triangle_count", &core::SensorPassesResult::triangleCount)
+        .def_ro("vertex_count", &core::SensorPassesResult::vertexCount)
+        .def_ro("ground_elevation_contact_min", &core::SensorPassesResult::groundElevationContactMin)
+        .def_ro("ground_elevation_contact_max", &core::SensorPassesResult::groundElevationContactMax);
+
+    m_core.def("render_sensor_passes", &core::renderSensorPasses, "scene_mesh"_a, "opts"_a = core::SensorPassesOptions(),
+               "Renders RGB beauty, metric linear depth, and surface normal validation passes");
+
+    m.def("render_sensor_passes", [](
+        const ScratchboxMesh& mesh,
+        int width,
+        int height,
+        const Vec3& camera_position,
+        const Vec3& camera_target,
+        float fov_degrees,
+        int samples_per_pixel,
+        uint32_t seed
+    ) {
+        core::SensorPassesOptions opts;
+        opts.width = width;
+        opts.height = height;
+        opts.cameraPosition = camera_position;
+        opts.cameraTarget = camera_target;
+        opts.fovDegrees = fov_degrees;
+        opts.samplesPerPixel = samples_per_pixel;
+        opts.seed = seed;
+        return core::renderSensorPasses(mesh, opts);
+    }, "mesh"_a,
+       "width"_a = 512,
+       "height"_a = 512,
+       "camera_position"_a = Vec3(0, 25, 65),
+       "camera_target"_a = Vec3(0, 6, 0),
+       "fov_degrees"_a = 45.0f,
+       "samples_per_pixel"_a = 1,
+       "seed"_a = 42,
+       "Render RGB beauty, metric linear depth, and surface normal validation passes");
 }

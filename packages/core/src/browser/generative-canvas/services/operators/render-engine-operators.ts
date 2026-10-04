@@ -108,30 +108,5 @@ export const RENDER_ENGINE_OPERATORS: OperatorDefinition[] = [
                 data: mesh.material.bakedAiTexture
             };
         }
-    },
-    {
-        name: 'sb_configure_fsr',
-        category: 'lighting_camera',
-        description: 'Configures AMD FidelityFX Super Resolution 1.0 (EASU spatial upscaling + RCAS contrast-adaptive sharpening).',
-        execute: (ctx, params: { enabled?: boolean; preset?: string; scale?: number; sharpness?: number }) => {
-            const scene = ctx.getSceneData() as any;
-            if (!scene.metadata) scene.metadata = {};
-            if (!scene.metadata.postprocessing) scene.metadata.postprocessing = {};
-
-            scene.metadata.postprocessing.fsr = {
-                enabled: params.enabled ?? true,
-                preset: params.preset ?? 'quality',
-                scale: params.scale,
-                sharpness: params.sharpness ?? 0.8,
-                updatedAt: Date.now()
-            };
-            ctx.setSceneData(scene);
-
-            return {
-                success: true,
-                operator: 'sb_configure_fsr',
-                data: scene.metadata.postprocessing.fsr
-            };
-        }
     }
 ];

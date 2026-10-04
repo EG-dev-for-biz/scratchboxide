@@ -191,7 +191,7 @@ export class NativePythonRunnerService {
         // If the script doesn't explicitly assign OUTPUT_GLB_PATH, prepend it
         let preparedScript = scriptSource;
         if (!preparedScript.match(/^\s*OUTPUT_GLB_PATH\s*=/m)) {
-            preparedScript = `OUTPUT_GLB_PATH = r"${expectedGlbPath}"\n` + preparedScript;
+            preparedScript = `import os\nos.environ["OUTPUT_GLB_PATH"] = r"${expectedGlbPath}"\nOUTPUT_GLB_PATH = r"${expectedGlbPath}"\n` + preparedScript;
         }
 
         fs.writeFileSync(scriptFile, preparedScript, 'utf8');
@@ -216,11 +216,14 @@ export class NativePythonRunnerService {
 
         // Build PYTHONPATH
         const pythonPaths = [
+            options.env?.PYTHONPATH,
+            path.resolve(process.cwd(), 'packages/core/src/python'),
             this.moduleDirectory,
             path.dirname(this.moduleDirectory),
+            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/build_py'),
             path.resolve(process.cwd(), 'packages/core/src/native/3d-engine'),
             process.env.PYTHONPATH
-        ].filter(Boolean).join(':');
+        ].filter(Boolean).join(path.delimiter);
 
         const env = {
             ...process.env,

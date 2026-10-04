@@ -494,7 +494,8 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             title: updatedData.title || activeArtifact?.title || '3D Scene',
             summary: `Dispatched ${executedCount} 3D operator(s) in ${executionTimeMs.toFixed(1)}ms.`,
             data: updatedData,
-            version: ((activeArtifact as any)?.version || 1) + 1
+            version: ((activeArtifact as any)?.version || 1) + 1,
+            createdAt: activeArtifact?.createdAt || new Date().toISOString()
         };
 
         return {
@@ -551,7 +552,8 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 title: updatedData.title || '3D Scene (Repaired)',
                 summary: `Auto-repaired ${repairedCount} defect(s) via 3D visual audit.`,
                 data: updatedData,
-                version: ((activeArtifact as any)?.version || 1) + 1
+                version: ((activeArtifact as any)?.version || 1) + 1,
+                createdAt: activeArtifact?.createdAt || new Date().toISOString()
             };
 
             repairResult = {

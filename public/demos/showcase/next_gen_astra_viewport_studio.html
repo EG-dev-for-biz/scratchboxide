@@ -671,12 +671,12 @@
             </div>
 
             <div style="height: 6px;"></div>
-            <div class="section-title" style="font-size: 10px; margin-top: 4px;">Temporal Super Resolution (FSR 2.2 / TAAU)</div>
+            <div class="section-title" style="font-size: 10px; margin-top: 4px;">Temporal Super Resolution (TSR / TAAU)</div>
             <div class="mode-toggle-group" style="grid-template-columns: repeat(4, 1fr);">
-                <button class="mode-btn" id="btn-fsr-off" onclick="setFsrMode('off')">Off</button>
-                <button class="mode-btn" id="btn-fsr-uq" onclick="setFsrMode('ultra-quality')">UQ</button>
-                <button class="mode-btn active" id="btn-fsr-q" onclick="setFsrMode('quality')">Qual</button>
-                <button class="mode-btn" id="btn-fsr-p" onclick="setFsrMode('performance')">Perf</button>
+                <button class="mode-btn" id="btn-tsr-off" onclick="setTsrMode('off')">Off</button>
+                <button class="mode-btn" id="btn-tsr-uq" onclick="setTsrMode('ultra-quality')">UQ</button>
+                <button class="mode-btn active" id="btn-tsr-q" onclick="setTsrMode('quality')">Qual</button>
+                <button class="mode-btn" id="btn-tsr-p" onclick="setTsrMode('performance')">Perf</button>
             </div>
         </div>
 
@@ -836,7 +836,7 @@
         let computeCull = true;
         let microRaster = true;
         let visBuffer = true;
-        let fsrMode = 'quality';
+        let tsrMode = 'quality';
 
         // Virtual Geometry Paging (10B+) State
         let gvmPaging = true;
@@ -1775,8 +1775,8 @@
             }
         }
 
-        function getFsrScaleFactor() {
-            switch(fsrMode) {
+        function getTsrScaleFactor() {
+            switch(tsrMode) {
                 case 'ultra-quality': return 1.30;
                 case 'quality': return 1.50;
                 case 'performance': return 2.00;
@@ -1785,7 +1785,7 @@
         }
 
         function updateSiliconHUD() {
-            const scale = getFsrScaleFactor();
+            const scale = getTsrScaleFactor();
             const fillrateBoost = (scale * scale).toFixed(2);
 
             const virtualTrisEl = document.getElementById('stat-virtual-tris');
@@ -1831,7 +1831,7 @@
                 }
 
                 const boostEl = document.getElementById('stat-fillrate-boost');
-                if (boostEl) boostEl.textContent = fsrMode === 'off' ? '1.00x native' : `${fillrateBoost}x fillrate`;
+                if (boostEl) boostEl.textContent = tsrMode === 'off' ? '1.00x native' : `${fillrateBoost}x fillrate`;
             } else {
                 if (virtualTrisEl) virtualTrisEl.textContent = '4.2M (Max)';
                 if (residentPoolEl) residentPoolEl.textContent = '4,200 MB';
@@ -1907,11 +1907,11 @@
             updateSiliconHUD();
         }
 
-        function setFsrMode(mode) {
-            fsrMode = mode;
+        function setTsrMode(mode) {
+            tsrMode = mode;
             ['off', 'ultra-quality', 'quality', 'performance'].forEach(m => {
                 const id = m === 'ultra-quality' ? 'uq' : m === 'quality' ? 'q' : m === 'performance' ? 'p' : 'off';
-                const el = document.getElementById('btn-fsr-' + id);
+                const el = document.getElementById('btn-tsr-' + id);
                 if (el) el.classList.toggle('active', m === mode);
             });
             updateSiliconHUD();
@@ -2089,7 +2089,7 @@
                                 <th>Draw Call Model</th>
                                 <th>Sub-Pixel Micro-Rasterizer</th>
                                 <th>Shading & Overdraw</th>
-                                <th>Effective Framerate (FSR / TAAU)</th>
+                                <th>Effective Framerate (TSR / TAAU)</th>
                                 <th>3DGS Depth Sharing</th>
                                 <th>Client Deployment</th>
                             </tr>
@@ -2103,7 +2103,7 @@
                                 <td class="col-highlight">1 Indirect (0.08ms GPU Culling)</td>
                                 <td class="col-highlight">Compute Rasterizer (99.4% Quad Eff)</td>
                                 <td class="col-highlight">64-bit VisBuffer (1.00x Exact)</td>
-                                <td class="col-highlight">148–240+ FPS (FSR 2.2 / 2.25x–4.0x)</td>
+                                <td class="col-highlight">148–240+ FPS (TSR / 2.25x–4.0x)</td>
                                 <td class="col-highlight">Native (SPZ v2 + PBR)</td>
                                 <td class="col-highlight">0MB Web & Electron</td>
                             </tr>
@@ -2127,7 +2127,7 @@
                                 <td>GPU Resident Drawer</td>
                                 <td>Hardware Raster (24% Quad Eff)</td>
                                 <td>Deferred / Forward+ (2.4x Overdraw)</td>
-                                <td>45–75 FPS (FSR plugin)</td>
+                                <td>45–75 FPS (Upscaler plugin)</td>
                                 <td>Plugin Only</td>
                                 <td>30MB–80MB WASM</td>
                             </tr>
@@ -2224,7 +2224,7 @@
                         <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(251, 191, 36, 0.25); border-radius: 8px; padding: 12px;">
                             <div style="font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Effective Throughput</div>
                             <div style="font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 800; color: #fbbf24; margin: 4px 0;">148–240 FPS</div>
-                            <div style="font-size: 10px; color: #10b981;">FSR 2.2 / TAAU 4.0x fillrate</div>
+                            <div style="font-size: 10px; color: #10b981;">TSR / TAAU 4.0x fillrate</div>
                         </div>
                     </div>
                 </div>

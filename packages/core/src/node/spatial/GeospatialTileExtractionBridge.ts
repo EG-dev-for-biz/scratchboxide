@@ -149,7 +149,7 @@ export class GeospatialTileExtractionBridge {
       resolvedAddress: tileResult.resolvedAddress || query,
       lat: tileResult.geoAnchor.lat,
       lng: tileResult.geoAnchor.lng,
-      altitudeMeters: tileResult.geoAnchor.altitudeMeters,
+      altitudeMeters: tileResult.geoAnchor.elevation ?? 0,
       tileGlbPath: tileResult.glbPath,
       totalVertices: tileResult.mesh.vertexCount,
       totalTriangles: tileResult.mesh.triangleCount,

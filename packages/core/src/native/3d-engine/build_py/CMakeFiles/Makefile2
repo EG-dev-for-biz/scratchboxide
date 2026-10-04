@@ -63,10 +63,12 @@ CMAKE_BINARY_DIR = /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/n
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
+all: CMakeFiles/scratchbox_core.dir/all
 all: CMakeFiles/scratchbox_native.dir/all
 .PHONY : all
 
 # The main recursive "codegen" target.
+codegen: CMakeFiles/scratchbox_core.dir/codegen
 codegen: CMakeFiles/scratchbox_native.dir/codegen
 .PHONY : codegen
 
@@ -75,23 +77,57 @@ preinstall:
 .PHONY : preinstall
 
 # The main recursive "clean" target.
+clean: CMakeFiles/scratchbox_core.dir/clean
 clean: CMakeFiles/scratchbox_native.dir/clean
 clean: CMakeFiles/nanobind-static.dir/clean
 .PHONY : clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/scratchbox_core.dir
+
+# All Build rule for target.
+CMakeFiles/scratchbox_core.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=13,14 "Built target scratchbox_core"
+.PHONY : CMakeFiles/scratchbox_core.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/scratchbox_core.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles 2
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/scratchbox_core.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles 0
+.PHONY : CMakeFiles/scratchbox_core.dir/rule
+
+# Convenience name for target.
+scratchbox_core: CMakeFiles/scratchbox_core.dir/rule
+.PHONY : scratchbox_core
+
+# codegen rule for target.
+CMakeFiles/scratchbox_core.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=13,14 "Finished codegen for target scratchbox_core"
+.PHONY : CMakeFiles/scratchbox_core.dir/codegen
+
+# clean rule for target.
+CMakeFiles/scratchbox_core.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_core.dir/build.make CMakeFiles/scratchbox_core.dir/clean
+.PHONY : CMakeFiles/scratchbox_core.dir/clean
 
 #=============================================================================
 # Target rules for target CMakeFiles/scratchbox_native.dir
 
 # All Build rule for target.
 CMakeFiles/scratchbox_native.dir/all: CMakeFiles/nanobind-static.dir/all
+CMakeFiles/scratchbox_native.dir/all: CMakeFiles/scratchbox_core.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_native.dir/build.make CMakeFiles/scratchbox_native.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_native.dir/build.make CMakeFiles/scratchbox_native.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=13,14 "Built target scratchbox_native"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=15,16 "Built target scratchbox_native"
 .PHONY : CMakeFiles/scratchbox_native.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/scratchbox_native.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles 14
+	$(CMAKE_COMMAND) -E cmake_progress_start /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles 16
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/scratchbox_native.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles 0
 .PHONY : CMakeFiles/scratchbox_native.dir/rule
@@ -103,7 +139,7 @@ scratchbox_native: CMakeFiles/scratchbox_native.dir/rule
 # codegen rule for target.
 CMakeFiles/scratchbox_native.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/scratchbox_native.dir/build.make CMakeFiles/scratchbox_native.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=13,14 "Finished codegen for target scratchbox_native"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=15,16 "Finished codegen for target scratchbox_native"
 .PHONY : CMakeFiles/scratchbox_native.dir/codegen
 
 # clean rule for target.
