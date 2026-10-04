@@ -23,6 +23,8 @@ import {
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 export type UniversalSpatialCategory =
+  | 'landmark'
+  | 'vehicle'
   | 'monument'
   | 'architecture'
   | 'foliage'
@@ -36,10 +38,29 @@ export type UniversalSpatialCategory =
 export type DownstreamGeneratorRouting =
   | 'sb-archi'
   | 'sb-veggie'
+  | 'sb-vehicle'
   | 'archie-building'
   | 'sb-terrain'
   | 'trellis'
   | 'triposr';
+
+export interface VehicleMetadata {
+  vehicleType: 'sedan' | 'suv' | 'van_truck' | 'compact';
+  lengthMeters: number;
+  widthMeters: number;
+  heightMeters: number;
+  headingDeg: number;
+  groundElevationMeters: number;
+  estimatedWheelbaseMeters?: number;
+}
+
+export interface LandmarkMetadata {
+  landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point';
+  historicName: string;
+  architecturalStyle: string;
+  prominenceRatio: number;
+  portalPassageDimensions?: [number, number, number];
+}
 
 export interface BoundingBox3DMetric {
   min: [number, number, number];
@@ -69,6 +90,8 @@ export interface UniversalSeparatedObject {
   };
   treeMetadata?: any;
   buildingMetadata?: any;
+  vehicleMetadata?: VehicleMetadata;
+  landmarkMetadata?: LandmarkMetadata;
 }
 
 export interface UniversalSeparatedScene {
@@ -344,7 +367,9 @@ export class Universal3DObjectSeparationService {
           baseColor: cluster.colorHex
         },
         treeMetadata: (cluster as any).treeMetadata,
-        buildingMetadata: (cluster as any).buildingMetadata
+        buildingMetadata: (cluster as any).buildingMetadata,
+        vehicleMetadata: (cluster as any).vehicleMetadata,
+        landmarkMetadata: (cluster as any).landmarkMetadata
       };
     });
 
@@ -544,12 +569,15 @@ export class Universal3DObjectSeparationService {
 
   private determineRoutingRecommendation(category: UniversalSpatialCategory): DownstreamGeneratorRouting {
     switch (category) {
-      case 'foliage':
-      case 'foliage_trees':
-        return 'sb-veggie';
+      case 'landmark':
       case 'monument':
       case 'ruin':
         return 'sb-archi';
+      case 'vehicle':
+        return 'sb-vehicle';
+      case 'foliage':
+      case 'foliage_trees':
+        return 'sb-veggie';
       case 'architecture':
       case 'colosseum_architecture':
       case 'urban_infrastructure':

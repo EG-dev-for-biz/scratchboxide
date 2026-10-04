@@ -619,57 +619,72 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan/i.test(request.prompt || '')) {
-        userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Descriptive Dynamic Title>", ... }) or output JSON with type: "3d-scene". NEVER output "markdown-document" or "live-code-sandbox" for this request.
-- PROCEDURAL PYTHON 3 SCRIPTING (BLENDER MENTAL MODEL): Scratchbox IDE natively supports procedural Python 3 scripting using the Scratchbox 3D Engine (\`import scratchbox as sb\`), following the mental model of Blender's procedural scene scripting. You can execute procedural scripts via the \`execute_3d_python_script({ script: "..." })\` tool OR mount a "3d-scene" with \`pythonGenerator: { sourceCode: "..." }\`. The engine compiles native C++20 geometry via nanobind bindings and streams the resulting binary .glb directly into the Three.js viewport on the stage!
-  
-  High-Fidelity Architectural & Environmental Grammar:
-  \`\`\`python
-  import scratchbox as sb
+        userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
+- UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
+- DYNAMIC CAMERA AUTO-FRAMING: The engine automatically extracts the analytical Axis-Aligned Bounding Box (AABB) from the GLB accessors in <0.1ms and computes the optimal camera distance and 3/4 cinematic framing. You do not need to manually guess camera coordinates!
 
-  # 1. Root compound scene mesh
-  scene = sb.geometry.Mesh("UrbanPlaza")
+High-Fidelity Architectural & Environmental Grammar:
+\`\`\`python
+import scratchbox as sb
 
-  # 2. Ground promenade / plaza pedestal
-  plaza = sb.geometry.create_studio_pedestal(radius=18.0, height=0.5, bevel=0.08, segments=64)
-  plaza.material = sb.geometry.PbrMaterial.stone_limestone()
-  scene.merge(plaza)
+# 1. Root compound scene mesh
+scene = sb.geometry.Mesh("UrbanPlaza")
 
-  # 3. Procedural multi-story architecture with rhythmic fenestration & roofs
-  # Supports roofs: 'mansard', 'hip', 'gable', 'flat' (or sb.RoofType.Mansard, etc.)
-  main_bldg = sb.create_building(
-      width=18.0, depth=14.0, floors=4, floor_height=3.4,
-      ground_floor_height=4.2, plinth_height=0.8,
-      bay_width=3.2, window_width=1.8, window_height=2.0, window_recess_depth=0.25,
-      roof='mansard', name="CentralPalais"
-  )
-  main_bldg.translate(0, 0.5, -4.0)
-  scene.merge(main_bldg)
+# 2. Ground promenade / plaza pedestal
+plaza = sb.geometry.create_studio_pedestal(radius=18.0, height=0.5, bevel=0.08, segments=64)
+plaza.material = sb.geometry.PbrMaterial.stone_limestone()
+scene.merge(plaza)
 
-  # 4. Symmetrical side wings
-  left_wing = sb.create_building(width=10.0, depth=10.0, floors=3, roof='hip', name="EastWing")
-  left_wing.translate(-16.0, 0.5, 0.0)
-  scene.merge(left_wing)
+# 3. Procedural multi-story architecture with rhythmic fenestration & modeled roofs
+# Supports roofs: 'mansard', 'hip', 'gable', 'flat' (or sb.RoofType.Mansard, etc.)
+main_bldg = sb.create_building(
+    width=18.0, depth=14.0, floors=4, floor_height=3.4,
+    ground_floor_height=4.2, plinth_height=0.8,
+    bay_width=3.2, window_width=1.8, window_height=2.0, window_recess_depth=0.25,
+    roof='mansard', name="CentralPalais"
+)
+main_bldg.translate(0, 0.5, -4.0)
+scene.merge(main_bldg)
 
-  right_wing = sb.create_building(width=10.0, depth=10.0, floors=3, roof='hip', name="WestWing")
-  right_wing.translate(16.0, 0.5, 0.0)
-  scene.merge(right_wing)
+# 4. Symmetrical side wings
+left_wing = sb.create_building(width=10.0, depth=10.0, floors=3, roof='hip', name="EastWing")
+left_wing.translate(-16.0, 0.5, 0.0)
+scene.merge(left_wing)
 
-  # 5. Botanical growth: Space colonization trees
-  tree1 = sb.create_tree(attractor_count=120, crown_center=(0, 5, 0), crown_extents=(2.5, 3.5, 2.5))
-  tree1.translate(-7.0, 0.5, 8.0)
-  scene.merge(tree1)
+right_wing = sb.create_building(width=10.0, depth=10.0, floors=3, roof='hip', name="WestWing")
+right_wing.translate(16.0, 0.5, 0.0)
+scene.merge(right_wing)
 
-  tree2 = sb.create_tree(attractor_count=120, crown_center=(0, 5, 0), crown_extents=(2.5, 3.5, 2.5))
-  tree2.translate(7.0, 0.5, 8.0)
-  scene.merge(tree2)
+# 5. Botanical growth: Space colonization trees (SB-Veggie)
+tree1 = sb.create_tree(attractor_count=120, crown_center=(0, 5, 0), crown_extents=(2.5, 3.5, 2.5))
+tree1.translate(-7.0, 0.5, 8.0)
+scene.merge(tree1)
 
-  # 6. Stream binary .glb directly into canvas stage
-  sb.io.write_glb(OUTPUT_GLB_PATH, scene)
-  \`\`\`
-- CRITICAL THINKING & PROCEDURAL ARCHITECTURE: Always leverage existing procedural building code (\`sb.create_building\`, \`sb.architecture.generate_building\`, \`sb.create_tree\`, \`sb.create_ivy\`) to generate rich architectural scenes with genuine structural depth: real recessed window reveals, facade sills, rhythmic bay spacing, foundation plinths, and modeled roof geometries rather than toy flat boxes!
-- PROCEDURAL BUILDING VS 3D TILES DISTINCTION: When generating procedural buildings, civic plazas, pavilions, or architectural complexes, execute procedural architecture directly via \`execute_3d_python_script\` or \`mount_canvas_primitive\` with \`payload: { script: "..." }\`. Never hijack procedural architecture into synthetic mock tile clay cloth. Google Elevation data provides the geodetic anchor ground datum.
-- BOTANICAL & ORGANIC ASSETS: When tasked with botanical objects (flowers, plants, trees, gardens), construct anatomical plant geometry (rich soil bed, curved tapering stem, organic foliage leaves, sepal calyx, pollen receptacle, and radial petals) with authentic PBR material properties (roughness, velvet albedo, translucency). Never output generic abstract cylinders or boxes.
-- C++20 ASTRO ENGINE AS GEOMETRY GENERATOR: Prefer native C++20 generation (scratchbox_engine.hpp, FastNoise3D, Marching Cubes, SDFs, transferred envelope normals) streamed to binary .glb, utilizing Three.js as a pure renderer rather than assembling crude toy meshes.
+tree2 = sb.create_tree(attractor_count=120, crown_center=(0, 5, 0), crown_extents=(2.5, 3.5, 2.5))
+tree2.translate(7.0, 0.5, 8.0)
+scene.merge(tree2)
+
+# 6. Stream binary .glb directly into canvas stage
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+\`\`\`
+
+- REAL-WORLD LOCATIONS & SHAPE EXTRACTION PIPELINE: When the user requests a real-world location (e.g. "Eiffel Tower", "Colosseum", "Central Park"), pass location: "<query>" to execute_3d_python_script. The backend automatically streams Google 3D Tiles, separates terrain, buildings, and vegetation clusters, and exposes them in sb.geospatial.load_location():
+\`\`\`python
+import scratchbox as sb
+
+# Ingest tiles and extracted shape manifest
+loc = sb.geospatial.load_location()
+scene = sb.geometry.Mesh("LocationScene")
+if loc.raw_mesh:
+    scene.merge(loc.raw_mesh)
+
+# Replace photogrammetric melted foliage with authentic procedural C++20 trees
+scene.merge(loc.create_procedural_vegetation(density=1.0))
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+\`\`\`
+
+- INSTANT IN-MEMORY DELTA EDITS (<1ms): For conversational multi-turn requests modifying an existing 3D scene (e.g. "move the building back 5m", "change roof color to copper", "make it golden hour", "frame closer"), call scene_3d_dispatch_operators with commands: [{ operator: "...", params: { ... } }] instead of regenerating from scratch!
+- CLOSED-LOOP VISUAL QUALITY AUDIT: Call audit_3d_scene_viewport to inspect multi-angle camera perspectives, detect geometric flaws, and auto-dispatch corrective repair operators!
 - ZERO UNINVITED DEFAULTS: Preserve studio lighting and visual neutrality unless atmospheric scattering or diurnal ephemeris is explicitly requested.]`;
     }
 

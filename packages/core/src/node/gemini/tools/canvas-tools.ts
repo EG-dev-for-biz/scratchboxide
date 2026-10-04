@@ -12,6 +12,8 @@ import { synthesizeContextualVideoTimeline } from '../../../browser/generative-c
 import { synthesizeContextual3DScene } from '../../../browser/generative-canvas/procedural-3d-synthesizer';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { NativeCppCompilerService } from '../../3d-engine/native-compiler-service';
+import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
+import { VisualVerificationService } from '../../visual-verification-service';
 import type { ToolDeclaration, ToolHandler } from './types';
 
 function asString(val: unknown): string {
@@ -132,6 +134,59 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 }
             },
             required: ['title', 'goal', 'pipelineTier', 'steps']
+        }
+    },
+    {
+        name: 'scene_3d_dispatch_operators',
+        description: 'Dispatches high-performance in-memory 3D scene operators against the active 3D canvas stage via DirectDispatchOperatorEngine. Executes transformations (sb_transform_object), PBR material properties (sb_set_material_pbr), lighting & sun angles (sb_set_sun_position, sb_setup_lighting), physics, and dynamic camera auto-framing in <1ms without re-compiling geometry or re-uploading GLB files.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                commands: {
+                    type: 'ARRAY',
+                    description: 'Ordered list of operator commands to execute.',
+                    items: {
+                        type: 'OBJECT',
+                        properties: {
+                            operator: {
+                                type: 'STRING',
+                                description: 'Operator name (e.g. "sb_transform_object", "sb_set_material_pbr", "sb_set_sun_position", "sb_setup_lighting", "sb_frame_bounds")'
+                            },
+                            params: {
+                                type: 'OBJECT',
+                                description: 'Parameters specific to the operator'
+                            }
+                        },
+                        required: ['operator']
+                    }
+                },
+                atomic: {
+                    type: 'BOOLEAN',
+                    description: 'Whether to rollback all changes if any single operator fails (default true).'
+                }
+            },
+            required: ['commands']
+        }
+    },
+    {
+        name: 'audit_3d_scene_viewport',
+        description: 'Audits the active 3D canvas viewport across multi-angle camera perspectives (cinematic 3/4, top-down, eye-level, detail) using the 8-Dimension Visual Fidelity Rubric. Detects geometry clipping, floating objects, under-exposed lighting, and scale mismatches, and returns actionable direct-dispatch repair operators.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                targetPrompt: {
+                    type: 'STRING',
+                    description: 'The target scene prompt or artistic intention to evaluate against.'
+                },
+                minPassingScore: {
+                    type: 'NUMBER',
+                    description: 'Minimum passing fidelity score 0-100 (default 80).'
+                },
+                autoRepair: {
+                    type: 'BOOLEAN',
+                    description: 'If true, automatically applies corrective operators to repair defects (default true).'
+                }
+            }
         }
     }
 ];
@@ -402,6 +457,121 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 executionPlanCard
             },
             summaryResult: `Presented execution plan "${title}" (${pipelineTier}) for user review.`
+        };
+    },
+
+    async scene_3d_dispatch_operators(args, _ctx) {
+        const rawCommands = Array.isArray(args.commands) ? args.commands : [];
+        const atomic = args.atomic !== false;
+
+        const activeArtifact = _ctx?.request?.activeArtifact;
+        const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
+            ? (activeArtifact.data as Scene3DData)
+            : {
+                title: '3D Scene',
+                renderMode: 'pbr',
+                customMeshes: [],
+                objects: []
+            };
+
+        const engine = new DirectDispatchOperatorEngine(currentData);
+        const batchCommands: BatchCommand[] = rawCommands.map((c: any) => ({
+            operator: asString(c.operator),
+            params: (c.params && typeof c.params === 'object') ? c.params : {}
+        }));
+
+        const result = engine.executeBatch(batchCommands, { atomic });
+        const updatedData = engine.getSceneData();
+        const executedCount = result.results.filter(r => r.success).length;
+        const failedCount = result.results.filter(r => !r.success).length;
+        const executionTimeMs = result.totalExecutionTimeMs || 0.1;
+        const errors = result.results.filter(r => !r.success).map(r => r.error).filter(Boolean);
+
+        const artifactId = activeArtifact?.id || `artifact-3d-${Date.now()}`;
+        const artifact: CanvasArtifact = {
+            id: artifactId,
+            type: '3d-scene',
+            title: updatedData.title || activeArtifact?.title || '3D Scene',
+            summary: `Dispatched ${executedCount} 3D operator(s) in ${executionTimeMs.toFixed(1)}ms.`,
+            data: updatedData,
+            version: ((activeArtifact as any)?.version || 1) + 1
+        };
+
+        return {
+            resultPayload: {
+                success: result.success,
+                executedCount,
+                failedCount,
+                executionTimeMs,
+                errors,
+                operatorResults: result.results,
+                artifact
+            },
+            summaryResult: `Dispatched ${executedCount} operator(s) in ${executionTimeMs.toFixed(1)}ms (${result.success ? 'all succeeded' : failedCount + ' failed'}).`
+        };
+    },
+
+    async audit_3d_scene_viewport(args, _ctx) {
+        const targetPrompt = asString(args.targetPrompt) || _ctx?.request?.prompt || 'Verify photorealistic 3D scene';
+        const minPassingScore = typeof args.minPassingScore === 'number' ? args.minPassingScore : 80;
+        const autoRepair = args.autoRepair !== false;
+
+        const activeArtifact = _ctx?.request?.activeArtifact;
+        const currentData: Scene3DData = (activeArtifact && activeArtifact.type === '3d-scene' && activeArtifact.data)
+            ? (activeArtifact.data as Scene3DData)
+            : {
+                title: '3D Scene',
+                renderMode: 'pbr',
+                customMeshes: [],
+                objects: []
+            };
+
+        const verifier = new VisualVerificationService();
+        const audit = await verifier.audit3DSceneMultiAngle({
+            prompt: targetPrompt,
+            sceneData: currentData
+        });
+
+        let repairResult: any = undefined;
+        let updatedArtifact: CanvasArtifact | undefined = undefined;
+
+        if (autoRepair && audit.combinedOperatorDispatches.length > 0 && audit.averageFidelityScore < minPassingScore) {
+            const engine = new DirectDispatchOperatorEngine(currentData);
+            const batchCommands: BatchCommand[] = audit.combinedOperatorDispatches.map(d => ({
+                operator: d.operator,
+                params: d.params || {}
+            }));
+            const batchResult = engine.executeBatch(batchCommands, { atomic: false });
+            const updatedData = engine.getSceneData();
+            const repairedCount = batchResult.results.filter(r => r.success).length;
+
+            updatedArtifact = {
+                id: activeArtifact?.id || `artifact-3d-${Date.now()}`,
+                type: '3d-scene',
+                title: updatedData.title || '3D Scene (Repaired)',
+                summary: `Auto-repaired ${repairedCount} defect(s) via 3D visual audit.`,
+                data: updatedData,
+                version: ((activeArtifact as any)?.version || 1) + 1
+            };
+
+            repairResult = {
+                appliedCount: repairedCount,
+                executionTimeMs: batchResult.totalExecutionTimeMs || 0.1
+            };
+        }
+
+        return {
+            resultPayload: {
+                overallPass: audit.overallPass,
+                averageFidelityScore: audit.averageFidelityScore,
+                summaryCritique: audit.summaryCritique,
+                detectedDefects: audit.detectedDefects,
+                repairOperators: audit.combinedOperatorDispatches,
+                autoRepaired: !!repairResult,
+                repairResult,
+                artifact: updatedArtifact
+            },
+            summaryResult: `Visual audit complete: Score ${audit.averageFidelityScore}/100 (${audit.overallPass ? 'PASSED' : 'NEEDS_REPAIR'}). Detected ${audit.detectedDefects.length} defect(s).${repairResult ? ` Auto-applied ${repairResult.appliedCount} repair operators.` : ''}`
         };
     }
 };

@@ -15,6 +15,8 @@ import {
   type UniversalSeparationOptions,
   type UniversalSeparatedScene
 } from '../src/node/spatial/Universal3DObjectSeparationService';
+import { BoundingBoxComparisonService } from '../src/node/spatial/BoundingBoxComparisonService';
+import { GoogleTileAlignmentOptimizer } from '../src/node/spatial/GoogleTileAlignmentOptimizer';
 
 describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)', () => {
   const colosseumModelPath = fs.existsSync(path.resolve(__dirname, '../../../public/models/colosseum_grounded.glb'))
@@ -171,5 +173,139 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(['sb-archi', 'archie-building']).toContain(struct.routingRecommendation);
       expect(struct.vertexCount).toBeGreaterThan(0);
     }
+  });
+
+  it('performs high-resolution semantic separation on HQ Leaf 3D Tile (Landmarks, Vehicles, Trees, Architecture)', async () => {
+    const hqPath = path.resolve(__dirname, '../../../public/models/washington_arch_hq.glb');
+    if (!fs.existsSync(hqPath)) return;
+
+    const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
+      granularity: 'detailed',
+      autoDetectSemanticCategories: true
+    });
+
+    expect(scene).toBeDefined();
+    expect(scene.totalVertices).toBe(295217);
+    expect(scene.totalSubmeshes).toBe(94);
+    expect(scene.objects.length).toBeGreaterThanOrEqual(180);
+
+    // 1. Primary Landmark Verification
+    const landmarks = scene.objects.filter(o => o.category === 'landmark');
+    expect(landmarks.length).toBe(1);
+    const arch = landmarks[0]!;
+    expect(arch.name).toContain('Washington Square Arch');
+    expect(arch.landmarkMetadata).toBeDefined();
+    expect(arch.landmarkMetadata?.landmarkType).toBe('triumphal_arch');
+    expect(arch.landmarkMetadata?.architecturalStyle).toContain('Neoclassical');
+    expect(arch.routingRecommendation).toBe('sb-archi');
+    expect(arch.vertexCount).toBeGreaterThan(1500);
+
+    // 2. Ground-Level Vehicle Verification
+    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
+    expect(vehicles.length).toBeGreaterThanOrEqual(12);
+    for (const v of vehicles) {
+      expect(v.vehicleMetadata).toBeDefined();
+      expect(['sedan', 'suv', 'van_truck', 'compact']).toContain(v.vehicleMetadata?.vehicleType);
+      expect(v.vehicleMetadata?.lengthMeters).toBeGreaterThanOrEqual(2.5);
+      expect(v.vehicleMetadata?.lengthMeters).toBeLessThanOrEqual(8.5);
+      expect(v.vehicleMetadata?.headingDeg).toBeDefined();
+      expect(v.routingRecommendation).toBe('sb-vehicle');
+    }
+
+    // 3. Botanical Trees Verification
+    const trees = scene.objects.filter(o => o.category === 'foliage_trees');
+    expect(trees.length).toBeGreaterThanOrEqual(150);
+    const oaks = trees.filter(t => t.treeMetadata?.species === 'quercus_ilex');
+    expect(oaks.length).toBeGreaterThan(50);
+  });
+
+  it('verifies BoundingBoxComparisonService metrology and GoogleTileAlignmentOptimizer asset docking contracts on separated entities', async () => {
+    const hqPath = path.resolve(__dirname, '../../../public/models/washington_arch_hq.glb');
+    if (!fs.existsSync(hqPath)) return;
+
+    const scene = Universal3DObjectSeparationService.separate3DMesh(hqPath, {
+      granularity: 'detailed',
+      autoDetectSemanticCategories: true
+    });
+
+    expect(scene).toBeDefined();
+
+    // 1. Verify BoundingBoxComparisonService metrology on Vehicles
+    const vehicles = scene.objects.filter(o => o.category === 'vehicle');
+    expect(vehicles.length).toBeGreaterThanOrEqual(12);
+
+    for (const v of vehicles) {
+      const obb = v.orientedBoundingBox;
+      expect(obb).toBeDefined();
+
+      const cornersOBB = BoundingBoxComparisonService.computeCornersOBB(obb);
+      expect(cornersOBB.length).toBe(8);
+
+      // Derive AABB from corners
+      const minX = Math.min(...cornersOBB.map(c => c[0]));
+      const maxX = Math.max(...cornersOBB.map(c => c[0]));
+      const minY = Math.min(...cornersOBB.map(c => c[1]));
+      const maxY = Math.max(...cornersOBB.map(c => c[1]));
+      const minZ = Math.min(...cornersOBB.map(c => c[2]));
+      const maxZ = Math.max(...cornersOBB.map(c => c[2]));
+
+      const aabb = {
+        min: [minX, minY, minZ] as [number, number, number],
+        max: [maxX, maxY, maxZ] as [number, number, number],
+        dimensions: [maxX - minX, maxY - minY, maxZ - minZ] as [number, number, number],
+        volumeM3: (maxX - minX) * (maxY - minY) * (maxZ - minZ),
+        centroid: [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2] as [number, number, number]
+      };
+
+      const metrology = BoundingBoxComparisonService.computeMetrology(aabb, obb);
+      expect(metrology.volumeAABBM3).toBeGreaterThan(0);
+      expect(metrology.volumeOBBM3).toBeGreaterThan(0);
+      expect(metrology.airPenaltyRatio).toBeGreaterThanOrEqual(1.0);
+      expect(metrology.tightnessGainPercent).toBeGreaterThanOrEqual(0);
+    }
+
+    // 2. Verify GoogleTileAlignmentOptimizer docking contracts on Vehicle #1
+    const targetCar = vehicles[0]!;
+    const generativeVanBounds = {
+      min: [-1.05, 0, -2.5] as [number, number, number],
+      max: [1.05, 2.4, 2.5] as [number, number, number],
+      dimensions: [2.1, 2.4, 5.0] as [number, number, number],
+      centroid: [0, 1.2, 0] as [number, number, number]
+    };
+
+    const targetTileBounds = {
+      min: [
+        targetCar.orientedBoundingBox.center[0] - targetCar.orientedBoundingBox.dimensions[0] / 2,
+        targetCar.orientedBoundingBox.center[1] - targetCar.orientedBoundingBox.dimensions[1] / 2,
+        targetCar.orientedBoundingBox.center[2] - targetCar.orientedBoundingBox.dimensions[2] / 2
+      ] as [number, number, number],
+      max: [
+        targetCar.orientedBoundingBox.center[0] + targetCar.orientedBoundingBox.dimensions[0] / 2,
+        targetCar.orientedBoundingBox.center[1] + targetCar.orientedBoundingBox.dimensions[1] / 2,
+        targetCar.orientedBoundingBox.center[2] + targetCar.orientedBoundingBox.dimensions[2] / 2
+      ] as [number, number, number],
+      dimensions: targetCar.orientedBoundingBox.dimensions,
+      centroid: targetCar.orientedBoundingBox.center
+    };
+
+    const alignment = GoogleTileAlignmentOptimizer.computeMetricAlignment(
+      generativeVanBounds,
+      targetTileBounds,
+      {
+        preserveAspectRatio: true,
+        groundSnap: true,
+        initialYawDeg: targetCar.vehicleMetadata?.headingDeg || 0
+      }
+    );
+
+    expect(alignment).toBeDefined();
+    expect(alignment.scale[0]).toBeGreaterThan(0);
+    expect(alignment.scale[1]).toBeGreaterThan(0);
+    expect(alignment.scale[2]).toBeGreaterThan(0);
+    expect(alignment.translation).toBeDefined();
+    // Verify ground snap: lowest vertex of source placed exactly at lowest vertex of target
+    const sourceBottomY = generativeVanBounds.min[1] * alignment.scale[1] + alignment.translation[1];
+    expect(Math.abs(sourceBottomY - targetTileBounds.min[1])).toBeLessThan(0.001);
+    expect(alignment.transformMatrix4x4.length).toBe(16);
   });
 });

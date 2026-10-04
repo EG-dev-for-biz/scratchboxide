@@ -378,27 +378,243 @@ nature.create_ivy = create_ivy
 _orig_write_glb = _native.io.write_glb
 _orig_export_glb_bytes = _native.io.export_glb_bytes
 
-def export_glb(mesh_or_path, maybe_path_or_mesh=None):
-    import __main__
-    mesh = None
-    path = None
-    if maybe_path_or_mesh is not None:
-        if isinstance(mesh_or_path, str):
-            path = mesh_or_path
-            mesh = maybe_path_or_mesh
+def read_glb(file_path):
+    """
+    Parses a standard binary glTF 2.0 (.glb) file and returns a ScratchboxMesh.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"GLB file not found: {file_path}")
+    with open(file_path, "rb") as f:
+        data = f.read()
+    if len(data) < 20 or data[:4] != b"glTF":
+        raise ValueError(f"Invalid glTF binary file header in {file_path}")
+
+    import struct
+    import json
+
+    version, length = struct.unpack_from("<II", data, 4)
+    chunk0_len, chunk0_type = struct.unpack_from("<II", data, 12)
+    if chunk0_type != 0x4E4F534A:  # 'JSON'
+        raise ValueError("Invalid glTF chunk 0 (expected JSON)")
+
+    json_bytes = data[20:20 + chunk0_len]
+    gltf = json.loads(json_bytes.decode("utf-8"))
+
+    bin_chunk_start = 20 + chunk0_len
+    bin_bytes = b""
+    if len(data) > bin_chunk_start + 8:
+        chunk1_len, chunk1_type = struct.unpack_from("<II", data, bin_chunk_start)
+        if chunk1_type == 0x004E4942:  # 'BIN\0'
+            bin_bytes = data[bin_chunk_start + 8:bin_chunk_start + 8 + chunk1_len]
+
+    accessors = gltf.get("accessors", [])
+    buffer_views = gltf.get("bufferViews", [])
+
+    def get_accessor_data(acc_idx):
+        if acc_idx is None or acc_idx < 0 or acc_idx >= len(accessors):
+            return None, None, None, 0
+        acc = accessors[acc_idx]
+        bv_idx = acc.get("bufferView")
+        if bv_idx is None or bv_idx >= len(buffer_views):
+            return None, None, None, 0
+        bv = buffer_views[bv_idx]
+        bv_offset = bv.get("byteOffset", 0)
+        acc_offset = acc.get("byteOffset", 0)
+        offset = bv_offset + acc_offset
+        return offset, acc["componentType"], acc["type"], acc["count"]
+
+    mesh = Mesh()
+    mesh.name = os.path.splitext(os.path.basename(file_path))[0]
+
+    for m in gltf.get("meshes", []):
+        for prim in m.get("primitives", []):
+            attrs = prim.get("attributes", {})
+            pos_idx = attrs.get("POSITION")
+            if pos_idx is None:
+                continue
+
+            p_offset, _, _, p_count = get_accessor_data(pos_idx)
+            if p_offset is None:
+                continue
+
+            base_vert_idx = mesh.vertex_count
+            norm_idx = attrs.get("NORMAL")
+            uv_idx = attrs.get("TEXCOORD_0")
+
+            n_offset = get_accessor_data(norm_idx)[0] if norm_idx is not None else None
+            uv_offset = get_accessor_data(uv_idx)[0] if uv_idx is not None else None
+
+            default_normal = Vec3(0, 1, 0)
+            default_uv = Vec2(0, 0)
+            default_color = Vec4(0.85, 0.85, 0.85, 1.0)
+
+            for i in range(p_count):
+                px, py, pz = struct.unpack_from("<fff", bin_bytes, p_offset + i * 12)
+                pos = Vec3(px, py, pz)
+                norm = default_normal
+                if n_offset is not None:
+                    nx, ny, nz = struct.unpack_from("<fff", bin_bytes, n_offset + i * 12)
+                    norm = Vec3(nx, ny, nz)
+                uv = default_uv
+                if uv_offset is not None:
+                    u, v = struct.unpack_from("<ff", bin_bytes, uv_offset + i * 8)
+                    uv = Vec2(u, v)
+                mesh.add_vertex(pos, norm, uv, default_color)
+
+            # Read indices
+            ind_idx = prim.get("indices")
+            if ind_idx is not None:
+                i_offset, i_comp, _, i_count = get_accessor_data(ind_idx)
+                if i_offset is not None:
+                    if i_comp == 5123:  # UNSIGNED_SHORT
+                        fmt = f"<{i_count}H"
+                        indices = struct.unpack_from(fmt, bin_bytes, i_offset)
+                    elif i_comp == 5125:  # UNSIGNED_INT
+                        fmt = f"<{i_count}I"
+                        indices = struct.unpack_from(fmt, bin_bytes, i_offset)
+                    elif i_comp == 5121:  # UNSIGNED_BYTE
+                        fmt = f"<{i_count}B"
+                        indices = struct.unpack_from(fmt, bin_bytes, i_offset)
+                    else:
+                        indices = []
+
+                    for k in range(0, len(indices) - 2, 3):
+                        mesh.add_triangle(
+                            base_vert_idx + indices[k],
+                            base_vert_idx + indices[k + 1],
+                            base_vert_idx + indices[k + 2]
+                        )
+
+    mesh.recompute_bounds()
+    return mesh
+
+io.read_glb = read_glb
+io.load_glb = read_glb
+
+# ==============================================================================
+# Geospatial Location Ingestion & Procedural Shape Extraction
+# ==============================================================================
+class VegetationAnchor:
+    def __init__(self, id, center, radius=3.0, height=6.0, seed=42):
+        self.id = str(id)
+        if isinstance(center, (list, tuple)):
+            self.center = Vec3(float(center[0]), float(center[1]), float(center[2]))
         else:
-            mesh = mesh_or_path
-            path = maybe_path_or_mesh
-    else:
-        mesh = mesh_or_path
-        path = getattr(__main__, "OUTPUT_GLB_PATH", None) or os.environ.get("OUTPUT_GLB_PATH", "output.glb")
+            self.center = center
+        self.radius = float(radius)
+        self.height = float(height)
+        self.seed = int(seed)
 
-    # If mesh is a single Mesh, wrap or pass directly
-    return _orig_write_glb(str(path), mesh)
+    def __repr__(self):
+        return f"<VegetationAnchor id='{self.id}' center=({self.center.x:.1f}, {self.center.y:.1f}, {self.center.z:.1f}) r={self.radius:.1f}m>"
 
-io.export_glb = export_glb
-io.save_glb = export_glb
-io.write_glb = export_glb
+
+class LocationScene:
+    def __init__(self, query, lat=0.0, lng=0.0, altitude=0.0, glb_path=None, manifest_path=None):
+        self.query = query
+        self.lat = lat
+        self.lng = lng
+        self.altitude = altitude
+        self.glb_path = glb_path
+        self.manifest_path = manifest_path
+        self._raw_mesh = None
+        self.vegetation_anchors = []
+        self._load_manifest()
+
+    def _load_manifest(self):
+        import json
+        if self.manifest_path and os.path.exists(self.manifest_path):
+            try:
+                with open(self.manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                    self.lat = manifest.get("lat", self.lat)
+                    self.lng = manifest.get("lng", self.lng)
+                    self.altitude = manifest.get("altitudeMeters", self.altitude)
+                    anchors = []
+                    for a in manifest.get("vegetationAnchors", []):
+                        anchors.append(VegetationAnchor(
+                            id=a.get("id"),
+                            center=a.get("centroid", (0, 0, 0)),
+                            radius=a.get("radius", 3.0),
+                            height=a.get("height", 6.0),
+                            seed=a.get("seed", 42)
+                        ))
+                    self.vegetation_anchors = anchors
+            except Exception as e:
+                print(f"[LocationScene] Error loading manifest: {e}", file=sys.stderr)
+
+    @property
+    def raw_mesh(self):
+        if self._raw_mesh is None and self.glb_path and os.path.exists(self.glb_path):
+            try:
+                self._raw_mesh = read_glb(self.glb_path)
+            except Exception as e:
+                print(f"[LocationScene] Error loading GLB: {e}", file=sys.stderr)
+        return self._raw_mesh
+
+    @property
+    def architecture(self):
+        return self.raw_mesh
+
+    @property
+    def terrain(self):
+        # Baseline terrain patch matching location extent
+        patch = create_promenade(width=180.0, depth=180.0, height=0.4)
+        return patch
+
+    def create_procedural_vegetation(self, density=1.0, max_trees=60):
+        """
+        Instantiates high-fidelity procedural C++20 botanical trees (space colonization / SB-Veggie)
+        at each extracted real-world vegetation anchor from Google 3D Tiles.
+        """
+        compound = Mesh()
+        compound.name = f"{self.query}_ProceduralVegetation"
+        count = int(len(self.vegetation_anchors) * max(0.1, min(1.0, density)))
+        anchors = self.vegetation_anchors[:min(max_trees, count)]
+
+        for a in anchors:
+            tree = create_tree(
+                crown_center=a.center,
+                crown_extents=(a.radius, a.height * 0.55, a.radius),
+                seed=a.seed
+            )
+            compound.merge(tree)
+        return compound
+
+
+class GeospatialModule:
+    @staticmethod
+    def load_location(query=None, mode="populate", radius_meters=150.0):
+        """
+        Loads a real-world location (Google 3D Tiles) and runs the shape extraction pipeline.
+        Exposes terrain, architectural massings, and vegetation anchors for procedural population.
+        """
+        q = query or os.environ.get("SCRATCHBOX_LOCATION_QUERY", "Default Landmark")
+        glb_path = os.environ.get("SCRATCHBOX_LOCATION_GLB")
+        manifest_path = os.environ.get("SCRATCHBOX_LOCATION_MANIFEST")
+
+        # If not pre-staged via execute_3d_python_script, attempt CLI extraction bridge
+        if (not glb_path or not os.path.exists(glb_path)) and query:
+            import subprocess
+            import json
+            bridge_script = os.path.join(os.getcwd(), "scripts", "geospatial_extract.ts")
+            if os.path.exists(bridge_script):
+                try:
+                    cmd = ["npx", "ts-node", bridge_script, "--query", query]
+                    if mode == "clay":
+                        cmd.append("--clay")
+                    out = subprocess.check_output(cmd, timeout=35, stderr=subprocess.STDOUT)
+                    data = json.loads(out.decode("utf-8").strip().splitlines()[-1])
+                    if data.get("success"):
+                        glb_path = data.get("glbPath")
+                        manifest_path = data.get("manifestPath")
+                except Exception as e:
+                    print(f"[sb.geospatial] Bridge execution error: {e}", file=sys.stderr)
+
+        return LocationScene(query=q, glb_path=glb_path, manifest_path=manifest_path)
+
+
+geospatial = GeospatialModule()
 
 create_pedestal = create_studio_pedestal
 
@@ -408,7 +624,9 @@ __all__ = [
     "architecture",
     "nature",
     "composer",
+    "shaper",
     "io",
+    "geospatial",
     "Mesh",
     "Scene",
     "PbrMaterial",
@@ -427,5 +645,9 @@ __all__ = [
     "create_tree",
     "create_lsystem_tree",
     "create_ivy",
+    "read_glb",
+    "LocationScene",
+    "VegetationAnchor",
 ]
+
 

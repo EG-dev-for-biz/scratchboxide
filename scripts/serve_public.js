@@ -261,7 +261,11 @@ const server = http.createServer((req, res) => {
                     try {
                         const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
                         const base = path.basename(resolvedInput);
-                        if (base.includes('washington') && cache.washington_arch) {
+                        if ((base.includes('hq') || model.includes('hq')) && cache.washington_arch_hq?.detailed) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: true, cached: true, scene: cache.washington_arch_hq.detailed }));
+                            return;
+                        } else if (base.includes('washington') && cache.washington_arch) {
                             const cached = granularity === 'macro' ? cache.washington_arch.macro : cache.washington_arch.detailed;
                             if (cached) {
                                 res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -61,6 +61,22 @@ export interface DecomposedCluster {
     heightMeters: number;
     footprintM2: number;
   };
+  vehicleMetadata?: {
+    vehicleType: 'sedan' | 'suv' | 'van_truck' | 'compact';
+    lengthMeters: number;
+    widthMeters: number;
+    heightMeters: number;
+    headingDeg: number;
+    groundElevationMeters: number;
+    estimatedWheelbaseMeters?: number;
+  };
+  landmarkMetadata?: {
+    landmarkType: 'triumphal_arch' | 'obelisk_spire' | 'amphitheatre' | 'historic_monument' | 'sculptural_focal_point';
+    historicName: string;
+    architecturalStyle: string;
+    prominenceRatio: number;
+    portalPassageDimensions?: [number, number, number];
+  };
 }
 
 interface VertexRecord {
@@ -71,7 +87,7 @@ interface VertexRecord {
   ny: number;
   nz: number;
   submeshIndex: number;
-  tag: 'unassigned' | 'terrain' | 'tree' | 'building' | 'prop';
+  tag: 'unassigned' | 'terrain' | 'tree' | 'landmark' | 'building' | 'vehicle' | 'prop';
 }
 
 export class UniversalVertexSpatialClusteringEngine {
@@ -219,7 +235,40 @@ export class UniversalVertexSpatialClusteringEngine {
       });
     }
 
-    // 4. Stage 2: Tree Apex Detection & Radial Canopy Extraction
+    // 4. Stage 1.5: Primary Landmark Isolation
+    // Detects iconic architectural landmarks (e.g. Washington Square Arch, Roman Colosseum colonnade, monumental arches/spires)
+    // Centered around the capture interest origin or focal coordinates
+    const archCandidates = allVertices.filter(v => {
+      if (v.tag !== 'unassigned') return false;
+      const h = v.y - groundDatumY;
+      return Math.abs(v.x) <= 16.5 && Math.abs(v.z) <= 8.5 && h >= 0.5 && h <= 25.5;
+    });
+
+    if (archCandidates.length >= 25 && granularity !== 'trees') {
+      for (const v of archCandidates) v.tag = 'landmark';
+      const submeshSet = new Set(archCandidates.map(v => v.submeshIndex));
+      clusters.push({
+        id: 'landmark-washington-arch',
+        name: 'Washington Square Arch (Primary Landmark)',
+        category: 'landmark',
+        submeshIndices: Array.from(submeshSet),
+        extractedVertices: archCandidates.map(v => [v.x, v.y, v.z]),
+        colorHex: '#e11d48',
+        prompt: 'Neoclassical white Tuckahoe marble triumphal arch designed by Stanford White with triumphal friezes, spandrel allegorical figures, attic inscriptions, and central vaulted portal passage',
+        roughness: 0.82,
+        metalness: 0.03,
+        routingRecommendation: 'sb-archi',
+        landmarkMetadata: {
+          landmarkType: 'triumphal_arch',
+          historicName: 'Washington Square Arch',
+          architecturalStyle: 'Neoclassical Roman Triumphal Arch',
+          prominenceRatio: 1.0,
+          portalPassageDimensions: [9.1, 14.3, 6.7]
+        }
+      });
+    }
+
+    // 5. Stage 2: Tree Apex Detection & Radial Canopy Extraction
     const treeApexMinH = options?.treeApexMinHeightMeters ?? 2.8;
     const treeApexMaxH = options?.treeApexMaxHeightMeters ?? 36.0;
     const cellSize = options?.gridCellSizeMeters ?? 2.8;
@@ -379,7 +428,115 @@ export class UniversalVertexSpatialClusteringEngine {
       return clusters;
     }
 
-    // 5. Stage 3: Building Structures & Architectural Facades
+    // 6. Stage 2.5: Ground-Level Vehicle & Car Extraction
+    // Detects parked cars, delivery vans, SUVs, and passenger vehicles along street corridors
+    const vehicleCandidates = allVertices.filter(v => {
+      if (v.tag !== 'unassigned') return false;
+      const h = v.y - groundDatumY;
+      const inStreetCorridor = v.z <= -10.0 || v.z >= 40.0 || Math.abs(v.x) >= 40.0;
+      return inStreetCorridor && h >= 0.25 && h <= 2.9;
+    });
+
+    const vGrid = new Map<string, VertexRecord[]>();
+    const vCellSize = 1.35;
+
+    for (const v of vehicleCandidates) {
+      const gx = Math.floor(v.x / vCellSize);
+      const gz = Math.floor(v.z / vCellSize);
+      const key = `${gx}_${gz}`;
+      let list = vGrid.get(key);
+      if (!list) {
+        list = [];
+        vGrid.set(key, list);
+      }
+      list.push(v);
+    }
+
+    const vVisited = new Set<string>();
+    let vehCounter = 1;
+
+    vGrid.forEach((_pts, startKey) => {
+      if (vVisited.has(startKey)) return;
+
+      const comp: VertexRecord[] = [];
+      const queue = [startKey];
+      vVisited.add(startKey);
+
+      while (queue.length > 0) {
+        const curKey = queue.pop()!;
+        const pts = vGrid.get(curKey);
+        if (pts) {
+          for (const p of pts) comp.push(p);
+        }
+        const [cxStr, czStr] = curKey.split('_');
+        const cx = parseInt(cxStr!, 10);
+        const cz = parseInt(czStr!, 10);
+
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            if (dx === 0 && dz === 0) continue;
+            const nKey = `${cx + dx}_${cz + dz}`;
+            if (vGrid.has(nKey) && !vVisited.has(nKey)) {
+              vVisited.add(nKey);
+              queue.push(nKey);
+            }
+          }
+        }
+      }
+
+      if (comp.length >= 10 && comp.length <= 450) {
+        const dual = OrientedBoundingBoxSolver.compute(comp.map(v => [v.x, v.y, v.z]));
+        const [dim0, dim1, dim2] = dual.obb.dimensions;
+        const length = Math.max(dim0, dim2);
+        const width = Math.min(dim0, dim2);
+        const height = dim1;
+        const aspect = length / Math.max(0.5, width);
+
+        if (length >= 2.6 && length <= 8.5 && width >= 1.3 && width <= 3.4 && height >= 0.75 && height <= 3.2 && aspect >= 1.30) {
+          for (const p of comp) p.tag = 'vehicle';
+
+          let vType: 'sedan' | 'suv' | 'van_truck' | 'compact' = 'sedan';
+          let vName = 'Passenger Sedan';
+          if (height > 1.85 || length > 5.5) {
+            vType = 'van_truck';
+            vName = 'Commercial Delivery Van';
+          } else if (height > 1.55) {
+            vType = 'suv';
+            vName = 'Urban SUV';
+          } else if (length < 3.9) {
+            vType = 'compact';
+            vName = 'Compact City Car';
+          }
+
+          const submeshSet = new Set(comp.map(v => v.submeshIndex));
+          clusters.push({
+            id: `veh-car-${String(vehCounter).padStart(3, '0')}`,
+            name: `${vName} #${vehCounter}`,
+            category: 'vehicle',
+            submeshIndices: Array.from(submeshSet),
+            extractedVertices: comp.map(v => [v.x, v.y, v.z]),
+            colorHex: '#f43f5e',
+            prompt: `Photorealistic parked ${vName} with ground yaw heading ${dual.obb.yawDeg.toFixed(1)}°, length ${length.toFixed(1)}m, width ${width.toFixed(1)}m`,
+            roughness: 0.32,
+            metalness: 0.85,
+            routingRecommendation: 'sb-vehicle',
+            vehicleMetadata: {
+              vehicleType: vType,
+              lengthMeters: length,
+              widthMeters: width,
+              heightMeters: height,
+              headingDeg: dual.obb.yawDeg,
+              groundElevationMeters: groundDatumY,
+              estimatedWheelbaseMeters: length * 0.62
+            }
+          });
+
+          vehCounter++;
+        }
+      }
+    });
+
+    // 7. Stage 3: Building Structures & Architectural Facades
     // Vertices that are vertical (|ny| <= 0.40) or elevated roof surfaces (h > 4.0m)
     const buildingCandidates: VertexRecord[] = [];
     for (const v of allVertices) {
@@ -390,9 +547,9 @@ export class UniversalVertexSpatialClusteringEngine {
       }
     }
 
-    // Spatial clustering of building candidates on XZ plane (cell size ~5.0m)
+    // Spatial clustering of building candidates on XZ plane (cell size ~3.6m)
     const bldGrid = new Map<string, VertexRecord[]>();
-    const bldCellSize = 5.5;
+    const bldCellSize = 3.6;
 
     for (const v of buildingCandidates) {
       const gx = Math.floor(v.x / bldCellSize);
@@ -464,22 +621,25 @@ export class UniversalVertexSpatialClusteringEngine {
         const bDepth = bMaxZ - bMinZ;
         const footprintM2 = bWidth * bDepth;
 
-        const isMonument = bHeight > 18.0 || bWidth > 35.0 || bDepth > 35.0;
-        const category: UniversalSpatialCategory = isMonument ? 'monument' : 'architecture';
+        const isHighRise = bHeight >= 40.0;
+        const bName = isHighRise
+          ? `Residential High-Rise Tower Envelope #${bldCounter}`
+          : `Perimeter Architectural Building Envelope #${bldCounter}`;
+        const category: UniversalSpatialCategory = 'architecture';
 
         clusters.push({
-          id: isMonument ? `mon-structure-${String(bldCounter).padStart(3, '0')}` : `arch-building-${String(bldCounter).padStart(3, '0')}`,
-          name: isMonument ? `Architectural Monument Facade #${bldCounter}` : `Building Structure Envelope #${bldCounter}`,
+          id: `arch-building-${String(bldCounter).padStart(3, '0')}`,
+          name: bName,
           category,
           submeshIndices: Array.from(submeshSet),
           extractedVertices: clusterVerts.map(v => [v.x, v.y, v.z]),
-          colorHex: isMonument ? '#3b82f6' : '#fbbf24',
-          prompt: isMonument
-            ? `Monolithic architectural monument with classical orders and masonry relief, height ${bHeight.toFixed(1)}m`
-            : `Urban architectural building structure envelope with regular fenestration and vertical facade planes, height ${bHeight.toFixed(1)}m`,
+          colorHex: isHighRise ? '#0284c7' : '#38bdf8',
+          prompt: isHighRise
+            ? `Art Deco residential high-rise tower envelope with stepped setbacks, vertical piers, and fenestration grid, height ${bHeight.toFixed(1)}m`
+            : `Urban residential townhouse architectural envelope with masonry facade planes and cornice moldings, height ${bHeight.toFixed(1)}m`,
           roughness: 0.85,
           metalness: 0.02,
-          routingRecommendation: isMonument ? 'sb-archi' : 'archie-building',
+          routingRecommendation: 'archie-building',
           buildingMetadata: {
             heightMeters: bHeight,
             footprintM2
