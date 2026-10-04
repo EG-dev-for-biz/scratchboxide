@@ -45,6 +45,7 @@ Quat = math.Quat
 # ==============================================================================
 _orig_create_box = _native.geometry.create_box
 _orig_create_pedestal = _native.geometry.create_studio_pedestal
+_orig_create_fluted_column = _native.geometry.create_fluted_column
 
 def create_box(size=None, width=1.0, height=1.0, depth=1.0, color=None):
     if size is not None:
@@ -75,6 +76,10 @@ def create_promenade(width=40.0, depth=30.0, height=0.6, steps=3, material='gran
     box.translate(0, float(height) * 0.5, 0)
     return box
 
+def create_fluted_column(radius=0.45, height=7.0, flutes=16, segments=48, color=None):
+    c = color if color is not None else Vec4(0.88, 0.85, 0.80, 1.0)
+    return _orig_create_fluted_column(float(radius), float(height), int(flutes), int(segments), c)
+
 # Attach ergonomic helpers to geometry submodule
 geometry.Scene = geometry.Mesh
 geometry.create_box = create_box
@@ -82,6 +87,7 @@ geometry.create_cube = create_cube
 geometry.create_studio_pedestal = create_studio_pedestal
 geometry.create_pedestal = create_studio_pedestal
 geometry.create_promenade = create_promenade
+geometry.create_fluted_column = create_fluted_column
 
 # Polymorphic Mesh transforms (accept 3 floats, tuple/list, or Vec3)
 _orig_mesh_translate = Mesh.translate
@@ -189,14 +195,25 @@ def create_building(
 architecture.create_building = create_building
 
 def create_tree(
-    attractor_count=160,
-    crown_center=(0, 6, 0),
-    crown_extents=(3.5, 4.5, 3.5),
-    perception_radius=4.0,
-    kill_radius=0.5,
-    branch_step_length=0.35,
-    base_radius=0.35,
-    generate_leaves=True
+    attractor_count=320,
+    crown_center=(0, 5.5, 0),
+    crown_extents=(3.2, 4.2, 3.2),
+    perception_radius=3.5,
+    kill_radius=0.55,
+    branch_step_length=0.40,
+    base_radius=0.38,
+    tip_radius=0.022,
+    root_flare_multiplier=1.85,
+    root_flare_height=1.1,
+    generate_leaves=True,
+    use_detailed_leaves=True,
+    use_twig_sprays=True,
+    spawn_lateral_twigs=True,
+    leaf_size=0.36,
+    leaves_per_tip=5,
+    wood_color=None,
+    leaf_color=None,
+    seed=1337
 ):
     cfg = nature.SpaceColonizationConfig()
     cfg.attractor_count = int(attractor_count)
@@ -212,10 +229,64 @@ def create_tree(
     cfg.kill_radius = float(kill_radius)
     cfg.branch_step_length = float(branch_step_length)
     cfg.base_radius = float(base_radius)
+    cfg.tip_radius = float(tip_radius)
+    cfg.root_flare_multiplier = float(root_flare_multiplier)
+    cfg.root_flare_height = float(root_flare_height)
     cfg.generate_leaves = bool(generate_leaves)
-    return nature.generate_tree(cfg)
+    cfg.use_detailed_leaves = bool(use_detailed_leaves)
+    cfg.use_twig_sprays = bool(use_twig_sprays)
+    cfg.spawn_lateral_twigs = bool(spawn_lateral_twigs)
+    cfg.leaf_size = float(leaf_size)
+    cfg.leaves_per_tip = int(leaves_per_tip)
+    if wood_color is not None:
+        if isinstance(wood_color, Vec4):
+            cfg.wood_color = wood_color
+        else:
+            cfg.wood_color = Vec4(float(wood_color[0]), float(wood_color[1]), float(wood_color[2]), float(wood_color[3]) if len(wood_color) > 3 else 1.0)
+    if leaf_color is not None:
+        if isinstance(leaf_color, Vec4):
+            cfg.leaf_color = leaf_color
+        else:
+            cfg.leaf_color = Vec4(float(leaf_color[0]), float(leaf_color[1]), float(leaf_color[2]), float(leaf_color[3]) if len(leaf_color) > 3 else 1.0)
+    cfg.seed = int(seed)
+    mesh = nature.generate_tree(cfg)
+    mesh.material.roughness = 0.55
+    mesh.material.metallic = 0.02
+    return mesh
 
 nature.create_tree = create_tree
+
+def create_lsystem_tree(
+    root_pos=(0, 0, 0),
+    max_depth=4,
+    initial_length=3.5,
+    initial_radius=0.35,
+    branch_angle_min=0.42,
+    branch_angle_max=0.66,
+    generate_leaves=True,
+    use_detailed_foliage_cards=True,
+    transfer_smooth_normals=True,
+    leaf_size=0.45,
+    seed=42
+):
+    params = nature.LSystemTreeParams()
+    params.max_depth = int(max_depth)
+    params.initial_length = float(initial_length)
+    params.initial_radius = float(initial_radius)
+    params.branch_angle_min = float(branch_angle_min)
+    params.branch_angle_max = float(branch_angle_max)
+    params.generate_leaves = bool(generate_leaves)
+    params.use_detailed_foliage_cards = bool(use_detailed_foliage_cards)
+    params.transfer_smooth_normals = bool(transfer_smooth_normals)
+    params.leaf_size = float(leaf_size)
+    params.seed = int(seed)
+    rp = Vec3(float(root_pos[0]), float(root_pos[1]), float(root_pos[2])) if isinstance(root_pos, (list, tuple)) else root_pos
+    mesh = nature.generate_lsystem_tree(rp, params)
+    mesh.material.roughness = 0.55
+    mesh.material.metallic = 0.02
+    return mesh
+
+nature.create_lsystem_tree = create_lsystem_tree
 
 def create_ivy(
     root=(0, 0, 0),
@@ -294,6 +365,7 @@ __all__ = [
     "create_promenade",
     "create_building",
     "create_tree",
+    "create_lsystem_tree",
     "create_ivy",
 ]
 

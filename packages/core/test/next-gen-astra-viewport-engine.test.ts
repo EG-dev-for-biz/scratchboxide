@@ -13,7 +13,12 @@ import {
     CULL_MESHLETS_WGSL,
     MICRO_RASTERIZER_WGSL,
     VISIBILITY_BUFFER_SHADING_WGSL,
-    TEMPORAL_SUPER_RES_WGSL
+    TEMPORAL_SUPER_RES_WGSL,
+    RELIEF_MICRO_DISPLACEMENT_WGSL,
+    CLUSTER_SLOT_SIZE_BYTES,
+    VRAM_PAGE_POOL_SIZE_MB,
+    TOTAL_RESIDENT_SLOTS,
+    VIRTUAL_GEOMETRY_CAPACITY_TRIANGLES
 } from '../src/browser/generative-canvas/services/NextGenAstraViewportEngine';
 
 function createMockContainer() {
@@ -80,7 +85,10 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
         });
 
         expect(latestTelemetry).toBeDefined();
-        expect(latestTelemetry.virtualizedTriangles).toBe(100_000_000);
+        expect(latestTelemetry.virtualizedTriangles).toBe(VIRTUAL_GEOMETRY_CAPACITY_TRIANGLES);
+        expect(latestTelemetry.virtualGeometryPagingEnabled).toBe(true);
+        expect(latestTelemetry.residentVramPoolMb).toBe(256);
+        expect(latestTelemetry.residentClusterSlots).toBe(65536);
         expect(latestTelemetry.activeDrawCalls).toBe(1);
         expect(latestTelemetry.toneMappingMode).toBe('agx');
         expect(latestTelemetry.standardBaseline.estimatedDrawCalls).toBe(3840);
@@ -141,6 +149,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
         expect(MICRO_RASTERIZER_WGSL).toContain('visBuffer');
         expect(VISIBILITY_BUFFER_SHADING_WGSL).toContain('shadeVisBuffer');
         expect(TEMPORAL_SUPER_RES_WGSL).toContain('accumulateTemporalTSR');
+        expect(RELIEF_MICRO_DISPLACEMENT_WGSL).toContain('computeMicroRelief');
     });
 
     it('8. Configures and toggles GPU Compute Culling, Hi-Z, Software Micro-Rasterizer, and VisBuffer', () => {
@@ -195,5 +204,95 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
         engine.setTemporalSuperResolution('performance');
         expect(telemetry.fillrateBoostMultiplier).toBe(4.00);
         expect(telemetry.effectiveFps).toBeGreaterThan(telemetry.fps);
+    });
+
+    it('10. Validates uniform 4KB cluster slot envelope and hardware scalability constants', () => {
+        expect(CLUSTER_SLOT_SIZE_BYTES).toBe(4096);
+        expect(VRAM_PAGE_POOL_SIZE_MB).toBe(256);
+        expect(TOTAL_RESIDENT_SLOTS).toBe(65536);
+        expect(VIRTUAL_GEOMETRY_CAPACITY_TRIANGLES).toBe(10_000_000_000);
+        expect((TOTAL_RESIDENT_SLOTS * CLUSTER_SLOT_SIZE_BYTES) / (1024 * 1024)).toBe(VRAM_PAGE_POOL_SIZE_MB);
+    });
+
+    it('11. Computes Camera-Relative Double Precision (CDP) positions with sub-millimeter accuracy', () => {
+        engine = new NextGenAstraViewportEngine({ container });
+
+        // Two points on Earth's surface separated by exactly 1 millimeter at latitude 41.8902 N
+        // In absolute earth-centered geocentric coordinates: ~6,378,137 meters
+        const planetaryCamera: [number, number, number] = [6378137.000, 1250000.000, 4500000.000];
+        const planetaryVertex: [number, number, number] = [6378137.001, 1250000.0005, 4500000.000];
+
+        // Direct subtraction in f32 would completely lose 0.001 (1mm) due to 24-bit mantissa (resolution ~0.5m)
+        // Camera-Relative subtraction on CPU retains exact millimeters in f32:
+        const relPos = engine.computeCameraRelativePosition(planetaryVertex, planetaryCamera);
+
+        expect(relPos[0]).toBeCloseTo(0.001, 4); // Sub-millimeter precision
+        expect(relPos[1]).toBeCloseTo(0.0005, 4);
+        expect(relPos[2]).toBe(0);
+    });
+
+    it('12. Enforces Strict Parent LOD Fallback Invariant with zero holes when child is non-resident', () => {
+        engine = new NextGenAstraViewportEngine({
+            container,
+            enableVirtualGeometryPaging: true,
+            enableStrictParentLodFallback: true
+        });
+
+        // Query a resident cluster
+        const residentSlot = engine.getVirtualClusterSlot(10);
+        expect(residentSlot).toBeDefined();
+        expect(residentSlot?.isResident).toBe(true);
+
+        const residentResult = engine.resolveClusterOrParent(10);
+        expect(residentResult.resolvedId).toBe(10);
+        expect(residentResult.isFallback).toBe(false);
+
+        // Evict cluster 10 from VRAM slot table
+        engine.evictClusterFromSlot(10);
+        expect(engine.isSlotResident(residentSlot!.slotIndex)).toBe(false);
+
+        // Query evicted cluster: Must seamlessly fallback to parent cluster without holes
+        const fallbackResult = engine.resolveClusterOrParent(10);
+        expect(fallbackResult.resolvedId).toBe(residentSlot!.parentClusterId);
+        expect(fallbackResult.isFallback).toBe(true);
+
+        // Reload cluster into slot and verify immediate recovery
+        engine.loadClusterIntoSlot(10, residentSlot!.slotIndex);
+        expect(engine.isSlotResident(residentSlot!.slotIndex)).toBe(true);
+        const restoredResult = engine.resolveClusterOrParent(10);
+        expect(restoredResult.resolvedId).toBe(10);
+        expect(restoredResult.isFallback).toBe(false);
+    });
+
+    it('13. Deduplicates procedural/CAD subtrees via SVDAG and scales virtual geometry telemetry', () => {
+        engine = new NextGenAstraViewportEngine({
+            container,
+            enableVirtualGeometryPaging: true,
+            enableSvdagDeduplication: true
+        });
+
+        let telemetry: any = null;
+        engine.subscribeTelemetry(t => { telemetry = t; });
+
+        expect(telemetry.virtualGeometryPagingEnabled).toBe(true);
+        expect(telemetry.virtualizedTrianglesCapacity).toBe(10_000_000_000);
+        expect(telemetry.residentVramPoolMb).toBe(256);
+        expect(telemetry.residentClusterSlots).toBe(65536);
+        expect(telemetry.svdagDeduplicationRatio).toBeGreaterThanOrEqual(1.0);
+
+        // Test SVDAG hash consing deduplication
+        const hash = 'corinthian_column_capital_lod0';
+        const res1 = engine.deduplicateProceduralSubtree(hash, 5000);
+        expect(res1.isNew).toBe(true);
+        expect(res1.deduplicatedTriangles).toBe(0);
+
+        // Second encounter of identical geometry must be deduplicated
+        const res2 = engine.deduplicateProceduralSubtree(hash, 5000);
+        expect(res2.isNew).toBe(false);
+        expect(res2.deduplicatedTriangles).toBe(5000);
+
+        // Verify deduplication ratio calculation
+        const ratio = engine.getSvdagDeduplicationRatio();
+        expect(ratio).toBeGreaterThan(1.0);
     });
 });

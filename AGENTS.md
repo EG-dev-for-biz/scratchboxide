@@ -87,11 +87,12 @@ When implementing 3D (scenes, models, procedural geometry, terrain generation, s
    - Native binaries stream binary glTF 2.0 (`.glb`) chunks containing vertices, normals, UVs, vertex colors (`COLOR_0`), and PBR metallic-roughness materials directly into the Three.js viewport.
    - Three.js is best utilized as a pure renderer and viewport, not the geometric generator.
 
-2. **Secondary / Fallback Path (Three.js / WebGL / TS)**:
-   - Only use alternative methods (such as Three.js `customScript`, client-side WebGL/WGSL shaders, or TypeScript geometry builders) when:
-     - Native C/C++ compilation tools (Clang) are explicitly unavailable in the environment.
-     - The user explicitly requests pure browser client-side scripts.
-     - Performing lightweight viewport camera choreography, UI overlays, or non-geometric DOM manipulations.
+2. **Strict Prohibition on JavaScript Generative Primitives (Zero-Tolerance "Tier-0" Ban)**:
+   - **No Silent Fallback to Toy Primitives**: Viewports, canvas studios, and generative endpoints must NEVER catch backend generation errors and silently substitute client-side Three.js primitives (`new THREE.BoxGeometry`, `new THREE.CylinderGeometry`, `new THREE.ConeGeometry`, `new THREE.SphereGeometry`). Stacking flat boxes is prohibited.
+   - **Failover Strictly to Tier 2 (ComfyUI / Cloud Run GPU)**: If Tier 1 native C++20 encounters a runtime fault, the pipeline must fail over strictly to Tier 2 ComfyUI neural diffusion/mesh generation. Dropping to flat JavaScript primitives is an unconstitutional "Tier 0" regression.
+   - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy (Primary edifice, secondary wings, tertiary botanical/architectural detail). Any generator emitting fewer vertices or un-subdivided primitive boxes must be rejected with `GeometricFidelityViolationError`.
+   - **Static Analysis CI Gate (`npm run lint:primitives`)**: The codebase is protected by `scripts/lint_no_js_primitives.js`. Any PR, commit, or agent change that introduces prohibited Three.js primitive constructors into generative viewports will immediately fail the CI build.
+   - **Client-Side Viewport Scope**: Three.js is restricted strictly to pure rendering, camera choreography, post-processing (FSR 1.0), and UI gizmo overlays. It is NEVER the procedural geometry generator.
 
 ### Rule: Dynamic Ephemeral Compilation & Zero Code Proliferation
 When generating procedural 3D scenes, structures, or worlds:
@@ -299,6 +300,25 @@ When conditioning video generation for performer avatars or generating multi-vie
 1. **Precision & Investigation**: Inspect existing files before editing. Never guess symbol names or file paths.
 2. **Type Safety**: Maintain 100% clean TypeScript typechecks across all monorepo packages.
 3. **Continuous Verification**: Test all procedural generation and 3D pipelines with automated test suites.
+4. **Mechanical Reality Grounding (Zero Simulation Traps)**: Activate `.agents/skills/prevent-architectural-simulation-trap/SKILL.md`. Never simulate architecture through hollow interface scaffolds, mock-only tests, synthetic terminal claims, closed taxonomy enums, or toy script fallbacks. Every architectural claim must be verified via unedited subprocess command execution and exit code 0.
+
+## Mechanical Reality Grounding & Anti-Simulation Trap Directive
+
+### Rule: Prevent the Architectural Simulation Trap Across All Agent Actions
+When planning, implementing, or verifying architectures, pipelines, and features:
+1. **Zero Hollow Interface Scaffolds**:
+   - Strictly adhere to the **Anti-Astronaut Principle**: never extract interfaces, abstract base classes, or factory providers unless at least two distinct, active, production implementations exist.
+   - Eliminate pass-through boilerplate, single-use wrappers, and stub methods (`return null;`, `// TODO`).
+2. **Live Subprocess Execution & Exit Code 0 Verification**:
+   - Never claim builds succeeded or tests passed in chat without executing real tools (`clang++`, `tsc`, `vitest`) via `run_command` and verifying `exit 0`.
+   - Mock-only tests that only assert `expect(spy).toHaveBeenCalled()` are rejected. Tests must verify transformed data, vertex counts, and binary magic bytes.
+3. **Analytical Forward Mapping Over Inverse Fictions**:
+   - If mathematical or procedural ground truth exists (hair curves, geometry vectors, camera matrices), project forward directly into target buffers (`.spz`, `.glb`). Never round-trip through 2D synthetic renders to re-estimate geometry via neural inverse solvers.
+4. **Geometric Complexity Floors over Toy Script Regressions**:
+   - Procedural 3D assets must pass `GeometricComplexityGate` ($\ge 25,000$ vertices for scenes, $\ge 5,000$ for props). Catching native engine errors and silently substituting client-side JS toy primitives (`THREE.BoxGeometry`) is strictly prohibited.
+5. **Continuous Dimensional Manifolds Over Closed Enums**:
+   - Systems must project into continuous physical fields (meters, roughness, Kelvin), never discrete string enums or static switch-case trees. The LLM is the domain engine.
+
 
 ## Visual Progress & Verification Directive
 

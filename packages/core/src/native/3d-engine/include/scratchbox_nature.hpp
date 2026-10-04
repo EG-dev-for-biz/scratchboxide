@@ -1321,10 +1321,25 @@ public:
         for (const auto& node : nodes) {
             if (node.parentId >= 0) {
                 const auto& parent = nodes[node.parentId];
+                float rStart = parent.radius;
+                float rEnd = node.radius;
+
+                // Buttress root flare: expand trunk diameter exponentially near ground anchor
+                if (parent.position.y <= cfg.rootAnchor.y + 0.9f) {
+                    float relY = std::max(0.0f, parent.position.y - cfg.rootAnchor.y);
+                    float flareFactor = 1.0f + 1.25f * std::exp(-relY / 0.40f);
+                    rStart *= flareFactor;
+                }
+                if (node.position.y <= cfg.rootAnchor.y + 0.9f) {
+                    float relY = std::max(0.0f, node.position.y - cfg.rootAnchor.y);
+                    float flareFactor = 1.0f + 1.25f * std::exp(-relY / 0.40f);
+                    rEnd *= flareFactor;
+                }
+
                 appendBranchCylinder(
                     treeMesh,
                     parent.position, node.position,
-                    parent.radius, node.radius,
+                    rStart, rEnd,
                     cfg.woodColor,
                     8
                 );
@@ -1443,9 +1458,9 @@ public:
                         Vec3 cardOffset(std::cos(angle) * cfg.leafSize * scale * 0.6f, (dist0To1(rng) - 0.5f) * 0.2f, std::sin(angle) * cfg.leafSize * scale * 0.6f);
                         Vec3 leafCenter = pos + cardOffset;
 
-                        // Create two intersecting crossed quads
-                        for (int q = 0; q < 2; ++q) {
-                            float qAngle = angle + (q * math::HALF_PI);
+                        // Create three intersecting rosette quads (60-degree offsets) for volumetric fullness
+                        for (int q = 0; q < 3; ++q) {
+                            float qAngle = angle + (q * (math::PI / 3.0f));
                             Vec3 right(std::cos(qAngle) * cfg.leafSize * scale * 0.5f, 0, std::sin(qAngle) * cfg.leafSize * scale * 0.5f);
                             Vec3 up(0, cfg.leafSize * scale * 0.5f, 0);
 
@@ -1455,10 +1470,14 @@ public:
                             treeMesh.vertices.push_back(leafCenter + right + up);
                             treeMesh.vertices.push_back(leafCenter - right + up);
 
+                            // Subtle natural chlorophyll variation per card
+                            float shadeJitter = 0.92f + dist0To1(rng) * 0.16f;
+                            Vec4 cardColor = Vec4(cfg.leafColor.x * shadeJitter, cfg.leafColor.y * shadeJitter, cfg.leafColor.z * shadeJitter, 1.0f);
+
                             Vec3 n = right.cross(up).normalized();
                             for (int k = 0; k < 4; ++k) {
                                 treeMesh.normals.push_back(n);
-                                treeMesh.vertexColors.push_back(cfg.leafColor);
+                                treeMesh.vertexColors.push_back(cardColor);
                             }
 
                             treeMesh.indices.push_back(bIdx);

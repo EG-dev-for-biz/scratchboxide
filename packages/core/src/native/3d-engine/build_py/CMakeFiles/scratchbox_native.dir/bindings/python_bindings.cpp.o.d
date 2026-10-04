@@ -1206,6 +1206,9 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_xpbd.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_lod.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_hair.hpp \
+  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_spz.hpp \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zconf.h \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_fabric.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_fracture.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_headless_realism.hpp \
@@ -1268,9 +1271,6 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/complex \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_camera_reprojector.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_colmap.hpp \
-  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_spz.hpp \
-  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h \
-  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zconf.h \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_gaussian_opt.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_jpeg.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_gltf_scene.hpp \

@@ -505,10 +505,14 @@ public:
         // 6 faces * 4 vertices = 24 vertices
         auto addFace = [&](const Vec3& n, const Vec3& u, const Vec3& v) {
             uint32_t start = static_cast<uint32_t>(mesh.vertices.size());
-            mesh.addVertex({n * h.dot(n) - u * h.dot(u) - v * h.dot(v), n, {0, 0}, color});
-            mesh.addVertex({n * h.dot(n) + u * h.dot(u) - v * h.dot(v), n, {1, 0}, color});
-            mesh.addVertex({n * h.dot(n) + u * h.dot(u) + v * h.dot(v), n, {1, 1}, color});
-            mesh.addVertex({n * h.dot(n) - u * h.dot(u) + v * h.dot(v), n, {0, 1}, color});
+            Vec3 center(n.x * h.x, n.y * h.y, n.z * h.z);
+            Vec3 u_span(u.x * h.x, u.y * h.y, u.z * h.z);
+            Vec3 v_span(v.x * h.x, v.y * h.y, v.z * h.z);
+
+            mesh.addVertex({center - u_span - v_span, n, {0, 0}, color});
+            mesh.addVertex({center + u_span - v_span, n, {1, 0}, color});
+            mesh.addVertex({center + u_span + v_span, n, {1, 1}, color});
+            mesh.addVertex({center - u_span + v_span, n, {0, 1}, color});
 
             mesh.addTriangle(start, start + 1, start + 2);
             mesh.addTriangle(start, start + 2, start + 3);
@@ -587,6 +591,96 @@ public:
             mesh.addTriangle(top1, top2, bot2);
             mesh.addTriangle(top1, bot2, bot1);
         }
+
+        return mesh;
+    }
+
+    static ScratchboxMesh createFlutedColumn(
+        float radius = 0.45f,
+        float height = 7.0f,
+        int flutes = 16,
+        int segments = 48,
+        const Vec4& color = {0.88f, 0.85f, 0.80f, 1.0f}
+    ) {
+        ScratchboxMesh mesh("fluted_column");
+        float plinthH = height * 0.045f;
+        float plinthW = radius * 2.6f;
+        float abacusH = height * 0.045f;
+        float abacusW = radius * 2.5f;
+        float torusH = radius * 0.22f;
+        float shaftH = height - plinthH - abacusH - torusH * 2.0f;
+        float yBase = 0.0f;
+
+        // 1. Square Plinth Base Box
+        ScratchboxMesh plinth = createBox(Vec3(plinthW, plinthH, plinthW), color * 0.95f);
+        for (auto& v : plinth.vertices) v.position.y += plinthH * 0.5f;
+        mesh.append(plinth);
+        yBase += plinthH;
+
+        // 2. Base Moulding Ring (Attic Base)
+        ScratchboxMesh baseRing = createCylinder(radius * 1.22f, radius * 1.30f, torusH, segments, color * 0.98f);
+        for (auto& v : baseRing.vertices) v.position.y += yBase + torusH * 0.5f;
+        mesh.append(baseRing);
+        yBase += torusH;
+
+        // 3. Fluted Shaft with Classical Entasis
+        int vertRings = 16;
+        float shaftBotY = yBase;
+        float shaftTopY = shaftBotY + shaftH;
+        uint32_t shaftBaseIdx = static_cast<uint32_t>(mesh.vertices.size());
+
+        for (int r = 0; r <= vertRings; ++r) {
+            float vNorm = static_cast<float>(r) / static_cast<float>(vertRings);
+            float y = shaftBotY + vNorm * shaftH;
+
+            // Classical Entasis: subtle taper from base to neck
+            float entasis = 1.0f - 0.14f * std::pow(vNorm, 1.6f);
+            float rEff = radius * entasis;
+
+            for (int s = 0; s <= segments; ++s) {
+                float u = static_cast<float>(s) / static_cast<float>(segments);
+                float angle = u * TWO_PI;
+
+                // Fluting modulation: sinusoidal concave flutes
+                float fluteDepth = 0.045f * rEff;
+                float fluteMod = -fluteDepth * std::cos(static_cast<float>(flutes) * angle);
+                float rFinal = rEff + fluteMod;
+
+                float cosA = std::cos(angle);
+                float sinA = std::sin(angle);
+                Vec3 pos(cosA * rFinal, y, sinA * rFinal);
+
+                Vec3 norm(cosA, 0.0f, sinA);
+                mesh.addVertex(Vertex(pos, norm.normalized(), Vec2(u, vNorm), color));
+            }
+        }
+
+        // Connect shaft quads
+        int segStride = segments + 1;
+        for (int r = 0; r < vertRings; ++r) {
+            for (int s = 0; s < segments; ++s) {
+                uint32_t i0 = shaftBaseIdx + r * segStride + s;
+                uint32_t i1 = shaftBaseIdx + r * segStride + (s + 1);
+                uint32_t i2 = shaftBaseIdx + (r + 1) * segStride + (s + 1);
+                uint32_t i3 = shaftBaseIdx + (r + 1) * segStride + s;
+
+                mesh.addTriangle(i0, i1, i2);
+                mesh.addTriangle(i0, i2, i3);
+            }
+        }
+
+        yBase = shaftTopY;
+
+        // 4. Neck Capital Moulding Ring (Echinus)
+        ScratchboxMesh capRing = createCylinder(radius * 1.25f, radius * 0.90f, torusH, segments, color * 1.02f);
+        for (auto& v : capRing.vertices) v.position.y += yBase + torusH * 0.5f;
+        mesh.append(capRing);
+        yBase += torusH;
+
+        // 5. Square Abacus Cap Box
+        ScratchboxMesh abacus = createBox(Vec3(abacusW, abacusH, abacusW), color);
+        for (auto& v : abacus.vertices) v.position.y += yBase + abacusH * 0.5f;
+        mesh.append(abacus);
 
         return mesh;
     }

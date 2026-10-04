@@ -196,6 +196,10 @@ NB_MODULE(scratchbox_native, m) {
         return generateStudioPedestal(radius, height, bevelRadius, segments);
     }, "radius"_a = 4.0f, "height"_a = 0.25f, "bevel_radius"_a = 0.04f, "segments"_a = 64);
 
+    m_geom.def("create_fluted_column", [](float radius, float height, int flutes, int segments, const Vec4& color) {
+        return ScratchboxMesh::createFlutedColumn(radius, height, flutes, segments, color);
+    }, "radius"_a = 0.45f, "height"_a = 7.0f, "flutes"_a = 16, "segments"_a = 48, "color"_a = Vec4(0.88f, 0.85f, 0.80f, 1.0f));
+
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
     // ========================================================================
@@ -238,18 +242,59 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("attractor_count", &SpaceColonizationConfig::attractorCount)
         .def_rw("crown_center", &SpaceColonizationConfig::crownCenter)
         .def_rw("crown_extents", &SpaceColonizationConfig::crownExtents)
+        .def_rw("root_anchor", &SpaceColonizationConfig::rootAnchor)
         .def_rw("perception_radius", &SpaceColonizationConfig::perceptionRadius)
         .def_rw("kill_radius", &SpaceColonizationConfig::killRadius)
         .def_rw("branch_step_length", &SpaceColonizationConfig::branchStepLength)
+        .def_rw("clear_trunk_height", &SpaceColonizationConfig::clearTrunkHeight)
         .def_rw("base_radius", &SpaceColonizationConfig::baseRadius)
         .def_rw("tip_radius", &SpaceColonizationConfig::tipRadius)
         .def_rw("da_vinci_exponent", &SpaceColonizationConfig::daVinciExponent)
-        .def_rw("generate_leaves", &SpaceColonizationConfig::generateLeaves);
+        .def_rw("generate_leaves", &SpaceColonizationConfig::generateLeaves)
+        .def_rw("use_detailed_leaves", &SpaceColonizationConfig::useDetailedLeaves)
+        .def_rw("spawn_lateral_twigs", &SpaceColonizationConfig::spawnLateralTwigs)
+        .def_rw("leaf_size", &SpaceColonizationConfig::leafSize)
+        .def_rw("leaves_per_tip", &SpaceColonizationConfig::leavesPerTip)
+        .def_rw("wood_color", &SpaceColonizationConfig::woodColor)
+        .def_rw("leaf_color", &SpaceColonizationConfig::leafColor)
+        .def_rw("use_twig_sprays", &SpaceColonizationConfig::useTwigSprays)
+        .def_rw("root_flare_multiplier", &SpaceColonizationConfig::rootFlareMultiplier)
+        .def_rw("root_flare_height", &SpaceColonizationConfig::rootFlareHeight)
+        .def_rw("volumetric_density", &SpaceColonizationConfig::volumetricDensity)
+        .def_rw("foliage_branch_radius_threshold", &SpaceColonizationConfig::foliageBranchRadiusThreshold)
+        .def_rw("lateral_twig_probability", &SpaceColonizationConfig::lateralTwigProbability)
+        .def_rw("outward_arch_factor", &SpaceColonizationConfig::outwardArchFactor)
+        .def_rw("growth_momentum_factor", &SpaceColonizationConfig::growthMomentumFactor)
+        .def_rw("cantilever_droop", &SpaceColonizationConfig::cantileverDroop)
+        .def_rw("is_shrub", &SpaceColonizationConfig::isShrub)
+        .def_rw("seed", &SpaceColonizationConfig::seed);
 
     m_nat.def("generate_tree", [](const SpaceColonizationConfig& config) {
         geometry::Mesh legacy = SpaceColonizationTreeGenerator::generateTree(config);
         return legacy.toScratchboxMesh();
     }, "config"_a, "Generate a realistic botanical tree using Runions space colonization");
+
+    nb::class_<LSystemTreeParams>(m_nat, "LSystemTreeParams")
+        .def(nb::init<>())
+        .def_rw("max_depth", &LSystemTreeParams::maxDepth)
+        .def_rw("initial_length", &LSystemTreeParams::initialLength)
+        .def_rw("initial_radius", &LSystemTreeParams::initialRadius)
+        .def_rw("branch_angle_min", &LSystemTreeParams::branchAngleMin)
+        .def_rw("branch_angle_max", &LSystemTreeParams::branchAngleMax)
+        .def_rw("length_decay", &LSystemTreeParams::lengthDecay)
+        .def_rw("gravity_droop", &LSystemTreeParams::gravityDroop)
+        .def_rw("children_per_node", &LSystemTreeParams::childrenPerNode)
+        .def_rw("generate_leaves", &LSystemTreeParams::generateLeaves)
+        .def_rw("use_detailed_foliage_cards", &LSystemTreeParams::useDetailedFoliageCards)
+        .def_rw("transfer_smooth_normals", &LSystemTreeParams::transferSmoothNormals)
+        .def_rw("normal_transfer_mix_factor", &LSystemTreeParams::normalTransferMixFactor)
+        .def_rw("leaf_size", &LSystemTreeParams::leafSize)
+        .def_rw("seed", &LSystemTreeParams::seed);
+
+    m_nat.def("generate_lsystem_tree", [](const Vec3& root_pos, const LSystemTreeParams& params) {
+        geometry::Mesh legacy = generateProceduralTree(root_pos, params);
+        return legacy.toScratchboxMesh();
+    }, "root_pos"_a = Vec3(0, 0, 0), "params"_a = LSystemTreeParams(), "Generate an L-system tree with transferred envelope normals");
 
     nb::class_<IvyConfig>(m_nat, "IvyConfig")
         .def(nb::init<>())

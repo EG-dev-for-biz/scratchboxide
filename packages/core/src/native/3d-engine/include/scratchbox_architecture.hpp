@@ -266,19 +266,50 @@ private:
                     float openBottom = currY + openSill;
                     float openTop = openBottom + openH;
 
-                    // 1. Left pier wall
+                    // 1. Left pier wall & 2. Right pier wall
                     Vec3 lp0 = side.start + side.rightDir * u0 + Vec3(0, currY - yBase, 0);
                     Vec3 lp1 = side.start + side.rightDir * openLeft + Vec3(0, currY - yBase, 0);
                     Vec3 lp2 = lp1 + Vec3(0, curFloorH, 0);
                     Vec3 lp3 = lp0 + Vec3(0, curFloorH, 0);
-                    addQuad(mesh, lp0, lp1, lp2, lp3, side.normal, cfg.materials.wall.baseColorFactor);
 
-                    // 2. Right pier wall
                     Vec3 rp0 = side.start + side.rightDir * openRight + Vec3(0, currY - yBase, 0);
                     Vec3 rp1 = side.start + side.rightDir * u1 + Vec3(0, currY - yBase, 0);
                     Vec3 rp2 = rp1 + Vec3(0, curFloorH, 0);
                     Vec3 rp3 = rp0 + Vec3(0, curFloorH, 0);
-                    addQuad(mesh, rp0, rp1, rp2, rp3, side.normal, cfg.materials.wall.baseColorFactor);
+
+                    if (floor == 0) {
+                        // Ground floor ashlar masonry rustication: horizontal reveal channels
+                        int courseCount = 7;
+                        float courseH = curFloorH / static_cast<float>(courseCount);
+                        float grooveH = 0.035f;
+                        Vec3 inwardGroove = -side.normal * 0.025f;
+
+                        auto addRusticatedPier = [&](float leftU, float rightU) {
+                            for (int c = 0; c < courseCount; ++c) {
+                                float y0 = currY + c * courseH;
+                                float y1 = y0 + courseH - grooveH;
+                                Vec3 cp0 = side.start + side.rightDir * leftU + Vec3(0, y0 - yBase, 0);
+                                Vec3 cp1 = side.start + side.rightDir * rightU + Vec3(0, y0 - yBase, 0);
+                                Vec3 cp2 = cp1 + Vec3(0, y1 - y0, 0);
+                                Vec3 cp3 = cp0 + Vec3(0, y1 - y0, 0);
+                                addQuad(mesh, cp0, cp1, cp2, cp3, side.normal, cfg.materials.wall.baseColorFactor);
+
+                                // Recessed reveal channel / groove
+                                Vec3 gp0 = cp3;
+                                Vec3 gp1 = cp2;
+                                Vec3 gp2 = gp1 + Vec3(0, grooveH, 0);
+                                Vec3 gp3 = gp0 + Vec3(0, grooveH, 0);
+                                addQuad(mesh, gp0 + inwardGroove, gp1 + inwardGroove, gp2 + inwardGroove, gp3 + inwardGroove, side.normal, cfg.materials.wall.baseColorFactor * 0.72f);
+                                addQuad(mesh, gp0, gp1, gp1 + inwardGroove, gp0 + inwardGroove, Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.82f);
+                                addQuad(mesh, gp3 + inwardGroove, gp2 + inwardGroove, gp2, gp3, -Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.62f);
+                            }
+                        };
+                        addRusticatedPier(u0, openLeft);
+                        addRusticatedPier(openRight, u1);
+                    } else {
+                        addQuad(mesh, lp0, lp1, lp2, lp3, side.normal, cfg.materials.wall.baseColorFactor);
+                        addQuad(mesh, rp0, rp1, rp2, rp3, side.normal, cfg.materials.wall.baseColorFactor);
+                    }
 
                     // 3. Spandrel below opening (if sill > 0)
                     if (openSill > 0.001f) {
@@ -314,6 +345,56 @@ private:
                     // Bottom sill jamb
                     if (openSill > 0.001f) {
                         addQuad(mesh, oBL + inward, oBL, oBR, oBR + inward, Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.95f);
+                    }
+
+                    // 5b. Projecting Architectural Window Sill with Drop-Edge Overhang
+                    if (!isEntranceBay && openSill > 0.001f) {
+                        float hornExt = 0.08f;
+                        float sillProj = 0.12f;
+                        float sillThick = 0.10f;
+                        Vec3 sProj = side.normal * sillProj;
+                        Vec3 sL = side.start + side.rightDir * (openLeft - hornExt) + Vec3(0, openBottom - yBase, 0);
+                        Vec3 sR = side.start + side.rightDir * (openRight + hornExt) + Vec3(0, openBottom - yBase, 0);
+
+                        Vec3 sTL = sL;
+                        Vec3 sTR = sR;
+                        Vec3 sBL = sL - Vec3(0, sillThick, 0);
+                        Vec3 sBR = sR - Vec3(0, sillThick, 0);
+
+                        Vec3 sTL_out = sTL + sProj - Vec3(0, 0.02f, 0);
+                        Vec3 sTR_out = sTR + sProj - Vec3(0, 0.02f, 0);
+                        Vec3 sBL_out = sBL + sProj;
+                        Vec3 sBR_out = sBR + sProj;
+
+                        // Sill Top Wash (sloping down to shed water)
+                        addQuad(mesh, sTL, sTR, sTR_out, sTL_out, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                        // Sill Front Nose
+                        addQuad(mesh, sBL_out, sBR_out, sTR_out, sTL_out, side.normal, cfg.materials.foundation.baseColorFactor * 0.95f);
+                        // Sill Underside (casts drop shadow)
+                        addQuad(mesh, sBL, sBL_out, sBR_out, sBR, -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                        // Sill Left Return Horn
+                        addQuad(mesh, sBL, sTL, sTL_out, sBL_out, -side.rightDir, cfg.materials.foundation.baseColorFactor * 0.85f);
+                        // Sill Right Return Horn
+                        addQuad(mesh, sBR_out, sTR_out, sTR, sBR, side.rightDir, cfg.materials.foundation.baseColorFactor * 0.85f);
+                    }
+
+                    // 5c. Projecting Window Lintel / Head Cap
+                    if (!isEntranceBay) {
+                        float lintelExt = 0.06f;
+                        float lintelProj = 0.08f;
+                        float lintelH = 0.14f;
+                        Vec3 lProj = side.normal * lintelProj;
+                        Vec3 lL = side.start + side.rightDir * (openLeft - lintelExt) + Vec3(0, openTop - yBase, 0);
+                        Vec3 lR = side.start + side.rightDir * (openRight + lintelExt) + Vec3(0, openTop - yBase, 0);
+                        Vec3 lTL = lL + Vec3(0, lintelH, 0);
+                        Vec3 lTR = lR + Vec3(0, lintelH, 0);
+
+                        // Front face
+                        addQuad(mesh, lL + lProj, lR + lProj, lTR + lProj, lTL + lProj, side.normal, cfg.materials.foundation.baseColorFactor);
+                        // Top slope wash
+                        addQuad(mesh, lTL, lTR, lTR + lProj, lTL + lProj, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                        // Underside
+                        addQuad(mesh, lL, lL + lProj, lR + lProj, lR, -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.70f);
                     }
 
                     // 6. Recessed Glazing / Door Panel
@@ -360,7 +441,7 @@ private:
         float currY = cfg.plinthHeight;
 
         for (int floor = 0; floor <= cfg.floorCount; ++floor) {
-            // Horizontal floor slab quad (ceiling of lower, floor of upper)
+            // Horizontal interior floor slab quad (ceiling of lower, floor of upper)
             Vec3 p0(-hx, currY,  hz);
             Vec3 p1( hx, currY,  hz);
             Vec3 p2( hx, currY, -hz);
@@ -368,6 +449,40 @@ private:
 
             // Upward facing
             addQuad(mesh, p0, p1, p2, p3, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.8f);
+
+            // Exterior projecting belt course / stringcourse moulding wrapping the perimeter
+            if (floor > 0) {
+                bool isRoofCornice = (floor == cfg.floorCount);
+                float beltProj = isRoofCornice ? 0.32f : 0.16f;
+                float beltH = isRoofCornice ? 0.28f : 0.16f;
+                float bTopY = currY;
+                float bBotY = currY - beltH;
+
+                float outX = hx + beltProj;
+                float outZ = hz + beltProj;
+
+                // 4-side exterior belt course quads:
+                // Front (+Z)
+                addQuad(mesh, Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 0, 1), cfg.materials.foundation.baseColorFactor);
+                // Back (-Z)
+                addQuad(mesh, Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 0, -1), cfg.materials.foundation.baseColorFactor);
+                // Left (-X)
+                addQuad(mesh, Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(-1, 0, 0), cfg.materials.foundation.baseColorFactor);
+                // Right (+X)
+                addQuad(mesh, Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(1, 0, 0), cfg.materials.foundation.baseColorFactor);
+
+                // Top wash (slopes down from wall to outer edge)
+                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, hz), Vec3(outX, bTopY, outZ), Vec3(-outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-outX, bTopY, -outZ), Vec3(outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(-hx, bTopY + 0.04f, -hz), Vec3(-hx, bTopY + 0.04f, hz), Vec3(-outX, bTopY, outZ), Vec3(-outX, bTopY, -outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+                addQuad(mesh, Vec3(hx, bTopY + 0.04f, hz), Vec3(hx, bTopY + 0.04f, -hz), Vec3(outX, bTopY, -outZ), Vec3(outX, bTopY, outZ), Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 1.05f);
+
+                // Underside drip face (casts continuous shadow onto wall below)
+                addQuad(mesh, Vec3(-hx, bBotY, hz), Vec3(-outX, bBotY, outZ), Vec3(outX, bBotY, outZ), Vec3(hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(hx, bBotY, -hz), Vec3(outX, bBotY, -outZ), Vec3(-outX, bBotY, -outZ), Vec3(-hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(-hx, bBotY, -hz), Vec3(-outX, bBotY, -outZ), Vec3(-outX, bBotY, outZ), Vec3(-hx, bBotY, hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+                addQuad(mesh, Vec3(hx, bBotY, hz), Vec3(outX, bBotY, outZ), Vec3(outX, bBotY, -outZ), Vec3(hx, bBotY, -hz), -Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.60f);
+            }
 
             if (floor < cfg.floorCount) {
                 float curFloorH = (floor == 0) ? cfg.groundFloorHeight : cfg.floorHeight;
@@ -559,10 +674,46 @@ private:
         Vec3 cBR( curbX, yCurb, -curbZ);
 
         // Steep lower slopes
-        addQuad(mesh, eFL, eFR, cFR, cFL, Vec3(0, curbInset, curbH).normalized(), cfg.materials.roof.baseColorFactor);
-        addQuad(mesh, eBR, eBL, cBL, cBR, Vec3(0, curbInset, -curbH).normalized(), cfg.materials.roof.baseColorFactor);
-        addQuad(mesh, eBL, eFL, cFL, cBL, Vec3(-curbH, curbInset, 0).normalized(), cfg.materials.roof.baseColorFactor);
-        addQuad(mesh, eFR, eBR, cBR, cFR, Vec3(curbH, curbInset, 0).normalized(), cfg.materials.roof.baseColorFactor);
+        Vec3 nFront = Vec3(0, curbInset, curbH).normalized();
+        Vec3 nBack = Vec3(0, curbInset, -curbH).normalized();
+        Vec3 nLeft = Vec3(-curbH, curbInset, 0).normalized();
+        Vec3 nRight = Vec3(curbH, curbInset, 0).normalized();
+
+        addQuad(mesh, eFL, eFR, cFR, cFL, nFront, cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eBR, eBL, cBL, cBR, nBack, cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eBL, eFL, cFL, cBL, nLeft, cfg.materials.roof.baseColorFactor);
+        addQuad(mesh, eFR, eBR, cBR, cFR, nRight, cfg.materials.roof.baseColorFactor);
+
+        // Standing seam ribs along steep lower mansard slopes (zinc / copper battens)
+        auto addMansardStandingSeam = [&](const Vec3& pBot, const Vec3& pTop, const Vec3& norm, const Vec3& tan) {
+            float ribW = 0.045f;
+            float ribH = 0.065f;
+            Vec3 wOff = tan * (ribW * 0.5f);
+            Vec3 hOff = norm * ribH;
+
+            Vec3 b0 = pBot - wOff;
+            Vec3 b1 = pBot + wOff;
+            Vec3 t0 = pTop - wOff;
+            Vec3 t1 = pTop + wOff;
+
+            // Front cap
+            addQuad(mesh, b0 + hOff, b1 + hOff, t1 + hOff, t0 + hOff, norm, cfg.materials.roof.baseColorFactor * 1.15f);
+            // Flanks
+            addQuad(mesh, b0, b0 + hOff, t0 + hOff, t0, -tan, cfg.materials.roof.baseColorFactor * 0.85f);
+            addQuad(mesh, b1 + hOff, b1, t1, t1 + hOff, tan, cfg.materials.roof.baseColorFactor * 0.85f);
+        };
+
+        float ribStep = 1.1f;
+        for (float rx = -curbX + 0.8f; rx <= curbX - 0.8f; rx += ribStep) {
+            float u = (rx + hx) / (2.0f * hx);
+            addMansardStandingSeam(math::lerp(eFL, eFR, u), math::lerp(cFL, cFR, u), nFront, Vec3(1, 0, 0));
+            addMansardStandingSeam(math::lerp(eBL, eBR, u), math::lerp(cBL, cBR, u), nBack, Vec3(1, 0, 0));
+        }
+        for (float rz = -curbZ + 0.8f; rz <= curbZ - 0.8f; rz += ribStep) {
+            float u = (rz + hz) / (2.0f * hz);
+            addMansardStandingSeam(math::lerp(eBL, eFL, u), math::lerp(cBL, cFL, u), nLeft, Vec3(0, 0, 1));
+            addMansardStandingSeam(math::lerp(eBR, eFR, u), math::lerp(cBR, cFR, u), nRight, Vec3(0, 0, 1));
+        }
 
         // Stage 2: Shallow upper deck
         float deckH = 0.8f;

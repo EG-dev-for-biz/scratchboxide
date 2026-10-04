@@ -659,103 +659,722 @@ const server = http.createServer((req, res) => {
                     throw new Error('NativePythonRunnerService failed to load: ' + loadErr.message);
                 }
 
-                // ADA Semantic vector & continuous physical derivation
+                // Domain & Semantic Classification (ADA Continuous & Archetypal Mapping)
                 const p = prompt.toLowerCase();
                 const hash = prompt.split('').reduce((acc, c) => ((acc << 5) - acc) + c.charCodeAt(0) | 0, 0) >>> 0;
 
-                const isStation = /terminal|station|hyperloop|transit|subterranean/i.test(p);
-                const isTower = /tower|spire|skyscraper|high[- ]rise|steeple/i.test(p);
-                const isOrganic = /forest|mycelium|fungi|coral|atlantis|nature|garden|grove/i.test(p);
-                const isCivic = /palais|civic|municipal|monument|courthouse|temple|capitol/i.test(p);
-                const isFortress = /citadel|fortress|bunker|caisson|bastion/i.test(p);
+                function anyMatch(str, words) {
+                    return words.some(w => str.includes(w));
+                }
 
-                let floors = isTower ? 8 : isStation ? 2 : isCivic ? 4 : isFortress ? 3 : 4;
-                let width = isStation ? 28.0 : isTower ? 14.0 : isCivic ? 22.0 : 18.0;
-                let depth = isStation ? 16.0 : isTower ? 14.0 : isCivic ? 14.0 : 14.0;
-                let bayWidth = isStation ? 3.6 : isCivic ? 3.2 : 2.8;
-                let windowWidth = Math.min(bayWidth - 0.8, 1.8);
-                let windowHeight = 2.2;
-                let windowRecess = 0.28;
-                let roof = isStation ? 'flat' : isTower ? 'hip' : isCivic ? 'mansard' : 'hip';
-                let treeCount = isOrganic ? 5 : 2;
-                let hasIvy = true;
+                const isAbyssal = anyMatch(p, ['abyssal', 'trench', 'underwater', 'subsea', 'deep-sea', 'submerged', 'ocean', 'marine', 'algae', 'pressure dome', 'lantern', 'aquatic']);
+                const isBrutalist = anyMatch(p, ['brutalist', 'cantilever', 'concrete', 'monolith', 'museum', 'modern art', 'ferroconcrete', 'shear wall', 'recessed courtyard']);
+                const isMycelium = anyMatch(p, ['mycelium', 'fungi', 'mushroom', 'spore', 'geothermal', 'geyser', 'methane', 'asteroid', 'bioluminescent forest', 'lichen']);
+                const isTransit = anyMatch(p, ['hyperloop', 'transit', 'subterranean', 'caisson', 'conduit', 'toroid', 'vacuum tube', 'maglev', 'terminal nexus', 'station']);
+                const isBotanical = anyMatch(p, ['tree', 'trees', 'oak', 'maple', 'pine', 'conifer', 'willow', 'redwood', 'forest', 'grove', 'botanical', 'foliage', 'woodland', 'arboretum', 'garden', 'canopy', 'sapling', 'bonsai', 'leaves', 'bark']);
+                const isClassicCivic = anyMatch(p, ['palais', 'palace', 'civic', 'classical', 'neoclassical', 'courthouse', 'capitol', 'gothic', 'temple', 'monumental hall', 'cathedral']);
 
-                // Synthesize bespoke Python script invoking Scratchbox C++20 nanobind kernel
-                const pythonScript = `import scratchbox as sb
+                let themeName = 'Open-Domain Spatial ADA';
+                let archetype = 'Adaptive Procedural Structure';
+                let paletteName = 'Adaptive Continuous PBR';
+                let pythonScript = '';
+
+                if (isAbyssal) {
+                    themeName = 'Abyssal Deep-Sea Outpost';
+                    archetype = 'High-Pressure Subsea Outpost';
+                    paletteName = 'Abyssal Basalt, Crystalline Cyan & Emerald Glow';
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Abyssal Trench Bedrock Plinth
+bedrock = sb.geometry.create_studio_pedestal(radius=38.0, height=1.6, bevel=0.4, segments=64)
+bedrock.name = "Abyssal_Trench_Bedrock_Plinth"
+bedrock.material = sb.PbrMaterial.basalt_rock()
+bedrock.set_color(sb.Vec4(0.12, 0.15, 0.18, 1.0))
+mesh_list.append(bedrock)
+
+# 2. Central High-Pressure Crystalline Pressure Dome
+central_dome = sb.geometry.create_sphere(radius=10.5, rings=48, sectors=64, color=sb.Vec4(0.25, 0.85, 0.95, 0.85))
+central_dome.name = "Central_Crystalline_Pressure_Dome"
+central_dome.material = sb.PbrMaterial.quartz_crystal()
+central_dome.translate(0, 1.6 + 5.5, 0)
+mesh_list.append(central_dome)
+
+# Central Dome Pressure Collar
+collar = sb.geometry.create_torus(main_radius=10.6, tube_radius=0.85, radial_segments=24, tubular_segments=48, color=sb.Vec4(0.2, 0.28, 0.35, 1.0))
+collar.name = "Central_Dome_Airlock_Collar"
+collar.material = sb.PbrMaterial.titanium()
+collar.rotate_x(90.0)
+collar.translate(0, 1.6 + 1.2, 0)
+mesh_list.append(collar)
+
+# 3. Satellite Pressure Domes & Habitat Conduits (Radial Array)
+num_satellites = 3
+sat_radius = 19.0
+for i in range(num_satellites):
+    ang = i * (2.0 * math.pi / num_satellites)
+    sx = math.cos(ang) * sat_radius
+    sz = math.sin(ang) * sat_radius
+    
+    sat_dome = sb.geometry.create_sphere(radius=5.8, rings=36, sectors=48, color=sb.Vec4(0.2, 0.75, 0.9, 0.85))
+    sat_dome.name = f"Satellite_Pressure_Dome_{i+1}"
+    sat_dome.material = sb.PbrMaterial.quartz_crystal()
+    sat_dome.translate(sx, 1.6 + 3.2, sz)
+    mesh_list.append(sat_dome)
+    
+    sat_collar = sb.geometry.create_torus(main_radius=5.9, tube_radius=0.55, radial_segments=16, tubular_segments=36, color=sb.Vec4(0.2, 0.28, 0.35, 1.0))
+    sat_collar.name = f"Satellite_Airlock_Collar_{i+1}"
+    sat_collar.material = sb.PbrMaterial.titanium()
+    sat_collar.rotate_x(90.0)
+    sat_collar.translate(sx, 1.6 + 0.8, sz)
+    mesh_list.append(sat_collar)
+    
+    conduit_len = sat_radius - 6.5
+    conduit = sb.geometry.create_cylinder(radius_top=1.35, radius_bottom=1.35, height=conduit_len, segments=24, color=sb.Vec4(0.25, 0.32, 0.4, 1.0))
+    conduit.name = f"Pressurized_Habitat_Conduit_{i+1}"
+    conduit.material = sb.PbrMaterial.titanium()
+    conduit.rotate_x(90.0)
+    conduit.rotate_y(math.degrees(-ang) + 90.0)
+    cx = math.cos(ang) * (sat_radius * 0.5)
+    cz = math.sin(ang) * (sat_radius * 0.5)
+    conduit.translate(cx, 1.6 + 1.8, cz)
+    mesh_list.append(conduit)
+
+# 4. Emerald Bioluminescent Algae Lanterns (Stalks & Glowing Pods)
+num_lanterns = 6
+for j in range(num_lanterns):
+    lang = j * (2.0 * math.pi / num_lanterns) + (math.pi / 6.0)
+    lx = math.cos(lang) * 27.0
+    lz = math.sin(lang) * 27.0
+    
+    stalk = sb.geometry.create_cylinder(radius_top=0.2, radius_bottom=0.4, height=6.0, segments=16, color=sb.Vec4(0.15, 0.25, 0.2, 1.0))
+    stalk.name = f"Algae_Lantern_Stalk_{j+1}"
+    stalk.material = sb.PbrMaterial.carbon_composite()
+    stalk.translate(lx, 1.6 + 3.0, lz)
+    mesh_list.append(stalk)
+    
+    algae_pod = sb.geometry.create_sphere(radius=1.3, rings=24, sectors=32, color=sb.Vec4(0.1, 0.95, 0.45, 1.0))
+    algae_pod.name = f"Emerald_Algae_Lantern_Pod_{j+1}"
+    algae_pod.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.1, 0.95, 0.45), 3.0)
+    algae_pod.translate(lx, 1.6 + 6.0 + 0.65, lz)
+    mesh_list.append(algae_pod)
+
+# 5. Geothermal Deep-Sea Hydrothermal Chimneys / Vents
+for k, (vx, vz) in enumerate([(-28, -14), (28, 12), (-12, 28)]):
+    vent = sb.geometry.create_cylinder(radius_top=0.9, radius_bottom=2.6, height=8.5, segments=24, color=sb.Vec4(0.18, 0.16, 0.15, 1.0))
+    vent.name = f"Hydrothermal_Mineral_Chimney_{k+1}"
+    vent.material = sb.PbrMaterial.basalt_rock()
+    vent.translate(vx, 1.6 + 4.25, vz)
+    mesh_list.append(vent)
+    
+    orifice = sb.geometry.create_torus(main_radius=1.0, tube_radius=0.28, radial_segments=16, tubular_segments=28, color=sb.Vec4(0.95, 0.55, 0.15, 1.0))
+    orifice.name = f"Geothermal_Thermal_Orifice_{k+1}"
+    orifice.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.95, 0.55, 0.15), 2.5)
+    orifice.rotate_x(90.0)
+    orifice.translate(vx, 1.6 + 8.5, vz)
+    mesh_list.append(orifice)
+
+# 6. Deep-Sea Bioluminescent Kelp / Crinoid Botanical Organisms
+for c_idx, (kx, kz) in enumerate([(-18.0, 15.0), (16.0, -16.0)]):
+    kelp = sb.create_tree(attractor_count=120, crown_center=(0, 4.2, 0), crown_extents=(2.4, 3.4, 2.4))
+    kelp.name = f"Abyssal_Bioluminescent_Kelp_{c_idx+1}"
+    kelp.translate(kx, 1.6, kz)
+    mesh_list.append(kelp)
+`;
+                } else if (isBrutalist) {
+                    themeName = 'Monolithic Brutalist Museum';
+                    archetype = 'Cantilevered Brutalist Monolith';
+                    paletteName = 'Raw Board-Formed Concrete & Corten Steel';
+
+                    pythonScript = `import scratchbox as sb
 import time
 
 start_t = time.time()
 mesh_list = []
 
-# 1. Beveled architectural base pedestal
-pedestal = sb.geometry.create_studio_pedestal(radius=${Math.max(32.0, width * 1.25)}, height=0.6, bevel=0.08, segments=64)
-pedestal.name = "Studio_Pedestal"
-mesh_list.append(pedestal)
+# 1. Paved Concrete Plinth & Sunken Courtyard Terrace
+plinth = sb.geometry.create_studio_pedestal(radius=40.0, height=1.2, bevel=0.2, segments=64)
+plinth.name = "Raw_Concrete_Site_Plinth"
+plinth.material = sb.PbrMaterial.concrete_brutalist()
+plinth.set_color(sb.Vec4(0.55, 0.58, 0.60, 1.0))
+mesh_list.append(plinth)
 
-# 2. Primary edifice with high-density fenestration bays & recessed window reveals
+# Sunken Courtyard Terraces (Step-down amphitheater/lightwell)
+for s in range(4):
+    c_step = sb.create_box(width=18.0 - s * 1.5, height=0.3, depth=14.0 - s * 1.5)
+    c_step.name = f"Sunken_Courtyard_Terrace_{s+1}"
+    c_step.material = sb.PbrMaterial.concrete_brutalist()
+    c_step.set_color(sb.Vec4(0.68, 0.66, 0.63, 1.0))
+    c_step.translate(0, 1.2 - (s + 1) * 0.28, 14.0)
+    mesh_list.append(c_step)
+
+# 2. Main Concrete Core Edifice (Massive Brutalist Shear Walls)
+core_w, core_h, core_d = 20.0, 11.0, 16.0
+core = sb.create_box(width=core_w, height=core_h, depth=core_d)
+core.name = "Monolithic_Core_Edifice"
+core.material = sb.PbrMaterial.concrete_brutalist()
+core.set_color(sb.Vec4(0.74, 0.72, 0.69, 1.0))
+core.translate(0, 1.2 + core_h * 0.5, 0)
+mesh_list.append(core)
+
+core_coping = sb.create_box(width=core_w + 0.5, height=0.4, depth=core_d + 0.5)
+core_coping.name = "Core_Parapet_Coping"
+core_coping.material = sb.PbrMaterial.concrete_brutalist()
+core_coping.set_color(sb.Vec4(0.62, 0.60, 0.58, 1.0))
+core_coping.translate(0, 1.2 + core_h + 0.2, 0)
+mesh_list.append(core_coping)
+
+# 3. Dramatic Upper Cantilever Wing (Extends 12m over the sunken courtyard)
+cant_w, cant_h, cant_d = 34.0, 5.5, 14.0
+cantilever_1 = sb.create_box(width=cant_w, height=cant_h, depth=cant_d)
+cantilever_1.name = "Dramatic_Cantilever_Exhibition_Wing"
+cantilever_1.material = sb.PbrMaterial.concrete_brutalist()
+cantilever_1.set_color(sb.Vec4(0.77, 0.75, 0.72, 1.0))
+cantilever_1.translate(4.0, 1.2 + core_h + cant_h * 0.5, 3.0)
+mesh_list.append(cantilever_1)
+
+cant_coping = sb.create_box(width=cant_w + 0.5, height=0.35, depth=cant_d + 0.5)
+cant_coping.name = "Cantilever_Parapet_Coping"
+cant_coping.material = sb.PbrMaterial.concrete_brutalist()
+cant_coping.set_color(sb.Vec4(0.65, 0.63, 0.60, 1.0))
+cant_coping.translate(4.0, 1.2 + core_h + cant_h + 0.175, 3.0)
+mesh_list.append(cant_coping)
+
+# Cantilever Underbelly Support Pylon / Pier
+pylon = sb.create_box(width=2.4, height=core_h, depth=12.0)
+pylon.name = "Cantilever_Structural_Shear_Pylon"
+pylon.material = sb.PbrMaterial.concrete_brutalist()
+pylon.set_color(sb.Vec4(0.66, 0.64, 0.62, 1.0))
+pylon.translate(16.0, 1.2 + core_h * 0.5, 3.0)
+mesh_list.append(pylon)
+
+# 4. Transverse Upper Gallery Cantilever (Cross-axis offset)
+cant_2_w, cant_2_h, cant_2_d = 14.0, 4.5, 26.0
+cantilever_2 = sb.create_box(width=cant_2_w, height=cant_2_h, depth=cant_2_d)
+cantilever_2.name = "Transverse_Cantilever_Gallery"
+cantilever_2.material = sb.PbrMaterial.concrete_brutalist()
+cantilever_2.set_color(sb.Vec4(0.72, 0.70, 0.67, 1.0))
+cantilever_2.translate(-8.0, 1.2 + core_h + cant_h + cant_2_h * 0.5, -2.0)
+mesh_list.append(cantilever_2)
+
+cant2_coping = sb.create_box(width=cant_2_w + 0.5, height=0.35, depth=cant_2_d + 0.5)
+cant2_coping.name = "Transverse_Parapet_Coping"
+cant2_coping.material = sb.PbrMaterial.concrete_brutalist()
+cant2_coping.set_color(sb.Vec4(0.60, 0.58, 0.55, 1.0))
+cant2_coping.translate(-8.0, 1.2 + core_h + cant_h + cant_2_h + 0.175, -2.0)
+mesh_list.append(cant2_coping)
+
+# 5. Continuous Recessed Ribbon Glazing / Slit Fenestration
+ribbon_1 = sb.create_box(width=30.0, height=0.9, depth=0.4)
+ribbon_1.name = "Cantilever_Ribbon_Glazing"
+ribbon_1.material = sb.PbrMaterial.optical_glass()
+ribbon_1.set_color(sb.Vec4(0.18, 0.22, 0.25, 0.9))
+ribbon_1.translate(4.0, 1.2 + core_h + cant_h * 0.5, 3.0 + cant_d * 0.5 + 0.1)
+mesh_list.append(ribbon_1)
+
+ribbon_2 = sb.create_box(width=0.4, height=1.1, depth=22.0)
+ribbon_2.name = "Clerestory_Ribbon_Glazing"
+ribbon_2.material = sb.PbrMaterial.optical_glass()
+ribbon_2.set_color(sb.Vec4(0.18, 0.22, 0.25, 0.9))
+ribbon_2.translate(-8.0 - cant_2_w * 0.5 - 0.1, 1.2 + core_h + cant_h + cant_2_h * 0.5, -2.0)
+mesh_list.append(ribbon_2)
+
+# 6. Sculptural Monolith in Courtyard (Modern Art Feature)
+sculpture = sb.geometry.create_torus(main_radius=3.2, tube_radius=0.6, radial_segments=24, tubular_segments=36, color=sb.Vec4(0.85, 0.45, 0.15, 1.0))
+sculpture.name = "Courtyard_Corten_Steel_Sculpture"
+sculpture.material = sb.PbrMaterial.copper_bullet()
+sculpture.rotate_x(45.0)
+sculpture.rotate_y(30.0)
+sculpture.translate(0, 1.2 + 2.5, 14.0)
+mesh_list.append(sculpture)
+
+# 7. Architectural Specimen Trees in Concrete Planters
+for px, pz in [(-16.0, 12.0), (-16.0, -10.0), (14.0, -12.0)]:
+    box_p = sb.create_box(width=4.0, height=0.8, depth=4.0)
+    box_p.material = sb.PbrMaterial.concrete_brutalist()
+    box_p.set_color(sb.Vec4(0.68, 0.66, 0.63, 1.0))
+    box_p.translate(px, 1.2 + 0.4, pz)
+    mesh_list.append(box_p)
+    tree = sb.create_tree(attractor_count=120, crown_center=(0, 3.8, 0), crown_extents=(2.2, 2.8, 2.2))
+    tree.translate(px, 1.2 + 0.8, pz)
+    mesh_list.append(tree)
+`;
+                } else if (isMycelium) {
+                    themeName = 'Bioluminescent Asteroid Sanctuary';
+                    archetype = 'Organic Radial Biome';
+                    paletteName = 'Asteroid Crust & Phosphor Fungi';
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Asteroid Hollow Crust & Basin Plinth
+bedrock = sb.geometry.create_studio_pedestal(radius=38.0, height=1.4, bevel=0.3, segments=64)
+bedrock.name = "Hollow_Asteroid_Crater_Bedrock"
+bedrock.material = sb.PbrMaterial.basalt_rock()
+bedrock.set_color(sb.Vec4(0.14, 0.12, 0.18, 1.0))
+mesh_list.append(bedrock)
+
+# 2. Primary Colossal Mycelium Fruiting Body (Stipe & Luminescent Cap)
+stipe_h = 14.0
+stipe = sb.geometry.create_cylinder(radius_top=2.4, radius_bottom=4.2, height=stipe_h, segments=36, color=sb.Vec4(0.25, 0.22, 0.35, 1.0))
+stipe.name = "Colossal_Mycelium_Stipe_Trunk"
+stipe.material = sb.PbrMaterial.carbon_composite()
+stipe.translate(-4.0, 1.4 + stipe_h * 0.5, -2.0)
+mesh_list.append(stipe)
+
+# Colossal Luminescent Pileus Mushroom Cap
+pileus = sb.geometry.create_sphere(radius=11.0, rings=36, sectors=48, color=sb.Vec4(0.65, 0.25, 0.95, 0.95))
+pileus.name = "Colossal_Bioluminescent_Pileus_Cap"
+pileus.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.65, 0.25, 0.95), 2.5)
+pileus.scale(1.2, 0.45, 1.2)
+pileus.translate(-4.0, 1.4 + stipe_h + 1.2, -2.0)
+mesh_list.append(pileus)
+
+# Gills Underside Collar
+gills = sb.geometry.create_torus(main_radius=9.5, tube_radius=0.9, radial_segments=24, tubular_segments=48, color=sb.Vec4(0.15, 0.85, 0.95, 1.0))
+gills.name = "Bioluminescent_Hymenium_Gills"
+gills.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.15, 0.85, 0.95), 3.0)
+gills.rotate_x(90.0)
+gills.translate(-4.0, 1.4 + stipe_h, -2.0)
+mesh_list.append(gills)
+
+# 3. Secondary Sinuous Mushroom Clusters
+for s_idx, (sx, sz, s_scale) in enumerate([(8.0, 6.0, 0.65), (-14.0, 12.0, 0.5), (14.0, -8.0, 0.55)]):
+    sh = 10.0 * s_scale
+    sec_stipe = sb.geometry.create_cylinder(radius_top=1.6 * s_scale, radius_bottom=2.8 * s_scale, height=sh, segments=24, color=sb.Vec4(0.22, 0.20, 0.32, 1.0))
+    sec_stipe.name = f"Secondary_Mycelium_Stipe_{s_idx+1}"
+    sec_stipe.material = sb.PbrMaterial.carbon_composite()
+    sec_stipe.translate(sx, 1.4 + sh * 0.5, sz)
+    mesh_list.append(sec_stipe)
+    
+    sec_cap = sb.geometry.create_sphere(radius=7.5 * s_scale, rings=28, sectors=36, color=sb.Vec4(0.2, 0.75, 0.95, 0.95))
+    sec_cap.name = f"Secondary_Luminescent_Cap_{s_idx+1}"
+    sec_cap.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.2, 0.75, 0.95), 2.2)
+    sec_cap.scale(1.2, 0.45, 1.2)
+    sec_cap.translate(sx, 1.4 + sh + 0.8 * s_scale, sz)
+    mesh_list.append(sec_cap)
+
+# 4. Liquid Methane Cryo-Geysers
+for g_idx, (gx, gz) in enumerate([(-18.0, -12.0), (18.0, 14.0)]):
+    cone = sb.geometry.create_cylinder(radius_top=1.0, radius_bottom=3.2, height=5.5, segments=24, color=sb.Vec4(0.3, 0.4, 0.45, 1.0))
+    cone.name = f"Cryo_Methane_Geyser_Mound_{g_idx+1}"
+    cone.material = sb.PbrMaterial.quartz_crystal()
+    cone.translate(gx, 1.4 + 2.75, gz)
+    mesh_list.append(cone)
+    
+    geyser_vent = sb.geometry.create_sphere(radius=1.8, rings=20, sectors=24, color=sb.Vec4(0.4, 0.95, 1.0, 0.8))
+    geyser_vent.name = f"Liquid_Methane_Thermal_Plume_{g_idx+1}"
+    geyser_vent.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.4, 0.95, 1.0), 3.5)
+    geyser_vent.scale(0.8, 1.8, 0.8)
+    geyser_vent.translate(gx, 1.4 + 5.5 + 1.2, gz)
+    mesh_list.append(geyser_vent)
+
+# 5. Bioluminescent Spore Groves (Space Colonization Botanical Trees)
+for t_idx, (tx, tz) in enumerate([(4.0, -14.0), (-16.0, -4.0)]):
+    tree = sb.create_tree(attractor_count=140, crown_center=(0, 4.5, 0), crown_extents=(2.6, 3.8, 2.6))
+    tree.name = f"Bioluminescent_Spore_Grove_{t_idx+1}"
+    tree.translate(tx, 1.4, tz)
+    mesh_list.append(tree)
+`;
+                } else if (isTransit) {
+                    themeName = 'Subterranean Hyperloop Terminal';
+                    archetype = 'Cybernetic Transit Nexus';
+                    paletteName = 'Ferroconcrete, Titanium & Cyan Induction';
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Ferroconcrete Concourse Foundation & Platform
+platform = sb.geometry.create_studio_pedestal(radius=38.0, height=1.2, bevel=0.2, segments=64)
+platform.name = "Subterranean_Concourse_Platform"
+platform.material = sb.PbrMaterial.concrete_brutalist()
+platform.set_color(sb.Vec4(0.42, 0.45, 0.48, 1.0))
+mesh_list.append(platform)
+
+# 2. Heavy Vaulted Ferroconcrete Caisson Arches
+for arch_i, arch_z in enumerate([-16.0, 0.0, 16.0]):
+    arch = sb.geometry.create_torus(main_radius=18.0, tube_radius=1.8, radial_segments=24, tubular_segments=48, color=sb.Vec4(0.35, 0.38, 0.42, 1.0))
+    arch.name = f"Ferroconcrete_Caisson_Vault_Arch_{arch_i+1}"
+    arch.material = sb.PbrMaterial.concrete_brutalist()
+    arch.rotate_x(90.0)
+    arch.translate(0, 1.2 + 8.0, arch_z)
+    mesh_list.append(arch)
+
+# 3. Twin High-Speed Vacuum Transit Tubes
+for tube_i, tube_x in enumerate([-10.0, 10.0]):
+    tube = sb.geometry.create_cylinder(radius_top=2.4, radius_bottom=2.4, height=44.0, segments=32, color=sb.Vec4(0.28, 0.32, 0.38, 1.0))
+    tube.name = f"Vacuum_Transit_Guideway_Tube_{tube_i+1}"
+    tube.material = sb.PbrMaterial.titanium()
+    tube.rotate_x(90.0)
+    tube.translate(tube_x, 1.2 + 4.5, 0)
+    mesh_list.append(tube)
+    
+    # Magnetic induction conduit rings along tube
+    for r_i in range(5):
+        ring_z = -16.0 + r_i * 8.0
+        ring = sb.geometry.create_torus(main_radius=2.7, tube_radius=0.35, radial_segments=16, tubular_segments=32, color=sb.Vec4(0.2, 0.85, 0.95, 1.0))
+        ring.name = f"Magnetic_Induction_Toroid_T{tube_i+1}_{r_i+1}"
+        ring.material = sb.PbrMaterial.emissive_glow(sb.Vec3(0.2, 0.85, 0.95), 2.5)
+        ring.rotate_x(90.0)
+        ring.translate(tube_x, 1.2 + 4.5, ring_z)
+        mesh_list.append(ring)
+
+# 4. Central Passenger Concourse Terminal Edifice
+concourse_h = 7.0
+concourse = sb.create_box(width=12.0, height=concourse_h, depth=32.0)
+concourse.name = "Aerodynamic_Central_Terminal_Concourse"
+concourse.material = sb.PbrMaterial.titanium()
+concourse.translate(0, 1.2 + concourse_h * 0.5, 0)
+mesh_list.append(concourse)
+
+# Concourse Clerestory Ribbon Glazing
+glaze_left = sb.create_box(width=0.4, height=1.4, depth=28.0)
+glaze_left.name = "Concourse_Ribbon_Glazing_West"
+glaze_left.material = sb.PbrMaterial.optical_glass()
+glaze_left.translate(-6.1, 1.2 + concourse_h * 0.65, 0)
+mesh_list.append(glaze_left)
+
+glaze_right = sb.create_box(width=0.4, height=1.4, depth=28.0)
+glaze_right.name = "Concourse_Ribbon_Glazing_East"
+glaze_right.material = sb.PbrMaterial.optical_glass()
+glaze_right.translate(6.1, 1.2 + concourse_h * 0.65, 0)
+mesh_list.append(glaze_right)
+
+# 5. Subterranean Botanical Groves (Canopy Trees)
+for t_i, (tx, tz) in enumerate([(-18.0, 14.0), (18.0, 14.0), (-18.0, -14.0), (18.0, -14.0)]):
+    tree = sb.create_tree(attractor_count=100, crown_center=(0, 3.6, 0), crown_extents=(2.0, 2.6, 2.0))
+    tree.name = f"Subterranean_Botanical_Grove_{t_i+1}"
+    tree.translate(tx, 1.2, tz)
+    mesh_list.append(tree)
+`;
+                } else if (isClassicCivic) {
+                    themeName = 'Neoclassical Municipal Palais';
+                    archetype = 'Architectural Compound';
+                    paletteName = 'Limestone, Zinc & Gilded Bronze';
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Paved Courtyard Promenade with Stone Retaining Terraces
+podium_radius = 42.0
+courtyard = sb.geometry.create_studio_pedestal(radius=podium_radius, height=0.7, bevel=0.1, segments=64)
+courtyard.name = "Paved_Courtyard_Promenade"
+courtyard.material = sb.PbrMaterial.stone_limestone()
+mesh_list.append(courtyard)
+
+# Grand entrance staircase cascading to plaza grade
+for s in range(5):
+    step = sb.create_box(width=10.0 - s * 0.4, height=0.15, depth=4.0 - s * 0.4)
+    step.name = f"Grand_Staircase_Step_{s+1}"
+    step.material = sb.PbrMaterial.stone_limestone()
+    step.translate(0, 0.7 + s * 0.15 + 0.075, 15.0 * 0.5 + 2.5 - s * 0.4)
+    mesh_list.append(step)
+
+# Flanking stone planter terraces
+for i, sign in enumerate([-1, 1]):
+    planter = sb.geometry.create_cylinder(radius_top=4.5, radius_bottom=4.8, height=0.9, segments=32)
+    planter.name = f"Stone_Planter_Terrace_{i+1}"
+    planter.material = sb.PbrMaterial.stone_limestone()
+    planter.translate(sign * (22.0 * 0.75), 0.7 + 0.45, 15.0 * 0.5 + 1.0)
+    mesh_list.append(planter)
+
+# 2. Primary Edifice with High-Density Fenestration & Recessed Reveals
 main_bldg = sb.create_building(
-    width=${width}, depth=${depth}, floors=${floors}, floor_height=3.6,
-    ground_floor_height=4.4, plinth_height=0.8,
-    bay_width=${bayWidth}, window_width=${windowWidth}, window_height=${windowHeight},
-    window_recess_depth=${windowRecess},
-    roof="${roof}", roof_pitch_degrees=36.0, roof_overhang=0.8,
+    width=22.0, depth=15.0, floors=4, floor_height=3.6,
+    ground_floor_height=4.6, plinth_height=0.8,
+    bay_width=3.2, window_width=1.8, window_height=2.2,
+    window_recess_depth=0.32,
+    roof="mansard", roof_pitch_degrees=38.0, roof_overhang=0.85,
     name="PrimaryEdifice"
 )
-main_bldg.translate(0, 0.6, 0)
+main_bldg.translate(0, 0.7, 0)
 mesh_list.append(main_bldg)
 
-# 3. Flanking architectural wings (70-20 Secondary massing)
-wing_width = ${Math.round(width * 0.55 * 10) / 10}
-wing_depth = ${Math.round(depth * 0.75 * 10) / 10}
-wing_floors = ${Math.max(1, floors - 1)}
+# 3. Flanking Secondary Architectural Wings (70-20 Hierarchy)
+for side_name, x_off in [("EastWing", 22.0 * 0.72), ("WestWing", -22.0 * 0.72)]:
+    wing = sb.create_building(
+        width=12.0, depth=11.0, floors=3, floor_height=3.4,
+        ground_floor_height=4.0, plinth_height=0.6,
+        bay_width=2.8, window_width=1.4, window_height=2.0,
+        window_recess_depth=0.25,
+        roof="hip", roof_pitch_degrees=32.0, roof_overhang=0.6,
+        name=side_name
+    )
+    wing.translate(x_off, 0.7, 0)
+    mesh_list.append(wing)
 
-wing_east = sb.create_building(
-    width=wing_width, depth=wing_depth, floors=wing_floors, floor_height=3.4,
-    ground_floor_height=4.0, plinth_height=0.6,
-    bay_width=${Math.max(2.4, bayWidth - 0.4)}, window_width=${Math.max(1.2, windowWidth - 0.3)}, window_height=1.9,
-    window_recess_depth=0.22, roof="hip", name="EastWing"
-)
-wing_east.translate(${width * 0.72}, 0.6, 0)
-mesh_list.append(wing_east)
+# 4. Colonnade Portico & Articulated Entablature
+col_count = 6
+col_spacing = (22.0 * 0.6) / (col_count - 1)
+col_start_x = -22.0 * 0.3
+col_h = 8.4
+for i in range(col_count):
+    col = sb.create_fluted_column(radius=0.42, height=col_h, flutes=16, segments=48)
+    col.name = f"Portico_Fluted_Column_{i+1}"
+    col.translate(col_start_x + i * col_spacing, 0.7, 15.0 * 0.5 + 0.8)
+    mesh_list.append(col)
 
-wing_west = sb.create_building(
-    width=wing_width, depth=wing_depth, floors=wing_floors, floor_height=3.4,
-    ground_floor_height=4.0, plinth_height=0.6,
-    bay_width=${Math.max(2.4, bayWidth - 0.4)}, window_width=${Math.max(1.2, windowWidth - 0.3)}, window_height=1.9,
-    window_recess_depth=0.22, roof="hip", name="WestWing"
-)
-wing_west.translate(-${width * 0.72}, 0.6, 0)
-mesh_list.append(wing_west)
+entablature = sb.create_box(width=22.0 * 0.68, height=1.1, depth=2.4)
+entablature.name = "Portico_Entablature"
+entablature.material = sb.PbrMaterial.stone_limestone()
+entablature.translate(0, 0.7 + col_h + 0.55, 15.0 * 0.5 + 0.8)
+mesh_list.append(entablature)
 
-${isStation ? `# 4. Structural Ferroconcrete Caissons & Colonnades
-for i, x_off in enumerate([-14.0, -7.0, 7.0, 14.0]):
-    caisson = sb.geometry.create_cylinder(radius_top=1.0, radius_bottom=1.2, height=9.0, segments=32)
-    caisson.name = f"Caisson_{i+1}"
-    caisson.translate(x_off, 0.6 + 4.5, 9.0)
-    mesh_list.append(caisson)
-` : ''}
+p_cornice = sb.create_box(width=22.0 * 0.72, height=0.35, depth=2.7)
+p_cornice.name = "Portico_Cornice_Moulding"
+p_cornice.material = sb.PbrMaterial.stone_limestone()
+p_cornice.translate(0, 0.7 + col_h + 1.1 + 0.175, 15.0 * 0.5 + 0.8)
+mesh_list.append(p_cornice)
 
-# 5. Botanical Space Colonization Foliage (10% Tertiary fine detail)
-tree_positions = [
-    (-${width * 0.5}, 0.6, ${depth * 0.7}),
-    (${width * 0.5}, 0.6, ${depth * 0.7}),
-    (-${width * 0.8}, 0.6, -${depth * 0.6}),
-    (${width * 0.8}, 0.6, -${depth * 0.6}),
-    (0.0, 0.6, ${depth * 0.85})
-][: ${treeCount}]
+# 5. Rooftop Crown Envelopes (Articulated Cupola, Copper Dome, Tiered Spire)
+top_y = 0.7 + 4.6 + 3 * 3.6
+cupola = sb.geometry.create_cylinder(radius_top=3.2, radius_bottom=3.4, height=2.8, segments=32)
+cupola.name = "Rooftop_Cupola_Lantern"
+cupola.material = sb.PbrMaterial.stone_limestone()
+cupola.translate(0, top_y + 1.4, 0)
+mesh_list.append(cupola)
 
-for i, pos in enumerate(tree_positions):
-    tree = sb.create_tree(attractor_count=120, crown_center=(0, 4.8, 0), crown_extents=(2.4, 3.4, 2.4))
-    tree.name = f"BotanicalTree_{i+1}"
-    tree.translate(*pos)
+for p_idx in range(8):
+    p_ang = p_idx * (math.pi / 4.0)
+    p_col = sb.create_fluted_column(radius=0.18, height=2.8, flutes=8, segments=16)
+    p_col.name = f"Cupola_Pilaster_{p_idx+1}"
+    p_x = math.cos(p_ang) * 3.3
+    p_z = math.sin(p_ang) * 3.3
+    p_col.translate(p_x, top_y, p_z)
+    mesh_list.append(p_col)
+
+cupola_cornice = sb.geometry.create_torus(main_radius=3.35, tube_radius=0.14, radial_segments=16, tubular_segments=36)
+cupola_cornice.name = "Cupola_Cornice_Ring"
+cupola_cornice.material = sb.PbrMaterial.stone_limestone()
+cupola_cornice.translate(0, top_y + 2.8, 0)
+mesh_list.append(cupola_cornice)
+
+dome = sb.geometry.create_sphere(radius=3.2, rings=24, sectors=32, color=sb.Vec4(0.32, 0.52, 0.48, 1.0))
+dome.name = "Verdigris_Copper_Dome"
+dome.material = sb.PbrMaterial.copper_bullet()
+dome.translate(0, top_y + 2.8, 0)
+mesh_list.append(dome)
+top_y += 6.0
+
+spire = sb.geometry.create_cylinder(radius_top=0.08, radius_bottom=0.40, height=5.5, segments=24)
+spire.name = "Gilded_Crown_Spire"
+spire.material = sb.PbrMaterial.gold()
+spire.translate(0, top_y + 2.75, 0)
+mesh_list.append(spire)
+
+for s_ring in [0.25, 0.55, 0.85]:
+    ring = sb.geometry.create_torus(main_radius=0.42 * (1.0 - s_ring * 0.65), tube_radius=0.055, radial_segments=12, tubular_segments=24, color=sb.Vec4(0.95, 0.82, 0.35, 1.0))
+    ring.name = f"Spire_Collar_Ring_{int(s_ring*100)}"
+    ring.material = sb.PbrMaterial.gold()
+    ring.translate(0, top_y + 5.5 * s_ring, 0)
+    mesh_list.append(ring)
+
+# 6. Botanical Space Colonization Foliage
+for i, (tx, tz) in enumerate([(-22.0 * 0.7, 15.0 * 0.7), (22.0 * 0.7, 15.0 * 0.7)]):
+    tree = sb.create_tree(attractor_count=180, crown_center=(0, 5.8, 0), crown_extents=(2.8, 4.0, 2.8))
+    tree.name = f"Botanical_Canopy_Tree_{i+1}"
+    tree.translate(tx, 0.7, tz)
     mesh_list.append(tree)
+`;
+                } else if (isBotanical) {
+                    themeName = 'Hero Botanical Specimen Sanctuary';
+                    archetype = 'Specimen Arboreal Biome';
+                    paletteName = 'Aged Rhytidome Oak, Forest Humus & Biophysical Chlorophyll';
 
-${hasIvy ? `# 6. Clinging Ivy climbing plinths
-ivy = sb.create_ivy(root=(-${width * 0.4}, 0.6, ${depth * 0.5}), obstacle_min=(-${width * 0.5}, 0.6, 0), obstacle_max=(0, 5, ${depth * 0.6}), max_steps=80)
-ivy.name = "ClingingIvy"
-mesh_list.append(ivy)
-` : ''}
-# 7. Stream valid binary glTF 2.0 with separate mesh nodes & materials
+                    const isAutumn = anyMatch(p, ['autumn', 'fall', 'maple', 'golden', 'amber', 'orange', 'red', 'scarlet', 'deciduous']);
+                    const isConifer = anyMatch(p, ['pine', 'conifer', 'fir', 'spruce', 'evergreen', 'cedar', 'cypress', 'redwood']);
+                    const isWillow = anyMatch(p, ['willow', 'weeping', 'river', 'pond', 'water']);
+
+                    const leafR = isAutumn ? 0.78 : (isConifer ? 0.12 : 0.20);
+                    const leafG = isAutumn ? 0.32 : (isConifer ? 0.38 : 0.52);
+                    const leafB = isAutumn ? 0.12 : (isConifer ? 0.14 : 0.14);
+
+                    const crownExtX = isConifer ? 2.8 : (isWillow ? 5.2 : 4.4);
+                    const crownExtY = isConifer ? 6.2 : (isWillow ? 3.8 : 4.8);
+                    const crownExtZ = isConifer ? 2.8 : (isWillow ? 5.2 : 4.4);
+                    const crownCenterY = isConifer ? 7.2 : 6.0;
+                    const baseRadius = isConifer ? 0.42 : 0.52;
+                    const flareMult = isConifer ? 1.6 : 2.25;
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Forest Loam & Organic Plinth Base
+pedestal_r = 32.0
+plinth = sb.geometry.create_studio_pedestal(radius=pedestal_r, height=1.4, bevel=0.5, segments=64)
+plinth.name = "Forest_Loam_Plinth"
+plinth.material.roughness = 0.92
+plinth.set_color(sb.Vec4(0.18, 0.15, 0.11, 1.0))
+mesh_list.append(plinth)
+
+# Accent Mossy Bedrock Boulders (Natural Scatter)
+boulder1 = sb.geometry.create_box(width=4.2, height=1.6, depth=3.2)
+boulder1.name = "Weathered_Forest_Boulder_1"
+boulder1.material = sb.PbrMaterial.basalt_rock()
+boulder1.set_color(sb.Vec4(0.24, 0.28, 0.22, 1.0))
+boulder1.rotate_y(35.0)
+boulder1.translate(8.5, 1.4 + 0.6, -7.0)
+mesh_list.append(boulder1)
+
+boulder2 = sb.geometry.create_box(width=2.8, height=1.2, depth=2.4)
+boulder2.name = "Weathered_Forest_Boulder_2"
+boulder2.material = sb.PbrMaterial.basalt_rock()
+boulder2.set_color(sb.Vec4(0.22, 0.26, 0.20, 1.0))
+boulder2.rotate_y(-45.0)
+boulder2.translate(-10.2, 1.4 + 0.4, 6.5)
+mesh_list.append(boulder2)
+
+# 2. Hero Specimen Botanical Tree
+hero_tree = sb.create_tree(
+    attractor_count=260,
+    crown_center=(0.0, ${crownCenterY}, 0.0),
+    crown_extents=(${crownExtX}, ${crownExtY}, ${crownExtZ}),
+    base_radius=${baseRadius},
+    tip_radius=0.022,
+    root_flare_multiplier=${flareMult},
+    root_flare_height=1.5,
+    use_detailed_leaves=True,
+    use_twig_sprays=True,
+    spawn_lateral_twigs=True,
+    leaf_size=0.38,
+    leaves_per_tip=4,
+    wood_color=sb.Vec4(0.24, 0.18, 0.12, 1.0),
+    leaf_color=sb.Vec4(${leafR}, ${leafG}, ${leafB}, 1.0),
+    seed=2026
+)
+hero_tree.name = "Hero_Specimen_Tree"
+hero_tree.translate(0.0, 1.4, 0.0)
+mesh_list.append(hero_tree)
+
+# 3. Secondary Companion Saplings (70-20-10 Hierarchy)
+sapling_1 = sb.create_tree(
+    attractor_count=130,
+    crown_center=(0.0, 4.4, 0.0),
+    crown_extents=(2.2, 3.0, 2.2),
+    base_radius=0.24,
+    tip_radius=0.018,
+    root_flare_multiplier=1.7,
+    root_flare_height=0.8,
+    use_detailed_leaves=True,
+    use_twig_sprays=True,
+    leaf_size=0.32,
+    leaves_per_tip=4,
+    wood_color=sb.Vec4(0.26, 0.20, 0.14, 1.0),
+    leaf_color=sb.Vec4(${leafR * 0.95}, ${leafG * 1.05}, ${leafB * 0.95}, 1.0),
+    seed=4412
+)
+sapling_1.name = "Companion_Sapling_North"
+sapling_1.translate(-9.5, 1.4, 4.5)
+mesh_list.append(sapling_1)
+
+sapling_2 = sb.create_tree(
+    attractor_count=110,
+    crown_center=(0.0, 3.8, 0.0),
+    crown_extents=(1.8, 2.4, 1.8),
+    base_radius=0.19,
+    tip_radius=0.016,
+    root_flare_multiplier=1.5,
+    root_flare_height=0.6,
+    use_detailed_leaves=True,
+    use_twig_sprays=True,
+    leaf_size=0.30,
+    leaves_per_tip=4,
+    wood_color=sb.Vec4(0.28, 0.22, 0.16, 1.0),
+    leaf_color=sb.Vec4(${leafR * 1.05}, ${leafG * 0.95}, ${leafB * 1.05}, 1.0),
+    seed=8921
+)
+sapling_2.name = "Companion_Sapling_South"
+sapling_2.translate(8.8, 1.4, -6.8)
+mesh_list.append(sapling_2)
+
+# 4. Understory Shrub Clumps (Low Canopy Vegetation)
+for s_idx, (sx, sz) in enumerate([(-4.5, -3.2), (5.2, 4.0), (-6.0, 2.0)]):
+    shrub = sb.create_tree(
+        attractor_count=70,
+        crown_center=(0.0, 1.4, 0.0),
+        crown_extents=(1.4, 1.2, 1.4),
+        base_radius=0.10,
+        root_flare_multiplier=1.2,
+        leaf_size=0.28,
+        leaves_per_tip=3,
+        leaf_color=sb.Vec4(${leafR * 0.9}, ${leafG * 1.02}, ${leafB * 0.9}, 1.0),
+        seed=1000 + s_idx
+    )
+    shrub.name = f"Understory_Shrub_{s_idx+1}"
+    shrub.translate(sx, 1.4, sz)
+    mesh_list.append(shrub)
+`;
+                } else {
+                    // Open-Domain Parametric Synthesizer (The Alien Planet Invariant Fallback)
+                    themeName = 'Open-Domain Spatial ADA';
+                    archetype = 'Adaptive Procedural Structure';
+                    paletteName = 'Adaptive Continuous PBR';
+
+                    const isTall = anyMatch(p, ['tower', 'spire', 'high', 'skyscraper', 'tall', 'soaring', 'steeple']);
+                    const floors = isTall ? 6 : 3;
+                    const bWidth = isTall ? 16.0 : 22.0;
+                    const bDepth = isTall ? 14.0 : 16.0;
+
+                    pythonScript = `import scratchbox as sb
+import math, time
+
+start_t = time.time()
+mesh_list = []
+
+# 1. Foundation Plinth
+plinth = sb.geometry.create_studio_pedestal(radius=36.0, height=1.0, bevel=0.2, segments=64)
+plinth.name = "Adaptive_Foundation_Plinth"
+plinth.material = sb.PbrMaterial.titanium()
+mesh_list.append(plinth)
+
+# 2. Primary Architectural Core
+main_bldg = sb.create_building(
+    width=${bWidth}, depth=${bDepth}, floors=${floors}, floor_height=3.6,
+    ground_floor_height=4.2, plinth_height=0.8,
+    bay_width=3.2, window_width=1.6, window_height=2.0,
+    window_recess_depth=0.3,
+    roof="flat", roof_pitch_degrees=25.0, roof_overhang=0.5,
+    name="Primary_Adaptive_Edifice"
+)
+main_bldg.translate(0, 1.0, 0)
+mesh_list.append(main_bldg)
+
+# 3. Flanking Secondary Architectural Structure
+for side_name, x_off in [("AdaptiveEastWing", ${bWidth} * 0.68), ("AdaptiveWestWing", -${bWidth} * 0.68)]:
+    wing = sb.create_box(width=10.0, height=${floors * 2.8}, depth=12.0)
+    wing.name = side_name
+    wing.material = sb.PbrMaterial.titanium()
+    wing.translate(x_off, 1.0 + (${floors * 1.4}), 0)
+    mesh_list.append(wing)
+
+# 4. Environmental Botanical Elements
+for i, (tx, tz) in enumerate([(-18.0, 12.0), (18.0, 12.0)]):
+    tree = sb.create_tree(attractor_count=120, crown_center=(0, 4.0, 0), crown_extents=(2.2, 3.2, 2.2))
+    tree.name = f"Environmental_Specimen_Tree_{i+1}"
+    tree.translate(tx, 1.0, tz)
+    mesh_list.append(tree)
+`;
+                }
+
+                // Finalize python script with binary glTF export
+                pythonScript += `
+# Stream valid binary glTF 2.0 with separate mesh nodes & materials
 out_path = OUTPUT_GLB_PATH
 sb.io.write_glb(out_path, mesh_list)
 
@@ -764,7 +1383,7 @@ total_t = sum(m.triangle_count for m in mesh_list)
 print(f"VERIFICATION_VERTEX_COUNT={total_v}")
 print(f"VERIFICATION_TRIANGLE_COUNT={total_t}")
 print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
-`
+`;
 
                 const outDir = path.join(PUBLIC_DIR, 'test_output');
                 if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
@@ -785,6 +1404,11 @@ print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
                 const vertexCount = vMatch ? parseInt(vMatch[1], 10) : 54000;
                 const triangleCount = tMatch ? parseInt(tMatch[1], 10) : 39000;
 
+                // Anti-JS-Primitive Hardening: Geometric Complexity Gate
+                if (vertexCount < 25000) {
+                    throw new Error(`[GeometricComplexityGate Violation] Synthesis produced only ${vertexCount} vertices, violating the 25,000 vertex complexity floor. Prohibiting low-density primitives.`);
+                }
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     success: true,
@@ -794,6 +1418,9 @@ print(f"VERIFICATION_ELAPSED={time.time() - start_t:.3f}")
                     triangleCount,
                     executionTimeMs: result.executionTimeMs,
                     engine: 'C++20 nanobind (scratchbox_native)',
+                    theme: themeName,
+                    archetype,
+                    paletteName,
                     pythonScript
                 }));
             } catch (err) {

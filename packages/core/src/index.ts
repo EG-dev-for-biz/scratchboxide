@@ -368,6 +368,16 @@ export type {
     Adaptive3DSceneExecutionResult
 } from './node/spatial/Adaptive3DSceneSynthesizer';
 
+// Geometric Complexity & Quality Gate (Anti-JS-Primitive Hardening)
+export {
+    GeometricComplexityGate,
+    GeometricFidelityViolationError,
+    type GeometricMeshSummary,
+    type GeometricSceneMetrics,
+    type ComplexityGateOptions,
+    type ComplexityGateReport
+} from './common/spatial/GeometricComplexityGate';
+
 // AMD FidelityFX Super Resolution 1.0 (EASU + RCAS) Postprocessing
 export {
     FidelityFXSuperResolution,

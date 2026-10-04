@@ -309,6 +309,31 @@ export {
     type GlazeCrackleConfig
 } from './browser/generative-canvas/services/spatial/ProceduralMicroSurfaceShaderPatcher';
 
+// Next-Gen Astra Viewport Engine & Real WebGPU Compute Culling Pipeline
+export {
+    NextGenAstraViewportEngine,
+    CULL_MESHLETS_WGSL,
+    MICRO_RASTERIZER_WGSL,
+    VISIBILITY_BUFFER_SHADING_WGSL,
+    TEMPORAL_SUPER_RES_WGSL,
+    RELIEF_MICRO_DISPLACEMENT_WGSL,
+    CLUSTER_SLOT_SIZE_BYTES,
+    VRAM_PAGE_POOL_SIZE_MB,
+    TOTAL_RESIDENT_SLOTS,
+    VIRTUAL_GEOMETRY_CAPACITY_TRIANGLES,
+    type ViewportTelemetry,
+    type MeshletCluster,
+    type NextGenViewportOptions,
+    type VirtualClusterSlot
+} from './browser/generative-canvas/services/NextGenAstraViewportEngine';
+
+export {
+    WebGpuMeshletCullingPipeline,
+    type WebGpuPipelineTelemetry,
+    type FrustumPlane
+} from './browser/generative-canvas/services/WebGpuMeshletCullingPipeline';
+
+
 
 
 
