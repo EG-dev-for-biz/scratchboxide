@@ -87,7 +87,7 @@ export const OMNI_STYLE_PRESETS: Record<OmniStylePresetId, OmniStylePreset> = {
     },
     'cyberpunk-scifi': {
         id: 'cyberpunk-scifi',
-        name: 'Preset 3: Hard-Surface Cyberpunk Megacity (Astra Blockout)',
+        name: 'Preset 3: Hard-Surface Cyberpunk Megacity (Astro Blockout)',
         description: 'Vertical multi-tier sci-fi canyon with carbon-fiber cladding, holographic ribbons, and wet asphalt reflections.',
         headerStyle: 'A photorealistic, hyper-detailed cinematic shot',
         materials: 'Weathered composite architectural cladding, industrial structural framework, and illuminated reflective surfaces',

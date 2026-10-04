@@ -2,7 +2,7 @@
 name: native-mesh-reshaping
 description: >-
   Reshape and deform 3D meshes via natural language prompts or explicit parametric operators using the native
-  C++20 Astra 3D engine (scratchbox_shaper.hpp) and NativeMeshReshaperService. Applies non-linear deformers
+  C++20 Astro 3D engine (scratchbox_shaper.hpp) and NativeMeshReshaperService. Applies non-linear deformers
   (taper, twist, bend, bulge, squash, shear), Bernstein FFD tensor lattices, sculpt brushes, loop subdivision,
   and manifold topology healing with zero external dependencies and sub-millisecond execution.
 ---

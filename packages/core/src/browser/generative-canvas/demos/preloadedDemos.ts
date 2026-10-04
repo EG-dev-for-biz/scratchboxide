@@ -761,7 +761,7 @@ const demoTelemetryDashboardData: MetricDashboardData = {
 export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
     {
         id: 'demo-nextgen-astra-viewport',
-        title: 'Next-Gen Astra 3D Viewport: 100M-Polygon Meshlet & Hybrid 3DGS',
+        title: 'Next-Gen Astro 3D Viewport: 100M-Polygon Meshlet & Hybrid 3DGS',
         subtitle: 'Universal 3D Benchmark · GPU Meshlets, SPZ Gaussian Splats & Clustered AgX PBR',
         category: '3d',
         categoryLabel: '3D & Next-Gen Viewport',
@@ -771,17 +771,17 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
         artifact: {
             id: 'art-demo-nextgen-viewport',
             type: 'interactive-browser',
-            title: 'Next-Gen Astra 3D Viewport Studio',
+            title: 'Next-Gen Astro 3D Viewport Studio',
             summary: 'Flagship 3D viewport engine running GPU Meshlet Virtualization (100M triangles), SPZ Gaussian Splats, and Clustered Forward PBR.',
             data: {
                 url: '/next_gen_astra_viewport_studio.html',
-                title: 'Next-Gen Astra Viewport Studio',
+                title: 'Next-Gen Astro Viewport Studio',
                 viewportMode: 'desktop'
             },
             createdAt: new Date().toISOString(),
             version: 1
         },
-        introMessage: 'Welcome to the **Next-Gen Astra 3D Viewport Studio**. This studio demonstrates our universal 3D architecture evaluated against all major marketplace platforms: 100M virtualized triangles via GPU meshlet clusters, sub-pixel continuous LOD cuts, 3D Gaussian Splatting with shared depth occlusion, and clustered forward lighting with photographic AgX color grading.'
+        introMessage: 'Welcome to the **Next-Gen Astro 3D Viewport Studio**. This studio demonstrates our universal 3D architecture evaluated against all major marketplace platforms: 100M virtualized triangles via GPU meshlet clusters, sub-pixel continuous LOD cuts, 3D Gaussian Splatting with shared depth occlusion, and clustered forward lighting with photographic AgX color grading.'
     },
     {
         id: 'demo-nanite-meshlets-pathtracing',

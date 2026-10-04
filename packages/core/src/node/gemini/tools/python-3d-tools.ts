@@ -4,7 +4,7 @@
  * Python 3D Procedural Scripting Tools
  * Exposes NativePythonRunnerService to Gemini agents, allowing Blender-style
  * procedural Python scripting (import scratchbox as sb) backed by native C++20
- * Astra engine nanobind bindings to stream binary .glb directly into the viewport.
+ * Astro engine nanobind bindings to stream binary .glb directly into the viewport.
  ********************************************************************************/
 
 import type { ToolDeclaration, ToolHandlerOutcome } from './types';

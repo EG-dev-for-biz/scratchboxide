@@ -299,9 +299,9 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
     });
 
     // =========================================================================
-    // Category 5: Native C++20 Astra Engine Mesh Shaping
+    // Category 5: Native C++20 Astro Engine Mesh Shaping
     // =========================================================================
-    describe('5. Native C++20 Astra Engine Mesh Shaping Tools', () => {
+    describe('5. Native C++20 Astro Engine Mesh Shaping Tools', () => {
         it('executes mesh_apply_deformers (taper, twist, bend, bulge)', async () => {
             const res = await registry.dispatch('mesh_apply_deformers', {
                 operations: [
@@ -705,7 +705,7 @@ describe('Master Agent Tool Registry & Multi-Scenario Stress Test Suite', () => 
             const res = await registry.dispatch('invoke_subagent', {
                 role: 'Codebase Researcher',
                 taskType: 'research',
-                prompt: 'Audit C++20 Astra Engine SIMD vector math performance'
+                prompt: 'Audit C++20 Astro Engine SIMD vector math performance'
             }, mockContext);
             expect(res.exec.status).toBe('completed');
             expect((res.resultPayload as any).role).toBe('Codebase Researcher');

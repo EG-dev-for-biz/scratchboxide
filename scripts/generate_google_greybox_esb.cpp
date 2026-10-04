@@ -3,7 +3,7 @@
  *
  * Native C++20 Generator: Google Maps-Informed Low-Poly Grey-Box Empire State Building
  *
- * Uses Scratchbox Astra 3D Engine core geometry and GlbWriter to produce a clean,
+ * Uses Scratchbox Astro 3D Engine core geometry and GlbWriter to produce a clean,
  * planar, low-poly architectural grey-box massing model adhering to Google 3D Tiles
  * spatial envelopes, setbacks, and 443.2m datum.
  ********************************************************************************/

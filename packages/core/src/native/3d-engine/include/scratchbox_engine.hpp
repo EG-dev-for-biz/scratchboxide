@@ -11,7 +11,7 @@
 #define SCRATCHBOX_ENGINE_HPP
 
 /**
- * Scratchbox Astra 3D Engine Core SDK (C++20)
+ * Scratchbox Astro 3D Engine Core SDK (C++20)
  *
  * Provides high-performance SIMD vector math, signed distance fields (SDF),
  * procedural noise (Perlin/Simplex/Worley), marching cubes isosurface meshing,

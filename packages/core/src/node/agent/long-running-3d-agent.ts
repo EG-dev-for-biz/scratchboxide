@@ -131,7 +131,7 @@ export class LongRunning3DGeneratorAgent {
 
         return {
             id: blueprintId,
-            title: `Astra 3D Generation: ${goal}`,
+            title: `Astro 3D Generation: ${goal}`,
             goal,
             worldDimensions: [200, 100, 200],
             targetPolygonBudget: polygonBudget,

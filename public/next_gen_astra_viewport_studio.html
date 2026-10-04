@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Next-Gen Astra 3D Viewport Studio (Universal 3D Benchmark) — Scratchbox IDE</title>
+    <title>Next-Gen Astro 3D Viewport Studio (Universal 3D Benchmark) — Scratchbox IDE</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -548,7 +548,7 @@
                     <polyline points="2 17 12 22 22 17"></polyline>
                     <polyline points="2 12 12 17 22 12"></polyline>
                 </svg>
-                Next-Gen Astra 3D Viewport Studio
+                Next-Gen Astro 3D Viewport Studio
             </h1>
             <p>10B+ Virtualized Geometry · 256MB GVM Ring Pool · SVDAG Deduplication · AgX Tonemapping</p>
         </div>
@@ -570,7 +570,7 @@
             <div class="section-title">Viewport Architecture Engine</div>
             <div class="mode-toggle-group">
                 <button class="mode-btn active" id="btn-mode-astra" onclick="setViewportMode('astra')">
-                    ⚡ Astra GPU Meshlets
+                    ⚡ Astro GPU Meshlets
                 </button>
                 <button class="mode-btn standard" id="btn-mode-standard" onclick="setViewportMode('standard')">
                     🏛️ Standard Pipeline
@@ -806,13 +806,13 @@
         </div>
 
         <div class="comparison-callout" id="callout-text">
-            <strong>Astra Viewport Advantage:</strong> The mesh is partitioned into sub-pixel cluster DAGs. The GPU selects LOD cuts via screen-space error with <strong>1 single indirect draw</strong>, leaving 99.88% of off-screen/backface triangles un-evaluated.
+            <strong>Astro Viewport Advantage:</strong> The mesh is partitioned into sub-pixel cluster DAGs. The GPU selects LOD cuts via screen-space error with <strong>1 single indirect draw</strong>, leaving 99.88% of off-screen/backface triangles un-evaluated.
         </div>
     </div>
 
     <!-- Bottom Dock -->
     <div class="bottom-dock">
-        <div><span class="status-dot" id="dock-status-dot"></span> <span id="dock-engine-label">Astra C++20 / WebGPU Virtualizer</span></div>
+        <div><span class="status-dot" id="dock-status-dot"></span> <span id="dock-engine-label">Astro C++20 / WebGPU Virtualizer</span></div>
         <div style="color: rgba(255, 255, 255, 0.2);">|</div>
         <div>Cam Orbit: <span style="color: var(--accent-cyan);">Left Click + Drag</span></div>
         <div style="color: rgba(255, 255, 255, 0.2);">|</div>
@@ -865,7 +865,7 @@
             0x3b82f6  // blue
         ];
 
-        class AstraWebGpuPipeline {
+        class AstroWebGpuPipeline {
             constructor(canvas) {
                 this.canvas = canvas;
                 this.device = null;
@@ -889,13 +889,13 @@
 
             async initialize() {
                 if (!navigator.gpu) {
-                    console.info('[Astra WebGPU] navigator.gpu is undefined in this browser.');
+                    console.info('[Astro WebGPU] navigator.gpu is undefined in this browser.');
                     return false;
                 }
                 try {
                     const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
                     if (!adapter) {
-                        console.warn('[Astra WebGPU] No suitable GPU adapter found.');
+                        console.warn('[Astro WebGPU] No suitable GPU adapter found.');
                         return false;
                     }
                     this.device = await adapter.requestDevice();
@@ -914,10 +914,10 @@
                     await this.buildShadersAndPipelines();
 
                     this.ready = true;
-                    console.info('[Astra WebGPU] Genuine Hardware Pipeline Active: 8,192 instances, 1,048,576 real triangles in GPU VRAM.');
+                    console.info('[Astro WebGPU] Genuine Hardware Pipeline Active: 8,192 instances, 1,048,576 real triangles in GPU VRAM.');
                     return true;
                 } catch (e) {
-                    console.warn('[Astra WebGPU Init Failure]', e);
+                    console.warn('[Astro WebGPU Init Failure]', e);
                     this.ready = false;
                     return false;
                 }
@@ -1419,6 +1419,7 @@
                 }
             }
         }
+        const AstraWebGpuPipeline = AstroWebGpuPipeline;
 
         async function initScene() {
             const container = document.getElementById('viewport-container');
@@ -1438,7 +1439,7 @@
             container.appendChild(webgpuCanvas);
 
             // Initialize WebGPU Pipeline
-            astraPipeline = new AstraWebGpuPipeline(webgpuCanvas);
+            astraPipeline = new AstroWebGpuPipeline(webgpuCanvas);
             const gpuOk = await astraPipeline.initialize();
             const dockDot = document.getElementById('dock-status-dot');
             const dockLabel = document.getElementById('dock-engine-label');
@@ -1659,7 +1660,7 @@
                     continue;
                 }
 
-                // Astra GPU Meshlet Error Evaluation
+                // Astro GPU Meshlet Error Evaluation
                 const dist = Math.max(cluster.center.distanceTo(camPos) - cluster.radius, 0.01);
                 const ssePx = (cluster.clusterError / dist) * sseConstant;
 
@@ -1942,7 +1943,7 @@
             if (currentMode === 'astra') {
                 if (btnAstra) btnAstra.classList.add('active');
                 if (btnStandard) btnStandard.classList.remove('active');
-                badgeApi.textContent = astraPipeline && astraPipeline.ready ? 'WEBGPU HARDWARE' : 'ASTRA MESHLET';
+                badgeApi.textContent = astraPipeline && astraPipeline.ready ? 'WEBGPU HARDWARE' : 'ASTRO MESHLET';
                 badgeApi.className = 'badge badge-cyan';
                 if (badgeTris) {
                     badgeTris.textContent = '1,048,576 TRIS';
@@ -1951,8 +1952,8 @@
                 dockDot.className = 'status-dot';
                 dockLabel.textContent = astraPipeline && astraPipeline.ready 
                     ? 'WebGPU Hardware Active (DrawIndexedIndirect + Compute Culling)' 
-                    : 'Astra Meshlet (WebGL Fallback)';
-                callout.innerHTML = '<strong>Astra Viewport Advantage:</strong> 8,192 cluster instances (1,048,576 real triangles) evaluated by a <strong>WGSL compute culling shader</strong> and rendered in <strong>1 single DrawIndexedIndirect call</strong> on the GPU.';
+                    : 'Astro Meshlet (WebGL Fallback)';
+                callout.innerHTML = '<strong>Astro Viewport Advantage:</strong> 8,192 cluster instances (1,048,576 real triangles) evaluated by a <strong>WGSL compute culling shader</strong> and rendered in <strong>1 single DrawIndexedIndirect call</strong> on the GPU.';
                 setToneMapping('agx');
             } else {
                 if (btnStandard) btnStandard.classList.add('active');
@@ -2075,7 +2076,7 @@
             </div>
             <div class="modal-body">
                 <p style="margin-bottom: 14px; font-size: 13px; color: #94a3b8;">
-                    Technical comparison of the <strong>Scratchbox Astra Next-Gen 3D Viewport</strong> across all major platform categories in the real-time graphics marketplace:
+                    Technical comparison of the <strong>Scratchbox Astro Next-Gen 3D Viewport</strong> across all major platform categories in the real-time graphics marketplace:
                 </p>
                 <div style="overflow-x: auto;">
                     <table class="matrix-table">
@@ -2095,7 +2096,7 @@
                         </thead>
                         <tbody>
                             <tr>
-                                <td class="col-highlight" style="font-weight:700;">⚡ Scratchbox Astra</td>
+                                <td class="col-highlight" style="font-weight:700;">⚡ Scratchbox Astro</td>
                                 <td class="col-highlight">Hybrid WebGPU / C++20</td>
                                 <td class="col-highlight">10B+ (GVM 256MB Ring Pool + SVDAG)</td>
                                 <td class="col-highlight">Strict Parent Fallback (0 Holes)</td>

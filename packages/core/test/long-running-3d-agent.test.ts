@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { LongRunning3DGeneratorAgent } from '../src/node/agent/long-running-3d-agent';
 import type { LongRunning3DProgressEvent } from '../src/common/3d-engine-protocol';
 
-describe('LongRunning3DGeneratorAgent (Astra-grade 3D Generation)', () => {
+describe('LongRunning3DGeneratorAgent (Astro-grade 3D Generation)', () => {
     it('should formulate an architectural spatial blueprint DAG', () => {
         const agent = new LongRunning3DGeneratorAgent();
         const blueprint = agent.planBlueprint('Create a futuristic cyberpunk metropolis with neon skyways', 150000);

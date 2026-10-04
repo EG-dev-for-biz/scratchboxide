@@ -257,7 +257,7 @@ export class ComfyUiPipelineAgent {
                         tier: 'tier1-native',
                         success: false,
                         capabilityResolution,
-                        error: `Tier 1 native scene execution encountered error (${nativeErr.message}). 3D scenes and environments are created natively in codebase (Tier 1 C++20 Astra / UniversalArchiBridgeService / Three.js) and cannot fall back to Trellis or external 3D neural services.`
+                        error: `Tier 1 native scene execution encountered error (${nativeErr.message}). 3D scenes and environments are created natively in codebase (Tier 1 C++20 Astro / UniversalArchiBridgeService / Three.js) and cannot fall back to Trellis or external 3D neural services.`
                     };
                 }
 

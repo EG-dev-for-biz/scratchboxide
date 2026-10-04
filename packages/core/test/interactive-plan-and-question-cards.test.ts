@@ -43,7 +43,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
                         prompt: 'Which 3D pipeline should be leveraged for this asset?',
                         allow_multiple: false,
                         options: [
-                            { id: 'cpp-astra', label: 'C++20 Astra Engine', isRecommended: true, description: 'Fast native compilation' },
+                            { id: 'cpp-astro', label: 'C++20 Astro Engine', isRecommended: true, description: 'Fast native compilation' },
                             { id: 'comfy-gpu', label: 'Cloud Run L4 GPU', isRecommended: false, description: 'Neural diffusion mesh' }
                         ]
                     }
@@ -55,7 +55,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(card.title).toBe('Select 3D Mesh Engine');
             expect(card.questions.length).toBe(1);
             expect(card.questions[0].options[0].isRecommended).toBe(true);
-            expect(card.questions[0].options[0].label).toBe('C++20 Astra Engine');
+            expect(card.questions[0].options[0].label).toBe('C++20 Astro Engine');
         });
 
         it('executes present_execution_plan and produces structured executionPlanCard payload', () => {
@@ -68,7 +68,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
                 ],
                 steps: [
                     { id: 's1', title: 'Generate red terrain SDF', tier: 'tier1-native', engine: 'C++20 FastNoise3D' },
-                    { id: 's2', title: 'Assemble solar array geometry', tier: 'tier1-native', engine: 'C++20 Astra Engine' }
+                    { id: 's2', title: 'Assemble solar array geometry', tier: 'tier1-native', engine: 'C++20 Astro Engine' }
                 ],
                 estimatedLatency: '~150ms'
             }, {} as any);
@@ -92,7 +92,7 @@ describe('Cursor-Grade Interactive Confirmation & Clarification Card Architectur
             expect(fallback.questionCard?.title).toContain('3D');
             const q = fallback.questionCard?.questions[0];
             expect(q).toBeDefined();
-            expect(q?.options.some(o => o.label.includes('C++20 Astra'))).toBe(true);
+            expect(q?.options.some(o => o.label.includes('C++20 Astro'))).toBe(true);
             expect(q?.options.some(o => o.label.includes('Gaussian Splat'))).toBe(true);
             expect(q?.options.some(o => o.label.includes('Cloud Run'))).toBe(true);
         });

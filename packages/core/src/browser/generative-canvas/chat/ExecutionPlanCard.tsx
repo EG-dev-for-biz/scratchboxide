@@ -44,7 +44,7 @@ export const ExecutionPlanCard: React.FC<ExecutionPlanCardProps> = ({
             };
         }
         return {
-            label: 'Tier 1: Native C++20 Astra / SIMD',
+            label: 'Tier 1: Native C++20 Astro / SIMD',
             color: '#34d399',
             bg: 'rgba(52, 211, 153, 0.12)',
             border: 'rgba(52, 211, 153, 0.3)'

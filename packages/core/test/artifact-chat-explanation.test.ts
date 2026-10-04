@@ -31,7 +31,7 @@ describe('Cursor-Grade Chat Explanations & Viewport Cleanliness', () => {
         });
 
         it('cleans execution plan approval tags from prompt', () => {
-            const rawPrompt = '[Execution Plan Approved]: Proceed with Tier 1 Native C++20 Astra pipeline for Mars Rover';
+            const rawPrompt = '[Execution Plan Approved]: Proceed with Tier 1 Native C++20 Astro pipeline for Mars Rover';
             const entities = extractPromptEntities(rawPrompt);
 
             expect(entities.subject).not.toContain('[Execution Plan');
@@ -93,7 +93,7 @@ describe('Cursor-Grade Chat Explanations & Viewport Cleanliness', () => {
             // Must include title / icon
             expect(explanation).toContain('Mars Rover Exploration Site');
             // Must include architectural specs
-            expect(explanation).toMatch(/C\+\+20|Astra/i);
+            expect(explanation).toMatch(/C\+\+20|Astro/i);
             expect(explanation).toMatch(/PBR/i);
             expect(explanation).toMatch(/18\.38°N.*77\.58°/);
             expect(explanation).toMatch(/4200K/);

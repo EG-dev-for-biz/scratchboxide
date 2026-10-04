@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Scratchbox Astra 3D Engine — Grand Master Synthesis Scene Generator
+ * Scratchbox Astro 3D Engine — Grand Master Synthesis Scene Generator
  *
  * Synthesizes a unified, photorealistic 3D architectural sanctuary combining:
  * 1. Procedural FastNoise3D terrain pedestal with Marching Cubes SDF & multi-tier plinth.

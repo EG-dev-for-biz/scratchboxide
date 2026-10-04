@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
+    NextGenAstroViewportEngine,
     NextGenAstraViewportEngine,
     CULL_MESHLETS_WGSL,
     MICRO_RASTERIZER_WGSL,
@@ -40,9 +41,9 @@ function createMockContainer() {
     } as any;
 }
 
-describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
+describe('NextGenAstroViewportEngine (Standalone Next-Gen Viewport)', () => {
     let container: any;
-    let engine: NextGenAstraViewportEngine | null = null;
+    let engine: NextGenAstroViewportEngine | null = null;
 
     beforeEach(() => {
         container = createMockContainer();
@@ -55,8 +56,13 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
         }
     });
 
+    it('0. Exports NextGenAstroViewportEngine with NextGenAstraViewportEngine backward compatibility alias', () => {
+        expect(NextGenAstroViewportEngine).toBeDefined();
+        expect(NextGenAstraViewportEngine).toBe(NextGenAstroViewportEngine);
+    });
+
     it('1. Initializes standalone engine with AgX tone mapping and WebGL/WebGPU stack', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             initialTonemapping: 'agx',
             enableMeshletVirtualization: true,
@@ -73,7 +79,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('2. Evaluates telemetry and reports virtualized triangles and draw call efficiency', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             initialTonemapping: 'agx',
             enableMeshletVirtualization: true
@@ -100,7 +106,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('3. Supports dynamic tone mapping mode switching (AgX, ACES, Linear)', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             initialTonemapping: 'agx'
         });
@@ -113,7 +119,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('4. Updates screen space error (SSE) and meshlet cluster visualization parameters', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             screenSpaceErrorThresholdPx: 1.0
         });
@@ -127,14 +133,14 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('5. Handles container resize cleanly without aspect distortion', () => {
-        engine = new NextGenAstraViewportEngine({ container });
+        engine = new NextGenAstroViewportEngine({ container });
 
         engine.resize(1920, 1080);
         expect(engine.getCamera().aspect).toBeCloseTo(1920 / 1080);
     });
 
     it('6. Disposes cleanly without leaking animation frames or canvas elements', () => {
-        engine = new NextGenAstraViewportEngine({ container });
+        engine = new NextGenAstroViewportEngine({ container });
         expect(container.children.length).toBeGreaterThanOrEqual(1);
 
         engine.dispose();
@@ -153,7 +159,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('8. Configures and toggles GPU Compute Culling, Hi-Z, Software Micro-Rasterizer, and VisBuffer', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             enableGpuComputeCulling: true,
             enableHiZOcclusion: true,
@@ -185,7 +191,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('9. Scales resolution and calculates fillrate boost across Temporal Super Resolution modes', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             temporalSuperResolutionMode: 'off'
         });
@@ -215,7 +221,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('11. Computes Camera-Relative Double Precision (CDP) positions with sub-millimeter accuracy', () => {
-        engine = new NextGenAstraViewportEngine({ container });
+        engine = new NextGenAstroViewportEngine({ container });
 
         // Two points on Earth's surface separated by exactly 1 millimeter at latitude 41.8902 N
         // In absolute earth-centered geocentric coordinates: ~6,378,137 meters
@@ -232,7 +238,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('12. Enforces Strict Parent LOD Fallback Invariant with zero holes when child is non-resident', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             enableVirtualGeometryPaging: true,
             enableStrictParentLodFallback: true
@@ -265,7 +271,7 @@ describe('NextGenAstraViewportEngine (Standalone Next-Gen Viewport)', () => {
     });
 
     it('13. Deduplicates procedural/CAD subtrees via SVDAG and scales virtual geometry telemetry', () => {
-        engine = new NextGenAstraViewportEngine({
+        engine = new NextGenAstroViewportEngine({
             container,
             enableVirtualGeometryPaging: true,
             enableSvdagDeduplication: true

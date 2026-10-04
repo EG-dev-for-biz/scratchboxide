@@ -1,7 +1,7 @@
 /********************************************************************************
  * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
  *
- * Hyperrealistic Procedural 3D Forest Reconstruction (Astra Engine C++20)
+ * Hyperrealistic Procedural 3D Forest Reconstruction (Astro Engine C++20)
  * Clean-Slate Master 3D Artist Architecture adhering to:
  * - .agents/skills/3d-artist/SKILL.md
  * - 70-20-10 Form Hierarchy
@@ -1159,7 +1159,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "================================================================\n";
-    std::cout << "🌲 GENERATING HYPERREALISTIC 3D FOREST (ASTRA ENGINE C++20)\n";
+    std::cout << "🌲 GENERATING HYPERREALISTIC 3D FOREST (ASTRO ENGINE C++20)\n";
     std::cout << "================================================================\n";
 
     auto tStart = std::chrono::high_resolution_clock::now();

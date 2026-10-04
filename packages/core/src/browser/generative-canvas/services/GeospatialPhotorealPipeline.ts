@@ -63,7 +63,7 @@ export class GeospatialPhotorealPipeline {
   }
 
   /**
-   * Generates location-agnostic C++20 source code using the Scratchbox Astra Engine
+   * Generates location-agnostic C++20 source code using the Scratchbox Astro Engine
    * to reconstruct high-fidelity photoreal architecture with PBR materials.
    */
   public generatePhotorealCppSource(options: PhotorealReconstructionOptions): string {

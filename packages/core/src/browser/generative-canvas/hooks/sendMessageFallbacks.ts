@@ -459,7 +459,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.title = 'Colosseum — Solarpunk Terraced Citadel';
-            updated3D.subtitle = 'Astra C++20 Terraforming | 4 Stepped Tiers, 4 Solar Obelisks & Bio-Dome | 382,400 Verts';
+            updated3D.subtitle = 'Astro C++20 Terraforming | 4 Stepped Tiers, 4 Solar Obelisks & Bio-Dome | 382,400 Verts';
             updated3D.renderMode = 'shaded';
             updated3D.clayPreset = 'warm-clay';
             updated3D.restructuringTelemetry = {
@@ -478,7 +478,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 { id: 'obelisk-2', name: 'Solar Obelisk NE', type: 'cylinder', geometry: { type: 'cylinder', params: [1.2, 2.0, 18, 8] }, material: { color: 0xe8b898, roughness: 0.3 } },
                 { id: 'biodome', name: 'Central Biosphere Dome', type: 'sphere', geometry: { type: 'sphere', params: [16, 32, 16] }, material: { color: 0x90caf9, roughness: 0.1, metalness: 0.2 } }
             ];
-            explanation = `Restructured 3D tile into **Ancient Solarpunk Citadel** via Astra C++20 engine: hillside terraced into 4 stepped tiers, sun plaza leveled, 4 perimeter solar obelisks grafted, and central geodesic bio-dome erected (382,400 vertices in 68ms).`;
+            explanation = `Restructured 3D tile into **Ancient Solarpunk Citadel** via Astro C++20 engine: hillside terraced into 4 stepped tiers, sun plaza leveled, 4 perimeter solar obelisks grafted, and central geodesic bio-dome erected (382,400 vertices in 68ms).`;
         } else if (/acropolis|circular\s+colonnade|temple\s+tier/i.test(text)) {
             // Classical Acropolis
             updated3D.objects = [{
@@ -494,7 +494,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.title = 'Imperial Classical Acropolis';
-            updated3D.subtitle = 'Astra C++20 Terraforming | Grand Marble Plinth & 8-Column Circular Colonnade | 361,200 Verts';
+            updated3D.subtitle = 'Astro C++20 Terraforming | Grand Marble Plinth & 8-Column Circular Colonnade | 361,200 Verts';
             updated3D.renderMode = 'shaded';
             updated3D.clayPreset = 'alabaster';
             updated3D.restructuringTelemetry = {
@@ -522,7 +522,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.title = 'Brutalist Monolithic Fortress Massing';
-            updated3D.subtitle = 'Astra C++20 Terraforming | Perimeter Moat Trench & Monolithic Pylons | 329,100 Verts';
+            updated3D.subtitle = 'Astro C++20 Terraforming | Perimeter Moat Trench & Monolithic Pylons | 329,100 Verts';
             updated3D.renderMode = 'shaded';
             updated3D.clayPreset = 'concrete';
             updated3D.restructuringTelemetry = {
@@ -550,7 +550,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.title = 'Gothic Cathedral Ruins';
-            updated3D.subtitle = 'Astra C++20 Terraforming | Sunken Basin, 4 Needle Spires & Pointed Portals | 354,800 Verts';
+            updated3D.subtitle = 'Astro C++20 Terraforming | Sunken Basin, 4 Needle Spires & Pointed Portals | 354,800 Verts';
             updated3D.renderMode = 'shaded';
             updated3D.clayPreset = 'onyx';
             updated3D.restructuringTelemetry = {
@@ -578,7 +578,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.title = 'Colosseum, Rome — Restored Brand-New Architecture';
-            updated3D.subtitle = 'Astra C++20 Terraforming | Full Four-Tier Colonnade Rebuilt | 347,680 Verts';
+            updated3D.subtitle = 'Astro C++20 Terraforming | Full Four-Tier Colonnade Rebuilt | 347,680 Verts';
             updated3D.renderMode = 'shaded';
             updated3D.clayPreset = 'warm-clay';
             updated3D.restructuringTelemetry = {
@@ -787,7 +787,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             exposure: 1.25,
             ambientIntensity: 0.55
         };
-        updated3D.title = 'Sanctuary of Synthesis — C++20 Procedural Astra Engine';
+        updated3D.title = 'Sanctuary of Synthesis — C++20 Procedural Astro Engine';
         updated3D.subtitle = 'Marching Cubes SDF | Multibody Ragdoll | XPBD Fabric | 72 Crystal Spires | RTAO COLOR_0';
         updated3D.cppGenerator = {
             enabled: true,
@@ -799,7 +799,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             lastCompiledTimeMs: Date.now(),
             lastExecutionDurationMs: 199
         };
-        explanation = `Executed **C++20 Astra 3D Engine Procedural Synthesis**: compiled \`world_generator.cpp\` via Clang -O3, generated procedural FastNoise3D terrain pedestal, settled 7-bone humanoid ragdoll, simulated XPBD orthotropic fabric drape, scattered 72 crystal spires, baked ray-traced ambient occlusion (RTAO) into COLOR_0, and streamed binary glTF 2.0 (19,104 vertices, 22,154 triangles).`;
+        explanation = `Executed **C++20 Astro 3D Engine Procedural Synthesis**: compiled \`world_generator.cpp\` via Clang -O3, generated procedural FastNoise3D terrain pedestal, settled 7-bone humanoid ragdoll, simulated XPBD orthotropic fabric drape, scattered 72 crystal spires, baked ray-traced ambient occlusion (RTAO) into COLOR_0, and streamed binary glTF 2.0 (19,104 vertices, 22,154 triangles).`;
     } else if (/\b(?:clay|warm[- ]?clay|alabaster|onyx|studio[- ]?gr[ea]y|terracotta|porcelain|concrete)\b/i.test(text) && !/solarpunk|acropolis|brutalist|gothic/i.test(text)) {
         let presetId: ClayPresetId = 'warm-clay';
         if (/alabaster|plaster|white\s+clay/i.test(text)) presetId = 'alabaster';
@@ -2209,7 +2209,7 @@ export function synthesizeQuestionCardFallback(prompt: string, _activeArtifact?:
                 options: isSpatialOrVfx ? [
                     {
                         id: 'tier1-cpp-mesh',
-                        label: 'Procedural C++20 Astra Mesh (.glb)',
+                        label: 'Procedural C++20 Astro Mesh (.glb)',
                         description: 'Watertight manifold geometry, SIMD vector math, Apple Clang -O3, sub-second native compile',
                         isRecommended: true
                     },
@@ -2287,9 +2287,9 @@ export function synthesizeExecutionPlanFallback(prompt: string, _activeArtifact?
             {
                 id: 'step-2',
                 title: isSpatialOrVfx ? 'Synthesize procedural 3D geometry & PBR materials' : 'Generate interactive component tree & state machine',
-                description: isSpatialOrVfx ? 'Apply C++20 Astra SIMD math and watertight polygonization' : 'Mount hot-reloading React code sandbox',
+                description: isSpatialOrVfx ? 'Apply C++20 Astro SIMD math and watertight polygonization' : 'Mount hot-reloading React code sandbox',
                 tier: 'tier1-native',
-                engine: isSpatialOrVfx ? 'C++20 Astra Engine (Apple Clang)' : 'Live Code Sandbox'
+                engine: isSpatialOrVfx ? 'C++20 Astro Engine (Apple Clang)' : 'Live Code Sandbox'
             },
             {
                 id: 'step-3',

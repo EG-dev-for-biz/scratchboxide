@@ -330,7 +330,7 @@ export interface ARPlacementEntity {
   asset: {
     assetId: string;
     assetType?: 'mesh-glb' | 'gaussian-splat' | 'vector-corridor' | 'vector-parcel';
-    durableGlbUri?: string;        // Binary GLB compiled by Astra Engine
+    durableGlbUri?: string;        // Binary GLB compiled by Astro Engine
     durableSplatUri?: string;      // Standard .splat or super-compressed .spz URI
     splatFormat?: 'splat' | 'spz';
     splatCount?: number;

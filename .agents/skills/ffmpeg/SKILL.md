@@ -99,7 +99,7 @@ Coordinated motion analysis extracting articulated 3D kinematic telemetry:
 - Uses FFmpeg to extract sequential video frame samples at target sampling rates (default: 15 fps).
 - Runs MediaPipe 3D pose detection per frame, solving 3D joint Euler angles conforming to the Scratchbox Parametric Humanoid Standard (`SB-Human`).
 - Applies moving-average temporal smoothing across joint Euler angles and hip translation vectors to eliminate tracking jitter.
-- Streams motion data directly into the native C++20 Astra 3D engine for character driving, physics ragdolls, or WebGL playback.
+- Streams motion data directly into the native C++20 Astro 3D engine for character driving, physics ragdolls, or WebGL playback.
 
 ### 14. `vfx_video_auto_reframe`
 Intelligent subject-aware camera reframing:

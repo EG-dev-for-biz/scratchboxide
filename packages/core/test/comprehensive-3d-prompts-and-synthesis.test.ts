@@ -59,7 +59,7 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
                                          (scene.objects && scene.objects.length > 0);
                 expect(hasVehicleMeshes).toBe(true);
 
-                // Check that C++ Astra source code is attached
+                // Check that C++ Astro source code is attached
                 if (scene.cppGenerator?.sourceCode) {
                     expect(scene.cppGenerator.sourceCode).toContain('scratchbox_engine.hpp');
                 }
@@ -637,9 +637,9 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
     });
 
     // =========================================================================
-    // Domain 22: Operator Stack & C++20 Astra Generation
+    // Domain 22: Operator Stack & C++20 Astro Generation
     // =========================================================================
-    describe('22. Operator Stack & C++20 Astra Code Generation', () => {
+    describe('22. Operator Stack & C++20 Astro Code Generation', () => {
         const generationPrompts = [
             'procedural 3D alpine mountain terrain with glacial valleys and snow line',
             'build a 3d cyberpunk metropolis with neon skyscrapers and flying traffic',
@@ -648,7 +648,7 @@ describe('Comprehensive 3D Prompting & Synthesis Suite', () => {
         ];
 
         for (const prompt of generationPrompts) {
-            it(`attaches runnable C++20 Astra generator source code: "${prompt}"`, () => {
+            it(`attaches runnable C++20 Astro generator source code: "${prompt}"`, () => {
                 const scene = synthesizeContextual3DScene(prompt);
                 expect(scene).toBeDefined();
 

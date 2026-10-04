@@ -4711,7 +4711,7 @@ export const avatar4dgsHandlers: Record<string, ToolHandler> = {
 export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'splat_synthesize_analytical_groom',
-        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astra hair and SPZ engines. Strictly conforms to Adaptive Domain Architecture (ADA) with continuous dimensional parameters: spherical harmonics (radial frequencies m, amplitudes A, axial taper) or arbitrary surface mesh attachment, Marschner melanin pigmentation, and Voronoi clumping.',
+        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astro hair and SPZ engines. Strictly conforms to Adaptive Domain Architecture (ADA) with continuous dimensional parameters: spherical harmonics (radial frequencies m, amplitudes A, axial taper) or arbitrary surface mesh attachment, Marschner melanin pigmentation, and Voronoi clumping.',
         parameters: {
             type: 'OBJECT',
             properties: {

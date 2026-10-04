@@ -171,10 +171,10 @@
 <body>
   <header>
     <div class="brand">
-      <div class="brand-badge">C++20 ASTRA</div>
+      <div class="brand-badge">C++20 ASTRO</div>
       <div>
         <div class="brand-title">The Plaza Hotel, NYC — Procedural 3D Reconstruction</div>
-        <div class="brand-subtitle">Scratchbox Astra 3D Engine • Native Marching Primitives • PBR Shader Matrix</div>
+        <div class="brand-subtitle">Scratchbox Astro 3D Engine • Native Marching Primitives • PBR Shader Matrix</div>
       </div>
     </div>
     <div class="controls">
@@ -199,12 +199,12 @@
     <div class="pane 3d-pane">
       <div class="pane-header">
         <div class="dot dot-green"></div>
-        <span id="activeModelLabel">Procedural C++20 glTF 2.0 Mesh (Astra Engine)</span>
+        <span id="activeModelLabel">Procedural C++20 glTF 2.0 Mesh (Astro Engine)</span>
       </div>
       <canvas id="threeViewport"></canvas>
       <div class="hud-overlay" id="hud">
         <div class="hud-row"><span>Landmark:</span><span class="hud-val">The Plaza Hotel (NYC)</span></div>
-        <div class="hud-row"><span>Engine:</span><span class="hud-val">C++20 Astra (Clang -O3)</span></div>
+        <div class="hud-row"><span>Engine:</span><span class="hud-val">C++20 Astro (Clang -O3)</span></div>
         <div class="hud-row"><span>Vertices:</span><span class="hud-val" id="hudVerts">34,128</span></div>
         <div class="hud-row"><span>Triangles:</span><span class="hud-val" id="hudTris">21,496</span></div>
         <div class="hud-row"><span>Height:</span><span class="hud-val">68.2 meters (18 stories)</span></div>
@@ -287,7 +287,7 @@
       document.getElementById('btnTiles').classList.toggle('active', type === 'tiles');
 
       if (type === 'procedural') {
-        document.getElementById('activeModelLabel').textContent = 'Procedural C++20 glTF 2.0 Mesh (Astra Engine)';
+        document.getElementById('activeModelLabel').textContent = 'Procedural C++20 glTF 2.0 Mesh (Astro Engine)';
         loadModel('/models/plaza_hotel_procedural.glb', 'procedural');
       } else {
         document.getElementById('activeModelLabel').textContent = 'Google Maps Platform 3D Photogrammetric Tiles (.glb)';

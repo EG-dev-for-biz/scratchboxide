@@ -80,7 +80,7 @@ describe('Showcase Preloaded Demos Catalog', () => {
         expect(data.nodes.length).toBeGreaterThanOrEqual(4);
     });
 
-    it('Next-Gen Astra 3D Viewport demo must feature standalone studio artifact and meshlet tags', () => {
+    it('Next-Gen Astro 3D Viewport demo must feature standalone studio artifact and meshlet tags', () => {
         const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-nextgen-astra-viewport');
         expect(demo).toBeDefined();
         expect(demo?.category).toBe('3d');

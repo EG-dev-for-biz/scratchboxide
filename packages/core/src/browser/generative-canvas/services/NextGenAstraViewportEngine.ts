@@ -213,7 +213,7 @@ fn computeMicroRelief(@builtin(global_invocation_id) pixel: vec3<u32>) {
 `;
 
 /**
- * NextGenAstraViewportEngine
+ * NextGenAstroViewportEngine
  *
  * Universal high-throughput 3D viewport engine evaluated against the marketplace:
  * 1. GPU Meshlet Virtualization (Nanite-style DAG clustering for 10B+ virtual triangles with 1 indirect call)
@@ -227,7 +227,7 @@ fn computeMicroRelief(@builtin(global_invocation_id) pixel: vec3<u32>) {
  * 9. SVDAG Deduplication: Topological subtree hash-consing for procedural architecture
  * 10. Hybrid 3D Gaussian Splatting + PBR Mesh depth-buffer sharing (SPZ v2)
  */
-export class NextGenAstraViewportEngine {
+export class NextGenAstroViewportEngine {
     private container: HTMLElement;
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
@@ -1109,3 +1109,9 @@ export class NextGenAstraViewportEngine {
         this.telemetryListeners = [];
     }
 }
+
+/**
+ * Backwards compatibility alias for NextGenAstroViewportEngine.
+ */
+export const NextGenAstraViewportEngine = NextGenAstroViewportEngine;
+export type NextGenAstraViewportEngine = NextGenAstroViewportEngine;

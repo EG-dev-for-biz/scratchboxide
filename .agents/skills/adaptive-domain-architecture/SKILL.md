@@ -109,7 +109,7 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
 - **Procedural Grammars Only (Verbs)**: All spatial elements must be generated dynamically from continuous mathematical operators:
   - *Archie*: Procedural architectural operations (`extrudeSlab`, `punchRecessedOpening`, `generateLouverBay`, `createChamferedParapet`).
   - *SB-Veggie*: Algorithmic botanical branching (`apicalDominance`, `branchAngleDeg`, stem tapering, transferred envelope normals).
-  - *Astra Noise*: Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
+  - *Astro Noise*: Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
 
 ---
 

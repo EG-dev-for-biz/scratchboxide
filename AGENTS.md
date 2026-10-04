@@ -385,7 +385,7 @@ When synthesizing, managing, or rendering 3D scenes:
 3. **Structured Types When Needed**:
    - When explicit, typed geometric or simulation data exists on the scene, the engine and renderer must honor and render those structured types directly with absolute precedence:
      - `customMeshes`: Explicit typed array of mesh definitions (`id`, `name`, `type`, `position`, `rotation`, `scale`, `material`, `tier`).
-     - `cppGenerator`: Native C++20 Astra engine with `sourceCode` and binary GLB mesh generation.
+     - `cppGenerator`: Native C++20 Astro engine with `sourceCode` and binary GLB mesh generation.
      - `objects`: Typed 3D media objects with durable URIs, spatial coordinates, and mime types.
      - `geoAnchor`: WGS-84 geodetic coordinates and Google Photorealistic 3D Tiles.
      - `splat`: 3DGS Gaussian splat radiance fields.
@@ -419,7 +419,7 @@ To uphold Adaptive Domain Architecture and eliminate static kitbashing:
    - All spatial assets must be generated on the fly using continuous parametric grammars:
      - **Archie** ([`scratchbox_architecture.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_architecture.hpp)): Procedural architectural operations (`extrudeSlab`, `punchRecessedOpening`, `generateLouverBay`, `createChamferedParapet`).
      - **SB-Veggie** ([`scratchbox_sb_veggie.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_sb_veggie.hpp)): Algorithmic botanical branching (`apicalDominance`, `branchAngleDeg`, stem tapering, transferred envelope normals).
-     - **Astra Noise** ([`scratchbox_engine.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_engine.hpp)): Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
+     - **Astro Noise** ([`scratchbox_engine.hpp`](file:///Users/eligreen/dev/scratchbox-ide-master/packages/core/native/scratchbox_engine.hpp)): Multi-fractal terrain harmonics (arête knife-edges, cirque hollows, scree talus noise).
 
 ### Rule: Ephemeral Multimodal Vision Conditioning (Fast Reference -> CAD-Grade C++20)
 When synthesizing a 3D scene from an open-ended natural language prompt:
@@ -610,10 +610,10 @@ When integrating real-world photogrammetric 3D tiles (e.g. Google Photorealistic
 
 ## Native Prompt-Driven Mesh Reshaping Directive
 
-### Rule: Native C++20 Astra Engine Reshaping & Parametric Deformation
+### Rule: Native C++20 Astro Engine Reshaping & Parametric Deformation
 When executing prompt-driven mesh deformation, organic sculpting, or parametric reshaping:
-1. **Prioritize Native C++20 Astra Pipeline First**:
-   - Always run deformations through the native C++20 Astra 3D engine (`scratchbox_shaper.hpp`), compiling via Apple Clang (`clang++ -std=c++20 -O3 -march=native`) through `NativeMeshReshaperService` / `run_mesh_reshaping_pipeline.cpp`.
+1. **Prioritize Native C++20 Astro Pipeline First**:
+   - Always run deformations through the native C++20 Astro 3D engine (`scratchbox_shaper.hpp`), compiling via Apple Clang (`clang++ -std=c++20 -O3 -march=native`) through `NativeMeshReshaperService` / `run_mesh_reshaping_pipeline.cpp`.
    - Never spawn heavy external neural models or Python services for geometric deformations that can execute in sub-milliseconds via SIMD vector math:
      - **Non-Linear Deformers**: Taper, Twist, Bend, Bulge, Squash, Shear with smooth cubic Hermite and polynomial transitions.
      - **Free-Form Deformation**: Trivariate Bernstein polynomial tensor lattices (`Lattice3D`).

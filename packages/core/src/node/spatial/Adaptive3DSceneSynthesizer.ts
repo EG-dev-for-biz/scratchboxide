@@ -6,7 +6,7 @@
  * - Zero static scene .cpp files checked into production or user codebases.
  * - Dynamic open-ended schema inference from natural language prompts.
  * - Programmatic synthesis of high-performance C++20 generator code leveraging
- *   native Astra 3D Engine, Archie Architecture Engine, and SB-Veggie Botany Engine.
+ *   native Astro 3D Engine, Archie Architecture Engine, and SB-Veggie Botany Engine.
  * - On-the-fly compilation via Apple Clang (-std=c++20 -O3) and binary glTF 2.0 streaming.
  ********************************************************************************/
 
@@ -186,7 +186,7 @@ export class Adaptive3DSceneSynthesizer {
 
     /**
      * Dynamically generates the complete C++20 program implementing the scene contract.
-     * Uses Astra 3D Engine, Archie Architectural Generator, and SB-Veggie Foliage Engine.
+     * Uses Astro 3D Engine, Archie Architectural Generator, and SB-Veggie Foliage Engine.
      */
     public generateCppSource(contract: Adaptive3DSceneContract): string {
         const t = contract.terrain;

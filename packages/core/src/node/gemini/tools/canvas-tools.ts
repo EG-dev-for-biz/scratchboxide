@@ -119,7 +119,7 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                             title: { type: 'STRING' },
                             description: { type: 'STRING' },
                             tier: { type: 'STRING', enum: ['tier1-native', 'tier2-comfyui'] },
-                            engine: { type: 'STRING', description: 'Specific engine, e.g. C++20 Astra, Omni 1.1, Three.js' }
+                            engine: { type: 'STRING', description: 'Specific engine, e.g. C++20 Astro, Omni 1.1, Three.js' }
                         },
                         required: ['id', 'title']
                     }

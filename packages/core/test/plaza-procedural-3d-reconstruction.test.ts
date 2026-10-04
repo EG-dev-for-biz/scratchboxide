@@ -24,7 +24,7 @@ describe('Plaza Hotel Procedural 3D Reconstruction from Image', () => {
         expect(stats.size).toBeGreaterThan(50000);
     });
 
-    it('should compile the native C++20 Astra Plaza Hotel generator without errors', async () => {
+    it('should compile the native C++20 Astro Plaza Hotel generator without errors', async () => {
         expect(fs.existsSync(sourcePath)).toBe(true);
         const sourceCode = fs.readFileSync(sourcePath, 'utf8');
 

@@ -167,7 +167,7 @@ export interface UniversalTextureMap {
 }
 
 /**
- * Procedural PBR Material Presets matching native C++20 Astra engine definitions.
+ * Procedural PBR Material Presets matching native C++20 Astro engine definitions.
  */
 export type MaterialPresetName =
   | 'titanium'

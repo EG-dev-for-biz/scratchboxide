@@ -95,7 +95,7 @@ describe('Mars Rover Exploration & Non-Earth Geospatial Guardrails', () => {
                     timestamp: '12:01 PM'
                 }
             ];
-            const answerText = '[Clarification Selection]: Which 3D representation and execution architecture do you want to generate?: Procedural C++20 Astra Mesh (.glb)';
+            const answerText = '[Clarification Selection]: Which 3D representation and execution architecture do you want to generate?: Procedural C++20 Astro Mesh (.glb)';
             const priorUserMsg = [...messages].reverse().find(m =>
                 m.sender === 'user' &&
                 !m.text.startsWith('[Clarification Selection]') &&

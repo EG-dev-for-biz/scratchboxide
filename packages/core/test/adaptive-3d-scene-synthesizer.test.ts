@@ -5,7 +5,7 @@
  * Verifies:
  * 1. Zero hardcoded scene .cpp files needed in the repository.
  * 2. Dynamic open schema contract inference from natural language prompts.
- * 3. Dynamic C++20 code synthesis combining Astra 3D Engine, Archie Architecture,
+ * 3. Dynamic C++20 code synthesis combining Astro 3D Engine, Archie Architecture,
  *    and SB-Veggie Botany with transferred envelope normals.
  * 4. Compilation via Apple Clang (-std=c++20 -O3) and valid binary .glb generation.
  ********************************************************************************/

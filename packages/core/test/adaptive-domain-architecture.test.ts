@@ -178,7 +178,7 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
 
             // Scene with cppGenerator matching an overpass prompt must NOT be hijacked to 'highway_overpass' preset
             const overpassClassification = classifySceneContent({
-                title: "Highway Overpass Astra Engine",
+                title: "Highway Overpass Astro Engine",
                 sceneType: "adaptive",
                 worldBranch: "infrastructure/highway",
                 cppGenerator: {

@@ -1,7 +1,7 @@
 ---
 name: two-tier-problem-solving
 description: >-
-  Evaluate user requests against Scratchbox IDE native app capabilities (Tier 1: C++20 Astra 3D Engine,
+  Evaluate user requests against Scratchbox IDE native app capabilities (Tier 1: C++20 Astro 3D Engine,
   Three.js, Video Timeline NLE, UTDRA, NOAA Solar Ephemeris, Google Maps 3D Tiles) and seamlessly fall back
   to the ComfyUI autonomous pipeline (Tier 2: Google Cloud Run NVIDIA L4 GPU / local) for neural generation
   (Trellis, TripoSR, AnimateDiff, Marigold, specialized LoRAs). Enforces zero closed classifiers, transactional failover,
@@ -26,7 +26,7 @@ The **Two-Tier Problem-Solving Directive** establishes the architectural princip
           ┌─────────────────────┴─────────────────────┐
           ▼                                           ▼
 [Tier 1: Native App Capabilities]         [Tier 2: ComfyUI Service]
-- C++20 Astra Engine (SDF, SIMD, GLB)     - Neural Mesh (Trellis, TripoSR)
+- C++20 Astro Engine (SDF, SIMD, GLB)     - Neural Mesh (Trellis, TripoSR)
 - Google Photorealistic 3D Tiles          - Video Restyling (Omni, AnimateDiff)
 - Video Timeline NLE & Matchmove          - Dense Depth (Marigold)
 - UTDRA / ULDRA Mesh Rectification        - Custom Checkpoints & LoRAs
@@ -51,7 +51,7 @@ The **Two-Tier Problem-Solving Directive** establishes the architectural princip
 | Feature / Task Type | Primary Tier | Implementation Route |
 | :--- | :--- | :--- |
 | **Real-World Locations** | **Tier 1 (Native)** | `getGoogle3DTilesFullTexture` / `getGoogle3DTilesClay` |
-| **Procedural 3D Geometry** | **Tier 1 (Native)** | C++20 Astra Engine (`#include "scratchbox_engine.hpp"`), SIMD math, Marching Cubes SDF |
+| **Procedural 3D Geometry** | **Tier 1 (Native)** | C++20 Astro Engine (`#include "scratchbox_engine.hpp"`), SIMD math, Marching Cubes SDF |
 | **Parametric Mesh Reshaping** | **Tier 1 (Native)** | `mesh_reshape_via_prompt` / `NativeMeshReshaperService` (Bernstein FFD, Taper, Bend, Twist) |
 | **Photogrammetry Rectification** | **Tier 1 (Native)** | `utdra_probe_tile` / `UniversalTileDecompositionService` (Shafts, crowns, bridge voids) |
 | **Camera Matchmove & Tracking** | **Tier 1 (Native)** | `VfxPlateMatchmoveService` / `interpolateCameraSolve` |

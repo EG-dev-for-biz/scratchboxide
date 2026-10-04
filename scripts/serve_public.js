@@ -27,7 +27,7 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
-    { title: 'Next-Gen Astra 3D Viewport Studio', path: '/next_gen_astra_viewport_studio.html', badge: 'INDUSTRY BENCHMARK' },
+    { title: 'Next-Gen Astro 3D Viewport Studio', path: '/next_gen_astra_viewport_studio.html', badge: 'INDUSTRY BENCHMARK' },
     { title: 'Geographical 3DGS Studio · Real-World Radiance Fields', path: '/geographic_3dgs_studio.html', badge: 'GEOGRAPHIC 3DGS' },
     { title: 'AMD FidelityFX FSR 1.0 Super Resolution Studio', path: '/fsr_upscaling_demo.html', badge: 'EASU + RCAS' },
     { title: 'Volumetric Fire & Particle Simulation Studio', path: '/demos/fire-explosion.html', badge: 'VOLUMETRIC FLUID' },
@@ -461,7 +461,7 @@ const server = http.createServer((req, res) => {
                         logs: [
                             `[SurveyEngine] Synthesized ${stationEntries.length} 6-DoF stations across 4 elevation tiers`,
                             `[MultiSpectral] Ingested ${stationEntries.length} station plates at metric scale`,
-                            `[Astra C++20] Computed tangent-plane elliptical covariance (sigma-scale: 0.35, tau: 0.08)`,
+                            `[Astro C++20] Computed tangent-plane elliptical covariance (sigma-scale: 0.35, tau: 0.08)`,
                             `[Filter] Drop foliage: ${dropFoliage ? 'ACTIVE (Excess Green 2G-R-B > 0.08)' : 'OFF'}, Normal prune cos: ${normalPruneCos}`,
                             `[Octree] Voxel grid size: ${voxelSize}m, crop radius: ${cropRadius}m`,
                             `[Fuse] ${totalInput.toLocaleString()} input splats -> ${fusedCount.toLocaleString()} fused splats in ${durationMs}ms`,

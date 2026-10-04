@@ -74,7 +74,7 @@ inline std::vector<Vec2> makeEnuRect(float uMin, float uMax, float vMin, float v
 
 int main() {
     std::cout << "======================================================================\n";
-    std::cout << "  Scratchbox Astra C++20 Engine: Google Maps Low-Poly 3D Map Generator\n";
+    std::cout << "  Scratchbox Astro C++20 Engine: Google Maps Low-Poly 3D Map Generator\n";
     std::cout << "  Target: COLMAP & GLOMAP Photogrammetry & Three.js Viewports\n";
     std::cout << "======================================================================\n";
 

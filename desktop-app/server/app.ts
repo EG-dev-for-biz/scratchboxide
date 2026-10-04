@@ -462,7 +462,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/git', gitRouter);
     app.use('/workspace/git', gitRouter);
 
-    // 4. Native C++20 Astra 3D Engine Endpoints
+    // 4. Native C++20 Astro 3D Engine Endpoints
     const cppRouter = createCppRouter(cppCompiler, routeContext);
     app.use('/3d', cppRouter);
     app.use('/compiler', cppRouter);

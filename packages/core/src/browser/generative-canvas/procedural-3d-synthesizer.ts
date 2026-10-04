@@ -2296,7 +2296,7 @@ function _synthesizeRawContextual3DSceneInner(
         }
 
         // Only run tile ingest if explicitly requesting Google 3D tile models or geospatial photogrammetry
-        const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astra|nanobind)\b/i.test(prompt);
+        const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astro|astra|nanobind)\b/i.test(prompt);
         const isExplicitTileIngest = /\b(?:tile|tiles|map\s*data|satellite|photogrammetr|geospatial|real\s*world\s*clay|google\s*maps)\b/i.test(prompt) ||
             (!isExplicitProcedural && detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
 

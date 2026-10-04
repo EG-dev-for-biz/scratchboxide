@@ -28,7 +28,7 @@ This ledger provides an exhaustive index of all completed APIs, services, operat
 2. [Gemini Agent Tool Suite (In-App Tool Registry)](#2-gemini-agent-tool-suite-in-app-tool-registry)
 3. [Direct-Dispatch Canvas Operators (Three.js Stage Engine)](#3-direct-dispatch-canvas-operators-threejs-stage-engine)
 4. [Desktop App REST API Endpoints (Server & Routers)](#4-desktop-app-rest-api-endpoints-server--routers)
-5. [Native C++20 Astra 3D Engine Modules](#5-native-c20-astra-3d-engine-modules)
+5. [Native C++20 Astro 3D Engine Modules](#5-native-c20-astro-3d-engine-modules)
 6. [Scratchbox CLI (`sbox`) Commands](#6-scratchbox-cli-sbox-commands)
 7. [VFX Pipeline Integration Architecture: How Everything Fits Together](#7-vfx-pipeline-integration-architecture-how-everything-fits-together)
 
@@ -113,7 +113,7 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
   - `decomposeTile`: Full pipeline rectification of facades, spires, and road grades.
   - `carveBridgeVoids`: Excises photogrammetric curtain walls beneath spans while ensuring $\ge 3.5\text{m}$ clearance.
   - `sliceElevation`: Sutherland-Hodgman analytical planar slicing preserving building envelopes.
-- **`NativeMeshReshaperService`** (`packages/core/src/node/3d-engine/native-mesh-reshaper-service.ts`): C++20 Astra engine deformation runner (taper, twist, bend, bulge, squash, shear, FFD tensor lattices, sculpt brushes).
+- **`NativeMeshReshaperService`** (`packages/core/src/node/3d-engine/native-mesh-reshaper-service.ts`): C++20 Astro engine deformation runner (taper, twist, bend, bulge, squash, shear, FFD tensor lattices, sculpt brushes).
 - **`FieldAlignedQuadRemeshService`** (`packages/core/src/node/3d-engine/field-remesh-service.ts`): 4-RoSy directional cross-field calculation and quad-dominant remeshing.
 - **`PhotorealTileCleanupService`** (`packages/core/src/node/3d-engine/tile-cleanup-service.ts`): Decimates coplanar triangles, repairs non-manifold seams, and removes floating geometry.
 
@@ -365,7 +365,7 @@ Over 60 real-time operators executed via `DirectDispatchOperatorEngine` in `pack
 - `sb_loop_subdivide`: Loop subdivision for triangle surfaces.
 - `sb_loft_mesh`, `sb_lathe_mesh`: Generates geometry from 2D splines.
 - `sb_repair_mesh`: Manifold healing and duplicate vertex welding.
-- `sb_reshape_mesh`: Native C++ Astra engine deformation hook.
+- `sb_reshape_mesh`: Native C++ Astro engine deformation hook.
 - `sb_add_mesh`: Injects standard primitives (box, cylinder, sphere, torus).
 - `sb_import_3d_tile`: Ingests and mounts 3D tile submeshes.
 
@@ -478,7 +478,7 @@ Hosted by the desktop application server in `desktop-app/server/app.ts`:
 
 ---
 
-## 5. Native C++20 Astra 3D Engine Modules
+## 5. Native C++20 Astro 3D Engine Modules
 
 77 header modules in `packages/core/src/native/3d-engine/include/`, compiled on-the-fly with Apple Clang (`-std=c++20 -O3`):
 
@@ -573,7 +573,7 @@ Located in `packages/cli/src/commands/`:
 - **`sbox commit -m <message>`**: Creates a new spatial commit snapshotting geometry, transforms, and metadata.
 - **`sbox diff <commitA> <commitB>`**: Computes 3D geometric and volumetric deltas between two spatial commits.
 - **`sbox bake`**: Bakes procedural C++ geometry, high-res PBR textures, and LOD pyramids into static GLBs.
-- **`sbox generate --prompt <text> [--out <file.glb>]`**: Natural-language 3D generation via native C++ Astra or ComfyUI fallback.
+- **`sbox generate --prompt <text> [--out <file.glb>]`**: Natural-language 3D generation via native C++ Astro or ComfyUI fallback.
 - **`sbox qa [--rubric]`**: Runs the automated 8-Dimension Visual Critic quality audit on the workspace.
 - **`sbox splat <input> [--out <file.ply>]`**: Converts multi-view photos, videos, or meshes into optimized 3D Gaussian Splats.
 - **`sbox matchmove <video> --location <coords/address>`**: Solves 6-DOF camera matchmove and exports camera trajectories.

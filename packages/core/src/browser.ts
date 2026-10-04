@@ -309,8 +309,9 @@ export {
     type GlazeCrackleConfig
 } from './browser/generative-canvas/services/spatial/ProceduralMicroSurfaceShaderPatcher';
 
-// Next-Gen Astra Viewport Engine & Real WebGPU Compute Culling Pipeline
+// Next-Gen Astro Viewport Engine & Real WebGPU Compute Culling Pipeline
 export {
+    NextGenAstroViewportEngine,
     NextGenAstraViewportEngine,
     CULL_MESHLETS_WGSL,
     MICRO_RASTERIZER_WGSL,

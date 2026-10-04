@@ -346,13 +346,13 @@ export class TaskCapabilityResolver {
             if (isAnalyticalGroomSplat) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Native C++20 Astra Hair & Biophysical Grooming Engine (scratchbox_hair.hpp)');
+                nativeCapabilities.push('Native C++20 Astro Hair & Biophysical Grooming Engine (scratchbox_hair.hpp)');
                 nativeCapabilities.push('Analytical Forward 3D Gaussian Splatting & Niantic SPZ v2 Exporter (scratchbox_spz.hpp)');
                 nativeCapabilities.push('Continuous Spherical Harmonic Surface Synthesis (Harmonic Radial Modes, Axial Taper)');
                 nativeCapabilities.push('Biophysical Morphology (Voronoi Clumping, Helical Curl, Wave Noise)');
                 nativeCapabilities.push('Marschner Melanin Albedo Pigmentation (Eumelanin / Pheomelanin)');
                 nativeCapabilities.push('In-App Agent Tool: splat_synthesize_analytical_groom');
-                rationale = 'Native Scratchbox C++20 Astra hair engine synthesizes biophysical hair strands, Voronoi clumping, and procedural curl noise, then analytically forward-projects them into anisotropic 3D Gaussian Splats (.spz / .ply / .glb) in milliseconds without slow inverse training or external tools.';
+                rationale = 'Native Scratchbox C++20 Astro hair engine synthesizes biophysical hair strands, Voronoi clumping, and procedural curl noise, then analytically forward-projects them into anisotropic 3D Gaussian Splats (.spz / .ply / .glb) in milliseconds without slow inverse training or external tools.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'splat_synthesize_analytical_groom or AnalyticalGroomSplatService',
@@ -363,7 +363,7 @@ export class TaskCapabilityResolver {
             } else if (isNeuralImageTo3D) {
                 canSolveNatively = false;
                 primaryNativeEngine = 'none';
-                rationale = 'Single-image to discrete 3D object mesh reconstruction requires a neural generative diffusion model (such as Trellis or TripoSR for isolated props/objects). 3D scenes, urban environments, and architectural layouts are created natively in codebase (Tier 1 C++20 Astra / UniversalArchiBridgeService / Three.js).';
+                rationale = 'Single-image to discrete 3D object mesh reconstruction requires a neural generative diffusion model (such as Trellis or TripoSR for isolated props/objects). 3D scenes, urban environments, and architectural layouts are created natively in codebase (Tier 1 C++20 Astro / UniversalArchiBridgeService / Three.js).';
             } else if (/universal\s*3d\s*structure|canonical\s*3d\s*(?:anchor|foundation)|single\s*source\s*of\s*truth\s*3d|multi-?format\s*(?:3d|projection)|collision\s*(?:envelope|hull)|convex\s*bumper\s*hull|universal\s*animation|continuous\s*(?:time\s*)?animation|keyframe\s*diamonds?|animation[\s\w-]{0,30}(?:timeline|nle)|(?:export|project)\s*(?:to\s*)?(?:colmap|nerfstudio|3dgs)/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
@@ -399,14 +399,14 @@ export class TaskCapabilityResolver {
             } else if (/reshape|deform|taper|twist|bend|bulge|squash|shear|sculpt[\s\w-]{0,30}mesh|mesh[\s\w-]{0,30}shaping|lattice[\s\w-]{0,30}deform/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('Native C++20 Astra Mesh Reshaper Engine (scratchbox_shaper.hpp)');
+                nativeCapabilities.push('Native C++20 Astro Mesh Reshaper Engine (scratchbox_shaper.hpp)');
                 nativeCapabilities.push('NativeMeshReshaperService / MeshReshapingService');
                 nativeCapabilities.push('Parametric Non-Linear Deformers (Taper, Twist, Bend, Bulge, Squash, Shear)');
                 nativeCapabilities.push('Trivariate Bernstein FFD 3D Tensor Lattice (Lattice3D)');
                 nativeCapabilities.push('Multi-Brush Digital Sculpt Engine (Clay, Crease, Smooth, Flatten, Inflate)');
                 nativeCapabilities.push('Loop Subdivision & Manifold Topology Repair');
                 nativeCapabilities.push('In-App Agent Tools: mesh_reshape_via_prompt & mesh_apply_deformers');
-                rationale = 'Native Scratchbox C++20 Astra 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
+                rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'mesh_reshape_via_prompt or NativeMeshReshaperService',
@@ -448,7 +448,7 @@ export class TaskCapabilityResolver {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
                 nativeCapabilities.push('Algorithmic UV Unwrap & Rewrap Engine (AlgorithmicUvEngine)');
-                nativeCapabilities.push('Native C++20 Astra UV Acceleration (scratchbox_uv_engine.hpp)');
+                nativeCapabilities.push('Native C++20 Astro UV Acceleration (scratchbox_uv_engine.hpp)');
                 nativeCapabilities.push('MaxRects BSSF Atlas Bin Packing with 90° Chart Rotation (85-92% Fill Density)');
                 nativeCapabilities.push('Continuous 2D-to-3D Inverse Barycentric Projection & Analytical Cavitation Synthesis');
                 nativeCapabilities.push('Photometric De-Lighting & True PBR Material Suite Decomposition');

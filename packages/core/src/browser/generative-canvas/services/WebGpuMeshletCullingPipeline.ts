@@ -690,7 +690,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         this.updateCameraUniforms();
 
         // 3. Encode GPU commands
-        const commandEncoder = this.device.createCommandEncoder({ label: 'AstraComputeAndDrawEncoder' });
+        const commandEncoder = this.device.createCommandEncoder({ label: 'AstroComputeAndDrawEncoder' });
 
         // A. GPU Compute Culling Pass
         const tComputeStart = performance.now();

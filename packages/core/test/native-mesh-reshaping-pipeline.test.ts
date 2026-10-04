@@ -138,7 +138,7 @@ describe('Native Prompt-Driven Mesh Reshaping Pipeline (Tier 1)', () => {
         expect(capability.tier1Assessment.canSolveNatively).toBe(true);
         expect(capability.tier1Assessment.primaryNativeEngine).toBe('cpp-3d-engine');
         expect(capability.tier1Assessment.suggestedNativeAction?.serviceOrTool).toContain('mesh_reshape_via_prompt');
-        expect(capability.tier1Assessment.rationale).toContain('Astra');
+        expect(capability.tier1Assessment.rationale).toContain('Astro');
     });
 
     it('6. should execute direct-dispatch operator sb_reshape_mesh in browser operator engine', () => {

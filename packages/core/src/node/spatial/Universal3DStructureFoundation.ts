@@ -164,7 +164,7 @@ export class Universal3DStructureFoundation {
   }
 
   /**
-   * Factory: Get physical material preset grounded in C++20 Astra 3D Engine parameters.
+   * Factory: Get physical material preset grounded in C++20 Astro 3D Engine parameters.
    */
   public static getMaterialPreset(preset: MaterialPresetName): UniversalPbrMaterial {
     switch (preset) {
@@ -2446,7 +2446,7 @@ export class Universal3DStructureFoundation {
 ## 1. Scene Overview & Identification
 - **Project Structure ID**: \`${this.id}\`
 - **Asset Name**: \`${this.name}\`
-- **Creation Provenance**: \`Universal3DStructureFoundation (C++20 Astra / Biophysical PBR)\`
+- **Creation Provenance**: \`Universal3DStructureFoundation (C++20 Astro / Biophysical PBR)\`
 - **Standardized glTF Export**: \`${this.name}.glb\`
 
 ---

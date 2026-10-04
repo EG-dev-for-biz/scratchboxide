@@ -78,7 +78,7 @@ $$\frac{dL(\mathbf{x}, \mathbf{\omega})}{ds} = -\sigma_t(\mathbf{x}) L(\mathbf{x
 
 Scratchbox IDE contains production-grade C++20 and TypeScript systems that directly map to these disciplines:
 
-| Discipline | Native C++20 Astra Engine | TypeScript / Three.js Engine |
+| Discipline | Native C++20 Astro Engine | TypeScript / Three.js Engine |
 | :--- | :--- | :--- |
 | **Volumetric Lighting** | `#include "scratchbox_volumetrics.hpp"` (`marchVolumetrics`, `henyeyGreensteinPhase`, `dualLobePhase`) | `VolumetricGodRays.ts`, `volumetric-participating-media.ts`, `AtmosphereService.ts` |
 | **Subsurface Scattering** | `#include "scratchbox_sss.hpp"` (`evaluateThinWallTransmission`, `PROFILE_GREEN_LEAF`) | Custom Three.js shader chunks injecting dual-sided backface transmission |

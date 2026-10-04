@@ -24,7 +24,7 @@ function asString(val: unknown): string {
 export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'mesh_reshape_via_prompt',
-        description: 'Reshape, sculpt, and deform a 3D mesh (.glb) from a natural language prompt using the native Scratchbox C++20 Astra 3D engine (taper, twist, bend, bulge, FFD Bernstein lattice, digital sculpt strokes, and subdivision).',
+        description: 'Reshape, sculpt, and deform a 3D mesh (.glb) from a natural language prompt using the native Scratchbox C++20 Astro 3D engine (taper, twist, bend, bulge, FFD Bernstein lattice, digital sculpt strokes, and subdivision).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -113,7 +113,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'tile_restructure_via_prompt',
-        description: 'Restructure, terraform, and graft architectural primitives onto a 3D tile (.glb) from a natural language prompt using native C++20 Astra 3D engine.',
+        description: 'Restructure, terraform, and graft architectural primitives onto a 3D tile (.glb) from a natural language prompt using native C++20 Astro 3D engine.',
         parameters: {
             type: 'OBJECT',
             properties: {
