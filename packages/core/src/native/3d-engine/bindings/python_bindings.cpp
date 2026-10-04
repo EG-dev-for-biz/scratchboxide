@@ -274,6 +274,11 @@ NB_MODULE(scratchbox_native, m) {
         return legacy.toScratchboxMesh();
     }, "config"_a, "Generate a realistic botanical tree using Runions space colonization");
 
+    m_nat.def("generate_tree_components", [](const SpaceColonizationConfig& config) {
+        auto [wood, foliage] = SpaceColonizationTreeGenerator::generateTreeComponents(config);
+        return std::make_pair(wood.toScratchboxMesh(), foliage.toScratchboxMesh());
+    }, "config"_a, "Generate separate wood and foliage components with proper material tagging and cylindrical UVs");
+
     nb::class_<LSystemTreeParams>(m_nat, "LSystemTreeParams")
         .def(nb::init<>())
         .def_rw("max_depth", &LSystemTreeParams::maxDepth)
@@ -409,4 +414,50 @@ NB_MODULE(scratchbox_native, m) {
         auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
         return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
     }, "meshes"_a, "Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data");
+
+    m_io.def("write_botanical_glb", [](const std::string& path, const std::vector<ScratchboxMesh>& meshes, int texture_res, float season, uint32_t seed) {
+        auto textures = botanical::BotanicalPbrTextureSynthesizer::createBotanicalEmbeddedTextures(texture_res, texture_res, season, seed, false);
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes, textures);
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open file for writing: " + path);
+        }
+        out.write(reinterpret_cast<const char*>(glb.data()), static_cast<std::streamsize>(glb.size()));
+        out.close();
+        return true;
+    }, "path"_a, "meshes"_a, "texture_res"_a = 512, "season"_a = 1.0f, "seed"_a = 42,
+       "Save botanical tree meshes to GLB embedding procedural Worley bark and botanical foliage PBR texture maps (Albedo, Normal, ORM)");
+
+    // ========================================================================
+    // 8. PLANT SUBMODULE (scratchbox_plant_builder.hpp)
+    // ========================================================================
+    auto m_plant = m.def_submodule("plant", "Procedural botanical plant presets and heroic biome assets");
+
+    nb::class_<plant::PlantBuildResult>(m_plant, "PlantBuildResult")
+        .def_rw("wood_mesh", &plant::PlantBuildResult::woodMesh)
+        .def_rw("foliage_mesh", &plant::PlantBuildResult::foliageMesh)
+        .def_rw("ground_clutter_mesh", &plant::PlantBuildResult::groundClutterMesh)
+        .def_rw("total_vertices", &plant::PlantBuildResult::totalVertices)
+        .def_rw("total_triangles", &plant::PlantBuildResult::totalTriangles)
+        .def("get_combined", &plant::PlantBuildResult::getCombined, "name"_a = "CombinedPlant");
+
+    m_plant.def("create_hero_redwood", [](const Vec3& pos, float height) {
+        return plant::PlantPresets::createHeroAncientRedwood(pos, height);
+    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 28.0f, "Create hero ancient redwood with 8 buttress flutes and multi-tier conifer boughs");
+
+    m_plant.def("create_understory_dogwood", [](const Vec3& pos, float height) {
+        return plant::PlantPresets::createUnderstoryDogwood(pos, height);
+    }, "pos"_a = Vec3(0, 0, 0), "height"_a = 5.5f, "Create subcanopy understory dogwood tree");
+
+    m_plant.def("create_sword_fern_colony", [](const Vec3& pos, float radius, int fronds) {
+        return plant::PlantPresets::createSwordFernColony(pos, radius, fronds);
+    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 1.6f, "fronds"_a = 26, "Create arching sword fern colony");
+
+    m_plant.def("create_wood_sorrel_cushion", [](const Vec3& pos, float radius) {
+        return plant::PlantPresets::createWoodSorrelCushion(pos, radius);
+    }, "pos"_a = Vec3(0, 0, 0), "radius"_a = 0.95f, "Create trifoliate wood sorrel ground cushion");
+
+    m_plant.def("create_decaying_nurse_log", [](const Vec3& start, const Vec3& end, float radius) {
+        return plant::PlantPresets::createDecayingNurseLog(start, end, radius);
+    }, "start"_a = Vec3(-2, 0, 0), "end"_a = Vec3(2, 0, 0), "radius"_a = 0.5f, "Create decaying nurse log with polypore shelves");
 }

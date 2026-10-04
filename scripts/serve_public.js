@@ -1240,85 +1240,102 @@ boulder2.rotate_y(-45.0)
 boulder2.translate(-10.2, 1.4 + 0.4, 6.5)
 mesh_list.append(boulder2)
 
-# 2. Hero Specimen Botanical Tree
-hero_tree = sb.create_tree(
-    attractor_count=260,
-    crown_center=(0.0, ${crownCenterY}, 0.0),
-    crown_extents=(${crownExtX}, ${crownExtY}, ${crownExtZ}),
-    base_radius=${baseRadius},
-    tip_radius=0.022,
-    root_flare_multiplier=${flareMult},
-    root_flare_height=1.5,
-    use_detailed_leaves=True,
-    use_twig_sprays=True,
-    spawn_lateral_twigs=True,
-    leaf_size=0.38,
-    leaves_per_tip=4,
-    wood_color=sb.Vec4(0.24, 0.18, 0.12, 1.0),
-    leaf_color=sb.Vec4(${leafR}, ${leafG}, ${leafB}, 1.0),
-    seed=2026
-)
-hero_tree.name = "Hero_Specimen_Tree"
-hero_tree.translate(0.0, 1.4, 0.0)
-mesh_list.append(hero_tree)
+# 2. Hero Specimen Botanical Tree (Separated Bark & Foliage with Worley Rhytidome)
+hero_cfg = sb.nature.SpaceColonizationConfig()
+hero_cfg.attractor_count = 280
+hero_cfg.crown_center = sb.Vec3(0.0, ${crownCenterY}, 0.0)
+hero_cfg.crown_extents = sb.Vec3(${crownExtX}, ${crownExtY}, ${crownExtZ})
+hero_cfg.base_radius = ${baseRadius}
+hero_cfg.tip_radius = 0.022
+hero_cfg.root_flare_multiplier = ${flareMult}
+hero_cfg.root_flare_height = 1.5
+hero_cfg.generate_leaves = True
+hero_cfg.use_detailed_leaves = True
+hero_cfg.use_twig_sprays = True
+hero_cfg.spawn_lateral_twigs = True
+hero_cfg.leaf_size = 0.38
+hero_cfg.leaves_per_tip = 4
+hero_cfg.wood_color = sb.Vec4(0.24, 0.18, 0.12, 1.0)
+hero_cfg.leaf_color = sb.Vec4(${leafR}, ${leafG}, ${leafB}, 1.0)
+hero_cfg.seed = 2026
 
-# 3. Secondary Companion Saplings (70-20-10 Hierarchy)
-sapling_1 = sb.create_tree(
-    attractor_count=130,
-    crown_center=(0.0, 4.4, 0.0),
-    crown_extents=(2.2, 3.0, 2.2),
-    base_radius=0.24,
-    tip_radius=0.018,
-    root_flare_multiplier=1.7,
-    root_flare_height=0.8,
-    use_detailed_leaves=True,
-    use_twig_sprays=True,
-    leaf_size=0.32,
-    leaves_per_tip=4,
-    wood_color=sb.Vec4(0.26, 0.20, 0.14, 1.0),
-    leaf_color=sb.Vec4(${leafR * 0.95}, ${leafG * 1.05}, ${leafB * 0.95}, 1.0),
-    seed=4412
-)
-sapling_1.name = "Companion_Sapling_North"
-sapling_1.translate(-9.5, 1.4, 4.5)
-mesh_list.append(sapling_1)
+hero_wood, hero_foliage = sb.nature.generate_tree_components(hero_cfg)
+hero_wood.name = "Hero_Trunk_Bark"
+hero_wood.translate(0.0, 1.4, 0.0)
+mesh_list.append(hero_wood)
 
-sapling_2 = sb.create_tree(
-    attractor_count=110,
-    crown_center=(0.0, 3.8, 0.0),
-    crown_extents=(1.8, 2.4, 1.8),
-    base_radius=0.19,
-    tip_radius=0.016,
-    root_flare_multiplier=1.5,
-    root_flare_height=0.6,
-    use_detailed_leaves=True,
-    use_twig_sprays=True,
-    leaf_size=0.30,
-    leaves_per_tip=4,
-    wood_color=sb.Vec4(0.28, 0.22, 0.16, 1.0),
-    leaf_color=sb.Vec4(${leafR * 1.05}, ${leafG * 0.95}, ${leafB * 1.05}, 1.0),
-    seed=8921
-)
-sapling_2.name = "Companion_Sapling_South"
-sapling_2.translate(8.8, 1.4, -6.8)
-mesh_list.append(sapling_2)
+hero_foliage.name = "Hero_Canopy_Foliage"
+hero_foliage.translate(0.0, 1.4, 0.0)
+mesh_list.append(hero_foliage)
 
-# 4. Understory Shrub Clumps (Low Canopy Vegetation)
-for s_idx, (sx, sz) in enumerate([(-4.5, -3.2), (5.2, 4.0), (-6.0, 2.0)]):
-    shrub = sb.create_tree(
-        attractor_count=70,
-        crown_center=(0.0, 1.4, 0.0),
-        crown_extents=(1.4, 1.2, 1.4),
-        base_radius=0.10,
-        root_flare_multiplier=1.2,
-        leaf_size=0.28,
-        leaves_per_tip=3,
-        leaf_color=sb.Vec4(${leafR * 0.9}, ${leafG * 1.02}, ${leafB * 0.9}, 1.0),
-        seed=1000 + s_idx
-    )
-    shrub.name = f"Understory_Shrub_{s_idx+1}"
-    shrub.translate(sx, 1.4, sz)
-    mesh_list.append(shrub)
+# 3. Secondary Companion Saplings (70-20-10 Multi-Tier Hierarchy)
+sapling_1_cfg = sb.nature.SpaceColonizationConfig()
+sapling_1_cfg.attractor_count = 140
+sapling_1_cfg.crown_center = sb.Vec3(0.0, 4.4, 0.0)
+sapling_1_cfg.crown_extents = sb.Vec3(2.2, 3.0, 2.2)
+sapling_1_cfg.base_radius = 0.24
+sapling_1_cfg.tip_radius = 0.018
+sapling_1_cfg.root_flare_multiplier = 1.7
+sapling_1_cfg.root_flare_height = 0.8
+sapling_1_cfg.use_detailed_leaves = True
+sapling_1_cfg.use_twig_sprays = True
+sapling_1_cfg.leaf_size = 0.32
+sapling_1_cfg.leaves_per_tip = 4
+sapling_1_cfg.wood_color = sb.Vec4(0.26, 0.20, 0.14, 1.0)
+sapling_1_cfg.leaf_color = sb.Vec4(${leafR * 0.95}, ${leafG * 1.05}, ${leafB * 0.95}, 1.0)
+sapling_1_cfg.seed = 4412
+
+sap_wood_1, sap_foliage_1 = sb.nature.generate_tree_components(sapling_1_cfg)
+sap_wood_1.name = "Companion_Wood_North"
+sap_wood_1.translate(-9.5, 1.4, 4.5)
+mesh_list.append(sap_wood_1)
+
+sap_foliage_1.name = "Companion_Foliage_North"
+sap_foliage_1.translate(-9.5, 1.4, 4.5)
+mesh_list.append(sap_foliage_1)
+
+sapling_2_cfg = sb.nature.SpaceColonizationConfig()
+sapling_2_cfg.attractor_count = 120
+sapling_2_cfg.crown_center = sb.Vec3(0.0, 3.8, 0.0)
+sapling_2_cfg.crown_extents = sb.Vec3(1.8, 2.4, 1.8)
+sapling_2_cfg.base_radius = 0.19
+sapling_2_cfg.tip_radius = 0.016
+sapling_2_cfg.root_flare_multiplier = 1.5
+sapling_2_cfg.root_flare_height = 0.6
+sapling_2_cfg.use_detailed_leaves = True
+sapling_2_cfg.use_twig_sprays = True
+sapling_2_cfg.leaf_size = 0.30
+sapling_2_cfg.leaves_per_tip = 4
+sapling_2_cfg.wood_color = sb.Vec4(0.28, 0.22, 0.16, 1.0)
+sapling_2_cfg.leaf_color = sb.Vec4(${leafR * 1.05}, ${leafG * 0.95}, ${leafB * 1.05}, 1.0)
+sapling_2_cfg.seed = 8921
+
+sap_wood_2, sap_foliage_2 = sb.nature.generate_tree_components(sapling_2_cfg)
+sap_wood_2.name = "Companion_Wood_South"
+sap_wood_2.translate(8.8, 1.4, -6.8)
+mesh_list.append(sap_wood_2)
+
+sap_foliage_2.name = "Companion_Foliage_South"
+sap_foliage_2.translate(8.8, 1.4, -6.8)
+mesh_list.append(sap_foliage_2)
+
+# 4. Understory Biome Grounding (Sword Ferns, Wood Sorrels & Mossy Nurse Log)
+if hasattr(sb, 'plant') and sb.plant:
+    fern1 = sb.plant.create_sword_fern_colony(sb.Vec3(2.5, 1.4, 1.8), 1.8, 26)
+    mesh_list.append(fern1.foliage_mesh)
+    
+    fern2 = sb.plant.create_sword_fern_colony(sb.Vec3(-3.2, 1.4, -2.2), 1.5, 22)
+    mesh_list.append(fern2.foliage_mesh)
+
+    sorrel1 = sb.plant.create_wood_sorrel_cushion(sb.Vec3(1.6, 1.4, -1.8), 1.2)
+    mesh_list.append(sorrel1.foliage_mesh)
+
+    sorrel2 = sb.plant.create_wood_sorrel_cushion(sb.Vec3(-1.8, 1.4, 2.4), 1.0)
+    mesh_list.append(sorrel2.foliage_mesh)
+
+    nurse_log = sb.plant.create_decaying_nurse_log(sb.Vec3(-4.5, 1.7, 3.2), sb.Vec3(-0.5, 1.7, 5.0), 0.42)
+    nurse_log.wood_mesh.name = "Decaying_Nurse_Log_Bark"
+    mesh_list.append(nurse_log.wood_mesh)
 `;
                 } else {
                     // Open-Domain Parametric Synthesizer (The Alien Planet Invariant Fallback)
@@ -1376,7 +1393,7 @@ for i, (tx, tz) in enumerate([(-18.0, 12.0), (18.0, 12.0)]):
                 pythonScript += `
 # Stream valid binary glTF 2.0 with separate mesh nodes & materials
 out_path = OUTPUT_GLB_PATH
-sb.io.write_glb(out_path, mesh_list)
+${isBotanical ? 'sb.io.write_botanical_glb(out_path, mesh_list, 512, 1.0, 42)' : 'sb.io.write_glb(out_path, mesh_list)'}
 
 total_v = sum(m.vertex_count for m in mesh_list)
 total_t = sum(m.triangle_count for m in mesh_list)

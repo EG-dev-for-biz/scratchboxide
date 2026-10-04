@@ -89,6 +89,7 @@
 #include "scratchbox_tectonics.hpp"
 #include "scratchbox_tectonic_analyzer.hpp"
 #include "scratchbox_plant_builder.hpp"
+#include "scratchbox_botanical_texture.hpp"
 #include "scratchbox_infinigen.hpp"
 #include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_displacement.hpp"

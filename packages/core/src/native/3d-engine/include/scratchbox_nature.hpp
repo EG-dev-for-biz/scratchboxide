@@ -125,9 +125,10 @@ inline void appendBranchCylinder(
 
     uint32_t baseIndex = static_cast<uint32_t>(mesh.vertices.size());
 
-    // Generate rings for start and end
-    for (int i = 0; i < segments; ++i) {
-        float angle = (static_cast<float>(i) / static_cast<float>(segments)) * math::TWO_PI;
+    // Generate rings for start and end with duplicated seam (i <= segments) for seamless [0, 1] cylindrical UVs
+    for (int i = 0; i <= segments; ++i) {
+        float u = static_cast<float>(i) / static_cast<float>(segments);
+        float angle = u * math::TWO_PI;
         float cosA = std::cos(angle);
         float sinA = std::sin(angle);
         Vec3 ringRadial = side * cosA + up * sinA;
@@ -136,20 +137,21 @@ inline void appendBranchCylinder(
         mesh.vertices.push_back(start + ringRadial * rStart);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
+        mesh.uvs.push_back(Vec2(u * 2.0f, start.y * 1.5f));
 
         // Top vertex
         mesh.vertices.push_back(end + ringRadial * rEnd);
         mesh.normals.push_back(ringRadial);
         mesh.vertexColors.push_back(woodColor);
+        mesh.uvs.push_back(Vec2(u * 2.0f, end.y * 1.5f));
     }
 
     // Connect quads as triangles
     for (int i = 0; i < segments; ++i) {
-        int next = (i + 1) % segments;
         uint32_t b0 = baseIndex + i * 2;
         uint32_t t0 = baseIndex + i * 2 + 1;
-        uint32_t b1 = baseIndex + next * 2;
-        uint32_t t1 = baseIndex + next * 2 + 1;
+        uint32_t b1 = baseIndex + (i + 1) * 2;
+        uint32_t t1 = baseIndex + (i + 1) * 2 + 1;
 
         mesh.indices.push_back(b0);
         mesh.indices.push_back(t0);
@@ -249,6 +251,11 @@ inline void appendDetailedFoliageCards(
                 mesh.vertexColors.push_back(colTip);
                 mesh.vertexColors.push_back(colMid);
 
+                mesh.uvs.push_back(Vec2(0.5f, 0.0f));
+                mesh.uvs.push_back(Vec2(1.0f, 0.5f));
+                mesh.uvs.push_back(Vec2(0.5f, 1.0f));
+                mesh.uvs.push_back(Vec2(0.0f, 0.5f));
+
                 // Triangulation (two-sided cards)
                 mesh.indices.push_back(baseIdx);
                 mesh.indices.push_back(baseIdx + 1);
@@ -294,6 +301,10 @@ inline void appendLeafCluster(
             mesh.normals.push_back(Vec3(0, 1, 0)); // Point upward for lush ambient lighting
             mesh.vertexColors.push_back(leafColor);
         }
+        mesh.uvs.push_back(Vec2(0.5f, 0.0f));
+        mesh.uvs.push_back(Vec2(1.0f, 0.5f));
+        mesh.uvs.push_back(Vec2(0.5f, 1.0f));
+        mesh.uvs.push_back(Vec2(0.0f, 0.5f));
 
         mesh.indices.push_back(baseIdx);
         mesh.indices.push_back(baseIdx + 1);
@@ -1069,8 +1080,20 @@ struct ColonizationNode {
 
 class SpaceColonizationTreeGenerator {
 public:
-    static geometry::Mesh generateTree(const SpaceColonizationConfig& cfg) {
-        geometry::Mesh treeMesh;
+    static std::pair<geometry::Mesh, geometry::Mesh> generateTreeComponents(const SpaceColonizationConfig& cfg) {
+        geometry::Mesh woodMesh("Tree_Wood");
+        woodMesh.material = geometry::PbrMaterial::roughWood();
+        woodMesh.material.name = "PBR_Redwood_Bark";
+        woodMesh.material.roughnessFactor = 0.92f;
+        woodMesh.material.metallicFactor = 0.02f;
+
+        geometry::Mesh foliageMesh("Tree_Foliage");
+        foliageMesh.material.name = "PBR_Canopy_Foliage";
+        foliageMesh.material.roughnessFactor = 0.58f;
+        foliageMesh.material.metallicFactor = 0.01f;
+        foliageMesh.material.doubleSided = true;
+        foliageMesh.material.alphaMode = "MASK";
+        foliageMesh.material.alphaCutoff = 0.45f;
         std::mt19937 rng(cfg.seed);
         std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
         std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
@@ -1337,7 +1360,7 @@ public:
                 }
 
                 appendBranchCylinder(
-                    treeMesh,
+                    woodMesh,
                     parent.position, node.position,
                     rStart, rEnd,
                     cfg.woodColor,
@@ -1390,7 +1413,7 @@ public:
                     for (const auto& node : nodes) {
                         if (nodes[node.id].children.empty()) {
                             Vec3 branchDir = (node.growthDir + Vec3(0, 0.12f, 0)).normalized();
-                            TwigClusterGenerator::appendTwigCluster(treeMesh, node.position, branchDir, tCfg);
+                            TwigClusterGenerator::appendTwigCluster(foliageMesh, node.position, branchDir, tCfg);
                         }
                     }
 
@@ -1410,7 +1433,7 @@ public:
                                     // Sprout lateral twig outward from crown centroid with upward phototropic bias
                                     Vec3 outward = (node.position - cfg.crownCenter).normalized();
                                     Vec3 lateralDir = (node.growthDir * 0.40f + outward * 0.72f + Vec3(0, 0.22f, 0)).normalized();
-                                    TwigClusterGenerator::appendTwigCluster(treeMesh, node.position, lateralDir, lateralTCfg);
+                                    TwigClusterGenerator::appendTwigCluster(foliageMesh, node.position, lateralDir, lateralTCfg);
 
                                     // For dense vegetative blobs (rho > 0.55), sprout second bilateral lateral spray
                                     if (cfg.volumetricDensity > 0.55f && fDist(fRng) < (cfg.volumetricDensity - 0.25f)) {
@@ -1419,7 +1442,7 @@ public:
                                         if (binormal.lengthSquared() < 0.01f) binormal = branchTangent.cross(Vec3(1, 0, 0));
                                         binormal = binormal.normalized();
                                         Vec3 oppDir = (branchTangent * 0.35f + binormal * 0.55f + outward * 0.45f + Vec3(0, 0.18f, 0)).normalized();
-                                        TwigClusterGenerator::appendTwigCluster(treeMesh, node.position, oppDir, lateralTCfg);
+                                        TwigClusterGenerator::appendTwigCluster(foliageMesh, node.position, oppDir, lateralTCfg);
                                     }
                                 }
                             }
@@ -1436,7 +1459,7 @@ public:
                             float angle = (static_cast<float>(l) / static_cast<float>(count)) * math::TWO_PI;
                             Vec3 leafDir = (side * std::cos(angle) + up * std::sin(angle) + branchDir * 0.45f).normalized();
                             Vec3 leafNorm = (leafDir + Vec3(0, 0.4f, 0)).normalized();
-                            DetailedLeafGenerator::appendDetailedLeaf(treeMesh, pos, leafDir, leafNorm, scale, lCfg);
+                            DetailedLeafGenerator::appendDetailedLeaf(foliageMesh, pos, leafDir, leafNorm, scale, lCfg);
                         }
                     };
 
@@ -1464,11 +1487,11 @@ public:
                             Vec3 right(std::cos(qAngle) * cfg.leafSize * scale * 0.5f, 0, std::sin(qAngle) * cfg.leafSize * scale * 0.5f);
                             Vec3 up(0, cfg.leafSize * scale * 0.5f, 0);
 
-                            uint32_t bIdx = static_cast<uint32_t>(treeMesh.vertices.size());
-                            treeMesh.vertices.push_back(leafCenter - right - up);
-                            treeMesh.vertices.push_back(leafCenter + right - up);
-                            treeMesh.vertices.push_back(leafCenter + right + up);
-                            treeMesh.vertices.push_back(leafCenter - right + up);
+                            uint32_t bIdx = static_cast<uint32_t>(foliageMesh.vertices.size());
+                            foliageMesh.vertices.push_back(leafCenter - right - up);
+                            foliageMesh.vertices.push_back(leafCenter + right - up);
+                            foliageMesh.vertices.push_back(leafCenter + right + up);
+                            foliageMesh.vertices.push_back(leafCenter - right + up);
 
                             // Subtle natural chlorophyll variation per card
                             float shadeJitter = 0.92f + dist0To1(rng) * 0.16f;
@@ -1476,17 +1499,21 @@ public:
 
                             Vec3 n = right.cross(up).normalized();
                             for (int k = 0; k < 4; ++k) {
-                                treeMesh.normals.push_back(n);
-                                treeMesh.vertexColors.push_back(cardColor);
+                                foliageMesh.normals.push_back(n);
+                                foliageMesh.vertexColors.push_back(cardColor);
                             }
+                            foliageMesh.uvs.push_back(Vec2(0.5f, 0.0f));
+                            foliageMesh.uvs.push_back(Vec2(1.0f, 0.5f));
+                            foliageMesh.uvs.push_back(Vec2(0.5f, 1.0f));
+                            foliageMesh.uvs.push_back(Vec2(0.0f, 0.5f));
 
-                            treeMesh.indices.push_back(bIdx);
-                            treeMesh.indices.push_back(bIdx + 1);
-                            treeMesh.indices.push_back(bIdx + 2);
+                            foliageMesh.indices.push_back(bIdx);
+                            foliageMesh.indices.push_back(bIdx + 1);
+                            foliageMesh.indices.push_back(bIdx + 2);
 
-                            treeMesh.indices.push_back(bIdx);
-                            treeMesh.indices.push_back(bIdx + 2);
-                            treeMesh.indices.push_back(bIdx + 3);
+                            foliageMesh.indices.push_back(bIdx);
+                            foliageMesh.indices.push_back(bIdx + 2);
+                            foliageMesh.indices.push_back(bIdx + 3);
                         }
                     }
                 };
@@ -1502,10 +1529,30 @@ public:
             }
 
             // Transfer lush smooth radial normals
-            transferFoliageNormals(treeMesh, foliageHelpers, 0.85f, 0.25f);
+            transferFoliageNormals(foliageMesh, foliageHelpers, 0.85f, 0.25f);
         }
 
-        return treeMesh;
+        for (const auto& v : woodMesh.vertices) woodMesh.bounds.expand(v);
+        for (const auto& v : foliageMesh.vertices) foliageMesh.bounds.expand(v);
+        return {woodMesh, foliageMesh};
+    }
+
+    static geometry::Mesh generateTree(const SpaceColonizationConfig& cfg) {
+        auto [woodMesh, foliageMesh] = generateTreeComponents(cfg);
+        geometry::Mesh combined = woodMesh;
+        if (!foliageMesh.vertices.empty()) {
+            uint32_t offset = static_cast<uint32_t>(combined.vertices.size());
+            combined.vertices.insert(combined.vertices.end(), foliageMesh.vertices.begin(), foliageMesh.vertices.end());
+            combined.normals.insert(combined.normals.end(), foliageMesh.normals.begin(), foliageMesh.normals.end());
+            combined.uvs.insert(combined.uvs.end(), foliageMesh.uvs.begin(), foliageMesh.uvs.end());
+            combined.vertexColors.insert(combined.vertexColors.end(), foliageMesh.vertexColors.begin(), foliageMesh.vertexColors.end());
+            for (uint32_t idx : foliageMesh.indices) {
+                combined.indices.push_back(offset + idx);
+            }
+            combined.bounds.expand(foliageMesh.bounds.min);
+            combined.bounds.expand(foliageMesh.bounds.max);
+        }
+        return combined;
     }
 };
 

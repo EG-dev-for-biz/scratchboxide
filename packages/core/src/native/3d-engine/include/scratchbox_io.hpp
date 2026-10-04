@@ -88,6 +88,7 @@ struct EmbeddedTexture {
     float offsetU{0.0f};
     float offsetV{0.0f};
     int materialIndex{0};
+    std::string targetMaterialName{""};
 };
 
 struct InstanceTransform {
@@ -795,7 +796,28 @@ public:
             int emissiveTexIdx = -1;
 
             for (size_t i = 0; i < textures.size(); ++i) {
-                if (textures[i].materialIndex == static_cast<int>(m)) {
+                bool matchesMaterial = (textures[i].materialIndex == static_cast<int>(m));
+                if (!textures[i].targetMaterialName.empty()) {
+                    auto toLower = [](std::string s) {
+                        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        return s;
+                    };
+                    std::string matLow = toLower(mat.name);
+                    std::string subLow = toLower(subMeshes[m].name);
+                    std::string targetLow = toLower(textures[i].targetMaterialName);
+
+                    bool matchesTarget = (matLow.find(targetLow) != std::string::npos || subLow.find(targetLow) != std::string::npos);
+                    if (targetLow == "bark" || targetLow == "wood") {
+                        matchesTarget = matchesTarget || (matLow.find("bark") != std::string::npos || matLow.find("wood") != std::string::npos ||
+                                                         subLow.find("bark") != std::string::npos || subLow.find("wood") != std::string::npos);
+                    } else if (targetLow == "foliage" || targetLow == "leaf") {
+                        matchesTarget = matchesTarget || (matLow.find("foliage") != std::string::npos || matLow.find("leaf") != std::string::npos ||
+                                                         subLow.find("foliage") != std::string::npos || subLow.find("leaf") != std::string::npos);
+                    }
+                    matchesMaterial = matchesTarget;
+                }
+
+                if (matchesMaterial) {
                     if (textures[i].usage == TextureUsage::BASE_COLOR && baseColorTexIdx == -1) baseColorTexIdx = static_cast<int>(i);
                     else if ((textures[i].usage == TextureUsage::METALLIC_ROUGHNESS || textures[i].usage == TextureUsage::ORM) && mrTexIdx == -1) mrTexIdx = static_cast<int>(i);
                     else if (textures[i].usage == TextureUsage::NORMAL && normalTexIdx == -1) normalTexIdx = static_cast<int>(i);

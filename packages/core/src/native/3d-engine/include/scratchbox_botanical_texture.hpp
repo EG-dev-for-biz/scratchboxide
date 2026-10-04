@@ -462,6 +462,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::BASE_COLOR;
             t.materialIndex = 0;
+            t.targetMaterialName = "Bark";
             textures.push_back(t);
         }
         if (!barkNormalPng.empty()) {
@@ -470,6 +471,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::NORMAL;
             t.materialIndex = 0;
+            t.targetMaterialName = "Bark";
             textures.push_back(t);
         }
         if (!barkOrmPng.empty()) {
@@ -478,6 +480,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::ORM;
             t.materialIndex = 0;
+            t.targetMaterialName = "Bark";
             textures.push_back(t);
         }
 
@@ -493,6 +496,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::BASE_COLOR;
             t.materialIndex = 1;
+            t.targetMaterialName = "Foliage";
             textures.push_back(t);
         }
         if (!leafNormalPng.empty()) {
@@ -501,6 +505,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::NORMAL;
             t.materialIndex = 1;
+            t.targetMaterialName = "Foliage";
             textures.push_back(t);
         }
         if (!leafOrmPng.empty()) {
@@ -509,6 +514,7 @@ public:
             t.mimeType = "image/png";
             t.usage = TextureUsage::ORM;
             t.materialIndex = 1;
+            t.targetMaterialName = "Foliage";
             textures.push_back(t);
         }
 
