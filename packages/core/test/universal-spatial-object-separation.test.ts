@@ -119,4 +119,57 @@ describe('Universal3DObjectSeparationService (Zero-Preset 3D Entity Separation)'
       expect(obj.space.spatial3d?.boundingBox).toBeDefined();
     }
   });
+
+  it('performs vertex-level Tree Apex & Facade clustering on raw Google 3D Tile (Washington Square Arch)', async () => {
+    const archPath = path.resolve(__dirname, '../../../public/models/washington_square_arch_nyc_raw.glb');
+    if (!fs.existsSync(archPath)) return;
+
+    const scene = Universal3DObjectSeparationService.separate3DMesh(archPath, {
+      granularity: 'detailed',
+      autoDetectSemanticCategories: true
+    });
+
+    expect(scene).toBeDefined();
+    expect(scene.totalVertices).toBe(4277);
+    expect(scene.objects.length).toBeGreaterThanOrEqual(25);
+
+    // Verify categories breakdown
+    const categories = new Set(scene.objects.map(o => o.category));
+    expect(categories.has('terrain')).toBe(true);
+    expect(categories.has('foliage_trees')).toBe(true);
+    expect(categories.has('monument') || categories.has('architecture')).toBe(true);
+
+    // Verify individual trees
+    const treeEntities = scene.objects.filter(o => o.category === 'foliage_trees');
+    expect(treeEntities.length).toBeGreaterThanOrEqual(15);
+
+    for (const tree of treeEntities) {
+      expect(tree.orientedBoundingBox).toBeDefined();
+      expect(tree.orientedBoundingBox.dimensions[0]).toBeGreaterThan(0);
+      expect(tree.orientedBoundingBox.dimensions[1]).toBeGreaterThan(0);
+      expect(tree.orientedBoundingBox.dimensions[2]).toBeGreaterThan(0);
+      expect(tree.routingRecommendation).toBe('sb-veggie');
+
+      // Verify botanical metadata
+      expect(tree.treeMetadata).toBeDefined();
+      expect(['quercus_ilex', 'pinus_pinea', 'cupressus_sempervirens', 'olea_europaea', 'laurus_nobilis']).toContain(tree.treeMetadata.species);
+      expect(tree.treeMetadata.canopyHeightMeters).toBeGreaterThan(0);
+      expect(tree.treeMetadata.crownDiameterMeters).toBeGreaterThan(0);
+      expect(tree.treeMetadata.crownVolumeM3).toBeGreaterThan(0);
+    }
+
+    // Verify terrain ground apron
+    const terrainEntity = scene.objects.find(o => o.category === 'terrain');
+    expect(terrainEntity).toBeDefined();
+    expect(terrainEntity!.routingRecommendation).toBe('sb-terrain');
+    expect(terrainEntity!.orientedBoundingBox.dimensions[0]).toBeGreaterThan(30);
+
+    // Verify architecture & monument facades
+    const structuralEntities = scene.objects.filter(o => o.category === 'monument' || o.category === 'architecture');
+    expect(structuralEntities.length).toBeGreaterThanOrEqual(2);
+    for (const struct of structuralEntities) {
+      expect(['sb-archi', 'archie-building']).toContain(struct.routingRecommendation);
+      expect(struct.vertexCount).toBeGreaterThan(0);
+    }
+  });
 });

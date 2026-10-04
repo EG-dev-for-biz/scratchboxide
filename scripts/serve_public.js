@@ -27,6 +27,7 @@ const MIME_TYPES = {
 };
 
 const POPULAR_DEMOS = [
+    { title: 'Semantic 3D Tile Segmentation & Botanical Engine', path: '/semantic_3d_tile_separation_demo.html', badge: 'SEMANTIC 3D TILE' },
     { title: 'Next-Gen Astro 3D Viewport Studio', path: '/next_gen_astra_viewport_studio.html', badge: 'INDUSTRY BENCHMARK' },
     { title: 'Geographical 3DGS Studio · Real-World Radiance Fields', path: '/geographic_3dgs_studio.html', badge: 'GEOGRAPHIC 3DGS' },
     { title: 'AMD FidelityFX FSR 1.0 Super Resolution Studio', path: '/fsr_upscaling_demo.html', badge: 'EASU + RCAS' },
@@ -222,6 +223,68 @@ const server = http.createServer((req, res) => {
             } catch (err) {
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: err?.message || 'Tile query failed' }));
+            }
+        });
+        return;
+    }
+
+    // Handle Semantic 3D Object Separation API
+    if (reqPath === '/api/3d/separate' || reqPath === '/api/tiles/separate') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1:5173');
+                let params = {};
+                try { if (body) params = JSON.parse(body); } catch {}
+                const model = urlObj.searchParams.get('model') || params.model || 'washington_square_arch_nyc_raw.glb';
+                const granularity = urlObj.searchParams.get('granularity') || params.granularity || 'detailed';
+
+                const REPO_ROOT = path.resolve(__dirname, '..');
+                let resolvedInput = path.resolve(PUBLIC_DIR, 'models', path.basename(model));
+                if (!fs.existsSync(resolvedInput)) {
+                    resolvedInput = path.resolve(PUBLIC_DIR, model.replace(/^\//, ''));
+                }
+                if (!fs.existsSync(resolvedInput)) {
+                    resolvedInput = path.resolve(REPO_ROOT, model);
+                }
+
+                if (!fs.existsSync(resolvedInput)) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Model file not found: ${model}` }));
+                    return;
+                }
+
+                // Check static precomputed cache first for instant response
+                const cachePath = path.resolve(PUBLIC_DIR, 'data/semantic_separation_data.json');
+                if (fs.existsSync(cachePath)) {
+                    try {
+                        const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+                        const base = path.basename(resolvedInput);
+                        if (base.includes('washington') && cache.washington_arch) {
+                            const cached = granularity === 'macro' ? cache.washington_arch.macro : cache.washington_arch.detailed;
+                            if (cached) {
+                                res.writeHead(200, { 'Content-Type': 'application/json' });
+                                res.end(JSON.stringify({ success: true, cached: true, scene: cached }));
+                                return;
+                            }
+                        } else if (base.includes('esb') && cache.esb?.detailed) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: true, cached: true, scene: cache.esb.detailed }));
+                            return;
+                        } else if (base.includes('colosseum') && cache.colosseum?.detailed) {
+                            res.writeHead(200, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: true, cached: true, scene: cache.colosseum.detailed }));
+                            return;
+                        }
+                    } catch {}
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'No cached telemetry and live build requires tsx execution' }));
+            } catch (err) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Separation failed' }));
             }
         });
         return;

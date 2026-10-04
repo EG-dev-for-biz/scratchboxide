@@ -15,6 +15,11 @@ import {
   type OrientedBoundingBox3D,
   type DualBoundingBoxResult
 } from './OrientedBoundingBoxSolver';
+import {
+  UniversalVertexSpatialClusteringEngine,
+  type SubmeshGeometryInput,
+  type DecomposedCluster
+} from './UniversalVertexSpatialClusteringEngine';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 
 export type UniversalSpatialCategory =
@@ -62,6 +67,8 @@ export interface UniversalSeparatedObject {
     metalness: number;
     baseColor: string;
   };
+  treeMetadata?: any;
+  buildingMetadata?: any;
 }
 
 export interface UniversalSeparatedScene {
@@ -91,6 +98,7 @@ export interface UniversalSeparationOptions {
   glbBuffer?: Buffer;
   granularity?: 'macro' | 'detailed' | 'total' | 'trees' | 'all';
   autoDetectSemanticCategories?: boolean;
+  enableVertexClustering?: boolean;
   minVerticesPerEntity?: number;
   clusterDistance?: number;
   mode?: string;
@@ -159,19 +167,13 @@ export class Universal3DObjectSeparationService {
 
     const binOffset = 20 + jsonLength + 8;
 
-    const submeshData: {
-      min: [number, number, number];
-      max: [number, number, number];
-      count: number;
-      positions: Float32Array | null;
-      submeshIndex: number;
-    }[] = [];
+    const submeshData: SubmeshGeometryInput[] = [];
 
     let totalVertices = 0;
     const overallMin: [number, number, number] = [Infinity, Infinity, Infinity];
     const overallMax: [number, number, number] = [-Infinity, -Infinity, -Infinity];
 
-    const getAccessorData = (accIndex: number): Float32Array | null => {
+    const getAccessorData = (accIndex?: number): Float32Array | null => {
       if (accIndex === undefined || accIndex === null) return null;
       const acc = gltf.accessors?.[accIndex];
       if (!acc || acc.bufferView === undefined) return null;
@@ -184,6 +186,21 @@ export class Universal3DObjectSeparationService {
       return null;
     };
 
+    const getAccessorIndices = (accIndex?: number): Uint16Array | Uint32Array | null => {
+      if (accIndex === undefined || accIndex === null) return null;
+      const acc = gltf.accessors?.[accIndex];
+      if (!acc || acc.bufferView === undefined) return null;
+      const bv = gltf.bufferViews[acc.bufferView];
+      const offset = binOffset + (bv.byteOffset || 0) + (acc.byteOffset || 0);
+      const count = acc.count || 0;
+      if (acc.componentType === 5123) {
+        return new Uint16Array(buffer.buffer, buffer.byteOffset + offset, count);
+      } else if (acc.componentType === 5125) {
+        return new Uint32Array(buffer.buffer, buffer.byteOffset + offset, count);
+      }
+      return null;
+    };
+
     if (gltf.meshes && Array.isArray(gltf.meshes)) {
       for (let mIdx = 0; mIdx < gltf.meshes.length; mIdx++) {
         const mesh = gltf.meshes[mIdx];
@@ -191,6 +208,9 @@ export class Universal3DObjectSeparationService {
         if (!prim || prim.attributes?.POSITION === undefined) continue;
 
         const posAccIdx = prim.attributes.POSITION;
+        const normAccIdx = prim.attributes.NORMAL;
+        const indicesAccIdx = prim.indices;
+
         const acc = gltf.accessors[posAccIdx];
         if (!acc || !acc.min || !acc.max) continue;
 
@@ -200,8 +220,18 @@ export class Universal3DObjectSeparationService {
         const min: [number, number, number] = [acc.min[0], acc.min[1], acc.min[2]];
         const max: [number, number, number] = [acc.max[0], acc.max[1], acc.max[2]];
         const positions = getAccessorData(posAccIdx);
+        const normals = getAccessorData(normAccIdx);
+        const indices = getAccessorIndices(indicesAccIdx);
 
-        submeshData.push({ min, max, count, positions, submeshIndex: mIdx });
+        submeshData.push({
+          min,
+          max,
+          count,
+          positions,
+          indices,
+          normals,
+          submeshIndex: mIdx
+        });
 
         for (let k = 0; k < 3; k++) {
           if (min[k] < overallMin[k]) overallMin[k] = min[k];
@@ -246,8 +276,39 @@ export class Universal3DObjectSeparationService {
       tightnessGainPercent: 0
     };
 
-    // Partition submeshes into semantic entity clusters
-    const clusters = this.clusterSubmeshes(submeshData, overallBoundingBox, options);
+    // Partition submeshes or vertices into semantic entity clusters
+    const useVertexClustering = (options.granularity && options.granularity !== 'macro') || options.enableVertexClustering === true;
+
+    let clusters: {
+      id: string;
+      name: string;
+      category: UniversalSpatialCategory;
+      submeshIndices: number[];
+      extractedVertices: [number, number, number][];
+      colorHex: string;
+      prompt: string;
+      roughness: number;
+      metalness: number;
+      routingRecommendation?: DownstreamGeneratorRouting;
+      treeMetadata?: any;
+      buildingMetadata?: any;
+    }[] = [];
+
+    if (useVertexClustering) {
+      clusters = UniversalVertexSpatialClusteringEngine.decompose(
+        submeshData,
+        overallMin,
+        overallMax,
+        {
+          granularity: options.granularity,
+          minVerticesPerEntity: options.minVerticesPerEntity
+        }
+      );
+    }
+
+    if (clusters.length === 0) {
+      clusters = this.clusterSubmeshes(submeshData, overallBoundingBox, options);
+    }
 
     const objects: UniversalSeparatedObject[] = clusters.map(cluster => {
       const dualResult: DualBoundingBoxResult = OrientedBoundingBoxSolver.compute(cluster.extractedVertices);
@@ -256,7 +317,7 @@ export class Universal3DObjectSeparationService {
       const vCount = dualResult.vertexCount;
       const triCount = Math.floor(vCount * 1.8);
 
-      const routingRecommendation = this.determineRoutingRecommendation(cluster.category);
+      const routingRecommendation = cluster.routingRecommendation || this.determineRoutingRecommendation(cluster.category);
 
       return {
         id: cluster.id,
@@ -281,7 +342,9 @@ export class Universal3DObjectSeparationService {
           roughness: cluster.roughness,
           metalness: cluster.metalness,
           baseColor: cluster.colorHex
-        }
+        },
+        treeMetadata: (cluster as any).treeMetadata,
+        buildingMetadata: (cluster as any).buildingMetadata
       };
     });
 
