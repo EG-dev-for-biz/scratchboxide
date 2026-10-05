@@ -134,24 +134,25 @@ async function runScene3DDynamicExecutionTests() {
     console.log('  ✓ Test 5 Passed: Atmospheric sky dome calculates multi-order Rayleigh scattering and lighting.');
 
     // -------------------------------------------------------------
-    // Test 6: Procedural Terrain Biomes Generator
+    // Test 6: Procedural Terrain Biomes Generator (Anti-JS-Primitives Guard)
     // -------------------------------------------------------------
-    console.log('  Testing 6: Procedural Terrain Biomes Generator...');
+    console.log('  Testing 6: Procedural Terrain Biomes Generator (Zero-Primitive Guarantee)...');
     const terrainScene = new THREE.Scene();
     const alpineTerrain = createProceduralBiomeTerrain(terrainScene, 'alpine', 'pbr', false);
-    assert.ok(alpineTerrain.terrainMesh instanceof THREE.Mesh, 'Must generate terrain mesh');
-    assert.ok(alpineTerrain.cloudGroup instanceof THREE.Group, 'Must generate volumetric cloud layer');
+    assert.ok(alpineTerrain.group instanceof THREE.Group, 'Must return safe group container');
+    assert.strictEqual(alpineTerrain.terrainMesh, undefined, 'Must not instantiate client-side PlaneGeometry terrain');
+    assert.strictEqual(alpineTerrain.cloudGroup, undefined, 'Must not instantiate client-side DodecahedronGeometry clouds');
 
     const canyonTerrain = createProceduralBiomeTerrain(terrainScene, 'canyon', 'pbr', false);
-    assert.ok(canyonTerrain.terrainMesh instanceof THREE.Mesh);
+    assert.ok(canyonTerrain.group instanceof THREE.Group);
 
     const desertTerrain = createProceduralBiomeTerrain(terrainScene, 'desert', 'pbr', false);
-    assert.ok(desertTerrain.terrainMesh instanceof THREE.Mesh);
+    assert.ok(desertTerrain.group instanceof THREE.Group);
 
     alpineTerrain.dispose();
     canyonTerrain.dispose();
     desertTerrain.dispose();
-    console.log('  ✓ Test 6 Passed: Procedural terrain biomes generate distinct fractal heightmaps and cloud decks.');
+    console.log('  ✓ Test 6 Passed: Procedural terrain generator enforces zero-primitive guarantee.');
 
     // -------------------------------------------------------------
     // Test 7: Safe Dynamic Three.js Script Evaluation Engine

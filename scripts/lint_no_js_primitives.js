@@ -22,7 +22,8 @@ const TARGET_SCAN_PATHS = [
     path.join(ROOT_DIR, 'public/test_reports'),
     path.join(ROOT_DIR, 'packages/core/src/common/spatial'),
     path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/primitives'),
-    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/NextGenAstraViewportEngine.ts')
+    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/NextGenAstraViewportEngine.ts'),
+    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/procedural-3d-synthesizer.ts')
 ];
 
 // Patterns that indicate client-side toy primitives in scene generation
@@ -30,6 +31,9 @@ const BANNED_PATTERNS = [
     { regex: /new\s+(?:THREE\.)?BoxGeometry\s*\(/g, name: 'BoxGeometry' },
     { regex: /new\s+(?:THREE\.)?CylinderGeometry\s*\(/g, name: 'CylinderGeometry' },
     { regex: /new\s+(?:THREE\.)?ConeGeometry\s*\(/g, name: 'ConeGeometry' },
+    { regex: /new\s+(?:THREE\.)?SphereGeometry\s*\(/g, name: 'SphereGeometry' },
+    { regex: /new\s+(?:THREE\.)?OctahedronGeometry\s*\(/g, name: 'OctahedronGeometry' },
+    { regex: /new\s+(?:THREE\.)?TorusGeometry\s*\(/g, name: 'TorusGeometry' },
     { regex: /new\s+(?:THREE\.)?DodecahedronGeometry\s*\(/g, name: 'DodecahedronGeometry' }
 ];
 
