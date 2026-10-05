@@ -71,7 +71,49 @@ export class Adaptive3DSceneSynthesizer {
 
         // 2. Architecture Inference (Monolithic Citadel / Outpost)
         const isCitadel = /citadel|fortress|outpost|base|complex|facility|bunker/i.test(lower);
+        const hasSolar = /solar|panels?|photovoltaic/i.test(lower);
         const floorCount = /three[- ]story|3[- ]story/i.test(lower) ? 3 : /two[- ]story|2[- ]story/i.test(lower) ? 2 : 3;
+
+        const buildingFeatures: AdaptiveArchitecturalStructure['features'] = [
+            {
+                type: 'plinth',
+                position: [0, 0, 0],
+                scale: [24.0, 1.8, 20.0]
+            },
+            {
+                type: 'access_bridge',
+                position: [0, 0, 17.5],
+                scale: [4.2, 0.85, 11.0]
+            },
+            {
+                type: 'mast',
+                position: [8.5, 16.0, -6.5],
+                scale: [1.4, 12.0, 1.4]
+            },
+            {
+                type: 'radar_dish',
+                position: [10.5, 20.4, -6.5],
+                scale: [0.3, 1.8, 1.8]
+            },
+            {
+                type: 'hvac_chiller',
+                position: [-4.5, 17.2, -3.5],
+                scale: [2.6, 1.8, 2.2]
+            }
+        ];
+
+        if (hasSolar) {
+            buildingFeatures.push({
+                type: 'solar_array',
+                position: [-11.0, 6.5, 0],
+                scale: [5.4, 0.15, 3.2]
+            });
+            buildingFeatures.push({
+                type: 'solar_array',
+                position: [11.0, 6.5, 0],
+                scale: [5.4, 0.15, 3.2]
+            });
+        }
 
         const mainBuilding: AdaptiveArchitecturalStructure = {
             id: 'structure_primary_citadel',
@@ -103,33 +145,7 @@ export class Adaptive3DSceneSynthesizer {
                 copingWidth: 0.35
             },
             rooftopMechanicals: true,
-            features: [
-                {
-                    type: 'plinth',
-                    position: [0, 0, 0],
-                    scale: [24.0, 1.8, 20.0]
-                },
-                {
-                    type: 'access_bridge',
-                    position: [0, 0, 17.5],
-                    scale: [4.2, 0.85, 11.0]
-                },
-                {
-                    type: 'mast',
-                    position: [8.5, 16.0, -6.5],
-                    scale: [1.4, 12.0, 1.4]
-                },
-                {
-                    type: 'radar_dish',
-                    position: [10.5, 20.4, -6.5],
-                    scale: [0.3, 1.8, 1.8]
-                },
-                {
-                    type: 'hvac_chiller',
-                    position: [-4.5, 17.2, -3.5],
-                    scale: [2.6, 1.8, 2.2]
-                }
-            ]
+            features: buildingFeatures
         };
 
         // 3. Botany & Foliage Ecosystem Inference (70-20-10 Biome Rule)
@@ -501,6 +517,16 @@ static ScratchboxMesh buildArchitecturalCompound() {
     addBox(compound, Vec3(0, bridgeY, 17.5f), Vec3(4.2f, 0.85f, 11.0f), darkConcrete);
     addBox(compound, Vec3(-2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
     addBox(compound, Vec3( 2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
+
+    // 7. Photovoltaic Solar Arrays (if configured)
+    ${b.features?.some(f => f.type === 'solar_array') ? `
+    float solarWingX = cornerX + 3.2f;
+    const Vec4 solarDark(0.08f, 0.10f, 0.16f, 1.0f);
+    addBox(compound, Vec3(-solarWingX, baseY + 6.5f, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
+    addBox(compound, Vec3( solarWingX, baseY + 6.5f, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
+    addBox(compound, Vec3(-solarWingX + 2.7f, baseY + 6.5f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
+    addBox(compound, Vec3( solarWingX - 2.7f, baseY + 6.5f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
+    ` : ''}
 
     compound.recomputeBounds();
     return compound;

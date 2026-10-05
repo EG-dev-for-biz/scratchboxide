@@ -229,6 +229,18 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
             'Add AI Reasoning Node',
             'Add Postgres DB Action',
             'Connect Logic Pipeline'
+        ],
+        '3d': [
+            'Switch to Sunset Lighting',
+            'Add Photovoltaic Solar Arrays',
+            'Tune Biophysical PBR Materials',
+            'Frame All Objects in Viewport'
+        ],
+        '3d-scene': [
+            'Switch to Sunset Lighting',
+            'Add Photovoltaic Solar Arrays',
+            'Tune Biophysical PBR Materials',
+            'Frame All Objects in Viewport'
         ]
     };
 
@@ -261,6 +273,7 @@ export const VibecodeAiSideChat: React.FC<VibecodeAiSideChatProps> = ({
                                 {activeContextType === 'code' ? "I'm your Vibecode assistant. Prompt me below to generate UI components, add spring animations, or refactor code in real-time." :
                                  activeContextType === 'document' ? "I'm your Document assistant. Ask me to draft sections, add specification tables, architecture callouts, or action checklists." :
                                  activeContextType === 'kanban' ? "I'm your Sprint assistant. Ask me to add tasks, configure delivery columns, prioritize bugs, or move cards." :
+                                 activeContextType === '3d' || (activeContextType as any) === '3d-scene' ? "I'm your 3D Scene assistant. Ask me to synthesize procedural geometry, tune PBR materials, choreograph cameras, or simulate lighting." :
                                  "I'm your Canvas assistant. Ask me to add webhook triggers, AI reasoning nodes, or database actions."}
                             </p>
                         </div>
