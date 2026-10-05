@@ -321,3 +321,220 @@ export function rasterizeGlbToTestScreenshot(
 
     return saveTestScreenshot(testName, rgba, { ...options, width, height });
 }
+
+/**
+ * 5x8 bitmap font glyph definitions for high-contrast test screenshot text rendering.
+ */
+const FONT_5X8: Record<string, number[]> = {
+    ' ': [0, 0, 0, 0, 0],
+    '!': [0, 0, 0x5f, 0, 0],
+    '"': [0, 0x07, 0, 0x07, 0],
+    '#': [0x14, 0x7f, 0x14, 0x7f, 0x14],
+    '$': [0x24, 0x2a, 0x7f, 0x2a, 0x12],
+    '%': [0x23, 0x13, 0x08, 0x64, 0x62],
+    '&': [0x36, 0x49, 0x55, 0x22, 0x50],
+    "'": [0, 0x05, 0x03, 0, 0],
+    '(': [0, 0x1c, 0x22, 0x41, 0],
+    ')': [0, 0x41, 0x22, 0x1c, 0],
+    '*': [0x14, 0x08, 0x3e, 0x08, 0x14],
+    '+': [0x08, 0x08, 0x3e, 0x08, 0x08],
+    ',': [0, 0x50, 0x30, 0, 0],
+    '-': [0x08, 0x08, 0x08, 0x08, 0x08],
+    '.': [0, 0x60, 0x60, 0, 0],
+    '/': [0x20, 0x10, 0x08, 0x04, 0x02],
+    '0': [0x3e, 0x51, 0x49, 0x45, 0x3e],
+    '1': [0, 0x42, 0x7f, 0x40, 0],
+    '2': [0x42, 0x61, 0x51, 0x49, 0x46],
+    '3': [0x21, 0x41, 0x45, 0x4b, 0x31],
+    '4': [0x18, 0x14, 0x12, 0x7f, 0x10],
+    '5': [0x27, 0x45, 0x45, 0x45, 0x39],
+    '6': [0x3c, 0x4a, 0x49, 0x49, 0x30],
+    '7': [0x01, 0x71, 0x09, 0x05, 0x03],
+    '8': [0x36, 0x49, 0x49, 0x49, 0x36],
+    '9': [0x06, 0x49, 0x49, 0x29, 0x1e],
+    ':': [0, 0x36, 0x36, 0, 0],
+    ';': [0, 0x56, 0x36, 0, 0],
+    '<': [0x08, 0x14, 0x22, 0x41, 0],
+    '=': [0x14, 0x14, 0x14, 0x14, 0x14],
+    '>': [0x41, 0x22, 0x14, 0x08, 0],
+    '?': [0x02, 0x01, 0x51, 0x09, 0x06],
+    '@': [0x32, 0x49, 0x79, 0x41, 0x3e],
+    'A': [0x7e, 0x11, 0x11, 0x11, 0x7e],
+    'B': [0x7f, 0x49, 0x49, 0x49, 0x36],
+    'C': [0x3e, 0x41, 0x41, 0x41, 0x22],
+    'D': [0x7f, 0x41, 0x41, 0x22, 0x1c],
+    'E': [0x7f, 0x49, 0x49, 0x49, 0x41],
+    'F': [0x7f, 0x09, 0x09, 0x09, 0x01],
+    'G': [0x3e, 0x41, 0x49, 0x49, 0x7a],
+    'H': [0x7f, 0x08, 0x08, 0x08, 0x7f],
+    'I': [0, 0x41, 0x7f, 0x41, 0],
+    'J': [0x20, 0x40, 0x41, 0x3f, 0x01],
+    'K': [0x7f, 0x08, 0x14, 0x22, 0x41],
+    'L': [0x7f, 0x40, 0x40, 0x40, 0x40],
+    'M': [0x7f, 0x02, 0x0c, 0x02, 0x7f],
+    'N': [0x7f, 0x04, 0x08, 0x10, 0x7f],
+    'O': [0x3e, 0x41, 0x41, 0x41, 0x3e],
+    'P': [0x7f, 0x09, 0x09, 0x09, 0x06],
+    'Q': [0x3e, 0x41, 0x51, 0x21, 0x5e],
+    'R': [0x7f, 0x09, 0x19, 0x29, 0x46],
+    'S': [0x46, 0x49, 0x49, 0x49, 0x31],
+    'T': [0x01, 0x01, 0x7f, 0x01, 0x01],
+    'U': [0x3f, 0x40, 0x40, 0x40, 0x3f],
+    'V': [0x1f, 0x20, 0x40, 0x20, 0x1f],
+    'W': [0x3f, 0x40, 0x38, 0x40, 0x3f],
+    'X': [0x63, 0x14, 0x08, 0x14, 0x63],
+    'Y': [0x07, 0x08, 0x70, 0x08, 0x07],
+    'Z': [0x61, 0x51, 0x49, 0x45, 0x43],
+    '[': [0, 0x7f, 0x41, 0x41, 0],
+    '\\': [0x02, 0x04, 0x08, 0x10, 0x20],
+    ']': [0, 0x41, 0x41, 0x7f, 0],
+    '^': [0x04, 0x02, 0x01, 0x02, 0x04],
+    '_': [0x40, 0x40, 0x40, 0x40, 0x40],
+    '`': [0, 0x01, 0x02, 0x04, 0],
+    'a': [0x20, 0x54, 0x54, 0x54, 0x78],
+    'b': [0x7f, 0x48, 0x44, 0x44, 0x38],
+    'c': [0x38, 0x44, 0x44, 0x44, 0x20],
+    'd': [0x38, 0x44, 0x44, 0x48, 0x7f],
+    'e': [0x38, 0x54, 0x54, 0x54, 0x18],
+    'f': [0x08, 0x7e, 0x09, 0x01, 0x02],
+    'g': [0x0c, 0x52, 0x52, 0x52, 0x3e],
+    'h': [0x7f, 0x08, 0x04, 0x04, 0x78],
+    'i': [0, 0x44, 0x7d, 0x40, 0],
+    'j': [0x20, 0x40, 0x44, 0x3d, 0],
+    'k': [0x7f, 0x10, 0x28, 0x44, 0],
+    'l': [0, 0x41, 0x7f, 0x40, 0],
+    'm': [0x7c, 0x04, 0x18, 0x04, 0x78],
+    'n': [0x7c, 0x08, 0x04, 0x04, 0x78],
+    'o': [0x38, 0x44, 0x44, 0x44, 0x38],
+    'p': [0x7c, 0x14, 0x14, 0x14, 0x08],
+    'q': [0x08, 0x14, 0x14, 0x18, 0x7c],
+    'r': [0x7c, 0x08, 0x04, 0x04, 0x08],
+    's': [0x48, 0x54, 0x54, 0x54, 0x20],
+    't': [0x04, 0x3f, 0x44, 0x40, 0x20],
+    'u': [0x3c, 0x40, 0x40, 0x20, 0x7c],
+    'v': [0x1c, 0x20, 0x40, 0x20, 0x1c],
+    'w': [0x3c, 0x40, 0x30, 0x40, 0x3c],
+    'x': [0x44, 0x28, 0x10, 0x28, 0x44],
+    'y': [0x0c, 0x50, 0x50, 0x50, 0x3c],
+    'z': [0x44, 0x64, 0x54, 0x4c, 0x44],
+    '{': [0, 0x08, 0x36, 0x41, 0],
+    '|': [0, 0, 0x7f, 0, 0],
+    '}': [0, 0x41, 0x36, 0x08, 0],
+    '~': [0x08, 0x04, 0x08, 0x10, 0x08]
+};
+
+/**
+ * Renders structured Markdown chat response text into a high-contrast dark-mode visual screenshot.
+ *
+ * @returns Absolute file path to the saved screenshot.
+ */
+export function rasterizeChatMarkdownToScreenshot(
+    testName: string,
+    markdownText: string,
+    options: TestScreenshotOptions = {}
+): string {
+    const width = options.width || 680;
+    const height = options.height || 540;
+    const rgba = Buffer.alloc(width * height * 4);
+
+    // Studio canvas dark background (#0b0f17)
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+            rgba[idx] = 11;
+            rgba[idx + 1] = 15;
+            rgba[idx + 2] = 23;
+            rgba[idx + 3] = 255;
+        }
+    }
+
+    // Draw card background (#151c28 with border)
+    const cardMarginX = 24;
+    const cardMarginY = 24;
+    const cardW = width - cardMarginX * 2;
+    const cardH = height - cardMarginY * 2;
+
+    for (let y = cardMarginY; y < cardMarginY + cardH; y++) {
+        for (let x = cardMarginX; x < cardMarginX + cardW; x++) {
+            const idx = (y * width + x) * 4;
+            const isBorder = (x === cardMarginX || x === cardMarginX + cardW - 1 || y === cardMarginY || y === cardMarginY + cardH - 1);
+            if (isBorder) {
+                rgba[idx] = 40; rgba[idx + 1] = 52; rgba[idx + 2] = 72; rgba[idx + 3] = 255;
+            } else {
+                rgba[idx] = 19; rgba[idx + 1] = 26; rgba[idx + 2] = 38; rgba[idx + 3] = 255;
+            }
+        }
+    }
+
+    // Helper to draw char
+    const drawChar = (char: string, cx: number, cy: number, r: number, g: number, b: number, scale: number = 1) => {
+        const glyph = FONT_5X8[char] || FONT_5X8['?'] || [0, 0, 0, 0, 0];
+        for (let col = 0; col < 5; col++) {
+            const byte = glyph[col];
+            for (let row = 0; row < 8; row++) {
+                if ((byte & (1 << row)) !== 0) {
+                    for (let sy = 0; sy < scale; sy++) {
+                        for (let sx = 0; sx < scale; sx++) {
+                            const px = cx + col * scale + sx;
+                            const py = cy + row * scale + sy;
+                            if (px >= 0 && px < width && py >= 0 && py < height) {
+                                const idx = (py * width + px) * 4;
+                                rgba[idx] = r; rgba[idx + 1] = g; rgba[idx + 2] = b; rgba[idx + 3] = 255;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    const drawString = (str: string, sx: number, sy: number, r: number, g: number, b: number, scale: number = 1) => {
+        let curX = sx;
+        for (let i = 0; i < str.length; i++) {
+            drawChar(str[i], curX, sy, r, g, b, scale);
+            curX += (5 * scale + scale);
+        }
+    };
+
+    // Header badge: 🪐 Studio AI • Adaptive Domain Synthesis
+    drawString("SCRATCHBOX STUDIO AI  •  ADAPTIVE DOMAIN ARCHITECTURE", cardMarginX + 16, cardMarginY + 16, 56, 189, 248, 1);
+
+    // Render markdown lines
+    const rawLines = markdownText.split('\n');
+    let curY = cardMarginY + 38;
+    const maxLines = Math.min(rawLines.length, 32);
+
+    for (let i = 0; i < maxLines && curY < height - cardMarginY - 20; i++) {
+        const line = rawLines[i].trim();
+        if (!line) {
+            curY += 8;
+            continue;
+        }
+
+        if (line.startsWith('# ')) {
+            const heading = line.replace(/^#\s+/, '').slice(0, 48);
+            drawString(heading, cardMarginX + 16, curY, 241, 245, 249, 2);
+            curY += 22;
+        } else if (line.startsWith('### ')) {
+            const h3 = line.replace(/^###\s+/, '').slice(0, 60);
+            drawString(h3, cardMarginX + 16, curY, 147, 197, 253, 1);
+            curY += 14;
+        } else if (line.startsWith('* ') || line.startsWith('- ')) {
+            const bullet = line.slice(0, 80);
+            drawString("•", cardMarginX + 16, curY, 56, 189, 248, 1);
+            drawString(bullet.replace(/^[\*\-]\s+/, ''), cardMarginX + 28, curY, 203, 213, 225, 1);
+            curY += 13;
+        } else if (line.startsWith('|')) {
+            const tableRow = line.slice(0, 84);
+            drawString(tableRow, cardMarginX + 16, curY, 148, 163, 184, 1);
+            curY += 12;
+        } else {
+            const textLine = line.slice(0, 84);
+            drawString(textLine, cardMarginX + 16, curY, 226, 232, 240, 1);
+            curY += 13;
+        }
+    }
+
+    return saveTestScreenshot(testName, rgba, { ...options, width, height });
+}
+

@@ -41,7 +41,8 @@ import {
     synthesizeAdaptiveMetrics,
     synthesizeAdaptiveNodeGraph,
     synthesizeAdaptiveSandbox,
-    synthesizeAdaptive3DScene
+    synthesizeAdaptive3DScene,
+    synthesizeAdaptiveResearchBrief
 } from '../services/adaptive-domain-engine';
 import type { AttachedDataFile } from './useSendMessage';
 import { MASTER_SCENE_CPP_SOURCE, MASTER_SCENE_GLB_BASE64, MASTER_SCENE_STATS } from '../state/master-scene-data';
@@ -82,6 +83,14 @@ export interface FallbackClassification {
 }
 
 export function hasExplicit3DDirective(text: string): boolean {
+    const isPureQuestion = /^(what|why|how|who|when|where|can\s+you\s+explain|tell\s+me\s+about|describe|explain|is\s+there|are\s+there)\b/i.test(text.trim()) &&
+        !/\b(build|make|create|generate|render|model|sculpt|extrude|carve|construct|synthesize|assemble|fabricate|shape|switch\s+to|change\s+to|apply|enable|turn\s+on|set|rotate|orbit|animate|export)\b/i.test(text) &&
+        !/\b(?:in\s+3d|3d\s+model|3d\s+scene|3d\s+simulation|as\s+a\s+3d)\b/i.test(text);
+
+    if (isPureQuestion) {
+        return false;
+    }
+
     const isVehicleCreationRequest = (
         /\b(?:build|make|create|generate|render|simulate|spawn|show)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:cars?|vehicles?|automobiles?|trucks?|pickups?|sedans?|sports\s*cars?|coupes?|suvs?|race\s*cars?|racers?|formula\s*(?:1|one)?|f1\b|cybertrucks?|cyber\s*trucks?|roadsters?|speedsters?|hot\s*rods?|evs?|hypercars?|supercars?|convertibles?|vans?)\b/i.test(text) ||
         /\b(?:cybertrucks?|cyber\s*trucks?|sports\s*cars?|race\s*cars?|hypercars?|supercars?|roadsters?|formula\s*1)\b/i.test(text)
@@ -104,7 +113,7 @@ export function hasExplicit3DDirective(text: string): boolean {
         /\b(?:apartment\s*interior|interior\s*room|office\s*(?:loft|space)|loft\s*(?:office|space)|gallery\s*hall|architectural\s*interior)\b/i.test(text) ||
         /\b(?:mountain\s*terrain|desert\s*canyon|volcanic\s*island|sand\s*dunes|alpine\s*mountain)\b/i.test(text) ||
         /\b(?:space\s*station|orbital\s*(?:station|habitat|defense)|deep\s*space|cyberpunk\s*(?:underground|bunker|city|alleyway)|hacker\s*bunker)\b/i.test(text) ||
-        Boolean(detectRealWorldLocationIntent(text)?.isRealWorld)
+        (Boolean(detectRealWorldLocationIntent(text)?.isRealWorld) && /\b(?:3d|spatial|render|mesh|model|tiles?|build|make|create|generate|show|view)\b/i.test(text))
     );
 
     const isAdvanced3DFeatureRequest = (
@@ -121,7 +130,7 @@ export function hasExplicit3DDirective(text: string): boolean {
     const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(text);
     const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(text);
     const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(text);
-    const isOpenDomainSpatialSynthesis = (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) || (hasSpatialEntity && hasPhysicalMaterial);
+    const isOpenDomainSpatialSynthesis = hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial);
 
     return (
         isOpenDomainSpatialSynthesis ||
@@ -186,10 +195,13 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         isDocumentEditRequest
     );
 
-    const isExplicit3D = !isExplicitMedia && !isVideoTimelineRequest && (targetPrimitiveType === '3d-scene' ||
+    const isPureQuestion = /^(what|why|how|who|when|where|can\s+you\s+explain|tell\s+me\s+about|describe|explain|is\s+there|are\s+there)\b/i.test(text.trim()) &&
+        !/\b(build|make|create|generate|render|model|sculpt|extrude|carve|construct|synthesize|assemble|fabricate|shape|switch\s+to|change\s+to|apply|enable|turn\s+on|set|rotate|orbit|animate|export)\b/i.test(text) &&
+        !/\b(?:in\s+3d|3d\s+model|3d\s+scene|3d\s+simulation|as\s+a\s+3d)\b/i.test(text);
+
+    const isExplicit3D = !isExplicitMedia && !isVideoTimelineRequest && !isPureQuestion && (targetPrimitiveType === '3d-scene' ||
         text.trim().startsWith('/3d') ||
         hasExplicit3DDirective(text) ||
-        Boolean(detectRealWorldLocationIntent(text)?.isRealWorld) ||
         (!isExplicitDoc && (
             /planetary\s+orbit|cyberpunk\s+city|architectural\s+blueprint/i.test(text) ||
             /\b(?:build|make|create|generate|render|simulate)\s+(?:me\s+)?(?:a\s+)?(?:3d\s+)?scene\b/i.test(text) ||
@@ -203,14 +215,6 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
             lower.includes('wasm physics') ||
             lower.includes('drone route') ||
             lower.includes('mars colony') ||
-            lower.includes('ambient light') ||
-            lower.includes('ambient lighting') ||
-            lower.includes('post-apocalypse') ||
-            lower.includes('solarpunk') ||
-            lower.includes('acropolis') ||
-            lower.includes('brutalist') ||
-            lower.includes('colosseum') ||
-            lower.includes('travertine') ||
             lower.includes('raw tile') ||
             lower.includes('clay mode')
         ))
@@ -245,7 +249,16 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
 
     const isExplicitSandbox = hasAppCreationIntent;
 
-    const isTileOr3DMutation = /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow|building|facade|tower|monument|landmark|eiffel|colosseum|taj|empire state|ferry building|salesforce|coit tower|red rocks|plaza|rome|paris|pbr|shaded|hdr/i.test(text);
+    const isTileOr3DMutation = !isPureQuestion && (
+        /\b(?:wireframe\s*mode|wasm\s*physics|drone\s*route|export\s*glb|download\s*glb)\b/i.test(text) ||
+        /\b(?:switch\s+to|change\s+to|render\s+in|apply|set)\s+(?:[\w-]+\s+)?(?:clay|textured|pbr|wireframe|studio\s+gr[ea]y|daylight|golden\s*hour|sunset|sunrise|dusk|fog|lighting)\b/i.test(text) ||
+        /\b(?:rotate|orbit|tilt|pan|zoom|wasd|turntable)\s*(?:camera|view|scene)?\b/i.test(text) ||
+        /\b(?:animate|fly|flight|takeoff|motion|playback)\b/i.test(text) ||
+        /\b(?:add|remove|delete|isolate|separate|hide|show)\s+(?:mesh|geometry|object|building|facade|tower|bounding\s*box|portal)\b/i.test(text) ||
+        /\b(?:de-?light|shadow\s*lift|highlight\s*compress|travertine\s*cavitation)\b/i.test(text) ||
+        /\b(?:cinematic\s+arc|canyon\s+push|orbit\s+360)\b/i.test(text) ||
+        /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow/i.test(text)
+    );
     const is3DRequest = !isVideoTimelineRequest && !isExplicitMedia && (isExplicit3D || ((layoutMode === '3d' || activeArtifact?.type === '3d-scene') && isTileOr3DMutation));
     const isKanbanRequest = !isVideoTimelineRequest && (isExplicitKanban || ((layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board') && /column|card|task|board|move/i.test(text)));
     const isGraphRequest = !isVideoTimelineRequest && (isExplicitGraph || ((layoutMode === 'automation' || activeArtifact?.type === 'node-graph') && /node|edge|port|connect|pipeline/i.test(text)));
@@ -2097,8 +2110,8 @@ Modern personal knowledge base (PKB) engines pair local plain-text Markdown file
         return { chatResponse };
     }
 
-    // 3. Coding, Web Development & Software Architecture
-    if (/react|typescript|javascript|python|architecture|api|database|system|css|html|node|docker|kubernetes/i.test(lower)) {
+    // 3. Coding, Web Development & Software Architecture (Word Boundaries)
+    if (/\b(?:react|typescript|javascript|python|css|html|node|docker|kubernetes)\b/i.test(lower) || /\b(?:software\s*architecture|codebase|frontend|backend|rest\s*api|sql\s*database)\b/i.test(lower)) {
         const chatResponse = `### 💻 Engineering Architecture Analysis
 
 Here is an analysis and recommendation based on your inquiry:
@@ -2112,14 +2125,9 @@ Would you like me to generate code for a specific component, create a live inter
         return { chatResponse };
     }
 
-    // 4. Default Conversational Chat Response
-    const chatResponse = `I'm here to help! Whether you're exploring scientific research, writing code, designing system architectures, or analyzing data, feel free to ask questions or brainstorm ideas.
-
-If you ever want to turn our conversation into visual canvas artifacts, you can ask me to:
-- **Write a Document**: \`create a document on [topic]\`
-- **Build a 3D Scene**: \`build a 3D simulation of [topic]\`
-- **Design an Architecture Map**: \`create a node graph for [system]\`
-- **Build an Interactive Web App**: \`build a live sandbox for [prototype]\``;
+    // 4. Adaptive Domain Architecture (ADA) Zero-Preset Conversational Brief Synthesizer
+    const domain = classifyDomain(text);
+    const chatResponse = synthesizeAdaptiveResearchBrief(domain, text);
 
     return { chatResponse };
 }

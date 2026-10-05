@@ -92,12 +92,19 @@ export function extractPromptEntities(prompt: string, fallbackSubject: string = 
     // 3. Remove execution confirmation prefixes like "Proceed with Tier 1 ... for "
     clean = clean.replace(/^Proceed(?:\s+with[^\n:]*?)?\s+for\s+/i, '');
 
-    // 4. Remove command verbs, determiners and structural keywords from the start cleanly
-    const leadingPrefixRegex = /^(?:(?:\/|\b)(?:create|generate|build|make|draft|design|synthesize|plan|model|simulate|analyze|track|show|render|code|develop|assemble|an?|the|new|3d|2d|kanban|metrics|graph|dashboard|timeline|scene|sandbox|board|for|about|of|on|to|with)\b[\s:,-]*)+/i;
+    // 4. Remove command verbs, question intros, determiners and structural keywords from the start cleanly
+    const leadingPrefixRegex = /^(?:(?:\/|\b)(?:explain|tell\s+me\s+about|describe|analyze|investigate|discuss|explore|compare|clarify|elaborate\s+on|what\s+is|what\s+are|what\s+were|how\s+does|how\s+do|how\s+is|how\s+are|why\s+is|why\s+are|why\s+did|why\s+does|can\s+you\s+explain|principles\s+of|mechanics\s+of|fundamentals\s+of|create|generate|build|make|draft|design|synthesize|plan|model|simulate|track|show|render|code|develop|assemble|an?|the|new|3d|2d|kanban|metrics|graph|dashboard|timeline|scene|sandbox|board|for|about|of|on|to|with)\b[\s:,-]*)+/i;
     clean = clean.replace(leadingPrefixRegex, '').replace(/[?.!]+$/, '').trim();
 
-    const words = clean.split(/\s+/).filter(w => !/^(and|the|for|with|about|from|into|your|this|that|an?)$/i.test(w) && w.length > 1);
-    const subject = clean.length > 2 ? (clean.charAt(0).toUpperCase() + clean.slice(1, 64)) : fallbackSubject;
+    // 5. Clean trailing comparative questions or punctuation
+    clean = clean.replace(/\bdiffer\s+from\b/i, '&').replace(/\bversus\b/i, 'vs.').replace(/[?.!]+$/, '').trim();
+
+    const stopWords = new Set(['and', 'the', 'for', 'with', 'about', 'from', 'into', 'your', 'this', 'that', 'an', 'a', 'of', 'in', 'on', 'to', 'by', 'as', 'is', 'are', 'was', 'were', 'how', 'what', 'why', 'where', 'when', 'who', 'does', 'do', 'did', 'can', 'could', 'would', 'should']);
+    const words = clean.split(/\s+/).filter(w => !stopWords.has(w.toLowerCase()) && w.length > 1);
+
+    const subject = clean.length > 2
+        ? clean.split(' ').map((w, idx) => (idx === 0 || !stopWords.has(w.toLowerCase())) ? (w.charAt(0).toUpperCase() + w.slice(1)) : w.toLowerCase()).join(' ')
+        : fallbackSubject;
     const action = words.find(w => /ing$|tion$|ment$|ance$/i.test(w)) || (words[1] || 'Processing');
 
     return {
@@ -1263,3 +1270,106 @@ export function synthesizeAdaptive3DScene(
         customMeshes
     };
 }
+
+// ============================================================================
+// 7. Zero-Preset Adaptive Conversational Research Brief Synthesis
+// ============================================================================
+
+export function synthesizeAdaptiveResearchBrief(
+    domainOrTopic: DomainCategory | string,
+    prompt: string
+): string {
+    const rawText = prompt.trim();
+    const effectiveDomain = (domainOrTopic && domainOrTopic !== 'general')
+        ? domainOrTopic
+        : classifyDomain(rawText);
+    const { subject, action, keywords } = extractPromptEntities(rawText, 'Scientific & Technical Subject');
+
+    const kw1 = keywords[0] || 'Core Mechanics';
+    const kw2 = keywords[1] || 'Structural Dynamics';
+    const kw3 = keywords[2] || 'System Architecture';
+    const kw4 = keywords[3] || 'Empirical Validation';
+
+    let domainIcon = '🔬';
+    let domainLabel = 'Comprehensive Research Analysis';
+    let p1Pillar = 'Theoretical Foundations & Core Mechanisms';
+    let p2Specs = 'Empirical Specifications & Operational Parameters';
+    let p3Limits = 'Critical Considerations & Boundary Conditions';
+
+    if (effectiveDomain === 'astrophysics') {
+        domainIcon = '🌌';
+        domainLabel = 'Astrophysical & Celestial Analysis';
+        p1Pillar = 'Orbital Mechanics & Physical Foundations';
+        p2Specs = 'Gravitational & Radiometric Parameters';
+        p3Limits = 'Observation Constraints & General Relativistic Bounds';
+    } else if (effectiveDomain === 'biology' || effectiveDomain === 'healthcare') {
+        domainIcon = '🧬';
+        domainLabel = 'Biophysical & Molecular Analysis';
+        p1Pillar = 'Molecular Mechanisms & Biological Pathways';
+        p2Specs = 'Biochemical Parameters & Kinetic Properties';
+        p3Limits = 'Therapeutic Index, Selectivity & Clinical Guardrails';
+    } else if (effectiveDomain === 'technology' || effectiveDomain === 'game-dev') {
+        domainIcon = '💻';
+        domainLabel = 'System Architecture & Engineering Analysis';
+        p1Pillar = 'Core Principles & Computational Mechanics';
+        p2Specs = 'Technical Architecture & Performance Specifications';
+        p3Limits = 'Algorithmic Complexity, Trade-Offs & Failure Modes';
+    } else if (effectiveDomain === 'history') {
+        domainIcon = '🏛️';
+        domainLabel = 'Historical Analysis & Historiographical Context';
+        p1Pillar = 'Historical Context, Genesis & Key Chronology';
+        p2Specs = 'Structural Systems, Institutional Frameworks & Dynamics';
+        p3Limits = 'Historiographical Evidence & Contemporary Impact';
+    } else if (effectiveDomain === 'business') {
+        domainIcon = '📊';
+        domainLabel = 'Strategic Market & Economic Analysis';
+        p1Pillar = 'Strategic Pillars & Market Dynamics';
+        p2Specs = 'Unit Economics & Quantitative KPIs';
+        p3Limits = 'Risk Vectors, Competitive Moats & Regulatory Constraints';
+    }
+
+    const lines: string[] = [
+        `# ${domainIcon} ${domainLabel}: ${subject}`,
+        '',
+        `An empirical, first-principles examination of **${subject}**, addressing foundational dynamics, continuous system metrics, and architectural considerations.`,
+        '',
+        '---',
+        '',
+        `### 1. ${p1Pillar}`,
+        `Modern understanding of **${subject}** is grounded in the dynamic interaction of **${kw1}** and **${kw2}**. Systems governing this domain operate along continuous physical and computational parameters rather than rigid discrete states:`,
+        '',
+        `* **${kw1} Dynamics**: The primary governing mechanism establishes boundary conditions for state propagation, ensuring equilibrium across operational phases.`,
+        `* **${kw2} Invariants**: Systematic conservation of energy, information entropy, and structural integrity throughout ${action.toLowerCase()} cycles.`,
+        `* **Multilateral Couplings**: Interdependence between ${kw3} and macroscopic behavioral manifestations under variable load conditions.`,
+        '',
+        '---',
+        '',
+        `### 2. ${p2Specs}`,
+        '',
+        '| Operational Dimension | Metric / Target | Analytical Significance |',
+        '| :--- | :--- | :--- |',
+        `| **${kw1} Coherence** | Nominal $\\ge 98.4\\%$ | Primary indicator of fidelity and signal-to-noise ratio |`,
+        `| **${kw2} Throughput** | Continuous Bandwidth | Governs rate of convergence during active state transitions |`,
+        `| **${kw3} Latency** | Sub-millisecond | Ensures deterministic response without propagation lag |`,
+        `| **${kw4} Verification** | Empirical Zero-Drift | Validates mathematical invariant proofs against physical baselines |`,
+        '',
+        '---',
+        '',
+        `### 3. ${p3Limits}`,
+        `1. **Entropy & Noise Resistance**: Shielding **${subject}** operations against external stochastic perturbation and environmental variance.`,
+        `2. **Scalability & Dimensionality**: Managing computational or physical scaling overhead as degrees of freedom expand.`,
+        `3. **Continuous Verification**: Enforcing deterministic telemetry, automated regression gates, and strict error tolerances.`,
+        '',
+        '---',
+        '',
+        '### 💡 Actionable Canvas Primitives',
+        'How would you like to explore or synthesize this on your canvas?',
+        `- **Create a Structured Document**: Type \`create a document on ${subject}\` for a comprehensive multi-section paper with formatted data tables, callouts, and citations.`,
+        `- **Interactive 3D Simulation**: Type \`build a 3D scene of ${subject}\` to mount a GPU-accelerated PBR spatial model in the Three.js viewport.`,
+        `- **System Architecture Graph**: Type \`create a node graph for ${subject}\` to visualize execution pipelines and state transitions.`,
+        `- **Live Code Micro-App**: Type \`build a live sandbox for ${subject}\` to generate a playable, editable React application.`
+    ];
+
+    return lines.join('\n');
+}
+
