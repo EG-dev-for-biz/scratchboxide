@@ -184,10 +184,11 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
         }
 
         if (bounds) {
-            cameraTarget = [bounds.center[0], bounds.center[1], bounds.center[2]];
+            cameraTarget = [bounds.center[0], Math.max(bounds.center[1], bounds.dimensions[1] * 0.35), bounds.center[2]];
             const fovRad = (cameraFov * Math.PI) / 180;
-            // Frame camera with 15% comfortable safety margin
-            const distance = Math.max(1.8, (bounds.radius / Math.sin(fovRad * 0.5)) * 1.15);
+            // Frame camera with comfortable safety margin focusing on hero height and structures
+            const effectiveRadius = Math.min(bounds.radius, Math.max(bounds.dimensions[1] * 1.6, Math.min(bounds.radius, 35.0)));
+            const distance = Math.max(6.0, (effectiveRadius / Math.sin(fovRad * 0.5)) * 1.2);
             // 35-degree azimuthal cinematic 3/4 perspective
             cameraPosition = [
                 bounds.center[0] + distance * 0.65,

@@ -665,55 +665,68 @@ world.scatter(
 world.compile_to_glb(pbr_quality="high")
 \`\`\`
 
-Option B: Custom Compound Mesh Architecture (Recommended for Sci-Fi outposts, towers, mechanical assets, modern buildings):
+Option B: Custom Compound Mesh Architecture (Recommended for Sci-Fi outposts, towers, mechanical complexes, modern buildings):
 \`\`\`python
 import scratchbox as sb
 import math
 
-scene = sb.geometry.Mesh("SciFiOutpost")
+scene = sb.geometry.Mesh("SciFiResearchOutpost")
 
-# 1. Ground terrain / platform
-ground = sb.create_plane(width=180.0, height=180.0, seg_x=16, seg_y=16)
-ground.material = sb.geometry.PbrMaterial(base_color="#2b2d42", roughness=0.85, metalness=0.15)
-scene.merge(ground)
+# 1. Foundation: Chamfered studio pedestal / terrain plinth (compact radius to keep camera framed)
+plinth = sb.geometry.create_studio_pedestal(radius=24.0, height=0.6, bevel=0.08, segments=64)
+plinth.material = sb.geometry.PbrMaterial.black_onyx()
+scene.merge(plinth)
 
-# 2. Observation tower base and cylindrical core
-base = sb.create_cylinder(radius=10.0, height=6.0, segments=32)
-base.translate(0, 3.0, 0)
-base.material = sb.geometry.PbrMaterial(base_color="#4a4e69", roughness=0.3, metalness=0.8)
-scene.merge(base)
+# 2. Primary Edifice (70%): Central 3-story modular research complex with modeled reveals
+main_hub = sb.create_building(
+    width=18.0, depth=14.0, floors=3, floor_height=3.4,
+    ground_floor_height=4.0, plinth_height=0.4,
+    bay_width=3.0, window_width=1.6, window_height=1.8, window_recess_depth=0.25,
+    roof='flat', parapet_height=0.8, name="CentralHub"
+)
+main_hub.translate(0, 0.6, 0)
+main_hub.material = sb.geometry.PbrMaterial.titanium_grade5()
+scene.merge(main_hub)
 
-spire = sb.create_cylinder(radius=4.5, height=36.0, segments=32)
-spire.translate(0, 24.0, 0)
-spire.material = sb.geometry.PbrMaterial(base_color="#3a3d52", roughness=0.2, metalness=0.85)
-scene.merge(spire)
+# 3. Secondary Massing (20%): Central observation tower & pressurized skyward cupola
+tower = sb.create_cylinder(radius=2.4, height=12.0, segments=32)
+tower.translate(0, 11.2, 0)
+tower.material = sb.geometry.PbrMaterial.titanium_grade5()
+scene.merge(tower)
 
-dome = sb.create_cone(radius=7.0, height=12.0, segments=32)
-dome.translate(0, 48.0, 0)
-dome.material = sb.geometry.PbrMaterial(base_color="#9a8c98", roughness=0.2, metalness=0.9, emissive="#00f5d4", emissive_intensity=0.8)
-scene.merge(dome)
+cupola = sb.create_sphere(radius=3.2, segments=32)
+cupola.translate(0, 17.5, 0)
+cupola.material = sb.geometry.PbrMaterial(base_color="#38bdf8", roughness=0.1, metalness=0.2, emissive="#0284c7", emissive_intensity=1.8)
+scene.merge(cupola)
 
-# 3. Communication array masts and parabolic dishes
-dish_mast = sb.create_cylinder(radius=0.8, height=22.0, segments=16)
-dish_mast.translate(25.0, 11.0, 25.0)
-scene.merge(dish_mast)
+# 4. Tertiary Micro-Detail (10%): Dual Photovoltaic Solar Array wings & High-Gain Comms
+# Left and right angled solar panel arrays
+solar_left = sb.create_box(width=6.8, height=0.15, depth=3.2)
+solar_left.rotate_z(math.radians(12.0))
+solar_left.translate(-11.5, 5.2, 0)
+solar_left.material = sb.geometry.PbrMaterial(base_color="#0f172a", roughness=0.12, metalness=0.95, emissive="#00f5d4", emissive_intensity=0.4)
+scene.merge(solar_left)
 
-dish = sb.create_sphere(radius=4.5, segments=32)
-dish.scale(1.0, 0.25, 1.0)
-dish.rotate_x(math.pi * 0.35)
-dish.translate(25.0, 23.0, 25.0)
-dish.material = sb.geometry.PbrMaterial(base_color="#f2e9e4", roughness=0.3, metalness=0.7)
-scene.merge(dish)
+solar_right = sb.create_box(width=6.8, height=0.15, depth=3.2)
+solar_right.rotate_z(math.radians(-12.0))
+solar_right.translate(11.5, 5.2, 0)
+solar_right.material = sb.geometry.PbrMaterial(base_color="#0f172a", roughness=0.12, metalness=0.95, emissive="#00f5d4", emissive_intensity=0.4)
+scene.merge(solar_right)
 
-# 4. Multi-story buildings or outposts
-outpost_lab = sb.create_building(width=16.0, depth=14.0, floors=2, floor_height=3.8, roof='flat', name="LabComplex")
-outpost_lab.translate(-28.0, 0, -15.0)
-scene.merge(outpost_lab)
+# High-gain communications telemetry mast
+mast = sb.create_cylinder(radius=0.15, height=8.0, segments=16)
+mast.translate(6.5, 14.5, -4.5)
+mast.material = sb.geometry.PbrMaterial.polished_gold_24k()
+scene.merge(mast)
 
-# 5. Botanical alien flora (SB-Veggie space colonization)
-tree = sb.create_tree(attractor_count=120, crown_center=(0, 6, 0), crown_extents=(3.0, 4.5, 3.0))
-tree.translate(-15.0, 0, 20.0)
-scene.merge(tree)
+# 5. Botanical foliage & terrain boulders around base (SB-Veggie space colonization)
+tree1 = sb.create_tree(attractor_count=120, crown_center=(0, 4, 0), crown_extents=(2.2, 3.5, 2.2))
+tree1.translate(-14.0, 0.6, 12.0)
+scene.merge(tree1)
+
+tree2 = sb.create_tree(attractor_count=90, crown_center=(0, 3.2, 0), crown_extents=(1.8, 2.8, 1.8))
+tree2.translate(13.0, 0.6, -10.0)
+scene.merge(tree2)
 
 # 6. Stream binary .glb directly into canvas stage
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)

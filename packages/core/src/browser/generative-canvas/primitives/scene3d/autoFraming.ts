@@ -37,10 +37,13 @@ export interface SceneBoundsResult {
 
 /**
  * Computes bounding box and sphere of scene geometry, ignoring helper grids, lights, and skies.
+ * Intelligently identifies focal hero geometry vs massive flat ground planes to prevent camera over-retreat.
  */
 export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResult {
     const box = new THREE.Box3();
+    const focalBox = new THREE.Box3();
     let hasGeometry = false;
+    let hasFocalGeometry = false;
 
     scene.traverse((child) => {
         if (child === scene) return;
@@ -74,14 +77,25 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
         if ((child as any).isMesh || (child as any).isPoints || (child as any).isInstancedMesh) {
             box.expandByObject(child);
             hasGeometry = true;
+
+            // Check if this object is a flat ground plane vs focal structure
+            const childBox = new THREE.Box3().setFromObject(child);
+            const childSize = new THREE.Vector3();
+            childBox.getSize(childSize);
+            const isFlatGround = (name.includes('ground') || name.includes('plane') || name.includes('floor')) && childSize.y < 1.0 && Math.max(childSize.x, childSize.z) > 40.0;
+            if (!isFlatGround) {
+                focalBox.expandByObject(child);
+                hasFocalGeometry = true;
+            }
         }
     });
 
     const sphere = new THREE.Sphere();
-    if (hasGeometry && !box.isEmpty()) {
-        box.getBoundingSphere(sphere);
+    const effectiveBox = (hasFocalGeometry && !focalBox.isEmpty()) ? focalBox : box;
+    if (hasGeometry && !effectiveBox.isEmpty()) {
+        effectiveBox.getBoundingSphere(sphere);
     }
-    return { box, sphere, hasGeometry };
+    return { box: effectiveBox, sphere, hasGeometry };
 }
 
 /**
