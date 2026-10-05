@@ -221,6 +221,60 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
     _native.geometry.PbrMaterial = PbrMaterial
     geometry.PbrMaterial = PbrMaterial
 
+    _NativeMesh = getattr(_native.geometry, "Mesh", None)
+    if _NativeMesh is None:
+        _NativeMesh = getattr(_native.geometry, "ScratchboxMesh", None)
+
+    if _NativeMesh is not None:
+        def _mesh_align_to_terrain(self, terrain, offset_z=0.2):
+            min_x, max_x = 1e9, -1e9
+            min_z, max_z = 1e9, -1e9
+            min_y = 1e9
+            if hasattr(self, "vertices") and self.vertices:
+                for v in self.vertices:
+                    pos = v.position
+                    px = pos.x if hasattr(pos, "x") else pos[0]
+                    py = pos.y if hasattr(pos, "y") else pos[1]
+                    pz = pos.z if hasattr(pos, "z") else pos[2]
+                    if px < min_x: min_x = px
+                    if px > max_x: max_x = px
+                    if pz < min_z: min_z = pz
+                    if pz > max_z: max_z = pz
+                    if py < min_y: min_y = py
+
+            cx = (min_x + max_x) * 0.5 if min_x < 1e8 else 0.0
+            cz = (min_z + max_z) * 0.5 if min_z < 1e8 else 0.0
+            half_w = (max_x - min_x) * 0.5 if min_x < 1e8 else 1.0
+            half_l = (max_z - min_z) * 0.5 if min_z < 1e8 else 1.0
+
+            sample_pts = [
+                (cx, cz),
+                (cx - half_w, cz - half_l),
+                (cx + half_w, cz - half_l),
+                (cx - half_w, cz + half_l),
+                (cx + half_w, cz + half_l),
+                (cx, cz - half_l),
+                (cx, cz + half_l),
+                (cx - half_w, cz),
+                (cx + half_w, cz)
+            ]
+
+            ground_elevations = [terrain.sample_height(x, z) for x, z in sample_pts] if hasattr(terrain, "sample_height") else [0.0]
+            target_ground_y = max(ground_elevations) if ground_elevations else 0.0
+            if min_y > 1e8: min_y = 0.0
+
+            delta_y = (target_ground_y + float(offset_z)) - min_y
+            self.translate(math.Vec3(0.0, delta_y, 0.0))
+            return self
+
+        def _mesh_apply_material(self, mat):
+            self.material = mat
+            return self
+
+        _NativeMesh.align_to_terrain = _mesh_align_to_terrain
+        _NativeMesh.apply_material = _mesh_apply_material
+        _NativeMesh.set_material = _mesh_apply_material
+
 # ============================================================================
 # 3. PRIMITIVE FACTORY HELPERS
 # ============================================================================
@@ -250,12 +304,17 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_cylinder not available")
     _geom.create_cylinder = create_cylinder
 
+    def create_cone(radius=1.0, height=2.0, segments=24, color=None, **kwargs):
+        return create_cylinder(radius_top=0.0, radius_bottom=radius, height=height, segments=segments, color=color, **kwargs)
+    _geom.create_cone = create_cone
+
     _orig_create_plane = getattr(_geom, "create_plane", None)
-    def create_plane(width=2.0, height=2.0, seg_x=4, seg_y=4, segments=None, **kwargs):
-        sx = int(segments if segments is not None else seg_x)
-        sy = int(segments if segments is not None else seg_y)
+    def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, **kwargs):
+        h = float(depth if depth is not None else height)
+        sx = int(segments if segments is not None else (width_segments if width_segments is not None else seg_x))
+        sy = int(segments if segments is not None else (depth_segments if depth_segments is not None else seg_y))
         if _orig_create_plane:
-            return _orig_create_plane(float(width), float(height), sx, sy)
+            return _orig_create_plane(float(width), h, sx, sy)
         raise RuntimeError("Native create_plane not available")
     _geom.create_plane = create_plane
 
@@ -329,12 +388,34 @@ def create_building(
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
 
+    # Support continuous dimensional parameters (Alien Planet Test)
+    archetype_str = str(kwargs.get("archetype", "")).lower()
+    if "dome" in archetype_str:
+        rad = float(kwargs.get("radius", max(width, depth) * 0.5))
+        dome_mesh = create_sphere(radius=rad, segments=32)
+        dome_mesh.name = name or "GeodesicDome"
+        return dome_mesh
+
     cfg = _native.architecture.BuildingConfig()
     cfg.width = float(width)
     cfg.depth = float(depth)
-    cfg.floor_count = int(kwargs.get("floor_count", floors))
-    cfg.floor_height = float(floor_height)
-    cfg.ground_floor_height = float(ground_floor_height)
+
+    if "radius" in kwargs:
+        r = float(kwargs["radius"])
+        cfg.width = r * 2.0
+        cfg.depth = r * 2.0
+
+    floor_cnt = int(kwargs.get("levels", kwargs.get("floor_count", floors)))
+    cfg.floor_count = max(1, floor_cnt)
+
+    if "height" in kwargs:
+        total_h = float(kwargs["height"])
+        cfg.floor_height = total_h / max(1, cfg.floor_count)
+        cfg.ground_floor_height = cfg.floor_height
+    else:
+        cfg.floor_height = float(floor_height)
+        cfg.ground_floor_height = float(ground_floor_height)
+
     cfg.plinth_height = float(plinth_height)
     cfg.bay_width = float(bay_width)
     cfg.window_width = float(window_width)
@@ -353,6 +434,8 @@ def create_building(
             cfg.roof_type = RoofType.Hip
         elif "gable" in r:
             cfg.roof_type = RoofType.Gable
+        elif "flat" in r:
+            cfg.roof_type = RoofType.FlatParapet
         else:
             cfg.roof_type = RoofType.FlatParapet
     elif isinstance(roof, RoofType):
@@ -465,6 +548,12 @@ class _ArchitectureModule:
 
 architecture = _ArchitectureModule()
 
+create_cylinder = getattr(_geom, "create_cylinder", None)
+create_cone = getattr(_geom, "create_cone", None)
+create_plane = getattr(_geom, "create_plane", None)
+create_box = getattr(_geom, "create_box", None)
+create_sphere = getattr(_geom, "create_sphere", None)
+
 __all__ = [
     "World",
     "Terrain",
@@ -475,6 +564,11 @@ __all__ = [
     "create_building",
     "create_tree",
     "create_studio_pedestal",
+    "create_cylinder",
+    "create_cone",
+    "create_plane",
+    "create_box",
+    "create_sphere",
     "geospatial",
     "nature",
     "architecture",

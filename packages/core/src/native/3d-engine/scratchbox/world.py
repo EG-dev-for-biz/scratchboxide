@@ -21,8 +21,21 @@ class World:
         self.units = str(units)
         self.terrains: List[Terrain] = []
         self.structures: List[Structure] = []
+        self.standalone_meshes: List[Any] = []
         self.scattered_meshes: List[Any] = []
         self._rng = random.Random(self.seed)
+
+    def add_mesh(self, mesh: Any) -> Any:
+        """Add any standalone mesh (building, prop, or custom asset) to the world."""
+        if hasattr(mesh, "mesh"):
+            self.standalone_meshes.append(mesh.mesh)
+        else:
+            self.standalone_meshes.append(mesh)
+        return mesh
+
+    def add_asset(self, asset: Any) -> Any:
+        """Alias for add_mesh."""
+        return self.add_mesh(asset)
 
     def add_terrain(
         self,
@@ -206,10 +219,30 @@ class World:
             # Avoid structures check
             collision = False
             for struct in avoid_structures:
-                half_w = struct.footprint_width * 0.5 + 4.0  # Buffer margin
-                half_l = struct.footprint_length * 0.5 + 4.0
-                scx = struct.position[0]
-                scz = struct.position[2]
+                half_w = 4.0
+                half_l = 4.0
+                scx = 0.0
+                scz = 0.0
+                if hasattr(struct, "footprint_width") and hasattr(struct, "footprint_length") and hasattr(struct, "position"):
+                    half_w = struct.footprint_width * 0.5 + 4.0
+                    half_l = struct.footprint_length * 0.5 + 4.0
+                    scx = struct.position[0]
+                    scz = struct.position[2]
+                else:
+                    # Mesh or generic object: sample approximate bounds or position
+                    m = getattr(struct, "mesh", struct)
+                    if hasattr(m, "bounds"):
+                        scx = (m.bounds.min.x + m.bounds.max.x) * 0.5
+                        scz = (m.bounds.min.z + m.bounds.max.z) * 0.5
+                        half_w = max(4.0, (m.bounds.max.x - m.bounds.min.x) * 0.5 + 2.0)
+                        half_l = max(4.0, (m.bounds.max.z - m.bounds.min.z) * 0.5 + 2.0)
+                    elif hasattr(m, "vertices") and m.vertices:
+                        v0 = m.vertices[0].position
+                        scx = v0.x if hasattr(v0, "x") else v0[0]
+                        scz = v0.z if hasattr(v0, "z") else v0[2]
+                        half_w = 6.0
+                        half_l = 6.0
+
                 if abs(px - scx) < half_w and abs(pz - scz) < half_l:
                     collision = True
                     break
@@ -253,6 +286,8 @@ class World:
             all_meshes.append(t.mesh)
         for s in self.structures:
             all_meshes.append(s.mesh)
+        for sm in self.standalone_meshes:
+            all_meshes.append(sm)
         for sc in self.scattered_meshes:
             all_meshes.append(sc)
 
@@ -299,6 +334,8 @@ class World:
             scene_mesh.append(t.mesh)
         for s in self.structures:
             scene_mesh.append(s.mesh)
+        for sm in self.standalone_meshes:
+            scene_mesh.append(sm)
         for sc in self.scattered_meshes:
             scene_mesh.append(sc)
 

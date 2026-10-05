@@ -540,121 +540,21 @@ export const createDynamicContrails = (scene: THREE.Scene, maxPoints: number = 3
 // Procedural Terrain Biomes Generator
 // ---------------------------------------------------------
 export const createProceduralBiomeTerrain = (
-    scene: THREE.Scene,
-    biomeType: string = 'alpine',
-    renderMode: string = 'pbr',
-    isSunset: boolean = false
+    _scene: THREE.Scene,
+    _biomeType: string = 'alpine',
+    _renderMode: string = 'pbr',
+    _isSunset: boolean = false
 ) => {
-    const terrainGroup = new THREE.Group();
-    const terrainSize = 350;
-    const segments = 64;
-
-    const terrainGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, segments, segments);
-    terrainGeo.rotateX(-Math.PI / 2);
-
-    const positions = terrainGeo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < positions.count; i++) {
-        const x = positions.getX(i);
-        const z = positions.getZ(i);
-        const dist = Math.sqrt(x * x + z * z);
-
-        let height = 0;
-        if (biomeType === 'canyon') {
-            // Layered stepped plateau with carved river channel
-            const riverDist = Math.abs(x);
-            height = Math.sin(z * 0.05) * 3.0 + Math.cos(x * 0.04) * 8.0;
-            if (riverDist < 12) {
-                height -= (12 - riverDist) * 1.5;
-            }
-        } else if (biomeType === 'desert') {
-            // Wind-swept dunes
-            height = Math.sin(x * 0.04 + z * 0.02) * 3.5 + Math.sin(x * 0.08) * 1.5;
-        } else if (biomeType === 'coastal') {
-            // Shoreline transition
-            height = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 4.0;
-            if (x < -10) height = -2.5 + Math.sin(z * 0.1) * 0.3;
-        } else {
-            // Alpine mountains & valleys
-            height = Math.sin(x * 0.03) * Math.cos(z * 0.03) * 7.5;
-            height += Math.sin(x * 0.07 + z * 0.05) * 3.5;
-            height += Math.sin(x * 0.15) * 1.0;
-        }
-
-        // Edge fade
-        if (dist > 120) {
-            height *= Math.max(0, (170 - dist) / 50);
-        }
-
-        positions.setY(i, height - 8.0);
-    }
-    terrainGeo.computeVertexNormals();
-
-    let terrainColor = 0x1e3a29; // Alpine green
-    if (biomeType === 'desert') terrainColor = 0xd97706;
-    else if (biomeType === 'canyon') terrainColor = 0x9a3412;
-    else if (biomeType === 'coastal') terrainColor = 0x0f766e;
-    else if (biomeType === 'cyberpunk') terrainColor = 0x0f172a;
-
-    let terrainMat: THREE.Material;
-    if (renderMode === 'wireframe') {
-        terrainMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true });
-    } else {
-        terrainMat = new THREE.MeshStandardMaterial({
-            color: isSunset ? 0x1e293b : terrainColor,
-            roughness: 0.75,
-            metalness: 0.2,
-            flatShading: true
-        });
-    }
-
-    const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
-    terrainGroup.add(terrainMesh);
-
-    // Volumetric cloud clusters
-    const cloudGroup = new THREE.Group();
-    const cloudMat = new THREE.MeshStandardMaterial({
-        color: isSunset ? 0xffedd5 : 0xffffff,
-        roughness: 0.9,
-        metalness: 0.0,
-        transparent: true,
-        opacity: 0.85
-    });
-
-    for (let c = 0; c < 20; c++) {
-        const puffCluster = new THREE.Group();
-        const puffCount = 5 + Math.floor(Math.random() * 5);
-        for (let p = 0; p < puffCount; p++) {
-            const radius = 1.2 + Math.random() * 2.0;
-            const puff = new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 1), cloudMat);
-            puff.position.set(
-                (Math.random() - 0.5) * 3.5,
-                (Math.random() - 0.5) * 1.2,
-                (Math.random() - 0.5) * 3.5
-            );
-            puffCluster.add(puff);
-        }
-        const cx = (Math.random() - 0.5) * 160;
-        const cy = -3 + Math.random() * 6;
-        const cz = (Math.random() - 0.5) * 160;
-        puffCluster.position.set(cx, cy, cz);
-        cloudGroup.add(puffCluster);
-    }
-    terrainGroup.add(cloudGroup);
-    scene.add(terrainGroup);
-
+    // Purged: In accordance with the Anti-JS-Primitives directive, procedural terrains
+    // and biomes are generated via the native C++20 engine (scratchbox_infiniti.hpp / sb.World.add_terrain)
+    // and streamed as binary glTF 2.0 (.glb).
+    const emptyGroup = new THREE.Group();
     return {
-        group: terrainGroup,
-        terrainMesh,
-        cloudGroup,
-        update: (time: number, _delta: number) => {
-            cloudGroup.position.x = Math.sin(time * 0.02) * 5.0;
-        },
-        dispose: () => {
-            scene.remove(terrainGroup);
-            terrainGeo.dispose();
-            terrainMat.dispose();
-            cloudMat.dispose();
-        }
+        group: emptyGroup,
+        terrainMesh: undefined,
+        cloudGroup: undefined,
+        update: () => {},
+        dispose: () => {}
     };
 };
 
@@ -1958,11 +1858,12 @@ int main(int argc, char** argv) {
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
         hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
         hasCppGenerator: !!sceneData.cppGenerator?.glbBase64,
+        hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64,
         selectedShape,
         sculptWireframe: !!sculptSettings.wireframeOverlay
     }), [
         sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.cppGenerator?.glbBase64, selectedShape, sculptSettings.wireframeOverlay
+        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.cppGenerator?.glbBase64, sceneData.pythonGenerator?.glbBase64, selectedShape, sculptSettings.wireframeOverlay
     ]);
     // Shape / wireframe changes are applied in place by their own handlers, so they are excluded here.
     const contentFingerprint = React.useMemo(() => JSON.stringify({
@@ -2620,6 +2521,7 @@ int main(int argc, char** argv) {
                     scene.remove(existing);
                 }
                 gltf.scene.name = 'scratchbox-cpp-generated-root';
+                scene.add(gltf.scene);
                 gltf.scene.traverse((child) => {
                     if ((child as any).isMesh) {
                         const m = child as THREE.Mesh;
@@ -2638,18 +2540,20 @@ int main(int argc, char** argv) {
                         }
                     }
                 });
-                // Automatically frame camera around generated procedural geometry
-                const box = new THREE.Box3().setFromObject(gltf.scene);
-                const size = box.getSize(new THREE.Vector3());
-                const center = box.getCenter(new THREE.Vector3());
-                const maxDim = Math.max(size.x, size.y, size.z, 15);
-                const dist = Math.max(maxDim * 1.25, 24);
-                if (stack.camera) {
-                    stack.camera.position.set(center.x + dist * 0.65, center.y + dist * 0.45, center.z + dist * 0.75);
-                    stack.camera.lookAt(center.x, center.y + size.y * 0.2, center.z);
+                // Automatically frame camera around generated procedural geometry using calculateStandoffCamera
+                const bounds = computeSceneGeometryBounds(stack.scene);
+                const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, {
+                    fovDegrees: stack.camera.fov,
+                    force: true
+                });
+                if (autoFrame && stack.camera) {
+                    cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
+                    cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+                    stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
+                    stack.camera.lookAt(cameraTargetRef.current);
+                    stack.camera.far = Math.max(stack.camera.far, autoFrame.distance * 5, 20000);
+                    stack.camera.updateProjectionMatrix();
                 }
-                cameraTargetRef.current.set(center.x, center.y + size.y * 0.2, center.z);
-                cameraRotationRef.current = { theta: 0.72, phi: 1.12, distance: dist };
                 refreshEntities();
             }, (err) => {
                 console.warn('[3D Engine GLB Loader Error]:', err);
@@ -3291,6 +3195,8 @@ int main(int argc, char** argv) {
         if (autoFrame) {
             cameraTargetRef.current.set(autoFrame.target[0], autoFrame.target[1], autoFrame.target[2]);
             cameraRotationRef.current = { theta: autoFrame.theta, phi: autoFrame.phi, distance: autoFrame.distance };
+            stack.camera.far = Math.max(stack.camera.far, autoFrame.distance * 5, 20000);
+            stack.camera.updateProjectionMatrix();
             stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
             stack.camera.lookAt(cameraTargetRef.current);
         }

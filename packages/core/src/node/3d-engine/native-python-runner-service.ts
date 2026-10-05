@@ -67,6 +67,20 @@ export class NativePythonRunnerService {
     }
 
     /**
+     * Find the repository root dynamically (containing packages/core and package.json).
+     */
+    private resolveRepoRoot(): string {
+        let cur = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+        while (cur && cur !== path.dirname(cur)) {
+            if (fs.existsSync(path.join(cur, 'packages/core')) && fs.existsSync(path.join(cur, 'package.json'))) {
+                return cur;
+            }
+            cur = path.dirname(cur);
+        }
+        return process.cwd();
+    }
+
+    /**
      * Locate the preferred Python interpreter (.venv first, then system).
      */
     private resolvePythonExecutable(): string {
@@ -74,8 +88,11 @@ export class NativePythonRunnerService {
             return process.env.SCRATCHBOX_PYTHON;
         }
 
+        const repoRoot = this.resolveRepoRoot();
         const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
         const candidatePaths = [
+            path.resolve(repoRoot, '.venv/bin/python'),
+            path.resolve(repoRoot, '.venv/bin/python3'),
             path.resolve(process.cwd(), '.venv/bin/python'),
             path.resolve(process.cwd(), '.venv/bin/python3'),
             path.resolve(baseDir, '../../../../../.venv/bin/python'),
@@ -97,20 +114,24 @@ export class NativePythonRunnerService {
      * Resolve the directory containing compiled scratchbox_native extension and scratchbox package.
      */
     private resolveModuleDirectory(): string {
+        const repoRoot = this.resolveRepoRoot();
         const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
         const candidateDirs = [
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/scratchbox'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
+            path.resolve(repoRoot, 'packages/core/src/python/scratchbox'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
             path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(baseDir, '../../native/3d-engine/scratchbox'),
+            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/scratchbox'),
             path.resolve(baseDir, '../../native/3d-engine/build_py'),
-            path.resolve(baseDir, '../../../src/native/3d-engine/scratchbox'),
-            path.resolve(baseDir, '../../../src/native/3d-engine/build_py')
+            path.resolve(baseDir, '../../native/3d-engine/scratchbox'),
+            path.resolve(baseDir, '../../../src/native/3d-engine/build_py'),
+            path.resolve(baseDir, '../../../src/native/3d-engine/scratchbox')
         ];
 
         for (const dir of candidateDirs) {
             if (fs.existsSync(dir)) {
                 const files = fs.readdirSync(dir);
-                if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd')))) {
+                if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd') || f.endsWith('.dylib')))) {
                     return dir;
                 }
             }
@@ -133,12 +154,13 @@ export class NativePythonRunnerService {
     public async ensureNativeModule(): Promise<boolean> {
         if (fs.existsSync(this.moduleDirectory)) {
             const files = fs.readdirSync(this.moduleDirectory);
-            if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd')))) {
+            if (files.some(f => f.startsWith('scratchbox_native') && (f.endsWith('.so') || f.endsWith('.pyd') || f.endsWith('.dylib')))) {
                 return true;
             }
         }
 
-        const engineDir = path.resolve(process.cwd(), 'packages/core/src/native/3d-engine');
+        const repoRoot = this.resolveRepoRoot();
+        const engineDir = path.resolve(repoRoot, 'packages/core/src/native/3d-engine');
         const buildDir = path.join(engineDir, 'build_py');
 
         try {
@@ -163,7 +185,8 @@ export class NativePythonRunnerService {
         options: PythonExecutionOptions = {}
     ): Promise<PythonExecutionResult> {
         const startTime = Date.now();
-        const outputDir = options.outputDir || path.resolve(process.cwd(), 'build/3d-python');
+        const repoRoot = this.resolveRepoRoot();
+        const outputDir = options.outputDir || path.resolve(repoRoot, 'build/3d-python');
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
@@ -213,15 +236,17 @@ export class NativePythonRunnerService {
     ): Promise<PythonExecutionResult> {
         const cwd = options.cwd || path.dirname(scriptPath);
         const timeout = options.timeoutMs || 60000;
+        const repoRoot = this.resolveRepoRoot();
 
         // Build PYTHONPATH
         const pythonPaths = [
             options.env?.PYTHONPATH,
-            path.resolve(process.cwd(), 'packages/core/src/python'),
+            path.resolve(repoRoot, 'packages/core/src/python'),
             this.moduleDirectory,
             path.dirname(this.moduleDirectory),
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine/build_py'),
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine'),
             process.env.PYTHONPATH
         ].filter(Boolean).join(path.delimiter);
 

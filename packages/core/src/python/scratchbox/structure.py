@@ -72,22 +72,48 @@ class Structure:
         self.translate(0.0, delta_y, 0.0)
         return self
 
-    def translate(self, dx: float, dy: float, dz: float) -> "Structure":
-        """Translate the structure by (dx, dy, dz) meters."""
-        self.position[0] += dx
-        self.position[1] += dy
-        self.position[2] += dz
+    def translate(self, dx: Any, dy: Optional[float] = None, dz: Optional[float] = None) -> "Structure":
+        """Translate the structure by (dx, dy, dz) meters or by a Vec3 / tuple."""
+        if dy is None and dz is None:
+            if hasattr(dx, "x") and hasattr(dx, "y") and hasattr(dx, "z"):
+                offset_x, offset_y, offset_z = float(dx.x), float(dx.y), float(dx.z)
+            elif isinstance(dx, (tuple, list)) and len(dx) >= 3:
+                offset_x, offset_y, offset_z = float(dx[0]), float(dx[1]), float(dx[2])
+            else:
+                offset_x, offset_y, offset_z = float(dx), 0.0, 0.0
+        else:
+            offset_x, offset_y, offset_z = float(dx), float(dy or 0.0), float(dz or 0.0)
 
-        if hasattr(self.mesh, "vertices"):
+        self.position[0] += offset_x
+        self.position[1] += offset_y
+        self.position[2] += offset_z
+
+        if hasattr(self.mesh, "translate"):
+            try:
+                import scratchbox_native as _sn
+                self.mesh.translate(_sn.math.Vec3(offset_x, offset_y, offset_z))
+            except Exception:
+                if hasattr(self.mesh, "vertices"):
+                    for v in self.mesh.vertices:
+                        if hasattr(v.position, "x"):
+                            v.position.x += offset_x
+                            v.position.y += offset_y
+                            v.position.z += offset_z
+                        else:
+                            v.position[0] += offset_x
+                            v.position[1] += offset_y
+                            v.position[2] += offset_z
+        elif hasattr(self.mesh, "vertices"):
             for v in self.mesh.vertices:
                 if hasattr(v.position, "x"):
-                    v.position.x += dx
-                    v.position.y += dy
-                    v.position.z += dz
+                    v.position.x += offset_x
+                    v.position.y += offset_y
+                    v.position.z += offset_z
                 else:
-                    v.position[0] += dx
-                    v.position[1] += dy
-                    v.position[2] += dz
+                    v.position[0] += offset_x
+                    v.position[1] += offset_y
+                    v.position[2] += offset_z
+
         if hasattr(self.mesh, "recomputeBounds"):
             self.mesh.recomputeBounds()
         elif hasattr(self.mesh, "recompute_bounds"):
@@ -95,5 +121,37 @@ class Structure:
 
         return self
 
+    def apply_material(self, mat: Any) -> "Structure":
+        """Applies a PBR material to the underlying structure mesh."""
+        if hasattr(self.mesh, "apply_material"):
+            self.mesh.apply_material(mat)
+        elif hasattr(self.mesh, "material"):
+            self.mesh.material = mat
+        return self
+
+    def set_material(self, mat: Any) -> "Structure":
+        """Sets the PBR material on the underlying structure mesh."""
+        return self.apply_material(mat)
+
+    def set_color(self, color: Any) -> "Structure":
+        """Sets vertex color or base tint on the underlying structure mesh."""
+        if hasattr(self.mesh, "set_color"):
+            self.mesh.set_color(color)
+        return self
+
+    @property
+    def material(self) -> Any:
+        return getattr(self.mesh, "material", None)
+
+    @material.setter
+    def material(self, mat: Any) -> None:
+        self.apply_material(mat)
+
     def get_mesh(self) -> Any:
         return self.mesh
+
+    def __getattr__(self, name: str) -> Any:
+        """Transparently delegate any mesh methods to self.mesh."""
+        if hasattr(self.mesh, name):
+            return getattr(self.mesh, name)
+        raise AttributeError(f"'Structure' object has no attribute '{name}'")

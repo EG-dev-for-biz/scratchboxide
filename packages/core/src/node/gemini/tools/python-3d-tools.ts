@@ -201,7 +201,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             resultPayload: {
                 success: true,
                 glbPath: result.glbPath,
-                glbBase64: result.glbBase64,
+                glbGenerated: true,
                 executionTimeMs: result.executionTimeMs,
                 stdout: result.stdout,
                 description: desc,

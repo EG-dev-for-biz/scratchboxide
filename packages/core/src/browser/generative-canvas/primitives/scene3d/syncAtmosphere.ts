@@ -106,7 +106,7 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
 
     let backgroundHex = CLAY_GREY_HEX;
     if (hasAtmosphere) {
-        backgroundHex = isSunset ? 0x1e1b4b : 0x0284c7;
+        backgroundHex = isSunset ? 0x1e1b4b : 0xc4d4e8;
     } else if (input.backgroundHex !== undefined) {
         backgroundHex = input.backgroundHex;
     } else if (isDirectedDarkOrBlack) {

@@ -198,6 +198,74 @@ struct PbrMaterial {
         m.roughnessFactor = 0.92f;
         return m;
     }
+
+    static PbrMaterial metalDarkAnodized() {
+        PbrMaterial m;
+        m.name = "metal_dark_anodized";
+        m.baseColorFactor = Vec4(0.22f, 0.23f, 0.25f, 1.0f);
+        m.metallicFactor = 0.92f;
+        m.roughnessFactor = 0.28f;
+        return m;
+    }
+
+    static PbrMaterial metalBrushedSteel() {
+        PbrMaterial m;
+        m.name = "metal_brushed_steel";
+        m.baseColorFactor = Vec4(0.78f, 0.80f, 0.82f, 1.0f);
+        m.metallicFactor = 0.88f;
+        m.roughnessFactor = 0.32f;
+        return m;
+    }
+
+    static PbrMaterial plasticSmoothBlack() {
+        PbrMaterial m;
+        m.name = "plastic_smooth_black";
+        m.baseColorFactor = Vec4(0.08f, 0.08f, 0.09f, 1.0f);
+        m.metallicFactor = 0.0f;
+        m.roughnessFactor = 0.35f;
+        return m;
+    }
+
+    static PbrMaterial plasticShiny(const Vec4& color = Vec4(0.85f, 0.85f, 0.85f, 1.0f)) {
+        PbrMaterial m;
+        m.name = "plastic_shiny";
+        m.baseColorFactor = color;
+        m.metallicFactor = 0.0f;
+        m.roughnessFactor = 0.15f;
+        m.clearcoatFactor = 0.5f;
+        return m;
+    }
+
+    static PbrMaterial glassTinted(const Vec4& color = Vec4(0.85f, 0.92f, 0.98f, 0.25f), float roughness = 0.08f, float iorVal = 1.52f) {
+        PbrMaterial m;
+        m.name = "glass_tinted";
+        m.baseColorFactor = color;
+        m.metallicFactor = 0.0f;
+        m.roughnessFactor = roughness;
+        m.transmissionFactor = 0.92f;
+        m.ior = iorVal;
+        m.clearcoatFactor = 0.8f;
+        return m;
+    }
+
+    static PbrMaterial stoneRough(const Vec4& color = Vec4(0.55f, 0.53f, 0.50f, 1.0f)) {
+        PbrMaterial m;
+        m.name = "stone_rough";
+        m.baseColorFactor = color;
+        m.metallicFactor = 0.02f;
+        m.roughnessFactor = 0.85f;
+        return m;
+    }
+
+    static PbrMaterial obsidian() {
+        PbrMaterial m;
+        m.name = "volcanic_obsidian";
+        m.baseColorFactor = Vec4(0.05f, 0.05f, 0.06f, 1.0f);
+        m.metallicFactor = 0.15f;
+        m.roughnessFactor = 0.05f;
+        m.clearcoatFactor = 0.9f;
+        return m;
+    }
 };
 
 struct Vertex {

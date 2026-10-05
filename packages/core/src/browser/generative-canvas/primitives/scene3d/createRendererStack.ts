@@ -33,7 +33,7 @@ export function createRendererStack(options: CreateRendererStackOptions): Render
 
     const scene = new THREE.Scene();
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 20000);
     const [px, py, pz] = options.cameraPosition || [15, 12, 15];
     camera.position.set(px, py, pz);
 

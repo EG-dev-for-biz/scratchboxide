@@ -9,31 +9,12 @@
 
 import * as THREE from 'three';
 import type { BakedGaussian } from '../../../../common/geospatial-4d-protocol';
-import {
-    createHistoricalBattlefieldScene,
-    createProceduralCityScene,
-    createHighwayOverpassScene,
-    createAlpineMatterhornScene,
-    createBabylonianZigguratScene,
-    createSolarSystemScene,
-    createMolecularPhysicsScene,
-    createArchitecturalRoomScene,
-    createProceduralSpatialScene,
-    createWorldBuilderScene
-} from '../../procedural-3d-synthesizer';
 import { createSculptableGeometry } from '../../services/mesh-sculpting-engine';
 import { createArticulatedAircraft } from '../../services/mesh/aircraft';
 import type { TerrainManager } from '../../services/TerrainManager';
 import type { RendererStack, Scene3DRenderMode, SceneContentHandle, WasmMeshHandle } from './types';
 import { removeAndDispose } from './types';
 import { isGroundSnapTarget } from './syncTilesLayer';
-
-const BATTLEFIELD_KEYWORDS = /lexington|concord|1776|battle|revolution|minuteman|redcoat/i;
-const WORLD_KEYWORDS = /world|terrain|mountain|alpine|canyon|desert|valley|island|citadel|outpost/i;
-const CITY_KEYWORDS = /city|metropolis|urban|cyberpunk-city|skyline/i;
-const SPACE_KEYWORDS = /solar|planet|space|orbit|celestial/i;
-const MOLECULAR_KEYWORDS = /molecular|physics|atom|dna|quantum|chemistry/i;
-const ARCHITECTURE_KEYWORDS = /room|building|interior|blueprint|pavilion/i;
 
 export type SculptableShape = 'sphere' | 'plane' | 'box' | 'cylinder' | 'torus';
 
@@ -49,6 +30,7 @@ export interface SceneContentInput {
     /** Objects exist and are not merely the `internal:mesh` fallback placeholder. */
     hasNonFallbackObjects: boolean;
     hasCppGenerator?: boolean;
+    hasPythonGenerator?: boolean;
     selectedShape: SculptableShape;
     sculptWireframe: boolean;
 }
@@ -65,38 +47,23 @@ export interface SceneContentFactories {
     } | null;
 }
 
-export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'worldbuilder' | 'battlefield' | 'city' | 'highway_overpass' | 'alpine_valley' | 'ziggurat' | 'solar-system' | 'molecular' | 'architecture' | 'custom-meshes' | 'objects' | 'spatial' {
-    const worldBranch = (input.worldBranch || '').toLowerCase();
-    const sceneTitle = (input.title || '').toLowerCase();
-    const haystack = `${worldBranch} ${sceneTitle}`;
-    const t = input.sceneType;
-
+export function classifySceneContent(input: SceneContentInput): 'script' | 'tiles' | 'aircraft' | 'custom-meshes' | 'objects' | 'spatial' {
     // 1. Structured Types First (Always honor explicit typed geometry and engines)
     const hasActiveScript = input.hasActiveScript ?? !!(input as any).customScript;
     const has3DTiles = input.has3DTiles ?? !!(input as any).geoAnchor?.active;
     const hasCppGenerator = input.hasCppGenerator ?? !!(input as any).cppGenerator;
+    const hasPythonGenerator = input.hasPythonGenerator ?? !!(input as any).pythonGenerator;
     const hasCustomMeshes = input.hasCustomMeshes ?? ((input as any).customMeshes && (input as any).customMeshes.length > 0);
     const hasNonFallbackObjects = input.hasNonFallbackObjects ?? ((input as any).objects && (input as any).objects.length > 0);
 
     if (hasActiveScript) return 'script';
     if (has3DTiles) return 'tiles';
-    if (hasCppGenerator) return 'objects';
+    if (hasCppGenerator || hasPythonGenerator) return 'objects';
     if (hasCustomMeshes) return 'custom-meshes';
     if (hasNonFallbackObjects) return 'objects';
     if (input.isAirplane) return 'aircraft';
 
-    // 2. Legacy / Explicit Presets (Only when explicitly specified via sceneType and no structured types exist)
-    if (t === 'highway_overpass') return 'highway_overpass';
-    if (t === 'alpine_valley') return 'alpine_valley';
-    if (t === 'ziggurat') return 'ziggurat';
-    if (t === 'battlefield' || (BATTLEFIELD_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'battlefield';
-    if (t === 'city' || (CITY_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'city';
-    if (t === 'solar-system' || (SPACE_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'solar-system';
-    if (t === 'molecular' || (MOLECULAR_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'molecular';
-    if (t === 'architecture' || (ARCHITECTURE_KEYWORDS.test(haystack) && !input.hasCustomMeshes)) return 'architecture';
-    if (t === 'worldbuilder') return 'worldbuilder';
-
-    // 3. Adaptive Domain Architecture Default
+    // 2. Adaptive Domain Architecture Default (Zero closed taxonomies / zero keyword regexes)
     return 'spatial';
 }
 
@@ -152,58 +119,15 @@ export function syncSceneContent(
             }
             break;
         }
-        case 'worldbuilder':
-            proceduralSceneGroup = createWorldBuilderScene(scene, THREE, {
-                prompt: input.title || 'Scenic mountain valley with architectural settlements',
-                resolution: 32,
-                seed: 1337
-            });
-            break;
-        case 'battlefield':
-            proceduralSceneGroup = createHistoricalBattlefieldScene(scene, THREE, {
-                tavern: true,
-                meetinghouse: true,
-                stoneWalls: true,
-                minutemenCount: 12,
-                redcoatCount: 16,
-                smokeParticles: true
-            });
-            break;
-        case 'city':
-            proceduralSceneGroup = createProceduralCityScene(scene, THREE, {
-                buildingCount: 28,
-                animatedVehicles: true,
-                cyberpunk: worldBranch.includes('cyberpunk') || sceneTitle.includes('cyberpunk')
-            });
-            break;
-        case 'highway_overpass':
-            proceduralSceneGroup = createHighwayOverpassScene(scene, THREE);
-            break;
-        case 'alpine_valley':
-            proceduralSceneGroup = createAlpineMatterhornScene(scene, THREE);
-            break;
-        case 'ziggurat':
-            proceduralSceneGroup = createBabylonianZigguratScene(scene, THREE);
-            break;
-        case 'solar-system':
-            proceduralSceneGroup = createSolarSystemScene(scene, THREE, { includeAsteroidBelt: true, includeMoons: true });
-            break;
-        case 'molecular':
-            proceduralSceneGroup = createMolecularPhysicsScene(scene, THREE, {
-                latticeType: /dna|helix/i.test(sceneTitle) ? 'dna' : 'caffeine',
-                showElectronCloud: true
-            });
-            break;
-        case 'architecture':
-            proceduralSceneGroup = createArchitecturalRoomScene(scene, THREE);
-            break;
         case 'custom-meshes':
         case 'objects':
             // Custom meshes / objects are synchronised by their own slices.
             break;
         case 'spatial':
         default:
-            proceduralSceneGroup = createProceduralSpatialScene(scene, THREE);
+            // Neutral studio baseline. Zero client-side Three.js primitives.
+            // Procedural geometry is authored in C++20 / Python SDK and streamed as GLB.
+            proceduralSceneGroup = null;
             break;
     }
 

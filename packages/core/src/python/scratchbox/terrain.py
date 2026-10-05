@@ -60,3 +60,35 @@ class Terrain:
 
     def get_mesh(self) -> Any:
         return self.mesh
+
+    def apply_material(self, mat: Any) -> "Terrain":
+        """Applies a PBR material to the underlying terrain mesh."""
+        if hasattr(self.mesh, "apply_material"):
+            self.mesh.apply_material(mat)
+        elif hasattr(self.mesh, "material"):
+            self.mesh.material = mat
+        return self
+
+    def set_material(self, mat: Any) -> "Terrain":
+        """Sets the PBR material on the underlying terrain mesh."""
+        return self.apply_material(mat)
+
+    def set_color(self, color: Any) -> "Terrain":
+        """Sets vertex color or base tint on the underlying terrain mesh."""
+        if hasattr(self.mesh, "set_color"):
+            self.mesh.set_color(color)
+        return self
+
+    @property
+    def material(self) -> Any:
+        return getattr(self.mesh, "material", None)
+
+    @material.setter
+    def material(self, mat: Any) -> None:
+        self.apply_material(mat)
+
+    def __getattr__(self, name: str) -> Any:
+        """Transparently delegate any mesh methods (e.g. translate, scale) to self.mesh."""
+        if hasattr(self.mesh, name):
+            return getattr(self.mesh, name)
+        raise AttributeError(f"'Terrain' object has no attribute '{name}'")

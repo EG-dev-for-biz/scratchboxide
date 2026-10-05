@@ -75,6 +75,11 @@ export class WebGpuMeshletCullingPipeline {
     private isReadbackPending = false;
     private readbackCounter = 0;
 
+    // Astro GVM Culling & Rendering Mode State
+    private frustumCullingEnabled = true;
+    private coneCullingEnabled = true;
+    private viewMode: 'pbr' | 'clusters' = 'pbr';
+
     // Timings
     private lastFrameTime = 0;
     private frameCount = 0;
@@ -236,15 +241,16 @@ export class WebGpuMeshletCullingPipeline {
     /**
      * Builds 8,192 real cluster instances stored in a flat GPU Storage Buffer.
      * Total = 8,192 instances * 128 triangles = 1,048,576 real triangles.
-     * Layout:
-     * - center: vec3<f32> (12 bytes)
-     * - radius: f32 (4 bytes)
-     * - color: vec4<f32> (16 bytes)
+     * std430 16-byte aligned layout (128 bytes per cluster):
+     * - center: vec3<f32> + radius: f32 (16 bytes)
+     * - cone: vec4<f32> [axis.xyz, cutoff] (16 bytes)
+     * - color: vec4<f32> [albedo.rgb, opacity] (16 bytes)
+     * - material: vec4<f32> [roughness, metallic, subsurface, clearcoat] (16 bytes)
      * - transform: mat4x4<f32> (64 bytes)
-     * Total per cluster = 96 bytes (std430 16-byte alignment).
+     * Total = 128 bytes per cluster * 8,192 = 1,048,576 bytes (1.0 MB flat GPU storage).
      */
     private buildClusterInstances(): void {
-        const bytesPerCluster = 96;
+        const bytesPerCluster = 128;
         const totalBytes = this.totalClusters * bytesPerCluster;
         const clusterData = new Float32Array(totalBytes / 4);
 
@@ -279,35 +285,57 @@ export class WebGpuMeshletCullingPipeline {
             clusterData[floatOffset + 2] = posZ;
             clusterData[floatOffset + 3] = radius;
 
-            // 2. color (4 floats)
-            clusterData[floatOffset + 4] = col[0];
-            clusterData[floatOffset + 5] = col[1];
-            clusterData[floatOffset + 6] = col[2];
-            clusterData[floatOffset + 7] = 1.0;
+            // 2. cone: normal axis xyz (3 floats) + cutoff w (1 float)
+            // Radial outward normal cone orientation for backface culling
+            const radLen = Math.hypot(posX, posZ) || 1.0;
+            const coneAxisX = posX / radLen;
+            const coneAxisZ = posZ / radLen;
+            clusterData[floatOffset + 4] = coneAxisX;
+            clusterData[floatOffset + 5] = 0.0;
+            clusterData[floatOffset + 6] = coneAxisZ;
+            // Cutoff: -0.2 (wide 100-degree acceptance cone before backface culling)
+            clusterData[floatOffset + 7] = -0.2;
 
-            // 3. transform (16 floats identity matrix with translation)
+            // 3. color: rgba albedo (4 floats)
+            clusterData[floatOffset + 8] = col[0];
+            clusterData[floatOffset + 9] = col[1];
+            clusterData[floatOffset + 10] = col[2];
+            clusterData[floatOffset + 11] = 1.0;
+
+            // 4. material: roughness, metallic, subsurface, clearcoat (4 floats)
+            const roughness = 0.18 + (i % 6) * 0.12;
+            const metallic = (i % 7 === 0) ? 0.85 : 0.04;
+            const subsurface = (i % 3 === 0) ? 0.40 : 0.0;
+            const clearcoat = (i % 2 === 0) ? 0.65 : 0.0;
+
+            clusterData[floatOffset + 12] = roughness;
+            clusterData[floatOffset + 13] = metallic;
+            clusterData[floatOffset + 14] = subsurface;
+            clusterData[floatOffset + 15] = clearcoat;
+
+            // 5. transform: mat4x4 column-major (16 floats)
             // Column 0
-            clusterData[floatOffset + 8] = 1.0;
-            clusterData[floatOffset + 9] = 0.0;
-            clusterData[floatOffset + 10] = 0.0;
-            clusterData[floatOffset + 11] = 0.0;
-            // Column 1
-            clusterData[floatOffset + 12] = 0.0;
-            clusterData[floatOffset + 13] = 1.0;
-            clusterData[floatOffset + 14] = 0.0;
-            clusterData[floatOffset + 15] = 0.0;
-            // Column 2
-            clusterData[floatOffset + 16] = 0.0;
+            clusterData[floatOffset + 16] = 1.0;
             clusterData[floatOffset + 17] = 0.0;
-            clusterData[floatOffset + 18] = 1.0;
+            clusterData[floatOffset + 18] = 0.0;
             clusterData[floatOffset + 19] = 0.0;
+            // Column 1
+            clusterData[floatOffset + 20] = 0.0;
+            clusterData[floatOffset + 21] = 1.0;
+            clusterData[floatOffset + 22] = 0.0;
+            clusterData[floatOffset + 23] = 0.0;
+            // Column 2
+            clusterData[floatOffset + 24] = 0.0;
+            clusterData[floatOffset + 25] = 0.0;
+            clusterData[floatOffset + 26] = 1.0;
+            clusterData[floatOffset + 27] = 0.0;
             // Column 3 (Translation)
-            clusterData[floatOffset + 20] = posX;
-            clusterData[floatOffset + 21] = posY;
-            clusterData[floatOffset + 22] = posZ;
-            clusterData[floatOffset + 23] = 1.0;
+            clusterData[floatOffset + 28] = posX;
+            clusterData[floatOffset + 29] = posY;
+            clusterData[floatOffset + 30] = posZ;
+            clusterData[floatOffset + 31] = 1.0;
 
-            floatOffset += 24; // 24 floats = 96 bytes
+            floatOffset += 32; // 32 floats = 128 bytes
         }
 
         this.clusterStorageBuffer = this.device.createBuffer({
@@ -363,12 +391,15 @@ struct CameraUniforms {
     cameraPos: vec3<f32>,
     time: f32,
     frustumPlanes: array<vec4<f32>, 6>,
+    cullParams: vec4<f32>, // x: frustumOn, y: coneOn, z: viewMode, w: totalCount
 };
 
 struct ClusterInstance {
     center: vec3<f32>,
     radius: f32,
+    cone: vec4<f32>,
     color: vec4<f32>,
+    material: vec4<f32>,
     transform: mat4x4<f32>,
 };
 
@@ -388,7 +419,7 @@ struct DrawIndexedIndirectArgs {
 @compute @workgroup_size(64)
 fn cull_meshlets(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
-    let total = arrayLength(&clusters);
+    let total = u32(camera.cullParams.w);
     if (index >= total) {
         return;
     }
@@ -397,21 +428,28 @@ fn cull_meshlets(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let center = cluster.center;
     let radius = cluster.radius;
 
-    // 6-Plane Frustum Culling
-    var isVisible: bool = true;
-    for (var i = 0; i < 6; i++) {
-        let plane = camera.frustumPlanes[i];
-        let dist = dot(plane.xyz, center) + plane.w;
-        if (dist < -radius) {
-            isVisible = false;
-            break;
+    // 1. 6-Plane Frustum Culling
+    if (camera.cullParams.x > 0.5) {
+        for (var i = 0; i < 6; i++) {
+            let plane = camera.frustumPlanes[i];
+            let dist = dot(plane.xyz, center) + plane.w;
+            if (dist < -radius) {
+                return;
+            }
         }
     }
 
-    if (isVisible) {
-        let slot = atomicAdd(&indirectArgs.instanceCount, 1u);
-        visibleClusterIndices[slot] = index;
+    // 2. Normal Cone Backface Culling (Astro GVM Invariant)
+    if (camera.cullParams.y > 0.5 && cluster.cone.w > -1.0) {
+        let toCam = normalize(camera.cameraPos - center);
+        if (dot(cluster.cone.xyz, toCam) < cluster.cone.w) {
+            return;
+        }
     }
+
+    // Survived: Lock-free atomic compaction into visible queue
+    let slot = atomicAdd(&indirectArgs.instanceCount, 1u);
+    visibleClusterIndices[slot] = index;
 }
 `;
 
@@ -421,12 +459,15 @@ struct CameraUniforms {
     cameraPos: vec3<f32>,
     time: f32,
     frustumPlanes: array<vec4<f32>, 6>,
+    cullParams: vec4<f32>,
 };
 
 struct ClusterInstance {
     center: vec3<f32>,
     radius: f32,
+    cone: vec4<f32>,
     color: vec4<f32>,
+    material: vec4<f32>, // x: roughness, y: metallic, z: subsurface, w: clearcoat
     transform: mat4x4<f32>,
 };
 
@@ -442,9 +483,22 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clipPos: vec4<f32>,
     @location(0) worldNormal: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) color: vec4<f32>,
     @location(2) worldPos: vec3<f32>,
+    @location(3) material: vec4<f32>,
+    @location(4) clusterColor: vec3<f32>,
 };
+
+fn hashColor(seed: u32) -> vec3<f32> {
+    var s = seed * 747796405u + 2891336453u;
+    var word = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    let h = f32((word >> 22u) ^ word) / 4294967295.0;
+    return vec3<f32>(
+        abs(sin(h * 6.28318 + 0.0)),
+        abs(sin(h * 6.28318 + 2.094)),
+        abs(sin(h * 6.28318 + 4.188))
+    );
+}
 
 @vertex
 fn vs_main(in: VertexInput, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
@@ -457,22 +511,110 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instanceIndex: u32) -> Vert
     var out: VertexOutput;
     out.clipPos = camera.viewProj * worldPos4;
     out.worldNormal = normalize(worldNormal);
-    out.color = cluster.color.rgb;
+    out.color = cluster.color;
     out.worldPos = worldPos4.xyz;
+    out.material = cluster.material;
+    out.clusterColor = hashColor(clusterIdx);
     return out;
+}
+
+const PI: f32 = 3.14159265359;
+
+fn distributionGGX(N: vec3<f32>, H: vec3<f32>, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let NdotH = max(dot(N, H), 0.0);
+    let NdotH2 = NdotH * NdotH;
+    let num = a2;
+    var denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    return num / max(denom, 0.0001);
+}
+
+fn geometrySchlickGGX(NdotV: f32, roughness: f32) -> f32 {
+    let r = (roughness + 1.0);
+    let k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+fn geometrySmith(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, roughness: f32) -> f32 {
+    let NdotV = max(dot(N, V), 0.0);
+    let NdotL = max(dot(N, L), 0.0);
+    let ggx2 = geometrySchlickGGX(NdotV, roughness);
+    let ggx1 = geometrySchlickGGX(NdotL, roughness);
+    return ggx1 * ggx2;
+}
+
+fn fresnelSchlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
+    return F0 + (vec3<f32>(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+fn acesToneMap(color: vec3<f32>) -> vec3<f32> {
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let lightDir = normalize(vec3<f32>(0.5, 0.8, 0.35));
-    let ndl = max(dot(in.worldNormal, lightDir), 0.0);
-    let ambient = 0.22;
-    let diffuse = ndl * 0.78;
-    let rawColor = in.color * (ambient + diffuse);
+    if (camera.cullParams.z > 0.5) {
+        return vec4<f32>(in.clusterColor, 1.0);
+    }
 
-    // AgX Filmic Tone Mapping Roll-off
-    let mapped = rawColor / (rawColor + vec3<f32>(0.14)) * 1.05;
-    return vec4<f32>(mapped, 1.0);
+    let N = normalize(in.worldNormal);
+    let V = normalize(camera.cameraPos - in.worldPos);
+    let L = normalize(vec3<f32>(0.45, 0.85, 0.28));
+    let H = normalize(V + L);
+
+    let albedo = in.color.rgb;
+    let roughness = clamp(in.material.x, 0.04, 1.0);
+    let metallic = clamp(in.material.y, 0.0, 1.0);
+    let subsurface = in.material.z;
+    let clearcoat = in.material.w;
+
+    let F0 = mix(vec3<f32>(0.04), albedo, metallic);
+
+    let NDF = distributionGGX(N, H, roughness);
+    let G = geometrySmith(N, V, L, roughness);
+    let F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    let numerator = NDF * G * F;
+    let denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
+    let specular = numerator / denominator;
+
+    let kS = F;
+    var kD = (vec3<f32>(1.0) - kS) * (1.0 - metallic);
+
+    let NdotL = max(dot(N, L), 0.0);
+    let sunRadiance = vec3<f32>(3.2, 3.0, 2.7);
+
+    var Lo = (kD * albedo / PI + specular) * sunRadiance * NdotL;
+
+    if (subsurface > 0.0) {
+        let backLight = max(dot(-N, L), 0.0) * 0.45;
+        let sssColor = albedo * vec3<f32>(0.8, 1.15, 0.45);
+        Lo = Lo + sssColor * backLight * subsurface * sunRadiance;
+    }
+
+    if (clearcoat > 0.0) {
+        let ccNDF = distributionGGX(N, H, 0.12);
+        let ccG = geometrySmith(N, V, L, 0.12);
+        let ccF = fresnelSchlick(max(dot(H, V), 0.0), vec3<f32>(0.04));
+        let ccSpec = (ccNDF * ccG * ccF) / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001);
+        Lo = Lo + ccSpec * clearcoat * sunRadiance * NdotL;
+    }
+
+    let upDir = vec3<f32>(0.0, 1.0, 0.0);
+    let hemiSky = max(dot(N, upDir), 0.0);
+    let skyAmbient = mix(vec3<f32>(0.08, 0.12, 0.18), vec3<f32>(0.32, 0.45, 0.65), hemiSky * 0.5 + 0.5);
+    let ambient = skyAmbient * albedo * 0.65;
+
+    let totalColor = Lo + ambient;
+    let tonemapped = acesToneMap(totalColor);
+    return vec4<f32>(tonemapped, in.color.a);
 }
 `;
 
@@ -664,6 +806,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             uniformData[pOffset + 3] = plane.distance / len;
             pOffset += 4;
         }
+
+        // cullParams: 4 floats starting at offset 44 (Astro GVM Invariant)
+        uniformData[44] = this.frustumCullingEnabled ? 1.0 : 0.0;
+        uniformData[45] = this.coneCullingEnabled ? 1.0 : 0.0;
+        uniformData[46] = this.viewMode === 'clusters' ? 1.0 : 0.0;
+        uniformData[47] = this.totalClusters;
 
         this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
     }
@@ -861,5 +1009,102 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     public onTelemetry(callback: (t: WebGpuPipelineTelemetry) => void): void {
         this.telemetryListeners.push(callback);
+    }
+
+    /**
+     * Toggles 6-plane frustum culling.
+     */
+    public setFrustumCulling(enabled: boolean): void {
+        this.frustumCullingEnabled = enabled;
+    }
+
+    public isFrustumCullingEnabled(): boolean {
+        return this.frustumCullingEnabled;
+    }
+
+    /**
+     * Toggles Astro GVM normal cone backface culling.
+     */
+    public setConeCulling(enabled: boolean): void {
+        this.coneCullingEnabled = enabled;
+    }
+
+    public isConeCullingEnabled(): boolean {
+        return this.coneCullingEnabled;
+    }
+
+    /**
+     * Toggles between full Cook-Torrance GGX PBR and visual cluster color debugging.
+     */
+    public setViewMode(mode: 'pbr' | 'clusters'): void {
+        this.viewMode = mode;
+    }
+
+    public getViewMode(): 'pbr' | 'clusters' {
+        return this.viewMode;
+    }
+
+    /**
+     * Ingests arbitrary discrete cluster bounds, normal cones, and PBR material channels
+     * from external procedural synthesizers, C++20 engine, or GLB loaders.
+     */
+    public loadClusterData(
+        clusters: Array<{
+            center: [number, number, number];
+            radius: number;
+            cone?: [number, number, number, number];
+            color?: [number, number, number, number];
+            roughness?: number;
+            metallic?: number;
+            subsurface?: number;
+            clearcoat?: number;
+            transform?: Float32Array | number[];
+        }>
+    ): void {
+        if (!this.device || !this.clusterStorageBuffer) return;
+        const count = Math.min(clusters.length, this.totalClusters);
+        const clusterData = new Float32Array(count * 32);
+
+        for (let i = 0; i < count; i++) {
+            const c = clusters[i];
+            const off = i * 32;
+            clusterData[off + 0] = c.center[0];
+            clusterData[off + 1] = c.center[1];
+            clusterData[off + 2] = c.center[2];
+            clusterData[off + 3] = c.radius;
+
+            const cone = c.cone || [0, 1, 0, -1.0];
+            clusterData[off + 4] = cone[0];
+            clusterData[off + 5] = cone[1];
+            clusterData[off + 6] = cone[2];
+            clusterData[off + 7] = cone[3];
+
+            const col = c.color || [0.7, 0.7, 0.7, 1.0];
+            clusterData[off + 8] = col[0];
+            clusterData[off + 9] = col[1];
+            clusterData[off + 10] = col[2];
+            clusterData[off + 11] = col[3];
+
+            clusterData[off + 12] = c.roughness ?? 0.35;
+            clusterData[off + 13] = c.metallic ?? 0.04;
+            clusterData[off + 14] = c.subsurface ?? 0.0;
+            clusterData[off + 15] = c.clearcoat ?? 0.0;
+
+            if (c.transform && c.transform.length >= 16) {
+                for (let k = 0; k < 16; k++) {
+                    clusterData[off + 16 + k] = c.transform[k];
+                }
+            } else {
+                clusterData[off + 16] = 1.0;
+                clusterData[off + 21] = 1.0;
+                clusterData[off + 26] = 1.0;
+                clusterData[off + 28] = c.center[0];
+                clusterData[off + 29] = c.center[1];
+                clusterData[off + 30] = c.center[2];
+                clusterData[off + 31] = 1.0;
+            }
+        }
+
+        this.device.queue.writeBuffer(this.clusterStorageBuffer, 0, clusterData);
     }
 }

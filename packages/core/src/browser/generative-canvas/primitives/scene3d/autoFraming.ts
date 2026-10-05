@@ -44,18 +44,29 @@ export function computeSceneGeometryBounds(scene: THREE.Scene): SceneBoundsResul
 
     scene.traverse((child) => {
         if (child === scene) return;
-        // Skip lights, cameras, skies, helpers
+        // Skip invisible objects, lights, cameras, skies, helpers, and gizmos
+        if (!child.visible) return;
         if ((child as any).isLight || (child as any).isCamera || (child as any).isHelper) return;
+        if ((child as any).isGridHelper || child.userData?.isGizmo || child.userData?.handleType) return;
         const name = child.name || '';
         if (
+            name.startsWith('sb-') ||
             name.startsWith('atmosphere_') ||
             name.startsWith('terrain_') ||
             name.startsWith('grid_') ||
             name === 'sky_dome' ||
+            name === 'AtmosphericSkyDome' ||
+            name === 'PhysicalSunDisc' ||
+            name.includes('SkyDome') ||
+            name.includes('SunDisc') ||
+            name.includes('Orbit Ring') ||
+            name === 'volumetric-god-rays' ||
+            name.includes('god-rays') ||
             name === 'selectionBox' ||
             name === 'GooglePhotorealistic3DTiles' ||
             name.startsWith('3d-tiles') ||
-            name.startsWith('tiles_')
+            name.startsWith('tiles_') ||
+            name === 'solar-system'
         ) {
             return;
         }

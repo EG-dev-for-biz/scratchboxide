@@ -602,7 +602,7 @@ export class StreamingEngine {
                         name: toolName,
                         response: {
                             name: toolName,
-                            content: resultPayload
+                            content: sanitizeToolResultForModel(resultPayload)
                         }
                     }
                 });
@@ -818,6 +818,35 @@ function extractAgentStepText(step: AgentStep): string {
         return stepText;
     }
     return step.text || '';
+}
+
+/**
+ * Sanitizes tool results before returning to Gemini's prompt context.
+ * Strips huge binary base64 strings (like GLBs or images) so they do not exhaust the 1M token limit.
+ */
+export function sanitizeToolResultForModel(obj: any): any {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'string') {
+        if (obj.length > 512 && (obj.startsWith('data:') || /^[A-Za-z0-9+/=]{256,}$/.test(obj.substring(0, 256)))) {
+            return `[binary data omitted, length: ${obj.length} bytes]`;
+        }
+        return obj;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(sanitizeToolResultForModel);
+    }
+    if (typeof obj === 'object') {
+        const clean: Record<string, any> = {};
+        for (const [k, v] of Object.entries(obj)) {
+            if (k === 'glbBase64' || k === 'base64' || k === 'imageBytes' || k === 'rawBuffer') {
+                clean[k] = typeof v === 'string' ? `[binary data omitted, length: ${v.length} bytes]` : undefined;
+            } else {
+                clean[k] = sanitizeToolResultForModel(v);
+            }
+        }
+        return clean;
+    }
+    return obj;
 }
 
 /** Merge grounding metadata across streamed chunks, de-duplicating queries and chunk URIs. */

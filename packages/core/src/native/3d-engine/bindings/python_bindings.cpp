@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/optional.h>
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_core.hpp"
@@ -106,18 +107,80 @@ NB_MODULE(scratchbox_native, m) {
 
     nb::class_<PbrMaterial>(m_geom, "PbrMaterial")
         .def(nb::init<std::string>(), "name"_a = "defaultMaterial")
+        .def("__init__", [](PbrMaterial* self,
+                            const std::string& name,
+                            std::optional<Vec4> base_color,
+                            std::optional<Vec4> color,
+                            std::optional<float> metallic,
+                            std::optional<float> metalness,
+                            std::optional<float> roughness,
+                            nb::object emissive,
+                            std::optional<float> emissive_intensity,
+                            std::optional<float> clearcoat,
+                            std::optional<float> ior) {
+            new (self) PbrMaterial();
+            self->name = name;
+            if (base_color) self->baseColorFactor = *base_color;
+            else if (color) self->baseColorFactor = *color;
+
+            if (metallic) self->metallicFactor = *metallic;
+            else if (metalness) self->metallicFactor = *metalness;
+
+            if (roughness) self->roughnessFactor = *roughness;
+
+            float intensity = emissive_intensity.value_or(1.0f);
+            if (!emissive.is_none()) {
+                if (nb::isinstance<Vec3>(emissive)) {
+                    self->emissiveFactor = nb::cast<Vec3>(emissive) * intensity;
+                } else if (nb::isinstance<Vec4>(emissive)) {
+                    auto v4 = nb::cast<Vec4>(emissive);
+                    self->emissiveFactor = Vec3(v4.x, v4.y, v4.z) * intensity;
+                } else if (nb::isinstance<nb::tuple>(emissive) || nb::isinstance<nb::list>(emissive)) {
+                    auto seq = nb::cast<nb::sequence>(emissive);
+                    if (nb::len(seq) >= 3) {
+                        float ex = nb::cast<float>(seq[0]);
+                        float ey = nb::cast<float>(seq[1]);
+                        float ez = nb::cast<float>(seq[2]);
+                        self->emissiveFactor = Vec3(ex, ey, ez) * intensity;
+                    }
+                }
+            }
+            if (clearcoat) self->clearcoatFactor = *clearcoat;
+            if (ior) self->ior = *ior;
+        }, "name"_a = "defaultMaterial",
+           "base_color"_a = nb::none(),
+           "color"_a = nb::none(),
+           "metallic"_a = nb::none(),
+           "metalness"_a = nb::none(),
+           "roughness"_a = nb::none(),
+           "emissive"_a = nb::none(),
+           "emissive_intensity"_a = nb::none(),
+           "clearcoat"_a = nb::none(),
+           "ior"_a = nb::none())
         .def_rw("name", &PbrMaterial::name)
         .def_rw("base_color", &PbrMaterial::baseColorFactor)
+        .def_prop_rw("color",
+            [](const PbrMaterial& self) { return self.baseColorFactor; },
+            [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; })
         .def_rw("metallic", &PbrMaterial::metallicFactor)
+        .def_prop_rw("metalness",
+            [](const PbrMaterial& self) { return self.metallicFactor; },
+            [](PbrMaterial& self, float val) { self.metallicFactor = val; })
         .def_rw("roughness", &PbrMaterial::roughnessFactor)
         .def_rw("emissive", &PbrMaterial::emissiveFactor)
+        .def_prop_rw("emissive_intensity",
+            [](const PbrMaterial& self) { return self.emissiveStrength; },
+            [](PbrMaterial& self, float val) { self.emissiveStrength = val; })
         .def_rw("clearcoat", &PbrMaterial::clearcoatFactor)
         .def_rw("ior", &PbrMaterial::ior)
+        .def("set_base_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
+        .def("set_color", [](PbrMaterial& self, const Vec4& c) { self.baseColorFactor = c; }, "color"_a)
         .def_static("titanium", &PbrMaterial::titanium)
         .def_static("chrome", &PbrMaterial::chrome)
         .def_static("gold", &PbrMaterial::gold)
         .def_static("basalt_rock", &PbrMaterial::basaltRock)
         .def_static("wood_oak", &PbrMaterial::woodOak)
+        .def_static("rough_wood", &PbrMaterial::roughWood)
         .def_static("optical_glass", &PbrMaterial::opticalGlass)
         .def_static("stone_limestone", &PbrMaterial::stoneLimestone)
         .def_static("concrete_brutalist", &PbrMaterial::concreteBrutalist)
@@ -126,6 +189,13 @@ NB_MODULE(scratchbox_native, m) {
         .def_static("carbon_composite", &PbrMaterial::carbonComposite)
         .def_static("polished_brass", &PbrMaterial::polishedBrass)
         .def_static("copper_bullet", &PbrMaterial::copperBullet)
+        .def_static("metal_dark_anodized", &PbrMaterial::metalDarkAnodized)
+        .def_static("metal_brushed_steel", &PbrMaterial::metalBrushedSteel)
+        .def_static("plastic_smooth_black", &PbrMaterial::plasticSmoothBlack)
+        .def_static("plastic_shiny", &PbrMaterial::plasticShiny, "color"_a = Vec4(0.85f, 0.85f, 0.85f, 1.0f))
+        .def_static("glass_tinted", &PbrMaterial::glassTinted, "color"_a = Vec4(0.85f, 0.92f, 0.98f, 0.25f), "roughness"_a = 0.08f, "ior"_a = 1.52f)
+        .def_static("stone_rough", &PbrMaterial::stoneRough, "color"_a = Vec4(0.55f, 0.53f, 0.50f, 1.0f))
+        .def_static("obsidian", &PbrMaterial::obsidian)
         .def_static("emissive_glow", [](const Vec3& color, float intensity) {
             return PbrMaterial::emissiveGlow(color, intensity);
         }, "color"_a, "intensity"_a = 1.0f);
@@ -149,6 +219,12 @@ NB_MODULE(scratchbox_native, m) {
         .def("rotate_z", &ScratchboxMesh::rotateZ, "angle_deg"_a)
         .def("set_color", &ScratchboxMesh::setColor, "color"_a)
         .def_rw("material", &ScratchboxMesh::material)
+        .def("set_material", [](ScratchboxMesh& self, const PbrMaterial& mat) {
+            self.material = mat;
+        }, "material"_a)
+        .def("apply_material", [](ScratchboxMesh& self, const PbrMaterial& mat) {
+            self.material = mat;
+        }, "material"_a)
         .def("compute_curvature_ao", &ScratchboxMesh::computeCurvatureAO, "intensity"_a = 0.6f)
         .def("apply_procedural_weathering", &ScratchboxMesh::applyProceduralWeathering, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
         .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) {
