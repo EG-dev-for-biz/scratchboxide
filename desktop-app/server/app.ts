@@ -349,6 +349,18 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
             app.use(express.static(demosExperiments));
         }
     }
+    const repoPublicRoot = path.resolve(process.cwd(), '..', 'public');
+    if (fs.existsSync(repoPublicRoot)) {
+        app.use(express.static(repoPublicRoot));
+        const demosShowcase = path.join(repoPublicRoot, 'demos', 'showcase');
+        if (fs.existsSync(demosShowcase)) {
+            app.use(express.static(demosShowcase));
+        }
+        const demosExperiments = path.join(repoPublicRoot, 'demos', 'experiments');
+        if (fs.existsSync(demosExperiments)) {
+            app.use(express.static(demosExperiments));
+        }
+    }
 
     // Trigger asynchronous background asset hydration for showcase demos
     const hydratorScript = path.resolve(process.cwd(), 'scripts', 'hydrate_demo_assets.cjs');
