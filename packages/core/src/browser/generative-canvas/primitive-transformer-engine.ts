@@ -724,10 +724,14 @@ export default function App() {
     const sceneContent = `import * as THREE from 'three';
 import { AtmosphericScatteringShader, VolumetricGodRaysShader } from './shaders';
 
-export function createAtmosphericScene(scene: THREE.Scene, options: { skybox?: string; renderMode?: string } = {}) {
+export function createAtmosphericScene(scene: THREE.Scene, options: { skybox?: string; renderMode?: string; fog?: boolean } = {}) {
     const isSunset = options.skybox === 'sunset';
     scene.background = new THREE.Color(isSunset ? 0x1e1b4b : 0x0284c7);
-    scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : 0xbae6fd, 0.005);
+    if (options.fog) {
+        scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : 0xbae6fd, 0.005);
+    } else {
+        scene.fog = null;
+    }
 
     // 1. Atmospheric Sky Dome
     const skyGeo = new THREE.SphereGeometry(300, 32, 16);

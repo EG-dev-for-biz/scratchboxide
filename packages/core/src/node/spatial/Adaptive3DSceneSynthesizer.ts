@@ -156,15 +156,16 @@ export class Adaptive3DSceneSynthesizer {
             });
         }
 
-        // 4. Atmosphere & Ephemeris (Zero Default Atmosphere: only synthesized when explicitly requested)
+        // 4. Atmosphere & Ephemeris (Zero Default Atmosphere & Fog: only synthesized when explicitly requested)
         const hasAtmosphere = /atmosphere|atmospheric|sky|clouds?|sunset|dusk|dawn|golden hour|twilight|weather|ephemeris/i.test(lower);
         let atmosphere: AdaptiveAtmosphereEphemeris | undefined = undefined;
         if (hasAtmosphere) {
             const isDusk = /dusk|sunset|golden hour|twilight/i.test(lower);
+            const hasFogOrHaze = /fog|haze|mist|vapor|dust/i.test(lower);
             atmosphere = {
                 sunAzimuthDeg: isDusk ? 220.0 : 135.0,
                 sunElevationDeg: isDusk ? 12.0 : 38.0,
-                fogDensity: isArctic ? 0.008 : 0.002,
+                fogDensity: hasFogOrHaze ? (isArctic ? 0.008 : 0.002) : 0.0,
                 skyColor: isDusk ? [0.85, 0.45, 0.25] : [0.45, 0.65, 0.95]
             };
         }

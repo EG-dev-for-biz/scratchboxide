@@ -938,7 +938,8 @@ export class Google3DTileBlockoutPipelineService {
     const roughness = atmo.roughness ?? 0.82;
     const metalness = atmo.metalness ?? 0.02;
     const skyColor = atmo.skyColor || '#dce3eb';
-    const fogDensity = atmo.fogExp2Density ?? 0.0022;
+    const enableFog = Boolean(atmo.fog === true || (typeof atmo.fogExp2Density === 'number' && atmo.fogExp2Density > 0));
+    const fogDensity = enableFog ? (atmo.fogExp2Density ?? 0.0022) : 0.0;
     const defaultExposure = isTextured ? 1.0 : 1.15;
     const exposure = atmo.exposure ?? defaultExposure;
 
@@ -1047,7 +1048,7 @@ export class Google3DTileBlockoutPipelineService {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('${skyColor}');
-    scene.fog = new THREE.FogExp2('${skyColor}', ${fogDensity});
+    ${enableFog ? `scene.fog = new THREE.FogExp2('${skyColor}', ${fogDensity});` : `scene.fog = null;`}
 
     const camera = new THREE.PerspectiveCamera(FRAMES[0].fov || 65, width / height, 0.5, 15000);
     camera.position.set(FRAMES[0].position[0], FRAMES[0].position[1], FRAMES[0].position[2]);

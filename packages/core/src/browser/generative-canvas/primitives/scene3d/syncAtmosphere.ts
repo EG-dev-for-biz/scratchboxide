@@ -197,9 +197,18 @@ export function syncAtmosphere(
     const isLargeScale = !!(input.has3DTiles || input.hasGeoCoordinates || (input.worldBranch || '').startsWith('earth'));
 
     scene.background = new THREE.Color(backgroundHex);
-    if (isSkySkybox) {
-        scene.fog = new THREE.FogExp2(isSunset ? 0xf97316 : 0xbae6fd, isLargeScale ? 0.0005 : 0.005);
-    } else if (input.fog) {
+    // Zero Default Fog/Haze: fog is strictly null unless explicitly requested via input.fog or explicit atmospheric fog
+    const atmoConfig = (typeof input.atmosphericScattering === 'object' && input.atmosphericScattering !== null)
+        ? input.atmosphericScattering
+        : (typeof input.atmosphere === 'object' && input.atmosphere !== null ? input.atmosphere : undefined);
+
+    const explicitFogRequested = Boolean(
+        input.fog ||
+        (atmoConfig?.fog === true) ||
+        (typeof atmoConfig?.fogDensity === 'number' && atmoConfig.fogDensity > 0)
+    );
+
+    if (explicitFogRequested) {
         let fogColor = backgroundHex;
         if (typeof input.fog === 'object' && input.fog.color !== undefined) {
             try {
@@ -209,13 +218,20 @@ export function syncAtmosphere(
             } catch {
                 fogColor = backgroundHex;
             }
+        } else if (atmoConfig?.fogColor !== undefined) {
+            try {
+                fogColor = typeof atmoConfig.fogColor === 'string'
+                    ? new THREE.Color(atmoConfig.fogColor).getHex()
+                    : Number(atmoConfig.fogColor);
+            } catch {
+                fogColor = backgroundHex;
+            }
         }
-        const defaultDensity = isLargeScale ? 0.0003 : 0.015;
-        const fogDensity = (typeof input.fog === 'object' && input.fog.density !== undefined) ? input.fog.density : defaultDensity;
+        const defaultDensity = isLargeScale ? 0.0003 : 0.005;
+        const fogDensity = (typeof input.fog === 'object' && input.fog.density !== undefined)
+            ? input.fog.density
+            : (typeof atmoConfig?.fogDensity === 'number' ? atmoConfig.fogDensity : defaultDensity);
         scene.fog = new THREE.FogExp2(fogColor, fogDensity);
-    } else if (backgroundHex === CLAY_GREY_HEX || backgroundHex === 0xc4d4e8) {
-        // Soft studio depth fog matching clay grey background to geometry seamlessly
-        scene.fog = new THREE.FogExp2(backgroundHex, 0.008);
     } else {
         scene.fog = null;
     }
@@ -246,7 +262,7 @@ export function syncAtmosphere(
         skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig);
         skyDomeObject = skyDomeModule.skyDome;
 
-        if (atmoConfig.aerialPerspectiveEnabled !== false) {
+        if (atmoConfig.aerialPerspectiveEnabled === true) {
             try {
                 aerialPerspective = createAerialPerspectiveEffect({
                     inscatteringIntensity: atmoConfig.inscatteringIntensity ?? 1.0,

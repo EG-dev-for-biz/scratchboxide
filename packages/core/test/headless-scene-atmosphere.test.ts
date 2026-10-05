@@ -36,7 +36,7 @@ describe('Headless Scene Atmosphere Architecture', () => {
     });
 
     it('enables physical atmospheric scattering when explicitly requested headlessly', () => {
-        const atmospherePrompt = 'Create a scenic valley with atmospheric scattering and sunset haze';
+        const atmospherePrompt = 'Create a scenic valley with atmospheric scattering, clouds and sunset haze';
         const outdoorScene = synthesizeContextual3DScene(atmospherePrompt);
         
         expect(outdoorScene.features?.atmosphericScattering).toBeDefined();
@@ -48,25 +48,39 @@ describe('Headless Scene Atmosphere Architecture', () => {
         expect(scattering.cloudShadowsEnabled).toBe(true);
     });
 
-    it('buildHeadlessAtmosphere constructs valid physical parameters with overrides', () => {
+    it('does not enable haze or fog when prompt does not request haze or fog', () => {
+        const skyPrompt = 'Create a scenic valley with realistic sky and daylight';
+        const outdoorScene = synthesizeContextual3DScene(skyPrompt);
+        
+        expect(outdoorScene.features?.atmosphericScattering).toBeDefined();
+        const scattering = outdoorScene.features!.atmosphericScattering as any;
+        expect(scattering.enabled).toBe(true);
+        expect(scattering.aerialPerspectiveEnabled).toBe(false);
+        expect(scattering.inscatteringIntensity).toBe(0.0);
+        expect(outdoorScene.environment?.fog).toBeUndefined();
+    });
+
+    it('buildHeadlessAtmosphere constructs valid physical parameters with zero default haze/fog', () => {
         const defaultAtmosphere = buildHeadlessAtmosphere();
         expect(defaultAtmosphere.enabled).toBe(true);
         expect(defaultAtmosphere.rayleigh).toBe(0.55);
         expect(defaultAtmosphere.mie).toBe(0.003);
         expect(defaultAtmosphere.turbidity).toBe(1.6);
-        expect(defaultAtmosphere.volumetricClouds).toBe(true);
-        expect(defaultAtmosphere.cloudCoverage).toBe(0.38);
-        expect(defaultAtmosphere.aerialPerspectiveEnabled).toBe(true);
+        expect(defaultAtmosphere.volumetricClouds).toBe(false);
+        expect(defaultAtmosphere.cloudCoverage).toBe(0.0);
+        expect(defaultAtmosphere.aerialPerspectiveEnabled).toBe(false);
 
         const customAtmosphere = buildHeadlessAtmosphere({
             rayleigh: 0.85,
             cloudCoverage: 0.72,
             cloudAltitude: 1800,
+            aerialPerspectiveEnabled: true,
             windVector: [0.1, 0.04]
         });
         expect(customAtmosphere.rayleigh).toBe(0.85);
         expect(customAtmosphere.cloudCoverage).toBe(0.72);
         expect(customAtmosphere.cloudAltitude).toBe(1800);
+        expect(customAtmosphere.aerialPerspectiveEnabled).toBe(true);
         expect(customAtmosphere.windVector).toEqual([0.1, 0.04]);
     });
 
@@ -144,5 +158,56 @@ describe('Headless Scene Atmosphere Architecture', () => {
         expect(sourceCode).not.toContain('C++ Studio');
         expect(sourceCode).not.toContain('sb-3d-cpp-studio-panel');
         expect(sourceCode).not.toContain('handleCompileCpp');
+    });
+
+    it('syncAtmosphere sets scene.fog to null by default and only applies fog when explicitly configured', async () => {
+        const THREE = await import('three');
+        const { syncAtmosphere } = await import('../src/browser/generative-canvas/primitives/scene3d/syncAtmosphere');
+
+        const mockScene = new THREE.Scene();
+        const mockGrid = new THREE.GridHelper(20, 20);
+        const mockContainer = { clientWidth: 800, clientHeight: 600 } as any;
+        const stack = {
+            scene: mockScene,
+            gridHelper: mockGrid,
+            container: mockContainer,
+            renderer: {} as any,
+            camera: new THREE.PerspectiveCamera(),
+            controls: {} as any
+        };
+        const factories = {
+            createVolumetricGodRays: () => ({ dispose: () => {} }),
+            createProceduralBiomeTerrain: () => ({ mesh: new THREE.Mesh(), dispose: () => {} })
+        };
+
+        // 1. Unconfigured default studio scene -> ZERO FOG
+        const handle1 = syncAtmosphere(stack, { worldBranch: 'studio', renderMode: 'pbr', hasGeoCoordinates: false, has3DTiles: false }, factories);
+        expect(mockScene.fog).toBeNull();
+        handle1.dispose();
+
+        // 2. Daylight skybox without explicit fog -> ZERO FOG
+        const handle2 = syncAtmosphere(stack, {
+            skybox: 'daylight',
+            worldBranch: 'studio',
+            renderMode: 'pbr',
+            hasGeoCoordinates: false,
+            has3DTiles: false,
+            atmosphericScattering: { enabled: true }
+        }, factories);
+        expect(mockScene.fog).toBeNull();
+        handle2.dispose();
+
+        // 3. Explicit fog requested via input.fog -> FogExp2 created
+        const handle3 = syncAtmosphere(stack, {
+            worldBranch: 'studio',
+            renderMode: 'pbr',
+            hasGeoCoordinates: false,
+            has3DTiles: false,
+            fog: { density: 0.012, color: 0x8899aa }
+        }, factories);
+        expect(mockScene.fog).not.toBeNull();
+        expect(mockScene.fog instanceof THREE.FogExp2).toBe(true);
+        expect((mockScene.fog as any).density).toBe(0.012);
+        handle3.dispose();
     });
 });

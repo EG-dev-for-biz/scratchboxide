@@ -128,24 +128,24 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     timeOfDay: scene.environment.timeOfDay,
                     latitude: scene.environment.latitude,
                     longitude: scene.environment.longitude,
-                    cloudCoverage: params.cloudCoverage ?? existingAtmo.cloudCoverage ?? (preset.toLowerCase() === 'overcast' ? 0.85 : 0.35),
-                    cloudDensity: params.cloudDensity ?? existingAtmo.cloudDensity ?? 0.45,
+                    cloudCoverage: params.cloudCoverage ?? existingAtmo.cloudCoverage ?? (preset.toLowerCase() === 'overcast' ? 0.85 : 0.0),
+                    cloudDensity: params.cloudDensity ?? existingAtmo.cloudDensity ?? 0.0,
                     cloudAltitude: params.cloudAltitude ?? existingAtmo.cloudAltitude ?? 1200.0,
-                    volumetricClouds: params.volumetricClouds ?? existingAtmo.volumetricClouds ?? true,
+                    volumetricClouds: params.volumetricClouds ?? existingAtmo.volumetricClouds ?? false,
                     kelvinTemperature: params.kelvinTemperature ?? existingAtmo.kelvinTemperature ?? (diurnalState?.kelvin || 6500),
 
-                    // Aerial perspective parameters
-                    aerialPerspectiveEnabled: true,
-                    inscatteringIntensity: params.inscatteringIntensity ?? existingAtmo.inscatteringIntensity ?? 1.0,
+                    // Aerial perspective parameters (Strictly opt-in: zero default haze/fog)
+                    aerialPerspectiveEnabled: params.inscatteringIntensity !== undefined ? true : (existingAtmo.aerialPerspectiveEnabled ?? false),
+                    inscatteringIntensity: params.inscatteringIntensity ?? existingAtmo.inscatteringIntensity ?? 0.0,
                     aerialPerspectiveRange: params.aerialPerspectiveRange ?? existingAtmo.aerialPerspectiveRange ?? 220.0,
                     albedoScale: params.albedoScale ?? existingAtmo.albedoScale ?? (diurnalState?.aerialAlbedoBoost || 1.1),
                     fogDensity: params.fogDensity ?? existingAtmo.fogDensity,
                     fogBaseAltitude: params.fogBaseAltitude ?? existingAtmo.fogBaseAltitude ?? 0.0,
                     fogHeight: params.fogHeight ?? existingAtmo.fogHeight ?? 120.0,
 
-                    // Terrain cloud shadows parameters
-                    cloudShadowsEnabled: params.cloudShadowsEnabled ?? existingAtmo.cloudShadowsEnabled ?? true,
-                    cloudShadowIntensity: params.cloudShadowIntensity ?? existingAtmo.cloudShadowIntensity ?? 0.65,
+                    // Terrain cloud shadows parameters (Strictly opt-in with volumetric clouds)
+                    cloudShadowsEnabled: params.cloudShadowsEnabled ?? existingAtmo.cloudShadowsEnabled ?? false,
+                    cloudShadowIntensity: params.cloudShadowIntensity ?? existingAtmo.cloudShadowIntensity ?? 0.0,
                     cloudShadowScale: params.cloudShadowScale ?? existingAtmo.cloudShadowScale ?? 0.015,
                     atmosphereShadowLength: params.atmosphereShadowLength ?? existingAtmo.atmosphereShadowLength ?? 1.0,
                     windVector: params.windVector ?? existingAtmo.windVector ?? [0.05, 0.02]

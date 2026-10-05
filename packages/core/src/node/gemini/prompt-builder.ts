@@ -143,13 +143,14 @@ export const CANVAS_PRIMITIVES_SPECIFICATION = `
    - Dynamic Viewport Choreography & Advanced Features:
      - You can output custom camera choreography / interaction hooks in \`data.customScript\`, custom GLSL/WGSL shaders in \`data.shaders\`, and activate advanced rendering passes via \`data.features\`:
        - \`features.godRays\`: Volumetric crepuscular light shafts projecting through the atmosphere from the sun
-       - \`features.volumetricFog\`: Dynamic height-based atmospheric fog with Mie scattering
+       - \`features.volumetricFog\`: Dynamic height-based atmospheric fog with Mie scattering (STRICTLY OPT-IN: only when user prompt specifically requests fog, haze, or mist)
        - \`features.waterShader\`: Physically-based ocean/lake water surface with Gerber waves and foam
        - \`features.depthOfField\`: Cinematic bokeh camera focus pass with adjustable focal distance
        - \`features.bloomPass\`: Selective HDR emissive glow with threshold, radius, and intensity
        - \`features.ssaoPass\`: Screen-space ambient occlusion for micro-shadows in crevices
        - \`features.outlinePass\`: Edge-detection silhouette outline for selected objects
        - \`features.lensDirt\`: Lens flare dirt and chromatic aberration on camera lens
+     - ZERO DEFAULT HAZE/FOG RULE: 3D scenes MUST default to crystal-clear visual neutrality with zero haze, fog, or aerial perspective inscattering unless the prompt explicitly asks for haze, fog, mist, or atmospheric depth fog. Never inject volumetricFog or aerialPerspective by default.
      - STRICT PROHIBITION: \`customScript\` is restricted to camera motion, post-processing, and UI interactions. NEVER instantiate Three.js geometry primitives (\`new THREE.BoxGeometry\`, \`new THREE.CylinderGeometry\`, etc.) in \`customScript\`. All geometry must be generated via C++20 / Python SDK and streamed as GLB.
      - You can also output custom GLSL vertex/fragment shaders in \`data.shaders\` as an array:
        \`shaders: [{ id: "customWater", vertexShader: "...", fragmentShader: "...", uniforms: { ... } }]\`

@@ -248,7 +248,7 @@ void main() {
 export function createScene(container: HTMLElement) {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a0c);
-    scene.fog = new THREE.FogExp2(0x0a0a0c, 0.015);
+    scene.fog = null; // Zero Default Fog: Atmosphere and fog are strictly opt-in
 
     const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
     camera.position.set(0, 5, 10);

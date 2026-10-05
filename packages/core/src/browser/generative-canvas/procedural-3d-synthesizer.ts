@@ -84,15 +84,15 @@ export function buildHeadlessAtmosphere(options: Partial<AtmosphericScatteringCo
         mie: options.mie ?? 0.003,
         turbidity: options.turbidity ?? 1.6,
         mieDirectionalG: options.mieDirectionalG ?? 0.82,
-        volumetricClouds: options.volumetricClouds ?? true,
-        cloudCoverage: options.cloudCoverage ?? 0.38,
-        cloudDensity: options.cloudDensity ?? 0.48,
+        volumetricClouds: options.volumetricClouds ?? false,
+        cloudCoverage: options.cloudCoverage ?? 0.0,
+        cloudDensity: options.cloudDensity ?? 0.0,
         cloudAltitude: options.cloudAltitude ?? 1200,
-        aerialPerspectiveEnabled: options.aerialPerspectiveEnabled ?? true,
-        inscatteringIntensity: options.inscatteringIntensity ?? 1.1,
+        aerialPerspectiveEnabled: options.aerialPerspectiveEnabled ?? false,
+        inscatteringIntensity: options.inscatteringIntensity ?? 0.0,
         aerialPerspectiveRange: options.aerialPerspectiveRange ?? 220.0,
-        cloudShadowsEnabled: options.cloudShadowsEnabled ?? true,
-        cloudShadowIntensity: options.cloudShadowIntensity ?? 0.65,
+        cloudShadowsEnabled: options.cloudShadowsEnabled ?? false,
+        cloudShadowIntensity: options.cloudShadowIntensity ?? 0.0,
         cloudShadowScale: options.cloudShadowScale ?? 0.015,
         atmosphereShadowLength: options.atmosphereShadowLength ?? 1.0,
         windVector: options.windVector ?? [0.05, 0.02],
@@ -2082,9 +2082,17 @@ function _synthesizeRawContextual3DSceneInner(
     const hasContrails = /contrail|vapor|vortex/i.test(prompt) || !!existingFeatures?.contrails;
     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder/i.test(prompt) || !!existingFeatures?.controlSurfaces;
 
+    const hasHazeOrFogRequested = /\b(?:haze|fog|mist|aerial\s*perspective|dense\s*atmosphere|dust|volumetric\s*fog)\b/i.test(prompt);
+    const hasCloudsRequested = /\b(?:clouds?|cloudy|overcast|cumulus|stratus)\b/i.test(prompt);
+
     const atmosphericConfig = hasAtmosphere ? buildHeadlessAtmosphere({
-        aerialPerspectiveEnabled: true,
-        cloudShadowsEnabled: true
+        aerialPerspectiveEnabled: hasHazeOrFogRequested,
+        inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0,
+        volumetricClouds: hasCloudsRequested,
+        cloudCoverage: hasCloudsRequested ? 0.38 : 0.0,
+        cloudDensity: hasCloudsRequested ? 0.48 : 0.0,
+        cloudShadowsEnabled: hasCloudsRequested,
+        cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.0
     }) : undefined;
 
     const baseFeatures = {
@@ -2286,8 +2294,8 @@ function _synthesizeRawContextual3DSceneInner(
                             sunAzimuth: 145,
                             latitude: realWorldLoc.lat,
                             longitude: realWorldLoc.lng,
-                            aerialPerspectiveEnabled: true,
-                            inscatteringIntensity: 1.0,
+                            aerialPerspectiveEnabled: hasHazeOrFogRequested,
+                            inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0,
                             aerialPerspectiveRange: 250.0
                         })
                     } : {})
@@ -2376,10 +2384,10 @@ function _synthesizeRawContextual3DSceneInner(
                             sunAzimuth: 145,
                             latitude: realWorldLoc.lat,
                             longitude: realWorldLoc.lng,
-                            aerialPerspectiveEnabled: true,
-                            inscatteringIntensity: 1.0,
-                            cloudShadowsEnabled: true,
-                            cloudShadowIntensity: 0.65
+                            aerialPerspectiveEnabled: hasHazeOrFogRequested,
+                            inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0,
+                            cloudShadowsEnabled: hasCloudsRequested,
+                            cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.0
                         }),
                         godRays: hasGodRays
                     } : {})
@@ -3727,7 +3735,10 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 contrails: true,
                 ...(hasAtmosphere ? {
                     godRays: hasGodRays,
-                    atmosphericScattering: buildHeadlessAtmosphere()
+                    atmosphericScattering: buildHeadlessAtmosphere({
+                        aerialPerspectiveEnabled: hasHazeOrFogRequested,
+                        inscatteringIntensity: hasHazeOrFogRequested ? 1.0 : 0.0
+                    })
                 } : {})
             },
             objects: [
