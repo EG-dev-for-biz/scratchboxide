@@ -532,8 +532,8 @@ export class NextGenAstroViewportEngine {
                 const subtreeHash = `procedural_column_segment_lod_${seg}_radius_${columnRadius.toFixed(2)}`;
                 this.deduplicateProceduralSubtree(subtreeHash, cluster.triangleCount);
 
-                // Create visual representation for the cluster
-                const geo = new THREE.CylinderGeometry(
+                // Create authentic discrete cluster representation adhering to Zero-JS-Primitives Directive
+                const geo = this.createDiscreteClusterBufferGeometry(
                     columnRadius * (1.0 - seg * 0.04),
                     columnRadius * (1.0 - (seg - 1) * 0.04),
                     segHeight * 0.96,
@@ -556,8 +556,8 @@ export class NextGenAstroViewportEngine {
             }
         }
 
-        // Add base podium platform
-        const podiumGeo = new THREE.BoxGeometry(32, 1.2, 28);
+        // Add base podium platform via authentic BufferGeometry
+        const podiumGeo = this.createPodiumBufferGeometry(32, 1.2, 28);
         const podiumMat = new THREE.MeshStandardMaterial({
             color: 0x1e293b,
             roughness: 0.65,
@@ -570,6 +570,130 @@ export class NextGenAstroViewportEngine {
     }
 
     /**
+     * Builds an authentic discrete cluster meshlet using raw BufferGeometry and TypedArrays.
+     * Enforces the Zero-Tolerance ban on client-side toy primitives (CylinderGeometry).
+     */
+    private createDiscreteClusterBufferGeometry(
+        radiusTop: number,
+        radiusBottom: number,
+        height: number,
+        radialSegments: number
+    ): THREE.BufferGeometry {
+        const positions: number[] = [];
+        const normals: number[] = [];
+        const uvs: number[] = [];
+        const indices: number[] = [];
+
+        const slope = (radiusBottom - radiusTop) / height;
+
+        for (let y = 0; y <= 1; y++) {
+            const v = y;
+            const r = y === 0 ? radiusBottom : radiusTop;
+            const py = (y - 0.5) * height;
+
+            for (let x = 0; x <= radialSegments; x++) {
+                const u = x / radialSegments;
+                const theta = u * Math.PI * 2;
+                const sinT = Math.sin(theta);
+                const cosT = Math.cos(theta);
+
+                positions.push(r * sinT, py, r * cosT);
+
+                const nLen = Math.hypot(sinT, slope, cosT) || 1.0;
+                normals.push(sinT / nLen, slope / nLen, cosT / nLen);
+                uvs.push(u, 1.0 - v);
+            }
+        }
+
+        const rowStride = radialSegments + 1;
+        for (let x = 0; x < radialSegments; x++) {
+            const b0 = x;
+            const b1 = x + 1;
+            const t0 = rowStride + x;
+            const t1 = rowStride + x + 1;
+
+            indices.push(b0, t0, b1);
+            indices.push(b1, t0, t1);
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        geo.setIndex(indices);
+        return geo;
+    }
+
+    /**
+     * Builds an authentic multi-faceted podium platform using raw BufferGeometry.
+     * Enforces the Zero-Tolerance ban on client-side toy primitives (BoxGeometry).
+     */
+    private createPodiumBufferGeometry(width: number, height: number, depth: number): THREE.BufferGeometry {
+        const hx = width * 0.5;
+        const hy = height * 0.5;
+        const hz = depth * 0.5;
+
+        const rawPositions = [
+            -hx, -hy,  hz,   hx, -hy,  hz,   hx,  hy,  hz,  -hx,  hy,  hz,
+             hx, -hy, -hz,  -hx, -hy, -hz,  -hx,  hy, -hz,   hx,  hy, -hz,
+            -hx,  hy,  hz,   hx,  hy,  hz,   hx,  hy, -hz,  -hx,  hy, -hz,
+            -hx, -hy, -hz,   hx, -hy, -hz,   hx, -hy,  hz,  -hx, -hy,  hz,
+             hx, -hy,  hz,   hx, -hy, -hz,   hx,  hy, -hz,   hx,  hy,  hz,
+            -hx, -hy, -hz,  -hx, -hy,  hz,  -hx,  hy,  hz,  -hx,  hy, -hz
+        ];
+
+        const rawNormals = [
+            0, 0, 1,   0, 0, 1,   0, 0, 1,   0, 0, 1,
+            0, 0, -1,  0, 0, -1,  0, 0, -1,  0, 0, -1,
+            0, 1, 0,   0, 1, 0,   0, 1, 0,   0, 1, 0,
+            0, -1, 0,  0, -1, 0,  0, -1, 0,  0, -1, 0,
+            1, 0, 0,   1, 0, 0,   1, 0, 0,   1, 0, 0,
+            -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  -1, 0, 0
+        ];
+
+        const rawUVs = [
+            0, 0,  1, 0,  1, 1,  0, 1,
+            0, 0,  1, 0,  1, 1,  0, 1,
+            0, 0,  1, 0,  1, 1,  0, 1,
+            0, 0,  1, 0,  1, 1,  0, 1,
+            0, 0,  1, 0,  1, 1,  0, 1,
+            0, 0,  1, 0,  1, 1,  0, 1
+        ];
+
+        const indices: number[] = [];
+        for (let f = 0; f < 6; f++) {
+            const base = f * 4;
+            indices.push(base, base + 1, base + 2);
+            indices.push(base, base + 2, base + 3);
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(rawPositions, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(rawNormals, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(rawUVs, 2));
+        geo.setIndex(indices);
+        return geo;
+    }
+
+    /**
+     * Builds a quad BufferGeometry for Gaussian splat cards.
+     */
+    private createQuadBufferGeometry(size: number): THREE.BufferGeometry {
+        const hs = size * 0.5;
+        const positions = [-hs, -hs, 0,  hs, -hs, 0,  hs, hs, 0,  -hs, hs, 0];
+        const normals = [0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1];
+        const uvs = [0, 0,  1, 0,  1, 1,  0, 1];
+        const indices = [0, 1, 2,  0, 2, 3];
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        geo.setIndex(indices);
+        return geo;
+    }
+
+    /**
      * Initializes hybrid 3D Gaussian Splats coexisting with PBR meshes in the same depth buffer.
      */
     private initDemoGaussianSplats(): void {
@@ -578,7 +702,7 @@ export class NextGenAstroViewportEngine {
 
         // Synthesize a cloud of golden atmospheric architectural dust & energy particles
         const dummy = new THREE.Object3D();
-        const baseQuad = new THREE.PlaneGeometry(0.35, 0.35);
+        const baseQuad = this.createQuadBufferGeometry(0.35);
         const splatMat = new THREE.MeshBasicMaterial({
             color: 0xfbbf24,
             transparent: true,

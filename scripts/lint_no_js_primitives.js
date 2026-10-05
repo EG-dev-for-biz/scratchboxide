@@ -21,7 +21,8 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const TARGET_SCAN_PATHS = [
     path.join(ROOT_DIR, 'public/test_reports'),
     path.join(ROOT_DIR, 'packages/core/src/common/spatial'),
-    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/primitives')
+    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/primitives'),
+    path.join(ROOT_DIR, 'packages/core/src/browser/generative-canvas/services/NextGenAstraViewportEngine.ts')
 ];
 
 // Patterns that indicate client-side toy primitives in scene generation
@@ -38,11 +39,18 @@ const EXEMPTIONS = [
     'syncCustomMeshes.ts' // fallback placeholder for custom mesh protocol
 ];
 
-function scanDirectory(dir, fileList = []) {
-    if (!fs.existsSync(dir)) return fileList;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+function scanDirectory(dirOrFile, fileList = []) {
+    if (!fs.existsSync(dirOrFile)) return fileList;
+    const stat = fs.statSync(dirOrFile);
+    if (stat.isFile()) {
+        if (dirOrFile.endsWith('.ts') || dirOrFile.endsWith('.js') || dirOrFile.endsWith('.html')) {
+            fileList.push(dirOrFile);
+        }
+        return fileList;
+    }
+    const entries = fs.readdirSync(dirOrFile, { withFileTypes: true });
     for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
+        const fullPath = path.join(dirOrFile, entry.name);
         if (entry.isDirectory()) {
             if (entry.name !== 'node_modules' && entry.name !== 'dist' && entry.name !== '.git') {
                 scanDirectory(fullPath, fileList);
