@@ -2695,8 +2695,140 @@ onFrame((time, delta) => {
 
     if (theme === 'worldbuilder' || theme === 'nature_atmosphere') {
         const spec = planWorldIntentHeuristic(prompt);
-        const grid = generateCompositeHeightfield(spec, 32);
-        const actors = placeRegionalObjects(spec, grid, 1337);
+        const isArchitecturalStructure = /\b(?:outpost|facility|station|tower|base|observatory|building|structure|solar|panels|citadel|compound|habitat|hub)\b/i.test(prompt);
+
+        let customMeshes: NonNullable<Scene3DData['customMeshes']>;
+
+        if (isArchitecturalStructure) {
+            const hasSolar = /\b(?:solar|panels?|photovoltaic)\b/i.test(prompt);
+            const hasTower = /\b(?:tower|cupola|spire|observatory|mast)\b/i.test(prompt);
+
+            customMeshes = [
+                // 1. Primary Research Hub / Outpost Massing (70%)
+                {
+                    id: 'arch-primary-hub',
+                    name: `${spec.name || 'Research Outpost'} Main Facility`,
+                    type: 'box',
+                    position: [0, 1.8, 0],
+                    scale: [7.0, 3.6, 6.0],
+                    tier: 'primary',
+                    material: { color: 0x475569, roughness: 0.35, metalness: 0.85, preset: 'titanium_grade5' }
+                },
+                // 2. Secondary Central Observation Tower (20%)
+                {
+                    id: 'arch-observation-tower',
+                    name: hasTower ? 'Central Observation Tower & Cupola' : 'Secondary Upper Research Module',
+                    parentId: 'arch-primary-hub',
+                    type: 'cylinder',
+                    position: [0, 4.8, 0],
+                    scale: [1.8, 2.6, 1.8],
+                    tier: 'secondary',
+                    material: { color: 0x94a3b8, roughness: 0.15, metalness: 0.40, clearcoat: 1.0 }
+                },
+                // 3. Tertiary Left Solar Array / Wing (10%)
+                {
+                    id: 'arch-solar-wing-left',
+                    name: hasSolar ? 'Photovoltaic Solar Array Alpha' : 'Port Avionics Wing',
+                    parentId: 'arch-primary-hub',
+                    type: 'box',
+                    position: [-4.6, 2.0, 0],
+                    rotation: [0, 0, 0.18],
+                    scale: [3.4, 0.12, 1.8],
+                    tier: 'tertiary',
+                    material: { color: 0x0f172a, roughness: 0.12, metalness: 0.95, preset: 'polished_gold_24k' }
+                },
+                // 4. Tertiary Right Solar Array / Wing (10%)
+                {
+                    id: 'arch-solar-wing-right',
+                    name: hasSolar ? 'Photovoltaic Solar Array Beta' : 'Starboard Sensor Wing',
+                    parentId: 'arch-primary-hub',
+                    type: 'box',
+                    position: [4.6, 2.0, 0],
+                    rotation: [0, 0, -0.18],
+                    scale: [3.4, 0.12, 1.8],
+                    tier: 'tertiary',
+                    material: { color: 0x0f172a, roughness: 0.12, metalness: 0.95, preset: 'polished_gold_24k' }
+                },
+                // 5. High-Gain Communications Mast
+                {
+                    id: 'arch-comms-mast',
+                    name: 'High-Gain Telemetry Mast',
+                    parentId: 'arch-primary-hub',
+                    type: 'cylinder',
+                    position: [0, 6.6, 0],
+                    scale: [0.12, 1.8, 0.12],
+                    tier: 'tertiary',
+                    material: { color: 0x64748b, roughness: 0.40, metalness: 0.85 }
+                },
+                // 6. Grounded Local Conifers & Terrain Boulders
+                {
+                    id: 'env-conifer-1',
+                    name: 'Subalpine Conifer Stand',
+                    type: 'cylinder',
+                    position: [-4.5, 1.2, 3.2],
+                    scale: [1.2, 2.4, 1.2],
+                    tier: 'secondary',
+                    material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
+                },
+                {
+                    id: 'env-conifer-2',
+                    name: 'Perimeter Pine Cluster',
+                    type: 'cylinder',
+                    position: [4.8, 1.0, -2.8],
+                    scale: [1.0, 2.0, 1.0],
+                    tier: 'secondary',
+                    material: { color: 0x234d20, roughness: 0.70, metalness: 0.05 }
+                },
+                {
+                    id: 'env-boulder-1',
+                    name: 'Basaltic Ground Boulder',
+                    type: 'sphere',
+                    position: [2.8, 0.35, 3.8],
+                    scale: [0.9, 0.6, 0.9],
+                    tier: 'tertiary',
+                    material: { color: 0x57534e, roughness: 0.90, metalness: 0.04 }
+                }
+            ];
+        } else {
+            customMeshes = [
+                {
+                    id: 'nature-primary-monolith',
+                    name: 'Ancient Plateau Monolith',
+                    type: 'box',
+                    position: [0, 2.4, 0],
+                    scale: [3.2, 4.8, 3.2],
+                    tier: 'primary',
+                    material: { color: 0x57534e, roughness: 0.88, metalness: 0.05, preset: 'granite' }
+                },
+                {
+                    id: 'nature-conifer-left',
+                    name: 'Subalpine Conifer Stand A',
+                    type: 'cylinder',
+                    position: [-4.2, 1.8, -2.5],
+                    scale: [1.4, 3.6, 1.4],
+                    tier: 'secondary',
+                    material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
+                },
+                {
+                    id: 'nature-conifer-right',
+                    name: 'Subalpine Conifer Stand B',
+                    type: 'cylinder',
+                    position: [4.0, 1.6, 2.2],
+                    scale: [1.2, 3.2, 1.2],
+                    tier: 'secondary',
+                    material: { color: 0x234d20, roughness: 0.70, metalness: 0.05 }
+                },
+                {
+                    id: 'nature-boulder-1',
+                    name: 'Glacial Scree Boulder',
+                    type: 'sphere',
+                    position: [2.5, 0.4, 3.2],
+                    scale: [0.8, 0.6, 0.8],
+                    tier: 'tertiary',
+                    material: { color: 0x78716c, roughness: 0.90, metalness: 0.04 }
+                }
+            ];
+        }
 
         const customScript = `
 // Procedural In-Tree 3D Worldbuilder Simulation Script
@@ -2712,21 +2844,6 @@ onFrame((time, delta) => {
     }
 });
 `;
-
-        const customMeshes = actors.slice(0, 16).map((actor, idx) => ({
-            id: `mesh-${actor.id}`,
-            name: actor.name,
-            type: (actor.type === 'Cube' ? 'box' : actor.type === 'Cylinder' ? 'cylinder' : actor.type === 'Cone' ? 'cylinder' : actor.type === 'Sphere' ? 'sphere' : 'box') as any,
-            position: [actor.position.x, actor.position.y, actor.position.z] as [number, number, number],
-            rotation: [actor.rotation.x, actor.rotation.y, actor.rotation.z] as [number, number, number],
-            scale: [actor.scale.x * 2, actor.scale.y * 2, actor.scale.z * 2] as [number, number, number],
-            tier: (idx < 2 ? 'primary' : idx < 8 ? 'secondary' : 'tertiary') as any,
-            material: {
-                color: actor.material?.color || 0x38bdf8,
-                roughness: actor.material?.roughness ?? 0.7,
-                metalness: actor.material?.metalness ?? 0.1
-            }
-        }));
 
         return {
             title: spec.name || 'Procedural 3D World & Terrain Foundation',
@@ -2745,9 +2862,9 @@ onFrame((time, delta) => {
                 isLooping: true
             },
             camera: {
-                position: [0, 35, 65],
-                target: [0, 5, 0],
-                fov: 50
+                position: [0, 18, 36],
+                target: [0, 3, 0],
+                fov: 48
             },
             environment: {
                 skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : (spec.atmosphere?.skybox || 'daylight'),
@@ -2766,22 +2883,34 @@ onFrame((time, delta) => {
             geoAnchor: (realWorldLoc && realWorldLoc.isRealWorld) ? {
                 lat: realWorldLoc.lat,
                 lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation || grid.elevations[0] || 10.0,
+                elevation: realWorldLoc.elevation || 10.0,
                 active: true,
                 landmarkName: realWorldLoc.landmarkName || spec.name
             } : undefined,
             customMeshes,
             customScript,
-            code: customScript
+            code: customScript,
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: generateDefaultCpp3DSource('nature_atmosphere', spec.name || 'Procedural World'),
+                vertexCount: 38000,
+                triangleCount: 24000
+            }
         };
     }
 
     if (theme === 'battlefield') {
         const isLexington = /lexington/i.test(prompt) || /lexington/i.test(docTitle) || /1776|1775|revolution/i.test(prompt) || /1776|1775|revolution/i.test(docTitle);
-        const title = isLexington
+        const isCastle = /castle|citadel|fortress|keep|battlements/i.test(prompt);
+        const title = isCastle
+            ? '3D Medieval Castle Citadel & Fortification'
+            : isLexington
             ? 'Battle of Lexington (April 19, 1775) — 3D Battlefield Simulation'
             : 'Historical Battlefield & Landscape Simulation';
-        const subtitle = isLexington
+        const subtitle = isCastle
+            ? 'Medieval defensive fortification with multi-tiered stone keep, perimeter curtain wall, fortified gatehouse, and elevated battlements.'
+            : isLexington
             ? 'Lexington Green with Buckman Tavern, colonial meetinghouse, split-rail fences, minutemen line, British redcoats, and morning musket smoke.'
             : 'Historical tactical formations, rustic terrain, fortifications, and dynamic particle battlefield effects.';
 
@@ -2804,10 +2933,104 @@ onFrame((time, delta) => {
 });
 `;
 
+        const customMeshes: NonNullable<Scene3DData['customMeshes']> = isCastle ? [
+            {
+                id: 'mesh-castle-keep',
+                name: 'Fortified Stone Keep (Primary Donjon)',
+                type: 'box',
+                position: [0, 8.0, 0],
+                scale: [16, 16, 16],
+                tier: 'primary',
+                material: { color: 0x78716c, roughness: 0.85, metalness: 0.05, preset: 'weathered_limestone' }
+            },
+            {
+                id: 'mesh-castle-tower-1',
+                name: 'North-East Watchtower',
+                type: 'cylinder',
+                position: [12, 10.0, 12],
+                scale: [5, 20, 5],
+                tier: 'secondary',
+                material: { color: 0x64748b, roughness: 0.80, metalness: 0.06 }
+            },
+            {
+                id: 'mesh-castle-tower-2',
+                name: 'North-West Watchtower',
+                type: 'cylinder',
+                position: [-12, 10.0, 12],
+                scale: [5, 20, 5],
+                tier: 'secondary',
+                material: { color: 0x64748b, roughness: 0.80, metalness: 0.06 }
+            },
+            {
+                id: 'mesh-castle-gatehouse',
+                name: 'Fortified Barbican Gatehouse',
+                type: 'box',
+                position: [0, 4.5, 14],
+                scale: [8, 9, 6],
+                tier: 'secondary',
+                material: { color: 0x57534e, roughness: 0.85, metalness: 0.08 }
+            },
+            {
+                id: 'mesh-curtain-wall',
+                name: 'Crenellated Perimeter Curtain Wall',
+                type: 'box',
+                position: [0, 3.0, 12],
+                scale: [24, 6, 2],
+                tier: 'tertiary',
+                material: { color: 0x708090, roughness: 0.90, metalness: 0.04 }
+            }
+        ] : [
+            {
+                id: 'mesh-buckman-tavern',
+                name: 'Buckman Tavern (Colonial Timber Frame)',
+                type: 'box',
+                position: [-22, 4, -14],
+                scale: [12, 8, 14],
+                tier: 'primary',
+                material: { color: 0x8b5a2b, roughness: 0.8, metalness: 0.1 }
+            },
+            {
+                id: 'mesh-meetinghouse',
+                name: 'Lexington Meetinghouse & Belfry',
+                type: 'box',
+                position: [18, 7, -20],
+                scale: [14, 14, 18],
+                tier: 'primary',
+                material: { color: 0xd4c5b9, roughness: 0.7, metalness: 0.1 }
+            },
+            {
+                id: 'mesh-minutemen-line',
+                name: 'Colonial Minutemen Firing Line (Capt. John Parker)',
+                type: 'cylinder',
+                position: [-6, 1.2, 5],
+                scale: [14, 2.2, 1.5],
+                tier: 'secondary',
+                material: { color: 0x2b4c7e, roughness: 0.6, metalness: 0.2 }
+            },
+            {
+                id: 'mesh-redcoat-formation',
+                name: 'British 10th Regiment of Foot (Major John Pitcairn)',
+                type: 'cylinder',
+                position: [8, 1.2, 12],
+                scale: [18, 2.2, 1.8],
+                tier: 'secondary',
+                material: { color: 0xb22222, roughness: 0.5, metalness: 0.3 }
+            },
+            {
+                id: 'mesh-stone-wall',
+                name: 'Colonial Fieldstone Boundary Wall',
+                type: 'box',
+                position: [-10, 0.6, -2],
+                scale: [28, 1.2, 1.2],
+                tier: 'tertiary',
+                material: { color: 0x708090, roughness: 0.9, metalness: 0.05 }
+            }
+        ];
+
         return {
             title,
             subtitle,
-            worldBranch: isLexington ? 'history/lexington-1775' : 'history/battlefield',
+            worldBranch: isCastle ? 'history/medieval-citadel' : isLexington ? 'history/lexington-1775' : 'history/battlefield',
             sceneType: 'battlefield',
             renderMode: 'pbr',
             cameraMode: 'orbit',
@@ -2831,7 +3054,7 @@ onFrame((time, delta) => {
                 ground: true
             },
             features: Object.keys(baseFeatures).length > 0 ? baseFeatures : undefined,
-            geoAnchor: {
+            geoAnchor: isCastle ? undefined : {
                 lat: 42.4473,
                 lng: -71.2272,
                 elevation: 68.0,
@@ -2852,48 +3075,7 @@ onFrame((time, delta) => {
                     lineage: { version: 1 }
                 }
             ],
-            customMeshes: [
-                {
-                    id: 'mesh-buckman-tavern',
-                    name: 'Buckman Tavern (Colonial Timber Frame)',
-                    type: 'box',
-                    position: [-22, 4, -14],
-                    scale: [12, 8, 14],
-                    material: { color: 0x8b5a2b, roughness: 0.8, metalness: 0.1 }
-                },
-                {
-                    id: 'mesh-meetinghouse',
-                    name: 'Lexington Meetinghouse & Belfry',
-                    type: 'box',
-                    position: [18, 7, -20],
-                    scale: [14, 14, 18],
-                    material: { color: 0xd4c5b9, roughness: 0.7, metalness: 0.1 }
-                },
-                {
-                    id: 'mesh-minutemen-line',
-                    name: 'Colonial Minutemen Firing Line (Capt. John Parker)',
-                    type: 'cylinder',
-                    position: [-6, 1.2, 5],
-                    scale: [14, 2.2, 1.5],
-                    material: { color: 0x2b4c7e, roughness: 0.6, metalness: 0.2 }
-                },
-                {
-                    id: 'mesh-redcoat-formation',
-                    name: 'British 10th Regiment of Foot (Major John Pitcairn)',
-                    type: 'cylinder',
-                    position: [8, 1.2, 12],
-                    scale: [18, 2.2, 1.8],
-                    material: { color: 0xb22222, roughness: 0.5, metalness: 0.3 }
-                },
-                {
-                    id: 'mesh-stone-wall',
-                    name: 'Colonial Fieldstone Boundary Wall',
-                    type: 'box',
-                    position: [-10, 0.6, -2],
-                    scale: [28, 1.2, 1.2],
-                    material: { color: 0x708090, roughness: 0.9, metalness: 0.05 }
-                }
-            ],
+            customMeshes,
             customScript,
             code: customScript
         };
@@ -3582,8 +3764,15 @@ onFrame((time, delta) => {
 
     if (theme === 'architecture') {
         const isPlazaOrCivic = /plaza|civic|square|forum|promenade|courtyard|esplanade|palais|hall/i.test(prompt);
-        const title = isPlazaOrCivic ? 'Procedural Architectural Civic Plaza' : 'Procedural Architectural Complex';
-        const subtitle = '3D multi-story architecture with rhythmic recessed window reveals, mansard and hip roofs, botanical space-colonization trees, and limestone promenade.';
+        const isOutpostOrFacility = /outpost|facility|station|research|tower|observatory|base|habitat|hub|solar/i.test(prompt);
+        const title = isOutpostOrFacility
+            ? '3D Architectural Research Outpost'
+            : isPlazaOrCivic
+            ? 'Procedural Architectural Civic Plaza'
+            : 'Procedural Architectural Complex';
+        const subtitle = isOutpostOrFacility
+            ? '3D modular research outpost with central observation tower, dual photovoltaic solar arrays, and high-gain telemetry communications mast.'
+            : '3D multi-story architecture with rhythmic recessed window reveals, mansard and hip roofs, botanical space-colonization trees, and limestone promenade.';
 
         const pythonSource = `import scratchbox as sb
 
@@ -3639,7 +3828,83 @@ scene.merge(ivy)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 `;
 
-        const customMeshes: NonNullable<Scene3DData['customMeshes']> = [
+        const customMeshes: NonNullable<Scene3DData['customMeshes']> = isOutpostOrFacility ? [
+            // 1. Primary Research Hub Massing (70%)
+            {
+                id: 'arch-primary-hub',
+                name: 'Central Research Facility Hub',
+                type: 'box',
+                position: [0, 1.8, 0],
+                scale: [7.0, 3.6, 6.0],
+                tier: 'primary',
+                material: { color: 0x475569, roughness: 0.35, metalness: 0.85, preset: 'titanium_grade5' }
+            },
+            // 2. Secondary Central Observation Tower (20%)
+            {
+                id: 'arch-observation-tower',
+                name: 'Central Observation Tower & Cupola',
+                parentId: 'arch-primary-hub',
+                type: 'cylinder',
+                position: [0, 4.8, 0],
+                scale: [1.8, 2.6, 1.8],
+                tier: 'secondary',
+                material: { color: 0x94a3b8, roughness: 0.15, metalness: 0.40, clearcoat: 1.0 }
+            },
+            // 3. Tertiary Left Solar Array (10%)
+            {
+                id: 'arch-solar-wing-left',
+                name: 'Photovoltaic Solar Array Alpha',
+                parentId: 'arch-primary-hub',
+                type: 'box',
+                position: [-4.6, 2.0, 0],
+                rotation: [0, 0, 0.18],
+                scale: [3.4, 0.12, 1.8],
+                tier: 'tertiary',
+                material: { color: 0x0f172a, roughness: 0.12, metalness: 0.95, preset: 'polished_gold_24k' }
+            },
+            // 4. Tertiary Right Solar Array (10%)
+            {
+                id: 'arch-solar-wing-right',
+                name: 'Photovoltaic Solar Array Beta',
+                parentId: 'arch-primary-hub',
+                type: 'box',
+                position: [4.6, 2.0, 0],
+                rotation: [0, 0, -0.18],
+                scale: [3.4, 0.12, 1.8],
+                tier: 'tertiary',
+                material: { color: 0x0f172a, roughness: 0.12, metalness: 0.95, preset: 'polished_gold_24k' }
+            },
+            // 5. Tertiary High-Gain Telemetry Mast
+            {
+                id: 'arch-comms-mast',
+                name: 'High-Gain Telemetry Mast',
+                parentId: 'arch-primary-hub',
+                type: 'cylinder',
+                position: [0, 6.6, 0],
+                scale: [0.12, 1.8, 0.12],
+                tier: 'tertiary',
+                material: { color: 0x64748b, roughness: 0.40, metalness: 0.85 }
+            },
+            // 6. Grounded Local Conifers & Natural Elements
+            {
+                id: 'arch-conifer-stand',
+                name: 'Subalpine Conifer Stand',
+                type: 'cylinder',
+                position: [-4.5, 1.2, 3.2],
+                scale: [1.2, 2.4, 1.2],
+                tier: 'secondary',
+                material: { color: 0x1e3f20, roughness: 0.70, metalness: 0.05 }
+            },
+            {
+                id: 'arch-ground-boulder',
+                name: 'Basaltic Ground Boulder',
+                type: 'sphere',
+                position: [2.8, 0.35, 3.8],
+                scale: [0.9, 0.6, 0.9],
+                tier: 'tertiary',
+                material: { color: 0x57534e, roughness: 0.90, metalness: 0.04 }
+            }
+        ] : [
             // 1. Elevated stone promenade pedestal
             {
                 id: 'arch-promenade',
@@ -3708,7 +3973,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 position: [-8.0, 4.5, 9.0],
                 scale: [3.2, 4.0, 3.2],
                 tier: 'tertiary',
-                material: { color: 0x22c55e, roughness: 0.8, metalness: 0.0 }
+                material: { color: 0x1e3f20, roughness: 0.8, metalness: 0.0 }
             },
             {
                 id: 'arch-tree-west',
@@ -3717,7 +3982,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 position: [8.0, 4.5, 9.0],
                 scale: [3.2, 4.0, 3.2],
                 tier: 'tertiary',
-                material: { color: 0x16a34a, roughness: 0.8, metalness: 0.0 }
+                material: { color: 0x1e3f20, roughness: 0.8, metalness: 0.0 }
             }
         ];
 
@@ -3753,6 +4018,13 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 enabled: true,
                 filename: 'procedural_architecture.py',
                 sourceCode: pythonSource
+            },
+            cppGenerator: {
+                filename: 'world_generator.cpp',
+                enabled: true,
+                sourceCode: generateDefaultCpp3DSource('architecture', title),
+                vertexCount: 38000,
+                triangleCount: 24000
             }
         };
     }

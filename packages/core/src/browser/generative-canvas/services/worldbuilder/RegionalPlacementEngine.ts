@@ -202,19 +202,19 @@ export function placeRegionalObjects(
 
             if (rawCategory.includes('house') || rawCategory.includes('building') || rawCategory.includes('outpost') || rawCategory.includes('dwelling') || rawCategory.includes('chalet')) {
                 actorType = 'Cube';
-                defaultColor = '#8b5a2b';
+                defaultColor = '#475569';
             } else if (rawCategory.includes('tower') || rawCategory.includes('pillar') || rawCategory.includes('satellite') || rawCategory.includes('spire') || rawCategory.includes('pylon') || rawCategory.includes('beacon')) {
                 actorType = 'Cylinder';
                 defaultColor = '#94a3b8';
             } else if (rawCategory.includes('rock') || rawCategory.includes('stone') || rawCategory.includes('boulder') || rawCategory.includes('crag')) {
                 actorType = 'Sphere';
-                defaultColor = '#64748b';
+                defaultColor = '#57534e';
             } else if (rawCategory.includes('dome') || rawCategory.includes('bunker') || rawCategory.includes('monolith')) {
                 actorType = 'Sphere';
-                defaultColor = '#00f3ff';
-            } else if (rawCategory.includes('tree') || rawCategory.includes('pine') || rawCategory.includes('cactus') || rawCategory.includes('elm')) {
+                defaultColor = '#334155';
+            } else if (rawCategory.includes('tree') || rawCategory.includes('pine') || rawCategory.includes('cactus') || rawCategory.includes('elm') || rawCategory.includes('foliage')) {
                 actorType = 'Cone';
-                defaultColor = '#22c55e';
+                defaultColor = '#1e3f20';
             }
 
             const scaleMultiplier = obj.scale || 1.0;
