@@ -15,6 +15,9 @@ import type { TerrainManager } from '../../services/TerrainManager';
 import type { RendererStack, Scene3DRenderMode, SceneContentHandle, WasmMeshHandle } from './types';
 import { removeAndDispose } from './types';
 import { isGroundSnapTarget } from './syncTilesLayer';
+import { createHistoricalBattlefieldScene } from '../../procedural-3d-synthesizer';
+
+const BATTLEFIELD_KEYWORDS = /battlefield|redcoat|minutemen|historic|revolutionary/i;
 
 export type SculptableShape = 'sphere' | 'plane' | 'box' | 'cylinder' | 'torus';
 
