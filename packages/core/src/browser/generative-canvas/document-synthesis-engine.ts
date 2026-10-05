@@ -30,7 +30,8 @@ export type DocumentDomain =
     | 'humanities'
     | 'philosophy'
     | 'arts'
-    | 'general';
+    | 'general'
+    | (string & {});
 
 export interface DynamicThemeProfile {
     topic: string;

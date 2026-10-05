@@ -14,7 +14,8 @@ export type ParticleEmissionModel =
     | 'incandescent'   // Blackbody thermal radiation (fire, embers, molten sparks)
     | 'diffuse'        // Lambertian mineral/dust scattering (sand, soil, dry ash, pollen)
     | 'transmissive'   // Specular liquid refraction (water, oil, clear chemical droplets)
-    | 'luminescent';   // Quantum/chemical light emission (bioluminescence, plasma, neon)
+    | 'luminescent'    // Quantum/chemical light emission (bioluminescence, plasma, neon)
+    | (string & {});
 
 /**
  * Universal Adaptive Particle Contract.

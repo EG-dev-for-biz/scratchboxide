@@ -11,7 +11,7 @@ import type { ComfyPipelineCategory } from '../../common/comfyui-protocol';
 export type { ComfyPipelineCategory };
 import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 
-export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general';
+export type TaskDomain = '3d' | 'vfx' | 'generative' | 'code' | 'general' | (string & {});
 
 export type PrimaryNativeEngine =
     | 'cpp-3d-engine'
@@ -23,7 +23,8 @@ export type PrimaryNativeEngine =
     | 'workspace-coding'
     | 'code-first'
     | 'skills'
-    | 'none';
+    | 'none'
+    | (string & {});
 
 export interface Tier1Assessment {
     /** True if the app's native code, pipelines, skills, or Google models can fully solve the problem. */

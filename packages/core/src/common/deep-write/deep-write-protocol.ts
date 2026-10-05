@@ -17,7 +17,8 @@ export type PlatformDomain =
     | 'native_systems'
     | 'spatial_3d'
     | 'cross_platform'
-    | 'universal';
+    | 'universal'
+    | (string & {});
 
 export type BuildToolchain =
     | 'npm'

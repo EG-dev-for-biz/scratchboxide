@@ -26,7 +26,8 @@ export type GeographicDomain =
     | 'ForestWoodlandCanopy'
     | 'AquaticCoastalFluvial'
     | 'AridDesertBadlands'
-    | 'HybridInterface';
+    | 'HybridInterface'
+    | (string & {});
 
 export type UtdraPipelineMode = 'full' | 'probe' | 'slicer' | 'bridge' | 'terrain';
 export type UtdraBenchmarkType = 'urban' | 'suburban' | 'bridge' | 'mountain' | 'forest' | 'slicer' | 'hybrid';

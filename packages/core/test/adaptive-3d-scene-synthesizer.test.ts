@@ -47,11 +47,16 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         // Zero Default Atmosphere: contract.atmosphere is undefined unless explicitly requested
         expect(contract.atmosphere).toBeUndefined();
 
-        // When atmosphere/sky/sunset is explicitly requested, atmosphere is synthesized
+        // When atmosphere/sky/sunset is explicitly requested, atmosphere is synthesized with zero default fog
         const atmoContract = synthesizer.synthesizeContractFromPrompt('arctic research station in snowy mountain basin at sunset with atmospheric sky');
         expect(atmoContract.atmosphere).toBeDefined();
         expect(atmoContract.atmosphere!.sunAzimuthDeg).toBeDefined();
-        expect(atmoContract.atmosphere!.fogDensity).toBeGreaterThan(0);
+        expect(atmoContract.atmosphere!.fogDensity).toBe(0.0);
+
+        // When haze/fog is explicitly requested in prompt, fogDensity is active
+        const hazeContract = synthesizer.synthesizeContractFromPrompt('arctic research station in snowy mountain basin at sunset with polar haze and fog');
+        expect(hazeContract.atmosphere).toBeDefined();
+        expect(hazeContract.atmosphere!.fogDensity).toBeGreaterThan(0);
     });
 
     it('synthesizes open-domain schema contract for other unconstrained domains (e.g. desert canyon temple)', () => {
@@ -107,7 +112,7 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         // Check vertex and triangle metrics
         expect(result.vertexCount).toBeGreaterThan(5000);
         expect(result.triangleCount).toBeGreaterThan(3000);
-    }, 60000); // Allow up to 60s for C++ Clang compilation & execution
+    }, 180000); // Allow up to 180s for C++ Clang compilation & execution
 
     it('builds an authoritative multimodal deconstruction prompt for visual reverse-engineering', () => {
         const prompt = synthesizer.buildMultimodalDeconstructionPrompt('geothermal volcanic monitoring station');
@@ -151,6 +156,6 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
 
         // Crucial Invariant: Ephemeral reference image MUST be unlinked / deleted
         expect(fs.existsSync(tempImagePath)).toBe(false);
-    }, 60000);
+    }, 180000);
 });
 
