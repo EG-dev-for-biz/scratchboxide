@@ -453,25 +453,26 @@ export {
     createTranslationMatrix
 } from './common/spatial/universal-spatial-node';
 
-// Autonomous AI-Native 3D Platform (Blender Alternative)
+// Autonomous AI-Native 3D Platform (Blender Alternative) (Types & Guards for Browser)
 export {
     ProceduralAstGuard,
     type AstGuardResult,
     type DynamicUiParameter
 } from './node/3d-engine/ProceduralAstGuard';
 
-export {
+export type {
     Procedural3DEngineService,
-    type ProceduralExecutionOptions,
-    type ProceduralExecutionResult,
-    type ProceduralMeshStats
+    Procedural3DExecutionOptions,
+    ProceduralExecutionOptions,
+    ProceduralExecutionResult,
+    ProceduralMeshStats
 } from './node/3d-engine/Procedural3DEngineService';
 
-export {
+export type {
     HeadlessSnapshotCriticService,
-    type SensorPassAuditResult,
-    type AuditAnomaly,
-    type HeadlessCriticOptions
+    SensorPassAuditResult,
+    AuditAnomaly,
+    HeadlessCriticOptions
 } from './node/3d-engine/HeadlessSnapshotCriticService';
 
 

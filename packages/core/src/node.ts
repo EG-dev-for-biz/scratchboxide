@@ -1053,5 +1053,28 @@ export {
     type GroundProbeResult
 } from './node/spatial/LivingWorldGraphService';
 
+// Autonomous AI-Native 3D Platform (Blender Alternative)
+export {
+    ProceduralAstGuard,
+    type AstGuardResult,
+    type DynamicUiParameter
+} from './node/3d-engine/ProceduralAstGuard';
+
+export {
+    Procedural3DEngineService,
+    type Procedural3DExecutionOptions,
+    type ProceduralExecutionOptions,
+    type ProceduralExecutionResult,
+    type ProceduralMeshStats
+} from './node/3d-engine/Procedural3DEngineService';
+
+export {
+    HeadlessSnapshotCriticService,
+    type SensorPassAuditResult,
+    type AuditAnomaly,
+    type HeadlessCriticOptions
+} from './node/3d-engine/HeadlessSnapshotCriticService';
+
+
 
 
