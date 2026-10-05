@@ -1363,12 +1363,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 </div>
             )}
 
-            {/* Global Banner Toast */}
-            {globalToast && (
-                <div className="sb-global-toast-pill">
-                    <span className="sb-global-toast-text">{globalToast.text}</span>
-                </div>
-            )}
+
 
             {/* Mobile Drawer Frosted Glass Backdrop Overlay */}
             {isSidebarOpen && (

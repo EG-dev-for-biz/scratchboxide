@@ -113,7 +113,11 @@ export default defineConfig(({ mode }) => {
         '/3d': apiProxy(),
         '/spatial': apiProxy(),
         '/models': apiProxy(),
-        '/cpp': apiProxy()
+        '/cpp': apiProxy(),
+        '^/(?!index\\.html$).*\\.html$': {
+          target: API_TARGET,
+          changeOrigin: true
+        }
       }
     },
     resolve: {

@@ -14985,3 +14985,50 @@ body.sb-light .sb-admin-btn-studio:hover {
     border-color: rgba(0, 0, 0, 0.28);
 }
 
+
+/* Global Toast Notifications */
+.sb-global-toast-pill {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(24, 24, 27, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9999px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    z-index: 10000;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: sb-toast-slide-up 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+body.sb-light .sb-global-toast-pill {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.sb-global-toast-text {
+    color: #e4e4e7;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+body.sb-light .sb-global-toast-text {
+    color: #27272a;
+}
+
+@keyframes sb-toast-slide-up {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 16px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
