@@ -158,7 +158,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // -0.988. Historical Battlefield / Lexington 1776 / Castle Siege (checked before geospatial so Battle of Lexington 1776 is not treated as modern tile)
-        if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing line|bunker hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical scene/i.test(text)) {
+        if (/lexington|concord|1776|battle|revolution|redcoat|minuteman|militia|firing\s*line|bunker\s*hill|gettysburg|waterloo|siege|castle\s*siege|warfare|historical\s*scene/i.test(text)) {
             return 'battlefield';
         }
 
@@ -174,12 +174,12 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
         }
 
         // -0.955. Architecture / Procedural Buildings / Civic Plazas / Mansard & Hip Roofs (checked before nature so architectural scenes with trees match architecture)
-        if (/\b(?:building|buildings|architectur(?:e|al)|palais|palace|plaza|promenade|civic|mansard|hip\s*roof|fenestration|create_building|facade|quoin|cornice)\b/i.test(text)) {
+        if (/\b(?:building|buildings|architectur(?:e|al)|palais|palace|plaza|promenade|civic|mansard|hip\s*roof|fenestration|create_building|facade|quoin|cornice|room|interior|blueprint|house|apartment|gallery|hall|pavilion|building\s*floor|office\s*space|industrial\s*loft|loft\s*apartment|loft\s*office|loft\s*space)\b/i.test(text)) {
             return 'architecture';
         }
 
         // -0.95. Nature, Ecosystem, Atmospheric Volumetrics, SSS & Triplanar
-        if (!/\b(?:worldbuilder|terrain|heightmap)\b/i.test(text) && /\b(?:nature|forest|trees?|l_system|vegetation|foliage|leaves|biome|stratified|cliff\s*strata|rock\s*strata|mountain\s*plateau|atmosphere|volumetric|fog|god\s*rays|mie\s*scattering|subsurface|sss|translucent|triplanar|moss)\b/i.test(text)) {
+        if (!/\b(?:worldbuilder|terrain|heightmap)\b/i.test(text) && /\b(?:nature|forest|trees?|l_system|vegetation|foliage|leaves|biome|stratified|cliff\s*strata|rock\s*strata|mountain\s*plateau|atmosphere|volumetric|fog|god\s*rays|mie\s*scattering|subsurface|sss|translucent|triplanar|moss|woodland|woods)\b/i.test(text)) {
             return 'nature_atmosphere';
         }
 
@@ -201,7 +201,7 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
 
         // -0.5. 3D Particle Simulation / Fluid Dynamics / Emitters / Fire / Vortex / Sparks
         if (/\b(?:particles?|emitter|emitters|vortex|sparks?|fountain|smoke|fluid\s*spray|blackbody\s*radiation|curl\s*noise|particle\s*fx)\b/i.test(text) &&
-            !/\b(?:molecule|molecular|atom|atomic|dna|double helix|chemical bond|electron|chemistry)\b/i.test(text)) {
+            !/\b(?:molecule|molecular|atom|atomic|dna|double\s*helix|chemical\s*bond|electron|chemistry)\b/i.test(text)) {
             return 'particles';
         }
 
@@ -215,33 +215,23 @@ export function detect3DSceneTheme(prompt: string, context?: { activeArtifact?: 
             return 'vehicle';
         }
 
-        // 2. City / Metropolis / Cyberpunk / Architecture Skyline / Urban
-        if (/city|metropol|skyline|skyscraper|urban|cyberpunk city|downtown|traffic|street|futuristic city|highway/i.test(text)) {
-            return 'city';
-        }
-
         // 2.5. Mars Rover / Planetary Surface Exploration (checked before general celestial solar-system or generic vehicle)
         if (/\b(?:mars|martian|rover|curiosity|perseverance|opportunity|sojourner|jezero|lunar\s*rover|moon\s*rover|planetary\s*surface|red\s*planet)\b/i.test(text)) {
             return 'mars_rover';
         }
 
         // 3. Space / Solar System / Celestial / Orbit / Galaxy / Planets / Asteroid
-        if (/\b(?:solar system|planets?|planetary|orbits?|celestial|galaxy|galaxies|\bsun\b|mars|jupiter|saturn|asteroids?|starfield|space station|cosmos|astronomy)\b/i.test(text)) {
+        if (/\b(?:solar\s*system|planets?|planetary|orbits?|celestial|galaxy|galaxies|\bsun\b|mars|jupiter|saturn|asteroids?|starfield|space\s*station|cosmos|astronomy)\b/i.test(text)) {
             return 'solar-system';
         }
 
-        // 4. Molecular / Physics / Chemistry / Atoms / DNA / Quantum
-        if (/molecule|molecular|atom|atomic|dna|double helix|chemical bond|physics simulation|quantum|electron|lattice|chemistry/i.test(text)) {
+        // 4. Molecular / Physics / Chemistry / Atoms / DNA
+        if (/\b(?:molecule|molecular|atoms?|atomic|dna|double\s*helix|chemical\s*bonds?|covalent|crystal\s*lattice|chemistry)\b/i.test(text)) {
             return 'molecular';
         }
 
-        // 5. Architecture / Interior Room / Blueprint / House / Building Interior
-        if (/room|interior|blueprint|architectur(e|al)|house|apartment|gallery|hall|pavilion|building floor|office space|loft/i.test(text)) {
-            return 'architecture';
-        }
-
         // 6. Procedural Worldbuilder / Landscape / Terrain / Mountain / Alpine / Canyon / Desert / Island / Citadel / Open World
-        if (/worldbuilder|open world|terrain|landscape|mountain|alpine|glacier|canyon|desert|oasis|badlands|island|citadel|valley|outpost|settlement|biome|heightmap/i.test(text)) {
+        if (/worldbuilder|open\s*world|terrain|landscape|mountain|alpine|glacier|canyon|desert|oasis|badlands|island|citadel|valley|outpost|settlement|biome|heightmap/i.test(text)) {
             return 'worldbuilder';
         }
     }
@@ -1946,12 +1936,39 @@ export function applyCreativeLocationCasting(
         return scene;
     }
 
+    // Check if the scene is an abstract, molecular, celestial, or open-domain adaptive spatial creation
+    const isExplicitRealWorld = Boolean(detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
+    const isAbstractOrSpatial = scene.sceneType === 'space' || scene.sceneType === 'molecular' || scene.sceneType === 'adaptive' || (scene.worldBranch && (scene.worldBranch.startsWith('spatial/') || scene.worldBranch.startsWith('space/')));
+
+    if (!isExplicitRealWorld && isAbstractOrSpatial && !scene.geoAnchor) {
+        // Leave unanchored spatial / abstract scene unpolluted by Earth coordinates
+        if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
+            const domain = classifyDomain(prompt);
+            const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
+            if (adaptive.cppGenerator) {
+                scene.cppGenerator = adaptive.cppGenerator;
+            }
+        }
+        return scene;
+    }
+
     const castedLoc = castCreativeLocation(prompt, {
         theme: scene.sceneType,
         docTitle,
         docContent,
         existingAnchor: scene.geoAnchor
     });
+
+    if (!castedLoc.isRealWorld && scene.sceneType !== 'mars_rover' && !/\b(?:mars|martian|rover)\b/i.test(prompt)) {
+        if (!scene.pythonGenerator && (!scene.cppGenerator || !scene.cppGenerator.sourceCode)) {
+            const domain = classifyDomain(prompt);
+            const adaptive = synthesizeAdaptive3DScene(domain, scene.title, prompt);
+            if (adaptive.cppGenerator) {
+                scene.cppGenerator = adaptive.cppGenerator;
+            }
+        }
+        return scene;
+    }
 
     if (!scene.geoAnchor || !scene.geoAnchor.lat || !scene.geoAnchor.lng) {
         scene.geoAnchor = {
@@ -2696,13 +2713,14 @@ onFrame((time, delta) => {
 });
 `;
 
-        const customMeshes = actors.slice(0, 16).map(actor => ({
+        const customMeshes = actors.slice(0, 16).map((actor, idx) => ({
             id: `mesh-${actor.id}`,
             name: actor.name,
             type: (actor.type === 'Cube' ? 'box' : actor.type === 'Cylinder' ? 'cylinder' : actor.type === 'Cone' ? 'cylinder' : actor.type === 'Sphere' ? 'sphere' : 'box') as any,
             position: [actor.position.x, actor.position.y, actor.position.z] as [number, number, number],
             rotation: [actor.rotation.x, actor.rotation.y, actor.rotation.z] as [number, number, number],
             scale: [actor.scale.x * 2, actor.scale.y * 2, actor.scale.z * 2] as [number, number, number],
+            tier: (idx < 2 ? 'primary' : idx < 8 ? 'secondary' : 'tertiary') as any,
             material: {
                 color: actor.material?.color || 0x38bdf8,
                 roughness: actor.material?.roughness ?? 0.7,
@@ -2745,13 +2763,13 @@ onFrame((time, delta) => {
                     heightVariation: spec.terrain.elevationMax - spec.terrain.elevationMin
                 }
             },
-            geoAnchor: {
-                lat: 40.7812,
-                lng: -73.9665,
-                elevation: grid.elevations[0] || 10.0,
+            geoAnchor: (realWorldLoc && realWorldLoc.isRealWorld) ? {
+                lat: realWorldLoc.lat,
+                lng: realWorldLoc.lng,
+                elevation: realWorldLoc.elevation || grid.elevations[0] || 10.0,
                 active: true,
-                landmarkName: spec.name
-            },
+                landmarkName: realWorldLoc.landmarkName || spec.name
+            } : undefined,
             customMeshes,
             customScript,
             code: customScript
@@ -3455,7 +3473,26 @@ onFrame((time, delta) => {
                     type: 'sphere',
                     position: [0, 0, 0],
                     scale: [6, 6, 6],
-                    material: { color: 0xffaa00, roughness: 0.1, metalness: 0.1 }
+                    tier: 'primary',
+                    material: { color: 0xffaa00, roughness: 0.1, metalness: 0.1, emissive: 0xff8800, emissiveIntensity: 1.5 }
+                },
+                {
+                    id: 'mesh-orbital-body',
+                    name: 'Major Orbital Planet',
+                    type: 'sphere',
+                    position: [18, 2, -10],
+                    scale: [2.2, 2.2, 2.2],
+                    tier: 'secondary',
+                    material: { color: 0x38bdf8, roughness: 0.45, metalness: 0.2 }
+                },
+                {
+                    id: 'mesh-telemetry-relay',
+                    name: 'Orbital Telemetry Relay',
+                    type: 'cylinder',
+                    position: [10, 1.2, 4],
+                    scale: [0.6, 1.4, 0.6],
+                    tier: 'tertiary',
+                    material: { color: 0xffd700, roughness: 0.2, metalness: 0.95, preset: 'polished_gold_24k' }
                 }
             ],
             customScript,
@@ -3515,8 +3552,27 @@ onFrame((time, delta) => {
                     name: 'Molecular Core Lattice',
                     type: 'sphere',
                     position: [0, 0, 0],
-                    scale: [2, 2, 2],
+                    scale: [2.4, 2.4, 2.4],
+                    tier: 'primary',
                     material: { color: 0x38bdf8, roughness: 0.3, metalness: 0.6 }
+                },
+                {
+                    id: 'mesh-helix-backbone',
+                    name: 'Helical Valence Backbone',
+                    type: 'cylinder',
+                    position: [2.8, 1.5, 0],
+                    scale: [0.6, 3.5, 0.6],
+                    tier: 'secondary',
+                    material: { color: 0x6366f1, roughness: 0.25, metalness: 0.4 }
+                },
+                {
+                    id: 'mesh-cofactor-sensor',
+                    name: 'Catalytic Cofactor Complex',
+                    type: 'sphere',
+                    position: [-1.6, -1.0, 1.2],
+                    scale: [0.55, 0.55, 0.55],
+                    tier: 'tertiary',
+                    material: { color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 2.0, roughness: 0.1 }
                 }
             ],
             customScript,

@@ -555,22 +555,28 @@ export class CreativeLocationCastingService {
       };
     }
 
-    // 1b. Check if the prompt targets an extraterrestrial planetary body (Mars, Moon, Titan)
-    if (/\b(?:mars|martian|rover|jezero|curiosity|perseverance|opportunity|sojourner|moon|lunar\s*surface|planetary\s*surface|red\s*planet)\b/i.test(combined)) {
+    // 1b. Check if the prompt targets an extraterrestrial planetary body, asteroid, or deep space
+    if (/\b(?:mars|martian|rover|jezero|curiosity|perseverance|opportunity|sojourner|moon|lunar\s*surface|planetary\s*surface|red\s*planet|asteroid|comet|deep\s*space|extraterrestrial|exoplanet|orbital\s*station|space\s*station)\b/i.test(combined)) {
+      const isMars = /\b(?:mars|martian|rover|jezero|curiosity|perseverance|opportunity|sojourner|red\s*planet)\b/i.test(combined);
+      const isMoon = /\b(?:moon|lunar)\b/i.test(combined);
       return {
         isRealWorld: false,
-        landmarkName: 'Jezero Crater, Mars (Perseverance Exploration Site)',
-        lat: 18.38,
-        lng: 77.58,
-        elevation: -2500,
-        elevationSource: 'planetary_mola',
-        datum: 'MOLA',
+        landmarkName: isMars ? 'Jezero Crater, Mars (Perseverance Exploration Site)' : isMoon ? 'Mare Tranquillitatis, Moon (Apollo 11 Landing Site)' : 'Carbonaceous Asteroid Surface (Deep Space Orbit)',
+        lat: isMars ? 18.38 : isMoon ? 0.674 : 0.0,
+        lng: isMars ? 77.58 : isMoon ? 23.472 : 0.0,
+        elevation: isMars ? -2500 : 0.0,
+        elevationSource: isMars ? 'planetary_mola' : 'planetary_datum',
+        datum: isMars ? 'MOLA' : 'SPATIAL',
         archetype: 'planetary_surface',
-        rationale: 'Extraterrestrial planetary surface: Jezero Crater, Mars (18.38°N, 77.58°E, altitude -2500m on Martian datum)',
+        rationale: isMars
+          ? 'Extraterrestrial planetary surface: Jezero Crater, Mars (18.38°N, 77.58°E, altitude -2500m on Martian datum)'
+          : isMoon
+          ? 'Extraterrestrial lunar surface: Mare Tranquillitatis, Moon (0.674°N, 23.472°E)'
+          : 'Extraterrestrial space asteroid body: unprojected deep space coordinate frame',
         suggestedEnvironment: {
-          skybox: 'mars',
-          lighting: 'golden_hour',
-          clayPreset: 'terracotta'
+          skybox: isMars ? 'mars' : 'deep_space',
+          lighting: isMars ? 'golden_hour' : 'orbital',
+          clayPreset: isMars ? 'terracotta' : 'studio-grey'
         }
       };
     }
