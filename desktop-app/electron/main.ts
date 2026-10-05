@@ -70,11 +70,12 @@ function attachListenErrorHandler(server: http.Server, label: string, port: numb
     server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
             console.error(`[Electron] ${label} port ${port} is already in use on ${BACKEND_HOST}. ` +
-                'Quit the other Scratchbox instance or set PORT / SCRATCHBOX_TOOLS_PORT.');
+                'Continuing, assuming it was launched externally.');
+            // Ignore error and do not crash
         } else {
             console.error(`[Electron] ${label} failed to listen on ${BACKEND_HOST}:${port}:`, err);
+            process.exit(1);
         }
-        app.exit(1);
     });
 }
 

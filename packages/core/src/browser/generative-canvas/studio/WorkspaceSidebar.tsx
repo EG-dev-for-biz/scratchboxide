@@ -10,7 +10,7 @@
 import * as React from 'react';
 import { ChatSession, StudioSettingsTab, WorkspaceFileType, getActiveUserName } from '../canvas-types';
 import { initialsOf } from '../state/studio-defaults';
-import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFilm, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings } from '../canvas-icons';
+import { Icon3D, IconAutomations, IconChat, IconChevronDown, IconChevronRight, IconClose, IconCode, IconCustomize, IconDocument, IconFilm, IconFolder, IconGlobe, IconKanban, IconList, IconNewChat, IconPlus, IconSearch, IconSettings, IconSparkles } from '../canvas-icons';
 import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
@@ -245,13 +245,13 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
             <button
                 type="button"
                 className="sb-sidebar-nav-row"
-                onClick={() => openSettingsToTab('workspace')}
-                title="Customize project rules & superpowers"
+                onClick={() => openSettingsToTab('admin')}
+                title="View Showcase Demos"
             >
                 <span className="sb-nav-icon">
-                    <IconCustomize size={14} strokeWidth={1.8} />
+                    <IconSparkles size={14} strokeWidth={1.8} />
                 </span>
-                <span className="sb-nav-label">Customize</span>
+                <span className="sb-nav-label">Demos</span>
             </button>
         </div>
 
