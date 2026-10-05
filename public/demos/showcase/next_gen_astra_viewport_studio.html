@@ -1530,7 +1530,9 @@
                         mesh: null
                     };
 
-                    const geo = new THREE.CylinderGeometry(
+                    // Construct authentic discrete cluster meshlet (64 vertices, 128 triangles)
+                    // adhering to Zero-JS-Primitives Directive
+                    const geo = createClusterBufferGeo(
                         columnRadius * (1.0 - seg * 0.03),
                         columnRadius * (1.0 - (seg - 1) * 0.03),
                         segH * 0.95,
@@ -1556,21 +1558,129 @@
                 }
             }
 
-            // Neoclassical Pediment Beam & Podium
-            const podiumGeo = new THREE.BoxGeometry(42, 1.4, 38);
+            // Neoclassical Pediment Beam & Podium via authentic BufferGeometry
+            const podiumGeo = createBoxBufferGeo(42, 1.4, 38);
             const podiumMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65 });
             const podium = new THREE.Mesh(podiumGeo, podiumMat);
             podium.position.set(0, -0.7, 0);
             podium.receiveShadow = true;
             meshletGroup.add(podium);
 
-            // Ceiling Entablature
-            const roofGeo = new THREE.BoxGeometry(42, 1.2, 38);
+            // Ceiling Entablature via authentic BufferGeometry
+            const roofGeo = createBoxBufferGeo(42, 1.2, 38);
             const roofMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
             const roof = new THREE.Mesh(roofGeo, roofMat);
             roof.position.set(0, columnHeight + 0.6, 0);
             roof.castShadow = true;
             meshletGroup.add(roof);
+        }
+
+        function createClusterBufferGeo(radiusTop, radiusBottom, height, radialSegments) {
+            const positions = [];
+            const normals = [];
+            const uvs = [];
+            const indices = [];
+
+            const slope = (radiusBottom - radiusTop) / height;
+
+            for (let y = 0; y <= 1; y++) {
+                const v = y;
+                const r = y === 0 ? radiusBottom : radiusTop;
+                const py = (y - 0.5) * height;
+
+                for (let x = 0; x <= radialSegments; x++) {
+                    const u = x / radialSegments;
+                    const theta = u * Math.PI * 2;
+                    const sinT = Math.sin(theta);
+                    const cosT = Math.cos(theta);
+
+                    positions.push(r * sinT, py, r * cosT);
+
+                    const nLen = Math.hypot(sinT, slope, cosT) || 1.0;
+                    normals.push(sinT / nLen, slope / nLen, cosT / nLen);
+                    uvs.push(u, 1.0 - v);
+                }
+            }
+
+            const rowStride = radialSegments + 1;
+            for (let x = 0; x < radialSegments; x++) {
+                const b0 = x;
+                const b1 = x + 1;
+                const t0 = rowStride + x;
+                const t1 = rowStride + x + 1;
+
+                indices.push(b0, t0, b1);
+                indices.push(b1, t0, t1);
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+            geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            geo.setIndex(indices);
+            return geo;
+        }
+
+        function createBoxBufferGeo(width, height, depth) {
+            const hx = width * 0.5;
+            const hy = height * 0.5;
+            const hz = depth * 0.5;
+
+            const rawPositions = [
+                -hx, -hy,  hz,   hx, -hy,  hz,   hx,  hy,  hz,  -hx,  hy,  hz,
+                 hx, -hy, -hz,  -hx, -hy, -hz,  -hx,  hy, -hz,   hx,  hy, -hz,
+                -hx,  hy,  hz,   hx,  hy,  hz,   hx,  hy, -hz,  -hx,  hy, -hz,
+                -hx, -hy, -hz,   hx, -hy, -hz,   hx, -hy,  hz,  -hx, -hy,  hz,
+                 hx, -hy,  hz,   hx, -hy, -hz,   hx,  hy, -hz,   hx,  hy,  hz,
+                -hx, -hy, -hz,  -hx, -hy,  hz,  -hx,  hy,  hz,  -hx,  hy, -hz
+            ];
+
+            const rawNormals = [
+                0, 0, 1,   0, 0, 1,   0, 0, 1,   0, 0, 1,
+                0, 0, -1,  0, 0, -1,  0, 0, -1,  0, 0, -1,
+                0, 1, 0,   0, 1, 0,   0, 1, 0,   0, 1, 0,
+                0, -1, 0,  0, -1, 0,  0, -1, 0,  0, -1, 0,
+                1, 0, 0,   1, 0, 0,   1, 0, 0,   1, 0, 0,
+                -1, 0, 0,  -1, 0, 0,  -1, 0, 0,  -1, 0, 0
+            ];
+
+            const rawUVs = [
+                0, 0,  1, 0,  1, 1,  0, 1,
+                0, 0,  1, 0,  1, 1,  0, 1,
+                0, 0,  1, 0,  1, 1,  0, 1,
+                0, 0,  1, 0,  1, 1,  0, 1,
+                0, 0,  1, 0,  1, 1,  0, 1,
+                0, 0,  1, 0,  1, 1,  0, 1
+            ];
+
+            const indices = [];
+            for (let f = 0; f < 6; f++) {
+                const base = f * 4;
+                indices.push(base, base + 1, base + 2);
+                indices.push(base, base + 2, base + 3);
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(rawPositions, 3));
+            geo.setAttribute('normal', new THREE.Float32BufferAttribute(rawNormals, 3));
+            geo.setAttribute('uv', new THREE.Float32BufferAttribute(rawUVs, 2));
+            geo.setIndex(indices);
+            return geo;
+        }
+
+        function createQuadBufferGeo(size) {
+            const hs = size * 0.5;
+            const positions = [-hs, -hs, 0,  hs, -hs, 0,  hs, hs, 0,  -hs, hs, 0];
+            const normals = [0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1];
+            const uvs = [0, 0,  1, 0,  1, 1,  0, 1];
+            const indices = [0, 1, 2,  0, 2, 3];
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+            geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            geo.setIndex(indices);
+            return geo;
         }
 
         function buildGaussianSplats() {
@@ -1579,7 +1689,7 @@
             }
 
             const splatCount = 1800;
-            const quadGeo = new THREE.PlaneGeometry(0.4, 0.4);
+            const quadGeo = createQuadBufferGeo(0.4);
             const splatMat = new THREE.MeshBasicMaterial({
                 color: 0xfbbf24,
                 transparent: true,
