@@ -222,8 +222,9 @@ export function syncSceneContent(
         splatViewer.loadSplatObservation(proceduralSplats);
     }
 
-    // Sculptable focal mesh (general / custom scenes) or first procedural mesh as sculpt target
-    if (!input.hasCppGenerator && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && !input.hasNonFallbackObjects && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup || input.sceneType === 'general' || input.sceneType === 'custom')) {
+    // Sculptable focal mesh (only for unconfigured blank general scenes with no procedural content)
+    const hasGenerators = input.hasCppGenerator || input.hasPythonGenerator;
+    if (!hasGenerators && !input.isAirplane && !input.has3DTiles && !input.hasCustomMeshes && !input.hasActiveScript && !input.hasNonFallbackObjects && input.sceneType !== 'glass_shatter' && (!proceduralSceneGroup && (input.sceneType === 'general' || !input.sceneType))) {
         const sGeo = createSculptableGeometry(input.selectedShape, { radius: 3.5, width: 12, height: 12, segments: 64 });
         const sMat = new THREE.MeshStandardMaterial({
             color: 0x60a5fa,

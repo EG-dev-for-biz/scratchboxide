@@ -1857,13 +1857,16 @@ int main(int argc, char** argv) {
         has3DTiles,
         hasCustomMeshes: Array.isArray(sceneData.customMeshes) && sceneData.customMeshes.length > 0,
         hasNonFallbackObjects: Array.isArray(sceneData.objects) && sceneData.objects.length > 0 && !sceneData.objects.some(o => o.content?.durableUri === 'internal:mesh'),
-        hasCppGenerator: !!sceneData.cppGenerator?.glbBase64,
-        hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64,
+        hasCppGenerator: !!sceneData.cppGenerator?.glbBase64 || !!(sceneData.cppGenerator?.sourceCode && sceneData.cppGenerator.sourceCode.trim().length > 0),
+        hasPythonGenerator: !!sceneData.pythonGenerator?.glbBase64 || !!(sceneData.pythonGenerator?.sourceCode && sceneData.pythonGenerator.sourceCode.trim().length > 0),
         selectedShape,
         sculptWireframe: !!sculptSettings.wireframeOverlay
     }), [
         sceneData.sceneType, sceneData.title, worldBranch, isAirplane, sceneData.features?.contrails, hasActiveScript,
-        has3DTiles, sceneData.customMeshes, sceneData.objects, sceneData.cppGenerator?.glbBase64, sceneData.pythonGenerator?.glbBase64, selectedShape, sculptSettings.wireframeOverlay
+        has3DTiles, sceneData.customMeshes, sceneData.objects,
+        sceneData.cppGenerator?.glbBase64, sceneData.cppGenerator?.sourceCode,
+        sceneData.pythonGenerator?.glbBase64, sceneData.pythonGenerator?.sourceCode,
+        selectedShape, sculptSettings.wireframeOverlay
     ]);
     // Shape / wireframe changes are applied in place by their own handlers, so they are excluded here.
     const contentFingerprint = React.useMemo(() => JSON.stringify({
