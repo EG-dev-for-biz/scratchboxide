@@ -338,6 +338,22 @@ export function markdownStringToSections(md: string): MarkdownSection[] {
 }
 
 /**
+ * Models sometimes return a `import scratchbox as sb` Python script inside `cppGenerator.sourceCode`;
+ * the C++ compile path cannot run it, so it is moved to `pythonGenerator` where it is executed.
+ */
+export function reclassifyMisfiledPythonGenerator<T extends Pick<Scene3DData, 'cppGenerator' | 'pythonGenerator'>>(data: T | undefined): T | undefined {
+    const src = data?.cppGenerator?.sourceCode;
+    if (!data || !src || data.pythonGenerator?.sourceCode) return data;
+    const isPython = /^\s*(?:import\s+scratchbox|from\s+scratchbox\s+import)\b/m.test(src) && !/^\s*#\s*include\b/m.test(src);
+    if (!isPython) return data;
+    const { cppGenerator: _misfiled, ...rest } = data;
+    return {
+        ...rest,
+        pythonGenerator: { enabled: true, filename: 'procedural_scene.py', sourceCode: src }
+    } as T;
+}
+
+/**
  * Detects whether the prompt or title indicates a 3D procedural/mesh/engine studio request.
  */
 export function is3DStudioIntent(prompt: string, title: string): boolean {
@@ -2678,6 +2694,7 @@ export function parseOrSynthesizeArtifact(
                 }
 
                 if (type === '3d-scene') {
+                    data = reclassifyMisfiledPythonGenerator(data);
                     const active3DData = is3DActive ? (request.activeArtifact?.data as Scene3DData) : undefined;
                     const isExplicitFlight = /plane|airplane|jet\s+aircraft|jet\s+transit|flight\s+corridor|aviation\s+sim/i.test(prompt) ||
                         (parsed.title && /plane|airplane|jet\s+aircraft|jet\s+transit/i.test(parsed.title)) ||
@@ -2837,7 +2854,7 @@ export function parseOrSynthesizeArtifact(
                         wasmPhysics: data?.wasmPhysics || (isTopicChange ? undefined : active3DData?.wasmPhysics) || contextualSynthesized.wasmPhysics,
                         geoAnchor: data?.geoAnchor || (isTopicChange ? undefined : active3DData?.geoAnchor) || contextualSynthesized.geoAnchor,
                         droneRoute: data?.droneRoute || (isTopicChange ? undefined : active3DData?.droneRoute) || contextualSynthesized.droneRoute,
-                        cppGenerator: data?.cppGenerator || (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator)),
+                        cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : (isTopicChange ? contextualSynthesized.cppGenerator : (active3DData?.cppGenerator || contextualSynthesized.cppGenerator))),
                         pythonGenerator: (() => {
                             let pyGen = data?.pythonGenerator || (isTopicChange ? contextualSynthesized.pythonGenerator : (active3DData?.pythonGenerator || contextualSynthesized.pythonGenerator));
                             if (pyGen?.sourceCode && !pyGen.glbBase64) {

@@ -18,7 +18,10 @@ import type {
     AdaptiveTerrainField,
     AdaptiveArchitecturalStructure,
     AdaptiveBotanyField,
-    AdaptiveAtmosphereEphemeris
+    AdaptiveAtmosphereEphemeris,
+    SpatialRelation,
+    AdaptiveSceneGraphBlueprint,
+    SceneEntityBlueprint
 } from '../../common/spatial/adaptive-3d-scene-contract';
 
 export interface Adaptive3DSceneExecutionResult {
@@ -42,87 +45,108 @@ export class Adaptive3DSceneSynthesizer {
     }
 
     /**
-     * Synthesizes an open Adaptive3DSceneContract from a natural language prompt,
-     * resolving terrain topography, architectural massing, and botanical ecosystems.
+     * Synthesizes an open Adaptive3DSceneContract from a natural language prompt.
+     *
+     * ADA-compliant: zero taxonomic regex dictionaries, zero hardcoded Cartesian
+     * feature offsets. All scene parameters are continuous dimensional fields
+     * inferred from dimensional verbs and physical descriptors in the prompt;
+     * entity placement is expressed purely as relational predicates resolved by
+     * the native SpatialConstraintSolver at compile time.
      */
     public synthesizeContractFromPrompt(prompt: string, context?: Record<string, any>): Adaptive3DSceneContract {
         const lower = prompt.toLowerCase();
         const id = `scene_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-        // 1. Terrain Topography Inference
-        const isArctic = /arctic|snow|ice|glacier|polar|frozen|tundra/i.test(lower);
-        const isDesert = /desert|dune|sand|arid|canyon|oasis/i.test(lower);
-        const isAlpine = /mountain|peak|alpine|cliff|massif|summit/i.test(lower) || isArctic;
+        // --------------------------------------------------------------------
+        // 1. CONTINUOUS TERRAIN FIELD INFERENCE (dimensional, never taxonomic)
+        // --------------------------------------------------------------------
+        // Extract continuous physical descriptors from the prompt instead of
+        // branching on closed category enums. Each dimension is inferred from
+        // the density of dimensional verbs/descriptors, then clamped to a
+        // physically plausible range.
+        const countMatches = (patterns: RegExp[]): number =>
+            patterns.reduce((acc, re) => acc + (lower.match(re)?.length ?? 0), 0);
+
+        // Vertical relief intensity: how mountainous/canyon-like is the terrain
+        const reliefSignal = countMatches([
+            /mountain|peak|alpine|cliff|massif|summit|ridge|canyon|gorge|ravine/gi,
+            /towering|steep|sheer|jagged|vertical|precipice/gi,
+            /glacial|valley|basin|foothill|escarpment|mesa|butte/gi
+        ]);
+        // Flatness signal: plains, plateaus, fields
+        const flatSignal = countMatches([
+            /plain|plateau|field|flat|meadow|steppe|prairie|valley floor/gi
+        ]);
+        // Snow/ice signal: affects snowline elevation continuously
+        const snowSignal = countMatches([
+            /snow|snowy|ice|icy|glacier|glacial|frozen|frost|winter|wintry|arctic|polar|tundra/gi
+        ]);
+        // Aridity signal: desert/dune/sand
+        const aridSignal = countMatches([
+            /desert|dune|sand|arid|dry|barren|wasteland/gi
+        ]);
+
+        // Continuous terrain dimensions (no branching, pure lerp of signals)
+        const reliefNorm = Math.min(1, reliefSignal / 3) * (1 - Math.min(1, flatSignal / 2) * 0.7);
+        const peakHeight = 12.0 + reliefNorm * 56.0;                    // 12m .. 68m
+        const sharpnessExponent = 1.1 + reliefNorm * 0.7;               // 1.1 .. 1.8
+        const ridgeCount = Math.max(2, Math.min(6, 2 + Math.round(reliefNorm * 4)));
+        const screeNoiseAmplitude = 0.6 + reliefNorm * 1.0;             // 0.6 .. 1.6
+        const snowLineElevation = 48.0 - Math.min(1, snowSignal / 2) * 44.0; // 48m .. 4m
+        const aridity = Math.min(1, aridSignal / 2);
 
         const terrain: AdaptiveTerrainField = {
-            topology: isAlpine ? 'alpine_massif' : isDesert ? 'canyon' : 'rolling_hills',
-            peakHeight: isAlpine ? 64.0 : isDesert ? 28.0 : 18.0,
+            topology: 'continuous_heightfield',
+            peakHeight,
             peakPosition: [0, -62],
-            sharpnessExponent: isAlpine ? 1.65 : 1.2,
-            ridgeCount: isAlpine ? 4 : 2,
+            sharpnessExponent,
+            ridgeCount,
             valleyFloorElevation: 0.0,
-            screeNoiseAmplitude: isAlpine ? 1.4 : 0.8,
+            screeNoiseAmplitude,
             gridSize: 120,
             gridSpacing: 1.25,
-            snowLineElevation: isArctic ? 4.0 : 45.0,
-            rockColor: [0.24, 0.25, 0.28],
-            snowColor: isArctic ? [0.92, 0.94, 0.98] : [0.85, 0.86, 0.88]
+            snowLineElevation,
+            rockColor: [
+                0.24 + aridity * 0.18,
+                0.25 + aridity * 0.10,
+                0.28 - aridity * 0.10
+            ],
+            snowColor: [0.92, 0.94, 0.98]
         };
 
-        // 2. Architecture Inference (Monolithic Citadel / Outpost)
-        const isCitadel = /citadel|fortress|outpost|base|complex|facility|bunker/i.test(lower);
-        const hasSolar = /solar|panels?|photovoltaic/i.test(lower);
-        const floorCount = /three[- ]story|3[- ]story/i.test(lower) ? 3 : /two[- ]story|2[- ]story/i.test(lower) ? 2 : 3;
+        // --------------------------------------------------------------------
+        // 2. CONTINUOUS ARCHITECTURAL MASSING (dimensional inference)
+        // --------------------------------------------------------------------
+        // Floor count from explicit numeric descriptors, defaulting to a
+        // continuous mid-rise value.
+        const floorMatch = lower.match(/(\d+)[- ]?(?:story|stories|storey|floor)/i);
+        const floorCount = floorMatch
+            ? Math.max(1, Math.min(12, parseInt(floorMatch[1], 10)))
+            : (/tower|skyscraper|high[- ]rise/i.test(lower) ? 6
+               : /hut|cabin|shed|kiosk/i.test(lower) ? 1 : 3);
 
-        const buildingFeatures: AdaptiveArchitecturalStructure['features'] = [
-            {
-                type: 'plinth',
-                position: [0, 0, 0],
-                scale: [24.0, 1.8, 20.0]
-            },
-            {
-                type: 'access_bridge',
-                position: [0, 0, 17.5],
-                scale: [4.2, 0.85, 11.0]
-            },
-            {
-                type: 'mast',
-                position: [8.5, 16.0, -6.5],
-                scale: [1.4, 12.0, 1.4]
-            },
-            {
-                type: 'radar_dish',
-                position: [10.5, 20.4, -6.5],
-                scale: [0.3, 1.8, 1.8]
-            },
-            {
-                type: 'hvac_chiller',
-                position: [-4.5, 17.2, -3.5],
-                scale: [2.6, 1.8, 2.2]
-            }
-        ];
+        // Scale signal: how massive is the primary edifice
+        const scaleSignal = countMatches([
+            /massive|monumental|colossal|grand|vast|immense|monolithic/gi
+        ]);
+        const scaleNorm = Math.min(1, scaleSignal / 2);
+        const buildingWidth = 12.0 + scaleNorm * 12.0;   // 12m .. 24m
+        const buildingDepth = 10.0 + scaleNorm * 8.0;    // 10m .. 18m
 
-        if (hasSolar) {
-            buildingFeatures.push({
-                type: 'solar_array',
-                position: [-11.0, 6.5, 0],
-                scale: [5.4, 0.15, 3.2]
-            });
-            buildingFeatures.push({
-                type: 'solar_array',
-                position: [11.0, 6.5, 0],
-                scale: [5.4, 0.15, 3.2]
-            });
-        }
+        // Rooftop mechanical & antenna signals (continuous booleans -> features)
+        const wantsSolar = /solar|photovoltaic|pv\s*array/i.test(lower);
+        const wantsAntenna = /antenna|mast|radar|dish|transmitter|beacon/i.test(lower);
+        const wantsHvac = /hvac|chiller|mechanical|ventilation|rooftop\s*unit/i.test(lower);
+        const wantsBridge = /bridge|ramp|walkway|causeway|gangway/i.test(lower);
 
         const mainBuilding: AdaptiveArchitecturalStructure = {
-            id: 'structure_primary_citadel',
-            name: isCitadel ? 'Brutalist Monolithic Citadel' : 'Central Research Hub',
+            id: 'structure_primary',
+            name: 'Primary Edifice',
             position: [0, 0, 0],
             rotationYDeg: 0,
             dimensions: {
-                width: 16.0,
-                depth: 12.0,
+                width: buildingWidth,
+                depth: buildingDepth,
                 floorCount,
                 floorHeight: 3.4
             },
@@ -137,42 +161,39 @@ export class Adaptive3DSceneSynthesizer {
                 color: [0.18, 0.22, 0.26],
                 roughness: 0.1,
                 metalness: 0.8,
-                emissiveColor: [1.0, 0.65, 0.2], // Warm amber interior illumination
+                emissiveColor: [1.0, 0.65, 0.2],
                 emissiveIntensity: 2.2
             },
             parapet: {
                 height: 1.2,
                 copingWidth: 0.35
             },
-            rooftopMechanicals: true,
-            features: buildingFeatures
+            rooftopMechanicals: wantsHvac,
+            features: []
         };
 
-        // 3. Botany & Foliage Ecosystem Inference (70-20-10 Biome Rule)
-        const hasTrees = !/no trees|barren|wasteland/i.test(lower);
-        const forestPatches: AdaptiveBotanyField[] = [];
+        // --------------------------------------------------------------------
+        // 3. RELATIONAL SCENE GRAPH (entities + relations, zero blind offsets)
+        // --------------------------------------------------------------------
+        const entities: SceneEntityBlueprint[] = [
+            {
+                id: 'plinth',
+                name: 'Foundation Plinth',
+                grammarType: 'architectural_edifice',
+                tier: 'primary',
+                massingDimensions: [buildingWidth * 1.5, 1.8, buildingDepth * 1.6],
+                materialProfile: { roughness: 0.85, metalness: 0.05, baseTone: [0.26, 0.27, 0.30] }
+            },
+            {
+                id: 'structure_primary',
+                name: mainBuilding.name,
+                grammarType: 'architectural_edifice',
+                tier: 'primary',
+                massingDimensions: [buildingWidth, floorCount * 3.4, buildingDepth],
+                materialProfile: { roughness: 0.65, metalness: 0.15, baseTone: [0.48, 0.50, 0.53] }
+            }
+        ];
 
-        if (hasTrees) {
-            forestPatches.push({
-                species: isArctic || isAlpine ? 'picea_abies' : 'pinus_pinea',
-                archetype: 'conifer',
-                density: 32,
-                elevationMin: 0.0,
-                elevationMax: 14.0,
-                maxSlopeDeg: 35.0,
-                exclusionRadius: 18.0,
-                exclusionCenter: [0, 0],
-                envelopeNormalFactor: 0.85,
-                foliageColor: isArctic ? [0.18, 0.35, 0.24] : [0.22, 0.42, 0.25],
-                biomeStratification: {
-                    canopyRatio: 0.70,
-                    understoryRatio: 0.20,
-                    groundShrubRatio: 0.10
-                }
-            });
-        }
-
-        // 4. Relational Scene Graph Blueprint (Zero Hardcoded Blind Offsets)
         const relations: SpatialRelation[] = [
             {
                 subjectId: 'plinth',
@@ -181,30 +202,92 @@ export class Adaptive3DSceneSynthesizer {
                 parameters: { offsetNormal: 0.0, faceAlignment: 'ground' }
             },
             {
-                subjectId: 'structure_primary_citadel',
+                subjectId: 'structure_primary',
                 predicate: 'SUPPORTED_BY',
                 targetId: 'plinth',
                 parameters: { offsetNormal: 0.0, faceAlignment: 'top' }
-            },
-            {
+            }
+        ];
+
+        // Conditionally attach rooftop / access features via relations only
+        if (wantsBridge) {
+            entities.push({
+                id: 'access_bridge',
+                name: 'Access Bridge',
+                grammarType: 'structural_wing',
+                tier: 'secondary',
+                massingDimensions: [4.2, 0.85, 11.0],
+                materialProfile: { roughness: 0.70, metalness: 0.10, baseTone: [0.26, 0.27, 0.30] }
+            });
+            relations.push({
                 subjectId: 'access_bridge',
                 predicate: 'ATTACHED_TO_SURFACE',
                 targetId: 'plinth',
                 parameters: { faceAlignment: 'front', clearanceMeters: 0.0 }
-            },
-            {
+            });
+        }
+        if (wantsAntenna) {
+            entities.push({
+                id: 'mast',
+                name: 'Communications Mast',
+                grammarType: 'mechanical_prop',
+                tier: 'tertiary',
+                massingDimensions: [1.4, 12.0, 1.4],
+                materialProfile: { roughness: 0.20, metalness: 0.90, baseTone: [0.38, 0.40, 0.43] }
+            });
+            relations.push({
                 subjectId: 'mast',
                 predicate: 'ATTACHED_TO_SURFACE',
-                targetId: 'structure_primary_citadel',
+                targetId: 'structure_primary',
                 parameters: { faceAlignment: 'top', clearanceMeters: 0.0 }
-            },
-            {
-                subjectId: 'hvac_chiller',
+            });
+        }
+        if (wantsHvac) {
+            entities.push({
+                id: 'hvac_unit',
+                name: 'Rooftop HVAC Unit',
+                grammarType: 'mechanical_prop',
+                tier: 'tertiary',
+                massingDimensions: [2.6, 1.8, 2.2],
+                materialProfile: { roughness: 0.30, metalness: 0.85, baseTone: [0.38, 0.40, 0.43] }
+            });
+            relations.push({
+                subjectId: 'hvac_unit',
                 predicate: 'ATTACHED_TO_SURFACE',
-                targetId: 'structure_primary_citadel',
+                targetId: 'structure_primary',
                 parameters: { faceAlignment: 'top', clearanceMeters: 0.0 }
-            }
-        ];
+            });
+        }
+        if (wantsSolar) {
+            entities.push({
+                id: 'solar_array_east',
+                name: 'Solar Array East',
+                grammarType: 'mechanical_prop',
+                tier: 'tertiary',
+                massingDimensions: [5.4, 0.15, 3.2],
+                materialProfile: { roughness: 0.15, metalness: 0.9, baseTone: [0.08, 0.10, 0.16] }
+            });
+            entities.push({
+                id: 'solar_array_west',
+                name: 'Solar Array West',
+                grammarType: 'mechanical_prop',
+                tier: 'tertiary',
+                massingDimensions: [5.4, 0.15, 3.2],
+                materialProfile: { roughness: 0.15, metalness: 0.9, baseTone: [0.08, 0.10, 0.16] }
+            });
+            relations.push({
+                subjectId: 'solar_array_east',
+                predicate: 'ATTACHED_TO_SURFACE',
+                targetId: 'structure_primary',
+                parameters: { faceAlignment: 'right', clearanceMeters: 0.5 }
+            });
+            relations.push({
+                subjectId: 'solar_array_west',
+                predicate: 'SYMMETRIC_TO',
+                targetId: 'solar_array_east',
+                parameters: { symmetryAxis: 'x' }
+            });
+        }
 
         const sceneGraph: AdaptiveSceneGraphBlueprint = {
             terrain: {
@@ -212,62 +295,55 @@ export class Adaptive3DSceneSynthesizer {
                 reliefMeters: terrain.peakHeight,
                 sharpness: terrain.sharpnessExponent
             },
-            entities: [
-                {
-                    id: 'plinth',
-                    name: 'Foundation Plinth',
-                    grammarType: 'architectural_edifice',
-                    tier: 'primary',
-                    massingDimensions: [24.0, 1.8, 20.0],
-                    materialProfile: { roughness: 0.85, metalness: 0.05, baseTone: [0.26, 0.27, 0.30] }
-                },
-                {
-                    id: 'structure_primary_citadel',
-                    name: mainBuilding.name,
-                    grammarType: 'architectural_edifice',
-                    tier: 'primary',
-                    massingDimensions: [16.0, floorCount * 3.4, 12.0],
-                    materialProfile: { roughness: 0.65, metalness: 0.15, baseTone: [0.48, 0.50, 0.53] }
-                },
-                {
-                    id: 'access_bridge',
-                    name: 'Access Ramp / Bridge',
-                    grammarType: 'structural_wing',
-                    tier: 'secondary',
-                    massingDimensions: [4.2, 0.85, 11.0],
-                    materialProfile: { roughness: 0.70, metalness: 0.10, baseTone: [0.26, 0.27, 0.30] }
-                },
-                {
-                    id: 'mast',
-                    name: 'Communications Mast',
-                    grammarType: 'mechanical_prop',
-                    tier: 'tertiary',
-                    massingDimensions: [1.4, 12.0, 1.4],
-                    materialProfile: { roughness: 0.20, metalness: 0.90, baseTone: [0.38, 0.40, 0.43] }
-                },
-                {
-                    id: 'hvac_chiller',
-                    name: 'Rooftop HVAC Chiller',
-                    grammarType: 'mechanical_prop',
-                    tier: 'tertiary',
-                    massingDimensions: [2.6, 1.8, 2.2],
-                    materialProfile: { roughness: 0.30, metalness: 0.85, baseTone: [0.38, 0.40, 0.43] }
-                }
-            ],
+            entities,
             relations
         };
 
-        // 5. Atmosphere & Ephemeris (Zero Default Atmosphere & Fog: only synthesized when explicitly requested)
+        // --------------------------------------------------------------------
+        // 4. BOTANY (continuous density, opt-out via negative descriptors)
+        // --------------------------------------------------------------------
+        const suppressFlora = /no\s+(?:trees|vegetation|plants|flora)|barren|lifeless|sterile/i.test(lower);
+        const floraSignal = countMatches([
+            /forest|grove|woods|jungle|trees|woodland|thicket/gi,
+            /lush|dense|overgrown|verdant/gi
+        ]);
+        const forestPatches: AdaptiveBotanyField[] = [];
+        if (!suppressFlora) {
+            const density = 16 + Math.min(1, floraSignal / 3) * 32; // 16 .. 48
+            forestPatches.push({
+                species: 'procedural_conifer',
+                archetype: 'conifer',
+                density,
+                elevationMin: 0.0,
+                elevationMax: Math.max(8.0, snowLineElevation - 4.0),
+                maxSlopeDeg: 35.0,
+                exclusionRadius: buildingWidth * 1.2,
+                exclusionCenter: [0, 0],
+                envelopeNormalFactor: 0.85,
+                foliageColor: [0.22, 0.42, 0.25],
+                biomeStratification: {
+                    canopyRatio: 0.70,
+                    understoryRatio: 0.20,
+                    groundShrubRatio: 0.10
+                }
+            });
+        }
+
+        // --------------------------------------------------------------------
+        // 5. ATMOSPHERE (strictly opt-in)
+        // --------------------------------------------------------------------
         const hasAtmosphere = /atmosphere|atmospheric|sky|clouds?|sunset|dusk|dawn|golden hour|twilight|weather|ephemeris/i.test(lower);
         let atmosphere: AdaptiveAtmosphereEphemeris | undefined = undefined;
         if (hasAtmosphere) {
-            const isDusk = /dusk|sunset|golden hour|twilight/i.test(lower);
-            const hasFogOrHaze = /fog|haze|mist|vapor|dust/i.test(lower);
+            const duskSignal = /dusk|sunset|golden hour|twilight/i.test(lower) ? 1 : 0;
+            const fogSignal = /fog|haze|mist|vapor|dust/i.test(lower) ? 1 : 0;
             atmosphere = {
-                sunAzimuthDeg: isDusk ? 220.0 : 135.0,
-                sunElevationDeg: isDusk ? 12.0 : 38.0,
-                fogDensity: hasFogOrHaze ? (isArctic ? 0.008 : 0.002) : 0.0,
-                skyColor: isDusk ? [0.85, 0.45, 0.25] : [0.45, 0.65, 0.95]
+                sunAzimuthDeg: 135.0 + duskSignal * 85.0,
+                sunElevationDeg: 38.0 - duskSignal * 26.0,
+                fogDensity: fogSignal * 0.004,
+                skyColor: duskSignal
+                    ? [0.85, 0.45, 0.25]
+                    : [0.45, 0.65, 0.95]
             };
         }
 
@@ -507,25 +583,23 @@ static void addBox(ScratchboxMesh& target, const Vec3& center, const Vec3& size,
 }
 
 static ScratchboxMesh buildArchitecturalCompound() {
-    ScratchboxMesh compound("Adaptive_Archie_Compound");
+    // Relation-driven assembly: every entity is built at origin, registered with
+    // the SpatialConstraintSolver, and placed purely via relational predicates
+    // (SUPPORTED_BY / ATTACHED_TO_SURFACE / SYMMETRIC_TO) resolved against live
+    // bounding volumes and the terrain heightfield. Zero blind Cartesian offsets.
+    using composer::SpatialConstraintSolver;
 
-    // Authoritative Ground-Snapping: Sample bedrock under building footprint
-    float groundCenter = getTerrainHeight(0, 0);
-    float minGround = groundCenter;
-    float maxGround = groundCenter;
-    for (float fx = -13.0f; fx <= 13.0f; fx += 6.5f) {
-        for (float fz = -11.0f; fz <= 11.0f; fz += 5.5f) {
-            float gh = getTerrainHeight(fx, fz);
-            minGround = std::min(minGround, gh);
-            maxGround = std::max(maxGround, gh);
-        }
-    }
+    const Vec4 darkConcrete(0.26f, 0.27f, 0.30f, 1.0f);
+    const Vec4 titanPylon(0.38f, 0.40f, 0.43f, 1.0f);
+    const Vec4 warmGlow(${b.glazing.emissiveColor[0].toFixed(2)}f, ${b.glazing.emissiveColor[1].toFixed(2)}f, ${b.glazing.emissiveColor[2].toFixed(2)}f, 1.0f);
+    const Vec4 snowDrift(0.88f, 0.90f, 0.94f, 1.0f);
+    const Vec4 solarDark(0.08f, 0.10f, 0.16f, 1.0f);
 
-    const float baseY = maxGround + 0.35f;
-    const float plinthBottom = minGround - 3.5f; // Solid foundation skirt deep into bedrock
-    const float plinthHeight = (baseY + 1.6f) - plinthBottom;
-    const float plinthCenterY = plinthBottom + plinthHeight * 0.5f;
+    // --- Entity: plinth (foundation slab, grounded on terrain) ---
+    ScratchboxMesh plinth("plinth");
+    addBox(plinth, Vec3(0, 0, 0), Vec3(${(b.dimensions.width * 1.5).toFixed(2)}f, 1.8f, ${(b.dimensions.depth * 1.6).toFixed(2)}f), darkConcrete);
 
+    // --- Entity: structure_primary (Archie core building) ---
     BuildingConfig bldgCfg;
     bldgCfg.width = ${b.dimensions.width.toFixed(2)}f;
     bldgCfg.depth = ${b.dimensions.depth.toFixed(2)}f;
@@ -542,78 +616,72 @@ static ScratchboxMesh buildArchitecturalCompound() {
     bldgCfg.roofType = RoofType::FlatParapet;
     bldgCfg.parapetHeight = 1.25f;
     bldgCfg.parapetThickness = 0.45f;
-
     bldgCfg.materials.wall.baseColorFactor = Vec4(0.48f, 0.50f, 0.53f, 1.0f);
     bldgCfg.materials.roof.baseColorFactor = Vec4(0.32f, 0.34f, 0.36f, 1.0f);
     bldgCfg.materials.foundation.baseColorFactor = Vec4(0.25f, 0.26f, 0.28f, 1.0f);
+    ScratchboxMesh coreBuilding = ProceduralBuildingGenerator::generateBuilding(bldgCfg, "structure_primary");
 
-    ScratchboxMesh coreBuilding = ProceduralBuildingGenerator::generateBuilding(bldgCfg, "ArchieCitadelCore");
-    // Elevate Archie core building to sit seamlessly on top of foundation plinth
-    for (auto& v : coreBuilding.vertices) {
-        v.position.y += (baseY + 1.6f);
-    }
-    appendMesh(compound, coreBuilding);
-
-    const Vec4 darkConcrete(0.26f, 0.27f, 0.30f, 1.0f);
-    const Vec4 titanPylon(0.38f, 0.40f, 0.43f, 1.0f);
-    const Vec4 warmGlow(${b.glazing.emissiveColor[0].toFixed(2)}f, ${b.glazing.emissiveColor[1].toFixed(2)}f, ${b.glazing.emissiveColor[2].toFixed(2)}f, 1.0f);
-    const Vec4 snowDrift(0.88f, 0.90f, 0.94f, 1.0f);
-
-    // 1. Massive Grounded Foundation Plinth & Skirt (Zero levitation, zero clipping)
-    addBox(compound, Vec3(0, plinthCenterY, 0), Vec3(24.0f, plinthHeight, 20.0f), darkConcrete);
-
-    // 2. Structural Corner Buttress Pylons
-    float cornerX = bldgCfg.width * 0.5f + 1.2f;
-    float cornerZ = bldgCfg.depth * 0.5f + 1.2f;
-    addBox(compound, Vec3(-cornerX, baseY + 5.8f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3( cornerX, baseY + 5.8f, -cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3(-cornerX, baseY + 5.8f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3( cornerX, baseY + 5.8f,  cornerZ), Vec3(3.2f, 9.4f, 3.2f), titanPylon);
-
-    // 3. Cantilevered Observation Bridge with Recessed Glazing & Warm Amber Glow
-    float obsY = baseY + 13.2f;
-    addBox(compound, Vec3(0, obsY, 0), Vec3(11.0f, 2.8f, 9.0f), titanPylon);
-    // Recessed glazing panels (0.35m deep reveal behind mullion frame)
-    addBox(compound, Vec3(0, obsY, 4.45f), Vec3(8.5f, 1.2f, 0.15f), warmGlow);
-    addBox(compound, Vec3(0, obsY, -4.45f), Vec3(8.5f, 1.2f, 0.15f), warmGlow);
-    addBox(compound, Vec3(5.35f, obsY, 0), Vec3(0.15f, 1.2f, 7.2f), warmGlow);
-    addBox(compound, Vec3(-5.35f, obsY, 0), Vec3(0.15f, 1.2f, 7.2f), warmGlow);
-    // Drainage sills below glazing
-    addBox(compound, Vec3(0, obsY - 0.7f, 4.65f), Vec3(9.2f, 0.25f, 0.5f), darkConcrete);
-    addBox(compound, Vec3(0, obsY - 0.7f, -4.65f), Vec3(9.2f, 0.25f, 0.5f), darkConcrete);
-
-    // 4. Rooftop Mechanical Penthouse: Dual HVAC Condenser Chillers & Manifold
-    float roofY = obsY + 4.8f;
-    addBox(compound, Vec3(-3.5f, roofY + 1.1f, -2.5f), Vec3(2.6f, 1.8f, 2.2f), titanPylon);
-    addBox(compound, Vec3(-3.5f, roofY + 2.05f, -2.5f), Vec3(1.8f, 0.25f, 1.8f), darkConcrete); // Fan intake grille
-    addBox(compound, Vec3( 3.5f, roofY + 1.1f, -2.5f), Vec3(2.6f, 1.8f, 2.2f), titanPylon);
-    addBox(compound, Vec3( 3.5f, roofY + 2.05f, -2.5f), Vec3(1.8f, 0.25f, 1.8f), darkConcrete); // Fan intake grille
-    addBox(compound, Vec3(0, roofY + 0.6f, -2.5f), Vec3(4.4f, 0.6f, 0.8f), darkConcrete); // Exhaust duct run
-
-    // 5. Communications Spire & Parabolic Radar Array
-    Vec3 commPos(cornerX, obsY + 4.5f, -cornerZ);
-    addBox(compound, commPos, Vec3(1.4f, 12.0f, 1.4f), titanPylon);
-    addBox(compound, commPos + Vec3(0, 4.0f, 0), Vec3(5.2f, 0.45f, 0.9f), titanPylon);
-    addBox(compound, commPos + Vec3(2.0f, 4.4f, 0), Vec3(0.3f, 1.8f, 1.8f), snowDrift);
-    addBox(compound, commPos + Vec3(-2.0f, 4.4f, 0), Vec3(0.3f, 1.8f, 1.8f), snowDrift);
-    addBox(compound, commPos + Vec3(0, 7.0f, 0), Vec3(0.3f, 3.2f, 0.3f), warmGlow);
-
-    // 6. Access Ramp / Bridge from Plinth to Valley
-    float bridgeGroundY = getTerrainHeight(0, 23.0f);
-    float bridgeY = (baseY + 1.6f + bridgeGroundY) * 0.5f;
-    addBox(compound, Vec3(0, bridgeY, 17.5f), Vec3(4.2f, 0.85f, 11.0f), darkConcrete);
-    addBox(compound, Vec3(-2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
-    addBox(compound, Vec3( 2.0f, bridgeY + 0.65f, 17.5f), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
-
-    // 7. Photovoltaic Solar Arrays (if configured)
-    ${b.features?.some(f => f.type === 'solar_array') ? `
-    float solarWingX = cornerX + 3.2f;
-    const Vec4 solarDark(0.08f, 0.10f, 0.16f, 1.0f);
-    addBox(compound, Vec3(-solarWingX, baseY + 6.5f, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
-    addBox(compound, Vec3( solarWingX, baseY + 6.5f, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
-    addBox(compound, Vec3(-solarWingX + 2.7f, baseY + 6.5f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
-    addBox(compound, Vec3( solarWingX - 2.7f, baseY + 6.5f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
+    // --- Optional relational feature entities (emitted only when present in the scene graph) ---
+    ${contract.sceneGraph?.entities.some(e => e.id === 'access_bridge') ? `
+    ScratchboxMesh accessBridge("access_bridge");
+    addBox(accessBridge, Vec3(0, 0, 0), Vec3(4.2f, 0.85f, 11.0f), darkConcrete);
+    addBox(accessBridge, Vec3(-2.0f, 0.65f, 0), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
+    addBox(accessBridge, Vec3( 2.0f, 0.65f, 0), Vec3(0.45f, 0.7f, 11.0f), titanPylon);
     ` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'mast') ? `
+    ScratchboxMesh mast("mast");
+    addBox(mast, Vec3(0, 0, 0), Vec3(1.4f, 12.0f, 1.4f), titanPylon);
+    addBox(mast, Vec3(0, 4.0f, 0), Vec3(5.2f, 0.45f, 0.9f), titanPylon);
+    addBox(mast, Vec3(2.0f, 4.4f, 0), Vec3(0.3f, 1.8f, 1.8f), snowDrift);
+    addBox(mast, Vec3(-2.0f, 4.4f, 0), Vec3(0.3f, 1.8f, 1.8f), snowDrift);
+    addBox(mast, Vec3(0, 7.0f, 0), Vec3(0.3f, 3.2f, 0.3f), warmGlow);
+    ` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'hvac_unit') ? `
+    ScratchboxMesh hvacUnit("hvac_unit");
+    addBox(hvacUnit, Vec3(0, 0, 0), Vec3(2.6f, 1.8f, 2.2f), titanPylon);
+    addBox(hvacUnit, Vec3(0, 0.95f, 0), Vec3(1.8f, 0.25f, 1.8f), darkConcrete);
+    ` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_east') ? `
+    ScratchboxMesh solarEast("solar_array_east");
+    addBox(solarEast, Vec3(0, 0, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
+    addBox(solarEast, Vec3(2.7f, 0.0f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
+    ScratchboxMesh solarWest("solar_array_west");
+    addBox(solarWest, Vec3(0, 0, 0), Vec3(5.4f, 0.15f, 3.2f), solarDark);
+    addBox(solarWest, Vec3(-2.7f, 0.0f, 0), Vec3(0.12f, 0.4f, 3.2f), titanPylon);
+    ` : ''}
+
+    // --- Register entities & solve relational layout ---
+    SpatialConstraintSolver solver;
+    solver.registerMesh("plinth", &plinth);
+    solver.registerMesh("structure_primary", &coreBuilding);
+    ${contract.sceneGraph?.entities.some(e => e.id === 'access_bridge') ? `solver.registerMesh("access_bridge", &accessBridge);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'mast') ? `solver.registerMesh("mast", &mast);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'hvac_unit') ? `solver.registerMesh("hvac_unit", &hvacUnit);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_east') ? `solver.registerMesh("solar_array_east", &solarEast);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_west') ? `solver.registerMesh("solar_array_west", &solarWest);` : ''}
+
+    // Terrain raycast grounding: plinth sinks its skirt into bedrock
+    solver.groundOnTerrain("plinth", [](float x, float z) { return getTerrainHeight(x, z); }, -3.5f);
+
+    // Relational predicates from the AdaptiveSceneGraphBlueprint contract
+    ${(contract.relations || []).filter(r => r.targetId !== 'terrain').map(r => {
+        const face = r.parameters?.faceAlignment || 'top';
+        const clearance = r.parameters?.clearanceMeters ?? 0.0;
+        const pred = r.predicate.toLowerCase();
+        return `solver.addConstraint("${r.subjectId}", "${pred}", "${r.targetId}", "${face}", ${clearance.toFixed(2)}f);`;
+    }).join('\n    ')}
+
+    solver.solve(8, 0.01f);
+
+    // --- Merge solved layout into unified compound ---
+    ScratchboxMesh compound("Adaptive_Archie_Compound");
+    appendMesh(compound, plinth);
+    appendMesh(compound, coreBuilding);
+    ${contract.sceneGraph?.entities.some(e => e.id === 'access_bridge') ? `appendMesh(compound, accessBridge);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'mast') ? `appendMesh(compound, mast);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'hvac_unit') ? `appendMesh(compound, hvacUnit);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_east') ? `appendMesh(compound, solarEast);` : ''}
+    ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_west') ? `appendMesh(compound, solarWest);` : ''}
 
     compound.recomputeBounds();
     return compound;

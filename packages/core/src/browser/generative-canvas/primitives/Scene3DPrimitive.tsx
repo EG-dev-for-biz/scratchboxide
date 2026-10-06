@@ -1069,7 +1069,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         environment: data?.environment || { skybox: 'studio', lighting: 'studio', ground: true },
         features: data?.features,
         customScript: data?.customScript || data?.code,
-        cppGenerator: data?.cppGenerator || {
+        pythonGenerator: data?.pythonGenerator,
+        cppGenerator: data?.cppGenerator || (data?.pythonGenerator ? undefined : {
             enabled: true,
             filename: 'world_generator.cpp',
             sourceCode: `#include "scratchbox_engine.hpp"
@@ -1099,7 +1100,7 @@ int main(int argc, char** argv) {
     engine.export_glb_stdout(scene);
     return 0;
 }`
-        },
+        }),
         shaders: data?.shaders,
         customMeshes: (() => {
             if (data?.customMeshes && data.customMeshes.length > 0) return data.customMeshes;
@@ -1197,6 +1198,7 @@ int main(int argc, char** argv) {
 
     // WebGL fallbacks
     const [webglError, setWebglError] = React.useState<string | null>(null);
+    const [generatedContentRadius, setGeneratedContentRadius] = React.useState<number | null>(null);
     const [isWasmActive, setIsWasmActive] = React.useState<boolean>(false);
 
     // 3D Map Tile Ingestion & Clay REST States
@@ -1590,6 +1592,7 @@ int main(int argc, char** argv) {
                 environment: effectiveEnvironment || { skybox: 'studio', lighting: 'studio', ground: true },
                 features: data.features,
                 customScript: data.customScript || data.code,
+                pythonGenerator: data.pythonGenerator,
                 cppGenerator: data.cppGenerator,
                 shaders: data.shaders,
                 customMeshes: effectiveCustomMeshes,
@@ -1833,12 +1836,14 @@ int main(int argc, char** argv) {
         atmosphericScattering: sceneData.features?.atmosphericScattering,
         atmosphere: (sceneData as any).atmosphere,
         godRays: sceneData.features?.godRays,
-        terrainBiomes: sceneData.features?.terrainBiomes
+        terrainBiomes: sceneData.features?.terrainBiomes,
+        contentRadiusMeters: generatedContentRadius ?? undefined
     }), [
         sceneData.environment?.skybox, sceneData.environment?.lighting, sceneData.environment?.ambientIntensity, sceneData.environment?.cinematicRig,
         sceneData.environment?.lightingKelvin, sceneData.environment?.ground, sceneData.environment?.fog,
         worldBranch, renderMode, hasGeoCoordinates, has3DTiles,
-        sceneData.features?.atmosphericScattering, (sceneData as any).atmosphere, sceneData.features?.godRays, sceneData.features?.terrainBiomes
+        sceneData.features?.atmosphericScattering, (sceneData as any).atmosphere, sceneData.features?.godRays, sceneData.features?.terrainBiomes,
+        generatedContentRadius
     ]);
     const atmosphereFingerprint = React.useMemo(() => JSON.stringify(atmosphereInput), [atmosphereInput]);
     const atmosphereInputRef = useLatest(atmosphereInput);
@@ -2543,6 +2548,10 @@ int main(int argc, char** argv) {
                         }
                     }
                 });
+                const generatedSphere = new THREE.Box3().setFromObject(gltf.scene).getBoundingSphere(new THREE.Sphere());
+                if (Number.isFinite(generatedSphere.radius) && generatedSphere.radius > 0) {
+                    setGeneratedContentRadius(Number(generatedSphere.radius.toPrecision(2)));
+                }
                 // Automatically frame camera around generated procedural geometry using calculateStandoffCamera
                 const bounds = computeSceneGeometryBounds(stack.scene);
                 const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, {

@@ -13,6 +13,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_core.hpp"
@@ -105,8 +106,8 @@ NB_MODULE(scratchbox_native, m) {
         .def(nb::init<Vec3, Vec3>(), "min"_a, "max"_a)
         .def_rw("min", &AABB::min)
         .def_rw("max", &AABB::max)
-        .def("center", &AABB::center)
-        .def("size", &AABB::size)
+        .def_prop_ro("center", &AABB::center)
+        .def_prop_ro("size", &AABB::size)
         .def("__repr__", [](const AABB& b) {
             return "AABB(min=" + std::to_string(b.min.x) + "," + std::to_string(b.min.y) + "," + std::to_string(b.min.z) +
                    ", max=" + std::to_string(b.max.x) + "," + std::to_string(b.max.y) + "," + std::to_string(b.max.z) + ")";
@@ -588,7 +589,50 @@ NB_MODULE(scratchbox_native, m) {
         }, "subject"_a, "predicate"_a, "target"_a, "face"_a = "top", "clearance"_a = 0.0f, "offset"_a = Vec3(0, 0, 0))
         .def("solve", &SpatialConstraintSolver::solve, "collision_passes"_a = 8, "min_margin"_a = 0.01f)
         .def("relax_collisions", &SpatialConstraintSolver::relaxCollisions, "iterations"_a = 8, "min_margin"_a = 0.01f)
-        .def("audit_contacts", &SpatialConstraintSolver::auditContacts, "max_allowed_gap"_a = 0.05f);
+        .def("audit_contacts", &SpatialConstraintSolver::auditContacts, "max_allowed_gap"_a = 0.05f)
+        .def("ground_on_terrain", &SpatialConstraintSolver::groundOnTerrainMesh, "name"_a, "terrain"_a, "clearance"_a = 0.0f,
+             "Raycast-ground a registered mesh onto a terrain mesh (Moller-Trumbore vertical rays from footprint)")
+        .def("align_to_terrain_normal", &SpatialConstraintSolver::alignToTerrainNormal, "name"_a, "terrain"_a, "max_tilt_deg"_a = 45.0f,
+             "Rotate a registered mesh so its +Y axis aligns with the terrain surface normal at its footprint");
+
+    // High-level scene-graph resolver: register meshes, apply relations, ground on terrain, relax collisions
+    m_comp.def("resolve_constraints", [](std::unordered_map<std::string, ScratchboxMesh*>& meshes,
+                                         const std::vector<std::unordered_map<std::string, std::string>>& relations,
+                                         ScratchboxMesh* terrain,
+                                         int collisionPasses) {
+        SpatialConstraintSolver solver;
+        for (auto& kv : meshes) {
+            solver.registerMesh(kv.first, kv.second);
+        }
+        for (const auto& rel : relations) {
+            const std::string subject = rel.count("subject") ? rel.at("subject") : "";
+            const std::string predicate = rel.count("predicate") ? rel.at("predicate") : "supported_by";
+            const std::string target = rel.count("target") ? rel.at("target") : "";
+            const std::string face = rel.count("face") ? rel.at("face") : "top";
+            float clearance = 0.0f;
+            if (rel.count("clearance")) {
+                try { clearance = std::stof(rel.at("clearance")); } catch (...) { clearance = 0.0f; }
+            }
+            if (!subject.empty() && !target.empty()) {
+                solver.addConstraint(subject, predicate, target, face, clearance);
+            }
+        }
+        // Ground any mesh whose relation targets the terrain sentinel
+        if (terrain) {
+            for (const auto& rel : relations) {
+                const std::string target = rel.count("target") ? rel.at("target") : "";
+                if (target == "terrain" || target == "__terrain__") {
+                    const std::string subject = rel.count("subject") ? rel.at("subject") : "";
+                    if (!subject.empty()) {
+                        solver.groundOnTerrainMesh(subject, *terrain, 0.0f);
+                    }
+                }
+            }
+        }
+        solver.solve(collisionPasses, 0.01f);
+        return solver.auditContacts(0.05f);
+    }, "meshes"_a, "relations"_a, "terrain"_a = nullptr, "collision_passes"_a = 8,
+       "Resolve a relational scene graph: register named meshes, apply spatial relations, ground on terrain, relax collisions, return contact violations");
 
     // ========================================================================
     // 6. SHAPER SUBMODULE (DEFORMERS & SCULPTING)

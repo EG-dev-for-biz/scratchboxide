@@ -25,10 +25,10 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         expect(contract.id).toBeDefined();
         expect(contract.subject).toBe(prompt);
 
-        // Terrain fields
-        expect(contract.terrain.topology).toBe('alpine_massif');
-        expect(contract.terrain.peakHeight).toBeGreaterThanOrEqual(60);
-        expect(contract.terrain.snowLineElevation).toBeLessThanOrEqual(10);
+        // Continuous dimensional terrain fields respond to prompt signals
+        expect(contract.terrain.topology).toBe('continuous_heightfield');
+        expect(contract.terrain.peakHeight).toBeGreaterThanOrEqual(30); // glacial valley -> elevated relief
+        expect(contract.terrain.snowLineElevation).toBeLessThanOrEqual(10); // arctic -> low snowline
 
         // Architecture fields (Archie)
         expect(contract.architecture.structures.length).toBeGreaterThanOrEqual(1);
@@ -36,7 +36,16 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         expect(structure.dimensions.floorCount).toBe(3);
         expect(structure.fenestration.bayWidth).toBeGreaterThan(0);
         expect(structure.parapet.height).toBeGreaterThan(0);
-        expect(structure.features.some(f => f.type === 'plinth')).toBe(true);
+
+        // Relational scene graph: plinth grounded on terrain, structure supported by plinth
+        expect(contract.sceneGraph).toBeDefined();
+        expect(contract.sceneGraph!.entities.some(e => e.id === 'plinth')).toBe(true);
+        expect(contract.sceneGraph!.entities.some(e => e.id === 'structure_primary')).toBe(true);
+        const groundRel = contract.relations!.find(r => r.subjectId === 'plinth' && r.targetId === 'terrain');
+        expect(groundRel).toBeDefined();
+        expect(groundRel!.predicate).toBe('SUPPORTED_BY');
+        const supportRel = contract.relations!.find(r => r.subjectId === 'structure_primary' && r.targetId === 'plinth');
+        expect(supportRel).toBeDefined();
 
         // Botany fields (SB-Veggie)
         expect(contract.botany.forestPatches.length).toBeGreaterThanOrEqual(1);
@@ -63,9 +72,12 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         const prompt = 'desert canyon sandstone temple';
         const contract = synthesizer.synthesizeContractFromPrompt(prompt);
 
-        expect(contract.terrain.topology).toBe('canyon');
-        expect(contract.terrain.peakHeight).toBeLessThan(40);
+        // Continuous heightfield: canyon descriptor drives moderate relief, high snowline
+        expect(contract.terrain.topology).toBe('continuous_heightfield');
+        expect(contract.terrain.peakHeight).toBeLessThan(45);
         expect(contract.terrain.snowLineElevation).toBeGreaterThan(30);
+        // Aridity signal warms the rock albedo continuously
+        expect(contract.terrain.rockColor[0]).toBeGreaterThan(0.30);
     });
 
     it('generates fully compliant C++20 source code with zero hardcoded file dependencies', () => {

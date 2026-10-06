@@ -438,6 +438,12 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             return self
 
         def _mesh_ground_on(self, target, clearance=0.0):
+            if _native and hasattr(_native, "composer") and hasattr(_native.composer, "SpatialConstraintSolver"):
+                solver = _native.composer.SpatialConstraintSolver()
+                solver.register_mesh("self", self)
+                t_mesh = target.mesh if hasattr(target, "mesh") else target
+                if solver.ground_on_terrain("self", t_mesh, float(clearance)):
+                    return self
             return self.snap_to(target, face="top", clearance=clearance)
 
         _NativeMesh.taper = _mesh_taper
@@ -494,7 +500,14 @@ if _native is not None and hasattr(_native, "geometry"):
     _geom.create_cone = create_cone
 
     _orig_create_plane = getattr(_geom, "create_plane", None)
-    def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, **kwargs):
+    def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, size=None, **kwargs):
+        if size is not None:
+            if isinstance(size, (int, float)):
+                width, depth = float(size), float(size)
+            elif isinstance(size, (tuple, list)):
+                width, depth = float(size[0]), float(size[-1])
+            else:
+                width, depth = float(size.x), float(size.z)
         h = float(depth if depth is not None else height)
         sx = int(segments if segments is not None else (width_segments if width_segments is not None else seg_x))
         sy = int(segments if segments is not None else (depth_segments if depth_segments is not None else seg_y))
@@ -620,6 +633,36 @@ class _LayoutModule:
         if _native and hasattr(_native, "composer") and hasattr(_native.composer, "SpatialConstraintSolver"):
             return _native.composer.SpatialConstraintSolver
         return None
+
+    @staticmethod
+    def resolve_constraints(meshes, relations, terrain=None, collision_passes=8):
+        """
+        Resolve a relational scene graph against named meshes.
+
+        meshes:    dict mapping entity name -> ScratchboxMesh
+        relations: list of dicts, e.g.
+                   {"subject": "hvac", "predicate": "attached_to_surface",
+                    "target": "roof", "face": "top", "clearance": "0.0"}
+                   Use target "terrain" to raycast-ground onto the terrain mesh.
+        terrain:   optional terrain ScratchboxMesh used for ground snapping.
+        Returns a list of ContactAuditViolation (empty when fully certified).
+        """
+        if _native and hasattr(_native, "composer") and hasattr(_native.composer, "resolve_constraints"):
+            mesh_map = {str(k): (v.mesh if hasattr(v, "mesh") else v) for k, v in dict(meshes).items()}
+            rel_list = []
+            for r in relations:
+                rel_list.append({
+                    "subject": str(r.get("subject", r.get("subjectId", ""))),
+                    "predicate": str(r.get("predicate", "supported_by")),
+                    "target": str(r.get("target", r.get("targetId", ""))),
+                    "face": str(r.get("face", r.get("faceAlignment", "top"))),
+                    "clearance": str(r.get("clearance", r.get("clearanceMeters", 0.0))),
+                })
+            t_mesh = None
+            if terrain is not None:
+                t_mesh = terrain.mesh if hasattr(terrain, "mesh") else terrain
+            return _native.composer.resolve_constraints(mesh_map, rel_list, t_mesh, int(collision_passes))
+        return []
 
 layout = _LayoutModule()
 

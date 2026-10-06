@@ -265,10 +265,48 @@ export class SceneSpatialAssertionService {
             }
         }
 
+        // Floating air-gap detection: for each non-terrain node, find the highest
+        // supporting surface below it among nodes with horizontal XZ overlap.
+        // If the vertical gap exceeds maxAllowedGapMeters, the node is floating.
+        for (let i = 0; i < nodes.length; ++i) {
+            const subj = nodes[i];
+            if (/terrain|ground|topography/i.test(subj.name)) continue;
+
+            let bestSupportTop = -Infinity;
+            let bestSupportName = '';
+            for (let j = 0; j < nodes.length; ++j) {
+                if (j === i) continue;
+                const cand = nodes[j];
+                const overlapX = Math.min(subj.max[0], cand.max[0]) - Math.max(subj.min[0], cand.min[0]);
+                const overlapZ = Math.min(subj.max[2], cand.max[2]) - Math.max(subj.min[2], cand.min[2]);
+                if (overlapX <= 0 || overlapZ <= 0) continue;   // no horizontal overlap
+                if (cand.max[1] > subj.min[1]) continue;         // not below subject
+                if (cand.max[1] > bestSupportTop) {
+                    bestSupportTop = cand.max[1];
+                    bestSupportName = cand.name;
+                }
+            }
+
+            if (isFinite(bestSupportTop)) {
+                const gap = subj.min[1] - bestSupportTop;
+                if (gap > maxAllowedGapMeters) {
+                    violations.push({
+                        subject: subj.name,
+                        target: bestSupportName,
+                        type: 'floating_air_gap',
+                        metricDistance: Number(gap.toFixed(3)),
+                        recommendation: `Lower ${subj.name} by ${gap.toFixed(3)}m to rest on ${bestSupportName} (supported_by / ground_on_terrain).`
+                    });
+                }
+            }
+        }
+
         const certified = violations.length === 0;
+        const penetrationCount = violations.filter(v => v.type === 'penetration').length;
+        const floatingCount = violations.filter(v => v.type === 'floating_air_gap').length;
         const summary = certified
-            ? `✅ Spatial contact audit certified: ${nodes.length} nodes, 0 penetrations, total vertices: ${totalVerts}.`
-            : `⚠️ Spatial contact audit found ${violations.length} violation(s): ${violations.map(v => `${v.subject} <-> ${v.target} (${v.type}: ${v.metricDistance}m)`).join(', ')}`;
+            ? `✅ Spatial contact audit certified: ${nodes.length} nodes, 0 penetrations, 0 floating gaps, total vertices: ${totalVerts}.`
+            : `⚠️ Spatial contact audit found ${violations.length} violation(s) (${penetrationCount} penetrations, ${floatingCount} floating gaps): ${violations.map(v => `${v.subject} <-> ${v.target} (${v.type}: ${v.metricDistance}m)`).join(', ')}`;
 
         return {
             certified,

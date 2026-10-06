@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <random>
+#include <functional>
 
 namespace scratchbox {
 namespace composer {
@@ -644,6 +645,206 @@ public:
         constraints.push_back(c);
     }
 
+    /**
+     * Terrain Raycast Grounding: snaps the mesh's bottom onto the terrain
+     * heightfield. Samples the height function at the mesh footprint center and
+     * four corners, then drops the mesh so its lowest point rests on the
+     * highest sampled ground contact (zero levitation, zero burial).
+     */
+    bool groundOnTerrain(const std::string& name,
+                         const std::function<float(float, float)>& heightFn,
+                         float clearance = 0.0f) {
+        auto it = meshRegistry.find(name);
+        if (it == meshRegistry.end() || !it->second) return false;
+        ScratchboxMesh* mesh = it->second;
+        mesh->recomputeBounds();
+
+        const Vec3 c = mesh->bounds.center();
+        const float hx = (mesh->bounds.max.x - mesh->bounds.min.x) * 0.5f;
+        const float hz = (mesh->bounds.max.z - mesh->bounds.min.z) * 0.5f;
+
+        float maxGround = -1e9f;
+        const float samplePts[5][2] = {
+            {c.x, c.z},
+            {c.x - hx, c.z - hz},
+            {c.x + hx, c.z - hz},
+            {c.x - hx, c.z + hz},
+            {c.x + hx, c.z + hz}
+        };
+        for (const auto& pt : samplePts) {
+            maxGround = std::max(maxGround, heightFn(pt[0], pt[1]));
+        }
+
+        const float deltaY = (maxGround + clearance) - mesh->bounds.min.y;
+        mesh->translate(Vec3(0.0f, deltaY, 0.0f));
+        mesh->recomputeBounds();
+        return true;
+    }
+
+    /**
+     * Mesh-based Terrain Raycast Grounding: casts vertical rays downward from
+     * the mesh footprint (center + 4 corners) against the terrain mesh
+     * triangles (Möller–Trumbore), snaps the mesh bottom onto the highest hit.
+     */
+    bool groundOnTerrainMesh(const std::string& name,
+                             const ScratchboxMesh& terrain,
+                             float clearance = 0.0f) {
+        auto it = meshRegistry.find(name);
+        if (it == meshRegistry.end() || !it->second) return false;
+        ScratchboxMesh* mesh = it->second;
+        mesh->recomputeBounds();
+
+        const Vec3 c = mesh->bounds.center();
+        const float hx = (mesh->bounds.max.x - mesh->bounds.min.x) * 0.5f;
+        const float hz = (mesh->bounds.max.z - mesh->bounds.min.z) * 0.5f;
+        const float samplePts[5][2] = {
+            {c.x, c.z},
+            {c.x - hx, c.z - hz},
+            {c.x + hx, c.z - hz},
+            {c.x - hx, c.z + hz},
+            {c.x + hx, c.z + hz}
+        };
+
+        auto raycastDown = [&](float x, float z) -> float {
+            const Vec3 origin(x, 1e6f, z);
+            const Vec3 dir(0.0f, -1.0f, 0.0f);
+            float bestT = 1e12f;
+            const size_t triCount = terrain.indices.size() / 3;
+            for (size_t t = 0; t < triCount; ++t) {
+                const Vec3& v0 = terrain.vertices[terrain.indices[t * 3 + 0]].position;
+                const Vec3& v1 = terrain.vertices[terrain.indices[t * 3 + 1]].position;
+                const Vec3& v2 = terrain.vertices[terrain.indices[t * 3 + 2]].position;
+                // Möller–Trumbore
+                const Vec3 e1 = v1 - v0;
+                const Vec3 e2 = v2 - v0;
+                const Vec3 p = dir.cross(e2);
+                const float det = e1.dot(p);
+                if (std::abs(det) < 1e-9f) continue;
+                const float invDet = 1.0f / det;
+                const Vec3 s = origin - v0;
+                const float u = s.dot(p) * invDet;
+                if (u < -1e-5f || u > 1.0f + 1e-5f) continue;
+                const Vec3 q = s.cross(e1);
+                const float v = dir.dot(q) * invDet;
+                if (v < -1e-5f || (u + v) > 1.0f + 1e-5f) continue;
+                const float tt = e2.dot(q) * invDet;
+                if (tt > 0.0f && tt < bestT) bestT = tt;
+            }
+            if (bestT > 1e11f) return -1e9f; // no hit
+            return origin.y - bestT;
+        };
+
+        float maxGround = -1e9f;
+        bool anyHit = false;
+        for (const auto& pt : samplePts) {
+            const float h = raycastDown(pt[0], pt[1]);
+            if (h > -1e8f) {
+                maxGround = std::max(maxGround, h);
+                anyHit = true;
+            }
+        }
+        if (!anyHit) return false;
+
+        const float deltaY = (maxGround + clearance) - mesh->bounds.min.y;
+        mesh->translate(Vec3(0.0f, deltaY, 0.0f));
+        mesh->recomputeBounds();
+        return true;
+    }
+
+    /**
+     * Surface-Normal Contact Snapping: rotates the mesh so its local +Y axis
+     * aligns with the terrain surface normal at its footprint center, keeping
+     * structures flush on sloped ground instead of floating on one edge.
+     */
+    bool alignToSurfaceNormal(const std::string& name,
+                              const std::function<Vec3(float, float)>& normalFn,
+                              float maxTiltDeg = 45.0f) {
+        auto it = meshRegistry.find(name);
+        if (it == meshRegistry.end() || !it->second) return false;
+        ScratchboxMesh* mesh = it->second;
+        mesh->recomputeBounds();
+
+        const Vec3 c = mesh->bounds.center();
+        Vec3 n = normalFn(c.x, c.z).normalized();
+        if (n.lengthSquared() < 1e-8f) return false;
+
+        // Clamp tilt to prevent structures toppling on cliffs
+        const float cosTilt = std::clamp(n.y, -1.0f, 1.0f);
+        const float tiltDeg = std::acos(cosTilt) * (180.0f / math::PI);
+        if (tiltDeg > maxTiltDeg) {
+            // Blend normal back toward vertical to respect the tilt cap
+            const float t = maxTiltDeg / std::max(tiltDeg, 1e-4f);
+            n = math::lerp(Vec3(0, 1, 0), n, t).normalized();
+        }
+
+        // Rotate +Y onto n around the horizontal axis
+        Vec3 axis = Vec3(0, 1, 0).cross(n);
+        const float axisLen = axis.length();
+        if (axisLen < 1e-6f) return true; // already aligned
+        axis = axis * (1.0f / axisLen);
+        const float angle = std::acos(std::clamp(Vec3(0, 1, 0).dot(n), -1.0f, 1.0f));
+        const Quat q = Quat::fromAxisAngle(axis, angle);
+
+        for (auto& v : mesh->vertices) {
+            const Vec3 rel = v.position - c;
+            v.position = c + q.rotate(rel);
+            v.normal = q.rotate(v.normal).normalized();
+        }
+        mesh->recomputeBounds();
+        return true;
+    }
+
+    /**
+     * Mesh-based Surface-Normal Snapping: estimates the terrain normal at the
+     * mesh footprint center via central differences on raycast heights.
+     */
+    bool alignToTerrainNormal(const std::string& name,
+                              const ScratchboxMesh& terrain,
+                              float maxTiltDeg = 45.0f) {
+        auto it = meshRegistry.find(name);
+        if (it == meshRegistry.end() || !it->second) return false;
+        ScratchboxMesh* mesh = it->second;
+        mesh->recomputeBounds();
+        const Vec3 c = mesh->bounds.center();
+
+        auto heightAt = [&](float x, float z) -> float {
+            const Vec3 origin(x, 1e6f, z);
+            const Vec3 dir(0.0f, -1.0f, 0.0f);
+            float bestT = 1e12f;
+            const size_t triCount = terrain.indices.size() / 3;
+            for (size_t t = 0; t < triCount; ++t) {
+                const Vec3& v0 = terrain.vertices[terrain.indices[t * 3 + 0]].position;
+                const Vec3& v1 = terrain.vertices[terrain.indices[t * 3 + 1]].position;
+                const Vec3& v2 = terrain.vertices[terrain.indices[t * 3 + 2]].position;
+                const Vec3 e1 = v1 - v0;
+                const Vec3 e2 = v2 - v0;
+                const Vec3 p = dir.cross(e2);
+                const float det = e1.dot(p);
+                if (std::abs(det) < 1e-9f) continue;
+                const float invDet = 1.0f / det;
+                const Vec3 s = origin - v0;
+                const float u = s.dot(p) * invDet;
+                if (u < -1e-5f || u > 1.0f + 1e-5f) continue;
+                const Vec3 q = s.cross(e1);
+                const float v = dir.dot(q) * invDet;
+                if (v < -1e-5f || (u + v) > 1.0f + 1e-5f) continue;
+                const float tt = e2.dot(q) * invDet;
+                if (tt > 0.0f && tt < bestT) bestT = tt;
+            }
+            if (bestT > 1e11f) return 0.0f;
+            return origin.y - bestT;
+        };
+
+        const float eps = std::max(0.25f, (mesh->bounds.max.x - mesh->bounds.min.x) * 0.05f);
+        const float hL = heightAt(c.x - eps, c.z);
+        const float hR = heightAt(c.x + eps, c.z);
+        const float hD = heightAt(c.x, c.z - eps);
+        const float hU = heightAt(c.x, c.z + eps);
+        Vec3 n(-(hR - hL) / (2.0f * eps), 1.0f, -(hU - hD) / (2.0f * eps));
+
+        return alignToSurfaceNormal(name, [&](float, float) { return n; }, maxTiltDeg);
+    }
+
     void addConstraint(const std::string& subject,
                        const std::string& predicateStr,
                        const std::string& target,
@@ -821,12 +1022,16 @@ public:
 
     /**
      * Audits registered mesh pairs for penetrations or floating air gaps.
+     * Floating detection: for each mesh, finds the highest support surface
+     * below it among meshes whose XZ footprints horizontally overlap; if the
+     * vertical gap exceeds maxAllowedGap, the mesh is reported as floating.
      */
     std::vector<ContactAuditViolation> auditContacts(float maxAllowedGap = 0.05f) const {
         std::vector<ContactAuditViolation> violations;
         std::vector<std::pair<std::string, ScratchboxMesh*>> meshList(meshRegistry.begin(), meshRegistry.end());
         size_t n = meshList.size();
 
+        // 1. Pairwise penetration detection
         for (size_t i = 0; i < n; ++i) {
             for (size_t j = i + 1; j < n; ++j) {
                 const auto& a = meshList[i];
@@ -847,6 +1052,56 @@ public:
                     v.type = "penetration";
                     v.metricDistance = std::min({overlapX, overlapY, overlapZ});
                     v.resolutionDelta = Vec3(overlapX, overlapY, overlapZ);
+                    violations.push_back(v);
+                }
+            }
+        }
+
+        // 2. Floating air-gap detection (unsupported meshes hovering above support)
+        for (size_t i = 0; i < n; ++i) {
+            const auto& subj = meshList[i];
+            if (!subj.second) continue;
+            // Skip meshes explicitly named as terrain/ground — they are the support
+            const std::string& sName = subj.first;
+            if (sName.find("terrain") != std::string::npos ||
+                sName.find("ground") != std::string::npos ||
+                sName.find("topography") != std::string::npos) {
+                continue;
+            }
+
+            const Vec3 sMin = subj.second->bounds.min;
+            const Vec3 sMax = subj.second->bounds.max;
+
+            // Find the highest top surface among meshes horizontally overlapping & below
+            float bestSupportTop = -1e9f;
+            std::string bestSupportName;
+            for (size_t j = 0; j < n; ++j) {
+                if (j == i) continue;
+                const auto& cand = meshList[j];
+                if (!cand.second) continue;
+                const Vec3 cMin = cand.second->bounds.min;
+                const Vec3 cMax = cand.second->bounds.max;
+
+                const float overlapX = std::min(sMax.x, cMax.x) - std::max(sMin.x, cMin.x);
+                const float overlapZ = std::min(sMax.z, cMax.z) - std::max(sMin.z, cMin.z);
+                if (overlapX <= 0.0f || overlapZ <= 0.0f) continue; // no horizontal overlap
+                if (cMax.y > sMin.y) continue;                       // not below subject
+
+                if (cMax.y > bestSupportTop) {
+                    bestSupportTop = cMax.y;
+                    bestSupportName = cand.first;
+                }
+            }
+
+            if (bestSupportTop > -1e8f) {
+                const float gap = sMin.y - bestSupportTop;
+                if (gap > maxAllowedGap) {
+                    ContactAuditViolation v;
+                    v.subject = sName;
+                    v.target = bestSupportName;
+                    v.type = "floating_gap";
+                    v.metricDistance = gap;
+                    v.resolutionDelta = Vec3(0.0f, -gap, 0.0f);
                     violations.push_back(v);
                 }
             }

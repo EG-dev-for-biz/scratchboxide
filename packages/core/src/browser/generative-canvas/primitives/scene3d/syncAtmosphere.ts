@@ -38,6 +38,18 @@ export interface AtmosphereInput {
     atmosphere?: any;
     godRays?: any;
     terrainBiomes?: any;
+    /** Bounding-sphere radius of the loaded generated geometry, used to size the studio rig. */
+    contentRadiusMeters?: number;
+}
+
+/** Bounding radius the cinematic studio rigs are authored around (lights sit ~4-5 m out, 20-25 m range). */
+const STUDIO_RIG_REFERENCE_RADIUS_METERS = 6.0;
+
+export function resolveStudioRigScale(input: { isLargeScale: boolean; contentRadiusMeters?: number }): number {
+    if (input.isLargeScale) return 100;
+    const r = input.contentRadiusMeters;
+    if (typeof r !== 'number' || !Number.isFinite(r)) return 1;
+    return Math.max(1, r / STUDIO_RIG_REFERENCE_RADIUS_METERS);
 }
 
 /** Factories that live in the primitive module (kept injectable to avoid an import cycle). */
@@ -317,7 +329,7 @@ export function syncAtmosphere(
         if (rigKey && rigKey !== 'default') {
             const rigLights = buildThreeJsLightingRig(rigKey, {
                 kelvin: input.lightingKelvin,
-                scale: isLargeScale ? 100 : 1.0,
+                scale: resolveStudioRigScale({ isLargeScale, contentRadiusMeters: input.contentRadiusMeters }),
                 isLargeScale
             });
             for (const light of rigLights) {

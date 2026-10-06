@@ -21,7 +21,16 @@ export const DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite';
 export const FALLBACK_SUBAGENT_MODELS = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
 
 export const DEFAULT_THINKING_BUDGET = 1024;
-export const VERTEX_LOCATION = 'us-central1';
+/** Gemini 3.x publisher models are served only from the `global` location; regional endpoints 404. */
+export const VERTEX_LOCATION = 'global';
+
+export function resolveVertexLocation(): string {
+    return process.env.SCRATCHBOX_VERTEX_LOCATION?.trim() || VERTEX_LOCATION;
+}
+
+export function vertexHost(location: string): string {
+    return location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+}
 
 const GOOGLE_AUTH_SCOPES = [
     'https://www.googleapis.com/auth/cloud-platform',
@@ -298,7 +307,7 @@ export class GeminiClient {
                 this.genAiClient = new GoogleGenAI({
                     vertexai: true,
                     project: this.cachedProjectId,
-                    location: VERTEX_LOCATION,
+                    location: resolveVertexLocation(),
                     googleAuthOptions: this.cachedServiceAccountPath
                         ? { keyFile: this.cachedServiceAccountPath, scopes: GOOGLE_AUTH_SCOPES }
                         : undefined
@@ -389,11 +398,13 @@ export class GeminiClient {
 
     vertexModelUrl(projectId: string, model: string, method: 'streamGenerateContent' | 'generateContent'): string {
         const suffix = method === 'streamGenerateContent' ? '?alt=sse' : '';
-        return `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/models/${model}:${method}${suffix}`;
+        const location = resolveVertexLocation();
+        return `https://${vertexHost(location)}/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:${method}${suffix}`;
     }
 
     vertexAgentUrl(projectId: string, agent: string): string {
-        return `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${VERTEX_LOCATION}/publishers/google/agents/${agent}:interact?alt=sse`;
+        const location = resolveVertexLocation();
+        return `https://${vertexHost(location)}/v1/projects/${projectId}/locations/${location}/publishers/google/agents/${agent}:interact?alt=sse`;
     }
 
     /**
