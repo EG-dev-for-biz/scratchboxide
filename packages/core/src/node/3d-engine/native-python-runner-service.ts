@@ -351,14 +351,19 @@ export class NativePythonRunnerService {
     ): PythonExecutionResult {
         const cwd = options.cwd || path.dirname(scriptPath);
         const timeout = options.timeoutMs || 60000;
+        const repoRoot = this.resolveRepoRoot();
 
         // Build PYTHONPATH
         const pythonPaths = [
+            options.env?.PYTHONPATH,
+            path.resolve(repoRoot, 'packages/core/src/python'),
             this.moduleDirectory,
             path.dirname(this.moduleDirectory),
-            path.resolve(process.cwd(), 'packages/core/src/native/3d-engine'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/build_py'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine/scratchbox'),
+            path.resolve(repoRoot, 'packages/core/src/native/3d-engine'),
             process.env.PYTHONPATH
-        ].filter(Boolean).join(':');
+        ].filter(Boolean).join(path.delimiter);
 
         const env = {
             ...process.env,

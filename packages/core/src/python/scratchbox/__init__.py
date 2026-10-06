@@ -343,6 +343,7 @@ if _native is not None and hasattr(_native, "geometry"):
             return _orig_create_box(s, c)
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box
+    _geom.create_cube = create_box
 
     _orig_create_sphere = getattr(_geom, "create_sphere", None)
     def create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, **kwargs):
@@ -555,10 +556,35 @@ class _ConstantsModule:
 
 constants = _ConstantsModule()
 
+if _native is not None and hasattr(_native, "io"):
+    _orig_write_glb = getattr(_native.io, "write_glb", None)
+
+    def write_glb(arg1, arg2=None):
+        if arg2 is not None:
+            out_path = str(arg1)
+            target = arg2
+        else:
+            out_path = os.environ.get("OUTPUT_GLB_PATH", "output.glb")
+            target = arg1
+        target_mesh = target.mesh if hasattr(target, "mesh") else target
+        if _orig_write_glb:
+            return _orig_write_glb(out_path, target_mesh)
+        raise RuntimeError("Native io.write_glb not available")
+
+    def export_glb(arg1, arg2=None):
+        return write_glb(arg1, arg2)
+
+    _native.io.write_glb = write_glb
+    _native.io.export_glb = export_glb
+    if io is not None:
+        io.write_glb = write_glb
+        io.export_glb = export_glb
+
 create_cylinder = getattr(_geom, "create_cylinder", None)
 create_cone = getattr(_geom, "create_cone", None)
 create_plane = getattr(_geom, "create_plane", None)
 create_box = getattr(_geom, "create_box", None)
+create_cube = getattr(_geom, "create_cube", None)
 create_sphere = getattr(_geom, "create_sphere", None)
 
 __all__ = [
@@ -575,6 +601,7 @@ __all__ = [
     "create_cone",
     "create_plane",
     "create_box",
+    "create_cube",
     "create_sphere",
     "geospatial",
     "nature",
