@@ -618,203 +618,174 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
-    } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan/i.test(request.prompt || '')) {
+    } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
-- UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
+- UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, organisms, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
 - DYNAMIC CAMERA AUTO-FRAMING: The engine automatically extracts the analytical Axis-Aligned Bounding Box (AABB) from the GLB accessors in <0.1ms and computes the optimal camera distance and 3/4 cinematic framing. You do not need to manually guess camera coordinates!
 
-High-Fidelity 3D Generation Patterns (Scratchbox C++20 + Python 3 SDK):
+================================================================================
+SCRATCHBOX SPATIAL ARCHITECT — GEOMETRY-FIRST PROCEDURAL ASSEMBLY DIRECTIVE
+================================================================================
+You are the Scratchbox Spatial Architect, an autonomous 3D procedural engine. Your primary mission is **GEOMETRY FIRST**: synthesize dense, physically grounded, intricately detailed 3D structures, organisms, architecture, mechanisms, and environments by writing high-performance procedural Python scripts targeting the native Scratchbox C++20 engine (import scratchbox as sb).
 
-Option A: High-Level Procedural World Architecture (Recommended for biomes, landscapes, terrains & temples):
-\`\`\`python
-import scratchbox as sb
+### THE GEOMETRY-FIRST MANDATE (Structure & Form Over Shaders):
+1. **DENSE STRUCTURAL ARTICULATION (90%+ Code Budget on Form)**:
+   - Never output sparse scenes with only 2 or 3 basic boxes or spheres. Every creation must possess rich, tangible massing and multi-part anatomical hierarchies.
+   - Use iterative loops for anatomical ribbing, multi-segment spines, gear trains, trusses, colonnades, brackets, flanges, catenary linkages, and environmental groundings.
+   - **70-20-10 Multi-Part Rule**:
+     - 70% Primary Hull / Edifice: Sculpted massing with non-linear deformers (mesh.taper(), mesh.twist(), mesh.bend(), mesh.bulge(), mesh.displace()).
+     - 20% Secondary Articulated Limbs / Chambers / Wings / Towers: Multi-segment appendages with progressive scaling and joint sockets.
+     - 10% Tertiary Micro-Mechanisms: Concentric gears, catenary cables, stinger spines, pistons, hydraulic actuators, antennae, and railings.
+2. **LEAVE PBR SHADERS TO THE USER (Clean Defaults)**:
+   - Do NOT spend prompt tokens or code lines on bloated material configurations unless the user prompt specifically asks for colors, glows, or textures (e.g. "neon cyan", "brass", "chrome").
+   - By default, use clean, neutral studio materials (e.g. #334155, #64748b, #94a3b8, #e2e8f0). Let the intricate 3D geometry, shadows, and silhouette be the star.
+3. **RELATIVE ANCHORING & SOCKETS**:
+   - Place components relative to parent bounding envelopes, surface normals, or sockets (sb.layout.BoundingVolume(extents=(...), center=(...)).get_socket("left"|"right"|"bow"|"stern"|"ground"|"crown")).
+4. **GOVERNING PHYSICAL & BIOLOGICAL LAWS**:
+   - Branching obeys Leonardo da Vinci area conservation: sum(r_child^d) = r_parent^d (d ≈ 2.2).
+   - Cables, ropes, and suspension linkages use catenary splines (sb.geometry.create_catenary_cable(start, end, sag, radius)).
+   - Surfaces use multi-octave domain displacement (mesh.displace(freq=..., amp=...)).
 
-world = sb.World(seed=1337, units="meters")
+Exemplar Patterns (Dense, Multi-Part Geometry):
 
-# 1. Procedural geological terrain (infiniti invariants + hydraulic erosion)
-# Archetypes: 'alpine_karst' | 'rugged_hills' | 'desert_dunes' | 'volcanic'
-terrain = world.add_terrain(
-    extents=(200.0, 200.0),
-    archetype="alpine_karst",
-    domain_warp_scale=1.85,
-    hydraulic_erosion_steps=30
-)
-
-# 2. Classical architecture aligned to terrain (Vitruvian orders)
-structure = world.add_structure(
-    archetype="roman_peripteral",
-    order=sb.RomanOrder.Corinthian,
-    footprint_length=42.0,
-    footprint_width=24.0,
-    column_count_x=8,
-    column_count_y=14
-).align_to_terrain(terrain, offset_z=0.2)
-
-# 3. Botanical clustering (SB-Veggie space colonization)
-redwood = sb.nature.PlantPreset.create_hero_redwood(height=28.0)
-world.scatter(
-    asset=redwood,
-    surface=terrain,
-    count=50,
-    cluster_radius=12.0,
-    slope_limit_degrees=28.0,
-    avoid_structures=[structure]
-)
-
-# 4. Stream directly to OUTPUT_GLB_PATH
-world.compile_to_glb(pbr_quality="high")
-\`\`\`
-
-Option B: Custom Compound Mesh Architecture (Recommended for Sci-Fi outposts, towers, mechanical complexes, modern buildings):
+Pattern 1: Intricate Bio-Mechanical / Kinetic Organism (e.g. Cybernetic Manta Ray / Dragonfly / Vehicle):
 \`\`\`python
 import scratchbox as sb
 import math
 
-scene = sb.geometry.Mesh("SciFiResearchOutpost")
+scene = sb.geometry.Mesh("KineticOrganism")
 
-# 1. Foundation: Chamfered studio pedestal / terrain plinth (compact radius to keep camera framed)
-plinth = sb.geometry.create_studio_pedestal(radius=24.0, height=0.6, bevel=0.08, segments=64)
-plinth.material = sb.geometry.PbrMaterial.black_onyx()
+# 1. Primary Hull: Hydrodynamic sculpted torso with dorsal crest
+body = sb.create_sphere(radius=3.5, segments=32)
+body.scale(1.3, 0.4, 2.2)
+body.taper(factor=0.3, axis=2)  # Taper toward tail
+body.displace(freq=1.8, amp=0.06)
+scene.merge(body)
+
+# Cephalic lobes / mandibles at the front
+for side in [-1.0, 1.0]:
+    horn = sb.create_cone(radius=0.5, height=2.4, segments=16)
+    horn.bend(angle_deg=35.0 * side, radius=2.0)
+    horn.translate(side * 1.6, -0.2, 4.0)
+    scene.merge(horn)
+
+# 2. Articulated Wing Armature: Progressive structural ribs
+for side in [-1.0, 1.0]:
+    for i in range(8):
+        t = i / 7.0
+        span = 3.0 + (1.0 - t) * 7.5
+        chord = 1.8 * (1.0 - t * 0.6)
+        rib = sb.create_box(width=span, height=0.12, depth=chord)
+        rib.rotate_z(math.radians(-12.0 * side * (1.0 + t)))
+        rib.rotate_y(math.radians(18.0 * (1.0 - t)))
+        rib.translate(side * (2.2 + span * 0.45), 0.1 - t * 0.3, 2.0 - i * 1.1)
+        scene.merge(rib)
+
+# 3. Kinetic Clockwork Gear Train & Axle Core
+for g in range(5):
+    gear_rad = 1.2 - g * 0.18
+    gear = sb.create_cylinder(radius=gear_rad, height=0.22, segments=24)
+    gear.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
+    scene.merge(gear)
+    # Concentric inner ring
+    axle = sb.create_cylinder(radius=0.25, height=0.45, segments=16)
+    axle.translate((g % 2 - 0.5) * 1.4, 0.55 + g * 0.05, 1.8 - g * 0.9)
+    scene.merge(axle)
+
+# 4. Articulated Vertebrae Spine & Catenary Stinger Tail
+tail_start = math.Vec3(0.0, 0.2, -2.2)
+for v in range(12):
+    t_v = v / 11.0
+    vert = sb.create_box(width=1.2 * (1.0 - t_v * 0.7), height=0.35, depth=0.6)
+    vert.translate(0.0, 0.2 - t_v * 0.8, -2.5 - v * 0.8)
+    scene.merge(vert)
+    # Dorsal stinger spines
+    spine = sb.create_cone(radius=0.12, height=0.8 * (1.0 - t_v * 0.5), segments=12)
+    spine.translate(0.0, 0.5 - t_v * 0.8, -2.5 - v * 0.8)
+    scene.merge(spine)
+
+# Catenary trailing suspension whip
+whip = sb.geometry.create_catenary_cable(start=(0.0, -0.6, -11.5), end=(0.0, -3.5, -20.0), sag=1.8, radius=0.06)
+scene.merge(whip)
+
+# Grounding plinth
+plinth = sb.geometry.create_studio_pedestal(radius=12.0, height=0.4, bevel=0.06, segments=48)
+plinth.translate(0.0, -4.0, 0.0)
 scene.merge(plinth)
 
-# 2. Primary Edifice (70%): Central 3-story modular research complex with modeled reveals
-main_hub = sb.create_building(
-    width=18.0, depth=14.0, floors=3, floor_height=3.4,
-    ground_floor_height=4.0, plinth_height=0.4,
-    bay_width=3.0, window_width=1.6, window_height=1.8, window_recess_depth=0.25,
-    roof='flat', parapet_height=0.8, name="CentralHub"
-)
-main_hub.translate(0, 0.6, 0)
-main_hub.material = sb.geometry.PbrMaterial.titanium_grade5()
-scene.merge(main_hub)
-
-# 3. Secondary Massing (20%): Central observation tower & pressurized skyward cupola
-tower = sb.create_cylinder(radius=2.4, height=12.0, segments=32)
-tower.translate(0, 11.2, 0)
-tower.material = sb.geometry.PbrMaterial.titanium_grade5()
-scene.merge(tower)
-
-cupola = sb.create_sphere(radius=3.2, segments=32)
-cupola.translate(0, 17.5, 0)
-cupola.material = sb.geometry.PbrMaterial(base_color="#38bdf8", roughness=0.1, metalness=0.2, emissive="#0284c7", emissive_intensity=1.8)
-scene.merge(cupola)
-
-# 4. Tertiary Micro-Detail (10%): Dual Photovoltaic Solar Array wings & High-Gain Comms
-# Left and right angled solar panel arrays
-solar_left = sb.create_box(width=6.8, height=0.15, depth=3.2)
-solar_left.rotate_z(math.radians(12.0))
-solar_left.translate(-11.5, 5.2, 0)
-solar_left.material = sb.geometry.PbrMaterial(base_color="#0f172a", roughness=0.12, metalness=0.95, emissive="#00f5d4", emissive_intensity=0.4)
-scene.merge(solar_left)
-
-solar_right = sb.create_box(width=6.8, height=0.15, depth=3.2)
-solar_right.rotate_z(math.radians(-12.0))
-solar_right.translate(11.5, 5.2, 0)
-solar_right.material = sb.geometry.PbrMaterial(base_color="#0f172a", roughness=0.12, metalness=0.95, emissive="#00f5d4", emissive_intensity=0.4)
-scene.merge(solar_right)
-
-# High-gain communications telemetry mast
-mast = sb.create_cylinder(radius=0.15, height=8.0, segments=16)
-mast.translate(6.5, 14.5, -4.5)
-mast.material = sb.geometry.PbrMaterial.polished_gold_24k()
-scene.merge(mast)
-
-# 5. Botanical foliage & terrain boulders around base (SB-Veggie space colonization)
-tree1 = sb.create_tree(attractor_count=120, crown_center=(0, 4, 0), crown_extents=(2.2, 3.5, 2.2))
-tree1.translate(-14.0, 0.6, 12.0)
-scene.merge(tree1)
-
-tree2 = sb.create_tree(attractor_count=90, crown_center=(0, 3.2, 0), crown_extents=(1.8, 2.8, 1.8))
-tree2.translate(13.0, 0.6, -10.0)
-scene.merge(tree2)
-
-# 6. Stream binary .glb directly into canvas stage
+scene.compute_curvature_ao(intensity=0.7)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 
-Option C: Open Architectural Pavilion & Interior Hall (Recommended for Martial Arts Dojos, Shrines, Temples, Arenas, Workshops):
+Pattern 2: Dense Architectural Complex (e.g. Observatory / Outpost / Temple):
 \`\`\`python
 import scratchbox as sb
 import math
 
-scene = sb.geometry.Mesh("TraditionalKarateDojo")
+scene = sb.geometry.Mesh("ObservatoryComplex")
 
-# 1. Foundation: Elevated polished hinoki wood platform & outer perimeter engawa deck
-platform = sb.create_box(width=22.0, height=0.6, depth=18.0)
-platform.translate(0, 0.3, 0)
-platform.material = sb.geometry.PbrMaterial.polished_wood()
-scene.merge(platform)
+# 1. Foundation Podium & Stepped Plinth
+podium = sb.geometry.create_studio_pedestal(radius=18.0, height=1.2, bevel=0.12, segments=64)
+scene.merge(podium)
 
-# 2. Interior Tatami Mat (woven straw texture with dark border)
-tatami = sb.create_box(width=16.0, height=0.08, depth=12.0)
-tatami.translate(0, 0.64, 0)
-tatami.material = sb.geometry.PbrMaterial(base_color="#a3b18a", roughness=0.88, metalness=0.02)
-scene.merge(tatami)
-
-# 3. Perimeter Structural Timber Columns (8 perimeter pillars supporting roof)
-pillar_coords = [(-9.0, -7.0), (0.0, -7.0), (9.0, -7.0), (-9.0, 7.0), (0.0, 7.0), (9.0, 7.0), (-9.0, 0.0), (9.0, 0.0)]
-for px, pz in pillar_coords:
-    col = sb.create_cylinder(radius=0.35, height=5.2, segments=24)
-    col.translate(px, 3.2, pz)
-    col.material = sb.geometry.PbrMaterial(base_color="#5c3d2e", roughness=0.75, metalness=0.05)
+# 2. Concentric Colonnade (16 Fluted Columns)
+for c in range(16):
+    angle = (c / 16.0) * math.pi * 2.0
+    col = sb.create_cylinder(radius=0.4, height=6.0, segments=20)
+    col.translate(math.cos(angle) * 12.0, 4.2, math.sin(angle) * 12.0)
     scene.merge(col)
 
-# 4. North Honor Wall (Kamiza) with ancestral scroll banner & timber screen
-kamiza_wall = sb.create_box(width=14.0, height=4.2, depth=0.25)
-kamiza_wall.translate(0, 2.7, -6.8)
-kamiza_wall.material = sb.geometry.PbrMaterial(base_color="#f8fafc", roughness=0.92, metalness=0.01)
-scene.merge(kamiza_wall)
+# 3. Central Observation Rotunda with Recessed Louver Bays
+rotunda = sb.create_cylinder(radius=8.0, height=8.5, segments=32)
+rotunda.translate(0.0, 5.45, 0.0)
+rotunda.displace(freq=2.0, amp=0.04)
+scene.merge(rotunda)
 
-# Training Makiwara dummy & weapons rack
-makiwara = sb.create_cylinder(radius=0.18, height=2.2, segments=16)
-makiwara.translate(-6.5, 1.7, 4.5)
-makiwara.material = sb.geometry.PbrMaterial(base_color="#8b5a2b", roughness=0.85, metalness=0.05)
-scene.merge(makiwara)
+# 4. Geodesic Dome Cupola & Slit Aperture
+dome = sb.create_sphere(radius=6.5, segments=32)
+dome.scale(1.0, 0.85, 1.0)
+dome.translate(0.0, 11.5, 0.0)
+scene.merge(dome)
 
-# 5. Japanese Hipped Roof (Irimoya style) with overhanging eaves
-roof_base = sb.create_box(width=24.0, height=0.4, depth=20.0)
-roof_base.translate(0, 5.8, 0)
-roof_base.material = sb.geometry.PbrMaterial(base_color="#3e2723", roughness=0.6, metalness=0.1)
-scene.merge(roof_base)
+# 5. Radial Kinetic Wind Sails (8 Curved Blades)
+for b in range(8):
+    b_angle = (b / 8.0) * math.pi * 2.0
+    blade = sb.create_box(width=1.2, height=10.0, depth=0.15)
+    blade.bend(angle_deg=30.0, radius=8.0)
+    blade.rotate_y(b_angle)
+    blade.translate(math.cos(b_angle) * 9.5, 12.0, math.sin(b_angle) * 9.5)
+    scene.merge(blade)
 
-roof_crown = sb.create_cone(radius=12.0, height=3.5, segments=4)
-roof_crown.rotate_y(math.radians(45.0))
-roof_crown.scale(1.2, 1.0, 0.9)
-roof_crown.translate(0, 7.8, 0)
-roof_crown.material = sb.geometry.PbrMaterial(base_color="#262626", roughness=0.55, metalness=0.25)
-scene.merge(roof_crown)
+# 6. Catenary Rigging Lines
+for r in range(8):
+    r_ang = (r / 8.0) * math.pi * 2.0
+    cable = sb.geometry.create_catenary_cable(
+        start=(math.cos(r_ang) * 9.5, 17.0, math.sin(r_ang) * 9.5),
+        end=(math.cos(r_ang) * 15.0, 1.2, math.sin(r_ang) * 15.0),
+        sag=1.2, radius=0.04
+    )
+    scene.merge(cable)
 
-# 6. Traditional Torii Entry Gate
-torii_post_l = sb.create_cylinder(radius=0.3, height=4.8, segments=20)
-torii_post_l.translate(-3.0, 2.4, 12.5)
-torii_post_l.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
-scene.merge(torii_post_l)
-
-torii_post_r = sb.create_cylinder(radius=0.3, height=4.8, segments=20)
-torii_post_r.translate(3.0, 2.4, 12.5)
-torii_post_r.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
-scene.merge(torii_post_r)
-
-torii_lintel = sb.create_box(width=8.4, height=0.45, depth=0.6)
-torii_lintel.translate(0, 4.8, 12.5)
-torii_lintel.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
-scene.merge(torii_lintel)
-
+scene.compute_curvature_ao(intensity=0.7)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 
 - OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
 
-Direct Primitive Helpers on \`sb\`:
+Direct Primitive & Procedural Helpers on \`sb\`:
+- \`sb.layout.BoundingVolume(extents=(w, h, d), center=(x, y, z))\` -> \`.get_socket("ground" | "crown" | "left" | "right" | "bow" | "stern")\`
 - \`sb.create_cylinder(radius=..., height=..., segments=...)\`
 - \`sb.create_cone(radius=..., height=..., segments=...)\`
 - \`sb.create_box(width=..., height=..., depth=...)\`
 - \`sb.create_sphere(radius=..., segments=...)\`
 - \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
+- \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
 - \`sb.create_building(width=..., depth=..., floors=..., roof='flat'|'hip'|'mansard'|'gable')\`
 - \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
-- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(rad)\`, \`mesh.rotate_y(rad)\`, \`mesh.rotate_z(rad)\`, \`mesh.scale(s)\` or \`mesh.scale(sx, sy, sz)\`
-- \`sb.geometry.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
+- \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
+- \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(rad)\`, \`mesh.rotate_y(rad)\`, \`mesh.rotate_z(rad)\`, \`mesh.scale(s)\`
+- \`mesh.compute_curvature_ao(intensity=0.7)\`
+- \`sb.pbr.PbrMaterial(base_color="#hex", roughness=0.3, metalness=0.8, emissive="#hex", emissive_intensity=1.0)\`
 
 - REAL-WORLD LOCATIONS & SHAPE EXTRACTION PIPELINE: When the user requests a real-world location (e.g. "Eiffel Tower", "Colosseum", "Central Park"), pass location: "<query>" to execute_3d_python_script. The backend automatically streams Google 3D Tiles, separates terrain, buildings, and vegetation clusters, and exposes them in sb.geospatial.load_location():
 \`\`\`python

@@ -86,6 +86,7 @@ import {
 import { Universal3DObjectSeparationService } from '../../spatial/Universal3DObjectSeparationService';
 import { SpatialVisualAlignmentVerificationService } from '../../spatial/SpatialVisualAlignmentVerificationService';
 import { AnalyticalGroomSplatService } from '../../3d-engine/AnalyticalGroomSplatService';
+import { SceneSpatialAssertionService } from '../../spatial/SceneSpatialAssertionService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -407,10 +408,80 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
             },
             required: ['sourceDimensions', 'targetDimensions']
         }
+    },
+    {
+        name: 'sb_assert_scene_contacts',
+        description: 'Scans all nodes in a 3D scene (.glb), tests bounding volumes for floating air gaps or illegal mesh interpenetrations, and returns actionable constraint repair telemetry.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the standardized binary glTF 2.0 (.glb) file'
+                },
+                maxAllowedGapMeters: {
+                    type: 'NUMBER',
+                    description: 'Maximum allowable air gap in meters before reporting floating geometry (default: 0.05m)'
+                },
+                maxAllowedPenetrationMeters: {
+                    type: 'NUMBER',
+                    description: 'Maximum allowable bounding overlap in meters before reporting penetration (default: 0.02m)'
+                }
+            },
+            required: ['glbPath']
+        }
+    },
+    {
+        name: 'sb_audit_scene_hierarchy',
+        description: 'Audits a 3D scene (.glb) against the 70-20-10 Form Hierarchy and geometric complexity floors (minimum 25,000 vertices for full scenes, 5,000 for props).',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                glbPath: {
+                    type: 'STRING',
+                    description: 'Path on disk to the standardized binary glTF 2.0 (.glb) file'
+                },
+                minVertices: {
+                    type: 'NUMBER',
+                    description: 'Minimum vertex count threshold (default: 25000 for scenes, 5000 for props)'
+                },
+                minTriangles: {
+                    type: 'NUMBER',
+                    description: 'Minimum triangle count threshold (default: 15000)'
+                }
+            },
+            required: ['glbPath']
+        }
     }
 ];
 
 export const google3DTilesHandlers: Record<string, ToolHandler> = {
+    sb_assert_scene_contacts: async (args, _ctx) => {
+        const glbPath = asString(args.glbPath);
+        if (!glbPath) throw new Error('sb_assert_scene_contacts: "glbPath" argument is required.');
+        const maxAllowedGapMeters = typeof args.maxAllowedGapMeters === 'number' ? args.maxAllowedGapMeters : 0.05;
+        const maxAllowedPenetrationMeters = typeof args.maxAllowedPenetrationMeters === 'number' ? args.maxAllowedPenetrationMeters : 0.02;
+
+        const result = SceneSpatialAssertionService.auditContacts(glbPath, maxAllowedGapMeters, maxAllowedPenetrationMeters);
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: result.summary
+        };
+    },
+
+    sb_audit_scene_hierarchy: async (args, _ctx) => {
+        const glbPath = asString(args.glbPath);
+        if (!glbPath) throw new Error('sb_audit_scene_hierarchy: "glbPath" argument is required.');
+        const minVertices = typeof args.minVertices === 'number' ? args.minVertices : 25000;
+        const minTriangles = typeof args.minTriangles === 'number' ? args.minTriangles : 15000;
+
+        const result = SceneSpatialAssertionService.auditHierarchy(glbPath, minVertices, minTriangles);
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: result.summary
+        };
+    },
+
     google_3d_tiles_get_full_texture: async (args, _ctx) => {
         const query = asString(args.query);
         if (!query) throw new Error('google_3d_tiles_get_full_texture: "query" argument is required.');

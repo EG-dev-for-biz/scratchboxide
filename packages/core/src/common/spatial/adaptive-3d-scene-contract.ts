@@ -86,6 +86,51 @@ export interface AdaptiveAtmosphereEphemeris {
     skyColor: [number, number, number];
 }
 
+export type SpatialRelationPredicate =
+    | 'SUPPORTED_BY'
+    | 'ADJACENT_TO'
+    | 'ATTACHED_TO_SURFACE'
+    | 'CONTAINED_IN'
+    | 'SYMMETRIC_TO'
+    | (string & {});
+
+export interface SpatialRelation {
+    subjectId: string;
+    predicate: SpatialRelationPredicate;
+    targetId: string;
+    parameters?: {
+        offsetNormal?: number;
+        faceAlignment?: 'top' | 'front' | 'side' | 'radial' | 'ground' | 'crown' | 'left' | 'right' | (string & {});
+        clearanceMeters?: number;
+        symmetryAxis?: 'x' | 'y' | 'z';
+    };
+}
+
+export interface SceneEntityBlueprint {
+    id: string;
+    name?: string;
+    grammarType: 'architectural_edifice' | 'structural_wing' | 'botanical_cluster' | 'mechanical_prop' | 'kinetic_articulation' | (string & {});
+    tier?: 'primary' | 'secondary' | 'tertiary';
+    massingDimensions: [width: number, height: number, depth: number];
+    materialProfile?: {
+        roughness: number;
+        metalness: number;
+        baseTone: [number, number, number];
+        emissiveColor?: [number, number, number];
+        emissiveIntensity?: number;
+    };
+}
+
+export interface AdaptiveSceneGraphBlueprint {
+    terrain?: {
+        envelope: { width: number; depth: number };
+        reliefMeters: number;
+        sharpness: number;
+    };
+    entities: SceneEntityBlueprint[];
+    relations: SpatialRelation[];
+}
+
 export interface Adaptive3DSceneContract {
     id: string;
     subject: string;
@@ -98,4 +143,6 @@ export interface Adaptive3DSceneContract {
         forestPatches: AdaptiveBotanyField[];
     };
     atmosphere?: AdaptiveAtmosphereEphemeris;
+    relations?: SpatialRelation[];
+    sceneGraph?: AdaptiveSceneGraphBlueprint;
 }

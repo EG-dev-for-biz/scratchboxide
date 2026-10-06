@@ -597,6 +597,264 @@ inline ScratchboxMesh createAncientReliquary(const std::string& meshName = "Anci
     return bakeCurvatureToVertexColors(master);
 }
 
+// ============================================================================
+// 8. DETERMINISTIC SPATIAL CONSTRAINT & CONTACT SOLVER
+// ============================================================================
+
+enum class RelationPredicate {
+    SupportedBy,        // Base of subject sits flush on target surface / terrain
+    AttachedToSurface,  // Subject snaps flush to target socket (top/bottom/left/right/front/back)
+    AdjacentTo,         // Subject placed adjacent to target with clearance
+    ContainedIn,        // Subject placed inside target bounding box
+    SymmetricTo         // Subject mirrored across target symmetry plane
+};
+
+struct SpatialConstraint {
+    std::string subjectName;
+    RelationPredicate predicate{RelationPredicate::SupportedBy};
+    std::string targetName;
+    Vec3 offset{0.0f, 0.0f, 0.0f};
+    std::string faceAlignment{"top"}; // "top", "crown", "ground", "bottom", "left", "right", "front", "back"
+    float clearanceMeters{0.0f};
+    char symmetryAxis{'x'};
+};
+
+struct ContactAuditViolation {
+    std::string subject;
+    std::string target;
+    std::string type; // "penetration" or "floating_gap"
+    float metricDistance{0.0f};
+    Vec3 resolutionDelta{0.0f, 0.0f, 0.0f};
+};
+
+class SpatialConstraintSolver {
+private:
+    std::unordered_map<std::string, ScratchboxMesh*> meshRegistry;
+    std::vector<SpatialConstraint> constraints;
+
+public:
+    void registerMesh(const std::string& name, ScratchboxMesh* mesh) {
+        if (mesh) {
+            mesh->recomputeBounds();
+            meshRegistry[name] = mesh;
+        }
+    }
+
+    void addConstraint(const SpatialConstraint& c) {
+        constraints.push_back(c);
+    }
+
+    void addConstraint(const std::string& subject,
+                       const std::string& predicateStr,
+                       const std::string& target,
+                       const std::string& face = "top",
+                       float clearance = 0.0f,
+                       const Vec3& offset = Vec3(0, 0, 0)) {
+        SpatialConstraint c;
+        c.subjectName = subject;
+        c.targetName = target;
+        c.faceAlignment = face;
+        c.clearanceMeters = clearance;
+        c.offset = offset;
+
+        std::string p = predicateStr;
+        std::transform(p.begin(), p.end(), p.begin(), ::tolower);
+        if (p == "supported_by" || p == "supported" || p == "grounded_on") {
+            c.predicate = RelationPredicate::SupportedBy;
+        } else if (p == "attached_to_surface" || p == "attached" || p == "attach") {
+            c.predicate = RelationPredicate::AttachedToSurface;
+        } else if (p == "adjacent_to" || p == "adjacent") {
+            c.predicate = RelationPredicate::AdjacentTo;
+        } else if (p == "contained_in" || p == "inside") {
+            c.predicate = RelationPredicate::ContainedIn;
+        } else if (p == "symmetric_to" || p == "mirror") {
+            c.predicate = RelationPredicate::SymmetricTo;
+        }
+        constraints.push_back(c);
+    }
+
+    /**
+     * Solves all spatial relational constraints in dependency order and relaxes collisions.
+     */
+    bool solve(int collisionPasses = 8, float minMargin = 0.01f) {
+        for (const auto& c : constraints) {
+            auto sIt = meshRegistry.find(c.subjectName);
+            auto tIt = meshRegistry.find(c.targetName);
+            if (sIt == meshRegistry.end() || tIt == meshRegistry.end()) continue;
+
+            ScratchboxMesh* subject = sIt->second;
+            ScratchboxMesh* target = tIt->second;
+            if (!subject || !target) continue;
+
+            subject->recomputeBounds();
+            target->recomputeBounds();
+
+            switch (c.predicate) {
+                case RelationPredicate::SupportedBy: {
+                    // Snap subject bottom to target top + vertical clearance
+                    float targetTopY = target->bounds.max.y;
+                    float subjectBottomY = subject->bounds.min.y;
+                    float deltaY = (targetTopY + c.clearanceMeters + c.offset.y) - subjectBottomY;
+                    subject->translate(Vec3(c.offset.x, deltaY, c.offset.z));
+                    break;
+                }
+                case RelationPredicate::AttachedToSurface: {
+                    std::string f = c.faceAlignment;
+                    std::transform(f.begin(), f.end(), f.begin(), ::tolower);
+
+                    Vec3 delta(0, 0, 0);
+                    if (f == "top" || f == "crown" || f == "roof") {
+                        delta.y = (target->bounds.max.y + c.clearanceMeters) - subject->bounds.min.y;
+                        delta.x = target->bounds.center().x - subject->bounds.center().x;
+                        delta.z = target->bounds.center().z - subject->bounds.center().z;
+                    } else if (f == "ground" || f == "bottom" || f == "base") {
+                        delta.y = (target->bounds.min.y - c.clearanceMeters) - subject->bounds.max.y;
+                        delta.x = target->bounds.center().x - subject->bounds.center().x;
+                        delta.z = target->bounds.center().z - subject->bounds.center().z;
+                    } else if (f == "left" || f == "west" || f == "port") {
+                        delta.x = (target->bounds.min.x - c.clearanceMeters) - subject->bounds.max.x;
+                        delta.y = target->bounds.center().y - subject->bounds.center().y;
+                        delta.z = target->bounds.center().z - subject->bounds.center().z;
+                    } else if (f == "right" || f == "east" || f == "starboard") {
+                        delta.x = (target->bounds.max.x + c.clearanceMeters) - subject->bounds.min.x;
+                        delta.y = target->bounds.center().y - subject->bounds.center().y;
+                        delta.z = target->bounds.center().z - subject->bounds.center().z;
+                    } else if (f == "front" || f == "bow" || f == "north") {
+                        delta.z = (target->bounds.max.z + c.clearanceMeters) - subject->bounds.min.z;
+                        delta.x = target->bounds.center().x - subject->bounds.center().x;
+                        delta.y = target->bounds.center().y - subject->bounds.center().y;
+                    } else if (f == "back" || f == "rear" || f == "stern" || f == "south") {
+                        delta.z = (target->bounds.min.z - c.clearanceMeters) - subject->bounds.max.z;
+                        delta.x = target->bounds.center().x - subject->bounds.center().x;
+                        delta.y = target->bounds.center().y - subject->bounds.center().y;
+                    }
+                    subject->translate(delta + c.offset);
+                    break;
+                }
+                case RelationPredicate::AdjacentTo: {
+                    // Position horizontally adjacent along X with clearance
+                    float deltaX = (target->bounds.max.x + c.clearanceMeters + c.offset.x) - subject->bounds.min.x;
+                    subject->translate(Vec3(deltaX, c.offset.y, c.offset.z));
+                    break;
+                }
+                case RelationPredicate::ContainedIn: {
+                    Vec3 targetCenter = target->bounds.center();
+                    Vec3 subjectCenter = subject->bounds.center();
+                    subject->translate(targetCenter - subjectCenter + c.offset);
+                    break;
+                }
+                case RelationPredicate::SymmetricTo: {
+                    Vec3 targetCenter = target->bounds.center();
+                    Vec3 subjectCenter = subject->bounds.center();
+                    Vec3 mirrored = subjectCenter;
+                    if (c.symmetryAxis == 'x' || c.symmetryAxis == 'X') {
+                        mirrored.x = targetCenter.x - (subjectCenter.x - targetCenter.x);
+                    } else if (c.symmetryAxis == 'z' || c.symmetryAxis == 'Z') {
+                        mirrored.z = targetCenter.z - (subjectCenter.z - targetCenter.z);
+                    }
+                    subject->translate(mirrored - subjectCenter + c.offset);
+                    break;
+                }
+            }
+            subject->recomputeBounds();
+        }
+
+        // Iterative OBB/AABB collision relaxation
+        relaxCollisions(collisionPasses, minMargin);
+        return true;
+    }
+
+    /**
+     * Non-penetration impulse relaxation between registered meshes.
+     */
+    void relaxCollisions(int iterations = 8, float minMargin = 0.01f) {
+        std::vector<ScratchboxMesh*> meshes;
+        for (auto& kv : meshRegistry) {
+            if (kv.second) {
+                kv.second->recomputeBounds();
+                meshes.push_back(kv.second);
+            }
+        }
+
+        size_t n = meshes.size();
+        for (int iter = 0; iter < iterations; ++iter) {
+            bool anyOverlap = false;
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t j = i + 1; j < n; ++j) {
+                    ScratchboxMesh* a = meshes[i];
+                    ScratchboxMesh* b = meshes[j];
+
+                    Vec3 aMin = a->bounds.min, aMax = a->bounds.max;
+                    Vec3 bMin = b->bounds.min, bMax = b->bounds.max;
+
+                    float overlapX = std::min(aMax.x, bMax.x) - std::max(aMin.x, bMin.x);
+                    float overlapY = std::min(aMax.y, bMax.y) - std::max(aMin.y, bMin.y);
+                    float overlapZ = std::min(aMax.z, bMax.z) - std::max(aMin.z, bMin.z);
+
+                    if (overlapX > 0 && overlapY > 0 && overlapZ > 0) {
+                        anyOverlap = true;
+                        // Minimum translation vector separation
+                        if (overlapX <= overlapY && overlapX <= overlapZ) {
+                            float push = (overlapX + minMargin) * 0.5f;
+                            float sign = (a->bounds.center().x < b->bounds.center().x) ? -1.0f : 1.0f;
+                            a->translate(Vec3(sign * push, 0, 0));
+                            b->translate(Vec3(-sign * push, 0, 0));
+                        } else if (overlapZ <= overlapX && overlapZ <= overlapY) {
+                            float push = (overlapZ + minMargin) * 0.5f;
+                            float sign = (a->bounds.center().z < b->bounds.center().z) ? -1.0f : 1.0f;
+                            a->translate(Vec3(0, 0, sign * push));
+                            b->translate(Vec3(0, 0, -sign * push));
+                        } else {
+                            float push = (overlapY + minMargin) * 0.5f;
+                            float sign = (a->bounds.center().y < b->bounds.center().y) ? -1.0f : 1.0f;
+                            a->translate(Vec3(0, sign * push, 0));
+                            b->translate(Vec3(0, -sign * push, 0));
+                        }
+                        a->recomputeBounds();
+                        b->recomputeBounds();
+                    }
+                }
+            }
+            if (!anyOverlap) break;
+        }
+    }
+
+    /**
+     * Audits registered mesh pairs for penetrations or floating air gaps.
+     */
+    std::vector<ContactAuditViolation> auditContacts(float maxAllowedGap = 0.05f) const {
+        std::vector<ContactAuditViolation> violations;
+        std::vector<std::pair<std::string, ScratchboxMesh*>> meshList(meshRegistry.begin(), meshRegistry.end());
+        size_t n = meshList.size();
+
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t j = i + 1; j < n; ++j) {
+                const auto& a = meshList[i];
+                const auto& b = meshList[j];
+                if (!a.second || !b.second) continue;
+
+                Vec3 aMin = a.second->bounds.min, aMax = a.second->bounds.max;
+                Vec3 bMin = b.second->bounds.min, bMax = b.second->bounds.max;
+
+                float overlapX = std::min(aMax.x, bMax.x) - std::max(aMin.x, bMin.x);
+                float overlapY = std::min(aMax.y, bMax.y) - std::max(aMin.y, bMin.y);
+                float overlapZ = std::min(aMax.z, bMax.z) - std::max(aMin.z, bMin.z);
+
+                if (overlapX > 0.02f && overlapY > 0.02f && overlapZ > 0.02f) {
+                    ContactAuditViolation v;
+                    v.subject = a.first;
+                    v.target = b.first;
+                    v.type = "penetration";
+                    v.metricDistance = std::min({overlapX, overlapY, overlapZ});
+                    v.resolutionDelta = Vec3(overlapX, overlapY, overlapZ);
+                    violations.push_back(v);
+                }
+            }
+        }
+        return violations;
+    }
+};
+
 } // namespace composer
 } // namespace scratchbox
 

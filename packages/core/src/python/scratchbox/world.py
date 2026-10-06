@@ -43,7 +43,8 @@ class World:
         archetype: str = "alpine_karst",
         domain_warp_scale: float = 1.85,
         hydraulic_erosion_steps: int = 35,
-        resolution: int = 160
+        resolution: int = 160,
+        **kwargs
     ) -> Terrain:
         """
         Synthesizes geological terrain using Infiniti invariants and
@@ -74,6 +75,26 @@ class World:
             geom = scratchbox_native.geometry
             mesh = geom.ScratchboxMesh.createPlane(float(extents[0]), float(extents[1]), int(resolution), int(resolution))
             terrain = Terrain(mesh, extents, archetype, domain_warp_scale, hydraulic_erosion_steps)
+
+        # Apply any procedural feature kwargs (e.g. caldera depression, height scaling)
+        features = kwargs.get("features", [])
+        if isinstance(features, (list, tuple)):
+            for f in features:
+                if isinstance(f, dict):
+                    ftype = f.get("type", "")
+                    if "caldera" in ftype or "crater" in ftype:
+                        c_center = f.get("center", (0, 0))
+                        c_rad = float(f.get("radius", 25.0))
+                        c_depth = float(f.get("depth", 8.0))
+                        if hasattr(terrain.mesh, "vertices"):
+                            for v in terrain.mesh.vertices:
+                                dx = v.position.x - c_center[0]
+                                dz = v.position.z - c_center[1]
+                                dist = math.sqrt(dx*dx + dz*dz)
+                                if dist < c_rad:
+                                    factor = (1.0 - dist / c_rad)
+                                    v.position = v.position - math.Vec3(0, c_depth * factor, 0)
+                            terrain.mesh.recompute_normals()
 
         self.terrains.append(terrain)
         return terrain

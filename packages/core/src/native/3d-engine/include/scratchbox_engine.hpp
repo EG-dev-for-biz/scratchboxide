@@ -94,6 +94,7 @@
 #include "scratchbox_infinigen.hpp"
 #include "scratchbox_tile_restructurer.hpp"
 #include "scratchbox_displacement.hpp"
+#include "scratchbox_processing.hpp"
 
 namespace sb = scratchbox;
 namespace disp = scratchbox::displacement;
@@ -101,6 +102,7 @@ namespace vhull = scratchbox::visual_hull;
 namespace gopt = scratchbox::gaussian_opt;
 namespace geo = scratchbox::geometry;
 namespace shp = scratchbox::shaper;
+namespace proc = scratchbox::processing;
 namespace ptc = scratchbox::particles;
 namespace pbr = scratchbox::pbr;
 namespace scn = scratchbox::composer;

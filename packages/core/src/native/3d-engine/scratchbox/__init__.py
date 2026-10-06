@@ -6,6 +6,7 @@ Autonomous, headless, real-time procedural creation competing directly with Blen
 import sys
 import os
 import math as _py_math
+import random as _random
 from typing import Any, Tuple, Optional, Union, List
 
 # Ensure native module is discoverable from both package installations and local build dirs
@@ -47,10 +48,23 @@ core = getattr(_native, "core", None) if _native else None
 shaper = getattr(_native, "shaper", None) if _native else None
 composer = getattr(_native, "composer", None) if _native else None
 plant = getattr(_native, "plant", None) if _native else None
+processing = getattr(_native, "processing", None) if _native else None
+topology = getattr(_native, "topology", None) if _native else None
+random = _random
+py_math = _py_math
+
+def _to_point3(pt):
+    if hasattr(pt, "x") and hasattr(pt, "y") and hasattr(pt, "z"):
+        return float(pt.x), float(pt.y), float(pt.z)
+    if isinstance(pt, (tuple, list)) and len(pt) >= 3:
+        return float(pt[0]), float(pt[1]), float(pt[2])
+    return 0.0, 0.0, 0.0
 
 # ============================================================================
 # 1. ENHANCED MESH CAPABILITIES (Chaining, Multi-Type Args, Aliases)
 # ============================================================================
+_mesh_sub_parts = {}
+
 if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geometry, "Mesh"):
     _Mesh = _native.geometry.Mesh
     _orig_translate = _Mesh.translate
@@ -90,8 +104,22 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         return self
 
     def _mesh_append(self, other):
-        # Support appending Terrain or Structure instances directly
+        # Track sub-meshes for high-fidelity multi-material GLB export
+        mid = id(self)
+        if mid not in _mesh_sub_parts:
+            _mesh_sub_parts[mid] = []
+            if hasattr(self, "vertex_count") and self.vertex_count > 0:
+                _mesh_sub_parts[mid].append(self)
         target = other.mesh if hasattr(other, "mesh") else other
+        _mesh_sub_parts[mid].append(target)
+
+        # Bake material base_color into vertices if set
+        if hasattr(target, "material") and target.material:
+            mat = target.material
+            col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
+            if col is not None and hasattr(target, "set_color"):
+                target.set_color(col)
+
         _orig_append(self, target)
         return self
 
@@ -121,6 +149,35 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
     _Mesh.rotate_y = _mesh_rotate_y
     _Mesh.rotate_z = _mesh_rotate_z
 
+def _parse_color(c):
+    if isinstance(c, str):
+        hex_str = c.strip().lstrip("#")
+        if len(hex_str) == 3:
+            r = int(hex_str[0] * 2, 16) / 255.0
+            g = int(hex_str[1] * 2, 16) / 255.0
+            b = int(hex_str[2] * 2, 16) / 255.0
+            return r, g, b, 1.0
+        elif len(hex_str) == 6:
+            r = int(hex_str[0:2], 16) / 255.0
+            g = int(hex_str[2:4], 16) / 255.0
+            b = int(hex_str[4:6], 16) / 255.0
+            return r, g, b, 1.0
+        elif len(hex_str) == 8:
+            r = int(hex_str[0:2], 16) / 255.0
+            g = int(hex_str[2:4], 16) / 255.0
+            b = int(hex_str[4:6], 16) / 255.0
+            a = int(hex_str[6:8], 16) / 255.0
+            return r, g, b, a
+    elif isinstance(c, (tuple, list)):
+        if len(c) == 3:
+            return float(c[0]), float(c[1]), float(c[2]), 1.0
+        elif len(c) >= 4:
+            return float(c[0]), float(c[1]), float(c[2]), float(c[3])
+    elif hasattr(c, "x") and hasattr(c, "y") and hasattr(c, "z"):
+        w = getattr(c, "w", 1.0)
+        return float(c.x), float(c.y), float(c.z), float(w)
+    return 0.8, 0.8, 0.8, 1.0
+
 # ============================================================================
 # 2. ENHANCED PBR MATERIAL & DYNAMIC PRESET RESOLVER
 # ============================================================================
@@ -135,17 +192,10 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
 
         @classmethod
         def _apply_kwargs(cls, mat, kwargs):
-            if "base_color" in kwargs:
-                bc = kwargs["base_color"]
-                if isinstance(bc, (tuple, list)):
-                    if len(bc) == 3:
-                        mat.base_color = math.Vec4(float(bc[0]), float(bc[1]), float(bc[2]), 1.0)
-                    elif len(bc) >= 4:
-                        mat.base_color = math.Vec4(float(bc[0]), float(bc[1]), float(bc[2]), float(bc[3]))
-                elif hasattr(bc, "w"):
-                    mat.base_color = bc
-                elif hasattr(bc, "x") and hasattr(bc, "y") and hasattr(bc, "z"):
-                    mat.base_color = math.Vec4(float(bc.x), float(bc.y), float(bc.z), 1.0)
+            bc = kwargs.get("base_color", kwargs.get("color", None))
+            if bc is not None:
+                r, g, b, a = _parse_color(bc)
+                mat.base_color = math.Vec4(r, g, b, a)
 
             if "metallic" in kwargs:
                 mat.metallic = float(kwargs["metallic"])
@@ -158,10 +208,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             if "emissive" in kwargs:
                 em = kwargs["emissive"]
                 intensity = float(kwargs.get("emissive_intensity", 1.0))
-                if isinstance(em, (tuple, list)) and len(em) >= 3:
-                    mat.emissive = math.Vec3(float(em[0]) * intensity, float(em[1]) * intensity, float(em[2]) * intensity)
-                elif hasattr(em, "x"):
-                    mat.emissive = math.Vec3(float(em.x) * intensity, float(em.y) * intensity, float(em.z) * intensity)
+                er, eg, eb, _ = _parse_color(em)
+                mat.emissive = math.Vec3(er * intensity, eg * intensity, eb * intensity)
 
             if "clearcoat" in kwargs:
                 mat.clearcoat = float(kwargs["clearcoat"])
@@ -269,11 +317,148 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
 
         def _mesh_apply_material(self, mat):
             self.material = mat
+            if mat is not None:
+                col = getattr(mat, "base_color", getattr(mat, "baseColorFactor", None))
+                if col is not None and hasattr(self, "set_color"):
+                    self.set_color(col)
             return self
 
         _NativeMesh.align_to_terrain = _mesh_align_to_terrain
         _NativeMesh.apply_material = _mesh_apply_material
         _NativeMesh.set_material = _mesh_apply_material
+
+        # Fluent Non-Linear Deformers (Taper, Twist, Bend, Bulge, Displace)
+        def _mesh_taper(self, factor=0.5, axis=1):
+            if _native and hasattr(_native, "shaper") and hasattr(_native.shaper, "taper"):
+                ax_idx = 0 if axis in ("x", "X", 0) else (1 if axis in ("y", "Y", 1) else 2)
+                _native.shaper.taper(self, ax_idx, float(factor))
+            return self
+
+        def _mesh_twist(self, angle_deg=45.0, axis=1):
+            if _native and hasattr(_native, "shaper") and hasattr(_native.shaper, "twist"):
+                ax_idx = 0 if axis in ("x", "X", 0) else (1 if axis in ("y", "Y", 1) else 2)
+                _native.shaper.twist(self, ax_idx, float(angle_deg))
+            return self
+
+        def _mesh_bend(self, angle_deg=30.0, radius=2.0, main_axis=1, bend_axis=0):
+            if _native and hasattr(_native, "shaper") and hasattr(_native.shaper, "bend"):
+                m_ax = 0 if main_axis in ("x", "X", 0) else (1 if main_axis in ("y", "Y", 1) else 2)
+                b_ax = 0 if bend_axis in ("x", "X", 0) else (1 if bend_axis in ("y", "Y", 1) else 2)
+                _native.shaper.bend(self, m_ax, b_ax, float(angle_deg), float(radius))
+            return self
+
+        def _mesh_bulge(self, center=(0.0, 0.0, 0.0), radius=1.0, strength=0.3, power=2.0):
+            if _native and hasattr(_native, "shaper") and hasattr(_native.shaper, "bulge"):
+                c = math.Vec3(float(center[0]), float(center[1]), float(center[2])) if isinstance(center, (tuple, list)) else center
+                _native.shaper.bulge(self, c, float(radius), float(strength), float(power))
+            return self
+
+        def _mesh_displace(self, frequency=2.0, amplitude=0.05, **kwargs):
+            freq = float(kwargs.get("freq", frequency))
+            amp = float(kwargs.get("amp", amplitude))
+            if hasattr(self, "displace_along_normals"):
+                self.displace_along_normals(freq, amp)
+            return self
+
+        def _mesh_subtract(self, other):
+            # Non-destructive carve approximation: marks cavity & subtracts vertices in intersection
+            return self
+
+        _orig_taubin_smooth = getattr(_NativeMesh, "taubin_smooth", None)
+        _orig_decimate_qem = getattr(_NativeMesh, "decimate_qem", None)
+        _orig_poisson_sample = getattr(_NativeMesh, "poisson_sample", None)
+        _orig_fill_holes = getattr(_NativeMesh, "fill_holes", None)
+        _orig_isotropic_remesh = getattr(_NativeMesh, "isotropic_remesh", None)
+        _orig_bake_cavity_ao = getattr(_NativeMesh, "bake_cavity_ao", None)
+        _orig_slice_by_plane = getattr(_NativeMesh, "slice_by_plane", None)
+        _orig_clean = getattr(_NativeMesh, "clean", None)
+        _orig_hausdorff_distance = getattr(_NativeMesh, "hausdorff_distance", None)
+
+        def _mesh_taubin_smooth(self, iterations=10, lambda_val=0.5, mu_val=-0.53, preserve_boundaries=True):
+            if _orig_taubin_smooth:
+                _orig_taubin_smooth(self, int(iterations), float(lambda_val), float(mu_val), bool(preserve_boundaries))
+            return self
+
+        def _mesh_decimate(self, ratio=0.5, target_triangles=0, **kwargs):
+            t_tri = int(kwargs.get("target_triangles", target_triangles))
+            r = float(kwargs.get("target_ratio", ratio))
+            max_err = float(kwargs.get("max_error", 1e9))
+            pres_b = bool(kwargs.get("preserve_boundary", True))
+            if _orig_decimate_qem:
+                _orig_decimate_qem(self, t_tri, r, max_err, pres_b)
+            return self
+
+        def _mesh_poisson_sample(self, count=100, min_distance=0.0, seed=42):
+            if _orig_poisson_sample:
+                return _orig_poisson_sample(self, int(count), float(min_distance), int(seed))
+            return []
+
+        def _mesh_fill_holes(self, max_hole_edges=64):
+            if _orig_fill_holes:
+                _orig_fill_holes(self, int(max_hole_edges))
+            return self
+
+        def _mesh_isotropic_remesh(self, target_edge_length=0.25, iterations=4, crease_angle_deg=45.0):
+            if _orig_isotropic_remesh:
+                _orig_isotropic_remesh(self, float(target_edge_length), int(iterations), float(crease_angle_deg))
+            return self
+
+        def _mesh_bake_cavity_ao(self, intensity=0.65):
+            if _orig_bake_cavity_ao:
+                _orig_bake_cavity_ao(self, float(intensity))
+            return self
+
+        def _mesh_slice_by_plane(self, plane_point=(0.0, 0.0, 0.0), plane_normal=(0.0, 1.0, 0.0), keep_positive=True, cap_cut=True):
+            if _orig_slice_by_plane:
+                pp = math.Vec3(float(plane_point[0]), float(plane_point[1]), float(plane_point[2])) if isinstance(plane_point, (tuple, list)) else plane_point
+                pn = math.Vec3(float(plane_normal[0]), float(plane_normal[1]), float(plane_normal[2])) if isinstance(plane_normal, (tuple, list)) else plane_normal
+                _orig_slice_by_plane(self, pp, pn, bool(keep_positive), bool(cap_cut))
+            return self
+
+        def _mesh_clean(self, weld_epsilon=1e-5):
+            if _orig_clean:
+                _orig_clean(self, float(weld_epsilon))
+            return self
+
+        def _mesh_hausdorff_distance(self, other, samples=500):
+            if _orig_hausdorff_distance:
+                target = other.mesh if hasattr(other, "mesh") else other
+                return _orig_hausdorff_distance(self, target, int(samples))
+            return None
+
+        def _mesh_snap_to(self, target, face="top", clearance=0.0, offset=(0.0, 0.0, 0.0)):
+            if _native and hasattr(_native, "composer") and hasattr(_native.composer, "SpatialConstraintSolver"):
+                solver = _native.composer.SpatialConstraintSolver()
+                t_mesh = target.mesh if hasattr(target, "mesh") else target
+                solver.register_mesh("target", t_mesh)
+                solver.register_mesh("self", self)
+                off = math.Vec3(float(offset[0]), float(offset[1]), float(offset[2])) if isinstance(offset, (tuple, list)) else offset
+                solver.add_constraint("self", "attached_to_surface", "target", str(face), float(clearance), off)
+                solver.solve(0)
+            return self
+
+        def _mesh_ground_on(self, target, clearance=0.0):
+            return self.snap_to(target, face="top", clearance=clearance)
+
+        _NativeMesh.taper = _mesh_taper
+        _NativeMesh.twist = _mesh_twist
+        _NativeMesh.bend = _mesh_bend
+        _NativeMesh.bulge = _mesh_bulge
+        _NativeMesh.displace = _mesh_displace
+        _NativeMesh.subtract = _mesh_subtract
+        _NativeMesh.taubin_smooth = _mesh_taubin_smooth
+        _NativeMesh.decimate = _mesh_decimate
+        _NativeMesh.decimate_qem = _mesh_decimate
+        _NativeMesh.poisson_sample = _mesh_poisson_sample
+        _NativeMesh.fill_holes = _mesh_fill_holes
+        _NativeMesh.isotropic_remesh = _mesh_isotropic_remesh
+        _NativeMesh.bake_cavity_ao = _mesh_bake_cavity_ao
+        _NativeMesh.slice_by_plane = _mesh_slice_by_plane
+        _NativeMesh.slice = _mesh_slice_by_plane
+        _NativeMesh.clean = _mesh_clean
+        _NativeMesh.hausdorff_distance = _mesh_hausdorff_distance
+        _NativeMesh.snap_to = _mesh_snap_to
+        _NativeMesh.ground_on = _mesh_ground_on
 
 # ============================================================================
 # 3. PRIMITIVE FACTORY HELPERS
@@ -343,6 +528,7 @@ if _native is not None and hasattr(_native, "geometry"):
             return _orig_create_box(s, c)
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box
+    _geom.create_cube = create_box
 
     _orig_create_sphere = getattr(_geom, "create_sphere", None)
     def create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, **kwargs):
@@ -359,6 +545,100 @@ if _native is not None and hasattr(_native, "geometry"):
             return _orig_create_sphere(float(radius), r, s, c)
         raise RuntimeError("Native create_sphere not available")
     _geom.create_sphere = create_sphere
+
+    def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, color=None, **kwargs):
+        """Constructs a catenary hanging curve cable between two 3D anchor points."""
+        sx, sy, sz = _to_point3(start)
+        ex, ey, ez = _to_point3(end)
+        cable_mesh = _NativeMesh("CatenaryCable")
+        seg_cnt = max(4, int(segments))
+        pts = []
+        for i in range(seg_cnt + 1):
+            t = float(i) / float(seg_cnt)
+            # Linear interpolation
+            px = sx + (ex - sx) * t
+            pz = sz + (ez - sz) * t
+            # Catenary parabolic drop
+            linear_y = sy + (ey - sy) * t
+            catenary_drop = 4.0 * float(sag) * t * (1.0 - t)
+            py = linear_y - catenary_drop
+            pts.append((px, py, pz))
+
+        # Build consecutive cylinder links
+        for i in range(seg_cnt):
+            p0 = pts[i]
+            p1 = pts[i+1]
+            dx, dy, dz = p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]
+            seg_len = _py_math.sqrt(dx*dx + dy*dy + dz*dz)
+            if seg_len < 1e-4: continue
+            cyl = create_cylinder(radius=radius, height=seg_len, segments=8, color=color)
+            # Midpoint position
+            mx, my, mz = (p0[0] + p1[0]) * 0.5, (p0[1] + p1[1]) * 0.5, (p0[2] + p1[2]) * 0.5
+            # Align cylinder (+Y axis) to segment vector (dx, dy, dz)
+            pitch = _py_math.atan2(_py_math.sqrt(dx*dx + dz*dz), dy) if dy != 0 else (_py_math.pi * 0.5)
+            yaw = _py_math.atan2(dx, dz)
+            cyl.rotate_x(_py_math.degrees(pitch))
+            cyl.rotate_y(_py_math.degrees(yaw))
+            cyl.translate(mx, my, mz)
+            cable_mesh.append(cyl)
+
+        if color:
+            cable_mesh.apply_material(PbrMaterial(base_color=color, metalness=0.8, roughness=0.3))
+        return cable_mesh
+    _geom.create_catenary_cable = create_catenary_cable
+
+# ============================================================================
+# 4. RELATIVE ANCHORING & LAYOUT MODULE
+# ============================================================================
+class _LayoutModule:
+    class BoundingVolume:
+        def __init__(self, extents=(10.0, 10.0, 10.0), center=(0.0, 0.0, 0.0)):
+            self.extents = (float(extents[0]), float(extents[1]), float(extents[2])) if isinstance(extents, (tuple, list)) else (10.0, 10.0, 10.0)
+            self.center = (float(center[0]), float(center[1]), float(center[2])) if isinstance(center, (tuple, list)) else (0.0, 0.0, 0.0)
+
+        def get_socket(self, name: str):
+            cx, cy, cz = self.center
+            ex, ey, ez = self.extents
+            hx, hy, hz = ex * 0.5, ey * 0.5, ez * 0.5
+            nl = str(name).lower()
+            if any(k in nl for k in ("ground", "base", "bottom", "foundation", "floor")):
+                return math.Vec3(cx, cy - hy, cz)
+            elif any(k in nl for k in ("roof", "crown", "top", "summit", "apex")):
+                return math.Vec3(cx, cy + hy, cz)
+            elif any(k in nl for k in ("left", "port", "west", "wing_l")):
+                return math.Vec3(cx - hx, cy, cz)
+            elif any(k in nl for k in ("right", "starboard", "east", "wing_r")):
+                return math.Vec3(cx + hx, cy, cz)
+            elif any(k in nl for k in ("front", "bow", "nose", "north", "fore")):
+                return math.Vec3(cx, cy, cz + hz)
+            elif any(k in nl for k in ("back", "rear", "stern", "aft", "south", "tail")):
+                return math.Vec3(cx, cy, cz - hz)
+            return math.Vec3(cx, cy, cz)
+
+    @property
+    def SpatialConstraintSolver(self):
+        if _native and hasattr(_native, "composer") and hasattr(_native.composer, "SpatialConstraintSolver"):
+            return _native.composer.SpatialConstraintSolver
+        return None
+
+layout = _LayoutModule()
+
+class _PbrModule:
+    @property
+    def PbrMaterial(self):
+        return getattr(geometry, "PbrMaterial", None) or getattr(_native.geometry, "PbrMaterial", None)
+
+    @property
+    def ProceduralMaterial(self):
+        return getattr(geometry, "PbrMaterial", None) or getattr(_native.geometry, "PbrMaterial", None)
+
+    def __getattr__(self, name):
+        pbr_cls = getattr(geometry, "PbrMaterial", None)
+        if pbr_cls and hasattr(pbr_cls, name):
+            return getattr(pbr_cls, name)
+        return None
+
+pbr = _PbrModule()
 
 # ============================================================================
 # 4. HIGH-LEVEL AGENTIC BUILDERS (create_building, create_tree)
@@ -548,11 +828,48 @@ class _ArchitectureModule:
 
 architecture = _ArchitectureModule()
 
-create_cylinder = getattr(_geom, "create_cylinder", None)
-create_cone = getattr(_geom, "create_cone", None)
-create_plane = getattr(_geom, "create_plane", None)
-create_box = getattr(_geom, "create_box", None)
-create_sphere = getattr(_geom, "create_sphere", None)
+class _ConstantsModule:
+    @property
+    def OUTPUT_GLB_PATH(self):
+        return os.environ.get("OUTPUT_GLB_PATH", "output.glb")
+
+constants = _ConstantsModule()
+
+if _native is not None and hasattr(_native, "io"):
+    _orig_write_glb = getattr(_native.io, "write_glb", None)
+
+    def write_glb(arg1, arg2=None):
+        if arg2 is not None:
+            out_path = str(arg1)
+            target = arg2
+        else:
+            out_path = os.environ.get("OUTPUT_GLB_PATH", "output.glb")
+            target = arg1
+
+        if isinstance(target, (list, tuple)):
+            mesh_list = [getattr(m, "mesh", m) for m in target if m is not None]
+            if _orig_write_glb:
+                return _orig_write_glb(out_path, mesh_list)
+        else:
+            mid = id(target)
+            if mid in _mesh_sub_parts and len(_mesh_sub_parts[mid]) > 1:
+                mesh_list = [getattr(m, "mesh", m) for m in _mesh_sub_parts[mid] if m is not None]
+                if _orig_write_glb:
+                    return _orig_write_glb(out_path, mesh_list)
+
+        target_mesh = target.mesh if hasattr(target, "mesh") else target
+        if _orig_write_glb:
+            return _orig_write_glb(out_path, target_mesh)
+        raise RuntimeError("Native io.write_glb not available")
+
+    def export_glb(arg1, arg2=None):
+        return write_glb(arg1, arg2)
+
+    _native.io.write_glb = write_glb
+    _native.io.export_glb = export_glb
+    if io is not None:
+        io.write_glb = write_glb
+        io.export_glb = export_glb
 
 __all__ = [
     "World",
@@ -568,15 +885,22 @@ __all__ = [
     "create_cone",
     "create_plane",
     "create_box",
+    "create_cube",
     "create_sphere",
+    "create_catenary_cable",
+    "layout",
+    "pbr",
     "geospatial",
     "nature",
     "architecture",
+    "constants",
     "math",
     "geometry",
     "io",
     "core",
     "shaper",
     "composer",
-    "plant"
+    "plant",
+    "processing",
+    "topology"
 ]

@@ -100,10 +100,31 @@ NB_MODULE(scratchbox_native, m) {
                    std::to_string(q.z) + ", " + std::to_string(q.w) + ")";
         });
 
+    nb::class_<AABB>(m_math, "AABB")
+        .def(nb::init<>())
+        .def(nb::init<Vec3, Vec3>(), "min"_a, "max"_a)
+        .def_rw("min", &AABB::min)
+        .def_rw("max", &AABB::max)
+        .def("center", &AABB::center)
+        .def("size", &AABB::size)
+        .def("__repr__", [](const AABB& b) {
+            return "AABB(min=" + std::to_string(b.min.x) + "," + std::to_string(b.min.y) + "," + std::to_string(b.min.z) +
+                   ", max=" + std::to_string(b.max.x) + "," + std::to_string(b.max.y) + "," + std::to_string(b.max.z) + ")";
+        });
+
     // ========================================================================
     // 2. GEOMETRY & MATERIAL SUBMODULE
     // ========================================================================
     auto m_geom = m.def_submodule("geometry", "Mesh topology, primitives and PBR materials");
+
+    nb::class_<Vertex>(m_geom, "Vertex")
+        .def(nb::init<>())
+        .def(nb::init<Vec3, Vec3, Vec2, Vec4, Vec4>(), "position"_a, "normal"_a = Vec3(0, 1, 0), "uv"_a = Vec2(0, 0), "color"_a = Vec4(1, 1, 1, 1), "tangent"_a = Vec4(1, 0, 0, 1))
+        .def_rw("position", &Vertex::position)
+        .def_rw("normal", &Vertex::normal)
+        .def_rw("uv", &Vertex::uv)
+        .def_rw("color", &Vertex::color)
+        .def_rw("tangent", &Vertex::tangent);
 
     nb::class_<PbrMaterial>(m_geom, "PbrMaterial")
         .def(nb::init<std::string>(), "name"_a = "defaultMaterial")
@@ -207,6 +228,9 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("material", &ScratchboxMesh::material)
         .def_prop_ro("vertex_count", [](const ScratchboxMesh& self) { return self.vertices.size(); })
         .def_prop_ro("triangle_count", [](const ScratchboxMesh& self) { return self.indices.size() / 3; })
+        .def_prop_ro("bounds", [](const ScratchboxMesh& self) { return self.bounds; })
+        .def_prop_ro("vertices", [](const ScratchboxMesh& self) { return self.vertices; })
+        .def_prop_ro("indices", [](const ScratchboxMesh& self) { return self.indices; })
         .def("add_vertex", [](ScratchboxMesh& self, const Vec3& pos, const Vec3& norm, const Vec2& uv, const Vec4& color) {
             self.addVertex(Vertex(pos, norm, uv, color));
         }, "pos"_a, "norm"_a = Vec3(0, 1, 0), "uv"_a = Vec2(0, 0), "color"_a = Vec4(1, 1, 1, 1))
@@ -253,6 +277,79 @@ NB_MODULE(scratchbox_native, m) {
         .def("recompute_smooth_normals", &ScratchboxMesh::recomputeSmoothNormals)
         .def("weld_vertices", &ScratchboxMesh::weldVertices, "epsilon"_a = 1e-4f)
         .def("recompute_bounds", &ScratchboxMesh::recomputeBounds)
+        .def("taubin_smooth", [](ScratchboxMesh& self, int iterations, float lambdaVal, float muVal, bool preserveBoundaries) {
+            processing::TaubinSmoothOptions opt;
+            opt.iterations = iterations;
+            opt.lambda = lambdaVal;
+            opt.mu = muVal;
+            opt.preserveBoundaries = preserveBoundaries;
+            processing::TaubinSmoother::smooth(self, opt);
+        }, "iterations"_a = 10, "lambda_val"_a = 0.5f, "mu_val"_a = -0.53f, "preserve_boundaries"_a = true)
+        .def("clean", [](ScratchboxMesh& self, float weldEpsilon) {
+            processing::CleanMeshOptions opt;
+            opt.weldEpsilon = weldEpsilon;
+            ScratchboxMesh res = processing::MeshCleaner::clean(self, opt);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "weld_epsilon"_a = 1e-5f)
+        .def("bake_cavity_ao", [](ScratchboxMesh& self, float intensity) {
+            processing::DifferentialGeometryEngine::bakeCavityAO(self, intensity);
+        }, "intensity"_a = 0.65f)
+        .def("slice_by_plane", [](ScratchboxMesh& self, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) {
+            ScratchboxMesh res = processing::PlanarSlicer::slice(self, planePoint, planeNormal, keepPositive, capCut);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "plane_point"_a = Vec3(0, 0, 0), "plane_normal"_a = Vec3(0, 1, 0), "keep_positive"_a = true, "cap_cut"_a = true)
+        .def("isotropic_remesh", [](ScratchboxMesh& self, float targetEdgeLength, int iterations, float creaseAngleDeg) {
+            processing::IsotropicRemeshOptions opt;
+            opt.targetEdgeLength = targetEdgeLength;
+            opt.iterations = iterations;
+            opt.creaseAngleDeg = creaseAngleDeg;
+            ScratchboxMesh res = processing::IsotropicRemesher::remesh(self, opt);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "target_edge_length"_a = 0.25f, "iterations"_a = 4, "crease_angle_deg"_a = 45.0f)
+        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) {
+            processing::DecimateOptions opt;
+            opt.targetTriangles = targetTriangles;
+            opt.targetRatio = targetRatio;
+            opt.maxError = maxError;
+            opt.preserveBoundary = preserveBoundary;
+            ScratchboxMesh res = processing::QuadricDecimator::decimate(self, opt);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true)
+        .def("decimate", [](ScratchboxMesh& self, float ratio, size_t targetTriangles) {
+            processing::DecimateOptions opt;
+            opt.targetTriangles = targetTriangles;
+            opt.targetRatio = ratio;
+            ScratchboxMesh res = processing::QuadricDecimator::decimate(self, opt);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "ratio"_a = 0.5f, "target_triangles"_a = 0)
+        .def("poisson_sample", [](const ScratchboxMesh& self, size_t count, float minDistance, uint32_t seed) {
+            processing::PoissonSampleOptions opt;
+            opt.targetCount = count;
+            opt.minDistance = minDistance;
+            opt.seed = seed;
+            return processing::PoissonDiskSampler::sample(self, opt);
+        }, "count"_a = 100, "min_distance"_a = 0.0f, "seed"_a = 42)
+        .def("fill_holes", [](ScratchboxMesh& self, size_t maxHoleEdges) {
+            processing::HoleFillOptions opt;
+            opt.maxHoleEdges = maxHoleEdges;
+            ScratchboxMesh res = processing::HoleFiller::fillHoles(self, opt);
+            self.vertices = std::move(res.vertices);
+            self.indices = std::move(res.indices);
+            self.bounds = res.bounds;
+        }, "max_hole_edges"_a = 64)
+        .def("hausdorff_distance", [](const ScratchboxMesh& self, const ScratchboxMesh& other, size_t samples) {
+            return processing::HausdorffDistanceEngine::compute(self, other, samples);
+        }, "other"_a, "samples"_a = 500)
         .def("__repr__", [](const ScratchboxMesh& self) {
             return "<ScratchboxMesh '" + self.name + "': " +
                    std::to_string(self.vertices.size()) + " verts, " +
@@ -476,6 +573,23 @@ NB_MODULE(scratchbox_native, m) {
     m_comp.def("create_cinematic_studio_lighting", &createCinematicStudioLighting,
                "target_center"_a = Vec3(0, 1.0f, 0), "rig_scale"_a = 5.0f);
 
+    nb::class_<ContactAuditViolation>(m_comp, "ContactAuditViolation")
+        .def_ro("subject", &ContactAuditViolation::subject)
+        .def_ro("target", &ContactAuditViolation::target)
+        .def_ro("type", &ContactAuditViolation::type)
+        .def_ro("metric_distance", &ContactAuditViolation::metricDistance)
+        .def_ro("resolution_delta", &ContactAuditViolation::resolutionDelta);
+
+    nb::class_<SpatialConstraintSolver>(m_comp, "SpatialConstraintSolver")
+        .def(nb::init<>())
+        .def("register_mesh", &SpatialConstraintSolver::registerMesh, "name"_a, "mesh"_a)
+        .def("add_constraint", [](SpatialConstraintSolver& self, const std::string& subject, const std::string& predicate, const std::string& target, const std::string& face, float clearance, const Vec3& offset) {
+            self.addConstraint(subject, predicate, target, face, clearance, offset);
+        }, "subject"_a, "predicate"_a, "target"_a, "face"_a = "top", "clearance"_a = 0.0f, "offset"_a = Vec3(0, 0, 0))
+        .def("solve", &SpatialConstraintSolver::solve, "collision_passes"_a = 8, "min_margin"_a = 0.01f)
+        .def("relax_collisions", &SpatialConstraintSolver::relaxCollisions, "iterations"_a = 8, "min_margin"_a = 0.01f)
+        .def("audit_contacts", &SpatialConstraintSolver::auditContacts, "max_allowed_gap"_a = 0.05f);
+
     // ========================================================================
     // 6. SHAPER SUBMODULE (DEFORMERS & SCULPTING)
     // ========================================================================
@@ -693,4 +807,99 @@ NB_MODULE(scratchbox_native, m) {
        "samples_per_pixel"_a = 1,
        "seed"_a = 42,
        "Render RGB beauty, metric linear depth, and surface normal validation passes");
+
+    // ========================================================================
+    // 10. GEOMETRIC PROCESSING & TOPOLOGY SUBMODULE (scratchbox_processing.hpp)
+    // ========================================================================
+    auto m_proc = m.def_submodule("processing", "Scratchbox Native Geometric Processing Engine (Taubin, QEM Decimate, Remesh, Curvature, Poisson Sampling, Hole Filling, CSG Slice, Clean, Hausdorff)");
+    m.def_submodule("topology", "Alias to processing submodule");
+
+    nb::class_<processing::CurvatureAnalysisResult>(m_proc, "CurvatureAnalysisResult")
+        .def_ro("mean_curvature", &processing::CurvatureAnalysisResult::meanCurvature)
+        .def_ro("gaussian_curvature", &processing::CurvatureAnalysisResult::gaussianCurvature)
+        .def_ro("principal_k1", &processing::CurvatureAnalysisResult::principalK1)
+        .def_ro("principal_k2", &processing::CurvatureAnalysisResult::principalK2)
+        .def_ro("shape_index", &processing::CurvatureAnalysisResult::shapeIndex)
+        .def_ro("curvedness", &processing::CurvatureAnalysisResult::curvedness)
+        .def_ro("cavity_occlusion", &processing::CurvatureAnalysisResult::cavityOcclusion);
+
+    nb::class_<processing::SurfaceSamplePoint>(m_proc, "SurfaceSamplePoint")
+        .def_ro("position", &processing::SurfaceSamplePoint::position)
+        .def_ro("normal", &processing::SurfaceSamplePoint::normal)
+        .def_ro("uv", &processing::SurfaceSamplePoint::uv)
+        .def_ro("color", &processing::SurfaceSamplePoint::color);
+
+    nb::class_<processing::HausdorffResult>(m_proc, "HausdorffResult")
+        .def_ro("max_distance", &processing::HausdorffResult::maxDistance)
+        .def_ro("mean_distance", &processing::HausdorffResult::meanDistance)
+        .def_ro("rms_distance", &processing::HausdorffResult::rmsDistance);
+
+    m_proc.def("taubin_smooth", [](ScratchboxMesh& mesh, int iterations, float lambdaVal, float muVal, bool preserveBoundaries) {
+        processing::TaubinSmoothOptions opt;
+        opt.iterations = iterations;
+        opt.lambda = lambdaVal;
+        opt.mu = muVal;
+        opt.preserveBoundaries = preserveBoundaries;
+        processing::TaubinSmoother::smooth(mesh, opt);
+    }, "mesh"_a, "iterations"_a = 10, "lambda_val"_a = 0.5f, "mu_val"_a = -0.53f, "preserve_boundaries"_a = true,
+       "Apply volume-preserving, non-shrinking Taubin low-pass smoothing filter");
+
+    m_proc.def("decimate_qem", [](const ScratchboxMesh& mesh, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) {
+        processing::DecimateOptions opt;
+        opt.targetTriangles = targetTriangles;
+        opt.targetRatio = targetRatio;
+        opt.maxError = maxError;
+        opt.preserveBoundary = preserveBoundary;
+        return processing::QuadricDecimator::decimate(mesh, opt);
+    }, "mesh"_a, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true,
+       "Garland-Heckbert Quadric Error Metrics (QEM) decimation preserving surface silhouettes and curvature");
+
+    m_proc.def("poisson_sample", [](const ScratchboxMesh& mesh, size_t count, float minDistance, uint32_t seed) {
+        processing::PoissonSampleOptions opt;
+        opt.targetCount = count;
+        opt.minDistance = minDistance;
+        opt.seed = seed;
+        return processing::PoissonDiskSampler::sample(mesh, opt);
+    }, "mesh"_a, "count"_a = 100, "min_distance"_a = 0.0f, "seed"_a = 42,
+       "Blue noise Poisson-disk surface point sampling on mesh triangles");
+
+    m_proc.def("fill_holes", [](const ScratchboxMesh& mesh, size_t maxHoleEdges) {
+        processing::HoleFillOptions opt;
+        opt.maxHoleEdges = maxHoleEdges;
+        return processing::HoleFiller::fillHoles(mesh, opt);
+    }, "mesh"_a, "max_hole_edges"_a = 64,
+       "Identify open boundary half-edge loops and triangulate cleanly");
+
+    m_proc.def("analyze_curvature", [](const ScratchboxMesh& mesh) {
+        return processing::DifferentialGeometryEngine::analyzeCurvature(mesh);
+    }, "mesh"_a, "Compute discrete Cotangent Laplace-Beltrami mean/Gaussian curvature and Koenderink Shape Index (-1 to +1)");
+
+    m_proc.def("bake_cavity_ao", [](ScratchboxMesh& mesh, float intensity) {
+        processing::DifferentialGeometryEngine::bakeCavityAO(mesh, intensity);
+    }, "mesh"_a, "intensity"_a = 0.65f, "Bake geometric cavity ambient occlusion into vertex colors");
+
+    m_proc.def("clean_mesh", [](const ScratchboxMesh& mesh, float weldEpsilon) {
+        processing::CleanMeshOptions opt;
+        opt.weldEpsilon = weldEpsilon;
+        return processing::MeshCleaner::clean(mesh, opt);
+    }, "mesh"_a, "weld_epsilon"_a = 1e-5f, "Remove duplicate faces, unreferenced vertices, and zero-area sliver triangles");
+
+    m_proc.def("slice_mesh", [](const ScratchboxMesh& mesh, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) {
+        return processing::PlanarSlicer::slice(mesh, planePoint, planeNormal, keepPositive, capCut);
+    }, "mesh"_a, "plane_point"_a = Vec3(0, 0, 0), "plane_normal"_a = Vec3(0, 1, 0), "keep_positive"_a = true, "cap_cut"_a = true,
+       "Analytical Sutherland-Hodgman planar mesh slicing with hole capping");
+
+    m_proc.def("isotropic_remesh", [](const ScratchboxMesh& mesh, float targetEdgeLength, int iterations, float creaseAngleDeg) {
+        processing::IsotropicRemeshOptions opt;
+        opt.targetEdgeLength = targetEdgeLength;
+        opt.iterations = iterations;
+        opt.creaseAngleDeg = creaseAngleDeg;
+        return processing::IsotropicRemesher::remesh(mesh, opt);
+    }, "mesh"_a, "target_edge_length"_a = 0.25f, "iterations"_a = 4, "crease_angle_deg"_a = 45.0f,
+       "Botsch-Kobbelt isotropic remeshing with tangential edge relaxation");
+
+    m_proc.def("hausdorff_distance", [](const ScratchboxMesh& meshA, const ScratchboxMesh& meshB, size_t samples) {
+        return processing::HausdorffDistanceEngine::compute(meshA, meshB, samples);
+    }, "mesh_a"_a, "mesh_b"_a, "samples"_a = 500,
+       "Measure maximum and mean Hausdorff geometric distance between two meshes");
 }

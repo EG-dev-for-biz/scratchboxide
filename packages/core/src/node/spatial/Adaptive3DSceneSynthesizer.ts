@@ -172,7 +172,92 @@ export class Adaptive3DSceneSynthesizer {
             });
         }
 
-        // 4. Atmosphere & Ephemeris (Zero Default Atmosphere & Fog: only synthesized when explicitly requested)
+        // 4. Relational Scene Graph Blueprint (Zero Hardcoded Blind Offsets)
+        const relations: SpatialRelation[] = [
+            {
+                subjectId: 'plinth',
+                predicate: 'SUPPORTED_BY',
+                targetId: 'terrain',
+                parameters: { offsetNormal: 0.0, faceAlignment: 'ground' }
+            },
+            {
+                subjectId: 'structure_primary_citadel',
+                predicate: 'SUPPORTED_BY',
+                targetId: 'plinth',
+                parameters: { offsetNormal: 0.0, faceAlignment: 'top' }
+            },
+            {
+                subjectId: 'access_bridge',
+                predicate: 'ATTACHED_TO_SURFACE',
+                targetId: 'plinth',
+                parameters: { faceAlignment: 'front', clearanceMeters: 0.0 }
+            },
+            {
+                subjectId: 'mast',
+                predicate: 'ATTACHED_TO_SURFACE',
+                targetId: 'structure_primary_citadel',
+                parameters: { faceAlignment: 'top', clearanceMeters: 0.0 }
+            },
+            {
+                subjectId: 'hvac_chiller',
+                predicate: 'ATTACHED_TO_SURFACE',
+                targetId: 'structure_primary_citadel',
+                parameters: { faceAlignment: 'top', clearanceMeters: 0.0 }
+            }
+        ];
+
+        const sceneGraph: AdaptiveSceneGraphBlueprint = {
+            terrain: {
+                envelope: { width: 150, depth: 150 },
+                reliefMeters: terrain.peakHeight,
+                sharpness: terrain.sharpnessExponent
+            },
+            entities: [
+                {
+                    id: 'plinth',
+                    name: 'Foundation Plinth',
+                    grammarType: 'architectural_edifice',
+                    tier: 'primary',
+                    massingDimensions: [24.0, 1.8, 20.0],
+                    materialProfile: { roughness: 0.85, metalness: 0.05, baseTone: [0.26, 0.27, 0.30] }
+                },
+                {
+                    id: 'structure_primary_citadel',
+                    name: mainBuilding.name,
+                    grammarType: 'architectural_edifice',
+                    tier: 'primary',
+                    massingDimensions: [16.0, floorCount * 3.4, 12.0],
+                    materialProfile: { roughness: 0.65, metalness: 0.15, baseTone: [0.48, 0.50, 0.53] }
+                },
+                {
+                    id: 'access_bridge',
+                    name: 'Access Ramp / Bridge',
+                    grammarType: 'structural_wing',
+                    tier: 'secondary',
+                    massingDimensions: [4.2, 0.85, 11.0],
+                    materialProfile: { roughness: 0.70, metalness: 0.10, baseTone: [0.26, 0.27, 0.30] }
+                },
+                {
+                    id: 'mast',
+                    name: 'Communications Mast',
+                    grammarType: 'mechanical_prop',
+                    tier: 'tertiary',
+                    massingDimensions: [1.4, 12.0, 1.4],
+                    materialProfile: { roughness: 0.20, metalness: 0.90, baseTone: [0.38, 0.40, 0.43] }
+                },
+                {
+                    id: 'hvac_chiller',
+                    name: 'Rooftop HVAC Chiller',
+                    grammarType: 'mechanical_prop',
+                    tier: 'tertiary',
+                    massingDimensions: [2.6, 1.8, 2.2],
+                    materialProfile: { roughness: 0.30, metalness: 0.85, baseTone: [0.38, 0.40, 0.43] }
+                }
+            ],
+            relations
+        };
+
+        // 5. Atmosphere & Ephemeris (Zero Default Atmosphere & Fog: only synthesized when explicitly requested)
         const hasAtmosphere = /atmosphere|atmospheric|sky|clouds?|sunset|dusk|dawn|golden hour|twilight|weather|ephemeris/i.test(lower);
         let atmosphere: AdaptiveAtmosphereEphemeris | undefined = undefined;
         if (hasAtmosphere) {
@@ -197,7 +282,9 @@ export class Adaptive3DSceneSynthesizer {
             botany: {
                 forestPatches
             },
-            atmosphere
+            atmosphere,
+            relations,
+            sceneGraph
         };
     }
 
