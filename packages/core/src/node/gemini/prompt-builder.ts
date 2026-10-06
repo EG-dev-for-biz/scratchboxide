@@ -732,6 +732,79 @@ scene.merge(tree2)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 
+Option C: Open Architectural Pavilion & Interior Hall (Recommended for Martial Arts Dojos, Shrines, Temples, Arenas, Workshops):
+\`\`\`python
+import scratchbox as sb
+import math
+
+scene = sb.geometry.Mesh("TraditionalKarateDojo")
+
+# 1. Foundation: Elevated polished hinoki wood platform & outer perimeter engawa deck
+platform = sb.create_box(width=22.0, height=0.6, depth=18.0)
+platform.translate(0, 0.3, 0)
+platform.material = sb.geometry.PbrMaterial.polished_wood()
+scene.merge(platform)
+
+# 2. Interior Tatami Mat (woven straw texture with dark border)
+tatami = sb.create_box(width=16.0, height=0.08, depth=12.0)
+tatami.translate(0, 0.64, 0)
+tatami.material = sb.geometry.PbrMaterial(base_color="#a3b18a", roughness=0.88, metalness=0.02)
+scene.merge(tatami)
+
+# 3. Perimeter Structural Timber Columns (8 perimeter pillars supporting roof)
+pillar_coords = [(-9.0, -7.0), (0.0, -7.0), (9.0, -7.0), (-9.0, 7.0), (0.0, 7.0), (9.0, 7.0), (-9.0, 0.0), (9.0, 0.0)]
+for px, pz in pillar_coords:
+    col = sb.create_cylinder(radius=0.35, height=5.2, segments=24)
+    col.translate(px, 3.2, pz)
+    col.material = sb.geometry.PbrMaterial(base_color="#5c3d2e", roughness=0.75, metalness=0.05)
+    scene.merge(col)
+
+# 4. North Honor Wall (Kamiza) with ancestral scroll banner & timber screen
+kamiza_wall = sb.create_box(width=14.0, height=4.2, depth=0.25)
+kamiza_wall.translate(0, 2.7, -6.8)
+kamiza_wall.material = sb.geometry.PbrMaterial(base_color="#f8fafc", roughness=0.92, metalness=0.01)
+scene.merge(kamiza_wall)
+
+# Training Makiwara dummy & weapons rack
+makiwara = sb.create_cylinder(radius=0.18, height=2.2, segments=16)
+makiwara.translate(-6.5, 1.7, 4.5)
+makiwara.material = sb.geometry.PbrMaterial(base_color="#8b5a2b", roughness=0.85, metalness=0.05)
+scene.merge(makiwara)
+
+# 5. Japanese Hipped Roof (Irimoya style) with overhanging eaves
+roof_base = sb.create_box(width=24.0, height=0.4, depth=20.0)
+roof_base.translate(0, 5.8, 0)
+roof_base.material = sb.geometry.PbrMaterial(base_color="#3e2723", roughness=0.6, metalness=0.1)
+scene.merge(roof_base)
+
+roof_crown = sb.create_cone(radius=12.0, height=3.5, segments=4)
+roof_crown.rotate_y(math.radians(45.0))
+roof_crown.scale(1.2, 1.0, 0.9)
+roof_crown.translate(0, 7.8, 0)
+roof_crown.material = sb.geometry.PbrMaterial(base_color="#262626", roughness=0.55, metalness=0.25)
+scene.merge(roof_crown)
+
+# 6. Traditional Torii Entry Gate
+torii_post_l = sb.create_cylinder(radius=0.3, height=4.8, segments=20)
+torii_post_l.translate(-3.0, 2.4, 12.5)
+torii_post_l.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
+scene.merge(torii_post_l)
+
+torii_post_r = sb.create_cylinder(radius=0.3, height=4.8, segments=20)
+torii_post_r.translate(3.0, 2.4, 12.5)
+torii_post_r.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
+scene.merge(torii_post_r)
+
+torii_lintel = sb.create_box(width=8.4, height=0.45, depth=0.6)
+torii_lintel.translate(0, 4.8, 12.5)
+torii_lintel.material = sb.geometry.PbrMaterial(base_color="#dc2626", roughness=0.45, metalness=0.15)
+scene.merge(torii_lintel)
+
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+\`\`\`
+
+- OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
+
 Direct Primitive Helpers on \`sb\`:
 - \`sb.create_cylinder(radius=..., height=..., segments=...)\`
 - \`sb.create_cone(radius=..., height=..., segments=...)\`

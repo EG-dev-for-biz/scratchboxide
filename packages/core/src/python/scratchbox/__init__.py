@@ -548,6 +548,13 @@ class _ArchitectureModule:
 
 architecture = _ArchitectureModule()
 
+class _ConstantsModule:
+    @property
+    def OUTPUT_GLB_PATH(self):
+        return os.environ.get("OUTPUT_GLB_PATH", "output.glb")
+
+constants = _ConstantsModule()
+
 create_cylinder = getattr(_geom, "create_cylinder", None)
 create_cone = getattr(_geom, "create_cone", None)
 create_plane = getattr(_geom, "create_plane", None)
@@ -572,6 +579,7 @@ __all__ = [
     "geospatial",
     "nature",
     "architecture",
+    "constants",
     "math",
     "geometry",
     "io",
