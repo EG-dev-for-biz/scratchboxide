@@ -82,6 +82,58 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             const goldStage = scene.customMeshes!.find(m => m.name.toLowerCase().includes('stage') || m.name.toLowerCase().includes('gold') || m.name.toLowerCase().includes('torus') || m.name.toLowerCase().includes('flange') || m.name.toLowerCase().includes('gimbal'));
             expect(goldStage).toBeDefined();
         });
+
+        it('synthesizes aerodynamic rocketship with cylindrical fuselage, payload nosecone, 4 delta fins, and bell nozzle', () => {
+            const prompt = 'rocketship';
+            const scene = synthesizeContextual3DScene(prompt);
+
+            expect(scene).toBeDefined();
+            expect(scene.title).toMatch(/rocketship|rocket/i);
+            expect(scene.customMeshes).toBeDefined();
+            expect(scene.customMeshes!.length).toBeGreaterThanOrEqual(6);
+
+            // 1. Primary Cylindrical Booster Body
+            const body = scene.customMeshes!.find(m => m.tier === 'primary' && m.type === 'cylinder');
+            expect(body).toBeDefined();
+
+            // 2. Conical Nosecone
+            const nosecone = scene.customMeshes!.find(m => m.type === 'cone' && m.name.toLowerCase().includes('nosecone'));
+            expect(nosecone).toBeDefined();
+
+            // 3. Four Symmetrical Stabilizer Delta Fins
+            const fins = scene.customMeshes!.filter(m => m.id.includes('fin') || m.name.toLowerCase().includes('fin'));
+            expect(fins.length).toBe(4);
+
+            // 4. Propulsion Engine Bell Nozzle
+            const nozzle = scene.customMeshes!.find(m => m.id.includes('nozzle') || m.name.toLowerCase().includes('nozzle') || m.name.toLowerCase().includes('engine'));
+            expect(nozzle).toBeDefined();
+            expect(nozzle!.material?.emissiveIntensity).toBeGreaterThan(1.0);
+        });
+
+        it('synthesizes traditional karate dojo with hinoki platform, tatami mat, perimeter pillars, and kamiza wall', () => {
+            const prompt = '3d scene of a karate dojo';
+            const scene = synthesizeContextual3DScene(prompt);
+
+            expect(scene).toBeDefined();
+            expect(scene.title).toMatch(/karate dojo|dojo/i);
+            expect(scene.customMeshes).toBeDefined();
+
+            // 1. Hinoki Platform
+            const platform = scene.customMeshes!.find(m => m.tier === 'primary' && m.name.toLowerCase().includes('platform'));
+            expect(platform).toBeDefined();
+
+            // 2. Tatami Mat
+            const tatami = scene.customMeshes!.find(m => m.name.toLowerCase().includes('tatami'));
+            expect(tatami).toBeDefined();
+
+            // 3. Perimeter Pillars
+            const pillars = scene.customMeshes!.filter(m => m.name.toLowerCase().includes('pillar') || m.name.toLowerCase().includes('column'));
+            expect(pillars.length).toBeGreaterThanOrEqual(4);
+
+            // 4. Kamiza Honor Wall
+            const kamiza = scene.customMeshes!.find(m => m.name.toLowerCase().includes('kamiza'));
+            expect(kamiza).toBeDefined();
+        });
     });
 
     describe('2. Canonical Specialized Archetypes (Selective Routing)', () => {

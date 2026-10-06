@@ -1008,8 +1008,11 @@ export function synthesizeAdaptive3DScene(
         lighting = 'cinematic_3point_studio';
         ground = true;
 
-        const isVertical = /\b(?:column|tower|pillar|tank|silo|vessel|reactor|tube|cylinder|bottle|pole|chimney|flue|standpipe)\b/i.test(rawText);
-        const isPlanar = /\b(?:desk|table|bench|board|chassis|vehicle|car|platform|stage|deck|shelf|rack|bed)\b/i.test(rawText);
+        const isRocket = /\b(?:rocket|rocketship|spacecraft|shuttle|booster|launch\s*vehicle|saturn\s*v|falcon|starship|missile)\b/i.test(rawText);
+        const isMartialArts = /\b(?:dojo|karate|judo|martial\s*arts|taekwondo|tatami|training\s*hall)\b/i.test(rawText);
+        const isFurniture = /\b(?:desk|table|workbench|chair|seating|bench|shelf|cabinet)\b/i.test(rawText);
+        const isVertical = /\b(?:column|tower|pillar|tank|silo|vessel|reactor|tube|cylinder|bottle|pole|chimney|flue|standpipe|beacon)\b/i.test(rawText);
+        const isPlanar = /\b(?:board|chassis|platform|stage|deck|rack|bed)\b/i.test(rawText);
         const isSpherical = /\b(?:orb|sphere|ball|globe|planet|core|bubble|droplet|head|bead|sensor)\b/i.test(rawText);
 
         // Infer material cues
@@ -1044,7 +1047,274 @@ export function synthesizeAdaptive3DScene(
 
         const primaryId = 'adaptive-primary-core';
 
-        if (isVertical) {
+        if (isRocket) {
+            cameraPos = [7.5, 6.0, 9.5];
+            cameraTarget = [0, 4.0, 0];
+            cameraFov = 46;
+            customMeshes = [
+                // 1. Primary Cylindrical Rocket Fuselage / Booster
+                {
+                    id: primaryId,
+                    name: `${subject} Rocket Fuselage`,
+                    type: 'cylinder',
+                    position: [0, 4.2, 0],
+                    scale: [1.4, 6.4, 1.4],
+                    tier: 'primary',
+                    material: { color: 0xf8fafc, roughness: 0.25, metalness: 0.85, preset: 'titanium_grade5' }
+                },
+                // 2. Aerodynamic Nosecone / Payload Fairing
+                {
+                    id: 'rocket-nosecone',
+                    name: 'Aerodynamic Payload Nosecone',
+                    parentId: primaryId,
+                    type: 'cone',
+                    position: [0, 8.8, 0],
+                    scale: [1.4, 2.8, 1.4],
+                    tier: 'secondary',
+                    material: { color: 0x0f172a, roughness: 0.18, metalness: 0.90 }
+                },
+                // 3. Four Symmetrical Stabilizer Delta Fins
+                {
+                    id: 'rocket-fin-north',
+                    name: 'Stabilizer Delta Fin North',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 1.8, 1.3],
+                    scale: [0.1, 2.0, 1.2],
+                    tier: 'secondary',
+                    material: { color: 0xdc2626, roughness: 0.40, metalness: 0.15 }
+                },
+                {
+                    id: 'rocket-fin-south',
+                    name: 'Stabilizer Delta Fin South',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 1.8, -1.3],
+                    scale: [0.1, 2.0, 1.2],
+                    tier: 'secondary',
+                    material: { color: 0xdc2626, roughness: 0.40, metalness: 0.15 }
+                },
+                {
+                    id: 'rocket-fin-east',
+                    name: 'Stabilizer Delta Fin East',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [1.3, 1.8, 0],
+                    scale: [1.2, 2.0, 0.1],
+                    tier: 'secondary',
+                    material: { color: 0xdc2626, roughness: 0.40, metalness: 0.15 }
+                },
+                {
+                    id: 'rocket-fin-west',
+                    name: 'Stabilizer Delta Fin West',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [-1.3, 1.8, 0],
+                    scale: [1.2, 2.0, 0.1],
+                    tier: 'secondary',
+                    material: { color: 0xdc2626, roughness: 0.40, metalness: 0.15 }
+                },
+                // 4. Propulsion Engine Exhaust Bell
+                {
+                    id: 'rocket-engine-nozzle',
+                    name: 'Rocket Engine Bell Nozzle',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [0, 0.6, 0],
+                    scale: [1.1, 0.8, 1.1],
+                    tier: 'tertiary',
+                    material: { color: 0x1e293b, roughness: 0.15, metalness: 0.95, emissive: 0xff4500, emissiveIntensity: 2.2 }
+                },
+                // 5. Ground Launch Stand / Pedestal
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Launch Pad Platform',
+                    type: 'cylinder',
+                    position: [0, -0.1, 0],
+                    scale: [4.6, 0.25, 4.6],
+                    tier: 'primary',
+                    material: { color: 0x1e293b, roughness: 0.85, metalness: 0.15, preset: 'dark_slate' }
+                }
+            ];
+        } else if (isMartialArts) {
+            cameraPos = [10.0, 7.0, 12.0];
+            cameraTarget = [0, 2.2, 0];
+            cameraFov = 46;
+            customMeshes = [
+                // 1. Elevated Hinoki Wood Training Platform
+                {
+                    id: primaryId,
+                    name: `${subject} Hinoki Platform`,
+                    type: 'box',
+                    position: [0, 0.3, 0],
+                    scale: [15.0, 0.6, 13.0],
+                    tier: 'primary',
+                    material: { color: 0x8b5a2b, roughness: 0.70, metalness: 0.05, preset: 'polished_wood' }
+                },
+                // 2. Interior Tatami Mat Surface
+                {
+                    id: 'dojo-tatami-mat',
+                    name: 'Woven Tatami Training Floor',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 0.64, 0],
+                    scale: [11.0, 0.08, 9.0],
+                    tier: 'secondary',
+                    material: { color: 0xa3b18a, roughness: 0.88, metalness: 0.02 }
+                },
+                // 3. Four Perimeter Structural Timber Pillars
+                {
+                    id: 'dojo-pillar-fl',
+                    name: 'Perimeter Column Front-Left',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [-5.8, 2.5, 4.8],
+                    scale: [0.35, 4.4, 0.35],
+                    tier: 'secondary',
+                    material: { color: 0x5c3d2e, roughness: 0.75, metalness: 0.05 }
+                },
+                {
+                    id: 'dojo-pillar-fr',
+                    name: 'Perimeter Column Front-Right',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [5.8, 2.5, 4.8],
+                    scale: [0.35, 4.4, 0.35],
+                    tier: 'secondary',
+                    material: { color: 0x5c3d2e, roughness: 0.75, metalness: 0.05 }
+                },
+                {
+                    id: 'dojo-pillar-rl',
+                    name: 'Perimeter Column Rear-Left',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [-5.8, 2.5, -4.8],
+                    scale: [0.35, 4.4, 0.35],
+                    tier: 'secondary',
+                    material: { color: 0x5c3d2e, roughness: 0.75, metalness: 0.05 }
+                },
+                {
+                    id: 'dojo-pillar-rr',
+                    name: 'Perimeter Column Rear-Right',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [5.8, 2.5, -4.8],
+                    scale: [0.35, 4.4, 0.35],
+                    tier: 'secondary',
+                    material: { color: 0x5c3d2e, roughness: 0.75, metalness: 0.05 }
+                },
+                // 4. North Kamiza Honor Screen Wall
+                {
+                    id: 'dojo-kamiza-wall',
+                    name: 'Kamiza Honor Wall & Scroll',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 2.6, -4.6],
+                    scale: [9.0, 3.8, 0.2],
+                    tier: 'secondary',
+                    material: { color: 0xf8fafc, roughness: 0.90, metalness: 0.02 }
+                },
+                // 5. Makiwara Training Dummy
+                {
+                    id: 'dojo-makiwara',
+                    name: 'Makiwara Strike Dummy',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [-4.2, 1.6, 3.0],
+                    scale: [0.3, 1.8, 0.3],
+                    tier: 'tertiary',
+                    material: { color: 0x8b5a2b, roughness: 0.85, metalness: 0.05 }
+                },
+                // 6. Overhanging Eaves Roof Beam
+                {
+                    id: 'dojo-roof-eaves',
+                    name: 'Irimoya Overhanging Eaves',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0, 4.9, 0],
+                    scale: [16.0, 0.4, 14.0],
+                    tier: 'secondary',
+                    material: { color: 0x262626, roughness: 0.60, metalness: 0.20 }
+                }
+            ];
+        } else if (isFurniture) {
+            cameraPos = [4.5, 3.5, 5.0];
+            cameraTarget = [0, 1.0, 0];
+            cameraFov = 45;
+            customMeshes = [
+                // Tabletop work surface
+                {
+                    id: primaryId,
+                    name: `${subject} Surface`,
+                    type: 'box',
+                    position: [0, 1.4, 0],
+                    scale: [3.4, 0.15, 2.0],
+                    tier: 'primary',
+                    material: primaryMat
+                },
+                // Four symmetrical legs
+                {
+                    id: 'desk-leg-fl',
+                    name: 'Support Leg Front-Left',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [-1.5, 0.7, 0.8],
+                    scale: [0.12, 1.4, 0.12],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'desk-leg-fr',
+                    name: 'Support Leg Front-Right',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [1.5, 0.7, 0.8],
+                    scale: [0.12, 1.4, 0.12],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'desk-leg-rl',
+                    name: 'Support Leg Rear-Left',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [-1.5, 0.7, -0.8],
+                    scale: [0.12, 1.4, 0.12],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'desk-leg-rr',
+                    name: 'Support Leg Rear-Right',
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [1.5, 0.7, -0.8],
+                    scale: [0.12, 1.4, 0.12],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                // Tertiary accessory / module
+                {
+                    id: 'desk-accessory',
+                    name: 'Workstation Terminal Unit',
+                    parentId: primaryId,
+                    type: 'box',
+                    position: [0.8, 1.6, -0.3],
+                    scale: [0.8, 0.35, 0.5],
+                    tier: 'tertiary',
+                    material: tertiaryMat
+                },
+                {
+                    id: 'adaptive-ground-pedestal',
+                    name: 'Level Floor Surface',
+                    type: 'box',
+                    position: [0, -0.05, 0],
+                    scale: [5.5, 0.1, 4.5],
+                    tier: 'primary',
+                    material: { color: 0x1e293b, roughness: 0.85, metalness: 0.15 }
+                }
+            ];
+        } else if (isVertical) {
             cameraPos = [6.0, 4.5, 7.5];
             cameraTarget = [0, 1.8, 0];
             cameraFov = 42;
@@ -1072,20 +1342,19 @@ export function synthesizeAdaptive3DScene(
                     id: 'adaptive-secondary-manifold',
                     name: `${keywords[1] || 'Flow'} Manifold Port`,
                     parentId: primaryId,
-                    type: 'box',
-                    position: [0.85, 1.4, 0],
-                    scale: [0.45, 0.6, 0.45],
+                    type: 'cylinder',
+                    position: [0, 1.2, 0],
+                    scale: [1.6, 0.5, 1.6],
                     tier: 'secondary',
                     material: secondaryMat
                 },
                 {
                     id: 'adaptive-tertiary-gauge',
-                    name: `${keywords[2] || 'Telemetry'} Digital Gauge`,
+                    name: `${keywords[2] || 'Telemetry'} Digital Indicator`,
                     parentId: primaryId,
-                    type: 'cylinder',
-                    position: [0.88, 2.2, 0],
-                    scale: [0.35, 0.12, 0.35],
-                    rotation: [0, 0, Math.PI / 2],
+                    type: 'sphere',
+                    position: [0, 3.8, 0],
+                    scale: [0.5, 0.5, 0.5],
                     tier: 'tertiary',
                     material: tertiaryMat
                 },
@@ -1194,20 +1463,30 @@ export function synthesizeAdaptive3DScene(
             customMeshes = [
                 {
                     id: primaryId,
-                    name: `${subject} Primary Body`,
+                    name: `${subject} Primary Edifice`,
                     type: 'box',
                     position: [0, 1.2, 0],
-                    scale: [2.0, 2.0, 2.0],
+                    scale: [2.6, 2.2, 2.2],
                     tier: 'primary',
                     material: primaryMat
                 },
                 {
-                    id: 'adaptive-secondary-articulation',
-                    name: `${keywords[0] || 'Secondary'} Articulation Node`,
+                    id: 'adaptive-secondary-wing-left',
+                    name: `${keywords[0] || 'Left'} Articulation Module`,
                     parentId: primaryId,
                     type: 'cylinder',
-                    position: [1.3, 1.2, 0],
-                    scale: [0.6, 1.5, 0.6],
+                    position: [-1.6, 1.2, 0],
+                    scale: [0.6, 1.6, 0.6],
+                    tier: 'secondary',
+                    material: secondaryMat
+                },
+                {
+                    id: 'adaptive-secondary-wing-right',
+                    name: `${keywords[0] || 'Right'} Articulation Module`,
+                    parentId: primaryId,
+                    type: 'cylinder',
+                    position: [1.6, 1.2, 0],
+                    scale: [0.6, 1.6, 0.6],
                     tier: 'secondary',
                     material: secondaryMat
                 },
@@ -1216,8 +1495,8 @@ export function synthesizeAdaptive3DScene(
                     name: `${keywords[1] || 'System'} Telemetry Emitter`,
                     parentId: primaryId,
                     type: 'sphere',
-                    position: [0, 2.35, 0],
-                    scale: [0.4, 0.4, 0.4],
+                    position: [0, 2.55, 0],
+                    scale: [0.45, 0.45, 0.45],
                     tier: 'tertiary',
                     material: tertiaryMat
                 },
@@ -1226,7 +1505,7 @@ export function synthesizeAdaptive3DScene(
                     name: 'Chamfered Studio Pedestal',
                     type: 'cylinder',
                     position: [0, -0.08, 0],
-                    scale: [4.2, 0.16, 4.2],
+                    scale: [4.6, 0.16, 4.6],
                     tier: 'primary',
                     material: { color: 0x1e293b, roughness: 0.80, metalness: 0.15, preset: 'dark_slate' }
                 }
