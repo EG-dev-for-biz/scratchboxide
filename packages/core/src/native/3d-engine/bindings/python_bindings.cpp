@@ -278,6 +278,30 @@ NB_MODULE(scratchbox_native, m) {
         .def("recompute_smooth_normals", &ScratchboxMesh::recomputeSmoothNormals)
         .def("weld_vertices", &ScratchboxMesh::weldVertices, "epsilon"_a = 1e-4f)
         .def("recompute_bounds", &ScratchboxMesh::recomputeBounds)
+        .def("subdivide", [](ScratchboxMesh& self, int iterations) -> ScratchboxMesh& {
+            self = shaper::LoopSubdivision::subdivide(self, iterations);
+            return self;
+        }, "iterations"_a = 1)
+        .def("taper", [](ScratchboxMesh& self, int axisIdx, float factor) -> ScratchboxMesh& {
+            shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+            shaper::Deformer::taper(self, axis, factor);
+            return self;
+        }, "axis"_a = 1, "factor"_a = 0.5f)
+        .def("twist", [](ScratchboxMesh& self, int axisIdx, float angleDeg) -> ScratchboxMesh& {
+            shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+            shaper::Deformer::twist(self, axis, angleDeg);
+            return self;
+        }, "axis"_a = 1, "angle_deg"_a = 45.0f)
+        .def("bend", [](ScratchboxMesh& self, int mainAxisIdx, int bendAxisIdx, float angleDeg, float radius) -> ScratchboxMesh& {
+            shaper::Axis mainAxis = mainAxisIdx == 0 ? shaper::Axis::X : (mainAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+            shaper::Axis bendAxis = bendAxisIdx == 0 ? shaper::Axis::X : (bendAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
+            shaper::Deformer::bend(self, mainAxis, bendAxis, angleDeg * (math::PI / 180.0f), radius);
+            return self;
+        }, "main_axis"_a = 1, "bend_axis"_a = 0, "angle_deg"_a = 30.0f, "radius"_a = 2.0f)
+        .def("bulge", [](ScratchboxMesh& self, const Vec3& center, float radius, float strength, float power) -> ScratchboxMesh& {
+            shaper::Deformer::bulge(self, center, radius, strength, power);
+            return self;
+        }, "center"_a = Vec3(0, 0, 0), "radius"_a = 1.0f, "strength"_a = 0.3f, "power"_a = 2.0f)
         .def("taubin_smooth", [](ScratchboxMesh& self, int iterations, float lambdaVal, float muVal, bool preserveBoundaries) {
             processing::TaubinSmoothOptions opt;
             opt.iterations = iterations;
@@ -385,6 +409,30 @@ NB_MODULE(scratchbox_native, m) {
     m_geom.def("create_fluted_column", [](float radius, float height, int flutes, int segments, const Vec4& color) {
         return ScratchboxMesh::createFlutedColumn(radius, height, flutes, segments, color);
     }, "radius"_a = 0.45f, "height"_a = 7.0f, "flutes"_a = 16, "segments"_a = 48, "color"_a = Vec4(0.88f, 0.85f, 0.80f, 1.0f));
+
+    m_geom.def("create_beveled_box", [](const Vec3& size, float bevelRadius, const Vec4& color) {
+        return ScratchboxMesh::createBeveledBox(size, bevelRadius, color);
+    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "bevel_radius"_a = 0.02f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+
+    m_geom.def("create_subdivided_box", [](const Vec3& size, int subX, int subY, int subZ, const Vec4& color) {
+        return ScratchboxMesh::createSubdividedBox(size, subX, subY, subZ, color);
+    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "sub_x"_a = 4, "sub_y"_a = 4, "sub_z"_a = 4, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+
+    m_geom.def("create_envelope", [](const Vec3& bounds, float crown, float slope, float centerDip, int gridX, int gridZ, const Vec4& color) {
+        return ScratchboxMesh::createEnvelope(bounds, crown, slope, centerDip, gridX, gridZ, color);
+    }, "bounds"_a = Vec3(1.0f, 0.3f, 1.5f), "crown"_a = 0.25f, "slope"_a = 0.3f, "center_dip"_a = 0.0f, "grid_x"_a = 16, "grid_z"_a = 16, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    m_geom.def("create_arched_blister", [](const Vec3& bounds, float archRadius, float swell, int gridPhi, int gridW, float sideSign, const Vec4& color) {
+        return ScratchboxMesh::createArchedBlister(bounds, archRadius, swell, gridPhi, gridW, sideSign, color);
+    }, "bounds"_a = Vec3(0.35f, 0.45f, 0.9f), "arch_radius"_a = 0.40f, "swell"_a = 0.08f, "grid_phi"_a = 16, "grid_w"_a = 8, "side_sign"_a = 1.0f, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+
+    m_geom.def("create_loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color) {
+        return shaper::Loft3D::skin(slices, closeEnds, color);
+    }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
 
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
@@ -658,6 +706,18 @@ NB_MODULE(scratchbox_native, m) {
     m_shaper.def("bulge", [](ScratchboxMesh& mesh, const Vec3& center, float radius, float strength, float power) {
         shaper::Deformer::bulge(mesh, center, radius, strength, power);
     }, "mesh"_a, "center"_a = Vec3(0, 0, 0), "radius"_a = 1.0f, "strength"_a = 0.3f, "power"_a = 2.0f);
+
+    m_shaper.def("subdivide", [](const ScratchboxMesh& mesh, int iterations) {
+        return shaper::LoopSubdivision::subdivide(mesh, iterations);
+    }, "mesh"_a, "iterations"_a = 1, "Refine mesh using Loop Subdivision");
+
+    m_shaper.def("loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color) {
+        return shaper::Loft3D::skin(slices, closeEnds, color);
+    }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Loft skin between 3D station slices");
+
+    m_shaper.def("lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color) {
+        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color);
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "Revolve 2D profile into rotational solid");
 
     // ========================================================================
     // 7. IO & STREAMING SUBMODULE

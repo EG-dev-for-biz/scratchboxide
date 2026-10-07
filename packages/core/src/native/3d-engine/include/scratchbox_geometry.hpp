@@ -596,6 +596,275 @@ public:
         return mesh;
     }
 
+    static ScratchboxMesh createBeveledBox(
+        const Vec3& size,
+        float bevelRadius = 0.02f,
+        const Vec4& color = {0.8f, 0.8f, 0.8f, 1.0f}
+    ) {
+        float minDim = std::min({size.x, size.y, size.z});
+        float b = std::clamp(bevelRadius, 0.0f, minDim * 0.48f);
+        if (b < 1e-4f) {
+            return createBox(size, color);
+        }
+
+        ScratchboxMesh mesh("beveled_box");
+        Vec3 h = size * 0.5f;
+        Vec3 inH(h.x - b, h.y - b, h.z - b);
+
+        auto addQuad = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& p3,
+                           const Vec3& n0, const Vec3& n1, const Vec3& n2, const Vec3& n3) {
+            uint32_t start = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.addVertex({p0, n0, {0.0f, 0.0f}, color});
+            mesh.addVertex({p1, n1, {1.0f, 0.0f}, color});
+            mesh.addVertex({p2, n2, {1.0f, 1.0f}, color});
+            mesh.addVertex({p3, n3, {0.0f, 1.0f}, color});
+            mesh.addTriangle(start, start + 1, start + 2);
+            mesh.addTriangle(start, start + 2, start + 3);
+        };
+
+        // 6 Primary Inset Faces
+        // Top (+Y)
+        addQuad({-inH.x, h.y, -inH.z}, { inH.x, h.y, -inH.z}, { inH.x, h.y,  inH.z}, {-inH.x, h.y,  inH.z},
+                {0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0});
+        // Bottom (-Y)
+        addQuad({-inH.x, -h.y,  inH.z}, { inH.x, -h.y,  inH.z}, { inH.x, -h.y, -inH.z}, {-inH.x, -h.y, -inH.z},
+                {0, -1, 0}, {0, -1, 0}, {0, -1, 0}, {0, -1, 0});
+        // Front (+Z)
+        addQuad({-inH.x, -inH.y, h.z}, { inH.x, -inH.y, h.z}, { inH.x,  inH.y, h.z}, {-inH.x,  inH.y, h.z},
+                {0, 0, 1}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1});
+        // Back (-Z)
+        addQuad({ inH.x, -inH.y, -h.z}, {-inH.x, -inH.y, -h.z}, {-inH.x,  inH.y, -h.z}, { inH.x,  inH.y, -h.z},
+                {0, 0, -1}, {0, 0, -1}, {0, 0, -1}, {0, 0, -1});
+        // Right (+X)
+        addQuad({h.x, -inH.y,  inH.z}, {h.x, -inH.y, -inH.z}, {h.x,  inH.y, -inH.z}, {h.x,  inH.y,  inH.z},
+                {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0});
+        // Left (-X)
+        addQuad({-h.x, -inH.y, -inH.z}, {-h.x, -inH.y,  inH.z}, {-h.x,  inH.y,  inH.z}, {-h.x,  inH.y, -inH.z},
+                {-1, 0, 0}, {-1, 0, 0}, {-1, 0, 0}, {-1, 0, 0});
+
+        // 12 Edge Chamfers
+        // Top 4 edges (+Y)
+        Vec3 nTF = Vec3(0, 1, 1).normalized();
+        addQuad({-inH.x, h.y, inH.z}, { inH.x, h.y, inH.z}, { inH.x, inH.y, h.z}, {-inH.x, inH.y, h.z},
+                nTF, nTF, nTF, nTF);
+        Vec3 nTB = Vec3(0, 1, -1).normalized();
+        addQuad({ inH.x, h.y, -inH.z}, {-inH.x, h.y, -inH.z}, {-inH.x, inH.y, -h.z}, { inH.x, inH.y, -h.z},
+                nTB, nTB, nTB, nTB);
+        Vec3 nTR = Vec3(1, 1, 0).normalized();
+        addQuad({inH.x, h.y, -inH.z}, {inH.x, h.y, inH.z}, {h.x, inH.y, inH.z}, {h.x, inH.y, -inH.z},
+                nTR, nTR, nTR, nTR);
+        Vec3 nTL = Vec3(-1, 1, 0).normalized();
+        addQuad({-inH.x, h.y, inH.z}, {-inH.x, h.y, -inH.z}, {-h.x, inH.y, -inH.z}, {-h.x, inH.y, inH.z},
+                nTL, nTL, nTL, nTL);
+
+        // Bottom 4 edges (-Y)
+        Vec3 nBF = Vec3(0, -1, 1).normalized();
+        addQuad({ inH.x, -h.y, inH.z}, {-inH.x, -h.y, inH.z}, {-inH.x, -inH.y, h.z}, { inH.x, -inH.y, h.z},
+                nBF, nBF, nBF, nBF);
+        Vec3 nBB = Vec3(0, -1, -1).normalized();
+        addQuad({-inH.x, -h.y, -inH.z}, { inH.x, -h.y, -inH.z}, { inH.x, -inH.y, -h.z}, {-inH.x, -inH.y, -h.z},
+                nBB, nBB, nBB, nBB);
+        Vec3 nBR = Vec3(1, -1, 0).normalized();
+        addQuad({inH.x, -h.y, inH.z}, {inH.x, -h.y, -inH.z}, {h.x, -inH.y, -inH.z}, {h.x, -inH.y, inH.z},
+                nBR, nBR, nBR, nBR);
+        Vec3 nBL = Vec3(-1, -1, 0).normalized();
+        addQuad({-inH.x, -h.y, -inH.z}, {-inH.x, -h.y, inH.z}, {-h.x, -inH.y, inH.z}, {-h.x, -inH.y, -h.z},
+                nBL, nBL, nBL, nBL);
+
+        // Vertical 4 edges
+        Vec3 nFR = Vec3(1, 0, 1).normalized();
+        addQuad({inH.x, -inH.y, h.z}, {h.x, -inH.y, inH.z}, {h.x, inH.y, inH.z}, {inH.x, inH.y, h.z},
+                nFR, nFR, nFR, nFR);
+        Vec3 nFL = Vec3(-1, 0, 1).normalized();
+        addQuad({-h.x, -inH.y, inH.z}, {-inH.x, -inH.y, h.z}, {-inH.x, inH.y, h.z}, {-h.x, inH.y, inH.z},
+                nFL, nFL, nFL, nFL);
+        Vec3 nBR2 = Vec3(1, 0, -1).normalized();
+        addQuad({h.x, -inH.y, -inH.z}, {inH.x, -inH.y, -h.z}, {inH.x, inH.y, -h.z}, {h.x, inH.y, -inH.z},
+                nBR2, nBR2, nBR2, nBR2);
+        Vec3 nBL2 = Vec3(-1, 0, -1).normalized();
+        addQuad({-inH.x, -inH.y, -h.z}, {-h.x, -inH.y, -inH.z}, {-h.x, inH.y, -inH.z}, {-inH.x, inH.y, -h.z},
+                nBL2, nBL2, nBL2, nBL2);
+
+        // 8 Corner Triangles
+        auto addTri = [&](const Vec3& p0, const Vec3& p1, const Vec3& p2, const Vec3& norm) {
+            uint32_t start = static_cast<uint32_t>(mesh.vertices.size());
+            mesh.addVertex({p0, norm, {0, 0}, color});
+            mesh.addVertex({p1, norm, {1, 0}, color});
+            mesh.addVertex({p2, norm, {0, 1}, color});
+            mesh.addTriangle(start, start + 1, start + 2);
+        };
+
+        addTri({inH.x, h.y, inH.z}, {inH.x, inH.y, h.z}, {h.x, inH.y, inH.z}, Vec3(1, 1, 1).normalized());
+        addTri({-inH.x, h.y, inH.z}, {-h.x, inH.y, inH.z}, {-inH.x, inH.y, h.z}, Vec3(-1, 1, 1).normalized());
+        addTri({inH.x, h.y, -inH.z}, {h.x, inH.y, -inH.z}, {inH.x, inH.y, -h.z}, Vec3(1, 1, -1).normalized());
+        addTri({-inH.x, h.y, -inH.z}, {-inH.x, inH.y, -h.z}, {-h.x, inH.y, -inH.z}, Vec3(-1, 1, -1).normalized());
+
+        addTri({inH.x, -h.y, inH.z}, {h.x, -inH.y, inH.z}, {inH.x, -inH.y, h.z}, Vec3(1, -1, 1).normalized());
+        addTri({-inH.x, -h.y, inH.z}, {-inH.x, -inH.y, h.z}, {-h.x, -inH.y, inH.z}, Vec3(-1, -1, 1).normalized());
+        addTri({inH.x, -h.y, -inH.z}, {inH.x, -inH.y, -h.z}, {h.x, -inH.y, -inH.z}, Vec3(1, -1, -1).normalized());
+        addTri({-inH.x, -h.y, -inH.z}, {-h.x, -inH.y, -inH.z}, {-inH.x, -inH.y, -h.z}, Vec3(-1, -1, -1).normalized());
+
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+    static ScratchboxMesh createSubdividedBox(
+        const Vec3& size,
+        int subX = 4,
+        int subY = 4,
+        int subZ = 4,
+        const Vec4& color = {0.8f, 0.8f, 0.8f, 1.0f}
+    ) {
+        ScratchboxMesh mesh("subdivided_box");
+        Vec3 h = size * 0.5f;
+
+        auto addFaceGrid = [&](const Vec3& norm, const Vec3& uDir, const Vec3& vDir,
+                              float uExtent, float vExtent, float faceOffset,
+                              int uSteps, int vSteps) {
+            uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
+            for (int j = 0; j <= vSteps; ++j) {
+                float vNorm = static_cast<float>(j) / vSteps;
+                float v = (vNorm - 0.5f) * 2.0f * vExtent;
+                for (int i = 0; i <= uSteps; ++i) {
+                    float uNorm = static_cast<float>(i) / uSteps;
+                    float u = (uNorm - 0.5f) * 2.0f * uExtent;
+                    Vec3 pos = norm * faceOffset + uDir * u + vDir * v;
+                    mesh.addVertex({pos, norm, {uNorm, vNorm}, color});
+                }
+            }
+            int cols = uSteps + 1;
+            for (int j = 0; j < vSteps; ++j) {
+                for (int i = 0; i < uSteps; ++i) {
+                    uint32_t i0 = baseIdx + j * cols + i;
+                    uint32_t i1 = baseIdx + j * cols + (i + 1);
+                    uint32_t i2 = baseIdx + (j + 1) * cols + (i + 1);
+                    uint32_t i3 = baseIdx + (j + 1) * cols + i;
+                    mesh.addTriangle(i0, i1, i2);
+                    mesh.addTriangle(i0, i2, i3);
+                }
+            }
+        };
+
+        // +Z / -Z
+        addFaceGrid({0, 0, 1}, {1, 0, 0}, {0, 1, 0}, h.x, h.y, h.z, subX, subY);
+        addFaceGrid({0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, h.x, h.y, h.z, subX, subY);
+        // +X / -X
+        addFaceGrid({1, 0, 0}, {0, 0, -1}, {0, 1, 0}, h.z, h.y, h.x, subZ, subY);
+        addFaceGrid({-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, h.z, h.y, h.x, subZ, subY);
+        // +Y / -Y
+        addFaceGrid({0, 1, 0}, {1, 0, 0}, {0, 0, -1}, h.x, h.z, h.y, subX, subZ);
+        addFaceGrid({0, -1, 0}, {1, 0, 0}, {0, 0, 1}, h.x, h.z, h.y, subX, subZ);
+
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+    static ScratchboxMesh createEnvelope(
+        const Vec3& bounds,
+        float crown = 0.25f,
+        float slope = 0.3f,
+        float centerDip = 0.0f,
+        int gridX = 16,
+        int gridZ = 16,
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+    ) {
+        ScratchboxMesh mesh("envelope");
+        float w = bounds.x;
+        float h = bounds.y;
+        float d = bounds.z;
+
+        gridX = std::max(gridX, 2);
+        gridZ = std::max(gridZ, 2);
+
+        for (int j = 0; j <= gridZ; ++j) {
+            float v = static_cast<float>(j) / gridZ;
+            float z = (v - 0.5f) * d;
+
+            for (int i = 0; i <= gridX; ++i) {
+                float u = static_cast<float>(i) / gridX;
+                float x = (u - 0.5f) * w;
+
+                float uNorm = (u - 0.5f) * 2.0f; // -1 to +1
+                float crownMod = h * crown * (1.0f - uNorm * uNorm);
+                float slopeMod = -h * slope * v;
+                float dipMod = -h * centerDip * std::exp(-8.0f * uNorm * uNorm) * std::sin(v * PI);
+                float y = h * 0.5f + crownMod + slopeMod + dipMod;
+
+                mesh.addVertex({Vec3(x, y, z), Vec3(0, 1, 0), {u, v}, color});
+            }
+        }
+
+        int cols = gridX + 1;
+        for (int j = 0; j < gridZ; ++j) {
+            for (int i = 0; i < gridX; ++i) {
+                uint32_t i0 = j * cols + i;
+                uint32_t i1 = j * cols + (i + 1);
+                uint32_t i2 = (j + 1) * cols + (i + 1);
+                uint32_t i3 = (j + 1) * cols + i;
+
+                mesh.addTriangle(i0, i2, i1);
+                mesh.addTriangle(i0, i3, i2);
+            }
+        }
+
+        mesh.recomputeSmoothNormals();
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+    static ScratchboxMesh createArchedBlister(
+        const Vec3& bounds,
+        float archRadius = 0.40f,
+        float swell = 0.08f,
+        int gridPhi = 16,
+        int gridW = 8,
+        float sideSign = 1.0f,
+        const Vec4& color = {0.8f, 0.85f, 0.9f, 1.0f}
+    ) {
+        ScratchboxMesh mesh("arched_blister");
+        float w = bounds.x;
+        float h = bounds.y;
+        float d = bounds.z;
+
+        for (int j = 0; j <= gridW; ++j) {
+            float t = static_cast<float>(j) / gridW; // 0 (inner) to 1 (outer lip)
+            for (int i = 0; i <= gridPhi; ++i) {
+                float phi = (static_cast<float>(i) / gridPhi) * PI; // 0 to PI
+                float z = (std::cos(phi)) * (d * 0.5f);
+                float rY = archRadius * 0.7f + h * (1.0f - t * 0.4f);
+                float y = std::sin(phi) * rY;
+
+                float xBase = (t - 0.5f) * w;
+                float xSwell = sideSign * swell * std::sin(phi) * (1.0f - t * t);
+                float x = xBase + xSwell;
+
+                mesh.addVertex({Vec3(x, y, z), Vec3(sideSign, 0, 0), {t, static_cast<float>(i) / gridPhi}, color});
+            }
+        }
+
+        int cols = gridPhi + 1;
+        for (int j = 0; j < gridW; ++j) {
+            for (int i = 0; i < gridPhi; ++i) {
+                uint32_t i0 = j * cols + i;
+                uint32_t i1 = j * cols + (i + 1);
+                uint32_t i2 = (j + 1) * cols + (i + 1);
+                uint32_t i3 = (j + 1) * cols + i;
+
+                if (sideSign >= 0.0f) {
+                    mesh.addTriangle(i0, i1, i2);
+                    mesh.addTriangle(i0, i2, i3);
+                } else {
+                    mesh.addTriangle(i0, i2, i1);
+                    mesh.addTriangle(i0, i3, i2);
+                }
+            }
+        }
+
+        mesh.recomputeSmoothNormals();
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
     static ScratchboxMesh createSphere(float radius = 1.0f, int rings = 16, int sectors = 32, const Vec4& color = {0.9f, 0.3f, 0.3f, 1.0f}) {
         ScratchboxMesh mesh("sphere");
         float const R = 1.0f / static_cast<float>(rings - 1);

@@ -637,6 +637,150 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_sphere not available")
     _geom.create_sphere = create_sphere
 
+    def _to_vec3(val, default=(1.0, 1.0, 1.0)):
+        if val is None:
+            return math.Vec3(float(default[0]), float(default[1]), float(default[2]))
+        if hasattr(val, "x") and hasattr(val, "y") and hasattr(val, "z"):
+            return math.Vec3(float(val.x), float(val.y), float(val.z))
+        if isinstance(val, (int, float)):
+            f = float(val)
+            return math.Vec3(f, f, f)
+        if isinstance(val, (tuple, list)):
+            if len(val) >= 3:
+                return math.Vec3(float(val[0]), float(val[1]), float(val[2]))
+            if len(val) == 2:
+                return math.Vec3(float(val[0]), float(val[1]), 1.0)
+            if len(val) == 1:
+                return math.Vec3(float(val[0]), float(val[0]), float(val[0]))
+        return math.Vec3(float(default[0]), float(default[1]), float(default[2]))
+
+    _orig_create_beveled_box = getattr(_geom, "create_beveled_box", None)
+    def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs):
+        s = _to_vec3(size)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
+        b = float(kwargs.get("bevel_radius", bevel))
+        if _orig_create_beveled_box:
+            mesh = _orig_create_beveled_box(s, b, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_beveled_box not available")
+    _geom.create_beveled_box = create_beveled_box
+
+    _orig_create_subdivided_box = getattr(_geom, "create_subdivided_box", None)
+    def create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs):
+        s = _to_vec3(size)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
+        if isinstance(subdivisions, (tuple, list)) and len(subdivisions) >= 3:
+            sx, sy, sz = int(subdivisions[0]), int(subdivisions[1]), int(subdivisions[2])
+        else:
+            sub = int(subdivisions)
+            sx, sy, sz = sub, sub, sub
+        if _orig_create_subdivided_box:
+            mesh = _orig_create_subdivided_box(s, sx, sy, sz, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_subdivided_box not available")
+    _geom.create_subdivided_box = create_subdivided_box
+
+    _orig_create_envelope = getattr(_geom, "create_envelope", None)
+    def create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), color=None, material=None, **kwargs):
+        b = _to_vec3(bounds)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.85, 0.9, 1.0))
+        gx = int(grid[0] if isinstance(grid, (tuple, list)) else grid)
+        gz = int(grid[1] if isinstance(grid, (tuple, list)) and len(grid) > 1 else gx)
+        cr = float(kwargs.get("transverse_crown", crown))
+        sl = float(kwargs.get("longitudinal_slope", slope))
+        cd = float(kwargs.get("center_channel", center_dip))
+        if _orig_create_envelope:
+            mesh = _orig_create_envelope(b, cr, sl, cd, gx, gz, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_envelope not available")
+    _geom.create_envelope = create_envelope
+
+    _orig_create_arched_blister = getattr(_geom, "create_arched_blister", None)
+    def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), color=None, material=None, **kwargs):
+        b = _to_vec3(bounds)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.85, 0.9, 1.0))
+        gphi = int(grid[0] if isinstance(grid, (tuple, list)) else grid)
+        gw = int(grid[1] if isinstance(grid, (tuple, list)) and len(grid) > 1 else 8)
+        ar = float(kwargs.get("radius", arch_radius))
+        sw = float(kwargs.get("bulge", swell))
+        ss = float(kwargs.get("side_sign", side))
+        if _orig_create_arched_blister:
+            mesh = _orig_create_arched_blister(b, ar, sw, gphi, gw, ss, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_arched_blister not available")
+    _geom.create_arched_blister = create_arched_blister
+
+    _orig_create_lathe = getattr(_geom, "create_lathe", None)
+    def create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, **kwargs):
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.85, 0.9, 1.0))
+        prof_vec = []
+        for p in profile:
+            if hasattr(p, "x") and hasattr(p, "y"):
+                prof_vec.append(math.Vec2(float(p.x), float(p.y)))
+            elif isinstance(p, (tuple, list)) and len(p) >= 2:
+                prof_vec.append(math.Vec2(float(p[0]), float(p[1])))
+        seg = int(segments)
+        ang = float(total_angle_rad if total_angle_rad is not None else (math.TWO_PI if hasattr(math, "TWO_PI") else 6.283185307))
+        if _orig_create_lathe:
+            mesh = _orig_create_lathe(prof_vec, seg, ang, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_lathe not available")
+    _geom.create_lathe = create_lathe
+
+    _orig_create_loft = getattr(_geom, "create_loft", None)
+    def create_loft(slices, close_ends=True, color=None, material=None, **kwargs):
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.85, 0.9, 1.0))
+        slices_vec = []
+        for slice_pts in slices:
+            s_vec = []
+            for p in slice_pts:
+                if hasattr(p, "x") and hasattr(p, "y") and hasattr(p, "z"):
+                    s_vec.append(math.Vec3(float(p.x), float(p.y), float(p.z)))
+                elif isinstance(p, (tuple, list)) and len(p) >= 3:
+                    s_vec.append(math.Vec3(float(p[0]), float(p[1]), float(p[2])))
+            slices_vec.append(s_vec)
+        if _orig_create_loft:
+            mesh = _orig_create_loft(slices_vec, bool(close_ends), c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
+        raise RuntimeError("Native create_loft not available")
+    _geom.create_loft = create_loft
+
+    def create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, slope=0.3, center_dip=0.0, color=None, material=None, **kwargs):
+        """Universal ADA Form Generator: Maps physical continuous parameters to the optimal 3D geometry engine."""
+        b = _to_vec3(bounds)
+        c, mat = _resolve_color_and_material(color, material)
+        
+        if axis_of_revolution is not None:
+            radius = max(b.x, b.z) * 0.5
+            height = b.y
+            segs = int(kwargs.get("segments", 32))
+            prof = [math.Vec2(0.0, -height*0.5), math.Vec2(radius, -height*0.5), math.Vec2(radius, height*0.5), math.Vec2(0.0, height*0.5)]
+            return create_lathe(prof, segments=segs, color=c, material=mat)
+            
+        if curvature <= 0.001:
+            bev = float(kwargs.get("bevel_radius", bevel))
+            return create_beveled_box(size=b, bevel=bev, color=c, material=mat)
+        else:
+            cr = float(crown if crown is not None else curvature)
+            sl = float(slope if slope is not None else 0.0)
+            dip = float(center_dip if center_dip is not None else 0.0)
+            gx = int(kwargs.get("grid_x", 16))
+            gz = int(kwargs.get("grid_z", 16))
+            return create_envelope(bounds=b, crown=cr, slope=sl, center_dip=dip, grid=(gx, gz), color=c, material=mat)
+    _geom.create_form = create_form
+
     def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, color=None, **kwargs):
         """Constructs a catenary hanging curve cable between two 3D anchor points."""
         sx, sy, sz = _to_point3(start)
@@ -677,6 +821,14 @@ if _native is not None and hasattr(_native, "geometry"):
             cable_mesh.apply_material(PbrMaterial(base_color=color, metalness=0.8, roughness=0.3))
         return cable_mesh
     _geom.create_catenary_cable = create_catenary_cable
+
+    create_beveled_box = _geom.create_beveled_box
+    create_subdivided_box = _geom.create_subdivided_box
+    create_envelope = _geom.create_envelope
+    create_arched_blister = _geom.create_arched_blister
+    create_lathe = _geom.create_lathe
+    create_loft = _geom.create_loft
+    create_form = _geom.create_form
 
 # ============================================================================
 # 4. RELATIVE ANCHORING & LAYOUT MODULE
@@ -1017,6 +1169,13 @@ __all__ = [
     "create_cube",
     "create_sphere",
     "create_catenary_cable",
+    "create_beveled_box",
+    "create_subdivided_box",
+    "create_envelope",
+    "create_arched_blister",
+    "create_lathe",
+    "create_loft",
+    "create_form",
     "layout",
     "pbr",
     "geospatial",

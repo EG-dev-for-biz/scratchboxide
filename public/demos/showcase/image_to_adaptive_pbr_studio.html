@@ -561,6 +561,21 @@
                     </div>
                     <input type="range" id="metalSlider" min="0" max="1.0" step="0.05" value="0.00" oninput="updateMetalness(this.value)">
                 </div>
+
+                <!-- Seamless Tiling Toggle -->
+                <div class="toggle-row" style="margin-top:6px;">
+                    <span style="font-size:11px; color:var(--text-sub);">Seamless Toroidal Tiling</span>
+                    <button class="toggle-btn" id="seamlessBtn" onclick="toggleSeamlessTiling()">OFF</button>
+                </div>
+
+                <!-- Texture UV Repeat -->
+                <div class="control-group">
+                    <div class="control-label-row">
+                        <span>Texture UV Repeat</span>
+                        <span class="control-val" id="uvRepeatVal">1.0×</span>
+                    </div>
+                    <input type="range" id="uvRepeatSlider" min="1" max="4" step="1" value="1" oninput="updateUvRepeat(this.value)">
+                </div>
             </div>
 
             <!-- Viewport & Lighting Tools -->
@@ -670,7 +685,11 @@
             heightTex: null,
             // Biophysical metrics
             porosity: 0.724,
-            conduction: 0.00
+            conduction: 0.00,
+            // Seamless Tiling & UV Repeat
+            seamlessTiling: false,
+            uvRepeat: 1.0,
+            rawCanvas: null
         };
 
         // -------------------------------------------------------------------------
@@ -1026,15 +1045,86 @@
         }
 
         // -------------------------------------------------------------------------
+        // Toroidal Seamless Boundary Feathering (Continuous Wrap Invariant)
+        // -------------------------------------------------------------------------
+        function applyToroidalSeamlessToCanvas(canvas, featherRatio = 0.15) {
+            const w = canvas.width;
+            const h = canvas.height;
+            const ctx = canvas.getContext('2d');
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const rgba = imgData.data;
+
+            const halfW = Math.floor(w / 2);
+            const halfH = Math.floor(h / 2);
+
+            const shifted = new Uint8ClampedArray(rgba.length);
+            for (let y = 0; y < h; y++) {
+                const srcY = (y + halfH) % h;
+                for (let x = 0; x < w; x++) {
+                    const srcX = (x + halfW) % w;
+                    const tIdx = (y * w + x) * 4;
+                    const sIdx = (srcY * w + srcX) * 4;
+                    shifted[tIdx] = rgba[sIdx];
+                    shifted[tIdx + 1] = rgba[sIdx + 1];
+                    shifted[tIdx + 2] = rgba[sIdx + 2];
+                    shifted[tIdx + 3] = rgba[sIdx + 3];
+                }
+            }
+
+            const blendDistX = Math.max(2, Math.floor(w * featherRatio * 0.5));
+            const blendDistY = Math.max(2, Math.floor(h * featherRatio * 0.5));
+
+            const outImg = ctx.createImageData(w, h);
+            const outData = outImg.data;
+            outData.set(shifted);
+
+            for (let y = 0; y < h; y++) {
+                const distY = Math.abs(y - halfH);
+                let weightY = 1.0;
+                if (distY < blendDistY) {
+                    const t = distY / blendDistY;
+                    weightY = t * t * (3.0 - 2.0 * t);
+                }
+
+                for (let x = 0; x < w; x++) {
+                    const distX = Math.abs(x - halfW);
+                    let weightX = 1.0;
+                    if (distX < blendDistX) {
+                        const t = distX / blendDistX;
+                        weightX = t * t * (3.0 - 2.0 * t);
+                    }
+
+                    const finalWeight = weightX * weightY;
+                    if (finalWeight < 0.999) {
+                        const idx = (y * w + x) * 4;
+                        for (let c = 0; c < 3; c++) {
+                            const sVal = shifted[idx + c];
+                            const oVal = rgba[idx + c];
+                            outData[idx + c] = Math.round(sVal * finalWeight + oVal * (1.0 - finalWeight));
+                        }
+                    }
+                }
+            }
+
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = w; outCanvas.height = h;
+            outCanvas.getContext('2d').putImageData(outImg, 0, 0);
+            return outCanvas;
+        }
+
+        // -------------------------------------------------------------------------
         // Load Image / Process Pipeline
         // -------------------------------------------------------------------------
         function processAndApplyImage(imgCanvas) {
-            state.imageWidth = imgCanvas.width;
-            state.imageHeight = imgCanvas.height;
-            state.aspectRatio = imgCanvas.width / imgCanvas.height;
+            state.rawCanvas = imgCanvas;
+            const effectiveCanvas = state.seamlessTiling ? applyToroidalSeamlessToCanvas(imgCanvas, 0.15) : imgCanvas;
+
+            state.imageWidth = effectiveCanvas.width;
+            state.imageHeight = effectiveCanvas.height;
+            state.aspectRatio = effectiveCanvas.width / effectiveCanvas.height;
             state.heightMeters = state.widthMeters / state.aspectRatio;
 
-            const res = processImageToBiophysicalMaps(imgCanvas);
+            const res = processImageToBiophysicalMaps(effectiveCanvas);
 
             state.albedoCanvas = res.albedoCanvas;
             state.normalCanvas = res.normalCanvas;
@@ -1055,6 +1145,15 @@
             state.normalTex = new THREE.CanvasTexture(res.normalCanvas);
             state.ormTex = new THREE.CanvasTexture(res.ormCanvas);
             state.heightTex = new THREE.CanvasTexture(res.heightCanvas);
+
+            // Configure texture wrapping and UV repeat
+            const wrap = state.seamlessTiling ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+            [state.albedoTex, state.normalTex, state.ormTex, state.heightTex].forEach(tex => {
+                tex.wrapS = wrap;
+                tex.wrapT = wrap;
+                tex.repeat.set(state.uvRepeat, state.uvRepeat);
+                tex.needsUpdate = true;
+            });
 
             // Update Thumbnails in Sidebar
             updateThumbnail('thumbAlbedo', res.albedoCanvas);
@@ -1195,6 +1294,28 @@
             btn.classList.toggle('active', showWireframe);
             btn.textContent = showWireframe ? 'ON' : 'OFF';
             if (wireframeMesh) wireframeMesh.visible = showWireframe;
+        }
+
+        function toggleSeamlessTiling() {
+            state.seamlessTiling = !state.seamlessTiling;
+            const btn = document.getElementById('seamlessBtn');
+            btn.classList.toggle('active', state.seamlessTiling);
+            btn.textContent = state.seamlessTiling ? 'ACTIVE' : 'OFF';
+
+            if (state.rawCanvas) {
+                processAndApplyImage(state.rawCanvas);
+            }
+        }
+
+        function updateUvRepeat(val) {
+            state.uvRepeat = parseFloat(val);
+            document.getElementById('uvRepeatVal').textContent = `${state.uvRepeat.toFixed(1)}×`;
+            [state.albedoTex, state.normalTex, state.ormTex, state.heightTex].forEach(tex => {
+                if (tex) {
+                    tex.repeat.set(state.uvRepeat, state.uvRepeat);
+                    tex.needsUpdate = true;
+                }
+            });
         }
 
         function toggleLightOrbit() {

@@ -58,6 +58,10 @@ export class GltfBinaryPacker {
             totalBinLength += bufferViews[i].length;
         }
 
+        // Pad entire BIN chunk to a multiple of 4 per glTF 2.0 specification
+        const binPadding = (4 - (totalBinLength % 4)) % 4;
+        totalBinLength += binPadding;
+
         // 2. Assemble contiguous BIN chunk
         const binChunk = Buffer.alloc(totalBinLength);
         for (let i = 0; i < bufferViews.length; i++) {
