@@ -969,24 +969,27 @@
           formattedAddress: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`
         };
       } else {
-        // Geocode via proxy
-        try {
-          const resp = await fetch(`/api/geocode?address=${encodeURIComponent(input)}`);
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.results && data.results.length > 0) {
-              const res = data.results[0];
-              currentAnchor = {
-                lat: res.geometry.location.lat,
-                lng: res.geometry.location.lng,
-                elevationMeters: 0,
-                headingDeg: 0,
-                formattedAddress: res.formatted_address
-              };
-            }
+        // Search local vector features (parcels, roads) from Google Vector Tile dataset
+        let found = false;
+        if (loadedVectorData && loadedVectorData.parcels) {
+          const clean = input.toLowerCase();
+          const p = loadedVectorData.parcels.find(x => x.name && x.name.toLowerCase().includes(clean));
+          if (p && p.coordinatesWGS84 && p.coordinatesWGS84.length) {
+            const avgLng = p.coordinatesWGS84.reduce((s, c) => s + c[0], 0) / p.coordinatesWGS84.length;
+            const avgLat = p.coordinatesWGS84.reduce((s, c) => s + c[1], 0) / p.coordinatesWGS84.length;
+            currentAnchor = {
+              lat: avgLat,
+              lng: avgLng,
+              elevationMeters: p.baseElevation || 0,
+              headingDeg: 0,
+              formattedAddress: `${p.name}, New York, NY`
+            };
+            found = true;
           }
-        } catch (e) {
-          console.warn('Geocoding fallback failed:', e);
+        }
+        if (!found) {
+          alert('Location query not found in vector tiles. Please enter coordinates (lat, lng). Google Geocoding API is disabled.');
+          return;
         }
       }
 

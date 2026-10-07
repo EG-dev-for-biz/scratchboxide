@@ -30,29 +30,23 @@ describe('GeoCameraMatchmovePipelineService Test Suite', () => {
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
 
-  test('1. Place names are geocoded through Google; nothing falls back to preset coordinates', async () => {
-    const ok = await service.geocodeLandmarkAnchor('The Plaza Hotel, New York', {
-      apiKey: 'K',
-      fetchImpl: geocodeFetch({ status: 'OK', results: [{ formatted_address: '768 5th Ave, New York, NY 10019, USA', place_id: 'PID', geometry: { location: { lat: 40.7646318, lng: -73.9743251 } } }] })
-    });
-    assert.strictEqual(ok.lat, 40.7646318);
-    assert.strictEqual(ok.lng, -73.9743251);
-    assert.strictEqual(ok.elevation, 18.66);
-    assert.strictEqual(ok.landmarkName, '768 5th Ave, New York, NY 10019, USA');
-    assert.strictEqual(ok.placeId, 'PID');
+  test('1. Geodetic anchors resolve through coordinates and Vector Tiles; Google Geocoding API is strictly disabled', async () => {
+    // 1. Direct coordinate parsing
+    const coordAnchor = await service.geocodeLandmarkAnchor('40.764632, -73.974325, 18.66');
+    assert.strictEqual(coordAnchor.lat, 40.764632);
+    assert.strictEqual(coordAnchor.lng, -73.974325);
+    assert.strictEqual(coordAnchor.elevation, 18.66);
 
+    // 2. Google Vector Tile resolution
+    const vectorAnchor = await service.geocodeLandmarkAnchor('Empire State Building');
+    assert.strictEqual(Number(vectorAnchor.lat.toFixed(4)), 40.7484);
+    assert.strictEqual(Number(vectorAnchor.lng.toFixed(4)), -73.9857);
+
+    // 3. Unresolvable query without coordinates or vector match throws strict zero-geocoding error
     await assert.rejects(
-      service.geocodeLandmarkAnchor('Custom Tower', { apiKey: 'K', fetchImpl: geocodeFetch({ status: 'ZERO_RESULTS', results: [] }) }),
-      /no result/i
+      service.geocodeLandmarkAnchor('NonExistentCustomFantasyTower'),
+      /Google Geocoding API is strictly disabled/i
     );
-    const saved = process.env.GOOGLE_MAPS_API_KEY;
-    delete process.env.GOOGLE_MAPS_API_KEY;
-    try {
-      await assert.rejects(service.geocodeLandmarkAnchor('The Plaza Hotel'), /api key|coordinates/i);
-    } finally {
-      if (saved !== undefined) process.env.GOOGLE_MAPS_API_KEY = saved;
-    }
-    assert.throws(() => service.resolveLandmarkAnchor('The Plaza Hotel' as any), /coordinates/i);
 
     const explicit = service.resolveLandmarkAnchor(PLAZA);
     assert.strictEqual(explicit.lat, PLAZA.lat);

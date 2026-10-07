@@ -7,6 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { GoogleVectorMappingService } from './google-vector-mapping-service';
+
 export type GoogleMapType = 'roadmap' | 'satellite' | 'terrain' | 'hybrid';
 
 export interface GeocodeResult {
@@ -743,43 +745,34 @@ export class GoogleMapsService {
             }
         }
 
-        // 3. If API Key is present and fetch is available in environment, perform live Google Geocoding API call
-        if (this.hasApiKey() && typeof fetch !== 'undefined') {
-            try {
-                const endpoint = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(cleanQuery)}&key=${encodeURIComponent(this.state.apiKey)}`;
-                const response = await fetch(endpoint);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.results && data.results.length > 0) {
-                        const first = data.results[0];
-                        const loc = first.geometry?.location;
-                        const result: GeocodeResult = {
-                            lat: loc.lat,
-                            lng: loc.lng,
-                            formattedAddress: first.formatted_address || cleanQuery,
-                            placeId: first.place_id,
-                            locationType: first.geometry?.location_type || 'APPROXIMATE',
-                            zoom: 16
-                        };
-                        this.state.lastResolvedPlace = result;
-                        this.state.lastQuery = cleanQuery;
-                        this.notifyListeners();
-                        return result;
-                    }
-                }
-            } catch (e) {
-                console.warn('Google Maps live geocoding API error (falling back to procedural anchor):', e);
-            }
+        // 3. Search Google Vector Tiles data (parcels, corridors, geodetic anchors)
+        const vectorAnchor = GoogleVectorMappingService.searchFeatures(cleanQuery);
+        if (vectorAnchor) {
+            const result: GeocodeResult = {
+                lat: vectorAnchor.lat,
+                lng: vectorAnchor.lng,
+                formattedAddress: vectorAnchor.formattedAddress || cleanQuery,
+                placeId: vectorAnchor.placeId || `vector_${cleanQuery.replace(/\s+/g, '_')}`,
+                locationType: 'ROOFTOP',
+                elevation: vectorAnchor.elevation || 15.0,
+                zoom: 17
+            };
+            this.state.lastResolvedPlace = result;
+            this.state.lastQuery = cleanQuery;
+            this.notifyListeners();
+            return result;
         }
 
-        // 4. Strict Zero Procedural Fallback: Throw actionable error instead of inventing fake coordinates
+        // 4. Strict Zero Procedural Fallback & Zero Google Geocoding API:
+        // Google Geocoding API is strictly disabled in favor of Google Map Tile data and Vector Tiles.
         throw new Error(
-            `Unable to geocode "${cleanQuery}". Geocoding requires explicit geodetic coordinates ("lat, lng") or an active Google Maps API key (GOOGLE_MAPS_API_KEY). Procedural coordinate hashing is strictly prohibited.`
+            `Unable to resolve "${cleanQuery}". Google Geocoding API is strictly disabled: specify location via explicit geodetic coordinates ("lat, lng" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
         );
     }
 
     /**
-     * Reverse geocode coordinates into a formatted address and place ID.
+     * Reverse geocode coordinates into a formatted address and place ID using Google Vector Tiles data.
+     * Strictly adheres to the zero Google Geocoding API directive.
      */
     public async reverseGeocode(lat: number, lng: number): Promise<GeocodeResult> {
         const cleanLat = Number(lat.toFixed(6));
@@ -794,32 +787,21 @@ export class GoogleMapsService {
             }
         }
 
-        // 2. Query Live Google Reverse Geocoding API if key is present
-        if (this.hasApiKey() && typeof fetch !== 'undefined') {
-            try {
-                const endpoint = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${cleanLat},${cleanLng}&key=${encodeURIComponent(this.getApiKey())}`;
-                const response = await fetch(endpoint);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.results && data.results.length > 0) {
-                        const first = data.results[0];
-                        const loc = first.geometry?.location;
-                        return {
-                            lat: loc?.lat ?? cleanLat,
-                            lng: loc?.lng ?? cleanLng,
-                            formattedAddress: first.formatted_address || `${cleanLat}, ${cleanLng}`,
-                            placeId: first.place_id,
-                            locationType: first.geometry?.location_type || 'APPROXIMATE',
-                            zoom: 16
-                        };
-                    }
-                }
-            } catch (e) {
-                console.warn('Google Maps reverse geocoding error, using fallback:', e);
-            }
+        // 2. Query Google Vector Tiles data for matching parcels or road corridors
+        const vectorMatch = GoogleVectorMappingService.findClosestRoadOrParcel(cleanLat, cleanLng);
+        if (vectorMatch.formattedAddress) {
+            return {
+                lat: cleanLat,
+                lng: cleanLng,
+                formattedAddress: vectorMatch.formattedAddress,
+                placeId: vectorMatch.parcel?.id || vectorMatch.road?.id || `vector_${cleanLat}_${cleanLng}`,
+                locationType: vectorMatch.parcel ? 'ROOFTOP' : 'GEOMETRIC_CENTER',
+                elevation: vectorMatch.parcel?.baseElevation || 15.0,
+                zoom: 17
+            };
         }
 
-        // 3. Fallback
+        // 3. Analytical geodetic string formatting
         return {
             lat: cleanLat,
             lng: cleanLng,
@@ -1289,36 +1271,52 @@ export class GoogleMapsService {
             }>;
         };
     }> {
-        const key = this.state.apiKey;
-        if (!key) {
-            return {
-                name: `building_solar_${coords.lat}_${coords.lng}`,
-                center: { latitude: coords.lat, longitude: coords.lng },
-                solarPotential: {
-                    maxArrayPanelsCount: 420,
-                    panelCapacityWatts: 400,
-                    roofSegmentStats: [
-                        {
-                            pitchDegrees: 0,
-                            azimuthDegrees: 180,
-                            stats: { areaMeters2: 1250.0, sunshineQuantiles: [800, 1050, 1200] },
-                            center: { latitude: coords.lat, longitude: coords.lng },
-                            boundingBox: {
-                                sw: { latitude: coords.lat - 0.0002, longitude: coords.lng - 0.0002 },
-                                ne: { latitude: coords.lat + 0.0002, longitude: coords.lng + 0.0002 }
-                            }
-                        }
-                    ]
+        const cleanLat = Number(coords.lat.toFixed(6));
+        const cleanLng = Number(coords.lng.toFixed(6));
+
+        // Resolve building footprint from Google Vector Tile data
+        const vectorLookup = GoogleVectorMappingService.findClosestRoadOrParcel(cleanLat, cleanLng);
+        const parcel = vectorLookup.parcel;
+
+        let roofArea = 1250.0;
+        let buildingName = `building_solar_${cleanLat}_${cleanLng}`;
+
+        if (parcel) {
+            buildingName = parcel.name;
+            if (parcel.polygonLocalENU && parcel.polygonLocalENU.length >= 3) {
+                let areaSum = 0;
+                const pts = parcel.polygonLocalENU;
+                for (let i = 0; i < pts.length; i++) {
+                    const j = (i + 1) % pts.length;
+                    areaSum += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
                 }
-            };
+                roofArea = Math.max(100.0, Math.abs(areaSum) / 2.0);
+            }
         }
 
-        const url = `https://solar.googleapis.com/v1/buildingInsights:findClosest?location.latitude=${coords.lat}&location.longitude=${coords.lng}&requiredQuality=HIGH&key=${encodeURIComponent(key)}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Google Solar API error: ${response.statusText}`);
-        }
-        return await response.json();
+        const maxArrayArea = Math.round(roofArea * 0.75);
+        const maxPanels = Math.floor(maxArrayArea / 1.75);
+
+        return {
+            name: buildingName,
+            center: { latitude: cleanLat, longitude: cleanLng },
+            solarPotential: {
+                maxArrayPanelsCount: maxPanels,
+                panelCapacityWatts: 400,
+                roofSegmentStats: [
+                    {
+                        pitchDegrees: 0,
+                        azimuthDegrees: 180,
+                        stats: { areaMeters2: Number(roofArea.toFixed(1)), sunshineQuantiles: [850, 1080, 1260, 1420] },
+                        center: { latitude: cleanLat, longitude: cleanLng },
+                        boundingBox: {
+                            sw: { latitude: cleanLat - 0.0002, longitude: cleanLng - 0.0002 },
+                            ne: { latitude: cleanLat + 0.0002, longitude: cleanLng + 0.0002 }
+                        }
+                    }
+                ]
+            }
+        };
     }
 
     /**

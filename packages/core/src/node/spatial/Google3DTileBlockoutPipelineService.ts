@@ -14,6 +14,7 @@ import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
+import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -390,37 +391,22 @@ export class Google3DTileBlockoutPipelineService {
       }
     }
 
-    // 2. Live Google Maps Geocoding API if key is available
-    const key = apiKey || process.env.GOOGLE_MAPS_API_KEY;
-    if (key && typeof fetch !== 'undefined') {
-      try {
-        const endpoint = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(rawQuery)}&key=${encodeURIComponent(key)}`;
-        const res = await fetch(endpoint);
-        if (res.ok) {
-          const data: any = await res.json();
-          if (data && data.status === 'OK' && data.results && data.results.length > 0) {
-            const first = data.results[0];
-            const loc = first.geometry?.location;
-            if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
-              return {
-                lat: Number(loc.lat.toFixed(6)),
-                lng: Number(loc.lng.toFixed(6)),
-                elevation: 15.0,
-                landmarkName: first.formatted_address || rawQuery
-              };
-            }
-          }
-        }
-      } catch (err: any) {
-        throw new Error(`Google Maps Geocoding API request failed for "${rawQuery}": ${err.message}`);
-      }
+    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
+    const vectorAnchor = GoogleVectorMappingService.searchFeatures(rawQuery);
+    if (vectorAnchor) {
+      return {
+        lat: vectorAnchor.lat,
+        lng: vectorAnchor.lng,
+        elevation: vectorAnchor.elevation || 15.0,
+        landmarkName: vectorAnchor.formattedAddress || rawQuery
+      };
     }
 
     // Zero presets and no procedural fallbacks are permitted
     throw new Error(
       `Cannot resolve geodetic coordinates for query "${rawQuery}". ` +
-      `Zero presets and no procedural fallbacks are enabled: please provide explicit coordinates ` +
-      `(e.g. "40.748400, -73.985700" or { lat, lng }) or configure an active Google Maps API key for geocoding.`
+      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
+      `(e.g. "40.748400, -73.985700" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
     );
   }
 

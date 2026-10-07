@@ -777,11 +777,6 @@ class GeoBoxPrecisionPipeline:
                         resp2 = requests.get(url_norm, timeout=8).json()
                         candidates = resp2.get("results")
 
-                    # 3. If still no candidates, try Geocoding API
-                    if not candidates:
-                        url_geo = f"https://maps.googleapis.com/maps/api/geocode/json?address={requests.utils.quote(hint_query)}&key={self.api_key}"
-                        resp3 = requests.get(url_geo, timeout=8).json()
-                        candidates = resp3.get("results")
                 else:
                     url = (
                         f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?"
@@ -1293,15 +1288,7 @@ class GeoBoxPrecisionPipeline:
         }
 
         # Construct rich descriptive location dossier
-        camera_address = ""
-        if self.api_key:
-            try:
-                rev_url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={est_cam_lat},{est_cam_lng}&key={self.api_key}"
-                rev_resp = requests.get(rev_url, timeout=5).json()
-                if rev_resp.get("status") == "OK" and rev_resp.get("results"):
-                    camera_address = rev_resp["results"][0].get("formatted_address", "")
-            except Exception:
-                pass
+        camera_address = f"Coordinates ({est_cam_lat:.4f}, {est_cam_lng:.4f})"
 
         if not camera_address and vantage_candidate:
             camera_address = vantage_candidate.get("camera_address", "")

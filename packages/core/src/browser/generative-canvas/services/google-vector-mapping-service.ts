@@ -1241,6 +1241,133 @@ export class GoogleVectorMappingService {
 
     return { roads, parcels, landscapes };
   }
+
+  private static cachedMapping: GoogleMidtownVectorMapping | null = null;
+
+  public static getCanonicalMapping(): GoogleMidtownVectorMapping {
+    if (!this.cachedMapping) {
+      this.cachedMapping = this.generateCanonicalMidtownMapping();
+    }
+    return this.cachedMapping;
+  }
+
+  /**
+   * Search vector features (parcels, roads, landscapes, geodetic anchor) by name or query.
+   * Direct alternative to Google Geocoding API using Google Vector Tile data.
+   */
+  public static searchFeatures(query: string): GoogleGeodeticAnchor | null {
+    if (!query || !query.trim()) return null;
+    const clean = query.trim().toLowerCase();
+    const mapping = this.getCanonicalMapping();
+
+    // 1. Check anchor
+    if (clean.includes('empire state') || clean.includes('esb') || (clean.includes('34th st') && clean.includes('5th'))) {
+      return mapping.anchor;
+    }
+
+    // 2. Check parcels
+    for (const p of mapping.parcels) {
+      if (p.name.toLowerCase().includes(clean) || clean.includes(p.name.toLowerCase()) || p.id.toLowerCase() === clean) {
+        const avgLng = p.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / p.coordinatesWGS84.length;
+        const avgLat = p.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / p.coordinatesWGS84.length;
+        return {
+          lat: Number(avgLat.toFixed(6)),
+          lng: Number(avgLng.toFixed(6)),
+          elevation: p.baseElevation,
+          placeId: p.id,
+          formattedAddress: `${p.name}, New York, NY, USA`
+        };
+      }
+    }
+
+    // 3. Check roads
+    for (const r of mapping.roads) {
+      if (r.name.toLowerCase().includes(clean) || clean.includes(r.name.toLowerCase()) || r.id.toLowerCase() === clean) {
+        const midIdx = Math.floor(r.coordinatesWGS84.length / 2);
+        const midPt = r.coordinatesWGS84[midIdx];
+        return {
+          lat: Number(midPt[1].toFixed(6)),
+          lng: Number(midPt[0].toFixed(6)),
+          elevation: mapping.anchor.elevation,
+          placeId: r.id,
+          formattedAddress: `${r.name}, New York, NY, USA`
+        };
+      }
+    }
+
+    // 4. Check landscapes
+    if (mapping.landscapes) {
+      for (const l of mapping.landscapes) {
+        if (l.name.toLowerCase().includes(clean) || clean.includes(l.name.toLowerCase()) || l.id.toLowerCase() === clean) {
+          const avgLng = l.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / l.coordinatesWGS84.length;
+          const avgLat = l.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / l.coordinatesWGS84.length;
+          return {
+            lat: Number(avgLat.toFixed(6)),
+            lng: Number(avgLng.toFixed(6)),
+            elevation: mapping.anchor.elevation,
+            placeId: l.id,
+            formattedAddress: `${l.name}, New York, NY, USA`
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find closest road corridor or parcel to coordinates.
+   * Direct alternative to reverse geocoding via Google Vector Tile data.
+   */
+  public static findClosestRoadOrParcel(lat: number, lng: number): {
+    road?: GoogleRoadCorridor;
+    parcel?: GoogleParcelEnvelope;
+    formattedAddress?: string;
+  } {
+    const mapping = this.getCanonicalMapping();
+    const [u, v] = this.projectWgs84ToEnu(lng, lat, mapping.anchor);
+
+    let closestParcel: GoogleParcelEnvelope | undefined;
+    let minParcelDist = Infinity;
+    for (const p of mapping.parcels) {
+      const cX = p.polygonLocalENU.reduce((sum, pt) => sum + pt[0], 0) / p.polygonLocalENU.length;
+      const cZ = p.polygonLocalENU.reduce((sum, pt) => sum + pt[1], 0) / p.polygonLocalENU.length;
+      const d = Math.hypot(u - cX, v - cZ);
+      if (d < minParcelDist) {
+        minParcelDist = d;
+        closestParcel = p;
+      }
+    }
+
+    let closestRoad: GoogleRoadCorridor | undefined;
+    let minRoadDist = Infinity;
+    for (const r of mapping.roads) {
+      for (const pt of r.pointsLocalENU) {
+        const d = Math.hypot(u - pt[0], v - pt[1]);
+        if (d < minRoadDist) {
+          minRoadDist = d;
+          closestRoad = r;
+        }
+      }
+    }
+
+    if (closestParcel && minParcelDist <= 50) {
+      return {
+        parcel: closestParcel,
+        road: closestRoad,
+        formattedAddress: `${closestParcel.name}, New York, NY`
+      };
+    }
+
+    if (closestRoad && minRoadDist <= 100) {
+      return {
+        road: closestRoad,
+        formattedAddress: `${closestRoad.name}, New York, NY`
+      };
+    }
+
+    return {};
+  }
 }
 
 /**

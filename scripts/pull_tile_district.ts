@@ -22,19 +22,24 @@ function envKey(name: string): string | undefined {
     return m?.[1]?.trim();
 }
 
-async function geocode(query: string, key: string) {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${key}`;
-    const body: any = await (await fetch(url)).json();
-    if (body.status !== 'OK' || !body.results?.length) throw new Error(`Geocoding failed for "${query}": ${body.status} ${body.error_message ?? ''}`);
-    const r = body.results[0];
-    return {
-        query,
-        formattedAddress: r.formatted_address as string,
-        placeId: r.place_id as string,
-        lat: r.geometry.location.lat as number,
-        lng: r.geometry.location.lng as number,
-        precision: r.geometry.location_type as string
-    };
+async function geocode(query: string, _key: string) {
+    const clean = query.trim();
+    const coordMatch = clean.match(/^([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)$/);
+    if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        return {
+            query,
+            formattedAddress: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+            placeId: `coords_${lat}_${lng}`,
+            lat,
+            lng,
+            precision: 'ROOFTOP'
+        };
+    }
+    throw new Error(
+        `Geocoding failed for "${query}": Google Geocoding API is strictly disabled. Please supply explicit coordinates ("lat, lng") or Google Map Tile data.`
+    );
 }
 
 async function main() {

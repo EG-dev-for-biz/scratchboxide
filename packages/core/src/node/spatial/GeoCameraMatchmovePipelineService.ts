@@ -23,6 +23,7 @@ import {
   TileBlockoutPipelineRequest
 } from './Google3DTileBlockoutPipelineService';
 import { LocalTangentPlane, Vec3 } from '../../common/coordinate/LocalTangentPlane';
+import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
 import { OmniVideoService, buildBlockoutFirstLastPrompt } from '../video/OmniVideoService';
 import type {
   CameraSolveTrack,
@@ -231,30 +232,45 @@ export class GeoCameraMatchmovePipelineService {
     query: string,
     options: { apiKey?: string; fetchImpl?: typeof fetch; headingDeg?: number } = {}
   ): Promise<GeoAnchor & { headingDeg: number; placeId: string; elevationSource: 'elevation-api' | 'unavailable' }> {
-    const apiKey = options.apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
-    if (!apiKey) {
-      throw new Error(`Geocoding "${query}" needs a Google Maps API key (GOOGLE_MAPS_API_KEY) or explicit coordinates.`);
+    const clean = query.trim();
+
+    // 1. Direct coordinate regex: matches "40.7484, -73.9857" or "40.748400, -73.985700, 15.0"
+    const coordMatch = clean.match(/^([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)(?:\s*,\s*([-+]?\d+(?:\.\d+)?))?$/);
+    if (coordMatch) {
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      const elev = coordMatch[3] ? parseFloat(coordMatch[3]) : 15.0;
+      return {
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6)),
+        elevation: isNaN(elev) ? 15.0 : elev,
+        elevationSource: 'unavailable',
+        landmarkName: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+        placeId: `coords_${lat}_${lng}`,
+        headingDeg: options.headingDeg ?? 0
+      };
     }
-    const doFetch = options.fetchImpl ?? fetch;
-    const geo: any = await (await doFetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${apiKey}`)).json();
-    if (geo.status !== 'OK' || !geo.results?.length) {
-      throw new Error(`Geocoding found no result for "${query}" (${geo.status}${geo.error_message ? `: ${geo.error_message}` : ''}).`);
+
+    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
+    const vectorAnchor = GoogleVectorMappingService.searchFeatures(clean);
+    if (vectorAnchor) {
+      return {
+        lat: vectorAnchor.lat,
+        lng: vectorAnchor.lng,
+        elevation: vectorAnchor.elevation || 15.0,
+        elevationSource: 'unavailable',
+        landmarkName: vectorAnchor.formattedAddress || clean,
+        placeId: vectorAnchor.placeId || `vector_${clean.replace(/\s+/g, '_')}`,
+        headingDeg: options.headingDeg ?? 0
+      };
     }
-    const hit = geo.results[0];
-    const lat: number = hit.geometry.location.lat;
-    const lng: number = hit.geometry.location.lng;
-    let elevation = 0;
-    let elevationSource: 'elevation-api' | 'unavailable' = 'unavailable';
-    try {
-      const elev: any = await (await doFetch(`https://maps.googleapis.com/maps/api/elevation/json?locations=${lat},${lng}&key=${apiKey}`)).json();
-      if (elev.status === 'OK' && Number.isFinite(elev.results?.[0]?.elevation)) {
-        elevation = elev.results[0].elevation;
-        elevationSource = 'elevation-api';
-      }
-    } catch {
-      elevationSource = 'unavailable';
-    }
-    return { lat, lng, elevation, elevationSource, landmarkName: hit.formatted_address, placeId: hit.place_id, headingDeg: options.headingDeg ?? 0 };
+
+    // Zero presets and no procedural fallbacks are permitted: Google Geocoding API is strictly disabled
+    throw new Error(
+      `Cannot resolve geodetic anchor for query "${query}". ` +
+      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
+      `(e.g. "40.748400, -73.985700" or { lat, lng }), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
+    );
   }
 
   /**

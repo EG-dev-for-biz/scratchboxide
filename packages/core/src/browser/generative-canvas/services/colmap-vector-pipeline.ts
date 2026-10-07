@@ -17,6 +17,7 @@ import {
   ColmapGeoJsonFeatureCollection
 } from '../../../common/spatial/colmap-vector-reference-types';
 import { GoogleElevationService } from './google-elevation-service';
+import { GoogleVectorMappingService } from './google-vector-mapping-service';
 
 /**
  * Universal, Zero-Preset Processing Pipeline for
@@ -145,34 +146,41 @@ export class ColmapVectorPipeline {
   }
 
   /**
-   * Dynamic live geocoding via Google Geocoding API with mandatory solution attribution.
+   * Resolves query coordinates via direct coordinate parsing or Google Vector Tiles data.
+   * Strictly adheres to the zero Google Geocoding API directive.
    */
-  private async geocodeAddress(query: string, apiKey: string): Promise<{ lat: number; lng: number; formattedAddress: string; placeId?: string }> {
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodedQuery}&key=${encodeURIComponent(apiKey)}&solution_id=gmp_git_agentskills_v1`;
+  private async geocodeAddress(query: string, _apiKey?: string): Promise<{ lat: number; lng: number; formattedAddress: string; placeId?: string }> {
+    const clean = query.trim();
 
-    const resp = await fetch(url, {
-      headers: {
-        'X-Goog-Api-Client': 'gl-node/ gmp_git_agentskills_v1'
-      }
-    });
-
-    if (!resp.ok) {
-      throw new Error(`Google Geocoding API HTTP error: ${resp.status} ${resp.statusText}`);
+    // 1. Direct coordinate regex: "40.7484, -73.9857"
+    const match = clean.match(/^([-+]?\d{1,2}(?:\.\d+)?)\s*,\s*([-+]?\d{1,3}(?:\.\d+)?)$/);
+    if (match) {
+      const lat = parseFloat(match[1]);
+      const lng = parseFloat(match[2]);
+      return {
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6)),
+        formattedAddress: `Coordinates (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+        placeId: `coords_${lat}_${lng}`
+      };
     }
 
-    const data = await resp.json();
-    if (data.status !== 'OK' || !data.results || data.results.length === 0) {
-      throw new Error(`Zero-Preset Error: Location "${query}" not found via Google Geocoding API (Status: ${data.status}).`);
+    // 2. Google Vector Tiles resolution (parcels, corridors, geodetic anchors)
+    const vectorAnchor = GoogleVectorMappingService.searchFeatures(clean);
+    if (vectorAnchor) {
+      return {
+        lat: vectorAnchor.lat,
+        lng: vectorAnchor.lng,
+        formattedAddress: vectorAnchor.formattedAddress || clean,
+        placeId: vectorAnchor.placeId || `vector_${clean.replace(/\s+/g, '_')}`
+      };
     }
 
-    const first = data.results[0];
-    return {
-      lat: first.geometry.location.lat,
-      lng: first.geometry.location.lng,
-      formattedAddress: first.formatted_address,
-      placeId: first.place_id
-    };
+    throw new Error(
+      `Zero-Preset Error: Location "${query}" cannot be resolved. ` +
+      `Google Geocoding API is strictly disabled: please provide explicit coordinates ` +
+      `(e.g. "40.748400, -73.985700"), Google Photorealistic 3D Tiles, or Google Vector Tiles.`
+    );
   }
 
   private readonly engine = new SurveySynthesisEngine();
