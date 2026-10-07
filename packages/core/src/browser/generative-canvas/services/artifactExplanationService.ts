@@ -31,8 +31,11 @@ export function buildArtifactExplanationMarkdown(artifact: CanvasArtifact, promp
             const data = (artifact.data || {}) as Scene3DData;
             const title = artifact.title || data.title || '3D Spatial Scene';
             const summary = artifact.summary || data.subtitle || 'Procedural 3D scene assembled on your visual canvas.';
+            const hasPython = !!(data.pythonGenerator?.glbBase64 || data.pythonGenerator?.sourceCode);
             const isCpp = !!data.cppGenerator?.sourceCode;
-            const engineType = isCpp ? 'Native C++20 Astro Engine (SIMD Geometry)' : 'Three.js Spatial Engine (PBR Shading)';
+            const engineType = hasPython
+                ? 'Native Python 3D Engine (scratchbox SDK / SIMD C++)'
+                : (isCpp ? 'Native C++20 Astro Engine (SIMD Geometry)' : 'Three.js Spatial Engine (PBR Shading)');
             const renderMode = (data.renderMode || 'pbr').toUpperCase();
             const cameraMode = (data.cameraMode || 'orbit').toUpperCase();
 

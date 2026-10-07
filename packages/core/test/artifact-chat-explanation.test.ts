@@ -103,6 +103,30 @@ describe('Cursor-Grade Chat Explanations & Viewport Cleanliness', () => {
             expect(explanation).toMatch(/Space|Playhead|Export/i);
         });
 
+        it('generates rich, structured explanation for Python 3D scene artifacts', () => {
+            const pythonSceneData: Scene3DData = {
+                title: 'Procedural Cyberpunk City',
+                subtitle: 'Generated via Python 3D engine',
+                renderMode: 'pbr',
+                cameraMode: 'orbit',
+                pythonGenerator: {
+                    sourceCode: 'import scratchbox as sb\nscene = sb.Scene()',
+                    glbPath: '/models/cyberpunk_city.glb'
+                }
+            };
+
+            const artifact: CanvasArtifact = {
+                id: 'art-3d-py',
+                type: '3d-scene',
+                title: 'Procedural Cyberpunk City',
+                data: pythonSceneData
+            };
+
+            const explanation = buildArtifactExplanationMarkdown(artifact);
+            expect(explanation).toContain('Procedural Cyberpunk City');
+            expect(explanation).toMatch(/Native Python 3D Engine/i);
+        });
+
         it('generates rich, structured explanation for Live Code Sandbox artifacts', () => {
             const sandboxData: LiveCodeSandboxData = {
                 title: 'Interactive Audio Synthesizer',
