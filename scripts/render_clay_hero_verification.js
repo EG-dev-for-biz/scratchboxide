@@ -470,9 +470,10 @@ function drawLineBresenham(x0, y0, x1, y1, r, g, b, a, buffer, width, height) {
 // IDE Studio Canvas UI Compositor
 // =============================================================================
 
-function renderIdeVerificationScreenshot(glbPath, outDir) {
+function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
     fs.mkdirSync(outDir, { recursive: true });
     const meshData = parseGlb(glbPath);
+    const pfx = prefix ? `${prefix}_` : '';
 
     // 1. Render Hero View 1: Front 3/4 Perspective (1280x720)
     const view1Buffer = renderGlbView(meshData, {
@@ -487,9 +488,9 @@ function renderIdeVerificationScreenshot(glbPath, outDir) {
     // Add watermark badge
     drawString(view1Buffer, 1280, 720, 24, 24, "SCRATCHBOX 3D // HERO OBJECT [STUDIO GREY CLAY]", 220, 230, 245, 2);
     drawString(view1Buffer, 1280, 720, 24, 48, "STAGE VOID // FLAT CAD STUDIO LIGHTING // PBR CLAY 18%", 140, 160, 185, 1);
-    drawString(view1Buffer, 1280, 720, 24, 60, "GEOMETRIC HIERARCHY: 4,324 VERTICES | 3,084 TRIANGLES", 100, 200, 140, 1);
+    drawString(view1Buffer, 1280, 720, 24, 60, `GEOMETRIC HIERARCHY: ${meshData.vertexCount.toLocaleString()} VERTICES | ${(meshData.indices.length / 3).toLocaleString()} TRIANGLES`, 100, 200, 140, 1);
     const view1Png = encodePNG(1280, 720, view1Buffer);
-    const view1Path = path.join(outDir, 'hero_clay_front_quarter_view.png');
+    const view1Path = path.join(outDir, `${pfx}hero_clay_front_quarter_view.png`);
     fs.writeFileSync(view1Path, view1Png);
 
     // 2. Render Hero View 2: Rear 3/4 Quarter View (1280x720)
@@ -504,9 +505,9 @@ function renderIdeVerificationScreenshot(glbPath, outDir) {
     });
     drawString(view2Buffer, 1280, 720, 24, 24, "SCRATCHBOX 3D // REAR DOWNFORCE & DIFFUSER ASSEMBLY", 220, 230, 245, 2);
     drawString(view2Buffer, 1280, 720, 24, 48, "GT WING // QUAD EXHAUST CLUSTER // 6-STRAKE DIFFUSER", 140, 160, 185, 1);
-    drawString(view2Buffer, 1280, 720, 24, 60, "COCKPIT INTERIOR: BUCKET SEATS // DASH // STEERING YOKE", 100, 200, 140, 1);
+    drawString(view2Buffer, 1280, 720, 24, 60, `AERODYNAMIC CURVATURE: ${meshData.vertexCount.toLocaleString()} VERTICES`, 100, 200, 140, 1);
     const view2Png = encodePNG(1280, 720, view2Buffer);
-    const view2Path = path.join(outDir, 'hero_clay_rear_quarter_view.png');
+    const view2Path = path.join(outDir, `${pfx}hero_clay_rear_quarter_view.png`);
     fs.writeFileSync(view2Path, view2Png);
 
     // 3. Composite Full Scratchbox IDE Canvas Studio Screenshot (1920x1080)
@@ -651,13 +652,14 @@ function renderIdeVerificationScreenshot(glbPath, outDir) {
     drawString(ideBuffer, ideW, ideH, c3X + 16, cardY + 68, "- PERFORATED ROTORS & RED CALIPERS: CERAMIC BRAKE SYSTEM", 190, 200, 215, 1);
 
     const fullIdePng = encodePNG(ideW, ideH, ideBuffer);
-    const fullIdePath = path.join(outDir, 'scratchbox_ide_clay_stage_void_verification.png');
+    const fullIdePath = path.join(outDir, `${pfx}scratchbox_ide_clay_stage_void_verification.png`);
     fs.writeFileSync(fullIdePath, fullIdePng);
 
     return { view1Path, view2Path, fullIdePath };
 }
 
 const outDir = '/Users/eligreen/.gemini/antigravity/brain/97b137e8-ad3d-47ff-a3ae-59e570b58f77';
-const glbPath = '/Users/eligreen/dev/scratchbox-ide-master/build/hero_hypercar_clay.glb';
-renderIdeVerificationScreenshot(glbPath, outDir);
-console.log("Visual verification screenshots updated successfully.");
+const glbPath = process.argv[2] || '/Users/eligreen/dev/scratchbox-ide-master/build/hero_hypercar_clay.glb';
+const prefix = process.argv[3] || '';
+renderIdeVerificationScreenshot(glbPath, outDir, prefix);
+console.log(`Visual verification screenshots updated successfully with prefix '${prefix}'.`);
