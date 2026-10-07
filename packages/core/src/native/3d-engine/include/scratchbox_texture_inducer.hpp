@@ -180,16 +180,19 @@ inline TextureSpatialProfile analyzeTextureSpatialProfile(const ImageBuffer& img
     profile.dominantPeriodPxX = findPeriodicPeak(autocorrX);
     profile.dominantPeriodPxY = findPeriodicPeak(autocorrY);
 
-    if (profile.dominantPeriodPxX > 0.0f && profile.dominantPeriodPxY > 0.0f) {
+    bool hasX = profile.dominantPeriodPxX > 0.0f;
+    bool hasY = profile.dominantPeriodPxY > 0.0f;
+
+    if (hasX || hasY) {
         profile.isPeriodic = true;
-        profile.aspectRatio = profile.dominantPeriodPxX / profile.dominantPeriodPxY;
+        profile.aspectRatio = (hasX && hasY) ? (profile.dominantPeriodPxX / profile.dominantPeriodPxY) : 1.0f;
 
         // Continuous metric wavelength derivation: λ = P_px * (L_target / Dim_px)
         float meterPerPixelX = targetResolutionMeters / static_cast<float>(W);
         float meterPerPixelY = targetResolutionMeters / static_cast<float>(H);
 
-        profile.spatialWavelengthMetersX = profile.dominantPeriodPxX * meterPerPixelX;
-        profile.spatialWavelengthMetersY = profile.dominantPeriodPxY * meterPerPixelY;
+        profile.spatialWavelengthMetersX = hasX ? (profile.dominantPeriodPxX * meterPerPixelX) : targetResolutionMeters;
+        profile.spatialWavelengthMetersY = hasY ? (profile.dominantPeriodPxY * meterPerPixelY) : targetResolutionMeters;
 
         // Analytical physical module dimensions derived directly from continuous spatial spectrum
         profile.physicalModuleWidthMeters = profile.spatialWavelengthMetersX;
@@ -198,7 +201,7 @@ inline TextureSpatialProfile analyzeTextureSpatialProfile(const ImageBuffer& img
         // Calibrate texture repeats directly from spatial wavelength: N_repeat = L_target / λ = Dim_px / P_px
         profile.recommendedRepeatX = targetResolutionMeters / profile.physicalModuleWidthMeters;
         profile.recommendedRepeatY = targetResolutionMeters / profile.physicalModuleHeightMeters;
-        profile.spectralPeriodicityConfidence = 0.95f;
+        profile.spectralPeriodicityConfidence = (hasX && hasY) ? 0.95f : 0.75f;
     } else {
         // Stochastic / continuous organic texture (granite, marble, concrete, gravel)
         profile.isPeriodic = false;
