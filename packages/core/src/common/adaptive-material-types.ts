@@ -102,3 +102,70 @@ export interface AdaptivePbrResult {
     totalTexelsProcessed: number;
     processingTimeMs: number;
 }
+
+/**
+ * Continuous Biophysical Material Descriptor.
+ * Conforms to Adaptive Domain Architecture (ADA Pillar 1, 2, 3, 8).
+ * Represents any earthly or alien material as a continuous dimensional coordinate in \mathbb{R}^k.
+ */
+export interface ContinuousMaterialDescriptor {
+    /** Spectral base albedo [R, G, B] in linear radiometric space [0..1]. */
+    albedoLinear: [number, number, number];
+    /** Secondary vein / grain / inclusion color. */
+    secondaryAlbedo?: [number, number, number];
+    /** Blend weight of secondary component [0..1]. */
+    secondaryWeight?: number;
+    /** Conduction metric [0..1]: 0.0 = pure dielectric, 1.0 = metallic conductor. */
+    conduction: number;
+    /** Baseline surface roughness [0.02..0.98]. */
+    roughnessBaseline: number;
+    /** High-frequency surface tooth / micro-roughness [0..1]. */
+    microPorosity?: number;
+    /** Tangent relief normal multiplier [0.1..5.0]. */
+    normalStrength?: number;
+    /** Spatial frequency of fissures / veins / pores [1..64]. */
+    fissureScale?: number;
+    /** Relief displacement depth of fissures [0..1]. */
+    fissureDepth?: number;
+    /** Octaves of fractional Brownian motion [1..8]. */
+    fbmOctaves?: number;
+    /** Fractal persistence gain [0.1..0.9]. */
+    fbmGain?: number;
+    /** Voronoi / crystal / aggregate grain weight [0..1]. */
+    cellularWeight?: number;
+    /** High-frequency mineral speckling [0..1]. */
+    graininess?: number;
+    /** Directional elongation [0..1] (0 = isotropic). */
+    anisotropyStrength?: number;
+    /** Angle of grain in radians [-\pi..\pi]. */
+    anisotropyAngleRad?: number;
+    /** Ambient occlusion intensity multiplier [0..2]. */
+    aoStrength?: number;
+}
+
+/**
+ * Continuous Differential Geometry Mesh Partition.
+ * Replaces closed architectural zone taxonomies with continuous differential geometric fields.
+ */
+export interface DifferentialGeometryPartition {
+    /** Continuous normal dot gravity (ny) [-1..1]. */
+    zenithCos: number[];
+    /** Continuous normalized relative elevation [0..1]. */
+    relativeElevation: number[];
+    /** Continuous verticality (1 - |ny|) [0..1]. */
+    verticality: number[];
+    /** Metric UV repeat along U derived from continuous geometry. */
+    metricUvRepeatsU: number[];
+    /** Metric UV repeat along V derived from continuous geometry. */
+    metricUvRepeatsV: number[];
+    /** Normal scale multiplier derived from continuous geometry. */
+    normalScaleMultipliers: number[];
+    /** Backward-compatible discrete face zones. */
+    faceZones?: number[];
+    groundPlinthFaces?: number;
+    mainShaftFaces?: number;
+    slopedRoofFaces?: number;
+    horizontalDeckFaces?: number;
+    corniceFaces?: number;
+}
+

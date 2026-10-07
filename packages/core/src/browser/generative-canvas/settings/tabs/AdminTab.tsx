@@ -90,6 +90,17 @@ export const STANDALONE_STUDIOS_CATALOG: StandaloneStudioItem[] = [
         tags: ['Nano Banana', '4x Loupe', 'Shape-Grounded Rewrap', '0.000mm Drift', 'Micro-Detail'],
         badge: '0.000MM DRIFT'
     },
+    // Adaptive Image-to-PBR Relief Studio
+    {
+        id: 'image-to-adaptive-pbr-studio',
+        title: 'Adaptive Image-to-PBR Relief Studio',
+        subtitle: '2D Surface to Metric Displaced PBR Plane · Retinex, Scharr RNM & Packed ORM',
+        category: 'Texture & PBR',
+        path: '/image_to_adaptive_pbr_studio.html',
+        description: 'Transforms single 2D photographs into aspect-locked 3D metric planes with central-difference surface relief, Retinex de-lighted albedo, and packed glTF ORM textures in <150ms.',
+        tags: ['Image to PBR', 'Continuous Biophysics', 'Displaced Plane', 'ORM Packed', 'Zero HuggingFace', 'glTF 2.0'],
+        badge: 'LOCAL BIOPHYSICS'
+    },
     // 5. GeoBox Geolocation Model Evaluation
     {
         id: 'geobox-eval-report',

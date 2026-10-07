@@ -96,6 +96,8 @@ export type {
     AdaptiveMaterialSchema,
     IntrinsicSignalMetrics,
     ContinuousBiophysicalFields,
+    ContinuousMaterialDescriptor,
+    DifferentialGeometryPartition,
     AdaptivePbrOptions,
     AdaptivePbrResult,
     AdaptiveAtlasTelemetry

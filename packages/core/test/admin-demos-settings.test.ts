@@ -40,6 +40,7 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
         expect(adminSrc).toContain('spatial_photoreal_3dgs_demo.html');
         expect(adminSrc).toContain('agent_lighting_proof.html');
         expect(adminSrc).toContain('nano_banana_texture_upscale_experiment.html');
+        expect(adminSrc).toContain('image_to_adaptive_pbr_studio.html');
         expect(adminSrc).toContain('geobox_eval_report.html');
         expect(adminSrc).toContain('vfx_plate_anti_drift_demo.html');
         expect(adminSrc).toContain('colmap_visualizer.html');
@@ -76,6 +77,7 @@ describe('Admin Access & Comprehensive Showcase Demos Catalog in Settings', () =
             'spatial_photoreal_3dgs_demo.html',
             'agent_lighting_proof.html',
             'nano_banana_texture_upscale_experiment.html',
+            'image_to_adaptive_pbr_studio.html',
             'geobox_eval_report.html',
             'vfx_plate_anti_drift_demo.html',
             'colmap_visualizer.html',

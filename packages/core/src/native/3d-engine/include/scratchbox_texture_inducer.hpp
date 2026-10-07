@@ -64,16 +64,20 @@ inline const char* getSemanticZoneName(SemanticSurfaceZone zone) {
 // ============================================================================
 
 struct TextureSpatialProfile {
-    float dominantPeriodPxX{0.0f};      // Fundamental periodicity (e.g. brick width)
-    float dominantPeriodPxY{0.0f};      // Fundamental periodicity (e.g. course height)
+    float dominantPeriodPxX{0.0f};      // Fundamental periodicity in pixels (X)
+    float dominantPeriodPxY{0.0f};      // Fundamental periodicity in pixels (Y)
     float correlationLengthPxX{16.0f};  // Distance where autocorrelation drops to 1/e
     float correlationLengthPxY{16.0f};
     float aspectRatio{1.0f};            // λx / λy
-    bool isPeriodic{false};             // True for brick, tile, ashlar; false for stone/concrete
+    bool isPeriodic{false};             // True when periodic structure is detected
     float physicalModuleWidthMeters{1.0f};
     float physicalModuleHeightMeters{1.0f};
     float recommendedRepeatX{1.0f};
     float recommendedRepeatY{1.0f};
+    // Continuous ADA spectral fields (Open-Domain Universality)
+    float spatialWavelengthMetersX{1.0f};
+    float spatialWavelengthMetersY{1.0f};
+    float spectralPeriodicityConfidence{0.0f}; // [0..1]
 };
 
 /**
@@ -180,36 +184,32 @@ inline TextureSpatialProfile analyzeTextureSpatialProfile(const ImageBuffer& img
         profile.isPeriodic = true;
         profile.aspectRatio = profile.dominantPeriodPxX / profile.dominantPeriodPxY;
 
-        // Architectural module induction based on aspect ratio
-        if (profile.aspectRatio > 2.8f) {
-            // Elongated Roman brick or modular brick stretcher course (~1.5" x 8-12")
-            profile.physicalModuleWidthMeters = 0.25f;
-            profile.physicalModuleHeightMeters = 0.065f;
-        } else if (profile.aspectRatio > 1.4f) {
-            // Ashlar masonry block (~12" x 24")
-            profile.physicalModuleWidthMeters = 0.60f;
-            profile.physicalModuleHeightMeters = 0.35f;
-        } else if (profile.aspectRatio < 0.6f) {
-            // Vertical standing seams or ribbed siding
-            profile.physicalModuleWidthMeters = 0.40f;
-            profile.physicalModuleHeightMeters = 1.20f;
-        } else {
-            // Square ceramic tile, paver, or terracotta shingle (~10" x 10")
-            profile.physicalModuleWidthMeters = 0.30f;
-            profile.physicalModuleHeightMeters = 0.30f;
-        }
+        // Continuous metric wavelength derivation: λ = P_px * (L_target / Dim_px)
+        float meterPerPixelX = targetResolutionMeters / static_cast<float>(W);
+        float meterPerPixelY = targetResolutionMeters / static_cast<float>(H);
 
-        // Calibrate texture repeats: how many repeats per target 2.0m span
+        profile.spatialWavelengthMetersX = profile.dominantPeriodPxX * meterPerPixelX;
+        profile.spatialWavelengthMetersY = profile.dominantPeriodPxY * meterPerPixelY;
+
+        // Analytical physical module dimensions derived directly from continuous spatial spectrum
+        profile.physicalModuleWidthMeters = profile.spatialWavelengthMetersX;
+        profile.physicalModuleHeightMeters = profile.spatialWavelengthMetersY;
+
+        // Calibrate texture repeats directly from spatial wavelength: N_repeat = L_target / λ = Dim_px / P_px
         profile.recommendedRepeatX = targetResolutionMeters / profile.physicalModuleWidthMeters;
         profile.recommendedRepeatY = targetResolutionMeters / profile.physicalModuleHeightMeters;
+        profile.spectralPeriodicityConfidence = 0.95f;
     } else {
         // Stochastic / continuous organic texture (granite, marble, concrete, gravel)
         profile.isPeriodic = false;
         profile.aspectRatio = 1.0f;
+        profile.spatialWavelengthMetersX = targetResolutionMeters;
+        profile.spatialWavelengthMetersY = targetResolutionMeters;
         profile.physicalModuleWidthMeters = targetResolutionMeters;
         profile.physicalModuleHeightMeters = targetResolutionMeters;
         profile.recommendedRepeatX = 1.0f;
         profile.recommendedRepeatY = 1.0f;
+        profile.spectralPeriodicityConfidence = 0.05f;
     }
 
     return profile;
@@ -355,6 +355,10 @@ struct SemanticMeshPartition {
     std::vector<float> metricUvRepeatsU;
     std::vector<float> metricUvRepeatsV;
     std::vector<float> normalScaleMultipliers;
+    // Continuous differential geometric fields (ADA Pillar 2 & 8)
+    std::vector<float> zenithCos;         // Continuous normal dot gravity (ny) [-1..1]
+    std::vector<float> relativeElevation; // Continuous normalized height [0..1]
+    std::vector<float> verticality;       // Continuous verticality (1 - |ny|) [0..1]
     size_t groundPlinthFaces{0};
     size_t mainShaftFaces{0};
     size_t slopedRoofFaces{0};
@@ -379,6 +383,9 @@ inline SemanticMeshPartition classifyMeshAndInduceParameters(
     partition.metricUvRepeatsU.resize(numTriangles);
     partition.metricUvRepeatsV.resize(numTriangles);
     partition.normalScaleMultipliers.resize(numTriangles);
+    partition.zenithCos.resize(numTriangles);
+    partition.relativeElevation.resize(numTriangles);
+    partition.verticality.resize(numTriangles);
 
     // Compute bounding box
     float minY = 1e9f, maxY = -1e9f;
@@ -460,6 +467,9 @@ inline SemanticMeshPartition classifyMeshAndInduceParameters(
         partition.metricUvRepeatsU[t] = repU;
         partition.metricUvRepeatsV[t] = repV;
         partition.normalScaleMultipliers[t] = nScale;
+        partition.zenithCos[t] = ny;
+        partition.relativeElevation[t] = normHeight;
+        partition.verticality[t] = 1.0f - std::abs(ny);
     }
 
     return partition;

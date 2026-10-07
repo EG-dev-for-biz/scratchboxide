@@ -12,6 +12,7 @@ import {
     NativeMaterialPbrService,
     PBR_50_ARCHETYPE_CATALOG
 } from '../src/node/3d-engine/native-material-pbr-service';
+import type { ContinuousMaterialDescriptor } from '../src/common/adaptive-material-types';
 
 describe('NativeMaterialPbrService', () => {
     const service = new NativeMaterialPbrService();
@@ -285,6 +286,176 @@ describe('NativeMaterialPbrService', () => {
             avgAo /= totalPixels;
             expect(avgAo).toBeGreaterThan(50);
             expect(avgAo).toBeLessThanOrEqual(255);
+        }, 60000);
+    });
+
+    describe('Adaptive Domain Architecture (ADA) Continuous Manifold & Differential Fields', () => {
+        it('should pass The Alien Planet Test: synthesize novel alien material without closed enums', async () => {
+            // Novel material: Bioluminescent Xenolithic Basalt with Vitrified Methane Inclusions
+            // Has no preset, no archetype ID, no closed taxonomy variant (ADA Pillar 1)
+            const alienMaterial: ContinuousMaterialDescriptor = {
+                albedoLinear: [0.08, 0.42, 0.36],
+                secondaryAlbedo: [0.12, 0.88, 0.72],
+                secondaryWeight: 0.38,
+                conduction: 0.22,
+                roughnessBaseline: 0.38,
+                microPorosity: 0.65,
+                normalStrength: 2.8,
+                fissureScale: 12.0,
+                fissureDepth: 0.45,
+                fbmOctaves: 5.0,
+                fbmGain: 0.55,
+                cellularWeight: 0.50,
+                graininess: 0.25,
+                anisotropyStrength: 0.70,
+                anisotropyAngleRad: 0.785, // 45 degrees
+                aoStrength: 1.4
+            };
+
+            const startTime = performance.now();
+            const res = await service.synthesizeContinuousManifoldPbr(alienMaterial, {
+                width: 64,
+                height: 64,
+                seed: 999
+            });
+            const duration = performance.now() - startTime;
+
+            expect(res.width).toBe(64);
+            expect(res.height).toBe(64);
+            expect(res.descriptor).toBe(alienMaterial);
+
+            const expectedBytes = 64 * 64 * 3;
+            expect(res.albedoRgb.length).toBe(expectedBytes);
+            expect(res.normalRgb.length).toBe(expectedBytes);
+            expect(res.roughnessRgb.length).toBe(expectedBytes);
+            expect(res.metallicRgb.length).toBe(expectedBytes);
+            expect(res.aoRgb.length).toBe(expectedBytes);
+            expect(res.ormRgb.length).toBe(expectedBytes);
+            expect(res.heightRgb.length).toBe(expectedBytes);
+
+            // Verify normal map Z channel validity
+            let dominantBlueCount = 0;
+            const totalPixels = 64 * 64;
+            for (let i = 0; i < totalPixels; i++) {
+                if (res.normalRgb[i * 3 + 2] >= 120) dominantBlueCount++;
+            }
+            expect(dominantBlueCount / totalPixels).toBeGreaterThan(0.95);
+
+            // Verify conduction reflected in metallic map
+            let avgMetallic = 0;
+            for (let i = 0; i < totalPixels; i++) {
+                avgMetallic += res.metallicRgb[i * 3 + 0];
+            }
+            avgMetallic /= totalPixels;
+            // 0.22 * 255 ~= 56
+            expect(avgMetallic).toBeGreaterThan(30);
+            expect(avgMetallic).toBeLessThan(90);
+        }, 60000);
+
+        it('should linearly interpolate two continuous descriptors (Continuous vs Discrete ADA Stress Test)', async () => {
+            const marbleDesc = service.getAnchorDescriptor(4); // Carrara Marble (dielectric, smooth)
+            const titaniumDesc = service.getAnchorDescriptor(20); // Titanium (metallic conductor, anisotropic)
+
+            expect(marbleDesc.conduction).toBeLessThan(0.1);
+            expect(titaniumDesc.conduction).toBeGreaterThan(0.9);
+
+            // Lerp halfway (t = 0.5)
+            const blended = service.lerpDescriptors(marbleDesc, titaniumDesc, 0.5);
+
+            expect(blended.conduction).toBeCloseTo((marbleDesc.conduction + titaniumDesc.conduction) / 2, 2);
+            expect(blended.roughnessBaseline).toBeCloseTo((marbleDesc.roughnessBaseline + titaniumDesc.roughnessBaseline) / 2, 2);
+            expect(blended.anisotropyStrength).toBeCloseTo((marbleDesc.anisotropyStrength! + titaniumDesc.anisotropyStrength!) / 2, 2);
+
+            // Synthesize blended material via synthesizePbrTextureSet with descriptor
+            const res = await service.synthesizePbrTextureSet({
+                descriptor: blended,
+                width: 64,
+                height: 64,
+                seed: 123
+            });
+
+            expect(res.width).toBe(64);
+            expect(res.albedoRgb.length).toBe(64 * 64 * 3);
+            expect(res.ormRgba.length).toBe(64 * 64 * 4);
+        }, 60000);
+
+        it('should compute continuous spatial wavelength and spectral periodicity', async () => {
+            const w = 64;
+            const h = 64;
+            const testImg = Buffer.alloc(w * h * 3);
+            // 8px horizontal period: sin(2 * pi * x / 8)
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 3;
+                    const v = Math.round(128 + 100 * Math.sin((2 * Math.PI * x) / 8.0));
+                    testImg[idx + 0] = v;
+                    testImg[idx + 1] = v;
+                    testImg[idx + 2] = v;
+                }
+            }
+
+            const prof = await service.analyzeTexturePeriodicity({
+                textureBytes: testImg,
+                width: w,
+                height: h,
+                channels: 3,
+                targetResolutionMeters: 2.0
+            });
+
+            expect(prof.dominantPeriodPxX).toBeGreaterThanOrEqual(6);
+            expect(prof.dominantPeriodPxX).toBeLessThanOrEqual(10);
+            expect(prof.spatialWavelengthMetersX).toBeDefined();
+            expect(prof.spatialWavelengthMetersX).toBeGreaterThan(0.1);
+            expect(prof.spatialWavelengthMetersX).toBeLessThan(0.5);
+            expect(prof.spectralPeriodicityConfidence).toBeDefined();
+            expect(prof.spectralPeriodicityConfidence).toBeGreaterThan(0.3);
+        }, 60000);
+
+        it('should evaluate continuous differential geometry fields on arbitrary 3D mesh', async () => {
+            const vertices = new Float32Array([
+                // Plinth (quad on XZ at ground Y=0..2)
+                0, 0, 0,  1, 0, 0,  1, 2, 0,  0, 2, 0,
+                // Shaft (quad on XZ at Y=2..10)
+                0, 2, 0,  1, 2, 0,  1, 10, 0, 0, 10, 0,
+                // Upper Deck (horizontal quad at Y=10)
+                0, 10, 0, 1, 10, 0, 1, 10, 1, 0, 10, 1
+            ]);
+            const normals = new Float32Array([
+                0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
+                0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
+                0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0
+            ]);
+            const indices = new Uint32Array([
+                0, 1, 2,  0, 2, 3,
+                4, 5, 6,  4, 6, 7,
+                8, 9, 10, 8, 10, 11
+            ]);
+
+            const partition = await service.classifyMeshSemanticZones({
+                vertices,
+                indices,
+                normals,
+                groundDatumY: 0.0,
+                plinthThresholdMeters: 3.8
+            });
+
+            expect(partition.zenithCos).toBeDefined();
+            expect(partition.zenithCos).toHaveLength(6);
+            expect(partition.relativeElevation).toBeDefined();
+            expect(partition.relativeElevation).toHaveLength(6);
+            expect(partition.verticality).toBeDefined();
+            expect(partition.verticality).toHaveLength(6);
+
+            // Vertical walls: zenithCos ~= 0, verticality ~= 1
+            expect(partition.zenithCos![0]).toBeCloseTo(0.0, 1);
+            expect(partition.verticality![0]).toBeCloseTo(1.0, 1);
+
+            // Horizontal deck: zenithCos ~= 1, verticality ~= 0
+            expect(partition.zenithCos![4]).toBeCloseTo(1.0, 1);
+            expect(partition.verticality![4]).toBeCloseTo(0.0, 1);
+
+            // Relative elevation: plinth should be lower than deck
+            expect(partition.relativeElevation![0]).toBeLessThan(partition.relativeElevation![4]);
         }, 60000);
     });
 });

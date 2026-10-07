@@ -808,6 +808,30 @@ export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
         introMessage: 'Welcome to the **Nanite Meshlets & Progressive Path Tracing Studio**. Explore 1-trillion virtual triangle cluster DAGs, continuous 1-pixel screen-space error cuts, GPU compute frustum & Hi-Z culling, and progressive path-traced global illumination.'
     },
     {
+        id: 'demo-image-to-adaptive-pbr',
+        title: 'Adaptive Image-to-PBR Relief Studio',
+        subtitle: '2D Surface to Displaced Metric 3D Plane',
+        category: '3d',
+        categoryLabel: '3D & Biophysical PBR',
+        description: 'Instant 2D image-to-PBR metric displaced plane generator. Zero external model servers, continuous biophysical signal processing in <150ms, multi-frequency Scharr normals, HBAO, and packed ORM.',
+        tags: ['Image to PBR', 'Poisson Relief', 'ORM Textures', 'Zero-Preset', 'Continuous Biophysics', 'glTF 2.0'],
+        highlightBadge: 'ZERO-PRESET PBR',
+        artifact: {
+            id: 'art-demo-image-to-pbr',
+            type: 'interactive-browser',
+            title: 'Adaptive Image-to-PBR Relief Studio',
+            summary: 'Instant 2D image-to-PBR displaced plane generator with multi-frequency Scharr normals, Retinex de-lighting, and packed ORM in <150ms.',
+            data: {
+                url: '/image_to_adaptive_pbr_studio.html',
+                title: 'Adaptive Image-to-PBR Relief Studio',
+                viewportMode: 'desktop'
+            },
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the **Adaptive Image-to-PBR Relief Studio**. This studio transforms 2D surface imagery into physical 3D displaced geometry with intrinsic Retinex de-lighting, multi-frequency Scharr normals, and packed ORM textures in under 150ms.'
+    },
+    {
         id: 'demo-3d-geospatial',
         title: '3D Geospatial Engine & Midtown Manhattan',
         subtitle: 'Digital Twin Landmark Ingestion',

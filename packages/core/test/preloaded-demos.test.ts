@@ -91,4 +91,18 @@ describe('Showcase Preloaded Demos Catalog', () => {
         expect(demo?.tags).toContain('Meshlet Virtualization');
         expect(demo?.tags).toContain('3D Gaussian Splatting');
     });
+
+    it('Adaptive Image-to-PBR studio demo must feature interactive-browser artifact and biophysical tags', () => {
+        const demo = PRELOADED_SHOWCASE_DEMOS.find(d => d.id === 'demo-image-to-adaptive-pbr');
+        expect(demo).toBeDefined();
+        expect(demo?.category).toBe('3d');
+        expect(demo?.highlightBadge).toBe('ZERO-PRESET PBR');
+        expect(demo?.artifact.type).toBe('interactive-browser');
+        const data = demo?.artifact.data as any;
+        expect(data.url).toBe('/image_to_adaptive_pbr_studio.html');
+        expect(demo?.tags).toContain('Image to PBR');
+        expect(demo?.tags).toContain('ORM Textures');
+        expect(demo?.tags).toContain('Continuous Biophysics');
+    });
 });
+
