@@ -777,6 +777,76 @@ scene.compute_curvature_ao(intensity=0.7)
 sb.io.write_glb(OUTPUT_GLB_PATH, scene)
 \`\`\`
 
+Pattern 3: Adaptive Domain Architecture (ADA) Hero Asset (The 4 Universal Differential Geometric Operators):
+\`\`\`python
+import scratchbox as sb
+
+# 70% Primary Edifice: Continuous compound curvature loft stations
+stations = [
+    {"position": -2.4, "center": [0, 0], "radii": [0.35, 0.28], "superellipseExponent": 2.0},
+    {"position": -1.2, "center": [0, 0.12], "radii": [1.1, 0.82], "superellipseExponent": 2.6},
+    {"position": 0.0, "center": [0, 0.18], "radii": [1.35, 0.95], "superellipseExponent": 2.8},
+    {"position": 1.2, "center": [0, 0.10], "radii": [1.05, 0.78], "superellipseExponent": 2.5},
+    {"position": 2.4, "center": [0, 0], "radii": [0.42, 0.35], "superellipseExponent": 2.0}
+]
+
+contract = {
+    "name": "AdaptiveHeroProbe",
+    "primaryHull": {
+        "stations": stations,
+        "symmetry": "BILATERAL_X",
+        "bowCap": "SUPER_ELLIPTIC",
+        "sternCap": "DIFFUSER"
+    },
+    # Operator 1: SE(3) Lie Group Curve Sweeps (limbs, hoses, claw prongs, tentacles)
+    "curveSweeps": [
+        {
+            "id": "articulated_limb_l",
+            "path": [[-0.8, 0.0, 1.0], [-1.5, -0.4, 1.6], [-1.2, -1.0, 2.2]],
+            "profile": "CIRCULAR",
+            "profileDimensions": [0.08, 0.08],
+            "scaleTaper": [1.3, 0.6],
+            "twistDeg": -35.0,
+            "radialModulation": {"amplitude": 0.015, "frequency": 6.0}
+        },
+        {
+            "id": "articulated_limb_r",
+            "path": [[0.8, 0.0, 1.0], [1.5, -0.4, 1.6], [1.2, -1.0, 2.2]],
+            "profile": "CIRCULAR",
+            "profileDimensions": [0.08, 0.08],
+            "scaleTaper": [1.3, 0.6],
+            "twistDeg": 35.0,
+            "radialModulation": {"amplitude": 0.015, "frequency": 6.0}
+        }
+    ],
+    # Operator 2: Harmonic Solids of Revolution (fluted drills, augers, cooling fins)
+    "revolvedHarmonics": [
+        {
+            "id": "rotary_coring_auger",
+            "anchorPoint": [0, 0, 2.6],
+            "axis": [0, 0, 1],
+            "profileCurve": [[0.0, 0.38], [0.4, 0.35], [1.0, 0.22], [1.8, 0.04]],
+            "harmonicLobeCount": 5,
+            "harmonicDepthRatio": 0.35,
+            "helixPitchMeters": 0.85
+        }
+    ],
+    # Operator 3: Affine Metric Replicators & 10% Tertiary Micro-Detail
+    "microDetail": {
+        "panelSeamFrequency": 2.2,
+        "fastenerPitchMeters": 0.18,
+        "fastenerDiameterMeters": 0.016,
+        "louverBays": [{"center": [0, 0.55, -0.6], "dimensions": [0.8, 0.28, 0.08], "bladeCount": 8, "angleDeg": 35.0}],
+        "intakeScreens": [{"center": [0, 0.2, 0.6], "normal": [0, 0.3, 0.95], "outerRadiusMeters": 0.35, "ringCount": 4, "spokeCount": 6}]
+    }
+}
+
+synthesizer = sb.adaptive_object.AdaptiveHeroObjectSynthesizer()
+hero_mesh = synthesizer.synthesize(contract)
+hero_mesh.compute_curvature_ao(intensity=0.85)
+sb.io.write_glb(OUTPUT_GLB_PATH, hero_mesh)
+\`\`\`
+
 - OPEN ARCHITECTURAL INVARIANT: For indoor and pavilion scenes (dojos, shrines, arenas, workshops, laboratories), NEVER enclose the scene in an opaque closed 6-sided solid cube where interior props are hidden. Model open-air or cutaway structures (open entrance/colonnades/timber posts) so that interior training floors, equipment, and structural trusses remain 100% visible to the orbit camera.
 
 Direct Primitive & Procedural Helpers on \`sb\`:

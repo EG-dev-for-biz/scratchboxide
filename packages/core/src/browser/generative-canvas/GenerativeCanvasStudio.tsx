@@ -513,7 +513,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     const { agentEvents, agentSession, handleCancelAgent, handlePauseAgent, handleResumeAgent, handleStartAgent } = useLongRunningAgent();
 
-    const { attachedDataFile, handleFileDrop, handleFileInputChange, handleGlobalDragLeave, handleGlobalDragOver, handleGlobalDrop, isDraggingDataFile, isGlobalDraggingFile, setAttachedDataFile, setIsDraggingDataFile } = useDataFileAttachments({ inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, setSelectedSkillIds, setSkills, showToast });
+    const { attachedDataFile, handleFileDrop, handleFileInputChange, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile } = useDataFileAttachments({ inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, showToast });
 
     // Auto-expand chat textarea height up to 220px as content is typed/pasted
     React.useEffect(() => {
@@ -1185,6 +1185,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         };
     }, [handleSendMessage]);
 
+    React.useEffect(() => {
+        (window as any).__scratchbox_is_generating = isGenerating;
+        (window as any).__scratchbox_active_artifact = activeArtifact;
+    }, [isGenerating, activeArtifact]);
+
     const workspaceFileDeps: UseWorkspaceFilesDeps = { activeArtifact, activeWorkspace, artifactHistory, currentSessionId, handleSendMessage, isGenerating, layoutMode, messages, setActiveArtifact, setArtifactHistory, setCurrentSessionId, setLayoutMode, setMessages, setSessions, setShowComposerWorkspaceMenu, setShowNewWorkspaceMenu, showComposerWorkspaceMenu, showNewWorkspaceMenu, showToast };
     const { handleFileClick, handleSurfaceAiPrompt } = useWorkspaceFiles(workspaceFileDeps);
     const { handleCreateWorkspaceFile } = useWorkspaceFileCreation(workspaceFileDeps);
@@ -1347,21 +1352,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         <StudioProvider store={chatStore} actions={studioActions} state={studioStateSnapshot}>
         <div
             className={`sb-studio-app sb-density-${appearanceConfig.canvasDensity} sb-blur-${appearanceConfig.glassBlur}`}
-            onDragOver={handleGlobalDragOver}
-            onDragLeave={handleGlobalDragLeave}
-            onDrop={handleGlobalDrop}
         >
-            {/* Global File Drop Overlay */}
-            {isGlobalDraggingFile && (
-                <div className="sb-global-drop-overlay">
-                    <div className="sb-global-drop-card">
-                        <h2 className="sb-global-drop-title">Drop SKILL.md or .skill here</h2>
-                        <p className="sb-global-drop-desc">
-                            Scratchbox will instantly parse, install, and activate this AI Superpower in your studio.
-                        </p>
-                    </div>
-                </div>
-            )}
 
 
 

@@ -27,6 +27,15 @@ Before proposing any architectural plan, designing schema contracts, routing too
 5. **Analytical Forward Mapping over Inverse Photogrammetry**:
    - Hair, fur, feathers, and volumetric grooms must be generated via direct analytical forward splatting (`scratchbox_hair.hpp`, `scratchbox_spz.hpp`), NEVER circular multi-camera inverse 3DGS training.
 
+6. **Differential Geometric Primitives over Anthropocentric Mechanical Taxonomies (The 4 Universal Geometric Operators)**:
+   - **Prohibition on Named Tool or Mechanical Taxonomies**: Never design schemas, classes, or procedural branches around anthropocentric tool categories (`drill`, `claw`, `camera`, `sensor_pod`, `grabber`, `intake`, `cockpit`). Any specialized or extraterrestrial tool, detail, or appendage must be generated purely through continuous differential geometry.
+   - **The 4 Universal Differential Geometric Operators**:
+     1. *$\mathrm{SE}(3)$ Lie Group Curve Sweeps*: 3D carrier curves $\mathbf{C}(t)$ sweeping continuous profiles $P(u, v)$ with scaling $s(t)$, twist $\theta(t)$, and modulation (generates limbs, hoses, claw prongs, struts, coils, tentacles, and truss members).
+     2. *Harmonic Solids of Revolution*: Radial profiles $r(z)$ revolved around an axis with $K$ continuous radial harmonic lobes and helical twist $P_{\text{helix}}$ (generates smooth flanges, nozzles, optical housings when $K=0$; fluted drills, spiral augers when $K \in [2, 6]$; cooling fins, cogwheels, splined hubs when $K \ge 12$).
+     3. *Affine Metric Replicators*: Periodic affine distribution of seed geometry along 1D curves or 2D manifolds at continuous metric pitch $p$ (generates bolt circles, fastener arrays, louver vanes, debris screens, gripper teeth, and treads).
+     4. *Isoparametric Normal Relief Fields*: Surface normal displacements $\Delta h(u, v)\,\mathbf{n}(u, v)$ along geodesic or parametric curves (generates panel shut lines, weld beads, knurling, and expansion grooves).
+   - Any new detail on any asset (known vehicle, futuristic rover, industrial machine, alien probe) must be synthesized through combinations of these 4 operators, ensuring infinite domain-agnostic universality and smooth parameter interpolation ($\operatorname{lerp}$).
+
 
 ## Two-Tier Problem-Solving Directive (VFX, 3D & Generative Tasks)
 

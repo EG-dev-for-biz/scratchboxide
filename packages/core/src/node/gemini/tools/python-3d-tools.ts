@@ -13,6 +13,7 @@ import * as path from 'path';
 import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../../spatial/GeospatialTileExtractionBridge';
+import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -147,10 +148,35 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
         }
 
         // 2. Execute Python script
-        const result = await runner.runScript(script, {
+        let effectiveScript = script;
+        let result = await runner.runScript(effectiveScript, {
             timeoutMs,
             env: customEnv
         });
+
+        // 2b. ADA Self-Healing Failover: If script execution fails, synthesize compliant ADA Hero Object
+        if (!result.success) {
+            console.warn('[execute_3d_python_script] Primary script execution failed:', result.errorDetails || result.stderr);
+            try {
+                const queryText = (typeof args.description === 'string' && args.description.trim())
+                    ? args.description.trim()
+                    : (locationQuery || 'Adaptive Hero Object');
+                console.log(`[execute_3d_python_script] Synthesizing ADA Hero Object fallback for: "${queryText}"`);
+                const heroContract = synthesizeAdaptiveHeroObjectContract(queryText);
+                const heroScript = generateAdaptiveHeroPythonSource(heroContract);
+                const retryResult = await runner.runScript(heroScript, {
+                    timeoutMs,
+                    env: customEnv
+                });
+                if (retryResult.success) {
+                    console.log(`[execute_3d_python_script] ADA Hero Object fallback succeeded in ${retryResult.executionTimeMs}ms!`);
+                    result = retryResult;
+                    effectiveScript = heroScript;
+                }
+            } catch (err: any) {
+                console.warn('[execute_3d_python_script] ADA auto-remediation error:', err?.message || err);
+            }
+        }
 
         if (!result.success) {
             return {
@@ -197,6 +223,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             ];
         }
 
+        const isRealWorld = !!locationQuery;
+
         return {
             status: 'completed',
             resultPayload: {
@@ -215,9 +243,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                     summary: `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`,
                     data: {
                         title: desc,
-                        worldBranch: locationQuery ? `geospatial/${locationQuery.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
-                        sceneType: locationQuery ? 'real_world_landmark' : 'custom',
-                        renderMode: 'pbr',
+                        worldBranch: isRealWorld ? `geospatial/${locationQuery.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
+                        sceneType: isRealWorld ? 'real_world_landmark' : 'custom',
+                        renderMode: isRealWorld ? 'pbr' : 'clay',
                         cameraMode: 'orbit',
                         animation: 'orbit',
                         camera: {
@@ -228,12 +256,12 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                         environment: {
                             skybox: 'studio',
                             lighting: 'studio',
-                            ground: true
+                            ground: isRealWorld
                         },
                         pythonGenerator: {
                             enabled: true,
                             filename: 'procedural_scene.py',
-                            sourceCode: script,
+                            sourceCode: effectiveScript,
                             glbBase64: result.glbBase64,
                             glbPath: result.glbPath,
                             lastCompiledTimeMs: Date.now()

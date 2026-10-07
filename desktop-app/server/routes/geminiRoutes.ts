@@ -120,6 +120,7 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
             'Connection': 'keep-alive'
         });
         res.flushHeaders?.();
+        res.write(': connected\n\n');
         const controller = new AbortController();
         res.on('close', () => {
             if (!res.writableEnded) {

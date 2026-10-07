@@ -371,6 +371,10 @@ export type {
 export type {
     Adaptive3DObjectContract,
     AdaptivePrimaryHull,
+    AdaptiveCurveSweepFeature,
+    AdaptiveRevolvedHarmonicFeature,
+    AdaptiveMetricReplicatorFeature,
+    AdaptiveNormalReliefFeature,
     AdaptiveKinematicLink,
     AdaptivePropulsionThruster,
     AdaptiveGroundingInterface,
@@ -381,6 +385,12 @@ export type {
     CapCurvatureProfile,
     ActuatorDriveType
 } from './common/spatial/adaptive-3d-object-contract';
+export {
+    synthesizeAdaptiveHeroObjectContract,
+    generateAdaptiveHeroPythonSource,
+    synthesizeAdaptiveHeroScene,
+    type AdaptiveHeroSynthesisOptions
+} from './common/spatial/adaptive-hero-synthesizer';
 export type {
     Adaptive3DSceneSynthesizer,
     Adaptive3DSceneExecutionResult

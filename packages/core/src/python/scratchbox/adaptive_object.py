@@ -11,6 +11,8 @@ Provides domain-agnostic, schema-driven procedural synthesis for any 3D entity:
 - Ephemeral in-memory generation streaming binary glTF 2.0 (.glb).
 """
 
+from __future__ import annotations
+
 import math
 import os
 import sys
@@ -424,6 +426,249 @@ def create_structural_truss_member(
 
 
 # ============================================================================
+# PILLAR 11: THE 4 PURE DIFFERENTIAL GEOMETRIC OPERATORS
+# ============================================================================
+
+def sweep_curve_profile(
+    path: List[Tuple[float, float, float]],
+    profile: str = "CIRCULAR",
+    profile_dimensions: Tuple[float, float] = (0.04, 0.04),
+    scale_taper: Tuple[float, float] = (1.0, 1.0),
+    twist_deg: float = 0.0,
+    radial_modulation: Optional[Dict[str, float]] = None,
+    color: Tuple[float, float, float, float] = CLAY_BASE
+) -> Any:
+    """
+    Operator 1: SE(3) Lie Group Curve Sweep (Pillar 11).
+    Sweeps a 2D cross-section P(u, v) along 3D carrier curve C(t) using Rotation-Minimizing Frames (RMF).
+    Applies continuous scale taper, axial twist, and optional radial sinusoidal modulation.
+    Generates limbs, claw prongs, hoses, struts, coils, tentacles, and truss members.
+    """
+    if len(path) < 2:
+        return sbg.Mesh("empty_sweep")
+    
+    n_pts = len(path)
+    points = [sbm.Vec3(p[0], p[1], p[2]) for p in path]
+    
+    # 1. Compute Tangents
+    tangents = []
+    for i in range(n_pts):
+        if i == 0:
+            d = points[1] - points[0]
+        elif i == n_pts - 1:
+            d = points[-1] - points[-2]
+        else:
+            d = points[i + 1] - points[i - 1]
+        l = d.length()
+        tangents.append(d * (1.0 / l) if l > 1e-6 else sbm.Vec3(0.0, 0.0, 1.0))
+        
+    # 2. Compute Rotation-Minimizing Frames (Bishop Frame)
+    normals = [None] * n_pts
+    binormals = [None] * n_pts
+    
+    t0 = tangents[0]
+    up = sbm.Vec3(0.0, 1.0, 0.0) if abs(t0.y) < 0.9 else sbm.Vec3(1.0, 0.0, 0.0)
+    n0 = t0.cross(up).normalized()
+    normals[0] = n0
+    binormals[0] = t0.cross(n0).normalized()
+    
+    for i in range(1, n_pts):
+        t_prev = tangents[i - 1]
+        t_curr = tangents[i]
+        axis = t_prev.cross(t_curr)
+        axis_len = axis.length()
+        if axis_len > 1e-6:
+            axis_n = axis * (1.0 / axis_len)
+            cos_phi = max(-1.0, min(1.0, t_prev.dot(t_curr)))
+            phi = math.acos(cos_phi)
+            n_prev = normals[i - 1]
+            cos_p = math.cos(phi)
+            sin_p = math.sin(phi)
+            k_cross_v = axis_n.cross(n_prev)
+            k_dot_v = axis_n.dot(n_prev)
+            n_curr = (n_prev * cos_p) + (k_cross_v * sin_p) + (axis_n * (k_dot_v * (1.0 - cos_p)))
+            normals[i] = n_curr.normalized()
+        else:
+            normals[i] = normals[i - 1]
+        binormals[i] = t_curr.cross(normals[i]).normalized()
+        
+    # 3. Generate 2D Profile Vertices along curve
+    n_profile_pts = 24
+    slices = []
+    
+    for i in range(n_pts):
+        t_ratio = i / (n_pts - 1) if n_pts > 1 else 0.0
+        scale = scale_taper[0] + t_ratio * (scale_taper[1] - scale_taper[0])
+        twist_rad = math.radians(twist_deg * t_ratio)
+        cos_tw = math.cos(twist_rad)
+        sin_tw = math.sin(twist_rad)
+        
+        rad_mod = 1.0
+        if radial_modulation:
+            amp = radial_modulation.get("amplitude", 0.0)
+            freq = radial_modulation.get("frequency", 1.0)
+            rad_mod = 1.0 + amp * math.sin(freq * 2.0 * math.pi * t_ratio)
+            
+        w = profile_dimensions[0] * 0.5 * scale * rad_mod
+        h = profile_dimensions[1] * 0.5 * scale * rad_mod
+        
+        slice_pts = []
+        p_center = points[i]
+        n_vec = normals[i]
+        b_vec = binormals[i]
+        
+        for k in range(n_profile_pts):
+            th = k * 2.0 * math.pi / n_profile_pts
+            if profile == "BEVELED_RECT" or profile == "I_BEAM":
+                pu, pv = superellipse_point(0.0, 0.0, w, h, th, m=3.6)
+            else: # CIRCULAR / default
+                pu = w * math.cos(th)
+                pv = h * math.sin(th)
+                
+            pu_rot = pu * cos_tw - pv * sin_tw
+            pv_rot = pu * sin_tw + pv * cos_tw
+            pt_3d = p_center + (n_vec * pu_rot) + (b_vec * pv_rot)
+            slice_pts.append(pt_3d)
+            
+        slices.append(slice_pts)
+        
+    return _get_sb().create_loft(slices, close_ends=True, color=color)
+
+
+def revolve_harmonic_solid(
+    anchor_point: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    axis: Tuple[float, float, float] = (0.0, 1.0, 0.0),
+    profile_curve: Optional[List[Tuple[float, float]]] = None,
+    harmonic_lobe_count: int = 0,
+    harmonic_depth_ratio: float = 0.2,
+    helix_pitch_meters: float = 0.0,
+    color: Tuple[float, float, float, float] = CLAY_BASE
+) -> Any:
+    """
+    Operator 2: Harmonic Solid of Revolution (Pillar 11).
+    Revolves a 2D meridian curve r(z) around a 3D axis with continuous radial harmonic lobes
+    and helical twist.
+    Generates smooth flanges, nozzles, lenses, fluted drills, spiral augers, cooling fins, and cogwheels.
+    """
+    if not profile_curve or len(profile_curve) < 2:
+        profile_curve = [(0.0, 0.1), (0.2, 0.1), (0.35, 0.06), (0.4, 0.0)]
+        
+    axis_v = sbm.Vec3(axis[0], axis[1], axis[2])
+    axis_len = axis_v.length()
+    if axis_len < 1e-6:
+        axis_v = sbm.Vec3(0.0, 1.0, 0.0)
+    else:
+        axis_v = axis_v * (1.0 / axis_len)
+        
+    anchor_v = sbm.Vec3(anchor_point[0], anchor_point[1], anchor_point[2])
+    
+    up = sbm.Vec3(0.0, 1.0, 0.0) if abs(axis_v.y) < 0.9 else sbm.Vec3(1.0, 0.0, 0.0)
+    vec_u = axis_v.cross(up).normalized()
+    vec_v = axis_v.cross(vec_u).normalized()
+    
+    n_theta = max(32, harmonic_lobe_count * 4) if harmonic_lobe_count > 0 else 32
+    slices = []
+    
+    for (z, r_base) in profile_curve:
+        slice_pts = []
+        center_z = anchor_v + (axis_v * z)
+        
+        phase_shift = 0.0
+        if helix_pitch_meters > 1e-4:
+            phase_shift = (2.0 * math.pi * z) / helix_pitch_meters
+            
+        for k in range(n_theta):
+            th = k * 2.0 * math.pi / n_theta
+            if harmonic_lobe_count > 0:
+                lobe_val = abs(math.sin(harmonic_lobe_count * 0.5 * th + phase_shift))
+                r = r_base * (1.0 - harmonic_depth_ratio * (lobe_val ** 1.5))
+            else:
+                r = r_base
+                
+            local_u = r * math.cos(th)
+            local_v = r * math.sin(th)
+            pt = center_z + (vec_u * local_u) + (vec_v * local_v)
+            slice_pts.append(pt)
+            
+        slices.append(slice_pts)
+        
+    return _get_sb().create_loft(slices, close_ends=True, color=color)
+
+
+def replicate_metric_array(
+    distribution_mode: str = "CURVE_1D",
+    guide_points: Optional[List[Tuple[float, float, float]]] = None,
+    pitch_meters: float = 0.1,
+    seed_geometry: Optional[Dict[str, Any]] = None,
+    color: Tuple[float, float, float, float] = CLAY_BASE
+) -> Any:
+    """
+    Operator 3: Affine Metric Replicator (Pillar 11).
+    Replicates micro-geometry seed instances along a 1D curve, polar ring, or 2D grid
+    at continuous metric pitch p.
+    Generates fastener circles, louver bays, debris grilles, gripper teeth, and treads.
+    """
+    mesh = sbg.Mesh("metric_replicator")
+    if not guide_points or len(guide_points) < 1:
+        return mesh
+        
+    seed = seed_geometry or {}
+    shape = seed.get("shape", "CYLINDRICAL_FASTENER")
+    dims = seed.get("dimensions", (0.01, 0.01, 0.005))
+    tilt_deg = float(seed.get("tiltAngleDeg", 0.0))
+    
+    if distribution_mode == "POLAR_RING":
+        center = guide_points[0]
+        normal = guide_points[1] if len(guide_points) > 1 else (0.0, 0.0, 1.0)
+        radius = float(dims[0]) if len(guide_points) <= 2 else math.dist(center, guide_points[2])
+        if radius < 1e-4:
+            radius = 0.1
+        circumference = 2.0 * math.pi * radius
+        count = max(3, int(round(circumference / max(0.01, pitch_meters))))
+        
+        n_v = sbm.Vec3(normal[0], normal[1], normal[2]).normalized()
+        up = sbm.Vec3(0.0, 1.0, 0.0) if abs(n_v.y) < 0.9 else sbm.Vec3(1.0, 0.0, 0.0)
+        u_v = n_v.cross(up).normalized()
+        v_v = n_v.cross(u_v).normalized()
+        c_v = sbm.Vec3(center[0], center[1], center[2])
+        
+        for i in range(count):
+            th = i * 2.0 * math.pi / count
+            pos = c_v + (u_v * (radius * math.cos(th))) + (v_v * (radius * math.sin(th)))
+            fastener = _get_sb().create_cylinder(dims[0], dims[2] if len(dims) > 2 else dims[1], segments=12, color=color)
+            fastener.translate(pos.x, pos.y, pos.z)
+            mesh.append(fastener)
+            
+    elif distribution_mode == "CURVE_1D":
+        points = [sbm.Vec3(p[0], p[1], p[2]) for p in guide_points]
+        for i in range(len(points) - 1):
+            seg_vec = points[i + 1] - points[i]
+            seg_len = seg_vec.length()
+            if seg_len < 1e-4:
+                continue
+            seg_dir = seg_vec * (1.0 / seg_len)
+            count = max(1, int(round(seg_len / max(0.01, pitch_meters))))
+            step = seg_len / count
+            for j in range(count):
+                pos = points[i] + (seg_dir * (j * step))
+                if shape == "ANGLED_LOUVER_VANE":
+                    vane = _get_sb().create_beveled_box(dims, bevel=0.002, color=color)
+                    vane.rotate_x(tilt_deg)
+                    vane.translate(pos.x, pos.y, pos.z)
+                    mesh.append(vane)
+                elif shape == "TRIANGULAR_TOOTH":
+                    tooth = _get_sb().create_cone(dims[0], dims[1], segments=8, color=color)
+                    tooth.translate(pos.x, pos.y, pos.z)
+                    mesh.append(tooth)
+                else:
+                    rivet = _get_sb().create_cylinder(dims[0], dims[1], segments=10, color=color)
+                    rivet.translate(pos.x, pos.y, pos.z)
+                    mesh.append(rivet)
+                    
+    return mesh
+
+
+# ============================================================================
 # UNIVERSAL ADAPTIVE HERO OBJECT SYNTHESIZER
 # ============================================================================
 
@@ -563,6 +808,66 @@ class AdaptiveHeroObjectSynthesizer:
             if len(pts) >= 2:
                 c_mesh = create_spline_conduit_harness(pts, radius=cr, color=CLAY_DARK, p_clamp_spacing=p_space)
                 master_mesh.append(c_mesh)
+
+        # --------------------------------------------------------------------
+        # 4. PILLAR 11: PURE DIFFERENTIAL GEOMETRIC OPERATORS
+        # --------------------------------------------------------------------
+        # Operator 1: SE(3) Curve Sweeps
+        for sweep in contract.get("curveSweeps", []):
+            pts = [tuple(p) for p in sweep.get("path", [])]
+            if len(pts) >= 2:
+                prof = str(sweep.get("profile", "CIRCULAR"))
+                dims = tuple(sweep.get("profileDimensions", (0.04, 0.04)))
+                taper = tuple(sweep.get("scaleTaper", (1.0, 1.0)))
+                twist = float(sweep.get("twistDeg", 0.0))
+                rad_mod = sweep.get("radialModulation", None)
+                col = tuple(sweep.get("colorRgba", CLAY_BASE))
+                sw_mesh = sweep_curve_profile(
+                    pts,
+                    profile=prof,
+                    profile_dimensions=dims,
+                    scale_taper=taper,
+                    twist_deg=twist,
+                    radial_modulation=rad_mod,
+                    color=col
+                )
+                master_mesh.append(sw_mesh)
+
+        # Operator 2: Harmonic Solids of Revolution
+        for rev in contract.get("revolvedHarmonics", []):
+            anchor = tuple(rev.get("anchorPoint", (0.0, 0.0, 0.0)))
+            axis = tuple(rev.get("axis", (0.0, 1.0, 0.0)))
+            prof = [tuple(p) for p in rev.get("profileCurve", [])]
+            lobes = int(rev.get("harmonicLobeCount", 0))
+            depth = float(rev.get("harmonicDepthRatio", 0.2))
+            helix = float(rev.get("helixPitchMeters", 0.0))
+            col = tuple(rev.get("colorRgba", CLAY_BASE))
+            rev_mesh = revolve_harmonic_solid(
+                anchor_point=anchor,
+                axis=axis,
+                profile_curve=prof,
+                harmonic_lobe_count=lobes,
+                harmonic_depth_ratio=depth,
+                helix_pitch_meters=helix,
+                color=col
+            )
+            master_mesh.append(rev_mesh)
+
+        # Operator 3: Affine Metric Replicators
+        for rep in contract.get("metricReplications", []):
+            mode = str(rep.get("distributionMode", "CURVE_1D"))
+            pts = [tuple(p) for p in rep.get("guidePoints", [])]
+            pitch = float(rep.get("pitchMeters", 0.1))
+            seed = rep.get("seedGeometry", {})
+            col = tuple(rep.get("colorRgba", CLAY_BASE))
+            rep_mesh = replicate_metric_array(
+                distribution_mode=mode,
+                guide_points=pts,
+                pitch_meters=pitch,
+                seed_geometry=seed,
+                color=col
+            )
+            master_mesh.append(rep_mesh)
 
         # Master Smooth Normals & Curvature Contact AO
         master_mesh.recompute_smooth_normals()

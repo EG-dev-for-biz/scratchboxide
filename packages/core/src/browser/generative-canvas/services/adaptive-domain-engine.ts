@@ -20,6 +20,11 @@ import type {
     Scene3DData,
     AccentColor
 } from '../canvas-types';
+import {
+    synthesizeAdaptiveHeroObjectContract,
+    generateAdaptiveHeroPythonSource,
+    synthesizeAdaptiveHeroScene
+} from '../../../common/spatial/adaptive-hero-synthesizer';
 import type {
     VideoTimelineData,
     TimelineTrack
@@ -1548,23 +1553,10 @@ export function synthesizeAdaptive3DScene(
         },
         pythonGenerator: {
             enabled: true,
-            filename: 'world_generator.py',
-            sourceCode: `import scratchbox as sb
-
-# Generated dynamically via Scratchbox Adaptive Domain Architecture
-# Open-domain procedural 3D geometry generator for "${subject}".
-world = sb.World("${subject}")
-
-# 70-20-10 Geometric Form Hierarchy synthesized analytically
-primary_mesh = sb.geometry.create_box(width=2.4, height=2.2, depth=2.4)
-primary_mesh.set_material(color=(0.28, 0.35, 0.48), roughness=0.45, metalness=0.6)
-world.add(primary_mesh)
-
-# Serialize high-fidelity binary GLB
-sb.io.write_glb(OUTPUT_GLB_PATH, world.build())
-`,
-            vertexCount: 28000,
-            triangleCount: 16000
+            filename: `${subject.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_generator.py`,
+            sourceCode: generateAdaptiveHeroPythonSource(synthesizeAdaptiveHeroObjectContract(prompt || title || 'Adaptive Hero Object')),
+            vertexCount: 38000,
+            triangleCount: 24000
         },
         customMeshes
     };

@@ -18,6 +18,11 @@ import {
     synthesizeAdaptive3DScene
 } from './services/adaptive-domain-engine';
 import {
+    synthesizeAdaptiveHeroScene,
+    synthesizeAdaptiveHeroObjectContract,
+    generateAdaptiveHeroPythonSource
+} from '../../common/spatial/adaptive-hero-synthesizer';
+import {
     WorldSpecification,
     planWorldIntentHeuristic,
     generateCompositeHeightfield,
@@ -1098,55 +1103,11 @@ export function generateParametricVehicleMeshes(styling: VehicleStyling): any[] 
 
 /**
  * Synthesizes an infinite-variety, zero-preset 3D Vehicle scene.
+ * Delegates directly to the ADA Hero Object Synthesizer executing the 4 Universal
+ * Differential Geometric Operators (Pillar 6 / Pillar 11) in 18% Studio Grey Clay Void.
  */
 export function synthesizeProceduralVehicleScene(prompt: string, context?: any, seed?: number): Scene3DData {
-    const styling = extractVehicleStyling(prompt, seed);
-    const customMeshes = generateParametricVehicleMeshes(styling);
-    const sourceCode = generateParametricVehicleCpp3DSource(styling, styling.title);
-    const cameraDist = Math.max(5.5, styling.chassisLength * 1.35);
-
-    return {
-        title: styling.title,
-        subtitle: styling.subtitle,
-        camera: {
-            position: [cameraDist * 0.85, cameraDist * 0.45, cameraDist * 0.85],
-            target: [0, styling.groundClearance + styling.chassisHeight * 0.5, 0],
-            fov: 40
-        },
-        environment: {
-            skybox: 'studio',
-            lighting: 'cinematic_3point_studio',
-            ground: true,
-            exposure: 1.25,
-            ambientIntensity: 0.45
-        },
-        features: {
-            cinematic3PointLighting: true,
-            studioPedestal: true,
-            curvatureAO: true
-        },
-        customMeshes,
-        cppGenerator: {
-            filename: 'world_generator.cpp',
-            sourceCode,
-            enabled: true
-        },
-        customScript: `
-// Scratchbox Studio Idle Suspension Breathing Animation
-let clock = new THREE.Clock();
-function animateVehicle() {
-    requestAnimationFrame(animateVehicle);
-    const t = clock.getElapsedTime();
-    const suspY = Math.sin(t * 1.5) * 0.006;
-    scene.children.forEach(c => {
-        if (c.name && (c.name.startsWith('Chassis_') || c.name.startsWith('Cabin_')) && c.position) {
-            c.position.y += suspY * 0.02;
-        }
-    });
-}
-animateVehicle();
-`
-    };
+    return synthesizeAdaptiveHeroScene(prompt, { seed });
 }
 
 /**
@@ -2424,6 +2385,14 @@ function _synthesizeRawContextual3DSceneInner(
                 }
             };
         }
+    }
+
+    const isObjectPrompt = theme === 'vehicle' ||
+        /\b(?:build|create|model|design|generate|sculpt|construct|synthesize)\b/i.test(prompt) ||
+        /\b(?:probe|rover|robot|machine|drone|vehicle|car|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite)\b/i.test(prompt);
+
+    if (isObjectPrompt && !realWorldLoc) {
+        return synthesizeAdaptiveHeroScene(prompt);
     }
 
     if (theme === 'vehicle') {

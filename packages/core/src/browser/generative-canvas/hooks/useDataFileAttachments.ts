@@ -24,16 +24,15 @@ export interface UseDataFileAttachmentsDeps {
     setActiveArtifact: ChatStore['setActiveArtifact'];
     setArtifactHistory: ChatStore['setArtifactHistory'];
     setInputValue: React.Dispatch<React.SetStateAction<string>>;
-    setSelectedSkillIds: React.Dispatch<React.SetStateAction<string[]>>;
-    setSkills: React.Dispatch<React.SetStateAction<SkillItem[]>>;
+    setSelectedSkillIds?: React.Dispatch<React.SetStateAction<string[]>>;
+    setSkills?: React.Dispatch<React.SetStateAction<SkillItem[]>>;
     showToast: (text: string, icon?: string) => void;
 }
 
 export function useDataFileAttachments(deps: UseDataFileAttachmentsDeps) {
-    const { inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, setSelectedSkillIds, setSkills, showToast } = deps;
+    const { inputRef, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setInputValue, showToast } = deps;
 
-    // Global drag-and-drop & CSV data file state
-    const [isGlobalDraggingFile, setIsGlobalDraggingFile] = React.useState<boolean>(false);
+    // CSV & data file state
     const [isDraggingDataFile, setIsDraggingDataFile] = React.useState<boolean>(false);
     const [attachedDataFile, setAttachedDataFile] = React.useState<{
         name: string;
@@ -198,69 +197,5 @@ export function useDataFileAttachments(deps: UseDataFileAttachmentsDeps) {
             e.target.value = '';
         }
     };
-
-    // Global file drag-and-drop for SKILL.md
-    const handleGlobalDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.dataTransfer.types.includes('Files') && !isGlobalDraggingFile) {
-            setIsGlobalDraggingFile(true);
-        }
-    };
-
-    const handleGlobalDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (e.relatedTarget === undefined || (e.clientX <= 0 || e.clientY <= 0)) {
-            setIsGlobalDraggingFile(false);
-        }
-    };
-
-    const handleGlobalDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsGlobalDraggingFile(false);
-
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            const file = e.dataTransfer.files[0];
-            const reader = new FileReader();
-            reader.onload = event => {
-                const text = event.target?.result as string;
-                if (text) {
-                    const headingMatch = text.match(/^#\s+(.+)$/m);
-                    const name = headingMatch
-                        ? headingMatch[1].trim()
-                        : file.name.replace(/\.(md|skill)$/i, '').replace(/[-_]/g, ' ');
-
-                    const cleanContent = text.replace(/^#.+$/m, '').trim();
-                    const firstParagraph = cleanContent.split('\n\n')[0] || 'Custom imported AI superpower instructions.';
-                    const tagline = firstParagraph.slice(0, 110) + (firstParagraph.length > 110 ? '...' : '');
-
-                    const newSkill: SkillItem = {
-                        id: `skill-imported-${Date.now()}`,
-                        name: name.charAt(0).toUpperCase() + name.slice(1),
-                        tagline,
-                        description: cleanContent,
-                        icon: '',
-                        category: 'Custom',
-                        accentColor: 'indigo',
-                        tags: ['Imported', file.name.replace(/\..+$/, '')],
-                        isEnabled: true,
-                        isCustom: true,
-                        author: 'Workspace Import',
-                        version: '1.0.0',
-                        rawContent: text,
-                        promptStarters: [`Apply ${name} superpower to active canvas`]
-                    };
-
-                    setSkills(prev => [newSkill, ...prev]);
-                    setSelectedSkillIds(prev => [...prev, newSkill.id]);
-                    showToast(`Superpower "${newSkill.name}" installed & ready!`);
-                }
-            };
-            reader.readAsText(file);
-        }
-    };
-
-    return { attachedDataFile, handleFileDrop, handleFileInputChange, handleGlobalDragLeave, handleGlobalDragOver, handleGlobalDrop, isDraggingDataFile, isGlobalDraggingFile, setAttachedDataFile, setIsDraggingDataFile };
+    return { attachedDataFile, handleFileDrop, handleFileInputChange, isDraggingDataFile, setAttachedDataFile, setIsDraggingDataFile };
 }

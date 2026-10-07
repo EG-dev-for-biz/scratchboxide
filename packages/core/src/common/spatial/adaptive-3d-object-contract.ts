@@ -4,6 +4,11 @@
  * Adaptive Domain Architecture 3D Object Contract.
  * In strict alignment with Scratchbox IDE Adaptive Domain Architecture:
  * - Zero closed taxonomies or noun-dictionary categorizations.
+ * - Pillar 11: Differential Geometric Primitives over Mechanical Taxonomies:
+ *   1. SE(3) Lie Group Curve Sweeps
+ *   2. Harmonic Solids of Revolution
+ *   3. Affine Metric Replicators
+ *   4. Isoparametric Normal Relief Fields
  * - Continuous dimensional parameters governing the 70-20-10 Form Hierarchy:
  *   - 70% Primary Edifice (Compound Curvature Lofts & Rotational Solids)
  *   - 20% Secondary Articulated Assemblies (Kinematics, Thrusters, Skids, Wings)
@@ -62,6 +67,83 @@ export interface AdaptivePrimaryHull {
     wallThicknessRatio?: number;
 }
 
+// ============================================================================
+// THE 4 UNIVERSAL DIFFERENTIAL GEOMETRIC OPERATOR CONTRACTS (PILLAR 11)
+// ============================================================================
+
+/**
+ * Operator 1: SE(3) Lie Group Curve Sweep
+ * Sweeps a 2D profile P(u, v) along a 3D carrier curve C(t) with continuous
+ * scaling, twist, and radial modulation. Generates limbs, hoses, claw prongs,
+ * tentacles, coils, and structural truss members.
+ */
+export interface AdaptiveCurveSweepFeature {
+    id: string;
+    path: Array<[number, number, number]>;
+    profile: 'CIRCULAR' | 'BEVELED_RECT' | 'I_BEAM' | 'HOLLOW_RING' | (string & {});
+    profileDimensions: [number, number]; // [width, height]
+    scaleTaper?: [number, number];       // [startScale, endScale] (default [1.0, 1.0])
+    twistDeg?: number;                   // Axial rotation accumulated along curve
+    radialModulation?: {
+        amplitude: number;               // Sinusoidal amplitude for peristaltic / bellows
+        frequency: number;               // Cycles along curve length
+    };
+    colorRgba?: [number, number, number, number];
+}
+
+/**
+ * Operator 2: Harmonic Solid of Revolution
+ * Revolves a 2D meridian curve r(z) around an arbitrary axis, with optional
+ * radial harmonic lobes and helical twist. Generates smooth flanges, nozzles,
+ * and lenses (lobeCount = 0), fluted drills and augers (lobeCount in [2, 6]),
+ * or cooling fins, cogwheels, and heat sinks (lobeCount >= 12).
+ */
+export interface AdaptiveRevolvedHarmonicFeature {
+    id: string;
+    anchorPoint: [number, number, number];
+    axis: [number, number, number];       // Direction vector of rotation axis
+    profileCurve: Array<[number, number]>;// [(z, radius)] along axis
+    harmonicLobeCount: number;            // 0 = smooth, 2-6 = flutes, 12-48 = fins/teeth
+    harmonicDepthRatio?: number;          // Depth of lobe indentation (0.0 to 0.5)
+    helixPitchMeters?: number;            // Longitudinal lead per 360 deg twist (0 = straight)
+    colorRgba?: [number, number, number, number];
+}
+
+/**
+ * Operator 3: Affine Metric Replicator
+ * Periodic affine distribution of a seed micro-geometry along a 1D curve or
+ * 2D manifold patch at continuous metric pitch p. Generates fastener circles,
+ * louver vanes, debris screens, gripper teeth, and treads.
+ */
+export interface AdaptiveMetricReplicatorFeature {
+    id: string;
+    distributionMode: 'CURVE_1D' | 'SURFACE_GRID_2D' | 'POLAR_RING' | (string & {});
+    guidePoints: Array<[number, number, number]>;
+    pitchMeters: number;                  // Spacing between repeated instances
+    seedGeometry: {
+        shape: 'CYLINDRICAL_FASTENER' | 'ANGLED_LOUVER_VANE' | 'PERFORATION_HOLE' | 'TRIANGULAR_TOOTH' | (string & {});
+        dimensions: [number, number, number]; // [width, height, depth]
+        tiltAngleDeg?: number;
+    };
+    colorRgba?: [number, number, number, number];
+}
+
+/**
+ * Operator 4: Isoparametric Normal Relief Field
+ * Displaces surface vertices along their continuous normals to create panel
+ * shut-line grooves, weld seams, expansion joints, or knurling.
+ */
+export interface AdaptiveNormalReliefFeature {
+    panelSeamFrequency: number;           // Recessed seams per meter
+    grooveDimensions: [number, number];   // [width, depth] in meters
+    fastenerPitchMeters?: number;         // Metric spacing for fastener circles along seams
+    reliefPaths?: Array<Array<[number, number, number]>>;
+}
+
+// ============================================================================
+// CONVENIENCE PROJECTIONS (MACRO INTERFACES MAPPED TO CONTINUOUS OPERATORS)
+// ============================================================================
+
 export interface AdaptiveKinematicLink {
     id: string;
     name?: string;
@@ -70,9 +152,7 @@ export interface AdaptiveKinematicLink {
     endPoint: [number, number, number];
     crossSectionThickness: [number, number];
     driveType: ActuatorDriveType;
-    /** Whether parallel dual-acting hydraulic rams are modeled alongside the link */
     hasHydraulicRamPair?: boolean;
-    /** Machined lightening pocket depth ratio (0.0 = solid, 0.5 = 50% pocket) */
     lighteningPocketRatio?: number;
     bevelRadius?: number;
 }
@@ -80,11 +160,10 @@ export interface AdaptiveKinematicLink {
 export interface AdaptivePropulsionThruster {
     id: string;
     mountPosition: [number, number, number];
-    thrustVector: [number, number, number]; // Unit vector
+    thrustVector: [number, number, number];
     nozzleLength: number;
     throatRadius: number;
     exitRadius: number;
-    /** Venturi / Kort hydrofoil profile curvature */
     nozzleCurvatureExponent: number;
     bladeCount: number;
     hasDebrisIntakeGrille?: boolean;
@@ -114,32 +193,25 @@ export interface AdaptiveAerodynamicSurface {
     sweepAngleDeg: number;
     dihedralAngleDeg: number;
     incidenceAngleDeg: number;
-    endplateDimensions?: [number, number]; // [height, thickness]
+    endplateDimensions?: [number, number];
 }
 
 export interface AdaptiveSurfaceTopologyMicroDetail {
-    /** Frequency of recessed panel shut-line grooves (seams per meter) */
     panelSeamFrequency: number;
-    /** Recessed groove width and depth in meters [width, depth] */
     grooveDimensions: [number, number];
-    /** Spacing between counterbored bolt/fastener centers in meters */
     fastenerPitchMeters: number;
-    /** Diameter of counterbored fastener recess in meters */
     fastenerDiameterMeters: number;
-    /** 3D guide-spline paths for hydraulic hoses, electrical harnesses, and conduits */
     conduitGuideSplines?: Array<{
         path: Array<[number, number, number]>;
         radiusMeters: number;
         pClampSpacingMeters?: number;
     }>;
-    /** Directional venting louver bays */
     louverBays?: Array<{
         center: [number, number, number];
-        dimensions: [number, number, number]; // [width, height, depth]
+        dimensions: [number, number, number];
         bladeCount: number;
         angleDeg: number;
     }>;
-    /** Concentric/radial debris screens for fluid ports */
     intakeScreens?: Array<{
         center: [number, number, number];
         normal: [number, number, number];
@@ -164,14 +236,20 @@ export interface Adaptive3DObjectContract {
     primaryHull: AdaptivePrimaryHull;
     secondaryHulls?: AdaptivePrimaryHull[];
 
-    // 20% Secondary Articulated Assemblies
+    // 20% Secondary Articulated Assemblies (Convenience mappings)
     kinematics?: AdaptiveKinematicLink[];
     propulsion?: AdaptivePropulsionThruster[];
     grounding?: AdaptiveGroundingInterface[];
     aerodynamics?: AdaptiveAerodynamicSurface[];
 
-    // 10% Tertiary Micro-Detail
-    microDetail: AdaptiveSurfaceTopologyMicroDetail;
+    // 10% Tertiary Micro-Detail (Convenience mappings)
+    microDetail?: AdaptiveSurfaceTopologyMicroDetail;
+
+    // Pillar 11: The 4 Pure Differential Geometric Operators
+    curveSweeps?: AdaptiveCurveSweepFeature[];
+    revolvedHarmonics?: AdaptiveRevolvedHarmonicFeature[];
+    metricReplications?: AdaptiveMetricReplicatorFeature[];
+    normalRelief?: AdaptiveNormalReliefFeature;
 
     /** Material tuning attributes */
     materialAttributes?: {

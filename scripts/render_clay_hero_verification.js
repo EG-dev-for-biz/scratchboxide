@@ -508,6 +508,24 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
     fs.mkdirSync(outDir, { recursive: true });
     const meshData = parseGlb(glbPath);
     const pfx = prefix ? `${prefix}_` : '';
+    const assetTitle = prefix ? prefix.replace(/_/g, ' ').toUpperCase() : 'HERO OBJECT';
+
+    // Compute bounding box for auto-framing
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < meshData.positions.length; i += 3) {
+        const x = meshData.positions[i];
+        const y = meshData.positions[i+1];
+        const z = meshData.positions[i+2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    const cx = (minX + maxX) * 0.5;
+    const cy = (minY + maxY) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    const span = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ) || 4.0;
+    const autoDist = Math.max(3.0, span * 1.4);
 
     // 1. Render Hero View 1: Front 3/4 Perspective (1280x720)
     const view1Buffer = renderGlbView(meshData, {
@@ -515,12 +533,12 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
         height: 720,
         camYaw: 0.65,
         camPitch: 0.24,
-        camDist: 6.8,
-        camTarget: [0, 0.65, 0],
+        camDist: autoDist,
+        camTarget: [cx, cy, cz],
         drawGrid: true
     });
     // Add watermark badge
-    drawString(view1Buffer, 1280, 720, 24, 24, "SCRATCHBOX 3D // HERO OBJECT [STUDIO GREY CLAY]", 220, 230, 245, 2);
+    drawString(view1Buffer, 1280, 720, 24, 24, `SCRATCHBOX 3D // ${assetTitle} [STUDIO GREY CLAY]`, 220, 230, 245, 2);
     drawString(view1Buffer, 1280, 720, 24, 48, "STAGE VOID // FLAT CAD STUDIO LIGHTING // PBR CLAY 18%", 140, 160, 185, 1);
     drawString(view1Buffer, 1280, 720, 24, 60, `GEOMETRIC HIERARCHY: ${meshData.vertexCount.toLocaleString()} VERTICES | ${(meshData.indices.length / 3).toLocaleString()} TRIANGLES`, 100, 200, 140, 1);
     const view1Png = encodePNG(1280, 720, view1Buffer);
@@ -533,13 +551,13 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
         height: 720,
         camYaw: 2.45,
         camPitch: 0.28,
-        camDist: 6.8,
-        camTarget: [0, 0.65, 0],
+        camDist: autoDist,
+        camTarget: [cx, cy, cz],
         drawGrid: true
     });
-    drawString(view2Buffer, 1280, 720, 24, 24, "SCRATCHBOX 3D // REAR DOWNFORCE & DIFFUSER ASSEMBLY", 220, 230, 245, 2);
-    drawString(view2Buffer, 1280, 720, 24, 48, "GT WING // QUAD EXHAUST CLUSTER // 6-STRAKE DIFFUSER", 140, 160, 185, 1);
-    drawString(view2Buffer, 1280, 720, 24, 60, `AERODYNAMIC CURVATURE: ${meshData.vertexCount.toLocaleString()} VERTICES`, 100, 200, 140, 1);
+    drawString(view2Buffer, 1280, 720, 24, 24, `SCRATCHBOX 3D // ${assetTitle} [REAR STERN VIEW]`, 220, 230, 245, 2);
+    drawString(view2Buffer, 1280, 720, 24, 48, "ARTICULATED KINEMATICS & PROPULSION / SENSOR SUITE", 140, 160, 185, 1);
+    drawString(view2Buffer, 1280, 720, 24, 60, `GEOMETRIC FIDELITY: ${meshData.vertexCount.toLocaleString()} VERTICES | ${(meshData.indices.length / 3).toLocaleString()} TRIANGLES`, 100, 200, 140, 1);
     const view2Png = encodePNG(1280, 720, view2Buffer);
     const view2Path = path.join(outDir, `${pfx}hero_clay_rear_quarter_view.png`);
     fs.writeFileSync(view2Path, view2Png);
@@ -562,7 +580,7 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
     // Top Navigation Bar (H = 52)
     fillRect(ideBuffer, ideW, ideH, 0, 0, ideW, 52, 22, 26, 32);
     drawString(ideBuffer, ideW, ideH, 20, 18, "SCRATCHBOX IDE", 80, 180, 255, 2);
-    drawString(ideBuffer, ideW, ideH, 210, 22, "| SPATIAL CANVAS STUDIO: HERO OBJECT PROCEDURAL SYNTHESIS", 180, 190, 205, 1);
+    drawString(ideBuffer, ideW, ideH, 210, 22, `| SPATIAL CANVAS STUDIO: ${assetTitle} PROCEDURAL SYNTHESIS`, 180, 190, 205, 1);
     drawString(ideBuffer, ideW, ideH, 1580, 22, "ENGINE: C++20 / PYTHON ASTRO 3D", 100, 220, 140, 1);
 
     // Left Panel: Scene Outliner (X: 16, Y: 68, W: 240, H: 810)
@@ -571,23 +589,33 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
     drawString(ideBuffer, ideW, ideH, leftX + 16, leftY + 16, "SCENE OUTLINER", 200, 210, 225, 1);
     drawLineBresenham(leftX + 16, leftY + 32, leftX + leftW - 16, leftY + 32, 45, 50, 60, 255, ideBuffer, ideW, ideH);
 
-    const outlinerItems = [
+    const outlinerItems = prefix.includes('europa') ? [
         "> WORLD (ROOT)",
-        "  v HERO_HYPERCAR_CLAY",
-        "    > 70% CHASSIS_MONOCOQUE",
-        "    > 70% SCULPTED_HOOD",
-        "    > 70% CANOPY_GLASSHOUSE",
-        "    > 20% FRONT_SPLITTER_DUAL",
-        "    > 20% REAR_GT_WING_ACTIVE",
-        "    > 20% 4X_WHEEL_ASSEMBLIES",
-        "      - RIM_BARREL_DEEPDISH",
-        "      - 10X_AERO_SPOKES",
-        "      - BRAKE_ROTOR_PERFORATED",
-        "      - MONOBLOC_CALIPER_6PISTON",
-        "    > 10% QUAD_EXHAUST_CLUSTER",
-        "    > 10% DORSAL_SHARK_FIN",
-        "    > 10% ENGINE_LOUVERS_6TIER",
-        "    > 10% COCKPIT_BUCKET_SEATS"
+        `  v ${assetTitle.replace(/\s+/g, '_')}`,
+        "    > 70% PRIMARY_PRESSURE_HULL",
+        "    > 70% THERMAL_RADIATOR_SPONSONS",
+        "    > 20% SE(3)_BENTHIC_ANCHOR_LIMBS",
+        "      - BISHOP_RMF_SWEEP_PATH",
+        "      - 45DEG_AXIAL_TWIST_TAPER",
+        "    > 20% REVOLVED_BORING_HEAD_K4",
+        "    > 20% REVOLVED_TURBINE_K26",
+        "    > 20% REVOLVED_MHD_NOZZLE_K0",
+        "    > 20% HYDRAULIC_STRUT_ACTUATORS",
+        "    > 10% POLAR_FASTENER_CIRCLES",
+        "    > 10% HYDROTHERMAL_LOUVERS",
+        "    > 10% DEBRIS_INTAKE_STRAINERS",
+        "    > 10% CRYO_UMBILICAL_HARNESSES"
+    ] : [
+        "> WORLD (ROOT)",
+        `  v ${assetTitle.replace(/\s+/g, '_')}`,
+        "    > 70% PRIMARY_EDIFICE_LOFT",
+        "    > 70% SECONDARY_HULL_SPONSONS",
+        "    > 20% SE(3)_CURVE_SWEEPS",
+        "    > 20% REVOLVED_HARMONIC_SOLIDS",
+        "    > 20% AFFINE_METRIC_REPLICATORS",
+        "    > 10% NORMAL_RELIEF_PANEL_SEAMS",
+        "    > 10% DIRECTIONAL_LOUVER_BAYS",
+        "    > 10% DEBRIS_INTAKE_STRAINERS"
     ];
 
     let itemY = leftY + 48;
@@ -607,8 +635,8 @@ function renderIdeVerificationScreenshot(glbPath, outDir, prefix = '') {
         height: stageH,
         camYaw: 0.62,
         camPitch: 0.22,
-        camDist: 6.6,
-        camTarget: [0, 0.65, 0],
+        camDist: autoDist,
+        camTarget: [cx, cy, cz],
         drawGrid: true
     });
 

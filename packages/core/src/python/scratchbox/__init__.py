@@ -1160,6 +1160,9 @@ from .adaptive_object import (
     create_intake_strainer,
     create_spline_conduit_harness,
     create_structural_truss_member,
+    sweep_curve_profile,
+    revolve_harmonic_solid,
+    replicate_metric_array,
 )
 
 __all__ = [
@@ -1170,6 +1173,9 @@ __all__ = [
     "create_intake_strainer",
     "create_spline_conduit_harness",
     "create_structural_truss_member",
+    "sweep_curve_profile",
+    "revolve_harmonic_solid",
+    "replicate_metric_array",
     "World",
     "Terrain",
     "Structure",

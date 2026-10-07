@@ -230,8 +230,8 @@ export class GeminiClient {
         let res: Response;
         const timeoutController = new AbortController();
         const timeoutId = setTimeout(() => {
-            timeoutController.abort(new Error('Backend connection timeout (120s)'));
-        }, 120000);
+            timeoutController.abort(new Error('Backend connection timeout (300s)'));
+        }, 300000);
 
         const onParentAbort = () => timeoutController.abort(signal?.reason);
         if (signal) {
