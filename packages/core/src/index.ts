@@ -369,6 +369,19 @@ export type {
     AdaptiveAtmosphereEphemeris
 } from './common/spatial/adaptive-3d-scene-contract';
 export type {
+    Adaptive3DObjectContract,
+    AdaptivePrimaryHull,
+    AdaptiveKinematicLink,
+    AdaptivePropulsionThruster,
+    AdaptiveGroundingInterface,
+    AdaptiveAerodynamicSurface,
+    AdaptiveSurfaceTopologyMicroDetail,
+    CrossSectionStation,
+    ObjectSymmetryMode,
+    CapCurvatureProfile,
+    ActuatorDriveType
+} from './common/spatial/adaptive-3d-object-contract';
+export type {
     Adaptive3DSceneSynthesizer,
     Adaptive3DSceneExecutionResult
 } from './node/spatial/Adaptive3DSceneSynthesizer';

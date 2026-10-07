@@ -1152,7 +1152,24 @@ if _native is not None and hasattr(_native, "io"):
         io.write_glb = write_glb
         io.export_glb = export_glb
 
+from .adaptive_object import (
+    AdaptiveHeroObjectSynthesizer,
+    create_panelized_loft,
+    create_hydraulic_actuator,
+    create_louver_bay,
+    create_intake_strainer,
+    create_spline_conduit_harness,
+    create_structural_truss_member,
+)
+
 __all__ = [
+    "AdaptiveHeroObjectSynthesizer",
+    "create_panelized_loft",
+    "create_hydraulic_actuator",
+    "create_louver_bay",
+    "create_intake_strainer",
+    "create_spline_conduit_harness",
+    "create_structural_truss_member",
     "World",
     "Terrain",
     "Structure",
