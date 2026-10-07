@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { GltfBinaryPacker } from './gltf-binary-packer';
 
 /**
  * Context provided for each individual texel in the universal baking kernel.
@@ -661,53 +662,8 @@ export class UniversalPbrBakingKernel {
             }
         }
 
-        // 8. Consolidate Binary Chunk with 4-Byte Alignment
-        let totalBinLength = 0;
-        const alignedOffsets: number[] = [];
-        for (let i = 0; i < processedBufferViews.length; i++) {
-            const pad = (4 - (totalBinLength % 4)) % 4;
-            totalBinLength += pad;
-            alignedOffsets.push(totalBinLength);
-            totalBinLength += processedBufferViews[i].length;
-        }
-
-        const newBinChunk = Buffer.alloc(totalBinLength);
-        for (let i = 0; i < processedBufferViews.length; i++) {
-            const offset = alignedOffsets[i];
-            processedBufferViews[i].copy(newBinChunk, offset);
-            bufferViews[i].buffer = 0;
-            bufferViews[i].byteOffset = offset;
-            bufferViews[i].byteLength = processedBufferViews[i].length;
-        }
-
-        gltf.buffers = [{ byteLength: newBinChunk.length }];
-
-        // 9. Serialize JSON Chunk with 4-Byte Padding
-        let newJsonBuf = Buffer.from(JSON.stringify(gltf), 'utf8');
-        const jsonPadding = (4 - (newJsonBuf.length % 4)) % 4;
-        if (jsonPadding > 0) {
-            newJsonBuf = Buffer.concat([newJsonBuf, Buffer.alloc(jsonPadding, 0x20)]);
-        }
-
-        // 10. Pack Standard Binary GLB
-        const totalGlbLength = 12 + 8 + newJsonBuf.length + 8 + newBinChunk.length;
-        const finalGlbBuffer = Buffer.alloc(totalGlbLength);
-
-        // Header
-        finalGlbBuffer.writeUInt32LE(0x46546C67, 0); // magic 'glTF'
-        finalGlbBuffer.writeUInt32LE(2, 4);          // version 2
-        finalGlbBuffer.writeUInt32LE(totalGlbLength, 8); // total byte length
-
-        // Chunk 0: JSON
-        finalGlbBuffer.writeUInt32LE(newJsonBuf.length, 12);
-        finalGlbBuffer.writeUInt32LE(0x4E4F534A, 16);
-        newJsonBuf.copy(finalGlbBuffer, 20);
-
-        // Chunk 1: BIN
-        const binHeaderPos = 20 + newJsonBuf.length;
-        finalGlbBuffer.writeUInt32LE(newBinChunk.length, binHeaderPos);
-        finalGlbBuffer.writeUInt32LE(0x004E4942, binHeaderPos + 4);
-        newBinChunk.copy(finalGlbBuffer, binHeaderPos + 8);
+        // 8. Pack Standard Binary GLB with 4-Byte Alignment using Canonical GltfBinaryPacker
+        const { glbBuffer: finalGlbBuffer } = GltfBinaryPacker.packGlb(gltf, processedBufferViews, true);
 
         const outPath = outputGlbPath || options.outputGlbPath;
         if (outPath) {

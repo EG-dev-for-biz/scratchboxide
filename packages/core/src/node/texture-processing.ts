@@ -395,6 +395,27 @@ export function packOrmBuffer(
 }
 
 /**
+ * Universal ORM packing function that works seamlessly with Uint8Array or Buffer.
+ */
+export function packOrmData(
+    ao: Uint8Array | Buffer,
+    roughness: Uint8Array | Buffer,
+    metallic: Uint8Array | Buffer,
+    width: number,
+    height: number
+): Uint8Array {
+    const orm = new Uint8Array(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+        const idx = i * 4;
+        orm[idx] = ao[idx] !== undefined ? ao[idx] : 255;
+        orm[idx + 1] = roughness[idx + 1] !== undefined ? roughness[idx + 1] : (roughness[idx] ?? 128);
+        orm[idx + 2] = metallic[idx + 2] !== undefined ? metallic[idx + 2] : (metallic[idx] ?? 0);
+        orm[idx + 3] = 255;
+    }
+    return orm;
+}
+
+/**
  * Decodes three separate PNG buffers (AO, Roughness, Metalness) and packages them into a single glTF ORM PNG.
  */
 export function packOrmPng(aoPng: Buffer, roughnessPng: Buffer, metallicPng: Buffer): Buffer {

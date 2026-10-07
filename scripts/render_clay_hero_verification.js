@@ -191,40 +191,74 @@ function parseGlb(filePath) {
     const binLength = view.getUint32(binChunkOffset, true);
     const binBytes = new Uint8Array(glbBytes.buffer, glbBytes.byteOffset + binChunkOffset + 8, binLength);
 
-    const prim = gltf.meshes[0].primitives[0];
-    const attrs = prim.attributes;
+    const allPositions = [];
+    const allNormals = [];
+    const allIndices = [];
+    let totalVertexCount = 0;
 
-    const posAcc = gltf.accessors[attrs.POSITION];
-    const normAcc = gltf.accessors[attrs.NORMAL];
-    const idxAcc = prim.indices !== undefined ? gltf.accessors[prim.indices] : null;
+    for (const mesh of gltf.meshes) {
+        for (const prim of mesh.primitives) {
+            const attrs = prim.attributes;
+            const posAcc = gltf.accessors[attrs.POSITION];
+            const normAcc = attrs.NORMAL !== undefined ? gltf.accessors[attrs.NORMAL] : null;
+            const idxAcc = prim.indices !== undefined ? gltf.accessors[prim.indices] : null;
 
-    const posView = gltf.bufferViews[posAcc.bufferView];
-    const normView = gltf.bufferViews[normAcc.bufferView];
+            const posView = gltf.bufferViews[posAcc.bufferView];
+            const posOffset = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
+            const positions = new Float32Array(binBytes.buffer, binBytes.byteOffset + posOffset, posAcc.count * 3);
 
-    const posOffset = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
-    const normOffset = (normView.byteOffset || 0) + (normAcc.byteOffset || 0);
+            let normals = null;
+            if (normAcc) {
+                const normView = gltf.bufferViews[normAcc.bufferView];
+                const normOffset = (normView.byteOffset || 0) + (normAcc.byteOffset || 0);
+                normals = new Float32Array(binBytes.buffer, binBytes.byteOffset + normOffset, normAcc.count * 3);
+            }
 
-    const positions = new Float32Array(binBytes.buffer, binBytes.byteOffset + posOffset, posAcc.count * 3);
-    const normals = new Float32Array(binBytes.buffer, binBytes.byteOffset + normOffset, normAcc.count * 3);
+            const baseVertex = totalVertexCount;
+            for (let i = 0; i < posAcc.count * 3; i++) {
+                allPositions.push(positions[i]);
+            }
+            if (normals) {
+                for (let i = 0; i < normAcc.count * 3; i++) {
+                    allNormals.push(normals[i]);
+                }
+            } else {
+                for (let i = 0; i < posAcc.count; i++) {
+                    allNormals.push(0, 1, 0);
+                }
+            }
 
-    let indices = null;
-    if (idxAcc) {
-        const idxView = gltf.bufferViews[idxAcc.bufferView];
-        const idxOffset = (idxView.byteOffset || 0) + (idxAcc.byteOffset || 0);
-        if (idxAcc.componentType === 5123) {
-            indices = new Uint16Array(binBytes.buffer, binBytes.byteOffset + idxOffset, idxAcc.count);
-        } else if (idxAcc.componentType === 5125) {
-            indices = new Uint32Array(binBytes.buffer, binBytes.byteOffset + idxOffset, idxAcc.count);
+            if (idxAcc) {
+                const idxView = gltf.bufferViews[idxAcc.bufferView];
+                const idxOffset = (idxView.byteOffset || 0) + (idxAcc.byteOffset || 0);
+                if (idxAcc.componentType === 5123) {
+                    const idxArr = new Uint16Array(binBytes.buffer, binBytes.byteOffset + idxOffset, idxAcc.count);
+                    for (let i = 0; i < idxArr.length; i++) {
+                        allIndices.push(baseVertex + idxArr[i]);
+                    }
+                } else if (idxAcc.componentType === 5125) {
+                    const idxArr = new Uint32Array(binBytes.buffer, binBytes.byteOffset + idxOffset, idxAcc.count);
+                    for (let i = 0; i < idxArr.length; i++) {
+                        allIndices.push(baseVertex + idxArr[i]);
+                    }
+                }
+            } else {
+                for (let i = 0; i < posAcc.count; i++) {
+                    allIndices.push(baseVertex + i);
+                }
+            }
+
+            totalVertexCount += posAcc.count;
         }
     }
 
     const mat = gltf.materials ? gltf.materials[0] : null;
     return {
-        positions,
-        normals,
-        indices,
-        vertexCount: posAcc.count,
-        triangleCount: indices ? indices.length / 3 : posAcc.count / 3,
+        positions: new Float32Array(allPositions),
+        normals: new Float32Array(allNormals),
+        indices: new Uint32Array(allIndices),
+        vertexCount: totalVertexCount,
+        triangleCount: allIndices.length / 3,
         material: mat
     };
 }

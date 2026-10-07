@@ -11,6 +11,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { AdaptiveMaterialPbrService } from './adaptive-material-pbr-service';
+import { NativeMaterialPbrService } from './native-material-pbr-service';
+import { GltfBinaryPacker } from './gltf-binary-packer';
+import { makeToroidalSeamless } from '../texture-processing';
 import type {
     ContinuousBiophysicalFields,
     IntrinsicSignalMetrics,
@@ -51,6 +54,14 @@ export interface ImageToPbrPlaneOptions {
     prompt?: string;
     /** Save standalone diagnostic maps (Albedo, Normal, ORM, Height) next to output. */
     saveDiagnosticMaps?: boolean;
+    /** Whether to enforce toroidal seamless boundary wrapping for infinite plane tiling (default: false). */
+    makeSeamlessTileable?: boolean;
+    /** Feathering boundary ratio for toroidal seamless blending [0.05..0.40] (default: 0.15). */
+    featherRatio?: number;
+    /** Metric UV repetition frequency [uRepeat, vRepeat] (default: [1.0, 1.0]). */
+    uvRepeat?: [number, number];
+    /** Whether to use hardware-accelerated C++20 engine with automatic Node.js fallback (default: true). */
+    useNativeCpp?: boolean;
 }
 
 /**
@@ -73,6 +84,10 @@ export interface ImageToPbrPlaneResult {
         subdivisionsY: number;
     };
     metrics: IntrinsicSignalMetrics;
+    /** Runtime acceleration tier utilized for biophysical synthesis. */
+    accelerationUsed: 'native-cpp20' | 'node-v8';
+    /** Whether the resulting texture set and mesh are seamlessly toroidal tileable. */
+    isSeamlessTileable: boolean;
     executionTimeMs: number;
 }
 
@@ -119,6 +134,10 @@ async function probeImageDimensions(buf: Buffer): Promise<{ width: number; heigh
  * 4. Adaptive Domain Architecture: Zero hardcoded roughness magic numbers; continuous biophysical schemas.
  */
 export class ImageToAdaptivePbrService {
+
+    public static async generatePbrDisplacedPlane(options: ImageToPbrPlaneOptions): Promise<ImageToPbrPlaneResult> {
+        return this.processImageToPbrPlane(options);
+    }
 
     public static async processImageToPbrPlane(options: ImageToPbrPlaneOptions): Promise<ImageToPbrPlaneResult> {
         const startTime = performance.now();
@@ -169,16 +188,47 @@ export class ImageToAdaptivePbrService {
             }
         }
 
-        // 5. Estimate continuous biophysical fields & intrinsic metrics
-        const fields: ContinuousBiophysicalFields = AdaptiveMaterialPbrService.estimateContinuousBiophysicalFields(
-            rawRgba,
-            width,
-            height,
-            schemaOverride
-        );
+        // 5. Toroidal seamless boundary wrapping (optional continuous periodic manifold)
+        const isSeamless = Boolean(options.makeSeamlessTileable);
+        const effectiveRgba = isSeamless
+            ? makeToroidalSeamless(rawRgba, width, height, options.featherRatio ?? 0.15)
+            : rawRgba;
+
+        // 6. Estimate continuous biophysical fields & intrinsic metrics (Two-Tier Architecture: C++20 Engine -> Node.js Fallback)
+        let fields: ContinuousBiophysicalFields;
+        let accelerationUsed: 'native-cpp20' | 'node-v8' = 'node-v8';
+
+        if (options.useNativeCpp !== false) {
+            try {
+                const nativeService = new NativeMaterialPbrService();
+                fields = await nativeService.estimateContinuousBiophysicalFields(
+                    effectiveRgba,
+                    width,
+                    height,
+                    schemaOverride
+                );
+                accelerationUsed = 'native-cpp20';
+            } catch {
+                // Transparent failover to pure Node.js V8 execution
+                fields = AdaptiveMaterialPbrService.estimateContinuousBiophysicalFields(
+                    effectiveRgba,
+                    width,
+                    height,
+                    schemaOverride
+                );
+                accelerationUsed = 'node-v8';
+            }
+        } else {
+            fields = AdaptiveMaterialPbrService.estimateContinuousBiophysicalFields(
+                effectiveRgba,
+                width,
+                height,
+                schemaOverride
+            );
+        }
 
         const metrics: IntrinsicSignalMetrics = AdaptiveMaterialPbrService.computeIntrinsicSignalMetrics(
-            rawRgba,
+            effectiveRgba,
             fields,
             width,
             height
@@ -229,6 +279,9 @@ export class ImageToAdaptivePbrService {
         let minX = Infinity, minY = Infinity, minZ = Infinity;
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
+        const repeatU = options.uvRepeat ? options.uvRepeat[0] : 1.0;
+        const repeatV = options.uvRepeat ? options.uvRepeat[1] : 1.0;
+
         for (let j = 0; j <= subY; j++) {
             const v = j / subY;
             const y = (0.5 - v) * planeHeight;
@@ -252,8 +305,8 @@ export class ImageToAdaptivePbrService {
                 if (z < minZ) minZ = z;
                 if (z > maxZ) maxZ = z;
 
-                uvs[vIdx * 2 + 0] = u;
-                uvs[vIdx * 2 + 1] = v;
+                uvs[vIdx * 2 + 0] = u * repeatU;
+                uvs[vIdx * 2 + 1] = v * repeatV;
 
                 tangents[vIdx * 4 + 0] = 1.0;
                 tangents[vIdx * 4 + 1] = 0.0;
@@ -373,20 +426,6 @@ export class ImageToAdaptivePbrService {
             normalBuf        // 7: normal image
         ];
 
-        let totalBinLength = 0;
-        const alignedOffsets: number[] = [];
-        for (let i = 0; i < rawBufferViews.length; i++) {
-            const pad = (4 - (totalBinLength % 4)) % 4;
-            totalBinLength += pad;
-            alignedOffsets.push(totalBinLength);
-            totalBinLength += rawBufferViews[i].length;
-        }
-
-        const binChunk = Buffer.alloc(totalBinLength);
-        for (let i = 0; i < rawBufferViews.length; i++) {
-            rawBufferViews[i].copy(binChunk, alignedOffsets[i]);
-        }
-
         const gltf = {
             asset: {
                 version: '2.0',
@@ -434,8 +473,8 @@ export class ImageToAdaptivePbrService {
             samplers: [{
                 magFilter: 9729, // LINEAR
                 minFilter: 9987, // LINEAR_MIPMAP_LINEAR
-                wrapS: 33071,   // CLAMP_TO_EDGE
-                wrapT: 33071    // CLAMP_TO_EDGE
+                wrapS: isSeamless ? 10497 : 33071,   // 10497 = REPEAT, 33071 = CLAMP_TO_EDGE
+                wrapT: isSeamless ? 10497 : 33071
             }],
             images: [
                 { bufferView: 5, mimeType: 'image/jpeg' },
@@ -443,14 +482,14 @@ export class ImageToAdaptivePbrService {
                 { bufferView: 7, mimeType: 'image/png' }
             ],
             bufferViews: [
-                { buffer: 0, byteOffset: alignedOffsets[0], byteLength: indicesBuffer.length, target: 34963 }, // ELEMENT_ARRAY_BUFFER
-                { buffer: 0, byteOffset: alignedOffsets[1], byteLength: positionsBuffer.length, target: 34962 }, // ARRAY_BUFFER
-                { buffer: 0, byteOffset: alignedOffsets[2], byteLength: normalsBuffer.length, target: 34962 },
-                { buffer: 0, byteOffset: alignedOffsets[3], byteLength: uvsBuffer.length, target: 34962 },
-                { buffer: 0, byteOffset: alignedOffsets[4], byteLength: tangentsBuffer.length, target: 34962 },
-                { buffer: 0, byteOffset: alignedOffsets[5], byteLength: albedoBuf.length },
-                { buffer: 0, byteOffset: alignedOffsets[6], byteLength: ormBuf.length },
-                { buffer: 0, byteOffset: alignedOffsets[7], byteLength: normalBuf.length }
+                { target: 34963 }, // 0: indices (ELEMENT_ARRAY_BUFFER)
+                { target: 34962 }, // 1: positions (ARRAY_BUFFER)
+                { target: 34962 }, // 2: normals
+                { target: 34962 }, // 3: uvs
+                { target: 34962 }, // 4: tangents
+                {},                // 5: albedo image
+                {},                // 6: orm image
+                {}                 // 7: normal image
             ],
             accessors: [
                 {
@@ -490,36 +529,11 @@ export class ImageToAdaptivePbrService {
                     count: vertexCount,
                     type: 'VEC4'
                 }
-            ],
-            buffers: [{ byteLength: binChunk.length }]
+            ]
         };
 
-        // Serialize JSON Chunk with 4-Byte Padding
-        let jsonBuf = Buffer.from(JSON.stringify(gltf), 'utf8');
-        const jsonPadding = (4 - (jsonBuf.length % 4)) % 4;
-        if (jsonPadding > 0) {
-            jsonBuf = Buffer.concat([jsonBuf, Buffer.alloc(jsonPadding, 0x20)]);
-        }
-
-        // Serialize GLB Header & Chunks
-        const totalGlbLength = 12 + 8 + jsonBuf.length + 8 + binChunk.length;
-        const finalGlbBuffer = Buffer.alloc(totalGlbLength);
-
-        // Header
-        finalGlbBuffer.writeUInt32LE(0x46546C67, 0); // 'glTF'
-        finalGlbBuffer.writeUInt32LE(2, 4);          // version 2
-        finalGlbBuffer.writeUInt32LE(totalGlbLength, 8);
-
-        // JSON Chunk
-        finalGlbBuffer.writeUInt32LE(jsonBuf.length, 12);
-        finalGlbBuffer.writeUInt32LE(0x4E4F534A, 16); // 'JSON'
-        jsonBuf.copy(finalGlbBuffer, 20);
-
-        // BIN Chunk
-        const binHeaderPos = 20 + jsonBuf.length;
-        finalGlbBuffer.writeUInt32LE(binChunk.length, binHeaderPos);
-        finalGlbBuffer.writeUInt32LE(0x004E4942, binHeaderPos + 4); // 'BIN\0'
-        binChunk.copy(finalGlbBuffer, binHeaderPos + 8);
+        // Standardized 4-byte aligned GLB packing
+        const { glbBuffer: finalGlbBuffer } = GltfBinaryPacker.packGlb(gltf, rawBufferViews, true);
 
         // Write output GLB file if requested
         if (options.outputGlbPath) {
@@ -570,6 +584,8 @@ export class ImageToAdaptivePbrService {
                 subdivisionsY: subY
             },
             metrics,
+            accelerationUsed,
+            isSeamlessTileable: isSeamless,
             executionTimeMs: Math.round(durationMs)
         };
     }
