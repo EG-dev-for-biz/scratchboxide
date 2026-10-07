@@ -103,6 +103,11 @@ export type {
     AdaptiveMaterialPbrService
 } from './node/3d-engine/adaptive-material-pbr-service';
 export type {
+    ImageToAdaptivePbrService,
+    ImageToPbrPlaneOptions,
+    ImageToPbrPlaneResult
+} from './node/3d-engine/image-to-adaptive-pbr-service';
+export type {
     UniversalPbrBakingKernel,
     UniversalTexelContext,
     UniversalTexelOutput,

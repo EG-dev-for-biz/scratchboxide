@@ -87,6 +87,11 @@ export {
     QuadRemeshResult
 } from './node/3d-engine/field-remesh-service';
 export { AdaptiveMaterialPbrService } from './node/3d-engine/adaptive-material-pbr-service';
+export {
+    ImageToAdaptivePbrService,
+    type ImageToPbrPlaneOptions,
+    type ImageToPbrPlaneResult
+} from './node/3d-engine/image-to-adaptive-pbr-service';
 export type {
     AdaptiveMaterialSchema,
     IntrinsicSignalMetrics,
@@ -227,6 +232,17 @@ export {
     type NativePerFaceMaterialResult,
     type NativeMaterialClassifyOptions
 } from './node/3d-engine/native-tile-lighting-service';
+export {
+    NativeMaterialPbrService,
+    PBR_50_ARCHETYPE_CATALOG,
+    type Pbr50CatalogEntry,
+    type NativeSynthesizePbrOptions,
+    type NativePbrTextureSet,
+    type NativeTexturePeriodicityOptions,
+    type NativeTexturePeriodicityResult,
+    type NativeMeshZoneClassifyOptions,
+    type NativeMeshSemanticPartitionResult
+} from './node/3d-engine/native-material-pbr-service';
 export {
     NativeSkyService,
     type AtmosphereParameters,

@@ -65,6 +65,8 @@ export interface ContinuousBiophysicalFields {
     ambientOcclusion: Uint8Array;
     /** Packed glTF ORM (Red: AO, Green: Roughness, Blue: Metallic). */
     ormRgb: Uint8Array;
+    /** Normalized surface virtual heightfield [0.0..1.0]. */
+    virtualHeight?: Float32Array;
 }
 
 export interface AdaptivePbrOptions {

@@ -566,7 +566,8 @@ export class AdaptiveMaterialPbrService {
             roughness,
             metallic,
             ambientOcclusion,
-            ormRgb
+            ormRgb,
+            virtualHeight
         };
     }
 

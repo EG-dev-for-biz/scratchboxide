@@ -23,9 +23,11 @@ export * from './botanical-tree-tools';
 export * from './lighting-tools';
 export * from './universal-3d-structure-tools';
 export * from './python-3d-tools';
+export * from './image-to-pbr-tools';
 
 
 import type { ToolDeclaration, ToolHandler } from './types';
+import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
 import { MESH_SHAPING_TOOL_DECLARATIONS, meshShapingHandlers } from './mesh-shaping-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS, nanoBananaHandlers } from './nano-banana-tools';
@@ -107,6 +109,7 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...AVATAR_4DGS_TOOL_DECLARATIONS,
     ...ANALYTICAL_GROOM_TOOL_DECLARATIONS,
     ...COMFYUI_TOOL_DECLARATIONS,
+    ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
     ...BROWSER_TOOL_DECLARATIONS
 ];
@@ -135,6 +138,7 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...avatar4dgsHandlers,
     ...analyticalGroomHandlers,
     ...comfyuiHandlers,
+    ...imageToPbrHandlers,
     ...lensHandlers,
     ...browserHandlers,
     ...botanicalTreeHandlers

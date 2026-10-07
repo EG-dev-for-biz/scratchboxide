@@ -241,6 +241,19 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                     mat.metallic = 0.0
                     mat.roughness = 0.4
                     mat.base_color = math.Vec4(0.1, 0.1, 0.1, 1.0) if "black" in nl else math.Vec4(0.8, 0.8, 0.8, 1.0)
+                elif any(x in nl for x in ("clay", "plaster", "matte_grey", "studio_grey")):
+                    mat.metallic = 0.0
+                    mat.roughness = 0.85
+                    mat.base_color = math.Vec4(0.55, 0.57, 0.60, 1.0)
+                elif any(x in nl for x in ("car_paint", "paint", "gloss")):
+                    mat.metallic = 0.8
+                    mat.roughness = 0.15
+                    mat.clearcoat = 1.0
+                    mat.base_color = math.Vec4(0.85, 0.05, 0.08, 1.0)
+                elif any(x in nl for x in ("rubber", "tire")):
+                    mat.metallic = 0.0
+                    mat.roughness = 0.92
+                    mat.base_color = math.Vec4(0.08, 0.08, 0.08, 1.0)
                 elif any(x in nl for x in ("stone", "rock", "concrete", "basalt", "travertine")):
                     mat.metallic = 0.05
                     mat.roughness = 0.85
@@ -480,27 +493,48 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_studio_pedestal not available")
     _geom.create_studio_pedestal = create_studio_pedestal
 
-    _orig_create_cylinder = getattr(_geom, "create_cylinder", None)
-    def create_cylinder(radius=None, radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, **kwargs):
-        rt = float(radius if radius is not None else radius_top)
-        rb = float(radius if radius is not None else radius_bottom)
+    def _resolve_color_and_material(color=None, material=None, default_color=None):
+        mat = material
         c = color
+        if c is not None and hasattr(c, "roughness"):
+            mat = c
+            c = getattr(c, "base_color", None)
+        if mat is not None and c is None:
+            c = getattr(mat, "base_color", None)
+
         if c is not None:
             if isinstance(c, (tuple, list)) and len(c) >= 3:
-                c = math.Vec4(float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0)
+                vec_c = math.Vec4(float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0)
+            elif isinstance(c, (int, float)):
+                val = float(c)
+                vec_c = math.Vec4(val, val, val, 1.0)
+            elif hasattr(c, "x") and hasattr(c, "y") and hasattr(c, "z") and hasattr(c, "w"):
+                vec_c = c
+            else:
+                vec_c = c
         else:
-            c = math.Vec4(0.8, 0.8, 0.8, 1.0)
+            vec_c = default_color if default_color is not None else math.Vec4(0.8, 0.8, 0.8, 1.0)
+        return vec_c, mat
+
+    _orig_create_cylinder = getattr(_geom, "create_cylinder", None)
+    def create_cylinder(radius=None, radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, **kwargs):
+        rt = float(radius if radius is not None else radius_top)
+        rb = float(radius if radius is not None else radius_bottom)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
         if _orig_create_cylinder:
-            return _orig_create_cylinder(rt, rb, float(height), int(segments), c)
+            mesh = _orig_create_cylinder(rt, rb, float(height), int(segments), c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
         raise RuntimeError("Native create_cylinder not available")
     _geom.create_cylinder = create_cylinder
 
-    def create_cone(radius=1.0, height=2.0, segments=24, color=None, **kwargs):
-        return create_cylinder(radius_top=0.0, radius_bottom=radius, height=height, segments=segments, color=color, **kwargs)
+    def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs):
+        return create_cylinder(radius_top=0.0, radius_bottom=radius, height=height, segments=segments, color=color, material=material, **kwargs)
     _geom.create_cone = create_cone
 
     _orig_create_plane = getattr(_geom, "create_plane", None)
-    def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, size=None, **kwargs):
+    def create_plane(width=2.0, height=2.0, depth=None, seg_x=4, seg_y=4, segments=None, width_segments=None, depth_segments=None, size=None, color=None, material=None, **kwargs):
         if size is not None:
             if isinstance(size, (int, float)):
                 width, depth = float(size), float(size)
@@ -511,8 +545,12 @@ if _native is not None and hasattr(_native, "geometry"):
         h = float(depth if depth is not None else height)
         sx = int(segments if segments is not None else (width_segments if width_segments is not None else seg_x))
         sy = int(segments if segments is not None else (depth_segments if depth_segments is not None else seg_y))
+        _, mat = _resolve_color_and_material(color, material)
         if _orig_create_plane:
-            return _orig_create_plane(float(width), h, sx, sy)
+            mesh = _orig_create_plane(float(width), h, sx, sy)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
         raise RuntimeError("Native create_plane not available")
     _geom.create_plane = create_plane
 
@@ -520,6 +558,7 @@ if _native is not None and hasattr(_native, "geometry"):
     def create_box(*args, **kwargs):
         size = None
         color = None
+        material = kwargs.get("material")
         if len(args) == 3 and all(isinstance(a, (int, float)) for a in args):
             s = math.Vec3(float(args[0]), float(args[1]), float(args[2]))
         elif len(args) == 4 and all(isinstance(a, (int, float)) for a in args[:3]):
@@ -539,8 +578,8 @@ if _native is not None and hasattr(_native, "geometry"):
                 if isinstance(size, (tuple, list)) and len(size) >= 3:
                     s = math.Vec3(float(size[0]), float(size[1]), float(size[2]))
                 elif isinstance(size, (int, float)):
-                    v = float(size)
-                    s = math.Vec3(v, v, v)
+                    val = float(size)
+                    s = math.Vec3(val, val, val)
                 elif hasattr(size, "x") and hasattr(size, "y") and hasattr(size, "z"):
                     s = size
                 else:
@@ -551,36 +590,27 @@ if _native is not None and hasattr(_native, "geometry"):
                 d = kwargs.get("depth", 1.0)
                 s = math.Vec3(float(w), float(h), float(d))
 
-        if color is not None:
-            if isinstance(color, (tuple, list)) and len(color) >= 3:
-                c = math.Vec4(float(color[0]), float(color[1]), float(color[2]), float(color[3]) if len(color) > 3 else 1.0)
-            elif isinstance(color, (int, float)):
-                val = float(color)
-                c = math.Vec4(val, val, val, 1.0)
-            else:
-                c = color
-        else:
-            c = math.Vec4(0.8, 0.8, 0.8, 1.0)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
 
         if _orig_create_box:
-            return _orig_create_box(s, c)
+            mesh = _orig_create_box(s, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box
     _geom.create_cube = create_box
 
     _orig_create_sphere = getattr(_geom, "create_sphere", None)
-    def create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, **kwargs):
+    def create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, material=None, **kwargs):
         r = int(segments if segments is not None else rings)
         s = int(segments if segments is not None else sectors)
-        if color is not None:
-            if isinstance(color, (tuple, list)) and len(color) >= 3:
-                c = math.Vec4(float(color[0]), float(color[1]), float(color[2]), float(color[3]) if len(color) > 3 else 1.0)
-            else:
-                c = color
-        else:
-            c = math.Vec4(0.9, 0.3, 0.3, 1.0)
+        c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.9, 0.3, 0.3, 1.0))
         if _orig_create_sphere:
-            return _orig_create_sphere(float(radius), r, s, c)
+            mesh = _orig_create_sphere(float(radius), r, s, c)
+            if mat is not None and hasattr(mesh, "apply_material"):
+                mesh.apply_material(mat)
+            return mesh
         raise RuntimeError("Native create_sphere not available")
     _geom.create_sphere = create_sphere
 

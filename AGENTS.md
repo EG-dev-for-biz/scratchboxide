@@ -113,6 +113,28 @@ When initializing 3D viewports, canvas scenes, lighting, or atmosphere:
 3. **Explicit Opt-In Gate**:
    - Atmospheric scattering, diurnal solar ephemeris, depth fog, and volumetric clouds are only instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather/i`).
 
+### Rule: Universal First-Request 3D Staging Invariant (Grey Clay Void, Extensive Construction & Follow-up Suggestions)
+When the user requests a 3D scene, model, vehicle, structure, or object:
+1. **Hero Objects in Grey Clay by Default (Unless a Location is Asked First)**:
+   - Unless a real-world geographic location is asked first, always construct Hero Objects in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, `roughness: 0.85, metalness: 0.0, color: [0.55, 0.57, 0.60]` or `renderMode: 'clay'`).
+   - Stage the hero object in a **3D stage void** (`environment: { skybox: 'studio', lighting: 'studio', ground: false }`) with simple flat/studio default lighting (neutral key + ambient fill, standard 3D CAD/DCC default).
+   - **Never Use ComfyUI Neural Meshes Unless Requested**: Rely strictly on Scratchbox native procedural generation (Python / C++20 engine) by default. Do not invoke external neural diffusion models (Trellis/TripoSR) unless explicitly asked.
+2. **Location Exception (Google 3D Tiles Clay Mode)**:
+   - If the user's first request is a real-world location (e.g., "Eiffel Tower", "San Francisco", "Monaco GP circuit") and that location can be created with Google Map Tiles:
+   - Return a **clay style 3D map tile object** (`getGoogle3DTilesClay` / `clayPreset: 'studio-grey'`), capturing authentic real-world metropolitan massing without photogrammetric texture noise.
+3. **Deep Multi-Step Procedural Construction**:
+   - Spend considerable effort and a large amount of procedural steps to construct the initial request.
+   - Enforce the **70-20-10 geometric form hierarchy**:
+     - **70% Primary Edifice / Silhouette**: Sculpted compound curvature, proportional stance, non-linear deformers (taper, twist, bend, bulge, FFD).
+     - **20% Secondary Articulated Assemblies**: Discrete sub-parts (splitters, diffusers, multi-element chassis, hollow-spoke wheel rims, brake discs/calipers, cockpit framework, air intakes).
+     - **10% Tertiary Micro-Detail**: Panel shut lines, hex grilles, hood louvers, quad exhaust tips, mechanical fasteners, chamfers.
+   - Never output toy boxes or hasty single-primitive representations.
+4. **Proactive Follow-up Suggestions (Lighting, Staging & Textures)**:
+   - Every initial response must conclude with clear, proactive follow-up suggestions for the user to explore:
+     - **Lighting**: e.g., 3-point high-contrast studio rim lighting, dramatic dusk twilight, or golden hour solar ephemeris.
+     - **Staging / Environment**: e.g., curved infinity cyclorama cove, beveled-curb asphalt road plinth, or architectural pedestal.
+     - **Textures & PBR Materials**: e.g., deep metallic automotive clearcoat, carbon fiber weave, tinted glass, and illuminated LED projector accents.
+
 ## 3D Tile & Mesh Ingestion Quality Directive
 
 ### Rule: Always Download Highest Quality Mesh & Convert to GLB
