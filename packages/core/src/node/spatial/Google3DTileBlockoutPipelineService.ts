@@ -1943,6 +1943,10 @@ export class Google3DTileBlockoutPipelineService {
           if (fs.existsSync(runnerPath)) {
             fs.unlinkSync(runnerPath);
           }
+          const legacyPath = path.join(process.cwd(), 'public/s4d_tile_blockout_runner.html');
+          if (fs.existsSync(legacyPath)) {
+            fs.unlinkSync(legacyPath);
+          }
         } catch (_) {}
       };
 

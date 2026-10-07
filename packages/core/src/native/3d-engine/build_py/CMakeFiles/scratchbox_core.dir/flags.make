@@ -6,7 +6,7 @@ CXX_DEFINES = -Dscratchbox_core_EXPORTS
 
 CXX_INCLUDES = -I/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include
 
-CXX_FLAGSarm64 = -std=gnu++20 -arch arm64 -fPIC -O3
+CXX_FLAGSarm64 = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC -O3
 
-CXX_FLAGS = -std=gnu++20 -arch arm64 -fPIC -O3
+CXX_FLAGS = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC -O3
 

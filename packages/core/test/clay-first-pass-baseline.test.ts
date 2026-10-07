@@ -66,6 +66,8 @@ describe('applyClayFirstPassBaseline', () => {
 describe('releaseClayOnMaterialRequest', () => {
     it('leaves clay for pbr when a follow-up asks for materials', () => {
         expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'now paint it rosso corsa', 'clay').renderMode).toBe('pbr');
+        expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'make the car red with blue stripes', 'clay').renderMode).toBe('pbr');
+        expect(releaseClayOnMaterialRequest({ renderMode: 'clay' }, 'give it a metallic chrome look', 'clay').renderMode).toBe('pbr');
         expect(releaseClayOnMaterialRequest({}, 'apply textures', 'clay').renderMode).toBe('pbr');
         expect(releaseClayOnMaterialRequest({ renderMode: 'shaded' }, 'apply textures', 'clay').renderMode).toBe('shaded');
     });

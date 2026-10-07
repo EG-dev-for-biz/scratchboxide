@@ -1105,15 +1105,12 @@ int main(int argc, char** argv) {
         shaders: data?.shaders,
         customMeshes: (() => {
             if (data?.customMeshes && data.customMeshes.length > 0) return data.customMeshes;
-            if (!hasRealSceneGeometry(data)) {
-                return synthesizeContextual3DScene(data?.title || 'Interactive 3D Scene').customMeshes;
-            }
-            return data?.customMeshes;
+            return [];
         })()
     }));
 
     // Rendering options
-    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>('shaded');
+    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || 'shaded');
     const renderModeRef = useLatest(renderMode);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const initialWorldBranch = (data?.worldBranch && /car|vehicle|automobile/i.test(data?.title || '') && /city|urban|street/i.test(data.worldBranch))
@@ -2697,6 +2694,7 @@ int main(int argc, char** argv) {
                     });
 
                     scene.add(model);
+                    applyClayRenderMode([model], renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
                     refreshEntities();
 
@@ -2787,7 +2785,8 @@ int main(int argc, char** argv) {
         if (!scene) return;
         applyClayRenderMode([
             scene.getObjectByName('scratchbox-cpp-generated-root'),
-            ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh)
+            ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh),
+            ...Array.from(externalObjectsMapRef.current.values())
         ], renderMode === 'clay');
     }, [renderMode]);
 

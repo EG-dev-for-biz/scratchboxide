@@ -1110,6 +1110,7 @@ CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.o: /Users/eligreen/dev/sc
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_physics.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_plant_builder.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_png.hpp \
+  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_processing.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_rigidbody.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi.hpp \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi_optimizer.hpp \
@@ -1163,6 +1164,8 @@ CMakeFiles/scratchbox_core.dir/src/scratchbox_core.cpp.o: /Users/eligreen/dev/sc
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_rigidbody.hpp:
+
+/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_processing.hpp:
 
 /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_pbr_texture_expert.hpp:
 

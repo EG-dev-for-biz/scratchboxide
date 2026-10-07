@@ -14,7 +14,7 @@ def "The_Plaza_Hotel" (
     {
         def "Lights"
         {
-            def UsdLuxSphereLight "gaffer_three_point_1791175434950_key"
+            def UsdLuxSphereLight "gaffer_three_point_1791344612414_key"
             {
                 float inputs:radius = 0.25
                 color3f inputs:color = (1.0000, 0.9271, 0.8523)
@@ -26,7 +26,7 @@ def "The_Plaza_Hotel" (
                 double3 xformOp:translate = (1.421, 70.004, -71.396)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }
-            def UsdLuxSphereLight "gaffer_three_point_1791175434950_fill"
+            def UsdLuxSphereLight "gaffer_three_point_1791344612414_fill"
             {
                 float inputs:radius = 0.15
                 color3f inputs:color = (1.0000, 0.6280, 0.3987)
@@ -36,7 +36,7 @@ def "The_Plaza_Hotel" (
                 double3 xformOp:translate = (-3.500, 2.800, 2.500)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
             }
-            def UsdLuxSphereLight "gaffer_three_point_1791175434950_rim"
+            def UsdLuxSphereLight "gaffer_three_point_1791344612414_rim"
             {
                 float inputs:radius = 0.25
                 color3f inputs:color = (1.0000, 0.9921, 0.9563)

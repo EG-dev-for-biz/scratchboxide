@@ -355,9 +355,9 @@ export function registerBeautifyHandlers(deps: SurveyApiDeps, generator: Station
         if (!args?.glbPath || !Array.isArray(args?.stations) || args.stations.length === 0 || !args?.anchor) {
             preset = resolveSurveyPreset(args, workspaceRoot);
         }
-        const glbPath = resolveGlb(args?.glbPath || preset?.glbPath!);
-        const anchor = args?.anchor || preset?.anchor!;
-        const stations = (args?.stations && args.stations.length) ? args.stations : preset?.stations!;
+        const glbPath = resolveGlb(args?.glbPath || preset!.glbPath);
+        const anchor = args?.anchor || preset!.anchor;
+        const stations = (args?.stations && args.stations.length) ? args.stations : preset!.stations;
         const outDir = path.resolve(workspaceRoot, args?.outDir || preset?.outDir || `public/tilesets/survey_${Date.now()}`);
         const beautify = {
             locationName: args?.locationName || preset?.beautify?.locationName || anchor.formattedAddress || 'the location',

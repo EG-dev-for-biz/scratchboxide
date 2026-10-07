@@ -11,7 +11,6 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/__wctype.h
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/__xlocale.h
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_abort.h
- /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_assert.h
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_bounds.h
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_ctermid.h
  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_ctype.h
@@ -1092,9 +1091,13 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/nb_types.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/array.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_array.h
+ /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_dict.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_list.h
+ /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_optional.h
+ /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/optional.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/pair.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/string.h
+ /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/unordered_map.h
  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/vector.h
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_4dgs_humanoid.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_architecture.hpp
@@ -1146,6 +1149,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_physics.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_plant_builder.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_png.hpp
+ /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_processing.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_rigidbody.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi.hpp
  /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_sb_archi_optimizer.hpp

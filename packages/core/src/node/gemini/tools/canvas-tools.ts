@@ -317,20 +317,12 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
             let cppGlbBase64 = p.cppGenerator?.glbBase64 || (!pythonGlbBase64 ? p.glbBase64 : undefined);
             let cppGlbPath = p.cppGenerator?.glbPath;
 
-            if (cppSource && !cppGlbBase64 && !pythonGlbBase64) {
-                try {
-                    const compiler = NativeCppCompilerService.getInstance();
-                    const compRes = await compiler.compileSource(cppSource);
-                    if (compRes.success && compRes.binaryPath) {
-                        const execRes = await compiler.executeBinary(compRes.binaryPath);
-                        if (execRes.success && execRes.glbBase64) {
-                            cppGlbBase64 = execRes.glbBase64;
-                            cppGlbPath = execRes.glbPath;
-                        }
-                    }
-                } catch (e) {
-                    console.warn('[mount_canvas_primitive] Error compiling C++ source:', e);
-                }
+            if (cppSource) {
+                return {
+                    status: 'failed',
+                    resultPayload: { success: false, error: 'Direct C++ generation via mount_canvas_primitive is deprecated and flawed. You MUST use the execute_3d_python_script tool for all 3D scene generation (import scratchbox as sb).' },
+                    summaryResult: 'Failed: Attempted to use deprecated C++ generation path.'
+                };
             }
 
             const pyGenerator = (pythonGlbBase64 || pythonScript) ? {
@@ -360,11 +352,7 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 splatUrl: p.splatUrl || contextual3D.splatUrl,
                 splatTilesetUrl: p.splatTilesetUrl || contextual3D.splatTilesetUrl,
                 splatOptions: p.splatOptions || contextual3D.splatOptions,
-                customMeshes: (pyGenerator?.glbBase64 || cppGen?.glbBase64)
-                    ? []
-                    : ((p.customMeshes && Array.isArray(p.customMeshes) && p.customMeshes.length > 0)
-                        ? p.customMeshes
-                        : contextual3D.customMeshes),
+                customMeshes: [], // STRICT TIER-0 JS PRIMITIVE BAN: No fake mock arrays.
                 environment: p.environment || contextual3D.environment,
                 camera: p.camera || contextual3D.camera,
                 objects: (Array.isArray(p.objects) && p.objects.length > 0) ? p.objects : (contextual3D.objects || []),

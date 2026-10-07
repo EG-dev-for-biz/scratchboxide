@@ -9,7 +9,7 @@
 
 /** AGENTS.md opt-in gate: atmosphere only when the user's words ask for it. */
 const ATMOSPHERE_OPT_IN = /\b(?:sky|skies|atmospher\w*|clouds?|cloudy|sunset|sunrise|dusk|dawn|twilight|golden\s*hour|weather|fog\w*|mist\w*|haze|god\s*rays?|scattering)\b/i;
-const MATERIAL_OPT_IN = /\b(?:materials?|textur(?:e|es|ed|ing)|pbr|shaders?|paint(?:ed)?|finish(?:es)?|photoreal\w*|albedo)\b/i;
+const MATERIAL_OPT_IN = /\b(?:materials?|textur\w*|pbr|shaders?|paint\w*|finish\w*|photoreal\w*|albedo|colou?rs?|colou?red|tint\w*|glossy|matte|metallic|chrome|gold|silver|bronze|copper|roughness|metalness|red|blue|green|yellow|orange|purple|pink|white|black|cyan|magenta)\b/i;
 
 const ATMOSPHERE_FEATURE_KEYS = [
     'atmosphericScattering', 'godRays', 'diurnalLighting', 'volumetricClouds', 'clouds',

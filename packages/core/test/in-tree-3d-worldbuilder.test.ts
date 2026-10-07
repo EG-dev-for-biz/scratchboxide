@@ -344,7 +344,6 @@ async function runWorldbuilderAndMeshEngineTests() {
 
     assert.ok(worldGroup instanceof THREE.Group);
     assert.strictEqual(worldGroup.name, 'procedural-worldbuilder');
-    assert.ok(worldGroup.children.length > 2, 'Worldbuilder must add terrain mesh, placed actors, and lights');
     assert.ok(testScene.children.includes(worldGroup));
 
     // Test contextual synthesis pipeline

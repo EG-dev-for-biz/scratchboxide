@@ -11,6 +11,8 @@ module.exports = tseslint.config(
             '**/dist/**',
             '**/dist-electron/**',
             '**/build/**',
+            '**/build_py/**',
+            '**/CMakeFiles/**',
             '**/.cache/**',
             'docs/**',
             'coverage/**',

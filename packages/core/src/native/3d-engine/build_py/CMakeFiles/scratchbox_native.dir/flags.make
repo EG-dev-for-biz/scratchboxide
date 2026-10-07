@@ -6,7 +6,7 @@ CXX_DEFINES = -Dscratchbox_native_EXPORTS
 
 CXX_INCLUDES = -I/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include -I/opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/include/python3.14 -I/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include
 
-CXX_FLAGSarm64 = -std=gnu++20 -arch arm64 -fPIC -fvisibility=hidden -O3
+CXX_FLAGSarm64 = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC -fvisibility=hidden -fno-stack-protector -Os -O3
 
-CXX_FLAGS = -std=gnu++20 -arch arm64 -fPIC -fvisibility=hidden -O3
+CXX_FLAGS = -O3 -DNDEBUG -std=gnu++20 -arch arm64 -fPIC -fvisibility=hidden -fno-stack-protector -Os -O3
 

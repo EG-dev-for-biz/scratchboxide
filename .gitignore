@@ -114,7 +114,8 @@ public/comfyui_outputs/
 !manifests/**
 
 data/s4d_dataset/
-**/s4d_tile_blockout_runner_*.html
+**/s4d_tile_blockout_runner*.html
+**/build_py/
 *.bak
 __pycache__/
 data/test_pilot_multiscene/

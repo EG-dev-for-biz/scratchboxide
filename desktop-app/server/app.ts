@@ -366,7 +366,6 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const hydratorScript = path.resolve(process.cwd(), 'scripts', 'hydrate_demo_assets.cjs');
     if (fs.existsSync(hydratorScript)) {
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-process, @typescript-eslint/no-require-imports
             const { fork } = require('child_process');
             fork(hydratorScript, ['--quiet'], { stdio: 'ignore' });
         } catch {}
