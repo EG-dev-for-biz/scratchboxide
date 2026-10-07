@@ -2763,7 +2763,10 @@ int main(int argc, char** argv) {
     React.useEffect(() => {
         const stack = stackRef.current;
         if (!stack) return;
-        syncCustomMeshes(stack, customMeshesRef.current as CustomMeshDefinition[] | undefined, customMeshRegistryRef.current, {
+        // Strict Tier-0 ban: suppress client-side toy primitives if native C++ or Python engine is configured
+        const hasNativeEngine = !!(sceneData.pythonGenerator?.glbBase64 || sceneData.cppGenerator?.glbBase64 || sceneData.pythonGenerator?.sourceCode || sceneData.cppGenerator?.sourceCode);
+        const meshesToSync = hasNativeEngine ? [] : (customMeshesRef.current as CustomMeshDefinition[] | undefined);
+        syncCustomMeshes(stack, meshesToSync, customMeshRegistryRef.current, {
             terrainManager: terrainManagerRef.current,
             has3DTiles: tilesInputRef.current.has3DTiles
         });

@@ -2178,24 +2178,24 @@ export function buildSimulatedSteps(fallbackGen: CanvasArtifact | undefined): Ag
     const simulatedSteps: AgentExecutionStep[] = [
         {
             id: `step-${Date.now()}-1`,
-            title: 'Indexed workspace directives & canvas schema',
-            status: 'running',
+            title: 'Loaded offline canvas schema',
+            status: 'completed',
             durationMs: 0,
-            details: 'Ingesting workspace file graph, active directives, and canvas primitive bounds.',
+            details: 'Workspace is running offline; loaded local primitive schema.',
             kind: 'context'
         },
         {
             id: `step-${Date.now()}-2`,
-            title: `Synthesized ${fallbackGen?.title || 'Generative Artifact'}`,
-            status: 'pending',
-            details: `Formulating ${fallbackGen?.type || 'interactive'} data model, layout configuration, and styles.`,
+            title: `Prepared local ${fallbackGen?.title || 'Generative Artifact'} template`,
+            status: 'completed',
+            details: `Constructed ${fallbackGen?.type || 'interactive'} layout configuration.`,
             kind: 'synthesize'
         },
         {
             id: `step-${Date.now()}-3`,
-            title: 'Verified schema integrity & canvas constraints',
-            status: 'pending',
-            details: 'Validating JSON schema compliance, reactive container bounds, and event bindings.',
+            title: 'Initialized canvas viewport',
+            status: 'completed',
+            details: 'Ready in interactive visual canvas.',
             kind: 'verify'
         }
     ];

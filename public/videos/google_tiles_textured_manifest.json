@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "timestamp": "2026-10-07T03:28:39.894Z",
+  "timestamp": "2026-10-07T05:17:55.348Z",
   "videoRef": "<VIDEO_REF_0>",
   "outputVideoPath": "/Users/eligreen/dev/scratchbox-ide-master/public/videos/google_tiles_textured_blockout_camera.mp4",
-  "outputGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/colosseum_rome_textured.glb",
+  "outputGlbPath": "/var/folders/78/ylz9y2bd0x393k6tfmw2q7m80000gn/T/scratchbox-tile-dual-api-test-NiClkT/textured_area.glb",
   "firstFramePath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/blockout_textured_first_frame.jpg",
   "firstFramePngPath": "/Users/eligreen/dev/scratchbox-ide-master/public/images/blockout_textured_frame_00.png",
   "storyboardPaths": [
@@ -20,17 +20,18 @@
   "totalFrames": 72,
   "durationSec": 3,
   "geoAnchor": {
-    "lat": 41.8903,
-    "lng": 12.49165,
-    "elevation": 26
+    "lat": 40.7484,
+    "lng": -73.9857,
+    "elevation": 15,
+    "landmarkName": "Midtown Manhattan"
   },
   "errorTarget": 0.5,
   "renderMode": "textured",
   "mesh": {
     "name": "Google3DTile_textured",
-    "vertexCount": 234679,
-    "triangleCount": 170802,
-    "submeshCount": 79,
+    "vertexCount": 341,
+    "triangleCount": 310,
+    "submeshCount": 1,
     "boundingBox": {
       "min": [
         -100,

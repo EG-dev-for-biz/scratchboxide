@@ -16,8 +16,17 @@ from .structure import Structure
 class World:
     """The central agentic procedural world director."""
 
-    def __init__(self, seed: int = 1337, units: str = "meters"):
-        self.seed = int(seed)
+    def __init__(self, seed: Any = 1337, units: str = "meters"):
+        if isinstance(seed, (int, float)):
+            self.seed = int(seed)
+        elif isinstance(seed, str):
+            try:
+                self.seed = int(seed)
+            except ValueError:
+                import zlib
+                self.seed = zlib.crc32(seed.encode("utf-8")) & 0x7fffffff
+        else:
+            self.seed = 1337
         self.units = str(units)
         self.terrains: List[Terrain] = []
         self.structures: List[Structure] = []
@@ -25,17 +34,29 @@ class World:
         self.scattered_meshes: List[Any] = []
         self._rng = random.Random(self.seed)
 
+    def add(self, entity: Any) -> Any:
+        """Add any standalone mesh, structure, or terrain to the world."""
+        if hasattr(entity, "mesh"):
+            self.standalone_meshes.append(entity.mesh)
+        elif isinstance(entity, Terrain):
+            self.terrains.append(entity)
+        elif isinstance(entity, Structure):
+            self.structures.append(entity)
+        else:
+            self.standalone_meshes.append(entity)
+        return entity
+
     def add_mesh(self, mesh: Any) -> Any:
         """Add any standalone mesh (building, prop, or custom asset) to the world."""
-        if hasattr(mesh, "mesh"):
-            self.standalone_meshes.append(mesh.mesh)
-        else:
-            self.standalone_meshes.append(mesh)
-        return mesh
+        return self.add(mesh)
 
     def add_asset(self, asset: Any) -> Any:
         """Alias for add_mesh."""
-        return self.add_mesh(asset)
+        return self.add(asset)
+
+    def build(self) -> bytes:
+        """Compiles the world directly into glTF 2.0 binary (.glb) in RAM."""
+        return self.compile_to_glb()
 
     def add_terrain(
         self,

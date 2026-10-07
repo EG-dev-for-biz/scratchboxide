@@ -71,6 +71,7 @@ export interface TileAtmosphereConfig {
   roughness?: number; // default 0.82
   metalness?: number; // default 0.02
   skyColor?: string; // default '#dce3eb'
+  fog?: boolean;
   fogExp2Density?: number; // default 0.0022
   exposure?: number; // default 1.15
   sunLight?: {

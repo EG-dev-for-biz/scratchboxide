@@ -140,6 +140,7 @@ interface GenerationContext {
 
 interface BackendStreamResult {
     usedBackend: boolean;
+    connectionError?: string;
     generatedArtifact: CanvasArtifact | undefined;
     finalResponseText: string;
     streamGroundingMetadata: GroundingMetadata | undefined;
@@ -355,6 +356,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
     const streamExecs: McpExecutionState[] = [];
     let streamQuestionCard: InteractiveQuestionCardData | undefined;
     let streamExecutionPlanCard: ExecutionPlanCardData | undefined;
+    let connectionError: string | undefined;
 
     try {
         const attachedSkillsContext: AttachedSkillContext[] = attachedSkillObjects.map(s => ({
@@ -474,28 +476,10 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                         }
                     }
 
-                    const is3DPrompt = hasExplicit3DDirective(promptText) || d.layoutMode === '3d' || d.activeArtifact?.type === '3d-scene' || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
-                    if (is3DPrompt && !isVideoTimelinePrompt) {
-                        const sceneData = art.data as Scene3DData;
-                        const hasGeometry = !!(sceneData?.customMeshes?.length ||
-                            sceneData?.pythonGenerator?.glbBase64 ||
-                            sceneData?.pythonGenerator?.sourceCode ||
-                            sceneData?.cppGenerator?.glbBase64 ||
-                            sceneData?.cppGenerator?.sourceCode ||
-                            sceneData?.splatUrl ||
-                            sceneData?.objects?.length);
-                        // Only synthesize a fallback if the artifact is not a 3D scene or has no geometry whatsoever
-                        if (art.type !== '3d-scene' || !hasGeometry) {
-                            const fallbackResult = synthesize3DFallback(promptText, lowerPromptText, activeArtifact, updatedMessages, undefined);
-                            if (fallbackResult.artifact) {
-                                art = fallbackResult.artifact;
-                            }
-                        }
-                    }
 
                     const isSandboxPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
                         /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
-                    if (isSandboxPrompt && !isVideoTimelinePrompt && !is3DPrompt && art.type !== 'live-code-sandbox') {
+                    if (isSandboxPrompt && !isVideoTimelinePrompt && art.type !== '3d-scene' && art.type !== 'live-code-sandbox') {
                         const fallbackResult = synthesizeSandboxFallback(promptText, activeArtifact);
                         if (fallbackResult.artifact) {
                             art = fallbackResult.artifact;
@@ -642,7 +626,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             signal
         );
     } catch (err: any) {
-        console.warn('Gemini backend streaming fallback to studio synthesis:', err?.message);
+        console.warn('Gemini backend streaming error:', err?.message);
+        connectionError = err?.message || 'Connection to backend failed';
         if (err?.message && (err.message.includes('Command failed') || err.message.includes('Error:') || err.message.includes('TS'))) {
             setActiveTerminalError({
                 command: 'Gemini AI Execution',
@@ -655,7 +640,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
         }
     }
     const effectiveUsedBackend = usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
-    return { usedBackend: effectiveUsedBackend, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
+    return { usedBackend: effectiveUsedBackend, connectionError, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
 }
 
 /** Step 4a — build the assistant message from a successful backend stream. */
@@ -788,40 +773,11 @@ async function streamLocalFallback(d: SendMessageDeps, ctx: GenerationContext, f
         setLiveSteps([...simulatedSteps]);
     }
 
-    // Step 1: context indexing (60ms)
-    await new Promise(r => setTimeout(r, 60));
-    if (signal.aborted) {
-        return undefined;
-    }
-    simulatedSteps[0].status = 'completed';
-    simulatedSteps[0].durationMs = 60;
-    simulatedSteps[0].durationFormatted = '60ms';
-    simulatedSteps[1].status = 'running';
-    if (activeSessionRef.current === targetSessionId) {
-        setLiveSteps([...simulatedSteps]);
-    }
-
-    // Step 2: synthesis (120ms)
-    await new Promise(r => setTimeout(r, 120));
-    if (signal.aborted) {
-        return undefined;
-    }
-    simulatedSteps[1].status = 'completed';
-    simulatedSteps[1].durationMs = 120;
-    simulatedSteps[1].durationFormatted = '120ms';
-    simulatedSteps[2].status = 'running';
-    if (activeSessionRef.current === targetSessionId) {
-        setLiveSteps([...simulatedSteps]);
-    }
-
-    // Step 3: verification (30ms)
-    await new Promise(r => setTimeout(r, 30));
-    if (signal.aborted) {
-        return undefined;
-    }
-    simulatedSteps[2].status = 'completed';
-    simulatedSteps[2].durationMs = 30;
-    simulatedSteps[2].durationFormatted = '30ms';
+    simulatedSteps.forEach(s => {
+        s.status = 'completed';
+        s.durationMs = 0;
+        s.durationFormatted = '0ms';
+    });
     if (activeSessionRef.current === targetSessionId) {
         setLiveSteps([...simulatedSteps]);
     }
@@ -1105,38 +1061,10 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                     depsRef.current.showToast(fb.toast?.text || `Synthesized Video NLE: ${fb.artifact.title}`, fb.toast?.icon || '🎬');
                 }
             }
-            const isSplatDirective = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(promptText);
-            const is3DDirective = isSplatDirective || hasExplicit3DDirective(promptText) || depsRef.current.layoutMode === '3d' || depsRef.current.activeArtifact?.type === '3d-scene' || /build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan/i.test(promptText);
-            if (is3DDirective && !isVideoTimelinePrompt) {
-                const currentArt = backend.generatedArtifact || depsRef.current.activeArtifact;
-                const sceneData = currentArt?.data as Scene3DData | undefined;
-                const hasGeometry = !!(sceneData?.customMeshes?.length ||
-                    sceneData?.pythonGenerator?.glbBase64 ||
-                    sceneData?.pythonGenerator?.sourceCode ||
-                    sceneData?.cppGenerator?.glbBase64 ||
-                    sceneData?.cppGenerator?.sourceCode ||
-                    sceneData?.splatUrl ||
-                    sceneData?.objects?.length);
-
-                // Only synthesize a client-side fallback if NO valid 3d scene with geometry was generated
-                if (!currentArt || currentArt.type !== '3d-scene' || !hasGeometry) {
-                    const fb = synthesize3DFallback(promptText, lowerPromptText, depsRef.current.activeArtifact, ctx.updatedMessages, undefined);
-                    if (fb.artifact) {
-                        backend.generatedArtifact = fb.artifact;
-                        if (fb.explanation && (!backend.finalResponseText || backend.finalResponseText.length < 50)) {
-                            backend.finalResponseText = fb.explanation;
-                        }
-                        const finalArt = backend.generatedArtifact;
-                        depsRef.current.setActiveArtifact(finalArt);
-                        depsRef.current.setLayoutMode('3d');
-                        depsRef.current.showToast(fb.toast?.text || `Updated 3D Scene: ${finalArt.title}`, fb.toast?.icon || '🪐');
-                    }
-                }
-            }
             const isSandboxCreationPrompt = /(?:create|build|generate|make|code|program|develop|prototype)\s+(?:me\s+)?(?:an?\s+)?(?:[\w-]+\s+){0,4}(?:app|application|web\s*app|tool|utility|tracker|dashboard|viewer|calculator|game|widget|simulator|playground|micro-studio|sandbox|ui|interface|prototype)\b/i.test(promptText) ||
                 /\b(?:code\s+sandbox|sandbox\s+code|runnable\s+prototype|react\s+sandbox|component\s+sandbox|app\s+sandbox|interactive\s+sandbox)\b/i.test(promptText);
 
-            if (isSandboxCreationPrompt && !isVideoTimelinePrompt && !is3DDirective) {
+            if (isSandboxCreationPrompt && !isVideoTimelinePrompt) {
                 const currentArt = backend.generatedArtifact;
                 if (!currentArt || currentArt.type !== 'live-code-sandbox') {
                     const fb = synthesizeSandboxFallback(promptText, depsRef.current.activeArtifact);
@@ -1149,6 +1077,14 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
                 }
             }
             finalAssistantMsg = finalizeBackendMessage(depsRef.current, ctx, backend);
+        } else if (backend.connectionError) {
+            finalAssistantMsg = {
+                id: `msg-${Date.now()}`,
+                sender: 'assistant',
+                text: `⚠️ **Scratchbox Backend Service Offline**\n\nUnable to connect to the backend server at \`http://127.0.0.1:3001\` (${backend.connectionError}).\n\nPlease ensure the dev server is running with network permissions (\`npm run dev\`).`,
+                timestamp: new Date().toLocaleTimeString()
+            };
+            depsRef.current.showToast(`Backend unreachable: ${backend.connectionError}`, '⚠️');
         } else {
             const latest = depsRef.current;
             const result = selectLocalFallback(latest, ctx);

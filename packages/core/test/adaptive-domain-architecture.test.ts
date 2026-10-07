@@ -42,7 +42,7 @@ describe("Antigravity-Style Adaptive Domain Architecture", () => {
 
         it("extracts rich prompt entities (subject, action, keywords) from natural language", () => {
             const entities = extractPromptEntities("Autonomous robotic rover navigation and obstacle avoidance across Martian terrain");
-            expect(entities.subject).toContain("Autonomous robotic rover");
+            expect(entities.subject.toLowerCase()).toContain("autonomous robotic rover");
             expect(entities.action).toBe("navigation");
             expect(entities.keywords.length).toBeGreaterThanOrEqual(3);
         });

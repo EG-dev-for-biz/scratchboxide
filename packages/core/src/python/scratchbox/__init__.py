@@ -517,21 +517,46 @@ if _native is not None and hasattr(_native, "geometry"):
     _geom.create_plane = create_plane
 
     _orig_create_box = getattr(_geom, "create_box", None)
-    def create_box(size=None, color=None, width=1.0, height=1.0, depth=1.0, **kwargs):
-        if size is not None:
-            if isinstance(size, (tuple, list)) and len(size) >= 3:
-                s = math.Vec3(float(size[0]), float(size[1]), float(size[2]))
-            elif isinstance(size, (int, float)):
-                v = float(size)
-                s = math.Vec3(v, v, v)
-            else:
-                s = size
+    def create_box(*args, **kwargs):
+        size = None
+        color = None
+        if len(args) == 3 and all(isinstance(a, (int, float)) for a in args):
+            s = math.Vec3(float(args[0]), float(args[1]), float(args[2]))
+        elif len(args) == 4 and all(isinstance(a, (int, float)) for a in args[:3]):
+            s = math.Vec3(float(args[0]), float(args[1]), float(args[2]))
+            color = args[3]
         else:
-            s = math.Vec3(float(width), float(height), float(depth))
+            if len(args) >= 1:
+                size = args[0]
+            if len(args) >= 2:
+                color = args[1]
+            if size is None:
+                size = kwargs.get("size")
+            if color is None:
+                color = kwargs.get("color")
+
+            if size is not None:
+                if isinstance(size, (tuple, list)) and len(size) >= 3:
+                    s = math.Vec3(float(size[0]), float(size[1]), float(size[2]))
+                elif isinstance(size, (int, float)):
+                    v = float(size)
+                    s = math.Vec3(v, v, v)
+                elif hasattr(size, "x") and hasattr(size, "y") and hasattr(size, "z"):
+                    s = size
+                else:
+                    s = size
+            else:
+                w = kwargs.get("width", 1.0)
+                h = kwargs.get("height", 1.0)
+                d = kwargs.get("depth", 1.0)
+                s = math.Vec3(float(w), float(h), float(d))
 
         if color is not None:
             if isinstance(color, (tuple, list)) and len(color) >= 3:
                 c = math.Vec4(float(color[0]), float(color[1]), float(color[2]), float(color[3]) if len(color) > 3 else 1.0)
+            elif isinstance(color, (int, float)):
+                val = float(color)
+                c = math.Vec4(val, val, val, 1.0)
             else:
                 c = color
         else:
@@ -888,6 +913,14 @@ if _native is not None and hasattr(_native, "io"):
         else:
             out_path = os.environ.get("OUTPUT_GLB_PATH", "output.glb")
             target = arg1
+
+        if hasattr(target, "compile_to_glb"):
+            return target.compile_to_glb(out_path)
+        if isinstance(target, (bytes, bytearray)):
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+            with open(out_path, "wb") as f:
+                f.write(target)
+            return out_path
 
         if isinstance(target, (list, tuple)):
             mesh_list = [getattr(m, "mesh", m) for m in target if m is not None]
