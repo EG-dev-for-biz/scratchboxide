@@ -515,160 +515,20 @@ int main(int argc, char** argv) {
         if (options.descriptor) {
             return this.synthesizeContinuousManifoldPbr(options.descriptor, options);
         }
-        const startTime = performance.now();
         const entry = this.resolveArchetype(options.archetype ?? 0);
-        const width = options.width ?? 512;
-        const height = options.height ?? 512;
-        const seed = options.seed ?? 1337;
+        const desc = this.getAnchorDescriptor(entry.archetypeId);
+        const res = await this.synthesizeContinuousManifoldPbr(desc, options);
+        res.archetypeId = entry.archetypeId;
+        res.archetypeKey = entry.key;
 
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbox_pbr_synth_'));
-        const outPrefix = path.join(tmpDir, 'tex');
-
-        const cppSource = `
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <cstdint>
-#include "scratchbox_pbr_50_library.hpp"
-
-using namespace scratchbox;
-
-int main(int argc, char** argv) {
-    if (argc < 6) {
-        std::cerr << "Usage: pbr_synth <archId> <w> <h> <seed> <outPrefix>" << std::endl;
-        return 1;
-    }
-    uint32_t archId = static_cast<uint32_t>(std::stoul(argv[1]));
-    int w = std::stoi(argv[2]);
-    int h = std::stoi(argv[3]);
-    uint32_t seed = static_cast<uint32_t>(std::stoul(argv[4]));
-    std::string outPrefix = argv[5];
-
-    auto pbr = pbr_texture::generatePbrMaterial(
-        static_cast<pbr_texture::PbrMaterialArchetype>(archId),
-        w,
-        h,
-        seed
-    );
-
-    auto dump = [](const std::string& p, const texture::ImageBuffer& b) {
-        std::ofstream out(p, std::ios::binary);
-        if (out.is_open() && !b.empty()) {
-            out.write(reinterpret_cast<const char*>(b.data.data()), b.data.size());
+        if (options.outputDir) {
+            fs.mkdirSync(options.outputDir, { recursive: true });
+            fs.writeFileSync(path.join(options.outputDir, `${entry.key}_albedo.raw`), res.albedoRgb);
+            fs.writeFileSync(path.join(options.outputDir, `${entry.key}_normal.raw`), res.normalRgb);
+            fs.writeFileSync(path.join(options.outputDir, `${entry.key}_orm.raw`), res.ormRgb);
         }
-    };
 
-    dump(outPrefix + "_albedo.raw", pbr.albedo);
-    dump(outPrefix + "_normal.raw", pbr.normal);
-    dump(outPrefix + "_roughness.raw", pbr.roughness);
-    dump(outPrefix + "_metallic.raw", pbr.metallic);
-    dump(outPrefix + "_ao.raw", pbr.ao);
-    dump(outPrefix + "_orm.raw", pbr.orm);
-    dump(outPrefix + "_height.raw", pbr.height);
-
-    std::cout << "{\\"success\\":true,\\"width\\":" << w << ",\\"height\\":" << h << "}" << std::endl;
-    return 0;
-}
-`;
-
-        try {
-            const compileRes = await this.compiler.compileSource(cppSource, {
-                outputDir: this.cacheDir,
-                outputBinaryName: 'pbr_texture_synth_runner',
-                optimization: '-O3'
-            });
-
-            if (!compileRes.success || !compileRes.binaryPath) {
-                throw new Error(`Failed to compile native PBR texture synthesizer: ${compileRes.compilerOutput}`);
-            }
-
-            const { stdout } = await execFileAsync(compileRes.binaryPath, [
-                entry.archetypeId.toString(),
-                width.toString(),
-                height.toString(),
-                seed.toString(),
-                outPrefix
-            ], {
-                timeout: 30000,
-                maxBuffer: 64 * 1024 * 1024
-            });
-
-            const parsed = JSON.parse(stdout.trim());
-            if (!parsed.success) {
-                throw new Error('Native C++20 texture synthesis returned non-success.');
-            }
-
-            // Read raw RGB buffers
-            const albedoRgb = fs.readFileSync(outPrefix + '_albedo.raw');
-            const normalRgb = fs.readFileSync(outPrefix + '_normal.raw');
-            const roughnessRgb = fs.readFileSync(outPrefix + '_roughness.raw');
-            const metallicRgb = fs.readFileSync(outPrefix + '_metallic.raw');
-            const aoRgb = fs.readFileSync(outPrefix + '_ao.raw');
-            const ormRgb = fs.readFileSync(outPrefix + '_orm.raw');
-            const heightRgb = fs.readFileSync(outPrefix + '_height.raw');
-
-            // Construct standard RGBA buffers for Three.js DataTexture compatibility
-            const totalPixels = width * height;
-            const albedoRgba = Buffer.alloc(totalPixels * 4);
-            const normalRgba = Buffer.alloc(totalPixels * 4);
-            const ormRgba = Buffer.alloc(totalPixels * 4);
-
-            for (let i = 0; i < totalPixels; i++) {
-                // Albedo RGBA
-                albedoRgba[i * 4 + 0] = albedoRgb[i * 3 + 0];
-                albedoRgba[i * 4 + 1] = albedoRgb[i * 3 + 1];
-                albedoRgba[i * 4 + 2] = albedoRgb[i * 3 + 2];
-                albedoRgba[i * 4 + 3] = 255;
-
-                // Normal RGBA
-                normalRgba[i * 4 + 0] = normalRgb[i * 3 + 0];
-                normalRgba[i * 4 + 1] = normalRgb[i * 3 + 1];
-                normalRgba[i * 4 + 2] = normalRgb[i * 3 + 2];
-                normalRgba[i * 4 + 3] = 255;
-
-                // ORM RGBA (R=AO, G=Roughness, B=Metallic, A=255)
-                ormRgba[i * 4 + 0] = ormRgb[i * 3 + 0];
-                ormRgba[i * 4 + 1] = ormRgb[i * 3 + 1];
-                ormRgba[i * 4 + 2] = ormRgb[i * 3 + 2];
-                ormRgba[i * 4 + 3] = 255;
-            }
-
-            // Optional destination save
-            if (options.outputDir) {
-                fs.mkdirSync(options.outputDir, { recursive: true });
-                fs.copyFileSync(outPrefix + '_albedo.raw', path.join(options.outputDir, `${entry.key}_albedo.raw`));
-                fs.copyFileSync(outPrefix + '_normal.raw', path.join(options.outputDir, `${entry.key}_normal.raw`));
-                fs.copyFileSync(outPrefix + '_orm.raw', path.join(options.outputDir, `${entry.key}_orm.raw`));
-            }
-
-            const durationMs = performance.now() - startTime;
-
-            return {
-                width,
-                height,
-                archetypeId: entry.archetypeId,
-                archetypeKey: entry.key,
-                albedoRgb,
-                normalRgb,
-                roughnessRgb,
-                metallicRgb,
-                aoRgb,
-                ormRgb,
-                heightRgb,
-                albedoRgba,
-                normalRgba,
-                ormRgba,
-                executionTimeMs: Math.round(durationMs)
-            };
-        } finally {
-            try {
-                if (fs.existsSync(tmpDir)) {
-                    fs.rmSync(tmpDir, { recursive: true, force: true });
-                }
-            } catch {
-                // Non-fatal cleanup
-            }
-        }
+        return res;
     }
 
     /**

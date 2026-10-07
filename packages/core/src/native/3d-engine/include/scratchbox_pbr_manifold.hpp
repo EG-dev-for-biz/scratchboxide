@@ -379,7 +379,8 @@ inline PbrTextureSet synthesizeManifoldPbrParallel(
                     pixelAlbedo.z = std::clamp(pixelAlbedo.z, 0.0f, 1.0f);
 
                     // Metallic synthesis
-                    float pixelMetallic = desc.conduction * (1.0f - blendFactor * 0.4f);
+                    float conductionAtten = (desc.conduction > 0.7f) ? 0.05f : 0.4f;
+                    float pixelMetallic = desc.conduction * (1.0f - blendFactor * conductionAtten);
                     pixelMetallic = std::clamp(pixelMetallic, 0.0f, 1.0f);
 
                     // Roughness modulation

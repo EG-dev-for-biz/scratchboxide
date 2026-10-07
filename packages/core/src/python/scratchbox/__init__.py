@@ -360,9 +360,32 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 _native.shaper.bend(self, m_ax, b_ax, float(angle_deg), float(radius))
             return self
 
-        def _mesh_bulge(self, center=(0.0, 0.0, 0.0), radius=1.0, strength=0.3, power=2.0):
+        def _mesh_bulge(self, *args, **kwargs):
             if _native and hasattr(_native, "shaper") and hasattr(_native.shaper, "bulge"):
-                c = math.Vec3(float(center[0]), float(center[1]), float(center[2])) if isinstance(center, (tuple, list)) else center
+                if len(args) == 2 and isinstance(args[0], (int, float)) and isinstance(args[1], (int, float)):
+                    c = math.Vec3(0.0, 0.0, 0.0)
+                    strength = float(args[0])
+                    radius = 1.0
+                    power = 2.0
+                elif len(args) == 1 and isinstance(args[0], (int, float)):
+                    c = math.Vec3(0.0, 0.0, 0.0)
+                    strength = float(args[0])
+                    radius = 1.0
+                    power = 2.0
+                else:
+                    center = args[0] if len(args) > 0 else kwargs.get("center", (0.0, 0.0, 0.0))
+                    radius = args[1] if len(args) > 1 else kwargs.get("radius", 1.0)
+                    strength = args[2] if len(args) > 2 else kwargs.get("strength", 0.3)
+                    power = args[3] if len(args) > 3 else kwargs.get("power", 2.0)
+                    if isinstance(center, (tuple, list)) and len(center) >= 3:
+                        c = math.Vec3(float(center[0]), float(center[1]), float(center[2]))
+                    elif isinstance(center, (int, float)):
+                        c = math.Vec3(0.0, 0.0, 0.0)
+                        strength = float(center)
+                    elif hasattr(center, "x") and hasattr(center, "y") and hasattr(center, "z"):
+                        c = center
+                    else:
+                        c = math.Vec3(0.0, 0.0, 0.0)
                 _native.shaper.bulge(self, c, float(radius), float(strength), float(power))
             return self
 
