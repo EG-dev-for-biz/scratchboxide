@@ -37,6 +37,7 @@ import {
 } from '../../browser/generative-canvas/services/adaptive-domain-engine';
 import { NativePythonRunnerService } from '../3d-engine/native-python-runner-service';
 import { TaskCapabilityResolver } from '../agent/task-capability-resolver';
+import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from './scene3d-clay-baseline';
 export { synthesizeContextualVideoTimeline };
 
 type CustomMesh = NonNullable<Scene3DData['customMeshes']>[number];
@@ -2877,7 +2878,9 @@ export function parseOrSynthesizeArtifact(
                             return pyGen;
                         })()
                     };
-                    data = scene3DData;
+                    data = isTopicChange
+                        ? applyClayFirstPassBaseline(scene3DData, prompt)
+                        : releaseClayOnMaterialRequest(scene3DData, prompt, active3DData?.renderMode);
                     parsed.title = effectiveTitle;
                 }
                 if (type === 'video-timeline') {

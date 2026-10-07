@@ -141,7 +141,8 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
-import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle } from './scene3d/types';
+import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
+import { applyClayRenderMode } from './scene3d/clayRenderMode';
 import type { VectorRoadmapConfig } from '../canvas-types';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
@@ -1112,7 +1113,8 @@ int main(int argc, char** argv) {
     }));
 
     // Rendering options
-    const [renderMode, setRenderMode] = React.useState<'wireframe' | 'solid' | 'shaded' | 'pbr'>('shaded');
+    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>('shaded');
+    const renderModeRef = useLatest(renderMode);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const initialWorldBranch = (data?.worldBranch && /car|vehicle|automobile/i.test(data?.title || '') && /city|urban|street/i.test(data.worldBranch))
         ? 'studio/showroom'
@@ -2548,6 +2550,7 @@ int main(int argc, char** argv) {
                         }
                     }
                 });
+                applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay');
                 const generatedSphere = new THREE.Box3().setFromObject(gltf.scene).getBoundingSphere(new THREE.Sphere());
                 if (Number.isFinite(generatedSphere.radius) && generatedSphere.radius > 0) {
                     setGeneratedContentRadius(Number(generatedSphere.radius.toPrecision(2)));
@@ -2766,6 +2769,7 @@ int main(int argc, char** argv) {
             terrainManager: terrainManagerRef.current,
             has3DTiles: tilesInputRef.current.has3DTiles
         });
+        applyClayRenderMode(Array.from(customMeshRegistryRef.current.values(), e => e.mesh), renderModeRef.current === 'clay');
         refreshEntities();
 
         const bounds = computeSceneGeometryBounds(stack.scene);
@@ -2777,6 +2781,15 @@ int main(int argc, char** argv) {
             stack.camera.lookAt(cameraTargetRef.current);
         }
     }, [customMeshesFingerprint, tilesFingerprint]);
+
+    React.useEffect(() => {
+        const scene = stackRef.current?.scene;
+        if (!scene) return;
+        applyClayRenderMode([
+            scene.getObjectByName('scratchbox-cpp-generated-root'),
+            ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh)
+        ], renderMode === 'clay');
+    }, [renderMode]);
 
     React.useEffect(() => {
         // Registry outlives individual syncs; free everything on unmount.

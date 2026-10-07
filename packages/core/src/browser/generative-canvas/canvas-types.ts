@@ -751,7 +751,7 @@ export interface Scene3DData {
     };
     parentCommitId?: string;
     objects?: Media4DObject[];
-    renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr';
+    renderMode?: 'wireframe' | 'solid' | 'shaded' | 'pbr' | 'clay';
     clayPreset?: 'warm-clay' | 'alabaster' | 'onyx' | 'studio-grey' | 'terracotta' | 'porcelain' | 'concrete' | string;
     restructuringTelemetry?: {
         vertices?: number;

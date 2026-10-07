@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import type { TerrainManager } from '../../services/TerrainManager';
 
-export type Scene3DRenderMode = 'wireframe' | 'solid' | 'shaded' | 'pbr';
+export type Scene3DRenderMode = 'wireframe' | 'solid' | 'shaded' | 'pbr' | 'clay';
 
 /** Long-lived three.js objects created exactly once per mounted viewport. */
 export interface RendererStack {

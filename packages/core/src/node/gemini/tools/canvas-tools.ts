@@ -15,6 +15,7 @@ import { NativeCppCompilerService } from '../../3d-engine/native-compiler-servic
 import { DirectDispatchOperatorEngine, type BatchCommand } from '../../../browser/generative-canvas/services/direct-dispatch-operator-engine';
 import { VisualVerificationService } from '../../visual-verification-service';
 import type { ToolDeclaration, ToolHandler } from './types';
+import { applyClayFirstPassBaseline, releaseClayOnMaterialRequest } from '../scene3d-clay-baseline';
 
 function asString(val: unknown): string {
     return typeof val === 'string' ? val : '';
@@ -375,6 +376,10 @@ sb.io.write_glb(OUTPUT_GLB_PATH, scene)
                 pythonGenerator: pyGenerator,
                 mesh: p.mesh || (contextual3D as any).mesh
             };
+            const active3D = _ctx?.request?.activeArtifact?.type === '3d-scene' ? _ctx.request.activeArtifact.data as any : undefined;
+            payload = active3D
+                ? releaseClayOnMaterialRequest(payload as any, prompt, active3D.renderMode)
+                : applyClayFirstPassBaseline(payload as any, prompt);
             title = p.title && p.title !== '4D Scene Workspace' ? p.title : (contextual3D.title || title);
             summary = p.subtitle || contextual3D.subtitle || summary;
         }
