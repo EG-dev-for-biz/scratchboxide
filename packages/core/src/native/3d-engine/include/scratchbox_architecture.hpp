@@ -41,7 +41,9 @@ enum class RoofType {
     FlatParapet,  // Flat roof enclosed by a raised perimeter parapet wall with coping
     Gable,        // Classic triangular dual-pitch roof with vertical gable end walls
     Hip,          // Quad-sloped roof with sloping ends and ridge line
-    Mansard       // Double-sloped curb roof with steep lower pitch and shallow upper pitch
+    Mansard,      // Double-sloped curb roof with steep lower pitch and shallow upper pitch
+    Dome,         // Continuous semi-ellipsoidal dome
+    BarrelVault   // Continuous cylindrical or parabolic barrel vault
 };
 
 struct BuildingMaterials {
@@ -107,9 +109,19 @@ struct BuildingConfig {
 
     RoofType roofType{RoofType::Hip};
     float roofPitchDegrees{32.0f};      // Slope angle for Gable, Hip, Mansard
+    float roofHeight{3.5f};             // Height of roof dome/mansard/vault (meters)
     float roofOverhang{0.65f};          // Eaves overhang beyond outer wall (meters)
     float parapetHeight{1.1f};          // Height of perimeter parapet for Flat roofs (meters)
     float parapetThickness{0.35f};      // Thickness of parapet wall coping (meters)
+
+    // Continuous Curvilinear & Parametric Manifold (ADA Continuous Invariant)
+    float curvature{0.0f};              // 0.0 = rectangular, 1.0 = superellipse/elliptical
+    float superellipseExponent{2.4f};   // Lamé exponent m (2.0 = ellipse, 2.4 = squircle, 10.0 = box)
+    float twistDegrees{0.0f};           // Helical rotation across height (degrees)
+    float taper{1.0f};                  // Crown scale ratio relative to base
+    float bulge{0.0f};                  // Mid-height barrel swelling / entasis ratio
+    int bayCount{0};                    // Radial window bays along curved perimeter (0 = auto)
+    bool bakeCurvatureAO{true};         // Automatic Laplace-Beltrami vertex baking
 
     BuildingMaterials materials{BuildingMaterials::createArchitecturalPalette()};
 };
@@ -121,11 +133,327 @@ struct BuildingConfig {
 class ProceduralBuildingGenerator {
 public:
     /**
+     * Generates a continuous curvilinear / parametric architectural building using
+     * superelliptic station lofts, elevation-varying axial twist, taper, bulge,
+     * surface-normal recessed fenestration bays, and automatic curvature-coupled AO shading.
+     */
+    static ScratchboxMesh generateCurvedBuilding(const BuildingConfig& cfg, const std::string& name = "CurvedBuilding") {
+        ScratchboxMesh mesh(name);
+        mesh.material = cfg.materials.wall;
+
+        float totalH = cfg.plinthHeight + cfg.groundFloorHeight + cfg.floorHeight * static_cast<float>(std::max(1, cfg.floorCount - 1));
+        float halfW = cfg.width * 0.5f;
+        float halfD = cfg.depth * 0.5f;
+        float avgR = std::sqrt(0.5f * (halfW * halfW + halfD * halfD));
+        float approxCircumference = 2.0f * PI * avgR;
+
+        int bays = cfg.bayCount > 0 ? cfg.bayCount : std::max(12, static_cast<int>(approxCircumference / std::max(1.0f, cfg.bayWidth)));
+        float m = cfg.superellipseExponent;
+        if (cfg.curvature > 0.001f && m >= 9.9f) {
+            m = 10.0f - 8.0f * std::clamp(cfg.curvature, 0.0f, 1.0f);
+        }
+
+        auto evalScale = [&](float t) -> float {
+            float sLinear = (1.0f - t) + t * cfg.taper;
+            float sBulge = 4.0f * cfg.bulge * t * (1.0f - t);
+            return std::max(0.05f, sLinear + sBulge);
+        };
+
+        auto evalTwistRad = [&](float t) -> float {
+            return cfg.twistDegrees * DEG_TO_RAD * t;
+        };
+
+        auto evalPoint = [&](float a, float b, float theta, float mVal, float y, float twistRad) -> Vec3 {
+            float rotTheta = theta + twistRad;
+            float cosT = std::cos(rotTheta);
+            float sinT = std::sin(rotTheta);
+            float sgnX = cosT >= 0.0f ? 1.0f : -1.0f;
+            float sgnZ = sinT >= 0.0f ? 1.0f : -1.0f;
+            float exp = 2.0f / std::max(0.05f, mVal);
+            float x = a * sgnX * std::pow(std::abs(cosT), exp);
+            float z = b * sgnZ * std::pow(std::abs(sinT), exp);
+            return Vec3(x, y, z);
+        };
+
+        auto evalNormal = [&](float a, float b, float theta, float mVal, float twistRad) -> Vec3 {
+            float rotTheta = theta + twistRad;
+            float cosT = std::cos(rotTheta);
+            float sinT = std::sin(rotTheta);
+            float sgnX = cosT >= 0.0f ? 1.0f : -1.0f;
+            float sgnZ = sinT >= 0.0f ? 1.0f : -1.0f;
+            float exp = 2.0f / std::max(0.05f, mVal);
+            float x = a * sgnX * std::pow(std::abs(cosT), exp);
+            float z = b * sgnZ * std::pow(std::abs(sinT), exp);
+
+            float gradX = (mVal / std::max(1e-4f, a)) * sgnX * std::pow(std::abs(x / std::max(1e-4f, a)), mVal - 1.0f);
+            float gradZ = (mVal / std::max(1e-4f, b)) * sgnZ * std::pow(std::abs(z / std::max(1e-4f, b)), mVal - 1.0f);
+            Vec3 n(gradX, 0.0f, gradZ);
+            float len = n.length();
+            return len > 1e-6f ? n / len : Vec3(cosT, 0.0f, sinT);
+        };
+
+        auto getStationPoint = [&](float t, float theta, float y, float rScale = 1.0f) -> Vec3 {
+            float s = evalScale(t) * rScale;
+            float tw = evalTwistRad(t);
+            return evalPoint(halfW * s, halfD * s, theta, m, y, tw);
+        };
+
+        auto getStationNormal = [&](float t, float theta) -> Vec3 {
+            float s = evalScale(t);
+            float tw = evalTwistRad(t);
+            return evalNormal(halfW * s, halfD * s, theta, m, tw);
+        };
+
+        // 1. Curved Plinth / Foundation Base
+        float plinthOffsetRatio = 1.0f + (cfg.plinthOffset / std::max(1.0f, avgR));
+        for (int i = 0; i < bays; ++i) {
+            float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+            float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+
+            Vec3 p0 = getStationPoint(0.0f, th0, 0.0f, plinthOffsetRatio);
+            Vec3 p1 = getStationPoint(0.0f, th1, 0.0f, plinthOffsetRatio);
+            Vec3 p2 = getStationPoint(0.0f, th1, cfg.plinthHeight, plinthOffsetRatio);
+            Vec3 p3 = getStationPoint(0.0f, th0, cfg.plinthHeight, plinthOffsetRatio);
+
+            Vec3 nMid = getStationNormal(0.0f, (th0 + th1) * 0.5f);
+            addQuad(mesh, p0, p1, p2, p3, nMid, cfg.materials.foundation.baseColorFactor);
+
+            // Plinth top horizontal reveal ledge stepping in to the building wall
+            Vec3 wBase0 = getStationPoint(0.0f, th0, cfg.plinthHeight, 1.0f);
+            Vec3 wBase1 = getStationPoint(0.0f, th1, cfg.plinthHeight, 1.0f);
+            addQuad(mesh, p3, p2, wBase1, wBase0, Vec3(0, 1, 0), cfg.materials.foundation.baseColorFactor * 0.9f);
+        }
+
+        // 2. Stories & Facades
+        float yCur = cfg.plinthHeight;
+        for (int floor = 0; floor < cfg.floorCount; ++floor) {
+            float fHeight = (floor == 0 ? cfg.groundFloorHeight : cfg.floorHeight);
+            float yNext = yCur + fHeight;
+            float t0 = yCur / totalH;
+            float t1 = yNext / totalH;
+
+            // Floor slab band (horizontal architectural ledge course)
+            float slabH = 0.28f;
+            float slabExtend = 1.0f + (0.08f / std::max(1.0f, avgR));
+            for (int i = 0; i < bays; ++i) {
+                float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+                float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+
+                Vec3 s0 = getStationPoint(t0, th0, yCur, slabExtend);
+                Vec3 s1 = getStationPoint(t0, th1, yCur, slabExtend);
+                Vec3 s2 = getStationPoint(t0, th1, yCur + slabH, slabExtend);
+                Vec3 s3 = getStationPoint(t0, th0, yCur + slabH, slabExtend);
+                Vec3 nMid = getStationNormal(t0, (th0 + th1) * 0.5f);
+
+                addQuad(mesh, s0, s1, s2, s3, nMid, cfg.materials.wall.baseColorFactor * 0.95f);
+            }
+
+            // Facade bays between floor slabs
+            float yWallBottom = yCur + slabH;
+            float ySill = yCur + cfg.sillHeight;
+            float yLintel = ySill + cfg.windowHeight;
+            if (yLintel > yNext - 0.2f) yLintel = yNext - 0.2f;
+
+            for (int i = 0; i < bays; ++i) {
+                float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+                float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+                float dTh = th1 - th0;
+
+                // Column pier left & right angle boundaries (18% pier, 64% window opening, 18% pier)
+                float thWin0 = th0 + 0.18f * dTh;
+                float thWin1 = th1 - 0.18f * dTh;
+
+                // Left Column Pier
+                Vec3 lp0 = getStationPoint(t0, th0, yWallBottom);
+                Vec3 lp1 = getStationPoint(t0, thWin0, yWallBottom);
+                Vec3 lp2 = getStationPoint(t1, thWin0, yNext);
+                Vec3 lp3 = getStationPoint(t1, th0, yNext);
+                Vec3 nL = getStationNormal(t0, (th0 + thWin0) * 0.5f);
+                addQuad(mesh, lp0, lp1, lp2, lp3, nL, cfg.materials.wall.baseColorFactor);
+
+                // Right Column Pier
+                Vec3 rp0 = getStationPoint(t0, thWin1, yWallBottom);
+                Vec3 rp1 = getStationPoint(t0, th1, yWallBottom);
+                Vec3 rp2 = getStationPoint(t1, th1, yNext);
+                Vec3 rp3 = getStationPoint(t1, thWin1, yNext);
+                Vec3 nR = getStationNormal(t0, (thWin1 + th1) * 0.5f);
+                addQuad(mesh, rp0, rp1, rp2, rp3, nR, cfg.materials.wall.baseColorFactor);
+
+                // Spandrel Wall below sill
+                Vec3 sp0 = getStationPoint(t0, thWin0, yWallBottom);
+                Vec3 sp1 = getStationPoint(t0, thWin1, yWallBottom);
+                Vec3 sp2 = getStationPoint(t0, thWin1, ySill);
+                Vec3 sp3 = getStationPoint(t0, thWin0, ySill);
+                Vec3 nMid = getStationNormal(t0, (thWin0 + thWin1) * 0.5f);
+                addQuad(mesh, sp0, sp1, sp2, sp3, nMid, cfg.materials.wall.baseColorFactor);
+
+                // Spandrel Wall above lintel
+                Vec3 top0 = getStationPoint(t1, thWin0, yLintel);
+                Vec3 top1 = getStationPoint(t1, thWin1, yLintel);
+                Vec3 top2 = getStationPoint(t1, thWin1, yNext);
+                Vec3 top3 = getStationPoint(t1, thWin0, yNext);
+                addQuad(mesh, top0, top1, top2, top3, nMid, cfg.materials.wall.baseColorFactor);
+
+                // Recessed Window Opening
+                Vec3 w0 = sp3; // bottom left outer
+                Vec3 w1 = sp2; // bottom right outer
+                Vec3 w2 = top1; // top right outer
+                Vec3 w3 = top0; // top left outer
+
+                Vec3 recessOff = nMid * (-cfg.windowRecessDepth);
+                Vec3 rw0 = w0 + recessOff;
+                Vec3 rw1 = w1 + recessOff;
+                Vec3 rw2 = w2 + recessOff;
+                Vec3 rw3 = w3 + recessOff;
+
+                // Window Sill Jamb (bottom horizontal reveal face)
+                addQuad(mesh, w0, w1, rw1, rw0, Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 0.9f);
+                // Window Lintel Soffit (top horizontal reveal face)
+                addQuad(mesh, rw3, rw2, w2, w3, Vec3(0, -1, 0), cfg.materials.wall.baseColorFactor * 0.7f);
+                // Window Left Jamb (vertical side reveal)
+                addQuad(mesh, w0, rw0, rw3, w3, nL, cfg.materials.wall.baseColorFactor * 0.8f);
+                // Window Right Jamb (vertical side reveal)
+                addQuad(mesh, rw1, w1, w2, rw2, nR, cfg.materials.wall.baseColorFactor * 0.8f);
+
+                // Recessed Window Glazing Panel
+                addQuad(mesh, rw0, rw1, rw2, rw3, nMid, cfg.materials.glass.baseColorFactor);
+
+                // Window Frame Mullion Cross (+ shape)
+                Vec3 mH0 = math::lerp(rw0, rw3, 0.5f);
+                Vec3 mH1 = math::lerp(rw1, rw2, 0.5f);
+                Vec3 mV0 = math::lerp(rw0, rw1, 0.5f);
+                Vec3 mV1 = math::lerp(rw3, rw2, 0.5f);
+
+                float mTh = cfg.mullionThickness * 0.5f;
+                Vec3 mullionFwd = nMid * 0.04f;
+                Vec3 hOff(0, mTh, 0);
+                Vec3 wDir = (w1 - w0).normalized() * mTh;
+
+                // Horizontal Mullion bar
+                addQuad(mesh, mH0 - hOff + mullionFwd, mH1 - hOff + mullionFwd,
+                              mH1 + hOff + mullionFwd, mH0 + hOff + mullionFwd,
+                              nMid, cfg.materials.frame.baseColorFactor);
+                // Vertical Mullion bar
+                addQuad(mesh, mV0 - wDir + mullionFwd, mV0 + wDir + mullionFwd,
+                              mV1 + wDir + mullionFwd, mV1 - wDir + mullionFwd,
+                              nMid, cfg.materials.frame.baseColorFactor);
+            }
+
+            yCur = yNext;
+        }
+
+        // 3. Curved Roof System
+        if (cfg.roofType == RoofType::Dome) {
+            int rings = 8;
+            float rH = cfg.roofHeight > 0.1f ? cfg.roofHeight : (std::min(halfW, halfD) * 0.65f);
+            for (int r = 0; r < rings; ++r) {
+                float phi0 = (PI * 0.5f) * static_cast<float>(r) / static_cast<float>(rings);
+                float phi1 = (PI * 0.5f) * static_cast<float>(r + 1) / static_cast<float>(rings);
+
+                float y0 = totalH + rH * std::sin(phi0);
+                float y1 = totalH + rH * std::sin(phi1);
+                float radScale0 = std::cos(phi0);
+                float radScale1 = std::cos(phi1);
+
+                for (int i = 0; i < bays; ++i) {
+                    float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+                    float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+
+                    Vec3 d0 = getStationPoint(1.0f, th0, y0, radScale0);
+                    Vec3 d1 = getStationPoint(1.0f, th1, y0, radScale0);
+                    Vec3 d2 = getStationPoint(1.0f, th1, y1, radScale1);
+                    Vec3 d3 = getStationPoint(1.0f, th0, y1, radScale1);
+
+                    Vec3 norm = (d0 + d1 + d2 + d3) * 0.25f - Vec3(0, totalH, 0);
+                    addQuad(mesh, d0, d1, d2, d3, norm.normalized(), cfg.materials.roof.baseColorFactor);
+                }
+            }
+        } else if (cfg.roofType == RoofType::Mansard) {
+            float rH = cfg.roofHeight > 0.1f ? cfg.roofHeight : 3.5f;
+            float yCurb = totalH + rH * 0.65f;
+            float yDeck = totalH + rH;
+            float curbScale = 0.70f;
+            float deckScale = 0.35f;
+
+            for (int i = 0; i < bays; ++i) {
+                float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+                float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+
+                // Lower steep slope
+                Vec3 p0 = getStationPoint(1.0f, th0, totalH, 1.0f);
+                Vec3 p1 = getStationPoint(1.0f, th1, totalH, 1.0f);
+                Vec3 p2 = getStationPoint(1.0f, th1, yCurb, curbScale);
+                Vec3 p3 = getStationPoint(1.0f, th0, yCurb, curbScale);
+                Vec3 nMid = getStationNormal(1.0f, (th0 + th1) * 0.5f);
+                addQuad(mesh, p0, p1, p2, p3, (nMid + Vec3(0, 0.6f, 0)).normalized(), cfg.materials.roof.baseColorFactor);
+
+                // Upper shallow slope
+                Vec3 q0 = p3;
+                Vec3 q1 = p2;
+                Vec3 q2 = getStationPoint(1.0f, th1, yDeck, deckScale);
+                Vec3 q3 = getStationPoint(1.0f, th0, yDeck, deckScale);
+                addQuad(mesh, q0, q1, q2, q3, (nMid + Vec3(0, 1.4f, 0)).normalized(), cfg.materials.roof.baseColorFactor * 0.9f);
+
+                // Center deck triangle fan / quads
+                Vec3 centerDeck(0, yDeck, 0);
+                addQuad(mesh, q3, q2, centerDeck, centerDeck, Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor * 0.8f);
+            }
+        } else {
+            // FlatParapet (Default): Perimeter parapet wall + flat roof deck
+            float ph = cfg.parapetHeight;
+            float pt = cfg.parapetThickness;
+            float innerScale = 1.0f - (pt / std::max(1.0f, avgR));
+
+            for (int i = 0; i < bays; ++i) {
+                float th0 = 2.0f * PI * static_cast<float>(i) / static_cast<float>(bays);
+                float th1 = 2.0f * PI * static_cast<float>(i + 1) / static_cast<float>(bays);
+
+                // Outer parapet wall
+                Vec3 op0 = getStationPoint(1.0f, th0, totalH, 1.0f);
+                Vec3 op1 = getStationPoint(1.0f, th1, totalH, 1.0f);
+                Vec3 op2 = getStationPoint(1.0f, th1, totalH + ph, 1.0f);
+                Vec3 op3 = getStationPoint(1.0f, th0, totalH + ph, 1.0f);
+                Vec3 nMid = getStationNormal(1.0f, (th0 + th1) * 0.5f);
+                addQuad(mesh, op0, op1, op2, op3, nMid, cfg.materials.wall.baseColorFactor);
+
+                // Parapet top coping cap
+                Vec3 ip2 = getStationPoint(1.0f, th1, totalH + ph, innerScale);
+                Vec3 ip3 = getStationPoint(1.0f, th0, totalH + ph, innerScale);
+                addQuad(mesh, op3, op2, ip2, ip3, Vec3(0, 1, 0), cfg.materials.wall.baseColorFactor * 1.05f);
+
+                // Inner parapet wall
+                Vec3 ip0 = getStationPoint(1.0f, th0, totalH, innerScale);
+                Vec3 ip1 = getStationPoint(1.0f, th1, totalH, innerScale);
+                addQuad(mesh, ip3, ip2, ip1, ip0, -nMid, cfg.materials.wall.baseColorFactor * 0.85f);
+
+                // Roof deck disc
+                Vec3 deckCenter(0, totalH, 0);
+                addQuad(mesh, ip0, ip1, deckCenter, deckCenter, Vec3(0, 1, 0), cfg.materials.roof.baseColorFactor);
+            }
+        }
+
+        mesh.recomputeSmoothNormals();
+        if (cfg.bakeCurvatureAO) {
+            mesh.computeCurvatureAO(0.72f);
+        }
+        mesh.recomputeBounds();
+        return mesh;
+    }
+
+    /**
      * Generates a complete, multi-story architectural building with facade bays,
      * recessed window reveals, mullions, ground entrance, plinth, and procedural roof.
+     * Routes automatically to curved generation when curvature or axial deformers are present.
      * Returns a unified ScratchboxMesh ready for glTF serialization.
      */
     static ScratchboxMesh generateBuilding(const BuildingConfig& config, const std::string& name = "ProceduralBuilding") {
+        if (config.curvature > 0.001f || std::abs(config.twistDegrees) > 0.001f ||
+            std::abs(config.taper - 1.0f) > 0.001f || std::abs(config.bulge) > 0.001f ||
+            config.superellipseExponent < 8.0f ||
+            config.roofType == RoofType::Dome || config.roofType == RoofType::BarrelVault) {
+            return generateCurvedBuilding(config, name);
+        }
+
         ScratchboxMesh mesh(name);
         mesh.material = config.materials.wall;
 
@@ -140,6 +468,10 @@ public:
 
         // 4. Procedural Roof System
         generateRoof(config, mesh);
+
+        if (config.bakeCurvatureAO) {
+            mesh.computeCurvatureAO(0.65f);
+        }
 
         mesh.recomputeBounds();
         return mesh;
@@ -506,6 +838,11 @@ private:
                 break;
             case RoofType::Mansard:
                 generateMansardRoof(cfg, totalH, mesh);
+                break;
+            case RoofType::Dome:
+            case RoofType::BarrelVault:
+            default:
+                generateFlatParapetRoof(cfg, totalH, mesh);
                 break;
         }
     }

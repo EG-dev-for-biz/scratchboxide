@@ -857,7 +857,9 @@ Direct Primitive & Procedural Helpers on \`sb\`:
 - \`sb.create_sphere(radius=..., segments=...)\`
 - \`sb.create_plane(width=..., height=..., seg_x=..., seg_y=...)\`
 - \`sb.geometry.create_catenary_cable(start=(x,y,z), end=(x,y,z), sag=..., radius=...)\`
-- \`sb.create_building(width=..., depth=..., floors=..., roof='flat'|'hip'|'mansard'|'gable')\`
+- \`sb.create_building(width=..., depth=..., floors=..., curvature=0.0..1.0, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='flat'|'hip'|'mansard'|'gable'|'dome'|'vault', bake_curvature_ao=True)\`
+- \`sb.create_curved_building(width=..., depth=..., floors=..., curvature=0.85, superellipse_exponent=2.4, twist_degrees=..., taper=..., bulge=..., roof='dome')\`
+- \`sb.create_tower(width=..., depth=..., floors=12, twist_degrees=45.0, taper=0.7, bulge=0.08, roof='flat')\`
 - \`sb.create_tree(attractor_count=..., crown_center=(x, y, z), crown_extents=(ex, ey, ez))\`
 - \`mesh.taper(factor=..., axis=0|1|2)\`, \`mesh.twist(angle_deg=..., axis=0|1|2)\`, \`mesh.bend(angle_deg=..., radius=...)\`, \`mesh.bulge(center=..., radius=..., strength=...)\`, \`mesh.displace(freq=..., amp=...)\`
 - \`mesh.translate(x, y, z)\`, \`mesh.rotate_x(rad)\`, \`mesh.rotate_y(rad)\`, \`mesh.rotate_z(rad)\`, \`mesh.scale(s)\`

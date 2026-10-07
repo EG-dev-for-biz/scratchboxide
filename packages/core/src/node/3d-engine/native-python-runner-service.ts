@@ -165,7 +165,7 @@ export class NativePythonRunnerService {
 
         try {
             await execAsync(
-                `cmake -B "${buildDir}" -S "${engineDir}" -DPython_EXECUTABLE="${this.pythonExecutable}" && cmake --build "${buildDir}" -j8`,
+                `cmake -B "${buildDir}" -S "${engineDir}" -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="${this.pythonExecutable}" && cmake --build "${buildDir}" -j8`,
                 { cwd: engineDir, timeout: 120000 }
             );
             this.moduleDirectory = buildDir;

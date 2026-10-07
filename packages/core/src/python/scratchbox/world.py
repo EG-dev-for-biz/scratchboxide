@@ -82,7 +82,17 @@ class World:
                 str(archetype),
                 float(domain_warp_scale),
                 int(hydraulic_erosion_steps),
-                int(self.seed)
+                int(self.seed),
+                float(kwargs.get("macro_slope_x", 0.0)),
+                float(kwargs.get("macro_slope_z", 0.0)),
+                float(kwargs.get("warp_freq", 0.0)),
+                int(kwargs.get("warp_octaves", 0)),
+                float(kwargs.get("content_scale", 0.0)),
+                float(kwargs.get("content_freq", 0.0)),
+                float(kwargs.get("strata_dune_scale", 0.0)),
+                float(kwargs.get("strata_dune_freq", 0.0)),
+                float(kwargs.get("slope_scale", 0.0)),
+                float(kwargs.get("suppressing_param", 0.0)),
             )
             terrain = Terrain(
                 native_surface,
@@ -92,10 +102,10 @@ class World:
                 hydraulic_erosion_steps=hydraulic_erosion_steps
             )
         else:
-            # Fallback using geometry plane with noise
-            geom = scratchbox_native.geometry
-            mesh = geom.ScratchboxMesh.createPlane(float(extents[0]), float(extents[1]), int(resolution), int(resolution))
-            terrain = Terrain(mesh, extents, archetype, domain_warp_scale, hydraulic_erosion_steps)
+            raise RuntimeError(
+                "Native geological terrain synthesizer scratchbox_native.core.generate_geological_terrain is required. "
+                "Silent fallback to flat primitives is prohibited under ADA Tier-0 ban."
+            )
 
         # Apply any procedural feature kwargs (e.g. caldera depression, height scaling)
         features = kwargs.get("features", [])
@@ -175,10 +185,9 @@ class World:
             )
 
         if mesh is None:
-            # Fallback box
-            geom = scratchbox_native.geometry
-            mesh = geom.ScratchboxMesh.createBox(
-                scratchbox_native.math.Vec3(float(footprint_width), float(column_height + plinth_height), float(footprint_length))
+            raise RuntimeError(
+                f"Structure generation failed for archetype '{archetype}'. "
+                "Silent fallback to flat box primitives is prohibited under ADA Tier-0 ban."
             )
 
         structure = Structure(

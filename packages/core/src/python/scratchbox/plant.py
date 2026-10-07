@@ -72,5 +72,52 @@ class PlantPreset:
             return res.get_combined("DecayingNurseLog")
         raise RuntimeError("Native plant module scratchbox_native.plant is required")
 
-# Alias Flora
+    @classmethod
+    def create_vegetation(
+        cls,
+        pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        height: float = 12.0,
+        attractor_count: int = 120,
+        crown_radius: float = 3.0,
+        branch_step_length: float = 0.25,
+        clear_trunk_height: float = 2.0,
+        base_radius: float = 0.25,
+        tip_radius: float = 0.03,
+        perception_radius: float = 2.0,
+        kill_radius: float = 0.5,
+        generate_leaves: bool = True,
+        use_detailed_leaves: bool = True,
+        leaf_density: Optional[float] = None,
+        name: str = "AdaptiveVegetation",
+        **kwargs
+    ) -> Any:
+        """
+        Creates open-domain continuous botanical flora or extraterrestrial vegetation
+        adhering to Runions space colonization and Da Vinci pipe conservation.
+        Satisfies ADA Pillar 1 (The Alien Planet Test).
+        """
+        import scratchbox as sb
+        crown_y = pos[1] + clear_trunk_height + max(1.0, (height - clear_trunk_height)) * 0.5
+        crown_h = max(1.0, (height - clear_trunk_height)) * 0.5
+        return sb.create_tree(
+            attractor_count=attractor_count,
+            crown_center=(pos[0], crown_y, pos[2]),
+            crown_extents=(crown_radius, crown_h, crown_radius),
+            root_anchor=pos,
+            perception_radius=perception_radius,
+            kill_radius=kill_radius,
+            branch_step_length=branch_step_length,
+            clear_trunk_height=clear_trunk_height,
+            base_radius=base_radius,
+            tip_radius=tip_radius,
+            generate_leaves=generate_leaves,
+            use_detailed_leaves=use_detailed_leaves,
+            leaf_density=leaf_density,
+            name=name,
+            **kwargs
+        )
+
+# Module-level alias & export
 Flora = PlantPreset
+create_vegetation = PlantPreset.create_vegetation
+

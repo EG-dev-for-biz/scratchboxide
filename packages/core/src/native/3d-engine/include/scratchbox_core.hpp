@@ -55,6 +55,18 @@ struct TerrainOptions {
     float domainWarpScale{1.85f};
     int hydraulicErosionSteps{35};
     uint32_t seed{1337};
+
+    // Continuous physical parameters (ADA Pillar 3 Invariant)
+    float macroSlopeX{0.0f};
+    float macroSlopeZ{0.0f};
+    float warpFreq{0.0f};
+    int warpOctaves{0};
+    float contentScale{0.0f};
+    float contentFreq{0.0f};
+    float strataDuneScale{0.0f};
+    float strataDuneFreq{0.0f};
+    float slopeScale{0.0f};
+    float suppressingParam{0.0f};
 };
 
 struct TerrainSurface {

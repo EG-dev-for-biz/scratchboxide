@@ -30,7 +30,7 @@ except ImportError:
 from .world import World
 from .terrain import Terrain
 from .structure import Structure
-from .plant import PlantPreset, Flora
+from .plant import PlantPreset, Flora, create_vegetation
 
 # Classical Roman Orders
 RomanOrder = None
@@ -444,6 +444,14 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
                 _orig_bake_cavity_ao(self, float(intensity))
             return self
 
+        _orig_compute_curvature_ao = getattr(_NativeMesh, "compute_curvature_ao", None)
+        def _mesh_compute_curvature_ao(self, intensity=0.65):
+            if _orig_compute_curvature_ao:
+                _orig_compute_curvature_ao(self, float(intensity))
+            elif hasattr(self, "bake_cavity_ao"):
+                self.bake_cavity_ao(intensity)
+            return self
+
         def _mesh_slice_by_plane(self, plane_point=(0.0, 0.0, 0.0), plane_normal=(0.0, 1.0, 0.0), keep_positive=True, cap_cut=True):
             if _orig_slice_by_plane:
                 pp = math.Vec3(float(plane_point[0]), float(plane_point[1]), float(plane_point[2])) if isinstance(plane_point, (tuple, list)) else plane_point
@@ -495,6 +503,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _NativeMesh.fill_holes = _mesh_fill_holes
         _NativeMesh.isotropic_remesh = _mesh_isotropic_remesh
         _NativeMesh.bake_cavity_ao = _mesh_bake_cavity_ao
+        _NativeMesh.compute_curvature_ao = _mesh_compute_curvature_ao
+        _NativeMesh.bake_curvature_ao = _mesh_compute_curvature_ao
         _NativeMesh.slice_by_plane = _mesh_slice_by_plane
         _NativeMesh.slice = _mesh_slice_by_plane
         _NativeMesh.clean = _mesh_clean
@@ -839,22 +849,31 @@ class _LayoutModule:
             self.extents = (float(extents[0]), float(extents[1]), float(extents[2])) if isinstance(extents, (tuple, list)) else (10.0, 10.0, 10.0)
             self.center = (float(center[0]), float(center[1]), float(center[2])) if isinstance(center, (tuple, list)) else (0.0, 0.0, 0.0)
 
-        def get_socket(self, name: str):
+        def get_socket(self, target: Any):
             cx, cy, cz = self.center
             ex, ey, ez = self.extents
             hx, hy, hz = ex * 0.5, ey * 0.5, ez * 0.5
-            nl = str(name).lower()
-            if any(k in nl for k in ("ground", "base", "bottom", "foundation", "floor")):
+
+            # 1. Continuous 3D vector coordinates (u, v, w) in [-1.0, 1.0] (ADA Pillar 3 Invariant)
+            if hasattr(target, "x") and hasattr(target, "y") and hasattr(target, "z"):
+                return math.Vec3(cx + float(target.x) * hx, cy + float(target.y) * hy, cz + float(target.z) * hz)
+            if isinstance(target, (tuple, list)) and len(target) >= 3:
+                u, v, w = float(target[0]), float(target[1]), float(target[2])
+                return math.Vec3(cx + u * hx, cy + v * hy, cz + w * hz)
+
+            # 2. Continuous axis notation or open-domain directional string lookup
+            nl = str(target).lower().strip()
+            if any(k in nl for k in ("ground", "base", "bottom", "foundation", "floor", "-y", "down")):
                 return math.Vec3(cx, cy - hy, cz)
-            elif any(k in nl for k in ("roof", "crown", "top", "summit", "apex")):
+            elif any(k in nl for k in ("roof", "crown", "top", "summit", "apex", "+y", "up")):
                 return math.Vec3(cx, cy + hy, cz)
-            elif any(k in nl for k in ("left", "port", "west", "wing_l")):
+            elif any(k in nl for k in ("left", "port", "west", "wing_l", "-x")):
                 return math.Vec3(cx - hx, cy, cz)
-            elif any(k in nl for k in ("right", "starboard", "east", "wing_r")):
+            elif any(k in nl for k in ("right", "starboard", "east", "wing_r", "+x")):
                 return math.Vec3(cx + hx, cy, cz)
-            elif any(k in nl for k in ("front", "bow", "nose", "north", "fore")):
+            elif any(k in nl for k in ("front", "bow", "nose", "north", "fore", "+z")):
                 return math.Vec3(cx, cy, cz + hz)
-            elif any(k in nl for k in ("back", "rear", "stern", "aft", "south", "tail")):
+            elif any(k in nl for k in ("back", "rear", "stern", "aft", "south", "tail", "-z")):
                 return math.Vec3(cx, cy, cz - hz)
             return math.Vec3(cx, cy, cz)
 
@@ -932,22 +951,22 @@ def create_building(
     roof_overhang: float = 0.4,
     roof_pitch_degrees: float = 55.0,
     parapet_height: float = 0.8,
+    curvature: float = 0.0,
+    superellipse_exponent: Optional[float] = None,
+    twist_degrees: float = 0.0,
+    taper: float = 1.0,
+    bulge: float = 0.0,
+    bay_count: Optional[int] = None,
+    bake_curvature_ao: bool = True,
     name: str = "ProceduralBuilding",
     **kwargs
 ) -> Any:
     """
-    Constructs multi-story procedural architecture with rhythmic fenestration and modeled roofs.
+    Constructs multi-story procedural architecture with rhythmic fenestration,
+    recessed reveals, continuous compound curvature manifolds, and modeled roofs.
     """
     if _native is None or not hasattr(_native, "architecture"):
         raise RuntimeError("Native 3D architecture module scratchbox_native.architecture is required")
-
-    # Support continuous dimensional parameters (Alien Planet Test)
-    archetype_str = str(kwargs.get("archetype", "")).lower()
-    if "dome" in archetype_str:
-        rad = float(kwargs.get("radius", max(width, depth) * 0.5))
-        dome_mesh = create_sphere(radius=rad, segments=32)
-        dome_mesh.name = name or "GeodesicDome"
-        return dome_mesh
 
     cfg = _native.architecture.BuildingConfig()
     cfg.width = float(width)
@@ -974,14 +993,34 @@ def create_building(
     cfg.window_width = float(window_width)
     cfg.window_height = float(window_height)
     cfg.window_recess_depth = float(window_recess_depth)
+    cfg.roof_height = float(kwargs.get("roof_height", roof_height))
     cfg.roof_pitch_degrees = float(roof_pitch_degrees)
     cfg.roof_overhang = float(roof_overhang)
     cfg.parapet_height = float(parapet_height)
 
+    # Continuous Curvilinear & Parametric Manifold (ADA Continuous Invariant)
+    curv_val = float(kwargs.get("curvature", curvature))
+    cfg.curvature = curv_val
+    if superellipse_exponent is not None or "superellipse_exponent" in kwargs:
+        cfg.superellipse_exponent = float(kwargs.get("superellipse_exponent", superellipse_exponent if superellipse_exponent is not None else 2.4))
+    elif curv_val > 0.001:
+        cfg.superellipse_exponent = max(1.8, 10.0 - 7.6 * min(1.0, curv_val))
+
+    cfg.twist_degrees = float(kwargs.get("twist_degrees", kwargs.get("twist", twist_degrees)))
+    cfg.taper = float(kwargs.get("taper", taper))
+    cfg.bulge = float(kwargs.get("bulge", bulge))
+    if bay_count is not None or "bay_count" in kwargs:
+        cfg.bay_count = int(kwargs.get("bay_count", bay_count if bay_count is not None else 0))
+    cfg.bake_curvature_ao = bool(kwargs.get("bake_curvature_ao", bake_curvature_ao))
+
     RoofType = _native.architecture.RoofType
     if isinstance(roof, str):
         r = roof.lower().strip()
-        if "mansard" in r:
+        if "dome" in r:
+            cfg.roof_type = RoofType.Dome
+        elif "vault" in r:
+            cfg.roof_type = RoofType.BarrelVault
+        elif "mansard" in r:
             cfg.roof_type = RoofType.Mansard
         elif "hip" in r:
             cfg.roof_type = RoofType.Hip
@@ -997,6 +1036,73 @@ def create_building(
         cfg.roof_type = RoofType.Mansard
 
     return _native.architecture.generate_building(cfg, name)
+
+def create_curved_building(
+    width: float = 18.0,
+    depth: float = 18.0,
+    floors: int = 6,
+    curvature: float = 0.85,
+    superellipse_exponent: float = 2.4,
+    twist_degrees: float = 0.0,
+    taper: float = 0.85,
+    bulge: float = 0.12,
+    roof: str = "dome",
+    roof_height: float = 4.0,
+    bake_curvature_ao: bool = True,
+    name: str = "CurvedBuilding",
+    **kwargs
+) -> Any:
+    """
+    Constructs a sculptural curved building using superelliptic floorplate lofts,
+    continuous elevation scaling (taper/bulge), and automatic curvature-coupled AO.
+    """
+    return create_building(
+        width=width,
+        depth=depth,
+        floors=floors,
+        curvature=curvature,
+        superellipse_exponent=superellipse_exponent,
+        twist_degrees=twist_degrees,
+        taper=taper,
+        bulge=bulge,
+        roof=roof,
+        roof_height=roof_height,
+        bake_curvature_ao=bake_curvature_ao,
+        name=name,
+        **kwargs
+    )
+
+def create_tower(
+    width: float = 16.0,
+    depth: float = 16.0,
+    floors: int = 14,
+    twist_degrees: float = 45.0,
+    taper: float = 0.70,
+    bulge: float = 0.08,
+    superellipse_exponent: float = 2.6,
+    roof: str = "flat",
+    bake_curvature_ao: bool = True,
+    name: str = "TwistingTower",
+    **kwargs
+) -> Any:
+    """
+    Constructs a soaring parametric skyscraper tower with continuous helical twist,
+    entasis taper, and surface-normal recessed fenestration bays.
+    """
+    return create_curved_building(
+        width=width,
+        depth=depth,
+        floors=floors,
+        curvature=0.9,
+        superellipse_exponent=superellipse_exponent,
+        twist_degrees=twist_degrees,
+        taper=taper,
+        bulge=bulge,
+        roof=roof,
+        bake_curvature_ao=bake_curvature_ao,
+        name=name,
+        **kwargs
+    )
 
 def create_tree(
     attractor_count: int = 120,
@@ -1144,6 +1250,17 @@ if _native is not None and hasattr(_native, "io"):
         raise RuntimeError("Native io.write_glb not available")
 
     def export_glb(arg1, arg2=None):
+        if arg2 is None and not isinstance(arg1, str):
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".glb", delete=False) as tf:
+                tmp_path = tf.name
+            try:
+                write_glb(tmp_path, arg1)
+                with open(tmp_path, "rb") as f:
+                    return f.read()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
         return write_glb(arg1, arg2)
 
     _native.io.write_glb = write_glb
@@ -1182,7 +1299,10 @@ __all__ = [
     "RomanOrder",
     "PlantPreset",
     "Flora",
+    "create_vegetation",
     "create_building",
+    "create_curved_building",
+    "create_tower",
     "create_tree",
     "create_studio_pedestal",
     "create_cylinder",

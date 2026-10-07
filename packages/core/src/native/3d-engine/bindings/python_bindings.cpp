@@ -32,6 +32,7 @@ using namespace scratchbox::sb_archi;
 using namespace scratchbox::core;
 
 NB_MODULE(scratchbox_native, m) {
+    nb::set_leak_warnings(false);
     m.doc() = "Scratchbox Native C++20 3D Engine Python Bindings (powered by nanobind)";
 
     // Classical Roman Orders
@@ -250,7 +251,10 @@ NB_MODULE(scratchbox_native, m) {
         .def("apply_material", [](ScratchboxMesh& self, const PbrMaterial& mat) {
             self.material = mat;
         }, "material"_a)
-        .def("compute_curvature_ao", &ScratchboxMesh::computeCurvatureAO, "intensity"_a = 0.6f)
+        .def("compute_curvature_ao", [](ScratchboxMesh& self, float intensity) -> ScratchboxMesh& {
+            self.computeCurvatureAO(intensity);
+            return self;
+        }, "intensity"_a = 0.6f)
         .def("apply_procedural_weathering", &ScratchboxMesh::applyProceduralWeathering, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
         .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) {
             math::FastNoise3D noise(42);
@@ -443,7 +447,9 @@ NB_MODULE(scratchbox_native, m) {
         .value("FlatParapet", RoofType::FlatParapet)
         .value("Gable", RoofType::Gable)
         .value("Hip", RoofType::Hip)
-        .value("Mansard", RoofType::Mansard);
+        .value("Mansard", RoofType::Mansard)
+        .value("Dome", RoofType::Dome)
+        .value("BarrelVault", RoofType::BarrelVault);
 
     nb::class_<BuildingConfig>(m_arch, "BuildingConfig")
         .def(nb::init<>())
@@ -459,12 +465,24 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("window_recess_depth", &BuildingConfig::windowRecessDepth)
         .def_rw("roof_type", &BuildingConfig::roofType)
         .def_rw("roof_pitch_degrees", &BuildingConfig::roofPitchDegrees)
+        .def_rw("roof_height", &BuildingConfig::roofHeight)
         .def_rw("roof_overhang", &BuildingConfig::roofOverhang)
-        .def_rw("parapet_height", &BuildingConfig::parapetHeight);
+        .def_rw("parapet_height", &BuildingConfig::parapetHeight)
+        .def_rw("curvature", &BuildingConfig::curvature)
+        .def_rw("superellipse_exponent", &BuildingConfig::superellipseExponent)
+        .def_rw("twist_degrees", &BuildingConfig::twistDegrees)
+        .def_rw("taper", &BuildingConfig::taper)
+        .def_rw("bulge", &BuildingConfig::bulge)
+        .def_rw("bay_count", &BuildingConfig::bayCount)
+        .def_rw("bake_curvature_ao", &BuildingConfig::bakeCurvatureAO);
 
     m_arch.def("generate_building", [](const BuildingConfig& config, const std::string& name) {
         return ProceduralBuildingGenerator::generateBuilding(config, name);
     }, "config"_a, "name"_a = "ProceduralBuilding");
+
+    m_arch.def("generate_curved_building", [](const BuildingConfig& config, const std::string& name) {
+        return ProceduralBuildingGenerator::generateCurvedBuilding(config, name);
+    }, "config"_a, "name"_a = "CurvedBuilding");
 
     m_arch.attr("RomanOrder") = m.attr("RomanOrder");
 
@@ -815,7 +833,17 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("archetype", &core::TerrainOptions::archetype)
         .def_rw("domain_warp_scale", &core::TerrainOptions::domainWarpScale)
         .def_rw("hydraulic_erosion_steps", &core::TerrainOptions::hydraulicErosionSteps)
-        .def_rw("seed", &core::TerrainOptions::seed);
+        .def_rw("seed", &core::TerrainOptions::seed)
+        .def_rw("macro_slope_x", &core::TerrainOptions::macroSlopeX)
+        .def_rw("macro_slope_z", &core::TerrainOptions::macroSlopeZ)
+        .def_rw("warp_freq", &core::TerrainOptions::warpFreq)
+        .def_rw("warp_octaves", &core::TerrainOptions::warpOctaves)
+        .def_rw("content_scale", &core::TerrainOptions::contentScale)
+        .def_rw("content_freq", &core::TerrainOptions::contentFreq)
+        .def_rw("strata_dune_scale", &core::TerrainOptions::strataDuneScale)
+        .def_rw("strata_dune_freq", &core::TerrainOptions::strataDuneFreq)
+        .def_rw("slope_scale", &core::TerrainOptions::slopeScale)
+        .def_rw("suppressing_param", &core::TerrainOptions::suppressingParam);
 
     nb::class_<core::TerrainSurface>(m_core, "TerrainSurface")
         .def_rw("mesh", &core::TerrainSurface::mesh)
@@ -826,7 +854,12 @@ NB_MODULE(scratchbox_native, m) {
     m_core.def("generate_geological_terrain", [](
         float extent_x, float extent_z, int resolution,
         const std::string& archetype, float domain_warp_scale,
-        int hydraulic_erosion_steps, uint32_t seed
+        int hydraulic_erosion_steps, uint32_t seed,
+        float macro_slope_x, float macro_slope_z,
+        float warp_freq, int warp_octaves,
+        float content_scale, float content_freq,
+        float strata_dune_scale, float strata_dune_freq,
+        float slope_scale, float suppressing_param
     ) {
         core::TerrainOptions opts;
         opts.extentX = extent_x;
@@ -836,11 +869,26 @@ NB_MODULE(scratchbox_native, m) {
         opts.domainWarpScale = domain_warp_scale;
         opts.hydraulicErosionSteps = hydraulic_erosion_steps;
         opts.seed = seed;
+        opts.macroSlopeX = macro_slope_x;
+        opts.macroSlopeZ = macro_slope_z;
+        opts.warpFreq = warp_freq;
+        opts.warpOctaves = warp_octaves;
+        opts.contentScale = content_scale;
+        opts.contentFreq = content_freq;
+        opts.strataDuneScale = strata_dune_scale;
+        opts.strataDuneFreq = strata_dune_freq;
+        opts.slopeScale = slope_scale;
+        opts.suppressingParam = suppressing_param;
         return core::generateGeologicalTerrain(opts);
     }, "extent_x"_a = 250.0f, "extent_z"_a = 250.0f, "resolution"_a = 160,
        "archetype"_a = "alpine_karst", "domain_warp_scale"_a = 1.85f,
        "hydraulic_erosion_steps"_a = 35, "seed"_a = 1337,
-       "Synthesizes domain-warped terrain with hydraulic sediment and moisture tracking");
+       "macro_slope_x"_a = 0.0f, "macro_slope_z"_a = 0.0f,
+       "warp_freq"_a = 0.0f, "warp_octaves"_a = 0,
+       "content_scale"_a = 0.0f, "content_freq"_a = 0.0f,
+       "strata_dune_scale"_a = 0.0f, "strata_dune_freq"_a = 0.0f,
+       "slope_scale"_a = 0.0f, "suppressing_param"_a = 0.0f,
+       "Synthesizes domain-warped terrain with continuous physical parameters or hydraulic sediment tracking");
 
     nb::class_<core::TempleOptions>(m_core, "TempleOptions")
         .def(nb::init<>())

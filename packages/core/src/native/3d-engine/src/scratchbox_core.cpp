@@ -30,7 +30,19 @@ TerrainSurface generateGeologicalTerrain(const TerrainOptions& opts) {
     cfg.seed = opts.seed;
     cfg.warpScale = opts.domainWarpScale;
 
-    if (opts.archetype == "alpine_karst" || opts.archetype.find("karst") != std::string::npos || opts.archetype.find("alpine") != std::string::npos) {
+    // ADA Pillar 3 Invariant: Read continuous physical fields first if specified
+    if (opts.warpFreq > 0.0f || opts.contentScale > 0.0f || opts.strataDuneScale > 0.0f) {
+        cfg.macroSlopeX = opts.macroSlopeX != 0.0f ? opts.macroSlopeX : -0.015f;
+        cfg.macroSlopeZ = opts.macroSlopeZ != 0.0f ? opts.macroSlopeZ : -0.020f;
+        cfg.warpFreq = opts.warpFreq > 0.0f ? opts.warpFreq : 0.065f;
+        cfg.warpOctaves = opts.warpOctaves > 0 ? opts.warpOctaves : 3;
+        cfg.contentScale = opts.contentScale > 0.0f ? opts.contentScale : 0.85f;
+        cfg.contentFreq = opts.contentFreq > 0.0f ? opts.contentFreq : 0.12f;
+        cfg.strataDuneScale = opts.strataDuneScale > 0.0f ? opts.strataDuneScale : 0.30f;
+        cfg.strataDuneFreq = opts.strataDuneFreq > 0.0f ? opts.strataDuneFreq : 0.30f;
+        cfg.slopeScale = opts.slopeScale > 0.0f ? opts.slopeScale : 0.50f;
+        cfg.supressingParam = opts.suppressingParam > 0.0f ? opts.suppressingParam : 0.85f;
+    } else if (opts.archetype == "alpine_karst" || opts.archetype.find("karst") != std::string::npos || opts.archetype.find("alpine") != std::string::npos) {
         cfg.macroSlopeX = -0.012f;
         cfg.macroSlopeZ = -0.018f;
         cfg.warpFreq = 0.055f;
