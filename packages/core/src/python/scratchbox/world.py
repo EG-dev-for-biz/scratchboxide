@@ -412,7 +412,158 @@ class World:
             "geometry_coverage": float(res.geometry_coverage),
             "render_ms": float(res.render_ms),
             "triangle_count": int(res.triangle_count),
-            "vertex_count": int(res.vertex_count),
             "ground_elevation_contact_min": float(res.ground_elevation_contact_min),
             "ground_elevation_contact_max": float(res.ground_elevation_contact_max)
         }
+
+    def stage_vector_tiles(self, lat: float, lng: float, radius: int = 1, style: str = "studio_clay", zoom: int = 16, out_glb: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Stages Google 2D roadmap vector tiles (zoom 16) around (lat, lng),
+        triangulates footprints into 18% Studio Grey Clay volumetric prisms, road ribbons, and water,
+        and saves into standard binary glTF 2.0 (.glb) for CAD/VFX staging.
+        """
+        import subprocess
+        import json
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+        script = os.path.join(repo_root, "scripts/stage_vector_world.ts")
+        bin_path = os.path.join(repo_root, "node_modules/.bin/vite-node")
+
+        if not out_glb:
+            clean_lat = f"{lat:.4f}".replace(".", "_").replace("-", "m")
+            clean_lng = f"{lng:.4f}".replace(".", "_").replace("-", "m")
+            out_glb = os.path.join(repo_root, "public/models", f"vector_world_{clean_lat}_{clean_lng}.glb")
+
+        cmd = [bin_path, script, "--", "--lat", str(lat), "--lng", str(lng), "--radius", str(radius), "--zoom", str(zoom), "--style", style, "--out", out_glb]
+        proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, check=True)
+        return json.loads(proc.stdout)
+
+    def populate_vector_world(
+        self,
+        lat: float,
+        lng: float,
+        radius: int = 1,
+        style: str = "studio_clay",
+        zoom: int = 16,
+        traffic: bool = True,
+        trees: bool = True,
+        streetlamps: bool = True,
+        sidewalks: bool = True,
+        hero_lane: Optional[int] = None,
+        hero_dist: Optional[float] = None,
+        hero_type: str = "lane",
+        out_glb: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Synthesizes a populated 3D world from Google 2D roadmap vector tiles (zoom 16) around (lat, lng).
+        Extracts topological road networks with 5-tier cross-sections (asphalt carriageway, lane markings,
+        beveled granite curbs, elevated sidewalks), articulates architectural building parcels (floor cornices &
+        roof parapet walls), and procedurally instances streetlamps, botanical trees, and traffic vehicles into standard
+        binary glTF 2.0 (.glb) in 18% Studio Grey Clay.
+        """
+        import subprocess
+        import json
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+        script = os.path.join(repo_root, "scripts/stage_vector_world.ts")
+        bin_path = os.path.join(repo_root, "node_modules/.bin/vite-node")
+
+        if not out_glb:
+            clean_lat = f"{lat:.4f}".replace(".", "_").replace("-", "m")
+            clean_lng = f"{lng:.4f}".replace(".", "_").replace("-", "m")
+            out_glb = os.path.join(repo_root, "public/models", f"vector_populated_world_{clean_lat}_{clean_lng}.glb")
+
+        cmd = [
+            bin_path, script, "--",
+            "--lat", str(lat),
+            "--lng", str(lng),
+            "--radius", str(radius),
+            "--zoom", str(zoom),
+            "--style", style,
+            "--out", out_glb,
+            "--populate"
+        ]
+        if not traffic:
+            cmd.append("--no-traffic")
+        if not trees:
+            cmd.append("--no-trees")
+        if not streetlamps:
+            cmd.append("--no-streetlamps")
+        if not sidewalks:
+            cmd.append("--no-sidewalks")
+        if hero_lane is not None:
+            cmd.extend(["--hero-lane", str(hero_lane)])
+        if hero_dist is not None:
+            cmd.extend(["--hero-dist", str(hero_dist)])
+        if hero_type:
+            cmd.extend(["--hero-type", str(hero_type)])
+
+        proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, check=True)
+        return json.loads(proc.stdout)
+
+    def get_vector_graph(self, lat: float, lng: float, radius: int = 1, zoom: int = 16) -> Dict[str, Any]:
+        """
+        Extracts semantic vector features (roads with lane counts/widths, building parcel footprints,
+        landuse green areas, water) around (lat, lng) in SI metric coordinates.
+        """
+        import subprocess
+        import json
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+        script = os.path.join(repo_root, "scripts/stage_vector_world.ts")
+        bin_path = os.path.join(repo_root, "node_modules/.bin/vite-node")
+
+        cmd = [
+            bin_path, script, "--",
+            "--lat", str(lat),
+            "--lng", str(lng),
+            "--radius", str(radius),
+            "--zoom", str(zoom),
+            "--graph-only"
+        ]
+        proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, check=True)
+        return json.loads(proc.stdout)
+
+    def snap_asset_to_lane(self, asset: Any, placement: Dict[str, Any]) -> Any:
+        """
+        Applies solved vector lane placement (position, heading rotation) to any native mesh or asset.
+        """
+        m = getattr(asset, "mesh", asset)
+        pos = placement.get("position", [0, 0, 0])
+        heading = placement.get("headingRad", 0.0)
+
+        # Apply yaw rotation then translation
+        if hasattr(m, "rotate_y"):
+            m.rotate_y(heading)
+        if hasattr(m, "translate"):
+            m.translate(float(pos[0]), float(pos[1]), float(pos[2]))
+        return asset
+
+    @staticmethod
+    def ground_streetview_pano(prompt: Optional[str] = None, pano_id: Optional[str] = None, lat: Optional[float] = None, lng: Optional[float] = None, out_png: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Grounds a landmark prompt or direct Google Street View panoId via Vertex AI Maps Imagery Grounding (MIG),
+        downloads cubic faces, and projects them into a 2:1 ERP equirectangular panorama.
+        """
+        import subprocess
+        import json
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+        script = os.path.join(repo_root, "scripts/mig_streetview.ts")
+        bin_path = os.path.join(repo_root, "node_modules/.bin/vite-node")
+
+        cmd = [bin_path, script, "--"]
+        if prompt:
+            cmd.extend(["--prompt", prompt])
+        if pano_id:
+            cmd.extend(["--panoId", pano_id])
+        if lat is not None:
+            cmd.extend(["--lat", str(lat)])
+        if lng is not None:
+            cmd.extend(["--lng", str(lng)])
+        if out_png:
+            cmd.extend(["--out", out_png])
+
+        proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, check=True)
+        return json.loads(proc.stdout)
+

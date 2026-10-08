@@ -755,7 +755,7 @@ export class StreamingEngine {
                     detectedToolCalls.push({
                         ...part.functionCall,
                         thought_signature: sig
-                    });
+                    } as any);
                     const callObj = {
                         id: part.functionCall.id || `call-${Date.now()}`,
                         name: part.functionCall.name || '',

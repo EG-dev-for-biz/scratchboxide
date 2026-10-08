@@ -756,9 +756,152 @@ const demoTelemetryDashboardData: MetricDashboardData = {
 };
 
 // ----------------------------------------------------------------------------------
+// Demo: Google Maps Imagery Grounding (MIG) & 360 Panorama Studio
+// ----------------------------------------------------------------------------------
+const demoMig360PanoramaData: Scene3DData = {
+    title: 'Google Maps Imagery Grounding (MIG) & 360 Panorama Studio',
+    subtitle: 'Vertex AI Gemini Grounding via PanoID & Spherical Equirectangular Projection',
+    sceneType: 'custom',
+    renderMode: 'shaded',
+    cameraMode: 'orbit',
+    selectedMeshId: 'shibuya-skybox-panorama',
+    camera: {
+        position: [0, 1.7, 0.1],
+        target: [0, 1.7, 10],
+        fov: 75
+    },
+    environment: {
+        skybox: 'studio',
+        lighting: 'studio',
+        ground: false,
+        ambientIntensity: 1.0
+    },
+    geoAnchor: {
+        lat: 35.6595,
+        lng: 139.7005,
+        elevation: 15,
+        active: true,
+        landmarkName: 'Shibuya Crossing Scramble',
+        castingArchetype: 'Urban Street View Grounding',
+        castingRationale: 'Grounded via Vertex AI Maps Imagery Grounding to official Street View panoId CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF'
+    },
+    objects: [
+        {
+            id: 'shibuya-skybox-panorama',
+            content: {
+                type: '3d-model',
+                durableUri: '/panoramas/streetview_shibuya_crossing_4k.png',
+                mimeType: 'image/png',
+                metadata: {
+                    panoId: 'CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF',
+                    groundingSource: 'Vertex AI Maps Imagery Grounding (MIG)',
+                    captureDate: '2024-05',
+                    projection: 'equirectangular_2_to_1',
+                    vehicleMastHeightMeters: 2.5
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 }
+            }
+        }
+    ]
+};
+
+// ----------------------------------------------------------------------------------
+// Demo: Google 3D Vector Tiles World Population Staging
+// ----------------------------------------------------------------------------------
+const demoVectorWorldStagingData: Scene3DData = {
+    title: 'Google 3D Vector Tiles World Population Staging',
+    subtitle: 'MVT Roadmap Extrusion in 18% Studio Grey Clay with Road Ribbons & Water Basins',
+    sceneType: 'city',
+    renderMode: 'clay',
+    cameraMode: 'orbit',
+    selectedMeshId: 'vector-world-stage',
+    camera: {
+        position: [200, 160, 220],
+        target: [0, 10, 0],
+        fov: 50
+    },
+    environment: {
+        skybox: 'studio',
+        lighting: 'studio',
+        ground: true,
+        groundColor: '#475569',
+        ambientIntensity: 0.95
+    },
+    geoAnchor: {
+        lat: 40.7484,
+        lng: -73.9857,
+        elevation: 15,
+        active: true,
+        landmarkName: 'Midtown Manhattan Staging Grid',
+        castingArchetype: 'Urban Architectural Massing',
+        castingRationale: 'Extruded directly from Google 2D roadmap vector tiles (zoom 16) in 18% Studio Grey Clay'
+    },
+    objects: [
+        {
+            id: 'vector-world-stage',
+            content: {
+                type: '3d-model',
+                durableUri: '/models/vector_world_midtown.glb',
+                mimeType: 'model/gltf-binary',
+                metadata: {
+                    materialPreset: '18% Studio Grey Clay (roughness: 0.85, metalness: 0.0)',
+                    layers: ['buildings', 'roads', 'water'],
+                    zoomLevel: 16
+                }
+            },
+            space: {
+                spatial3d: { x: 0, y: 0, z: 0 }
+            }
+        }
+    ]
+};
+
+// ----------------------------------------------------------------------------------
 // Complete Preloaded Showcase Demos Catalog
 // ----------------------------------------------------------------------------------
 export const PRELOADED_SHOWCASE_DEMOS: ShowcaseDemoItem[] = [
+    {
+        id: 'demo-mig-360-panorama',
+        title: 'Maps Imagery Grounding (MIG) & 360 Panorama',
+        subtitle: 'Vertex AI Grounding via PanoID & Spherical Projection',
+        category: '3d',
+        categoryLabel: '3D & Geospatial',
+        description: 'Ground natural language landmark queries to official Google Street View panoId via Vertex AI Maps Imagery Grounding (MIG). Projects multi-perspective cubic faces into a 2:1 equirectangular panorama with 360° vehicle rig telemetry, seamless seam healing, and metric camera height.',
+        tags: ['Maps Imagery Grounding', 'Vertex AI', 'Pano ID', '360 Panorama', 'Spherical ERP', 'Street View'],
+        highlightBadge: 'MIG GROUNDED',
+        artifact: {
+            id: 'art-demo-mig-360-panorama',
+            type: '3d-scene',
+            title: 'Google Maps Imagery Grounding (MIG) & 360 Panorama',
+            summary: 'Vertex AI Maps Imagery Grounding via PanoID with spherical 2:1 ERP projection and vehicle mast telemetry.',
+            data: demoMig360PanoramaData,
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the Maps Imagery Grounding (MIG) 360 Panorama demo! This showcase demonstrates how Vertex AI Gemini grounds natural language queries to official Google Street View panoIds, retrieving cubic perspective faces and projecting them into seamless 360° spherical environments.'
+    },
+    {
+        id: 'demo-vector-world-staging',
+        title: '3D Vector Tiles World Population Staging',
+        subtitle: 'MVT Roadmap Extrusion in 18% Studio Grey Clay',
+        category: '3d',
+        categoryLabel: '3D & Geospatial',
+        description: 'Stage full 3D urban populations and surrounding environments directly from Google 2D roadmap vector tiles (MVT/PBF at zoom 16). Extrudes building footprints with polygon triangulation, road network ribbons, and water basins into a standard binary .glb adhering strictly to the 18% Studio Grey Clay staging invariant.',
+        tags: ['Vector Tiles', '3D Staging', 'Grey Clay', 'MVT Protobuf', 'glTF 2.0', 'Urban World'],
+        highlightBadge: '3D STAGING',
+        artifact: {
+            id: 'art-demo-vector-world-staging',
+            type: '3d-scene',
+            title: 'Google 3D Vector Tiles World Population Staging',
+            summary: 'Google 2D roadmap vector tiles extruded into 18% Studio Grey Clay 3D world population for CAD staging.',
+            data: demoVectorWorldStagingData,
+            createdAt: new Date().toISOString(),
+            version: 1
+        },
+        introMessage: 'Welcome to the 3D Vector Tiles World Population Staging demo! This pipeline decodes Google 2D roadmap vector tiles (MVT/PBF) at zoom 16, triangulates building polygon rings, extrudes volumetric prisms, and bakes 18% Studio Grey Clay materials into a standard binary .glb for immediate scene staging.'
+    },
     {
         id: 'demo-nextgen-astra-viewport',
         title: 'Next-Gen Astro 3D Viewport: 100M-Polygon Meshlet & Hybrid 3DGS',

@@ -69,7 +69,7 @@ int main() {
 
     // 3. Compute Laplace-Beltrami discrete curvature and cavity AO
     auto curv = halfedge::LaplaceBeltramiCurvatureEngine::computeAndBake(beveled);
-    if (curv.meanCurvature.size() != beveled.vertices.size() || curv.cavityAO.size() != beveled.vertices.size()) {
+    if (curv.meanCurvature.size() != beveled.vertices.size() || curv.cavityOcclusion.size() != beveled.vertices.size()) {
         std::cerr << "LaplaceBeltramiCurvatureEngine size mismatch." << std::endl;
         return 2;
     }

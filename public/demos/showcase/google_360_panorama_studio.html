@@ -976,6 +976,26 @@
                     Authentic Google Maps Street View equirectangular panoramas with 360° vehicle rig mast telemetry, EAC projection, and nadir pavement inpainting.
                 </div>
 
+                <!-- Vertex AI Maps Imagery Grounding (MIG) & Pano ID Studio Ingestion -->
+                <div style="background: rgba(88, 28, 135, 0.25); border: 1px solid rgba(168, 85, 247, 0.45); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                        <span style="font-size:11px; font-weight:700; color:#c084fc; display:flex; align-items:center; gap:5px;">
+                            <span>🛰️ Maps Imagery Grounding (MIG) & Pano ID</span>
+                            <span style="font-size:8.5px; background:rgba(168, 85, 247, 0.25); color:#e9d5ff; border:1px solid rgba(168,85,247,0.5); border-radius:3px; padding:1px 4px; font-weight:700;">VERTEX AI</span>
+                        </span>
+                        <span style="font-size:9px; color:#c084fc;">PanoID Grounding & 360 Projection</span>
+                    </div>
+                    <div style="font-size:9.5px; color:#e2e8f0; line-height:1.35; margin-bottom:6px;">
+                        Ground any prompt or location to official Google Street View <code style="color:#e9d5ff;">panoId</code> via Gemini Maps Imagery Grounding, then project to 2:1 ERP.
+                    </div>
+                    <div style="display:flex; gap:4px; margin-bottom:6px;">
+                        <input type="text" id="input-mig-prompt" placeholder="Enter landmark prompt or Pano ID (e.g. Times Square facing south, or CAoSF0NJ...)" style="flex:1; background:rgba(15, 23, 42, 0.9); border:1px solid rgba(168, 85, 247, 0.6); border-radius:6px; padding:5px 7px; font-size:10px; font-family:var(--font-mono); color:#e9d5ff; outline:none;" onkeydown="if(event.key==='Enter') groundAndProjectMapsImagery()">
+                        <button class="btn-submode" id="btn-ground-mig" onclick="groundAndProjectMapsImagery()" style="padding:5px 9px; background:#7e22ce; border-color:#a855f7; color:#fff; font-weight:700; font-size:10px; cursor:pointer;">
+                            🤖 Ground MIG
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Google Street View Direct Pano ID Calling & spce Ray-Projection -->
                 <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
@@ -2169,6 +2189,58 @@
             if (softCubeMesh) softCubeMesh.visible = false;
 
             if (hud) hud.innerHTML = `<span style="color:#38bdf8;">☁️ 3D Street View Point Cloud Rendered: ${positions.length / 3} Metric Splat Vertices</span>`;
+        }
+
+        async function groundAndProjectMapsImagery(customInput) {
+            const input = document.getElementById('input-mig-prompt') || document.getElementById('input-streetview-panoid');
+            const query = (customInput || input?.value || '').trim();
+            if (!query) {
+                alert('Please enter a landmark description or Google Pano ID to ground via Maps Imagery Grounding (MIG).');
+                return;
+            }
+
+            const hud = document.getElementById('hud-status');
+            if (hud) hud.innerHTML = `<span style="color:#c084fc;">🤖 Vertex AI Maps Imagery Grounding (MIG): Grounding "${query.substring(0, 32)}"...</span>`;
+
+            try {
+                const isPanoId = query.startsWith('CAoS') || (query.length >= 22 && !query.includes(' '));
+                const param = isPanoId ? `panoId=${encodeURIComponent(query)}` : `prompt=${encodeURIComponent(query)}`;
+                const res = await fetch(`/api/streetview/mig?${param}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.success && (data.erpUrl || data.url)) {
+                        const panoId = data.panoId || query;
+                        const url = data.erpUrl || data.url;
+                        const customMeta = {
+                            id: 'mig-pano-grounded',
+                            name: `Grounded: ${data.prompt || panoId.substring(0, 16)}`,
+                            label: `MIG Grounded Street View: ${data.captureDate || data.date || 'Photographic'}`,
+                            panoId: panoId,
+                            lat: data.lat || 35.6595,
+                            lng: data.lng || 139.7005,
+                            heading: '000° (North Reference)',
+                            elevation: '15.0m Geoid',
+                            mast: '2.50m (Vehicle Mast)',
+                            projection: 'Equirectangular (ERP 2:1)',
+                            rigStatus: 'Vertex AI Maps Imagery Grounded',
+                            date: data.captureDate || data.date || '2024-05',
+                            promptKey: 'mig',
+                            url: url
+                        };
+                        currentStreetViewMeta = customMeta;
+                        updateStreetViewTelemetryUI(customMeta);
+                        loadImageSource(url, customMeta.label);
+                        window.history.replaceState(null, '', `?panoId=${encodeURIComponent(panoId)}`);
+                        if (hud) hud.innerHTML = `<span style="color:#a855f7;">✨ Vertex AI Grounded Pano ID: <b>${panoId.substring(0, 20)}...</b> (${data.captureDate || data.date || 'Historical'})</span>`;
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('MIG API call error:', err);
+            }
+
+            // Fallback to direct pano fetching
+            fetchAndProjectStreetViewPanoId(query);
         }
 
         async function fetchAndProjectStreetViewPanoId(customId, customLabel) {

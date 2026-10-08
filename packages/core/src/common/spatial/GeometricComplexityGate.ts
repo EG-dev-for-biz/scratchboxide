@@ -16,6 +16,13 @@ export interface GeometricMeshSummary {
     triangleCount: number;
     generatorType?: string;
     isPrimitive?: boolean;
+    bounds?: {
+        min: [number, number, number];
+        max: [number, number, number];
+        dimensions: [number, number, number];
+    };
+    tag?: string;
+    cardinalNormalRatio?: number;
 }
 
 export interface GeometricSceneMetrics {
@@ -49,6 +56,20 @@ export interface ComplexityGateOptions {
      * Banned generator identifiers or primitive tags.
      */
     disallowedGenerators?: string[];
+
+    /**
+     * Whether to enforce correct kinematic orientation for wheels and rolling elements.
+     * Flags flat pancake wheels lying horizontally on the ground.
+     * Default: true.
+     */
+    enforceKinematicOrientation?: boolean;
+
+    /**
+     * Whether to audit primary massing for continuous compound curvature.
+     * Detects and prohibits stacked flat box primitives.
+     * Default: true.
+     */
+    enforceCompoundCurvature?: boolean;
 }
 
 export interface ComplexityGateReport {
@@ -142,6 +163,18 @@ export class GeometricComplexityGate {
             );
         }
 
+        // 6. Kinematic Orientation Audit (Anti-Pancake Wheel Invariant)
+        if (options.enforceKinematicOrientation ?? true) {
+            const kinematicViolations = this.evaluateKinematicOrientation(metrics);
+            violations.push(...kinematicViolations);
+        }
+
+        // 7. Compound Curvature Audit (Anti-Box-Stacking Invariant)
+        if (options.enforceCompoundCurvature ?? true) {
+            const curvatureViolations = this.evaluateCurvatureFidelity(metrics);
+            violations.push(...curvatureViolations);
+        }
+
         return {
             passed: violations.length === 0,
             totalVertices: metrics.totalVertices,
@@ -150,6 +183,70 @@ export class GeometricComplexityGate {
             violations,
             isNativeKernel
         };
+    }
+
+    /**
+     * Audits all submeshes to ensure wheels and rolling elements are not lying flat like pancakes.
+     */
+    public static evaluateKinematicOrientation(metrics: GeometricSceneMetrics): string[] {
+        const violations: string[] = [];
+        for (const submesh of metrics.submeshes) {
+            const nameLower = (submesh.name || '').toLowerCase();
+            const tagLower = (submesh.tag || '').toLowerCase();
+            const isWheelCandidate = nameLower.includes('wheel') || nameLower.includes('tire') ||
+                nameLower.includes('tyre') || nameLower.includes('roller') ||
+                tagLower.includes('wheel') || tagLower.includes('tire');
+
+            if (!submesh.bounds) continue;
+            const [dx, dy, dz] = submesh.bounds.dimensions;
+            const diam = Math.max(dx, dz);
+            const isCylindricalDisc = (dy < 0.65 * diam) && (Math.abs(dx - dz) / Math.max(1e-4, diam) < 0.35);
+
+            // If explicitly named wheel/tire OR if it's a disc sitting near the ground
+            if (isWheelCandidate || (isCylindricalDisc && submesh.bounds.min[1] < 0.5)) {
+                // Check if its thin dimension is vertical (Y)
+                if (dy < 0.70 * diam) {
+                    violations.push(
+                        `Kinematic Orientation Violation: Submesh "${submesh.name}" is oriented as a flat horizontal disc ` +
+                        `(thickness Y=${dy.toFixed(2)}m vs diameter=${diam.toFixed(2)}m). ` +
+                        `Rolling elements must have their rotational symmetry axis aligned horizontally (pitch/lateral axis).`
+                    );
+                }
+            }
+        }
+        return violations;
+    }
+
+    /**
+     * Audits the primary edifice / hull to ensure it has compound curvature rather than stacked flat boxes.
+     */
+    public static evaluateCurvatureFidelity(metrics: GeometricSceneMetrics): string[] {
+        const violations: string[] = [];
+        if (!metrics.submeshes || metrics.submeshes.length === 0) return violations;
+
+        let largestSubmesh: GeometricMeshSummary | null = null;
+        let maxVolume = -1;
+        for (const submesh of metrics.submeshes) {
+            if (submesh.bounds) {
+                const [dx, dy, dz] = submesh.bounds.dimensions;
+                const vol = dx * dy * dz;
+                if (vol > maxVolume) {
+                    maxVolume = vol;
+                    largestSubmesh = submesh;
+                }
+            }
+        }
+
+        if (largestSubmesh) {
+            if (largestSubmesh.cardinalNormalRatio !== undefined && largestSubmesh.cardinalNormalRatio > 0.65 && largestSubmesh.vertexCount < 100) {
+                violations.push(
+                    `Curvature Fidelity Violation: Primary hull "${largestSubmesh.name}" consists of flat axis-aligned box faces ` +
+                    `(cardinal normal ratio: ${(largestSubmesh.cardinalNormalRatio * 100).toFixed(0)}%). ` +
+                    `Hero objects and streamlined hulls must use continuous compound curvature (create_lofted_hull or non-linear deformers).`
+                );
+            }
+        }
+        return violations;
     }
 
     /**

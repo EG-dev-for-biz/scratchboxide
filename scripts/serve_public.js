@@ -673,6 +673,116 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // Handle Vertex AI Maps Imagery Grounding (MIG) Pano & 360 Projection API
+    if (reqPath === '/api/streetview/mig') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1:5173');
+                let panoId = urlObj.searchParams.get('panoId') || urlObj.searchParams.get('panoid') || '';
+                let prompt = urlObj.searchParams.get('prompt') || urlObj.searchParams.get('q') || '';
+                let lat = parseFloat(urlObj.searchParams.get('lat') || '');
+                let lng = parseFloat(urlObj.searchParams.get('lng') || '');
+                const apiKey = process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyCSHRfQGTmZykmM4LA6mI7avjEQEkQive4';
+
+                if (body) {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (!panoId && parsed.panoId) panoId = parsed.panoId;
+                        if (!prompt && (parsed.prompt || parsed.q)) prompt = parsed.prompt || parsed.q;
+                        if (isNaN(lat) && typeof parsed.lat === 'number') lat = parsed.lat;
+                        if (isNaN(lng) && typeof parsed.lng === 'number') lng = parsed.lng;
+                    } catch {}
+                }
+
+                const { execFileSync } = require('child_process');
+                const REPO_ROOT = path.resolve(__dirname, '..');
+                const bin = path.resolve(REPO_ROOT, 'node_modules/.bin/vite-node');
+                const script = path.resolve(REPO_ROOT, 'scripts/mig_streetview.ts');
+
+                const args = [script, '--'];
+                if (prompt) args.push('--prompt', prompt);
+                if (panoId) args.push('--panoId', panoId);
+                if (!isNaN(lat)) args.push('--lat', String(lat));
+                if (!isNaN(lng)) args.push('--lng', String(lng));
+                if (apiKey) args.push('--apiKey', apiKey);
+
+                const out = execFileSync(bin, args, {
+                    cwd: REPO_ROOT,
+                    timeout: 45000,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+
+                const parsedResult = JSON.parse(out.toString('utf8'));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(parsedResult));
+            } catch (err) {
+                console.error('[MIG API] Error:', err?.message || err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Maps Imagery Grounding failed' }));
+            }
+        });
+        return;
+    }
+
+    // Handle 3D Vector Tiles World Population Staging API
+    if (reqPath === '/api/vectortiles/stage') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1:5173');
+                let lat = parseFloat(urlObj.searchParams.get('lat') || '40.7484');
+                let lng = parseFloat(urlObj.searchParams.get('lng') || '-73.9857');
+                let radius = parseInt(urlObj.searchParams.get('radius') || '1', 10);
+                let zoom = parseInt(urlObj.searchParams.get('zoom') || '16', 10);
+                let style = urlObj.searchParams.get('style') || 'studio_clay';
+
+                if (body) {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (typeof parsed.lat === 'number') lat = parsed.lat;
+                        if (typeof parsed.lng === 'number') lng = parsed.lng;
+                        if (typeof parsed.radius === 'number') radius = parsed.radius;
+                        if (typeof parsed.zoom === 'number') zoom = parsed.zoom;
+                        if (parsed.style) style = parsed.style;
+                    } catch {}
+                }
+
+                const { execFileSync } = require('child_process');
+                const REPO_ROOT = path.resolve(__dirname, '..');
+                const bin = path.resolve(REPO_ROOT, 'node_modules/.bin/vite-node');
+                const script = path.resolve(REPO_ROOT, 'scripts/stage_vector_world.ts');
+
+                const args = [
+                    script,
+                    '--',
+                    '--lat', String(lat),
+                    '--lng', String(lng),
+                    '--radius', String(radius),
+                    '--zoom', String(zoom),
+                    '--style', style
+                ];
+
+                const out = execFileSync(bin, args, {
+                    cwd: REPO_ROOT,
+                    timeout: 60000,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+
+                const parsedResult = JSON.parse(out.toString('utf8'));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(parsedResult));
+            } catch (err) {
+                console.error('[VectorTileStagingAPI] Error:', err?.message || err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err?.message || '3D Vector Tile staging failed' }));
+            }
+        });
+        return;
+    }
+
     // Downstream Neural Inpainting Endpoint (spce Inpaint Contract)
     if (reqPath === '/api/streetview/inpaint') {
         let body = '';

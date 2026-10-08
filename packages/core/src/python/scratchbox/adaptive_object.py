@@ -888,3 +888,500 @@ class AdaptiveHeroObjectSynthesizer:
             "triangleCount": mesh.triangle_count,
             "fileSizeKb": file_size_kb
         }
+
+
+# ============================================================================
+# OPERATOR 6: UNIVERSAL KINEMATIC REVOLVING COMPONENTS & ROLLING STANCE
+# ============================================================================
+
+def create_revolving_component(
+    radius: float = 0.5,
+    length: float = 1.0,
+    axis: Union[str, Tuple[float, float, float]] = "lateral",
+    profile: str = "cylinder",
+    crown: float = 0.0,
+    recess: float = 0.0,
+    segments: int = 32,
+    color: Optional[Tuple[float, float, float, float]] = None,
+    material: Any = None,
+    **kwargs
+) -> sbg.Mesh:
+    """
+    Universal Kinematic Revolving Component Operator (ADA Invariant 6).
+    Synthesizes revolving solids (wheels, drums, rollers, pulleys, turbine rotors,
+    actuator cylinders, gun barrels) aligned to their functional kinematic axis.
+
+    axis:
+      - 'x' / 'lateral' / 'transverse': Rotated into lateral axle orientation (wheels/rollers).
+      - 'y' / 'vertical' / 'load': Vertical axis (columns, turntables).
+      - 'z' / 'longitudinal' / 'thrust': Thrust/propulsion axis (turbines, jet engines, torpedoes).
+      - tuple/list (dx, dy, dz): Arbitrary 3D orientation vector.
+    """
+    sb = _get_sb()
+    r = float(radius)
+    h = float(length)
+    segs = int(segments)
+    col = color if color is not None else CLAY_BASE
+
+    if profile == "beveled":
+        bevel_rad = float(kwargs.get("bevel", min(r * 0.15, h * 0.15)))
+        prof = [
+            sbm.Vec2(0.0, -h * 0.5),
+            sbm.Vec2(max(1e-4, r - bevel_rad), -h * 0.5),
+            sbm.Vec2(r, -h * 0.5 + bevel_rad),
+            sbm.Vec2(r, h * 0.5 - bevel_rad),
+            sbm.Vec2(max(1e-4, r - bevel_rad), h * 0.5),
+            sbm.Vec2(0.0, h * 0.5)
+        ]
+        mesh = sb.create_lathe(prof, segments=segs, color=col)
+    elif profile == "fluted":
+        lobes = int(kwargs.get("lobes", 8))
+        mesh = revolve_harmonic_solid(
+            anchor_point=(0.0, -h * 0.5, 0.0),
+            axis=(0.0, 1.0, 0.0),
+            profile_curve=[(0.0, 0.0), (r, 0.0), (r, h), (0.0, h)],
+            harmonic_lobe_count=lobes,
+            harmonic_depth_ratio=float(kwargs.get("lobe_depth", 0.08)),
+            color=col
+        )
+    else:
+        mesh = sb.create_cylinder(radius=r, height=h, segments=segs, color=col)
+
+    if material is not None and hasattr(mesh, "apply_material"):
+        mesh.apply_material(material)
+
+    # Orient into functional kinematic axis (Native mesh rotation takes DEGREES!)
+    ax_str = str(axis).lower().strip()
+    if ax_str in ("x", "lateral", "transverse", "pitch"):
+        mesh.rotate_z(90.0)
+    elif ax_str in ("z", "longitudinal", "thrust", "roll"):
+        mesh.rotate_x(90.0)
+    elif isinstance(axis, (tuple, list)) and len(axis) >= 3:
+        dx, dy, dz = float(axis[0]), float(axis[1]), float(axis[2])
+        mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if mag > 1e-4:
+            dx, dy, dz = dx / mag, dy / mag, dz / mag
+            pitch_deg = math.degrees(math.atan2(math.sqrt(dx * dx + dz * dz), dy))
+            yaw_deg = math.degrees(math.atan2(dx, dz))
+            mesh.rotate_x(pitch_deg)
+            mesh.rotate_y(yaw_deg)
+
+    if hasattr(mesh, "tag"):
+        mesh.tag("revolving_component")
+    return mesh
+
+
+def create_wheel(
+    radius: float = 0.35,
+    width: float = 0.30,
+    rim_radius: Optional[float] = None,
+    rim_recess: float = 0.04,
+    tread_bevel: float = 0.025,
+    axis: str = "lateral",
+    ground: bool = True,
+    color: Optional[Tuple[float, float, float, float]] = None,
+    material: Any = None,
+    **kwargs
+) -> sbg.Mesh:
+    """
+    Universal Rolling Wheel / Tire Operator.
+    Synthesizes an authentic multi-element wheel:
+      - Outer rubber tire with beveled shoulder crowns and contact patch
+      - Inset recessed wheel rim with center hub cap
+      - Brake rotor disc
+    Pre-oriented with lateral rolling axis along X (R_z(90)) and seated on the ground (y_min = 0).
+    """
+    sb = _get_sb()
+    r = float(radius)
+    w = float(width)
+    rim_r = float(rim_radius) if rim_radius is not None else (r * 0.65)
+    recess = float(rim_recess)
+    bev = float(tread_bevel)
+
+    wheel_assembly = sbg.Mesh("WheelAssembly")
+
+    # 1. Outer Rubber Tire (beveled crown)
+    tire_prof = [
+        sbm.Vec2(rim_r, -w * 0.5),
+        sbm.Vec2(r - bev, -w * 0.5),
+        sbm.Vec2(r, -w * 0.5 + bev),
+        sbm.Vec2(r, w * 0.5 - bev),
+        sbm.Vec2(r - bev, w * 0.5),
+        sbm.Vec2(rim_r, w * 0.5)
+    ]
+    tire = sb.create_lathe(tire_prof, segments=int(kwargs.get("segments", 32)))
+    if hasattr(sb.PbrMaterial, "rubber"):
+        tire.apply_material(sb.PbrMaterial.rubber())
+    else:
+        tire.apply_material(sb.PbrMaterial(roughness=0.92, metalness=0.0, base_color=(0.12, 0.12, 0.14, 1.0)))
+    wheel_assembly.append(tire)
+
+    # 2. Recessed Alloy Wheel Rim (bilateral inset)
+    rim_w = max(0.01, w - recess * 2.0)
+    rim = sb.create_cylinder(radius=rim_r, height=rim_w, segments=int(kwargs.get("segments", 32)))
+    if hasattr(sb.PbrMaterial, "metal"):
+        rim.apply_material(sb.PbrMaterial.metal())
+    else:
+        rim.apply_material(sb.PbrMaterial(roughness=0.25, metalness=0.9, base_color=(0.7, 0.72, 0.75, 1.0)))
+    wheel_assembly.append(rim)
+
+    # 3. Brake Rotor Disc (thin metallic plate)
+    disc_r = rim_r * 0.75
+    disc = sb.create_cylinder(radius=disc_r, height=w * 0.12, segments=24)
+    if hasattr(sb.PbrMaterial, "steel"):
+        disc.apply_material(sb.PbrMaterial.steel())
+    else:
+        disc.apply_material(sb.PbrMaterial(roughness=0.35, metalness=0.85, base_color=(0.5, 0.5, 0.5, 1.0)))
+    wheel_assembly.append(disc)
+
+    # 4. Center Hub Nut
+    hub = sb.create_cylinder(radius=rim_r * 0.22, height=w * 1.05, segments=16)
+    hub.apply_material(sb.PbrMaterial(roughness=0.2, metalness=0.9, base_color=(0.85, 0.25, 0.2, 1.0)))
+    wheel_assembly.append(hub)
+
+    # Orient into functional kinematic axis (Default: lateral X axis so wheel rolls upright along Z)
+    ax_str = str(axis).lower().strip()
+    if ax_str in ("lateral", "x", "transverse"):
+        wheel_assembly.rotate_z(90.0)
+    elif ax_str in ("longitudinal", "z", "thrust"):
+        wheel_assembly.rotate_x(90.0)
+
+    # Grounding invariant: seat bottom tangent at y = 0
+    if ground:
+        wheel_assembly.translate(0.0, r, 0.0)
+
+    if hasattr(wheel_assembly, "tag"):
+        wheel_assembly.tag("wheel")
+    return wheel_assembly
+
+
+def create_wheel_assembly(
+    track_width: float = 1.6,
+    wheelbase: float = 3.2,
+    wheel_radius: float = 0.35,
+    tire_width: float = 0.30,
+    ground_clearance: float = 0.05,
+    axle_pairs: int = 2,
+    camber_deg: float = 0.0,
+    toe_deg: float = 0.0,
+    suspension: str = "double_wishbone",
+    color: Optional[Tuple[float, float, float, float]] = None,
+    material: Any = None,
+    **kwargs
+) -> sbg.Mesh:
+    """
+    Universal Ground Vehicle Wheel & Suspension Assembly.
+    Spawns N axle pairs of upright, grounded rolling wheels spaced at track_width and wheelbase,
+    with double-wishbone suspension linkages connecting to inner chassis pick-up points.
+    """
+    sb = _get_sb()
+    tw = float(track_width)
+    wb = float(wheelbase)
+    wr = float(wheel_radius)
+    tire_w = float(tire_width)
+    n_axles = max(1, int(axle_pairs))
+
+    group = sbg.Mesh("SuspensionWheelAssembly")
+
+    if n_axles == 1:
+        z_positions = [0.0]
+    else:
+        z_step = wb / float(n_axles - 1)
+        z_positions = [wb * 0.5 - i * z_step for i in range(n_axles)]
+
+    for z_axle in z_positions:
+        for side in [-1.0, 1.0]:
+            # 1. Upright Rolling Wheel
+            wheel = create_wheel(radius=wr, width=tire_w, ground=True, axis="lateral", **kwargs)
+            if camber_deg != 0.0:
+                wheel.rotate_z(camber_deg * side)
+            if toe_deg != 0.0:
+                wheel.rotate_y(toe_deg * side)
+
+            wheel.translate(side * (tw * 0.5), 0.0, z_axle)
+            group.append(wheel)
+
+            # 2. Suspension Wishbones (Double-wishbone A-arms)
+            if suspension == "double_wishbone":
+                hub_x = side * (tw * 0.5 - tire_w * 0.5)
+                chassis_x = side * (tw * 0.28)
+
+                # Upper wishbone A-arm
+                w_up_start = (chassis_x, wr * 0.95, z_axle - 0.18)
+                w_up_apex = (hub_x, wr * 0.90, z_axle)
+                w_up_end = (chassis_x, wr * 0.95, z_axle + 0.18)
+
+                arm_a = sb.create_catenary_cable(start=w_up_start, end=w_up_apex, sag=0.0, radius=0.016, segments=4)
+                arm_b = sb.create_catenary_cable(start=w_up_apex, end=w_up_end, sag=0.0, radius=0.016, segments=4)
+                group.append(arm_a)
+                group.append(arm_b)
+
+                # Lower wishbone A-arm
+                w_low_start = (chassis_x, wr * 0.35, z_axle - 0.22)
+                w_low_apex = (hub_x, wr * 0.30, z_axle)
+                w_low_end = (chassis_x, wr * 0.35, z_axle + 0.22)
+
+                arm_c = sb.create_catenary_cable(start=w_low_start, end=w_low_apex, sag=0.0, radius=0.018, segments=4)
+                arm_d = sb.create_catenary_cable(start=w_low_apex, end=w_low_end, sag=0.0, radius=0.018, segments=4)
+                group.append(arm_c)
+                group.append(arm_d)
+
+    if hasattr(group, "tag"):
+        group.tag("wheel_assembly")
+    return group
+
+
+# ============================================================================
+# OPERATOR 7: CONTINUOUS COMPOUND-CURVATURE LOFTS & AERODYNAMIC FOILS
+# ============================================================================
+
+def create_lofted_hull(
+    stations: List[Union[Dict[str, Any], Tuple, List]],
+    profile: str = "superellipse",
+    m: float = 2.8,
+    close_ends: bool = True,
+    n_pts: int = 32,
+    color: Optional[Tuple[float, float, float, float]] = None,
+    material: Any = None,
+    **kwargs
+) -> sbg.Mesh:
+    """
+    Continuous Compound-Curvature Hull Generator (ADA Invariant 1 & 6).
+    Synthesizes continuous streamlined bodies (monocoques, fuselages, hulls, organ bodies)
+    by lofting 2D stations along a carrier axis.
+
+    stations: list of dicts or tuples:
+      - dict: {"z": float, "width": float, "height": float, "y": float, "m": float, "roll": float}
+      - tuple: (z, width, height) or (z, y, width, height)
+    """
+    sb = _get_sb()
+    col = color if color is not None else CLAY_BASE
+    n_slices = int(n_pts)
+    slices = []
+
+    for st in stations:
+        if isinstance(st, dict):
+            z = float(st.get("z", st.get("position", 0.0)))
+            w = float(st.get("width", st.get("w", 1.0)))
+            h = float(st.get("height", st.get("h", 1.0)))
+            y_c = float(st.get("y", st.get("center_y", 0.0)))
+            x_c = float(st.get("x", st.get("center_x", 0.0)))
+            m_exp = float(st.get("m", st.get("superellipseExponent", m)))
+            roll = float(st.get("roll", st.get("rollDeg", 0.0)))
+        elif isinstance(st, (tuple, list)):
+            if len(st) == 3:
+                z, w, h = float(st[0]), float(st[1]), float(st[2])
+                x_c, y_c, m_exp, roll = 0.0, 0.0, float(m), 0.0
+            elif len(st) >= 4:
+                z, y_c, w, h = float(st[0]), float(st[1]), float(st[2]), float(st[3])
+                x_c = 0.0
+                m_exp = float(st[4]) if len(st) > 4 else float(m)
+                roll = float(st[5]) if len(st) > 5 else 0.0
+            else:
+                continue
+        else:
+            continue
+
+        rx, ry = max(1e-4, w * 0.5), max(1e-4, h * 0.5)
+        loop = superellipse_loop(z, x_c, y_c, rx, ry, m=m_exp, n_pts=n_slices, roll_deg=roll)
+        slices.append(loop)
+
+    if len(slices) < 2:
+        raise ValueError("create_lofted_hull requires at least 2 stations")
+
+    mesh = sb.create_loft(slices, close_ends=bool(close_ends), color=col)
+    if material is not None and hasattr(mesh, "apply_material"):
+        mesh.apply_material(material)
+    if hasattr(mesh, "recompute_smooth_normals"):
+        mesh.recompute_smooth_normals()
+    if hasattr(mesh, "compute_curvature_ao"):
+        mesh.compute_curvature_ao(0.65)
+    if hasattr(mesh, "tag"):
+        mesh.tag("primary_hull")
+    return mesh
+
+
+def create_cambered_foil(
+    span: float = 1.8,
+    chord: float = 0.45,
+    camber: float = 0.04,
+    thickness: float = 0.05,
+    angle_of_attack_deg: float = -4.0,
+    axis: str = "x",
+    endplates: bool = True,
+    endplate_height: float = 0.25,
+    endplate_thickness: float = 0.015,
+    color: Optional[Tuple[float, float, float, float]] = None,
+    material: Any = None,
+    **kwargs
+) -> sbg.Mesh:
+    """
+    Cambered Aerodynamic Foil / Wing Generator.
+    Synthesizes downforce wings, airplane wings, hydrofoil rudders, or turbine blades
+    with smooth NACA camber profiles and optional vertical endplates.
+    """
+    sb = _get_sb()
+    s = float(span)
+    ch = float(chord)
+    camb = float(camber)
+    th = float(thickness)
+    aoa_deg = float(angle_of_attack_deg)
+    aoa_rad = math.radians(aoa_deg)
+    cos_a = math.cos(aoa_rad)
+    sin_a = math.sin(aoa_rad)
+    col = color if color is not None else CLAY_BASE
+
+    foil_assembly = sbg.Mesh("AerodynamicFoil")
+    n_pts = int(kwargs.get("chord_pts", 24))
+    n_span = int(kwargs.get("span_slices", 8))
+
+    # Generate 2D NACA 4-digit style cambered airfoil coordinate slice
+    profile_pts = []
+    for i in range(n_pts):
+        t = float(i) / float(n_pts - 1)
+        x_c = (1.0 - math.cos(t * math.pi)) * 0.5
+        y_camber = 4.0 * camb * x_c * (1.0 - x_c)
+        y_t = 5.0 * th * (0.2969 * math.sqrt(max(0.0, x_c)) - 0.1260 * x_c - 0.3516 * (x_c**2) + 0.2843 * (x_c**3) - 0.1015 * (x_c**4))
+        z_local = (x_c - 0.25) * ch
+        y_local = (y_camber + y_t) * ch
+        z_rot = z_local * cos_a - y_local * sin_a
+        y_rot = z_local * sin_a + y_local * cos_a
+        profile_pts.append((y_rot, z_rot))
+
+    for i in range(n_pts - 1, -1, -1):
+        t = float(i) / float(n_pts - 1)
+        x_c = (1.0 - math.cos(t * math.pi)) * 0.5
+        y_camber = 4.0 * camb * x_c * (1.0 - x_c)
+        y_t = 5.0 * th * (0.2969 * math.sqrt(max(0.0, x_c)) - 0.1260 * x_c - 0.3516 * (x_c**2) + 0.2843 * (x_c**3) - 0.1015 * (x_c**4))
+        z_local = (x_c - 0.25) * ch
+        y_local = (y_camber - y_t) * ch
+        z_rot = z_local * cos_a - y_local * sin_a
+        y_rot = z_local * sin_a + y_local * cos_a
+        profile_pts.append((y_rot, z_rot))
+
+    slices = []
+    for s_idx in range(n_span):
+        t_span = float(s_idx) / float(n_span - 1)
+        x_span = -s * 0.5 + t_span * s
+        slice_loop = [sbm.Vec3(x_span, py, pz) for (py, pz) in profile_pts]
+        slices.append(slice_loop)
+
+    wing_mesh = sb.create_loft(slices, close_ends=True, color=col)
+    if material is not None and hasattr(wing_mesh, "apply_material"):
+        wing_mesh.apply_material(material)
+    foil_assembly.append(wing_mesh)
+
+    # Optional Vertical Endplates
+    if endplates:
+        e_h = float(endplate_height)
+        e_th = float(endplate_thickness)
+        for side in [-1.0, 1.0]:
+            ep = sb.create_beveled_box((e_th, e_h, ch * 1.15), bevel=0.003, color=col)
+            ep.translate(side * (s * 0.5 + e_th * 0.5), 0.0, 0.0)
+            if material is not None and hasattr(ep, "apply_material"):
+                ep.apply_material(material)
+            foil_assembly.append(ep)
+
+    if hasattr(foil_assembly, "tag"):
+        foil_assembly.tag("aerodynamic_foil")
+    return foil_assembly
+
+
+# ============================================================================
+# CLOSED-LOOP INVARIANT AUDIT & AUTO-HEALING
+# ============================================================================
+
+def validate_scene(scene_or_mesh: Any, auto_heal: bool = True) -> Dict[str, Any]:
+    """
+    In-Engine Kinematic & Geometric Invariant Validator.
+    Audits:
+      1. Wheel Orientation Invariant: Checks principal inertia axis of any ground-adjacent
+         wheel/roller. If vertical (lying flat like a pancake), auto-rotates R_z(90) and grounds.
+      2. Compound Curvature Invariant: Checks normal variance on primary hulls to flag
+         primitive box stacking.
+    """
+    violations = []
+    auto_healed = []
+
+    # Collect submeshes
+    submeshes = []
+    if hasattr(scene_or_mesh, "_sub_parts") and scene_or_mesh._sub_parts:
+        submeshes = list(scene_or_mesh._sub_parts)
+    elif hasattr(scene_or_mesh, "vertices"):
+        submeshes = [scene_or_mesh]
+
+    total_scene_height = 1.0
+    if hasattr(scene_or_mesh, "bounds"):
+        total_scene_height = max(0.1, scene_or_mesh.bounds.size.y)
+
+    # 1. Audit Wheels & Revolving Elements for Pancake Orientation
+    for sub in submeshes:
+        tag = getattr(sub, "_mesh_tag_name", getattr(sub, "name", "")).lower()
+        verts = getattr(sub, "vertices", [])
+        n_v = len(verts)
+        if n_v < 12:
+            continue
+
+        # Compute centroid & coordinate variances
+        cx = sum(v.position.x for v in verts) / n_v
+        cy = sum(v.position.y for v in verts) / n_v
+        cz = sum(v.position.z for v in verts) / n_v
+
+        vx = sum((v.position.x - cx)**2 for v in verts) / n_v
+        vy = sum((v.position.y - cy)**2 for v in verts) / n_v
+        vz = sum((v.position.z - cz)**2 for v in verts) / n_v
+
+        min_y = min(v.position.y for v in verts)
+
+        # Check if submesh is a wheel or cylindrical disc
+        is_wheel_tag = any(k in tag for k in ("wheel", "tire", "roller", "rim"))
+        is_disc_geom = (vy < 0.60 * min(vx, vz)) and (max(vx, vz) > 0.005)
+
+        # Near ground level?
+        is_ground_adjacent = min_y < (total_scene_height * 0.35)
+
+        if (is_wheel_tag or is_disc_geom) and (vy < 0.60 * min(vx, vz)) and is_ground_adjacent:
+            msg = f"Wheel/roller '{tag}' has vertical symmetry axis (lying flat horizontally on ground)."
+            violations.append(msg)
+            if auto_heal and hasattr(sub, "rotate_z"):
+                sub.rotate_z(90.0)
+                # Re-compute min Y and seat bottom on ground
+                new_min_y = min(v.position.y for v in sub.vertices)
+                if new_min_y < 0.0:
+                    sub.translate(0.0, -new_min_y, 0.0)
+                auto_healed.append(f"Auto-rotated '{tag}' 90 degrees around Z to upright lateral rolling stance.")
+
+    # 2. Audit Primary Hull for Planar Box-Stacking Anti-Pattern
+    largest_sub = None
+    max_vol = -1.0
+    for sub in submeshes:
+        if hasattr(sub, "bounds"):
+            sz = sub.bounds.size
+            vol = sz.x * sz.y * sz.z
+            if vol > max_vol:
+                max_vol = vol
+                largest_sub = sub
+
+    if largest_sub is not None:
+        verts = getattr(largest_sub, "vertices", [])
+        if verts and len(verts) < 1200:
+            cardinal_count = 0
+            for v in verts:
+                nx, ny, nz = abs(v.normal.x), abs(v.normal.y), abs(v.normal.z)
+                if nx > 0.98 or ny > 0.98 or nz > 0.98:
+                    cardinal_count += 1
+            cardinal_ratio = cardinal_count / len(verts)
+            sub_tag = getattr(largest_sub, "_mesh_tag_name", getattr(largest_sub, "name", "Hull"))
+            if cardinal_ratio > 0.65 and len(verts) < 60:
+                violations.append(
+                    f"Primary hull '{sub_tag}' consists of stacked planar box primitives (cardinal normal ratio: {cardinal_ratio:.2f}). "
+                    "Use create_lofted_hull() or apply non-linear deformers (taper, bulge, bend) for compound curvature."
+                )
+
+    passed = len(violations) == 0 or (len(auto_healed) == len(violations))
+    return {
+        "passed": passed,
+        "violations": violations,
+        "autoHealed": auto_healed
+    }
+

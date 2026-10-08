@@ -152,6 +152,16 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
     _Mesh.rotate_y = _mesh_rotate_y
     _Mesh.rotate_z = _mesh_rotate_z
 
+    def _mesh_tag(self, tag_name):
+        self._mesh_tag_name = str(tag_name)
+        return self
+
+    def _mesh_get_tag(self):
+        return getattr(self, "_mesh_tag_name", getattr(self, "name", ""))
+
+    _Mesh.tag = _mesh_tag
+    _Mesh.get_tag = _mesh_get_tag
+
 def _parse_color(c):
     if isinstance(c, str):
         hex_str = c.strip().lstrip("#")
@@ -541,6 +551,8 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         _NativeMesh.hausdorff_distance = _mesh_hausdorff_distance
         _NativeMesh.snap_to = _mesh_snap_to
         _NativeMesh.ground_on = _mesh_ground_on
+        _NativeMesh.tag = _mesh_tag
+        _NativeMesh.get_tag = _mesh_get_tag
 
 # ============================================================================
 # 3. PRIMITIVE FACTORY HELPERS
@@ -1329,7 +1341,29 @@ from .adaptive_object import (
     sweep_curve_profile,
     revolve_harmonic_solid,
     replicate_metric_array,
+    create_revolving_component,
+    create_wheel,
+    create_wheel_assembly,
+    create_lofted_hull,
+    create_cambered_foil,
+    validate_scene,
+    superellipse_loop,
+    superellipse_point,
 )
+
+# Attach universal operators to geometry module
+if _native is not None and hasattr(_native, "geometry"):
+    _native.geometry.create_revolving_component = create_revolving_component
+    _native.geometry.create_wheel = create_wheel
+    _native.geometry.create_wheel_assembly = create_wheel_assembly
+    _native.geometry.create_lofted_hull = create_lofted_hull
+    _native.geometry.create_cambered_foil = create_cambered_foil
+
+# Validation Module
+class _ValidationModule:
+    validate_scene = staticmethod(validate_scene)
+
+validation = _ValidationModule()
 
 __all__ = [
     "AdaptiveHeroObjectSynthesizer",
@@ -1342,6 +1376,15 @@ __all__ = [
     "sweep_curve_profile",
     "revolve_harmonic_solid",
     "replicate_metric_array",
+    "create_revolving_component",
+    "create_wheel",
+    "create_wheel_assembly",
+    "create_lofted_hull",
+    "create_cambered_foil",
+    "validate_scene",
+    "validation",
+    "superellipse_loop",
+    "superellipse_point",
     "World",
     "Terrain",
     "Structure",

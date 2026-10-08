@@ -14,6 +14,7 @@ import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../../spatial/GeospatialTileExtractionBridge';
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
+import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 
 export interface GlbAabbBounds {
     min: [number, number, number];
@@ -23,15 +24,20 @@ export interface GlbAabbBounds {
     radius: number;
 }
 
+export interface GlbAnalysisResult {
+    bounds: GlbAabbBounds | null;
+    metrics: GeometricSceneMetrics | null;
+}
+
 /**
  * Rapidly parse glTF 2.0 JSON chunk from binary GLB buffer to extract accurate AABB
- * bounding box without decoding heavy vertex buffers.
+ * bounding box and geometric scene metrics (submeshes, vertex counts, polygon fidelity).
  */
-export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
+export function extractGlbAnalysis(glbBuffer: Buffer): GlbAnalysisResult {
     try {
-        if (!glbBuffer || glbBuffer.length < 20) return null;
+        if (!glbBuffer || glbBuffer.length < 20) return { bounds: null, metrics: null };
         const magic = glbBuffer.toString('utf8', 0, 4);
-        if (magic !== 'glTF') return null;
+        if (magic !== 'glTF') return { bounds: null, metrics: null };
 
         const jsonLength = glbBuffer.readUInt32LE(12);
         const jsonStr = glbBuffer.toString('utf8', 20, 20 + jsonLength);
@@ -41,44 +47,114 @@ export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
         let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         let found = false;
 
-        if (Array.isArray(gltf.accessors)) {
-            for (const acc of gltf.accessors) {
-                if (acc.type === 'VEC3' && Array.isArray(acc.min) && Array.isArray(acc.max)) {
-                    minX = Math.min(minX, acc.min[0]);
-                    minY = Math.min(minY, acc.min[1]);
-                    minZ = Math.min(minZ, acc.min[2]);
-                    maxX = Math.max(maxX, acc.max[0]);
-                    maxY = Math.max(maxY, acc.max[1]);
-                    maxZ = Math.max(maxZ, acc.max[2]);
-                    found = true;
-                }
+        const accessors = Array.isArray(gltf.accessors) ? gltf.accessors : [];
+        for (const acc of accessors) {
+            if (acc.type === 'VEC3' && Array.isArray(acc.min) && Array.isArray(acc.max)) {
+                minX = Math.min(minX, acc.min[0]);
+                minY = Math.min(minY, acc.min[1]);
+                minZ = Math.min(minZ, acc.min[2]);
+                maxX = Math.max(maxX, acc.max[0]);
+                maxY = Math.max(maxY, acc.max[1]);
+                maxZ = Math.max(maxZ, acc.max[2]);
+                found = true;
             }
         }
 
-        if (!found || !isFinite(minX)) return null;
+        let bounds: GlbAabbBounds | null = null;
+        if (found && isFinite(minX)) {
+            const center: [number, number, number] = [
+                (minX + maxX) * 0.5,
+                (minY + maxY) * 0.5,
+                (minZ + maxZ) * 0.5
+            ];
+            const dimensions: [number, number, number] = [
+                Math.max(0.1, maxX - minX),
+                Math.max(0.1, maxY - minY),
+                Math.max(0.1, maxZ - minZ)
+            ];
+            const radius = Math.max(0.1, Math.sqrt(dimensions[0] ** 2 + dimensions[1] ** 2 + dimensions[2] ** 2) * 0.5);
+            bounds = {
+                min: [minX, minY, minZ],
+                max: [maxX, maxY, maxZ],
+                center,
+                dimensions,
+                radius
+            };
+        }
 
-        const center: [number, number, number] = [
-            (minX + maxX) * 0.5,
-            (minY + maxY) * 0.5,
-            (minZ + maxZ) * 0.5
-        ];
-        const dimensions: [number, number, number] = [
-            Math.max(0.1, maxX - minX),
-            Math.max(0.1, maxY - minY),
-            Math.max(0.1, maxZ - minZ)
-        ];
-        const radius = Math.max(0.1, Math.sqrt(dimensions[0] ** 2 + dimensions[1] ** 2 + dimensions[2] ** 2) * 0.5);
+        // Submesh and polygon metrics
+        const submeshes: GeometricMeshSummary[] = [];
+        let totalVertices = 0;
+        let totalTriangles = 0;
 
-        return {
-            min: [minX, minY, minZ],
-            max: [maxX, maxY, maxZ],
-            center,
-            dimensions,
-            radius
+        const meshes = Array.isArray(gltf.meshes) ? gltf.meshes : [];
+        meshes.forEach((meshObj: any, idx: number) => {
+            const meshName = meshObj.name || `Submesh_${idx}`;
+            let meshVerts = 0;
+            let meshTris = 0;
+            let subMinX = Infinity, subMinY = Infinity, subMinZ = Infinity;
+            let subMaxX = -Infinity, subMaxY = -Infinity, subMaxZ = -Infinity;
+
+            const primitives = Array.isArray(meshObj.primitives) ? meshObj.primitives : [];
+            for (const prim of primitives) {
+                if (prim.attributes && typeof prim.attributes.POSITION === 'number') {
+                    const posAcc = accessors[prim.attributes.POSITION];
+                    if (posAcc) {
+                        meshVerts += (posAcc.count || 0);
+                        if (Array.isArray(posAcc.min) && Array.isArray(posAcc.max)) {
+                            subMinX = Math.min(subMinX, posAcc.min[0]);
+                            subMinY = Math.min(subMinY, posAcc.min[1]);
+                            subMinZ = Math.min(subMinZ, posAcc.min[2]);
+                            subMaxX = Math.max(subMaxX, posAcc.max[0]);
+                            subMaxY = Math.max(subMaxY, posAcc.max[1]);
+                            subMaxZ = Math.max(subMaxZ, posAcc.max[2]);
+                        }
+                    }
+                }
+                if (typeof prim.indices === 'number') {
+                    const idxAcc = accessors[prim.indices];
+                    if (idxAcc) {
+                        meshTris += Math.floor((idxAcc.count || 0) / 3);
+                    }
+                }
+            }
+
+            totalVertices += meshVerts;
+            totalTriangles += meshTris;
+
+            let submeshBounds: GeometricMeshSummary['bounds'] | undefined = undefined;
+            if (isFinite(subMinX) && isFinite(subMaxX)) {
+                submeshBounds = {
+                    min: [subMinX, subMinY, subMinZ],
+                    max: [subMaxX, subMaxY, subMaxZ],
+                    dimensions: [subMaxX - subMinX, subMaxY - subMinY, subMaxZ - subMinZ]
+                };
+            }
+
+            submeshes.push({
+                name: meshName,
+                vertexCount: meshVerts,
+                triangleCount: meshTris,
+                bounds: submeshBounds,
+                tag: meshName
+            });
+        });
+
+        const metrics: GeometricSceneMetrics = {
+            totalVertices,
+            totalTriangles,
+            submeshes,
+            engineKernel: 'scratchbox-nanobind-c++20'
         };
+
+        return { bounds, metrics };
     } catch {
-        return null;
+        return { bounds: null, metrics: null };
     }
+}
+
+export function extractGlbAabb(glbBuffer: Buffer): GlbAabbBounds | null {
+    return extractGlbAnalysis(glbBuffer).bounds;
 }
 
 export const PYTHON_3D_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -195,18 +271,30 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
 
         const desc = (typeof args.description === 'string' && args.description.trim()) ? args.description.trim() : 'Procedural 3D Python Scene';
 
-        // 3. Analytical AABB Bounding Box Calculation for Dynamic Camera Auto-Framing
+        // 3. Analytical AABB Bounding Box & Geometric Fidelity Evaluation
         let cameraPosition: [number, number, number] = [0, 18, 38];
         let cameraTarget: [number, number, number] = [0, 4, 0];
         const cameraFov = 50;
         let bounds: GlbAabbBounds | null = null;
+        let gateReport: ComplexityGateReport | null = null;
 
+        let glbBuf: Buffer | null = null;
         if (result.glbBase64) {
-            const buffer = Buffer.from(result.glbBase64, 'base64');
-            bounds = extractGlbAabb(buffer);
+            glbBuf = Buffer.from(result.glbBase64, 'base64');
         } else if (result.glbPath && fs.existsSync(result.glbPath)) {
-            const buffer = fs.readFileSync(result.glbPath);
-            bounds = extractGlbAabb(buffer);
+            glbBuf = fs.readFileSync(result.glbPath);
+        }
+
+        if (glbBuf) {
+            const analysis = extractGlbAnalysis(glbBuf);
+            bounds = analysis.bounds;
+            if (analysis.metrics) {
+                gateReport = GeometricComplexityGate.evaluate(analysis.metrics, {
+                    minVertexCount: 100,
+                    minTriangleCount: 50,
+                    requireMultiMeshHierarchy: false
+                });
+            }
         }
 
         if (bounds) {
@@ -235,6 +323,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 stdout: result.stdout,
                 description: desc,
                 overallBoundingBox: bounds,
+                gateReport: gateReport,
                 locationManifest: extractedManifest,
                 artifact: {
                     id: `artifact-3d-${Date.now()}`,
@@ -269,7 +358,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                     }
                 }
             },
-            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}].`
+            summaryResult: `Successfully generated 3D GLB via Python (${result.executionTimeMs}ms). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}].${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') : ''}`
         };
     }
 };

@@ -87,6 +87,8 @@ import { Universal3DObjectSeparationService } from '../../spatial/Universal3DObj
 import { SpatialVisualAlignmentVerificationService } from '../../spatial/SpatialVisualAlignmentVerificationService';
 import { AnalyticalGroomSplatService } from '../../3d-engine/AnalyticalGroomSplatService';
 import { SceneSpatialAssertionService } from '../../spatial/SceneSpatialAssertionService';
+import { MapsImageryGroundingService } from '../../spatial/MapsImageryGroundingService';
+import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
 import type { BakedGaussian } from '../../../common/geospatial-4d-protocol';
 import type {
     NormalizedPoint2D,
@@ -1543,6 +1545,54 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 height: { type: 'NUMBER', description: 'Baking render resolution per view.' }
             },
             required: ['glbPath', 'stylePrompt']
+        }
+    },
+    {
+        name: 'maps_imagery_grounding_pano',
+        description: 'Ground a natural language landmark prompt or direct Google Street View Pano ID to official Street View imagery using Vertex AI Maps Imagery Grounding (MIG). Retrieves perspective cubic faces, projects to a 2:1 ERP equirectangular canvas buffer, and returns the panorama path and grounding metadata.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                prompt: { type: 'STRING', description: 'Natural language landmark prompt to ground (e.g. "Times Square facing south", "Shibuya Crossing scramble").' },
+                panoId: { type: 'STRING', description: 'Direct Google Street View Pano ID if already known (e.g. "CAoSF0NJSE0wb2dLRUlDQWdJRHE4NkMtbXdF").' },
+                lat: { type: 'NUMBER', description: 'Optional geographic latitude.' },
+                lng: { type: 'NUMBER', description: 'Optional geographic longitude.' },
+                canvasWidth: { type: 'NUMBER', description: 'Width of equirectangular output canvas in pixels (default: 2048).' },
+                canvasHeight: { type: 'NUMBER', description: 'Height of equirectangular output canvas in pixels (default: 1024).' },
+                outputImagePath: { type: 'STRING', description: 'Optional custom disk path to write the projected panorama PNG.' }
+            }
+        }
+    },
+    {
+        name: 'stage_3d_vector_world',
+        description: 'Stage a 3D world population (extruded building prisms, 5-tier road cross-sections with beveled curbs and sidewalks, streetlamps, trees, traffic vehicles, water basins) from Google 2D roadmap vector tiles (MVT/PBF) at zoom 16, rendered in 18% Studio Grey Clay and packaged into a standard binary .glb for immediate 3D scene staging around hero models.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                latitude: { type: 'NUMBER', description: 'Geodetic latitude of target center location (e.g. 40.7484 for Empire State Building).' },
+                longitude: { type: 'NUMBER', description: 'Geodetic longitude of target center location (e.g. -73.9857).' },
+                zoom: { type: 'NUMBER', description: 'Vector tile zoom level (default: 16).' },
+                radiusTiles: { type: 'NUMBER', description: 'Neighbor tile radius around center (default: 1 for a 3x3 tile grid).' },
+                style: { type: 'STRING', description: 'Material styling mode (default: "studio_clay" for 18% Studio Grey Clay).' },
+                populate: { type: 'BOOLEAN', description: 'Whether to procedurally populate world with streetlamps, street trees, and traffic vehicles (default: true).' },
+                includeTraffic: { type: 'BOOLEAN', description: 'Include background vehicles aligned in lanes (default: true).' },
+                includeTrees: { type: 'BOOLEAN', description: 'Include street trees and park foliage (default: true).' },
+                includeStreetlamps: { type: 'BOOLEAN', description: 'Include curbside streetlamps (default: true).' },
+                includeSidewalks: { type: 'BOOLEAN', description: 'Include elevated sidewalks with beveled granite curbs (default: true).' },
+                heroStaging: {
+                    type: 'OBJECT',
+                    description: 'Optional query to solve exact lane/sidewalk placement coordinates for a hero asset.',
+                    properties: {
+                        type: { type: 'STRING', description: 'Placement surface: "lane" or "sidewalk" or "plaza".' },
+                        laneIndex: { type: 'NUMBER', description: 'Lane index (0-indexed).' },
+                        distanceAlongM: { type: 'NUMBER', description: 'Distance along road corridor in meters.' },
+                        roadName: { type: 'STRING', description: 'Optional road name filter.' },
+                        side: { type: 'STRING', description: 'Sidewalk side: "left" or "right".' }
+                    }
+                },
+                outputGlbPath: { type: 'STRING', description: 'Optional custom output file path for the generated binary .glb.' }
+            },
+            required: ['latitude', 'longitude']
         }
     }
 ];
@@ -4900,6 +4950,92 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
             resultPayload: result as unknown as ToolResultPayload,
             summaryResult: `Successfully synthesized ${result.splatCount} anisotropic 3D Gaussian Splats from ${result.strandCount} biophysical strands (harmonic freq: ${contract.surface.harmonicFrequency ?? 0}, amplitude: ${contract.surface.harmonicAmplitude ?? 0}) in ${result.executionTimeMs}ms. SPZ: ${result.spzPath || 'N/A'}`
         };
+    },
+    maps_imagery_grounding_pano: async (args, _ctx) => {
+        const prompt = asString(args.prompt);
+        const panoId = asString(args.panoId);
+        const lat = typeof args.lat === 'number' ? args.lat : undefined;
+        const lng = typeof args.lng === 'number' ? args.lng : undefined;
+        const canvasWidth = typeof args.canvasWidth === 'number' ? args.canvasWidth : 2048;
+        const canvasHeight = typeof args.canvasHeight === 'number' ? args.canvasHeight : 1024;
+        const outputImagePath = asString(args.outputImagePath);
+
+        const result = await MapsImageryGroundingService.groundAndProjectStreetViewPanorama({
+            prompt: prompt || undefined,
+            panoId: panoId || undefined,
+            lat,
+            lng,
+            canvasWidth,
+            canvasHeight,
+            outputPath: outputImagePath || undefined
+        });
+
+        if (!result.success) {
+            throw new Error(`Maps Imagery Grounding failed: ${result.error}`);
+        }
+
+        return {
+            resultPayload: result as unknown as ToolResultPayload,
+            summaryResult: `Successfully grounded & projected Street View panorama for panoId "${result.panoId}". ERP canvas saved to: ${(result as any).outputPath || (result as any).erpPath || 'saved'} (${result.erpWidth}x${result.erpHeight}). Date: ${result.captureDate || (result as any).date || 'Historical'}, Lat/Lng: ${result.lat}, ${result.lng}.`
+        };
+    },
+    stage_3d_vector_world: async (args, _ctx) => {
+        const latitude = typeof args.latitude === 'number' ? args.latitude : 40.7484;
+        const longitude = typeof args.longitude === 'number' ? args.longitude : -73.9857;
+        const zoom = typeof args.zoom === 'number' ? args.zoom : 16;
+        const radiusTiles = typeof args.radiusTiles === 'number' ? args.radiusTiles : 1;
+        const style = asString(args.style) || 'studio_clay';
+        const outputGlbPath = asString(args.outputGlbPath);
+        const populate = args.populate !== false;
+        const includeTraffic = args.includeTraffic !== false;
+        const includeTrees = args.includeTrees !== false;
+        const includeStreetlamps = args.includeStreetlamps !== false;
+        const includeSidewalks = args.includeSidewalks !== false;
+        const heroStaging = args.heroStaging && typeof args.heroStaging === 'object' ? args.heroStaging as any : undefined;
+
+        if (populate) {
+            const { VectorWorldPopulatorService } = await import('../../spatial/VectorWorldPopulatorService');
+            const result = await VectorWorldPopulatorService.generatePopulatedWorld({
+                latitude,
+                longitude,
+                zoom,
+                radiusTiles,
+                style,
+                outputGlbPath: outputGlbPath || undefined,
+                includeTraffic,
+                includeTrees,
+                includeStreetlamps,
+                includeSidewalks,
+                heroStaging
+            });
+
+            const heroSummary = result.heroPlacement
+                ? ` Hero Placement solved: [${result.heroPlacement.position.map(n => n.toFixed(2)).join(', ')}], yaw: ${result.heroPlacement.headingDeg.toFixed(1)}° on ${result.heroPlacement.targetSurface}.`
+                : '';
+
+            return {
+                resultPayload: result as unknown as ToolResultPayload,
+                summaryResult: `Successfully staged populated 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Generated ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road cross-sections, ${result.stats.streetlampCount} streetlamps, ${result.stats.treeCount} trees, ${result.stats.trafficVehicleCount} vehicles, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${result.glbPath}.${heroSummary}`
+            };
+        } else {
+            const result = await GoogleVectorTileService.stage3DVectorWorld({
+                latitude,
+                longitude,
+                zoom,
+                radiusTiles,
+                style,
+                outputGlbPath: outputGlbPath || undefined
+            });
+
+            if (!result.success) {
+                throw new Error(`3D Vector Tile staging failed: ${(result as any).error || 'unknown error'}`);
+            }
+
+            return {
+                resultPayload: result as unknown as ToolResultPayload,
+                summaryResult: `Successfully staged 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Extruded ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${(result as any).glbPath || (result as any).outputGlbPath}`
+            };
+        }
     }
 };
 
