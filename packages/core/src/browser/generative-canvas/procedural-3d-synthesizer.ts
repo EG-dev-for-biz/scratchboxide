@@ -2098,16 +2098,15 @@ function _synthesizeRawContextual3DSceneInner(
     const docTitle = context?.docTitle || activeDoc?.title || '';
     const existingFeatures = (context?.activeArtifact?.data as Scene3DData)?.features;
 
-    const hasGodRays = /god\s*ray|crepuscular|light\s*shaft|volumetric/i.test(prompt) || !!existingFeatures?.godRays;
-    const isSunset = /sunset|golden\s*hour|dusk/i.test(prompt);
     const explicitAtmosphereRequested = /\b(?:atmosphere|atmospheric|scattering|rayleigh|mie|realistic\s*sky|aerial\s*perspective|haze|cloud\s*shadow|volumetric\s*clouds?)\b/i.test(prompt);
-    const isOutdoorTerrainWithSky = (theme === 'worldbuilder' || theme === 'nature_atmosphere' || theme === 'geospatial') && /\b(?:sky|horizon|sun|sunset|golden\s*hour|clouds?|mountain|valley|plateau|landscape|light)\b/i.test(prompt);
-    const hasAtmosphere = explicitAtmosphereRequested || isOutdoorTerrainWithSky || isSunset || theme === 'geospatial' || theme === 'nature_atmosphere' || hasGodRays || !!existingFeatures?.atmosphericScattering;
+    const hasAtmosphere = explicitAtmosphereRequested || !!existingFeatures?.atmosphericScattering;
+    const hasGodRays = hasAtmosphere && (/god\s*ray|crepuscular|light\s*shaft|volumetric/i.test(prompt) || !!existingFeatures?.godRays);
+    const isSunset = hasAtmosphere && /sunset|golden\s*hour|dusk/i.test(prompt);
     const hasContrails = /contrail|vapor|vortex/i.test(prompt) || !!existingFeatures?.contrails;
     const hasControlSurfaces = /control\s*surface|aileron|elevator|rudder/i.test(prompt) || !!existingFeatures?.controlSurfaces;
 
-    const hasHazeOrFogRequested = /\b(?:haze|fog|mist|aerial\s*perspective|dense\s*atmosphere|dust|volumetric\s*fog)\b/i.test(prompt);
-    const hasCloudsRequested = /\b(?:clouds?|cloudy|overcast|cumulus|stratus)\b/i.test(prompt);
+    const hasHazeOrFogRequested = hasAtmosphere && /\b(?:haze|fog|mist|aerial\s*perspective|dense\s*atmosphere|dust|volumetric\s*fog)\b/i.test(prompt);
+    const hasCloudsRequested = hasAtmosphere && /\b(?:clouds?|cloudy|overcast|cumulus|stratus)\b/i.test(prompt);
 
     const atmosphericConfig = hasAtmosphere ? buildHeadlessAtmosphere({
         aerialPerspectiveEnabled: hasHazeOrFogRequested,
@@ -2363,21 +2362,18 @@ function _synthesizeRawContextual3DSceneInner(
                 includeTerrain: true
             });
 
-            // For real-world scenes anchored to 3D tiles, Google 3D Tiles provides the persistent real-world
-            // architecture, trees, streets, and terrain. We attach the custom mesh definition and building meshes.
-            const customMeshes: NonNullable<Scene3DData['customMeshes']> = [
-                tileResult.customMeshDefinition,
-                ...(tileResult.buildingMeshes || [])
-            ];
+            // Real-world scenes stream authentic Google 3D Tiles in 18% Studio Grey Clay.
+            // Synthetic box meshes and uninvited atmospheric skyboxes are strictly suppressed.
+            const customMeshes: NonNullable<Scene3DData['customMeshes']> = [];
 
             const sceneTitle = `${realWorldLoc.landmarkName} — 3D Real-World Clay Model`;
 
             return {
                 title: sceneTitle,
-                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult.stats.buildingCount} structures, ${tileResult.stats.vertexCount} vertices, ${clayPreset} PBR shading).`,
+                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult.stats.buildingCount} structures, 18% Studio Grey Clay mode).`,
                 worldBranch: `real-world/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
                 sceneType: 'worldbuilder',
-                renderMode: 'pbr',
+                renderMode: 'clay',
                 cameraMode: 'orbit',
                 animation: 'orbit',
                 timeline: {
@@ -2394,8 +2390,8 @@ function _synthesizeRawContextual3DSceneInner(
                     fov: 45
                 },
                 environment: {
-                    skybox: (hasAtmosphere || hasGodRays) ? 'realistic-sky' : 'golden_hour',
-                    lighting: 'golden_hour',
+                    skybox: (hasAtmosphere && explicitAtmosphereRequested) ? 'realistic-sky' : 'studio',
+                    lighting: 'studio',
                     ground: false
                 },
                 geoAnchor: {
@@ -2411,7 +2407,7 @@ function _synthesizeRawContextual3DSceneInner(
                 objects: [tileResult.media4DObject],
                 features: {
                     ...baseFeatures,
-                    ...(hasAtmosphere ? {
+                    ...(explicitAtmosphereRequested ? {
                         atmosphericScattering: buildHeadlessAtmosphere({
                             sunElevation: 28,
                             sunAzimuth: 145,
@@ -2472,6 +2468,8 @@ function _synthesizeRawContextual3DSceneInner(
             renderMode: 'clay',
             environment: {
                 ...heroScene.environment,
+                skybox: (hasAtmosphere && explicitAtmosphereRequested) ? 'realistic-sky' : 'studio',
+                lighting: 'studio',
                 ground: true
             },
             geoAnchor: {
@@ -2488,22 +2486,20 @@ function _synthesizeRawContextual3DSceneInner(
                 ...(heroScene.objects || [])
             ],
             customMeshes: [
-                tileResult.customMeshDefinition,
-                ...(tileResult.buildingMeshes || []),
                 ...(heroScene.customMeshes || [])
             ],
             features: {
                 ...heroScene.features,
                 ...baseFeatures,
-                ...(hasAtmosphere ? {
+                ...(explicitAtmosphereRequested ? {
                     atmosphericScattering: buildHeadlessAtmosphere({
                         sunElevation: isSunset ? 12 : 28,
                         sunAzimuth: 145,
                         latitude: realWorldLoc.lat,
                         longitude: realWorldLoc.lng,
-                        aerialPerspectiveEnabled: hasHazeOrFogRequested || isSunset || hasAtmosphere,
+                        aerialPerspectiveEnabled: hasHazeOrFogRequested || isSunset,
                         inscatteringIntensity: (hasHazeOrFogRequested || isSunset) ? 1.0 : 0.0,
-                        cloudShadowsEnabled: hasCloudsRequested || hasAtmosphere,
+                        cloudShadowsEnabled: hasCloudsRequested,
                         cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.35
                     }),
                     godRays: hasGodRays

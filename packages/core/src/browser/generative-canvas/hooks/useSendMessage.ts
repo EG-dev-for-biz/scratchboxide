@@ -1081,22 +1081,18 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
             finalAssistantMsg = {
                 id: `msg-${Date.now()}`,
                 sender: 'assistant',
-                text: `⚠️ **Scratchbox Backend Service Offline**\n\nUnable to connect to the backend server at \`http://127.0.0.1:3001\` (${backend.connectionError}).\n\nPlease ensure the dev server is running with network permissions (\`npm run dev\`).`,
+                text: `⚠️ **Scratchbox Backend Service Offline**\n\nUnable to connect to the backend server at \`http://127.0.0.1:3001\` (${backend.connectionError}).\n\nIn accordance with our online architecture, offline mock fallbacks are disabled. Please ensure the dev server is running with network permissions (\`npm run dev\`).`,
                 timestamp: new Date().toLocaleTimeString()
             };
             depsRef.current.showToast(`Backend unreachable: ${backend.connectionError}`, '⚠️');
         } else {
-            const latest = depsRef.current;
-            const result = selectLocalFallback(latest, ctx);
-            fallbackGen = result.artifact;
-            if (result.toast) {
-                latest.showToast(result.toast.text, result.toast.icon);
-            }
-            const localMsg = await streamLocalFallback(depsRef.current, ctx, result, signal);
-            if (signal.aborted || !localMsg) {
-                return;
-            }
-            finalAssistantMsg = localMsg;
+            finalAssistantMsg = {
+                id: `msg-${Date.now()}`,
+                sender: 'assistant',
+                text: `⚠️ **Unable to Reach AI Model or Data Sources**\n\nThe AI model or backend generative services could not be reached to process your request. Offline fallbacks have been retired in accordance with our online architecture.\n\nPlease verify that the backend dev server is active (\`npm run dev\`) and that your network connection and API credentials are configured.`,
+                timestamp: new Date().toLocaleTimeString()
+            };
+            depsRef.current.showToast(`Unable to reach AI model or data sources`, '⚠️');
         }
 
         signal.removeEventListener('abort', resetLiveState);

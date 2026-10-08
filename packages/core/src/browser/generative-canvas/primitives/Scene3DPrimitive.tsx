@@ -1110,8 +1110,8 @@ int main(int argc, char** argv) {
         })()
     }));
 
-    // Rendering options
-    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || 'shaded');
+    // Rendering options: Default strictly to Studio Grey Clay mode
+    const [renderMode, setRenderMode] = React.useState<Scene3DRenderMode>(data?.renderMode || 'clay');
     const renderModeRef = useLatest(renderMode);
     const [cameraMode, setCameraMode] = React.useState<'orbit' | 'fps'>('orbit');
     const initialWorldBranch = (data?.worldBranch && /car|vehicle|automobile/i.test(data?.title || '') && /city|urban|street/i.test(data.worldBranch))

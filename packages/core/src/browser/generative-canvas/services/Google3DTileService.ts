@@ -94,12 +94,12 @@ export function generateGeospatialCpp3DSource(params: {
     ? `// Creative Casting Rationale: ${params.castingRationale.replace(/\n/g, ' ')}\n`
     : '';
 
-  let clayEnum = 'WARM_TERRACOTTA';
+  let clayEnum = 'SLATE_GREY';
   const preset = (params.clayPreset || '').toLowerCase();
   if (preset.includes('white') || preset.includes('arch')) clayEnum = 'ARCHITECTURAL_WHITE';
   else if (preset.includes('sandstone') || preset.includes('desert')) clayEnum = 'SANDSTONE';
   else if (preset.includes('concrete') || preset.includes('brutalist')) clayEnum = 'CONCRETE_BRUTALIST';
-  else if (preset.includes('slate') || preset.includes('grey') || preset.includes('gray')) clayEnum = 'SLATE_GREY';
+  else if (preset.includes('terracotta') || preset.includes('warm')) clayEnum = 'WARM_TERRACOTTA';
 
   return `// ==============================================================================
 // Scratchbox 3D Engine: Geospatial Procedural Generator (C++20)
@@ -207,32 +207,26 @@ export function detectRealWorldLocationIntent(
     return undefined;
   }
 
-  // Sort entries by key length descending so specific multi-word landmarks match first
-  const sortedLandmarks = Object.entries(OFFLINE_TEST_FIXTURE_COORDINATES).sort((a, b) => b[0].length - a[0].length);
-
-  // Check known landmark/city matches
-  for (const [key, item] of sortedLandmarks) {
-    // Word boundary check to avoid partial false matches
-    const escaped = key.replace(/[-[\]/{}()*+?.\\^$|]/g, '\\$&');
-    const regex = new RegExp(`\\b${escaped}\\b`, 'i');
-    if (regex.test(combined)) {
-      return {
-        isRealWorld: true,
-        landmarkName: item.name,
-        lat: item.lat,
-        lng: item.lng,
-        elevation: item.elevation,
-        elevationSource: 'offline_test_fixture',
-        datum: 'MSL_EGM96',
-        query: item.name
-      };
-    }
+  // Check real-world vector mapping features first (e.g. Midtown Manhattan, Central Park, Empire State, etc.)
+  const vectorAnchor = GoogleVectorMappingService.searchFeatures(combined);
+  if (vectorAnchor) {
+    return {
+      isRealWorld: true,
+      landmarkName: vectorAnchor.formattedAddress || combined,
+      lat: vectorAnchor.lat,
+      lng: vectorAnchor.lng,
+      elevation: vectorAnchor.elevation,
+      elevationSource: 'google_vector_tiles',
+      datum: 'MSL_EGM96',
+      query: vectorAnchor.formattedAddress || prompt
+    };
   }
 
   // Check generic map tile / real world scene / 3D model / 3DGS keywords followed by a location name
   const naturalPatterns = [
     /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)?\s*(?:a|the)?\s*(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)?\s*(?:of|for|at|around|in)\s+)(.+)/i,
-    /(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i
+    /(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i,
+    /\b(?:in|at|around|near)\s+([a-zA-Z0-9\s,.-]+?)(?:\s+(?:with|using|in\s+clay|photorealistic|in\s+3d|modeled)|$)/i
   ];
 
   for (const pattern of naturalPatterns) {
@@ -250,23 +244,31 @@ export function detectRealWorldLocationIntent(
 
       const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank'];
       if (stripped.length >= 2 && !blacklist.includes(stripped.toLowerCase())) {
-        const resolved = Google3DTileService.getInstance().resolveLocationSync(target);
-        const isKnown = Boolean(resolved.isResolved && resolved.lat !== 0);
-        const isRecognizedTarget = sortedLandmarks.some(([k]) => {
-          if (k.length <= 3) {
-            return new RegExp(`\\b${k}\\b`, 'i').test(target);
-          }
-          return target.toLowerCase().includes(k);
-        });
-        const hasCityQualifier = /\b(?:nyc|new york|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|dc|washington)\b/i.test(target);
-
-        if (isKnown || isRecognizedTarget || hasCityQualifier) {
+        const vAnchor = GoogleVectorMappingService.searchFeatures(target) || GoogleVectorMappingService.searchFeatures(stripped);
+        if (vAnchor) {
           return {
             isRealWorld: true,
-            landmarkName: (resolved.isResolved ? resolved.landmarkName : undefined) || target,
-            lat: resolved.lat,
-            lng: resolved.lng,
-            elevation: resolved.elevation,
+            landmarkName: vAnchor.formattedAddress || target,
+            lat: vAnchor.lat,
+            lng: vAnchor.lng,
+            elevation: vAnchor.elevation,
+            elevationSource: 'google_vector_tiles',
+            datum: 'MSL_EGM96',
+            query: target
+          };
+        }
+
+        const hasGeoQualifier = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i.test(target);
+
+        if (hasGeoQualifier) {
+          return {
+            isRealWorld: true,
+            landmarkName: target,
+            lat: 0,
+            lng: 0,
+            elevation: 0,
+            elevationSource: 'online_geocoding_required',
+            datum: 'MSL_EGM96',
             query: target
           };
         }
@@ -328,8 +330,20 @@ export class Google3DTileService {
       };
     }
 
-    // Sort entries by key length descending so specific multi-word landmarks match first
-    const sortedEntries = Object.entries(OFFLINE_TEST_FIXTURE_COORDINATES).sort((a, b) => b[0].length - a[0].length);
+    // Check Google Vector Mapping Service (features, road corridors, parcels)
+    const vectorAnchor = GoogleVectorMappingService.searchFeatures(cleanQuery);
+    if (vectorAnchor) {
+      return {
+        lat: vectorAnchor.lat,
+        lng: vectorAnchor.lng,
+        elevation: vectorAnchor.elevation,
+        elevationSource: 'google_vector_tiles',
+        datum: 'MSL_EGM96',
+        landmarkName: vectorAnchor.formattedAddress || cleanQuery,
+        formattedAddress: vectorAnchor.formattedAddress,
+        isResolved: true
+      };
+    }
 
     const strippedQuery = cleanQuery
       .replace(/^(?:the|a|an)\s+/i, '')
@@ -337,58 +351,23 @@ export class Google3DTileService {
       .replace(/[.,!?;:]+$/, '')
       .trim();
 
-    // 1. Exact match against full cleanQuery or strippedQuery
-    for (const [key, item] of sortedEntries) {
-      if (cleanQuery === key || strippedQuery === key) {
+    if (strippedQuery !== cleanQuery) {
+      const strippedAnchor = GoogleVectorMappingService.searchFeatures(strippedQuery);
+      if (strippedAnchor) {
         return {
-          lat: item.lat,
-          lng: item.lng,
-          elevation: item.elevation,
-          elevationSource: 'offline_test_fixture',
+          lat: strippedAnchor.lat,
+          lng: strippedAnchor.lng,
+          elevation: strippedAnchor.elevation,
+          elevationSource: 'google_vector_tiles',
           datum: 'MSL_EGM96',
-          landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`,
+          landmarkName: strippedAnchor.formattedAddress || strippedQuery,
+          formattedAddress: strippedAnchor.formattedAddress,
           isResolved: true
         };
       }
     }
 
-    // 2. Substring & word boundary match (longest key first)
-    for (const [key, item] of sortedEntries) {
-      const escaped = key.replace(/[-[\]/{}()*+?.\\^$|]/g, '\\$&');
-      const wordRegex = new RegExp(`\\b${escaped}\\b`, 'i');
-      if (wordRegex.test(cleanQuery) || wordRegex.test(strippedQuery) || (key.length >= 6 && cleanQuery.includes(key))) {
-        return {
-          lat: item.lat,
-          lng: item.lng,
-          elevation: item.elevation,
-          elevationSource: 'offline_test_fixture',
-          datum: 'MSL_EGM96',
-          landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`,
-          isResolved: true
-        };
-      }
-    }
-
-    // 3. Reverse substring match: check if any part of key is in cleanQuery
-    for (const [key, item] of sortedEntries) {
-      if (key.length >= 4 && (cleanQuery.includes(key) || strippedQuery.includes(key))) {
-        return {
-          lat: item.lat,
-          lng: item.lng,
-          elevation: item.elevation,
-          elevationSource: 'offline_test_fixture',
-          datum: 'MSL_EGM96',
-          landmarkName: item.name,
-          formattedAddress: `${item.name}, Earth`,
-          isResolved: true
-        };
-      }
-    }
-
-    // ADA Invariant: Never silently default to San Francisco!
-    // Return unresolved status so callers can request coordinates or trigger dynamic geocoding.
+    // In accordance with our online architecture: Never guess or silently default to mock coordinates!
     return {
       lat: 0,
       lng: 0,
@@ -413,7 +392,7 @@ export class Google3DTileService {
 
     const cleanQuery = queryOrCoords.trim().toLowerCase();
 
-    // Direct check against offline fixtures or coordinate strings
+    // Check direct sync resolution (explicit coordinates or vector mapping)
     const syncRes = this.resolveLocationSync(cleanQuery);
     if (syncRes.isResolved && syncRes.lat !== 0) {
       return syncRes;
@@ -442,11 +421,11 @@ export class Google3DTileService {
         };
       }
     } catch {
-      // Ignore network errors and continue to throw
+      // Ignore network errors and continue to throw actionable error
     }
 
     throw new Error(
-      `[Google3DTileService] Could not resolve geodetic coordinates for "${queryOrCoords}". In accordance with ADA Zero-Presets, provide explicit geodetic coordinates [lat, lng] or verify Google Maps API key / network connectivity.`
+      `[Google3DTileService] Unable to reach Google Maps 3D Tiles data sources or resolve coordinates for "${queryOrCoords}". In accordance with our online architecture, please verify network connectivity or provide explicit geodetic coordinates [lat, lng].`
     );
   }
 
@@ -458,51 +437,40 @@ export class Google3DTileService {
       options.query ||
       (options.lat !== undefined && options.lng !== undefined
         ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : 'san francisco ferry building')
+        : 'empire state building')
     );
 
-    if (!geo.isResolved && options.lat === undefined) {
+    if (!geo.isResolved || (geo.lat === 0 && geo.lng === 0 && options.lat === undefined)) {
       throw new Error(
-        `[Google3DTileService] Could not resolve geodetic coordinates for "${options.query}". In accordance with ADA Zero-Presets, provide explicit geodetic coordinates { lat, lng } or verify Google Maps tile availability.`
+        `[Google3DTileService] Could not resolve geodetic coordinates for "${options.query}". In accordance with our online architecture, please provide explicit geodetic coordinates [lat, lng] or verify Google Maps tile availability.`
       );
     }
 
     const zoom = options.zoom ?? 17;
     const radius = options.radiusMeters ?? 160;
-    const clayPreset = options.clayPreset ?? 'warm-clay';
+    const clayPreset = options.clayPreset ?? 'studio-grey';
     const detailLevel = options.detailLevel ?? 'high';
-    const includeTerrain = options.includeTerrain ?? true;
-    const includeBuildings = options.includeBuildings ?? true;
 
     const tileXYZ = TileBoundAligner.latLngToXYZ(geo.lat, geo.lng, zoom);
     const ltp = new LocalTangentPlane({ lat: geo.lat, lng: geo.lng, alt: geo.elevation });
     const localBounds = TileBoundAligner.latLngRadiusToLocalBounds(geo.lat, geo.lng, radius, ltp, -15, 220);
 
-    // Synthesize realistic 3D architectural & terrain geometry
-    const { geometry, stats, buildingRecords } = this.synthesizeTileGeometry({
-      radius,
-      detailLevel,
-      includeTerrain,
-      includeBuildings,
-      centerElevation: geo.elevation,
-      seedLat: geo.lat,
-      seedLng: geo.lng
-    });
-
-    const clayMaterial = TileClayProcessor.createClayMaterial({
-      preset: clayPreset,
-      color: options.customColor,
-      cavityShading: true
-    });
-
     const objectId = `tile_mesh_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const meshName = options.name || `3D Map Tile (${geo.landmarkName || `${geo.lat.toFixed(3)}, ${geo.lng.toFixed(3)}`})`;
+    const meshName = options.name || `Google 3D Map Tile (${geo.landmarkName || `${geo.lat.toFixed(4)}, ${geo.lng.toFixed(4)}`})`;
 
-    const mesh = new THREE.Mesh(geometry, clayMaterial);
-    mesh.name = meshName;
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.userData = {
+    const stats: TileIngestionStats = {
+      buildingCount: 0,
+      vertexCount: 0,
+      faceCount: 0,
+      elevationSpanMeters: 0,
+      terrainAreaSqMeters: Math.PI * radius * radius
+    };
+
+    // Clean anchor group for Three.js scene hierarchy.
+    // Real-world 3D geometry is streamed live online by GooglePhotorealistic3DTilesLayer.
+    const group = new THREE.Group();
+    group.name = meshName;
+    group.userData = {
       id: objectId,
       name: meshName,
       is3DMapTile: true,
@@ -512,11 +480,6 @@ export class Google3DTileService {
       bounds: localBounds,
       stats
     };
-
-    let glbBuffer: ArrayBuffer | undefined;
-    if (options.generateGlb !== false) {
-      glbBuffer = this.synthesizeGlbTileBufferSync(mesh);
-    }
 
     const media4DObject: Media4DObject = {
       id: objectId,
@@ -559,49 +522,16 @@ export class Google3DTileService {
       }
     };
 
-    const customMeshDefinition: NonNullable<Scene3DData['customMeshes']>[number] = {
-      id: objectId,
-      name: meshName,
-      type: 'custom',
-      position: [0, 0, 0],
-      rotation: [0, 0, 0],
-      scale: [1, 1, 1],
-      material: {
-        type: 'MeshStandardMaterial',
-        color: CLAY_PRESETS[clayPreset]?.color || 0xc89678,
-        roughness: CLAY_PRESETS[clayPreset]?.roughness ?? 0.82,
-        metalness: CLAY_PRESETS[clayPreset]?.metalness ?? 0.02,
-        shaderKey: clayPreset
-      }
-    };
-
-    const buildingMeshes: NonNullable<Scene3DData['customMeshes']> = buildingRecords.map(b => ({
-      id: b.id,
-      name: b.name,
-      type: 'box',
-      position: b.position,
-      rotation: [0, 0, 0],
-      scale: [b.dimensions[0], b.dimensions[1], b.dimensions[2]],
-      material: {
-        type: 'MeshStandardMaterial',
-        color: b.isCentral ? (CLAY_PRESETS[clayPreset]?.color || 0xc89678) : 0xd8a688,
-        roughness: CLAY_PRESETS[clayPreset]?.roughness ?? 0.82,
-        metalness: CLAY_PRESETS[clayPreset]?.metalness ?? 0.02,
-        shaderKey: clayPreset
-      }
-    }));
-
     return {
       success: true,
-      mesh,
+      mesh: group as unknown as THREE.Mesh,
       media4DObject,
-      customMeshDefinition,
-      buildingMeshes,
+      customMeshDefinition: undefined,
+      buildingMeshes: [],
       geoAnchor: geo,
       tileXYZ,
       bounds: localBounds,
-      stats,
-      glbBuffer
+      stats
     };
   }
 
@@ -613,7 +543,7 @@ export class Google3DTileService {
       options.query ||
       (options.lat !== undefined && options.lng !== undefined
         ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : 'san francisco ferry building')
+        : { lat: 40.7484, lng: -73.9857 })
     );
 
     return this.ingestTileRegionSync({
@@ -632,219 +562,7 @@ export class Google3DTileService {
     return GeospatialPhotorealPipeline.getInstance().synthesizePhotorealScene(options);
   }
 
-  /**
-   * Synthesizes 3D photogrammetric geometry with terrain elevation & realistic building footprint massing.
-   */
-  private synthesizeTileGeometry(params: {
-    radius: number;
-    detailLevel: 'low' | 'medium' | 'high';
-    includeTerrain: boolean;
-    includeBuildings: boolean;
-    centerElevation: number;
-    seedLat: number;
-    seedLng: number;
-  }): {
-    geometry: THREE.BufferGeometry;
-    stats: TileIngestionStats;
-    buildingRecords: Array<{
-      id: string;
-      name: string;
-      position: [number, number, number];
-      dimensions: [number, number, number];
-      isCentral: boolean;
-    }>;
-  } {
-    const { radius, detailLevel, includeTerrain, includeBuildings, centerElevation, seedLat, seedLng } = params;
 
-    const positions: number[] = [];
-    const normals: number[] = [];
-    const uvs: number[] = [];
-    const indices: number[] = [];
-
-    let vertexOffset = 0;
-    let buildingCount = 0;
-    const buildingRecords: Array<{
-      id: string;
-      name: string;
-      position: [number, number, number];
-      dimensions: [number, number, number];
-      isCentral: boolean;
-    }> = [];
-
-    // 1. Terrain Ground Mesh
-    if (includeTerrain) {
-      const gridSegments = detailLevel === 'high' ? 32 : detailLevel === 'medium' ? 20 : 12;
-      const step = (radius * 2) / gridSegments;
-      const startX = -radius;
-      const startZ = -radius;
-
-      const terrainGrid: number[][] = [];
-
-      for (let j = 0; j <= gridSegments; j++) {
-        const row: number[] = [];
-        const z = startZ + j * step;
-        for (let i = 0; i <= gridSegments; i++) {
-          const x = startX + i * step;
-
-          // Deterministic topographic undulation using trigonometric harmonic frequencies
-          const freq1 = Math.sin((x + seedLng * 100) * 0.02) * Math.cos((z + seedLat * 100) * 0.02) * 3.5;
-          const freq2 = Math.sin(x * 0.08 + 1.2) * Math.cos(z * 0.08 + 0.7) * 1.2;
-          const y = freq1 + freq2;
-
-          positions.push(x, y, z);
-          normals.push(0, 1, 0); // Will recompute
-          uvs.push(i / gridSegments, j / gridSegments);
-          row.push(vertexOffset++);
-        }
-        terrainGrid.push(row);
-      }
-
-      for (let j = 0; j < gridSegments; j++) {
-        for (let i = 0; i < gridSegments; i++) {
-          const a = terrainGrid[j][i];
-          const b = terrainGrid[j + 1][i];
-          const c = terrainGrid[j][i + 1];
-          const d = terrainGrid[j + 1][i + 1];
-
-          indices.push(a, b, c);
-          indices.push(c, b, d);
-        }
-      }
-    }
-
-    // 2. Architectural Building Volumes
-    let maxBuildingHeight = 0;
-
-    if (includeBuildings) {
-      const countFactor = detailLevel === 'high' ? 18 : detailLevel === 'medium' ? 10 : 5;
-      const blockStep = (radius * 1.6) / Math.sqrt(countFactor);
-
-      let seed = Math.abs(Math.sin(seedLat * 12.9898 + seedLng * 78.233)) * 43758.5453;
-      const pseudoRandom = () => {
-        seed = (seed * 9301 + 49297) % 233280;
-        return seed / 233280;
-      };
-
-      for (let bx = -radius * 0.75; bx <= radius * 0.75; bx += blockStep) {
-        for (let bz = -radius * 0.75; bz <= radius * 0.75; bz += blockStep) {
-          const distFromCenter = Math.sqrt(bx * bx + bz * bz);
-          if (distFromCenter > radius * 0.85) continue;
-
-          // Randomize building footprint size and height
-          const width = 14 + pseudoRandom() * 22;
-          const depth = 14 + pseudoRandom() * 22;
-          
-          // Landmark centers have prominent skyscrapers / main hall
-          const isCentral = distFromCenter < radius * 0.35;
-          const height = isCentral ? 35 + pseudoRandom() * 65 : 12 + pseudoRandom() * 28;
-          if (height > maxBuildingHeight) maxBuildingHeight = height;
-
-          const cx = bx + (pseudoRandom() - 0.5) * (blockStep * 0.4);
-          const cz = bz + (pseudoRandom() - 0.5) * (blockStep * 0.4);
-          const baseY = 0;
-
-          // Generate building box geometry
-          const halfW = width / 2;
-          const halfD = depth / 2;
-
-          // 8 Corner Vertices
-          const p0 = [cx - halfW, baseY, cz - halfD];
-          const p1 = [cx + halfW, baseY, cz - halfD];
-          const p2 = [cx + halfW, baseY, cz + halfD];
-          const p3 = [cx - halfW, baseY, cz + halfD];
-          const p4 = [cx - halfW, baseY + height, cz - halfD];
-          const p5 = [cx + halfW, baseY + height, cz - halfD];
-          const p6 = [cx + halfW, baseY + height, cz + halfD];
-          const p7 = [cx - halfW, baseY + height, cz + halfD];
-
-          const addQuad = (v0: number[], v1: number[], v2: number[], v3: number[], normal: number[]) => {
-            const i0 = vertexOffset++;
-            const i1 = vertexOffset++;
-            const i2 = vertexOffset++;
-            const i3 = vertexOffset++;
-
-            positions.push(...v0, ...v1, ...v2, ...v3);
-            normals.push(...normal, ...normal, ...normal, ...normal);
-            uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
-
-            indices.push(i0, i1, i2);
-            indices.push(i0, i2, i3);
-          };
-
-          // Front (+Z)
-          addQuad(p3, p2, p6, p7, [0, 0, 1]);
-          // Back (-Z)
-          addQuad(p1, p0, p4, p5, [0, 0, -1]);
-          // Left (-X)
-          addQuad(p0, p3, p7, p4, [-1, 0, 0]);
-          // Right (+X)
-          addQuad(p2, p1, p5, p6, [1, 0, 0]);
-          // Top (+Y Roof)
-          addQuad(p7, p6, p5, p4, [0, 1, 0]);
-
-          // Optional Architectural Roof Setback / Tower spire for tall buildings
-          if (height > 40 && detailLevel === 'high') {
-            const setbackW = halfW * 0.6;
-            const setbackD = halfD * 0.6;
-            const setbackH = height + 10 + pseudoRandom() * 15;
-
-            const sp0 = [cx - setbackW, baseY + height, cz - setbackD];
-            const sp1 = [cx + setbackW, baseY + height, cz - setbackD];
-            const sp2 = [cx + setbackW, baseY + height, cz + setbackD];
-            const sp3 = [cx - setbackW, baseY + height, cz + setbackD];
-            const sp4 = [cx - setbackW, baseY + setbackH, cz - setbackD];
-            const sp5 = [cx + setbackW, baseY + setbackH, cz - setbackD];
-            const sp6 = [cx + setbackW, baseY + setbackH, cz + setbackD];
-            const sp7 = [cx - setbackW, baseY + setbackH, cz + setbackD];
-
-            addQuad(sp3, sp2, sp6, sp7, [0, 0, 1]);
-            addQuad(sp1, sp0, sp4, sp5, [0, 0, -1]);
-            addQuad(sp0, sp3, sp7, sp4, [-1, 0, 0]);
-            addQuad(sp2, sp1, sp5, sp6, [1, 0, 0]);
-            addQuad(sp7, sp6, sp5, sp4, [0, 1, 0]);
-          }
-
-          buildingCount++;
-          const bldgId = `bldg_${buildingCount}_${Math.floor(cx)}_${Math.floor(cz)}`;
-          const bldgName = isCentral
-            ? `Landmark Building ${buildingCount} (${Math.round(height)}m)`
-            : `Structure ${buildingCount} (${Math.round(height)}m)`;
-          buildingRecords.push({
-            id: bldgId,
-            name: bldgName,
-            position: [cx, baseY + height / 2, cz],
-            dimensions: [width, height, depth],
-            isCentral
-          });
-        }
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geometry.setIndex(indices);
-
-    // Compute sharp & unified vertex normals
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-
-    const vertexCount = positions.length / 3;
-    const faceCount = indices.length / 3;
-
-    return {
-      geometry,
-      stats: {
-        buildingCount,
-        vertexCount,
-        faceCount,
-        elevationSpanMeters: maxBuildingHeight + centerElevation + 10,
-        terrainAreaSqMeters: Math.PI * radius * radius
-      },
-      buildingRecords
-    };
-  }
 
   /**
    * Synchronously synthesizes a valid standard Binary GLTF (.glb) buffer from Three.js Object3D.

@@ -74,12 +74,11 @@ export const CLAY_GREY_HEX = 0xb0b8c4;
 export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassification {
     const worldBranch = (input.worldBranch || '').toLowerCase();
     const skybox = (input.skybox || '').toLowerCase();
+    const isClayMode = input.renderMode === 'clay';
 
-    // Atmosphere is an explicit part of the headless build of the scene.
-    // There are NO keyword heuristic presets, and scenes do not receive atmosphere by default.
-    // A scene has atmosphere IF AND ONLY IF the headless scene data explicitly specifies
-    // atmosphericScattering or atmosphere configuration.
-    const atmoConfig = input.atmosphericScattering || input.atmosphere;
+    // In clay mode, focus strictly on clay mode and geometry before color and atmospherics.
+    // Atmospheric skybox domes, volumetric god rays, and biomes are suppressed in clay mode.
+    const atmoConfig = isClayMode ? undefined : (input.atmosphericScattering || input.atmosphere);
     const hasAtmosphere = !!(
         atmoConfig && (
             atmoConfig === true ||
@@ -96,7 +95,7 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
         ))
     );
     const hasGodRays = hasAtmosphere && !!input.godRays;
-    const hasBiomes = !!input.terrainBiomes;
+    const hasBiomes = !isClayMode && !!input.terrainBiomes;
     const biomeType = (typeof input.terrainBiomes === 'object' && input.terrainBiomes && input.terrainBiomes.biomeType)
         ? input.terrainBiomes.biomeType
         : 'alpine';
@@ -117,7 +116,9 @@ export function classifyAtmosphere(input: AtmosphereInput): AtmosphereClassifica
         worldBranch === 'earth/mars-colony-2150';
 
     let backgroundHex = CLAY_GREY_HEX;
-    if (hasAtmosphere) {
+    if (isClayMode) {
+        backgroundHex = CLAY_GREY_HEX;
+    } else if (hasAtmosphere) {
         backgroundHex = isSunset ? 0x1e1b4b : 0xc4d4e8;
     } else if (input.backgroundHex !== undefined) {
         backgroundHex = input.backgroundHex;
