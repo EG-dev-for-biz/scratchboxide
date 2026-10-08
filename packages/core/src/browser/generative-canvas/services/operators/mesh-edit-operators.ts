@@ -1122,7 +1122,9 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             if (!scene.customMeshes) scene.customMeshes = [];
             if (!scene.objects) scene.objects = [];
 
-            scene.customMeshes.push(result.customMeshDefinition);
+            if (result.customMeshDefinition) {
+                scene.customMeshes.push(result.customMeshDefinition);
+            }
             if (result.buildingMeshes && result.buildingMeshes.length > 0) {
                 scene.customMeshes.push(...result.buildingMeshes);
             }
@@ -1164,8 +1166,8 @@ export const MESH_EDIT_OPERATORS: OperatorDefinition[] = [
             ctx.recordState(`Import 3D Map Tile (${result.geoAnchor.landmarkName || result.geoAnchor.lat.toFixed(3)})`);
 
             return {
-                objectId: result.customMeshDefinition.id,
-                name: result.customMeshDefinition.name,
+                objectId: result.customMeshDefinition?.id || result.media4DObject.id,
+                name: result.customMeshDefinition?.name || result.media4DObject.id,
                 geoAnchor: result.geoAnchor,
                 bounds: result.bounds,
                 stats: result.stats,

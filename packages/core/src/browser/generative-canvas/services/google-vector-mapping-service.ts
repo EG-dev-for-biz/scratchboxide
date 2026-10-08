@@ -1260,20 +1260,7 @@ export class GoogleVectorMappingService {
     const clean = query.trim().toLowerCase();
     const mapping = this.getCanonicalMapping();
 
-    // 1. Check anchor
-    if (
-      clean.includes('empire state') ||
-      clean.includes('esb') ||
-      clean.includes('manhattan') ||
-      clean.includes('new york') ||
-      clean.includes('nyc') ||
-      clean.includes('midtown') ||
-      (clean.includes('34th st') && clean.includes('5th'))
-    ) {
-      return mapping.anchor;
-    }
-
-    // 2. Check parcels
+    // 1. Check parcels first
     for (const p of mapping.parcels) {
       if (p.name.toLowerCase().includes(clean) || clean.includes(p.name.toLowerCase()) || p.id.toLowerCase() === clean) {
         const avgLng = p.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / p.coordinatesWGS84.length;
@@ -1285,6 +1272,23 @@ export class GoogleVectorMappingService {
           placeId: p.id,
           formattedAddress: `${p.name}, New York, NY, USA`
         };
+      }
+    }
+
+    // 2. Check landscapes
+    if (mapping.landscapes) {
+      for (const l of mapping.landscapes) {
+        if (l.name.toLowerCase().includes(clean) || clean.includes(l.name.toLowerCase()) || l.id.toLowerCase() === clean) {
+          const avgLng = l.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / l.coordinatesWGS84.length;
+          const avgLat = l.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / l.coordinatesWGS84.length;
+          return {
+            lat: Number(avgLat.toFixed(6)),
+            lng: Number(avgLng.toFixed(6)),
+            elevation: mapping.anchor.elevation,
+            placeId: l.id,
+            formattedAddress: `${l.name}, New York, NY, USA`
+          };
+        }
       }
     }
 
@@ -1303,21 +1307,17 @@ export class GoogleVectorMappingService {
       }
     }
 
-    // 4. Check landscapes
-    if (mapping.landscapes) {
-      for (const l of mapping.landscapes) {
-        if (l.name.toLowerCase().includes(clean) || clean.includes(l.name.toLowerCase()) || l.id.toLowerCase() === clean) {
-          const avgLng = l.coordinatesWGS84.reduce((sum, c) => sum + c[0], 0) / l.coordinatesWGS84.length;
-          const avgLat = l.coordinatesWGS84.reduce((sum, c) => sum + c[1], 0) / l.coordinatesWGS84.length;
-          return {
-            lat: Number(avgLat.toFixed(6)),
-            lng: Number(avgLng.toFixed(6)),
-            elevation: mapping.anchor.elevation,
-            placeId: l.id,
-            formattedAddress: `${l.name}, New York, NY, USA`
-          };
-        }
-      }
+    // 4. Check anchor (Empire State Building / Midtown Anchor)
+    // Only match when query specifically indicates Empire State Building or Midtown Manhattan grid anchor
+    if (
+      clean.includes('empire state') ||
+      clean.includes('esb') ||
+      clean === 'manhattan' ||
+      clean === 'midtown' ||
+      clean === 'midtown manhattan' ||
+      (clean.includes('34th st') && clean.includes('5th'))
+    ) {
+      return mapping.anchor;
     }
 
     return null;

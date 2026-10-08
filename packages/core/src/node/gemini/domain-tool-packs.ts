@@ -30,6 +30,7 @@ import { MESH_SHAPING_TOOL_DECLARATIONS } from './tools/mesh-shaping-tools';
 import { ALGORITHMIC_UV_TOOL_DECLARATIONS } from './tools/algorithmic-uv-tools';
 import { BOTANICAL_TREE_TOOL_DECLARATIONS } from './tools/botanical-tree-tools';
 import { NANO_BANANA_TOOL_DECLARATIONS } from './tools/nano-banana-tools';
+import { TURNAROUND_TOOL_DECLARATIONS } from './tools/turnaround-tools';
 import { VFX_VIDEO_TOOL_DECLARATIONS, AI_BEAUTIFY_TOOL_DECLARATIONS } from './tools/vfx-video-tools';
 import { ADAPTIVE_MATCHMOVE_TOOL_DECLARATIONS } from './tools/adaptive-matchmove-tools';
 import { ATMOSPHERE_TOOL_DECLARATIONS } from './tools/atmosphere-tools';
@@ -101,6 +102,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS,
         ...BOTANICAL_TREE_TOOL_DECLARATIONS,
         ...NANO_BANANA_TOOL_DECLARATIONS,
+        ...TURNAROUND_TOOL_DECLARATIONS,
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS
     ],
     toolNames: [
@@ -108,6 +110,7 @@ export const MESH_SURFACE_PACK: ToolPackDefinition = {
         ...ALGORITHMIC_UV_TOOL_DECLARATIONS.map(d => d.name),
         ...BOTANICAL_TREE_TOOL_DECLARATIONS.map(d => d.name),
         ...NANO_BANANA_TOOL_DECLARATIONS.map(d => d.name),
+        ...TURNAROUND_TOOL_DECLARATIONS.map(d => d.name),
         ...ANALYTICAL_GROOM_TOOL_DECLARATIONS.map(d => d.name)
     ]
 };

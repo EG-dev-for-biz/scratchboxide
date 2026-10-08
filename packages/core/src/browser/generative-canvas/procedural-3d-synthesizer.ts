@@ -2211,10 +2211,10 @@ function _synthesizeRawContextual3DSceneInner(
     }
 
     // Determine procedural, object, and hero location classification
-    const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astro|astra|nanobind)\b/i.test(prompt);
-    const isObjectPrompt = theme === 'vehicle' ||
-        /\b(?:build|create|model|design|generate|sculpt|construct|synthesize)\b/i.test(prompt) ||
-        /\b(?:probe|rover|robot|machine|drone|vehicle|car|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite)\b/i.test(prompt);
+    const isExplicitProcedural = /\b(?:procedural|scratchbox\s*engine|create_building|create_tree|python|c\+\+|nanobind|customScript)\b/i.test(prompt);
+    const isHeroObject = theme === 'vehicle' ||
+        /\b(?:probe|rover|robot|machine|drone|vehicle|car|race\s*car|f1|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite|spacecraft|shuttle|aircraft|plane|jet|helicopter|truck|motorcycle|bicycle|mech|android|cyborg)\b/i.test(prompt);
+    const isObjectPrompt = isHeroObject;
     const isHeroWithLocation = isObjectPrompt && Boolean(realWorldLoc?.isRealWorld);
 
     if (realWorldLoc && realWorldLoc.isRealWorld) {

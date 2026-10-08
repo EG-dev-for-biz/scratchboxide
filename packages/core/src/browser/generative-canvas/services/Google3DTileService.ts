@@ -175,8 +175,21 @@ export function generatePhotorealProceduralCppSource(options: PhotorealReconstru
  */
 export function detectRealWorldLocationIntent(
   prompt: string,
-  context?: { docTitle?: string; docContent?: string }
+  context?: { docTitle?: string; docContent?: string; location?: { lat: number; lng: number; elevation?: number } }
 ): RealWorldLocationIntent | undefined {
+  if (context?.location && typeof context.location.lat === 'number' && typeof context.location.lng === 'number') {
+    return {
+      isRealWorld: true,
+      landmarkName: prompt.trim(),
+      lat: context.location.lat,
+      lng: context.location.lng,
+      elevation: context.location.elevation ?? GoogleMapsService.getInstance().getElevationSync(context.location.lat, context.location.lng),
+      elevationSource: 'explicit_coordinates',
+      datum: 'MSL_EGM96',
+      query: prompt.trim()
+    };
+  }
+
   const combined = `${prompt} ${context?.docTitle || ''} ${context?.docContent || ''}`.toLowerCase();
 
   // Exclude purely generic non-geographic, space, or extraterrestrial prompts unless coordinates are explicitly given
@@ -207,18 +220,18 @@ export function detectRealWorldLocationIntent(
     return undefined;
   }
 
-  // Check real-world vector mapping features first (e.g. Midtown Manhattan, Central Park, Empire State, etc.)
-  const vectorAnchor = GoogleVectorMappingService.searchFeatures(combined);
-  if (vectorAnchor) {
+  // Check if the prompt itself directly names a known vector feature (e.g. "Herald Square", "Penn Plaza", "Manhattan")
+  const directAnchor = GoogleVectorMappingService.searchFeatures(prompt.trim());
+  if (directAnchor && prompt.trim().split(/\s+/).length <= 4) {
     return {
       isRealWorld: true,
-      landmarkName: vectorAnchor.formattedAddress || combined,
-      lat: vectorAnchor.lat,
-      lng: vectorAnchor.lng,
-      elevation: vectorAnchor.elevation,
+      landmarkName: directAnchor.formattedAddress || prompt.trim(),
+      lat: directAnchor.lat,
+      lng: directAnchor.lng,
+      elevation: directAnchor.elevation,
       elevationSource: 'google_vector_tiles',
       datum: 'MSL_EGM96',
-      query: vectorAnchor.formattedAddress || prompt
+      query: directAnchor.formattedAddress || prompt
     };
   }
 
@@ -258,9 +271,10 @@ export function detectRealWorldLocationIntent(
           };
         }
 
+        const isExplicit3DPattern = pattern === naturalPatterns[0] || pattern === naturalPatterns[1];
         const hasGeoQualifier = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i.test(target);
 
-        if (hasGeoQualifier) {
+        if (isExplicit3DPattern || hasGeoQualifier) {
           return {
             isRealWorld: true,
             landmarkName: target,
@@ -273,6 +287,31 @@ export function detectRealWorldLocationIntent(
           };
         }
       }
+    }
+  }
+
+  // If no natural pattern matched, but the prompt itself is a direct location name with geo qualifiers (e.g. "Eiffel Tower Paris", "Tokyo Tower", "Ferry Building SF")
+  const directTarget = prompt.trim()
+    .replace(/\b(?:in\s+clay|with\s+shadows?|in\s+3d|photorealistic|in\s+daylight|at\s+sunset|in\s+golden\s+hour(?:\s+light)?|at\s+night|in\s+pbr|with\s+trees|with\s+clouds|with\s+lighting|in\s+low\s+poly|in\s+high\s+poly|as\s+a\s+(?:3d\s+)?splat|as\s+a\s+gaussian\s+splat|with\s+splats?|as\s+3dgs)\b/gi, '')
+    .replace(/[.,!?;:]+$/, '')
+    .trim();
+
+  const strippedDirect = directTarget.replace(/^(?:the|a|an)\s+/i, '').trim();
+  const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank'];
+  const directWords = strippedDirect.split(/\s+/);
+  if (directWords.length <= 6 && strippedDirect.length >= 2 && !blacklist.includes(strippedDirect.toLowerCase())) {
+    const hasGeo = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i.test(strippedDirect);
+    if (hasGeo) {
+      return {
+        isRealWorld: true,
+        landmarkName: directTarget,
+        lat: 0,
+        lng: 0,
+        elevation: 0,
+        elevationSource: 'online_geocoding_required',
+        datum: 'MSL_EGM96',
+        query: directTarget
+      };
     }
   }
 
@@ -433,12 +472,10 @@ export class Google3DTileService {
    * Ingests a 3D Google photorealistic map tile region into native clay geometry synchronously.
    */
   public ingestTileRegionSync(options: TileIngestionOptions = {}): TileIngestionResult {
-    const geo = this.resolveLocationSync(
-      options.query ||
-      (options.lat !== undefined && options.lng !== undefined
-        ? { lat: options.lat, lng: options.lng, elevation: options.elevation }
-        : 'empire state building')
-    );
+    const hasExplicitCoords = options.lat !== undefined && options.lng !== undefined && (options.lat !== 0 || options.lng !== 0);
+    const geo = hasExplicitCoords
+      ? this.resolveLocationSync({ lat: options.lat!, lng: options.lng!, elevation: options.elevation })
+      : this.resolveLocationSync(options.query || 'empire state building');
 
     if (!geo.isResolved || (geo.lat === 0 && geo.lng === 0 && options.lat === undefined)) {
       throw new Error(

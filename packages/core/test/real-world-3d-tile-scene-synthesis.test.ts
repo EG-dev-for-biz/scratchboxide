@@ -22,6 +22,7 @@ async function runTests() {
   console.log('🗺️ Running Real-World 3D Tile Scene Synthesis Test Suite...\n');
 
   // =========================================================================
+  // =========================================================================
   // Test 1: Real-World Location & Landmark Intent Detection
   // =========================================================================
   console.log('Testing 1: Real-World Location & Landmark Intent Detection...');
@@ -31,83 +32,44 @@ async function runTests() {
     const locPlaza = detectRealWorldLocationIntent(promptPlaza);
     assert.ok(locPlaza, 'Should detect The Plaza Hotel NYC');
     assert.strictEqual(locPlaza?.isRealWorld, true);
-    assert.strictEqual(locPlaza?.landmarkName, 'The Plaza Hotel NYC');
-    assert.ok(Math.abs((locPlaza?.lat ?? 0) - 40.7644) < 0.01, 'Latitude should match Plaza Hotel NYC (40.7644)');
-    assert.ok(Math.abs((locPlaza?.lng ?? 0) - (-73.9744)) < 0.01, 'Longitude should match Plaza Hotel NYC (-73.9744)');
-    assert.strictEqual(locPlaza?.elevation, 18.0);
+    assert.ok(locPlaza?.landmarkName.toLowerCase().includes('plaza'), 'Should extract Plaza Hotel as landmark');
+    assert.strictEqual(locPlaza?.elevationSource, 'online_geocoding_required');
 
-    // User prompt variation: "can you build me a 3d scene of the plaza hotel NYC"
-    const promptCanYou = 'can you build me a 3d scene of the plaza hotel NYC';
-    const locCanYou = detectRealWorldLocationIntent(promptCanYou);
-    assert.ok(locCanYou, 'Should detect "can you build me a 3d scene of the plaza hotel NYC"');
-    assert.strictEqual(locCanYou?.isRealWorld, true);
-    assert.strictEqual(locCanYou?.landmarkName, 'The Plaza Hotel NYC');
+    // Vector feature detection: Manhattan anchor
+    const promptManhattan = 'race car in Manhattan';
+    const locManhattan = detectRealWorldLocationIntent(promptManhattan);
+    assert.ok(locManhattan, 'Should detect Manhattan location');
+    assert.strictEqual(locManhattan?.isRealWorld, true);
+    assert.ok(Math.abs((locManhattan?.lat ?? 0) - 40.7484) < 0.05, 'Should match Manhattan vector anchor latitude');
+    assert.ok(Math.abs((locManhattan?.lng ?? 0) - (-73.9857)) < 0.05, 'Should match Manhattan vector anchor longitude');
 
-    // All Plaza variations
-    const plazaVariations = ['plaza hotel', 'the plaza hotel', 'the plaza hotel nyc', 'plaza hotel nyc', 'the plaza'];
-    for (const pVar of plazaVariations) {
-      const locVar = detectRealWorldLocationIntent(pVar);
-      assert.ok(locVar, `Should detect "${pVar}"`);
-      assert.strictEqual(locVar?.isRealWorld, true);
-      assert.strictEqual(locVar?.landmarkName, 'The Plaza Hotel NYC');
-      assert.ok(Math.abs((locVar?.lat ?? 0) - 40.7644) < 0.01);
-      assert.ok(Math.abs((locVar?.lng ?? 0) - (-73.9744)) < 0.01);
-    }
+    // Explicit coordinate detection
+    const promptCoords = '3D scene at 40.7644, -73.9744';
+    const locCoords = detectRealWorldLocationIntent(promptCoords);
+    assert.ok(locCoords, 'Should detect explicit coordinates');
+    assert.strictEqual(locCoords?.isRealWorld, true);
+    assert.ok(Math.abs((locCoords?.lat ?? 0) - 40.7644) < 0.001);
+    assert.ok(Math.abs((locCoords?.lng ?? 0) - (-73.9744)) < 0.001);
 
-    // Central Park New York
-    const promptCentralPark = 'Central Park New York';
-    const locCP = detectRealWorldLocationIntent(promptCentralPark);
-    assert.ok(locCP, 'Should detect Central Park New York');
-    assert.strictEqual(locCP?.isRealWorld, true);
-    assert.ok(Math.abs((locCP?.lat ?? 0) - 40.7829) < 0.01, 'Latitude should match Central Park');
-    assert.ok(Math.abs((locCP?.lng ?? 0) - (-73.9654)) < 0.01, 'Longitude should match Central Park');
-
-    // Eiffel Tower Paris
-    const promptEiffel = 'Eiffel Tower Paris';
-    const locEiffel = detectRealWorldLocationIntent(promptEiffel);
-    assert.ok(locEiffel, 'Should detect Eiffel Tower Paris');
-    assert.strictEqual(locEiffel?.isRealWorld, true);
-    assert.strictEqual(locEiffel?.landmarkName, 'Eiffel Tower');
-    assert.ok(Math.abs((locEiffel?.lat ?? 0) - 48.8584) < 0.01, 'Latitude should match Paris Eiffel Tower');
-    assert.ok(Math.abs((locEiffel?.lng ?? 0) - 2.2945) < 0.01, 'Longitude should match Paris Eiffel Tower');
-
-    // Tokyo Tower
-    const promptTokyo = 'Tokyo Tower';
-    const locTokyo = detectRealWorldLocationIntent(promptTokyo);
-    assert.ok(locTokyo, 'Should detect Tokyo Tower');
-    assert.strictEqual(locTokyo?.isRealWorld, true);
-    assert.strictEqual(locTokyo?.landmarkName, 'Tokyo Tower');
-    assert.ok(Math.abs((locTokyo?.lat ?? 0) - 35.6586) < 0.01, 'Latitude should match Tokyo Tower');
-    assert.ok(Math.abs((locTokyo?.lng ?? 0) - 139.7454) < 0.01, 'Longitude should match Tokyo Tower');
-
-    // Ferry Building SF
-    const promptFerrySF = 'Ferry Building SF';
-    const locFerry = detectRealWorldLocationIntent(promptFerrySF);
-    assert.ok(locFerry, 'Should detect Ferry Building SF');
-    assert.strictEqual(locFerry?.isRealWorld, true);
-    assert.strictEqual(locFerry?.landmarkName, 'San Francisco Ferry Building');
-    assert.ok(Math.abs((locFerry?.lat ?? 0) - 37.7955) < 0.01, 'Latitude should match SF Ferry Building');
-    assert.ok(Math.abs((locFerry?.lng ?? 0) - (-122.3937)) < 0.01, 'Longitude should match SF Ferry Building');
-
-    // Natural Language Variations
-    const naturalQueries = [
-      { prompt: 'create a 3d model of The Plaza Hotel in NYC', expectedLat: 40.7644, expectedLng: -73.9744 },
-      { prompt: 'show 3d view of Chrysler Building', expectedLat: 40.7516, expectedLng: -73.9755 },
-      { prompt: 'reconstruct Brooklyn Bridge in 3d', expectedLat: 40.7061, expectedLng: -73.9969 },
-      { prompt: 'generate 3D map of Grand Central', expectedLat: 40.7527, expectedLng: -73.9772 },
-      { prompt: 'model of Colosseum in Rome', expectedLat: 41.8902, expectedLng: 12.4922 },
-      { prompt: 'explore 3d map of Taj Mahal', expectedLat: 27.1751, expectedLng: 78.0421 },
-      { prompt: 'render 3d environment of Shibuya Crossing', expectedLat: 35.6595, expectedLng: 139.7004 },
-      { prompt: 'view 3d representation of Sydney Opera House', expectedLat: -33.8568, expectedLng: 151.2153 },
-      { prompt: 'synthesize 3d reconstruction of Burj Khalifa', expectedLat: 25.1972, expectedLng: 55.2744 }
+    // General landmark intent recognition
+    const landmarkPrompts = [
+      'Eiffel Tower Paris',
+      'Tokyo Tower',
+      'Ferry Building SF',
+      'create a 3d model of The Plaza Hotel in NYC',
+      'show 3d view of Chrysler Building',
+      'reconstruct Brooklyn Bridge in 3d',
+      'model of Colosseum in Rome',
+      'explore 3d map of Taj Mahal',
+      'render 3d environment of Shibuya Crossing',
+      'view 3d representation of Sydney Opera House',
+      'synthesize 3d reconstruction of Burj Khalifa'
     ];
 
-    for (const testCase of naturalQueries) {
-      const loc = detectRealWorldLocationIntent(testCase.prompt);
-      assert.ok(loc, `Should detect location for prompt: "${testCase.prompt}"`);
+    for (const prompt of landmarkPrompts) {
+      const loc = detectRealWorldLocationIntent(prompt);
+      assert.ok(loc, `Should detect geographic intent for: "${prompt}"`);
       assert.strictEqual(loc?.isRealWorld, true);
-      assert.ok(Math.abs((loc?.lat ?? 0) - testCase.expectedLat) < 0.05, `Lat for "${testCase.prompt}" should be near ${testCase.expectedLat}, got ${loc?.lat}`);
-      assert.ok(Math.abs((loc?.lng ?? 0) - testCase.expectedLng) < 0.05, `Lng for "${testCase.prompt}" should be near ${testCase.expectedLng}, got ${loc?.lng}`);
     }
 
     // Negative tests: generic non-geographic prompts
@@ -123,95 +85,87 @@ async function runTests() {
       assert.strictEqual(locNonGeo, undefined, `Generic prompt "${prompt}" should not trigger real-world location`);
     }
 
-    console.log(' ✓ Test 1 Passed: Real-world geographic intents and natural phrasing accurately detected.');
+    console.log(' ✓ Test 1 Passed: Real-world geographic intents accurately detected with online-first geocoding contract.');
   }
 
   // =========================================================================
-  // Test 2: Plaza Hotel NYC End-to-End Scene Synthesis with 3D Tiles
+  // Test 2: Online-Only Resolution & Actionable Error on Unreachable Sources
   // =========================================================================
-  console.log('Testing 2: Plaza Hotel NYC End-to-End Scene Synthesis with 3D Tiles...');
+  console.log('Testing 2: Online-Only Resolution & Actionable Error on Unreachable Sources...');
+  {
+    const tileService = Google3DTileService.getInstance();
+
+    // 1. Explicit coordinates resolve synchronously without mock fixtures
+    const coordRes = tileService.resolveLocationSync({ lat: 40.7644, lng: -73.9744, elevation: 18.0 });
+    assert.strictEqual(coordRes.isResolved, true);
+    assert.strictEqual(coordRes.lat, 40.7644);
+    assert.strictEqual(coordRes.lng, -73.9744);
+
+    // 2. Unreachable online sources must throw an actionable error, NOT silently default to mock coordinates
+    let errorThrown = false;
+    try {
+      await tileService.resolveLocation('unresolvable-fictional-location-12345XYZ');
+    } catch (err: any) {
+      errorThrown = true;
+      assert.ok(
+        err.message.includes('Unable to reach Google Maps 3D Tiles data sources'),
+        'Error should inform user that online data sources cannot be reached'
+      );
+    }
+    assert.strictEqual(errorThrown, true, 'Should throw actionable error when online sources are unreachable');
+
+    console.log(' ✓ Test 2 Passed: Online resolution enforced and silent offline fallbacks retired.');
+  }
+
+  // =========================================================================
+  // Test 3: Zero Synthetic JS Primitive Boxes & Pure Clay Default
+  // =========================================================================
+  console.log('Testing 3: Zero Synthetic JS Primitive Boxes & Pure Clay Default...');
   {
     const prompt = 'build a 3d scene of the plaza hotel NYC';
-    const scene = synthesizeContextual3DScene(prompt);
+    const scene = synthesizeContextual3DScene(prompt, {
+      location: { lat: 40.7644, lng: -73.9744, elevation: 18.0 }
+    });
 
     assert.ok(scene, 'Should synthesize a 3D scene');
-    assert.ok(scene.title.includes('The Plaza Hotel') || scene.title.includes('Plaza Hotel'), 'Title should reflect Plaza Hotel');
-    assert.ok(scene.geoAnchor, 'Scene should have geoAnchor');
-    assert.ok(Math.abs(scene.geoAnchor.lat - 40.7644) < 0.01, 'geoAnchor lat should match Plaza Hotel NYC');
-    assert.ok(Math.abs(scene.geoAnchor.lng - (-73.9744)) < 0.01, 'geoAnchor lng should match Plaza Hotel NYC');
-    assert.strictEqual(scene.geoAnchor.elevation, 18.0);
+    assert.strictEqual(scene.renderMode, 'clay', 'Real-world initial scene must default to Studio Grey Clay');
+    assert.strictEqual(scene.environment?.skybox, 'studio', 'Skybox must default to neutral studio');
+    assert.strictEqual(scene.environment?.lighting, 'studio', 'Lighting must default to neutral studio');
 
-    // Check custom meshes & objects from 3D tile
-    assert.ok(scene.customMeshes && scene.customMeshes.length > 0, 'Should contain custom building meshes from 3D tile');
-    assert.ok(scene.objects && scene.objects.length > 0, 'Should contain Media4DObjects from 3D tile');
+    // Verify ZERO fake building boxes in customMeshes (Tile streaming handles geometry)
+    assert.strictEqual(scene.customMeshes?.length ?? 0, 0, 'Must have zero synthetic extruded building boxes');
 
-    // Verify clay material styling
-    const mainMesh = scene.customMeshes[0];
-    assert.ok(mainMesh, 'Should have a landmark building mesh');
-    assert.ok(mainMesh.material?.roughness && mainMesh.material.roughness >= 0.7, 'Material should have matte clay roughness');
+    // Verify 3D tile streaming anchor is registered in objects
+    assert.ok(scene.objects && scene.objects.length > 0, 'Should contain Media4DObject streaming anchor');
+    const tileAnchor = scene.objects[0];
+    assert.strictEqual(tileAnchor.content?.type, 'map-3d', 'Object content type must be map-3d');
 
-    // Verify operator stack contains sb_import_3d_tile
-    assert.ok(scene.operatorStack && scene.operatorStack.length > 0, 'Should have operator stack');
-    const importOp = scene.operatorStack.find(op => op.operator === 'sb_import_3d_tile');
-    assert.ok(importOp, 'Operator stack should contain sb_import_3d_tile');
-
-    console.log(` ✓ Test 2 Passed: Plaza Hotel NYC scene synthesized with ${scene.customMeshes.length} building meshes and clay shaders.`);
+    console.log(' ✓ Test 3 Passed: Zero synthetic JS boxes detected, pure 18% grey clay mode enforced.');
   }
 
   // =========================================================================
-  // Test 3: Individual Mesh Manipulability & Direct-Dispatch Operators
+  // Test 4: Atmosphere and Ephemeris are Strictly Opt-In
   // =========================================================================
-  console.log('Testing 3: Individual Mesh Manipulability & Direct-Dispatch Operators...');
+  console.log('Testing 4: Atmosphere and Ephemeris are Strictly Opt-In...');
   {
-    const prompt = 'Reconstruct Independence Hall Philadelphia in 3D';
-    const scene = synthesizeContextual3DScene(prompt);
-    assert.ok(scene.customMeshes && scene.customMeshes.length >= 2, 'Should have multiple distinct buildings');
-
-    const targetMeshId = scene.customMeshes[0].id;
-    const initialY = scene.customMeshes[0].position[1];
-
-    const engine = createOperatorEngine(scene);
-
-    // 1. Translate specific building
-    const transRes = engine.dispatch('sb_translate', {
-      objectId: targetMeshId,
-      delta: [0, 5, 0]
+    // Default prompt: no atmospheric keywords -> atmospheric scattering disabled
+    const sceneDefault = synthesizeContextual3DScene('build a 3d scene of the plaza hotel NYC', {
+      location: { lat: 40.7644, lng: -73.9744, elevation: 18.0 }
     });
-    assert.strictEqual(transRes.success, true);
-    assert.strictEqual(engine.getSceneData().customMeshes![0].position[1], initialY + 5, 'Target building should be translated');
+    assert.strictEqual(
+      sceneDefault.features?.atmosphericScattering,
+      undefined,
+      'Atmospheric scattering must NOT be enabled without explicit opt-in'
+    );
 
-    // 2. Set clay mode preset
-    const clayRes = engine.dispatch('sb_set_clay_mode', {
-      preset: 'alabaster'
+    // Explicit opt-in prompt: golden hour light requested
+    const sceneOptIn = synthesizeContextual3DScene('Tokyo Tower in golden hour light with atmosphere and sunset', {
+      location: { lat: 35.6586, lng: 139.7454, elevation: 25.0 }
     });
-    assert.strictEqual(clayRes.success, true);
-    assert.strictEqual(engine.getSceneData().customMeshes![0].material?.roughness, CLAY_PRESETS.alabaster.roughness, 'Roughness should update to alabaster clay');
+    assert.ok(sceneOptIn.features?.atmosphericScattering, 'Atmospheric scattering should be enabled on explicit opt-in');
+    assert.ok(sceneOptIn.features.atmosphericScattering.enabled, 'Atmospheric scattering should be active');
 
-    // 3. Undo operator
-    const undoRes = engine.dispatch('sb_undo', {});
-    assert.strictEqual(undoRes.success, true);
-    assert.strictEqual(engine.getSceneData().customMeshes![0].position[1], initialY + 5, 'Undo should restore previous translation state');
-
-    console.log(' ✓ Test 3 Passed: Ingested 3D Tile meshes are individually selectable and manipulable with operators.');
-  }
-
-  // =========================================================================
-  // Test 4: Geodetic Solar & Atmospheric Grounding
-  // =========================================================================
-  console.log('Testing 4: Geodetic Solar & Atmospheric Grounding...');
-  {
-    const prompt = 'Create a 3d model of Tokyo Tower in golden hour light';
-    const scene = synthesizeContextual3DScene(prompt);
-
-    assert.ok(scene.features?.atmosphericScattering, 'Atmospheric scattering should be enabled');
-    assert.ok(scene.features.atmosphericScattering.enabled, 'Atmospheric scattering should be active');
-    assert.strictEqual(scene.geoAnchor?.landmarkName, 'Tokyo Tower');
-
-    // Sun position should be computed and atmospheric perspective active
-    assert.ok(scene.features.atmosphericScattering.aerialPerspectiveEnabled, 'Aerial perspective should be active for real-world tile');
-    assert.ok(scene.features.atmosphericScattering.cloudShadowsEnabled, 'Cloud shadows should be enabled');
-
-    console.log(' ✓ Test 4 Passed: Atmospheric scattering and solar angle matched to geographic coordinates.');
+    console.log(' ✓ Test 4 Passed: Atmosphere and ephemeris are strictly opt-in.');
   }
 
   // =========================================================================

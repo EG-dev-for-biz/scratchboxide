@@ -90,7 +90,7 @@ export class GeospatialTileExtractionBridge {
 
     const querySlug = typeof queryOrCoords === 'string'
       ? queryOrCoords
-      : `${queryOrCoords.formattedAddress || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
+      : `${(queryOrCoords as any).formattedAddress || queryOrCoords.landmarkName || 'geo'}_${queryOrCoords.lat.toFixed(4)}_${queryOrCoords.lng.toFixed(4)}`;
     const safeSlug = querySlug.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);
     const tileGlbPath = path.join(outputDir, `${safeSlug}_tiles.glb`);
     const manifestPath = path.join(outputDir, `${safeSlug}_manifest.json`);
@@ -149,9 +149,13 @@ export class GeospatialTileExtractionBridge {
       }
     }
 
+    const queryString = typeof queryOrCoords === 'string'
+      ? queryOrCoords
+      : (queryOrCoords.landmarkName || `${queryOrCoords.lat}, ${queryOrCoords.lng}`);
+
     const manifest: ExtractedLocationManifest = {
-      query,
-      resolvedAddress: tileResult.resolvedAddress || query,
+      query: queryString,
+      resolvedAddress: tileResult.resolvedAddress || queryString,
       lat: tileResult.geoAnchor.lat,
       lng: tileResult.geoAnchor.lng,
       altitudeMeters: tileResult.geoAnchor.elevation ?? 0,

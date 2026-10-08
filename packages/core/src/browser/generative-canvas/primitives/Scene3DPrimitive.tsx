@@ -1930,7 +1930,7 @@ int main(int argc, char** argv) {
             source: o.content?.metadata?.source
         })) || []);
         if (sceneData.splatUrl) {
-            objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined });
+            objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined, source: 'splatUrl' });
         }
         return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode });
     }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode]);
@@ -3204,7 +3204,13 @@ int main(int argc, char** argv) {
             }
 
             mutateSceneData(prev => {
-                const nextCustomMeshes = [...(prev.customMeshes || []), result.customMeshDefinition];
+                const nextCustomMeshes = [...(prev.customMeshes || [])];
+                if (result.customMeshDefinition) {
+                    nextCustomMeshes.push(result.customMeshDefinition);
+                }
+                if (result.buildingMeshes && result.buildingMeshes.length > 0) {
+                    nextCustomMeshes.push(...result.buildingMeshes);
+                }
                 const nextObjects = [...(prev.objects || []), result.media4DObject];
                 return {
                     ...prev,
