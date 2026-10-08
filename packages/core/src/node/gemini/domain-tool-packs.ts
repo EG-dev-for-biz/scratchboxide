@@ -186,6 +186,7 @@ export interface ResolveToolPacksOptions {
     enableLensTools?: boolean;
     requestedPacks?: ToolPackName[];
     agent?: string;
+    activeArtifact?: any;
 }
 
 /**
@@ -208,7 +209,8 @@ export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
     if (prompt.length > 0) {
         try {
             capabilityResolution = TaskCapabilityResolver.resolveTaskCapability(prompt, {
-                domainHint: options.domainHint
+                domainHint: options.domainHint,
+                activeArtifact: options.activeArtifact
             });
         } catch {
             // Graceful fallback
@@ -267,8 +269,10 @@ export function resolveDomainToolPacks(options: ResolveToolPacksOptions): {
 
         // Domain-specific packs based on Capability Resolution & Domain hints
         const domain = capabilityResolution?.taskDomain || 'general';
+        const is3DActive = options.activeArtifact?.type === '3d-scene';
+        const isStagingPrompt = /stage|staging|place|ground|anchor|situate|relocate|location|at\s+[a-z]|on\s+[a-z]|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles/i.test(prompt);
 
-        if (domain === '3d' || /3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|universal.*3d|webxr|geobox|splat/i.test(prompt)) {
+        if (domain === '3d' || is3DActive || isStagingPrompt || /3d|tile|photorealistic|satellite|geodetic|landmark|coordinates|address|utdra|uldra|decomposition|rectif|beautif|universal.*3d|webxr|geobox|splat/i.test(prompt)) {
             packs.add('geospatial_3d');
             packs.add('mesh_surface');
             packs.add('core_workspace');

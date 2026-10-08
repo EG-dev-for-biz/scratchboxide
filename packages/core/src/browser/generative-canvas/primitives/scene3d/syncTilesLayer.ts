@@ -11,11 +11,13 @@ import * as THREE from 'three';
 import { GooglePhotorealistic3DTilesLayer } from '../../services/GooglePhotorealistic3DTilesLayer';
 import { TerrainManager } from '../../services/TerrainManager';
 import type { RendererStack, Scene3DRenderMode, TilesLayerHandle } from './types';
+import type { GroundTileMode } from '../../canvas-types';
 
 export interface TilesLayerInput {
     has3DTiles: boolean;
     geoAnchor?: { lat: number; lng: number; elevation?: number } | null;
     renderMode: Scene3DRenderMode;
+    groundTileMode?: GroundTileMode;
 }
 
 /** Object names that must be re-grounded whenever new tile LODs stream in. */
@@ -56,12 +58,16 @@ export function syncTilesLayer(
     let tilesLayer: any | null = null;
     let terrainManager: TerrainManager | null = null;
 
-    if (input.has3DTiles) {
+    const mode = input.groundTileMode;
+    const isSuppressed = mode === 'none' || mode === 'vector-roadmap-blueprint' || mode === 'vector-world-clay';
+
+    if (input.has3DTiles && !isSuppressed) {
         try {
             const originAnchor = input.geoAnchor || { lat: 37.7749, lng: -122.4194, elevation: 0 };
+            const isClay = mode === 'photoreal-clay' || (mode !== 'photoreal-textured' && input.renderMode === 'clay');
             tilesLayer = new GooglePhotorealistic3DTilesLayer({
                 origin: { lat: originAnchor.lat, lng: originAnchor.lng, alt: originAnchor.elevation ?? 0 },
-                renderMode: input.renderMode === 'pbr' || input.renderMode === 'shaded' ? 'textured' : 'clay',
+                renderMode: isClay ? 'clay' : 'textured',
                 clayPreset: 'warm-clay'
             });
             scene.add(tilesLayer.group);

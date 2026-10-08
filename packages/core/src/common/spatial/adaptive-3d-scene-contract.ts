@@ -131,6 +131,26 @@ export interface AdaptiveSceneGraphBlueprint {
     relations: SpatialRelation[];
 }
 
+export interface AdaptiveCharacterEntity {
+    id: string;
+    name?: string;
+    role?: string;
+    targetHeightMeters: number;
+    genderBeta: number;
+    poseArchetype?: 'standing_survey' | 'ground_inspection' | 'seated_rest' | (string & {});
+    position: [x: number, y: number, z: number];
+    facingAngleDeg?: number;
+    groundOffsetMeters?: number;
+    clayMaterial?: {
+        roughness: number;
+        metalness: number;
+        color: [number, number, number];
+    };
+}
+
+export type AdaptiveCharacterEntourageField = AdaptiveCharacterEntity;
+
+
 export interface Adaptive3DSceneContract {
     id: string;
     subject: string;
@@ -145,4 +165,9 @@ export interface Adaptive3DSceneContract {
     atmosphere?: AdaptiveAtmosphereEphemeris;
     relations?: SpatialRelation[];
     sceneGraph?: AdaptiveSceneGraphBlueprint;
+    characters?: AdaptiveCharacterEntity[];
+    entourage?: {
+        characters: AdaptiveCharacterEntity[];
+    };
 }
+

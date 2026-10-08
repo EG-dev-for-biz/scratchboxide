@@ -25,6 +25,7 @@ import {
     synthesizeMediaDocument
 } from '../../browser/generative-canvas/document-synthesis-engine';
 import { synthesizeContextual3DScene } from '../../browser/generative-canvas/procedural-3d-synthesizer';
+import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 import type { VideoTimelineData } from '../../browser/generative-canvas/services/video/videoTypes';
 import { synthesizeContextualVideoTimeline } from '../../browser/generative-canvas/services/video/videoTimelineSynthesizer';
 import {
@@ -3236,11 +3237,16 @@ export function parseOrSynthesizeArtifact(
     }
 
     const is3DActive = request.activeArtifact?.type === '3d-scene';
-    const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust/i.test(prompt) ||
-        lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff');
+    const has3DToolExecution = _mcpExecutions.some(exec =>
+        /stage_3d_vector_world|google_3d_tiles|execute_3d_python_script|atmosphere_|geobox_|resect_|universal_3d_|utdra_|mesh_/i.test(exec.toolName)
+    );
+    const is3DFollowUpKeywords = /animate|fly|flight|motion|orbit|play|simulation|bank|roll|spin|takeoff|speed|camera|view|scene|heading|pitch|thrust|stage|staging|place|ground|anchor|situate|relocate|location|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles|material|texture|color|paint|metallic|clearcoat|wireframe|clay|render/i.test(prompt) ||
+        lower.includes('animate') || lower.includes('fly') || lower.includes('play') || lower.includes('orbit') || lower.includes('takeoff') || lower.includes('stage') || lower.includes('plinth') || lower.includes('beach');
 
     // Check if query is 3D scene / 3D model / 3D plane / spatial scene
-    const isSandboxOrAppRequest = !isMediaRequest && !isVideoTimelineFallback && (!is3DActive || !is3DFollowUpKeywords) && (
+    const isDocExplicitRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(prompt);
+
+    const isSandboxOrAppRequest = !isMediaRequest && !isVideoTimelineFallback && (!is3DActive || (!is3DFollowUpKeywords && !has3DToolExecution)) && (
         /preview|sandbox|\bapp\b|web\s*app|landing\s*page|calculator|game|arcade|gravity|orbit|physics|celestial|synth|synthesizer|piano|keyboard|audio|music|sound|sorting|visualizer|dashboard|component|widget|mockup|\bui\b|react|html|css|javascript|typescript|python|interactive|simulator/i.test(prompt) ||
         lower.includes('preview') || lower.includes('sandbox') || lower.includes('calculator') || lower.includes('landing page') ||
         lower.includes('web app') || lower.includes('react app') || lower.includes('dashboard') || lower.includes('widget') ||
@@ -3248,14 +3254,15 @@ export function parseOrSynthesizeArtifact(
         lower.includes('synth') || lower.includes('synthesizer') || lower.includes('piano') || lower.includes('sorting visualizer') ||
         lower.includes('gravity') || lower.includes('physics sim')
     );
-    const isDocExplicitRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(prompt);
 
-    const is3DFollowUp = !isMediaRequest && !isDocExplicitRequest && is3DActive && is3DFollowUpKeywords;
+    const is3DFollowUp = !isMediaRequest && !isDocExplicitRequest && is3DActive && (is3DFollowUpKeywords || has3DToolExecution || !isSandboxOrAppRequest);
     const is3DSceneRequest = !isMediaRequest && !isDocExplicitRequest && (
         is3DFollowUp ||
+        has3DToolExecution ||
         /3d\s+(?:scene|plane|world|model|flight|visual|mesh|field|generator|simulation|landscape|terrain|engine|orrery|solar|asteroid|molecular|lattice|city|corridor|environment)/i.test(prompt) ||
         /three\.js|webgl|r3f|airplane|aircraft|flight\s+corridor|asteroid\s+field|solar\s+system|planetary\s+orbit|molecular\s+lattice|cppgenerator|scratchbox_engine/i.test(prompt) ||
         /god\s*ray|crepuscular|contrail|control\s*surface|terrain\s*biome|volumetric\s*light|aerial\s*perspective/i.test(prompt) ||
+        /stage\s+(?:it|scene|model|asset|object|car|court|hero)|vector\s*world|stage_3d_vector_world|google_3d_tiles/i.test(prompt) ||
         ((lower.includes('3d') || lower.includes('spatial')) && (
             lower.includes('scene') || lower.includes('plane') || lower.includes('world') || lower.includes('model') ||
             lower.includes('flight') || lower.includes('render') || lower.includes('environment') || lower.includes('asteroid') ||
@@ -3280,7 +3287,7 @@ export function parseOrSynthesizeArtifact(
         });
 
         const sceneTitle = (isAnimateOnly && active3DData) ? active3DData.title : (isExplicitFlight ? '3D Aircraft & Flight Corridor' : contextualSynthesized.title);
-        const sceneSummary = isAnimateOnly && isExplicitFlight
+        let sceneSummary = isAnimateOnly && isExplicitFlight
             ? 'Animated 3D flight trajectory: dynamic bank, roll, and engine thrust active.'
             : (isExplicitFlight ? 'Interactive procedural 3D plane and spatial flight environment.' : (contextualSynthesized.subtitle || 'Interactive 3D spatial scene synthesized with Studio 3D Engine.'));
 
@@ -3321,9 +3328,59 @@ export function parseOrSynthesizeArtifact(
             ...(hasTerrainBiomes ? { terrainBiomes: (active3DData?.features?.terrainBiomes || { biomeType: 'alpine' as const }) } : {})
         };
 
+        const locIntent = detectRealWorldLocationIntent(prompt, { docTitle: active3DData?.title });
+        const hasRealWorldStaging = !!locIntent?.isRealWorld;
+
+        const resolvedGeoAnchor = hasRealWorldStaging ? {
+            lat: locIntent.lat,
+            lng: locIntent.lng,
+            elevation: locIntent.elevation,
+            active: true,
+            landmarkName: locIntent.landmarkName
+        } : (active3DData?.geoAnchor || contextualSynthesized.geoAnchor || {
+            lat: 37.7900,
+            lng: -122.4000,
+            elevation: 15.2,
+            active: true,
+            landmarkName: isExplicitFlight ? 'Flight Corridor' : 'San Francisco Bay Airspace'
+        });
+
+        let finalTitle = active3DData?.title || sceneTitle;
+        let finalSubtitle = (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary);
+        if (hasRealWorldStaging) {
+            finalTitle = active3DData?.title ? `${active3DData.title} — Staged at ${locIntent.landmarkName}` : `3D Scene — Staged at ${locIntent.landmarkName}`;
+            finalSubtitle = `Real-World Geospatial Staging | [${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
+            sceneSummary = `Staged active 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
+        }
+
+        const resolvedObjects = active3DData?.objects ? [...active3DData.objects] : [...defaultObjects];
+        for (const exec of _mcpExecutions) {
+            if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay') {
+                const res = ((exec as any).resultPayload || (exec as any).result || (exec as any).payload || {}) as any;
+                const glbPath = res?.glbPath || res?.outputGlbPath;
+                if (glbPath && !resolvedObjects.some(o => o.content?.durableUri === glbPath)) {
+                    resolvedObjects.push({
+                        id: `staged-env-${Date.now()}`,
+                        content: {
+                            type: '3d-model',
+                            durableUri: glbPath,
+                            mimeType: 'model/gltf-binary',
+                            metadata: {
+                                source: exec.toolName,
+                                resolvedAddress: res?.resolvedAddress
+                            }
+                        },
+                        space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                        time: { startMs: 0, durationMs: 20000 },
+                        lineage: { version: 1 }
+                    });
+                }
+            }
+        }
+
         const fallback3DData: Scene3DData = {
-            title: active3DData?.title || sceneTitle,
-            subtitle: (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary),
+            title: finalTitle,
+            subtitle: finalSubtitle,
             worldBranch: active3DData?.worldBranch || contextualSynthesized.worldBranch,
             sceneType: active3DData?.sceneType || contextualSynthesized.sceneType,
             renderMode: active3DData?.renderMode || contextualSynthesized.renderMode || 'pbr',
@@ -3352,14 +3409,8 @@ export function parseOrSynthesizeArtifact(
                 ...(contextualSynthesized.environment || {}),
                 skybox: ((hasAtmosphere || hasGodRays) ? 'realistic-sky' : (active3DData?.environment?.skybox || contextualSynthesized.environment?.skybox || 'studio'))
             },
-            geoAnchor: active3DData?.geoAnchor || contextualSynthesized.geoAnchor || {
-                lat: 37.7900,
-                lng: -122.4000,
-                elevation: 15.2,
-                active: true,
-                landmarkName: isExplicitFlight ? 'Flight Corridor' : 'San Francisco Bay Airspace'
-            },
-            objects: active3DData?.objects || defaultObjects,
+            geoAnchor: resolvedGeoAnchor,
+            objects: resolvedObjects,
             customScript: active3DData?.customScript || active3DData?.code || contextualSynthesized.customScript,
             code: active3DData?.code || active3DData?.customScript || contextualSynthesized.code,
             shaders: active3DData?.shaders,
@@ -3479,6 +3530,19 @@ export function parseOrSynthesizeArtifact(
     const extractedSandbox = extractCodeSandboxArtifact(prompt, cleanContent, request.activeArtifact);
     if (extractedSandbox && (isSandboxExplicit || extractedSandbox.hasRunnableCode)) {
         return extractedSandbox.artifact;
+    }
+
+    // Safety invariant: If active artifact is 3d-scene and the user did NOT explicitly request a document/spec/essay,
+    // NEVER overwrite the active 3D canvas viewport with a default markdown document!
+    if (request.activeArtifact?.type === '3d-scene' && !isDocExplicitRequest) {
+        const prevArtifact = request.activeArtifact;
+        const prevData = (prevArtifact.data as Scene3DData) || {};
+        return {
+            ...prevArtifact,
+            version: (prevArtifact.version || 1) + 1,
+            summary: cleanContent.slice(0, 160) || prevArtifact.summary,
+            data: prevData
+        };
     }
 
     // Default: rich Markdown Document artifact wrapping model text

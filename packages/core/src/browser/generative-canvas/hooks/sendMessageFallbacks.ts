@@ -254,10 +254,11 @@ export function classifyFallbackPrompt(text: string, targetPrimitiveType: Primit
         /\b(?:switch\s+to|change\s+to|render\s+in|apply|set)\s+(?:[\w-]+\s+)?(?:clay|textured|pbr|wireframe|studio\s+gr[ea]y|daylight|golden\s*hour|sunset|sunrise|dusk|fog|lighting)\b/i.test(text) ||
         /\b(?:rotate|orbit|tilt|pan|zoom|wasd|turntable)\s*(?:camera|view|scene)?\b/i.test(text) ||
         /\b(?:animate|fly|flight|takeoff|motion|playback)\b/i.test(text) ||
+        /\b(?:stage|staging|place|ground|anchor|situate|relocate)\b/i.test(text) ||
         /\b(?:add|remove|delete|isolate|separate|hide|show)\s+(?:mesh|geometry|object|building|facade|tower|bounding\s*box|portal)\b/i.test(text) ||
         /\b(?:de-?light|shadow\s*lift|highlight\s*compress|travertine\s*cavitation)\b/i.test(text) ||
         /\b(?:cinematic\s+arc|canyon\s+push|orbit\s+360)\b/i.test(text) ||
-        /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow/i.test(text)
+        /wireframe|wasm physics|camera|ambient light|rotate|orbit|mesh|texture|fog|lighting|clay|preset|restructur|terracotta|alabaster|onyx|porcelain|concrete|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|bounding box|separate|isolate|travertine|de-?light|portal|sun|sunset|sunrise|noon|dusk|golden hour|flight|wasd|fps|turntable|export|glb|usd|cinematic|canyon|tile|ground|skybox|clouds|shadow|stage|staging|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text)
     );
     const is3DRequest = !isVideoTimelineRequest && !isExplicitMedia && (isExplicit3D || ((layoutMode === '3d' || activeArtifact?.type === '3d-scene') && isTileOr3DMutation));
     const isKanbanRequest = !isVideoTimelineRequest && (isExplicitKanban || ((layoutMode === 'kanban' || activeArtifact?.type === 'kanban-board') && /column|card|task|board|move/i.test(text)));
@@ -366,7 +367,7 @@ export function synthesizeVideoTimelineFallback(text: string, activeArtifact: Ca
 export function synthesize3DFallback(text: string, lower: string, activeArtifact: CanvasArtifact | undefined, messages: ChatMessage[], docContentExtract: string | undefined): FallbackResult {
     const isExisting3D = activeArtifact?.type === '3d-scene' && activeArtifact?.data;
     const isNewSceneDirective = /\b(?:build|make|create|generate|render|model|sculpt|construct|synthesize|assemble|fabricate|forge|carve|extrude|shape|new|fresh|start|reconstruct)\b/i.test(text) && !/\b(?:brand-new|brand\s+new)\b/i.test(text);
-    const isMutationDirective = !isNewSceneDirective && !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route/i.test(text);
+    const isMutationDirective = !isNewSceneDirective && !/\b(?:ziggurat|etemenanki|babylon|mesopotamia|matterhorn|alpine|overpass)\b/i.test(text) && /restructur|solarpunk|acropolis|brutalist|gothic|brand[- ]?new|raw tile|original tile|show raw|view raw|clay|wireframe|pbr|textured|shaded|travertine|de-?light|portal|separate|bounding box|isolate|preset|export|glb|usd|ambient|sun|sunset|sunrise|dusk|noon|golden hour|orbit|rotate|camera|fps|wasd|fly|turntable|god ray|fog|deform|wave|route|stage|staging|place|ground|anchor|situate|relocate|plinth|pedestal|cyclorama|cove|beach|monaco|venice|boardwalk|vector/i.test(text);
     const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(text);
     const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|citadel|ziggurat|colosseum|matterhorn|planet|asteroid|geyser)\b/i.test(text);
     const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow|mycelium)\b/i.test(text);
@@ -914,9 +915,18 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             landmarkName: locIntent.landmarkName,
             active: true
         };
-        updated3D.title = locIntent.landmarkName;
-        updated3D.subtitle = `Google Maps Photorealistic 3D Tile | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°`;
-        if (/colosseum/i.test(locIntent.landmarkName)) {
+        const isStaging = /stage|ground|anchor|situate|place/i.test(text);
+        const currentHeroTitle = updated3D.title || '3D Asset';
+        if (isStaging) {
+            updated3D.title = `${currentHeroTitle} — Staged at ${locIntent.landmarkName}`;
+            updated3D.subtitle = `Geospatial 3D Staging | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}° | Studio Grey Clay Grounding`;
+            explanation = `Staged active 3D asset at **${locIntent.landmarkName}** (${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°) with real-world geospatial grounding. Next step: PBR materials & textures.`;
+        } else {
+            updated3D.title = locIntent.landmarkName;
+            updated3D.subtitle = `Google Maps Photorealistic 3D Tile | Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°`;
+            explanation = `Geospatially ingested Google Maps Photorealistic 3D Tile for **${locIntent.landmarkName}** (Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°, Alt ${locIntent.elevation.toFixed(1)}m).`;
+        }
+        if (/colosseum/i.test(locIntent.landmarkName) && (!isStaging || !updated3D.objects?.length)) {
             updated3D.objects = [{
                 id: 'tile-colosseum',
                 content: {
@@ -930,7 +940,7 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
                 lineage: { version: 1 }
             }];
             updated3D.camera = { position: [180, 120, 220], target: [0, 15, 0], fov: 45 };
-        } else if (/ferry/i.test(locIntent.landmarkName)) {
+        } else if (/ferry/i.test(locIntent.landmarkName) && (!isStaging || !updated3D.objects?.length)) {
             updated3D.objects = [{
                 id: 'tile-sf-ferry',
                 content: {
@@ -945,7 +955,10 @@ export function mutateExisting3DScene(text: string, lower: string, activeArtifac
             }];
             updated3D.camera = { position: [140, 80, 160], target: [0, 10, 0], fov: 45 };
         }
-        explanation = `Geospatially ingested Google Maps Photorealistic 3D Tile for **${locIntent.landmarkName}** (Lat ${locIntent.lat.toFixed(4)}°, Lng ${locIntent.lng.toFixed(4)}°, Alt ${locIntent.elevation.toFixed(1)}m).`;
+    } else if (/plinth|pedestal|cyclorama|curved cove|platform/i.test(text) || (/stage/i.test(text) && !/stage\s*_\s*3d/i.test(text))) {
+        updated3D.title = `${updated3D.title || '3D Asset'} — Staged on Studio Plinth`;
+        updated3D.subtitle = `Studio Plinth Staging | Curved Cyclorama Cove & Contact Grounding`;
+        explanation = `Staged active 3D asset on an environmental studio plinth with contact grounding. Next step: PBR materials & textures.`;
     } else if (/cinematic\s+arc|canyon\s+push/i.test(text)) {
         const isArc = /cinematic\s+arc/i.test(text);
         updated3D.cameraMode = 'orbit';

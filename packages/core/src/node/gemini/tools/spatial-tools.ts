@@ -501,6 +501,42 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             zenithAltitudeMeters
         });
 
+        let mountedArtifact: any = undefined;
+        if (_ctx.request?.activeArtifact?.type === '3d-scene') {
+            const prevArtifact = _ctx.request.activeArtifact;
+            const prevData = (prevArtifact.data as any) || {};
+            const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+            const tileObject = {
+                id: `tile-texture-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: result.glbPath,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        source: 'Google3DTilesFullTexture',
+                        resolvedAddress: result.resolvedAddress || query,
+                        vertexCount: result.mesh?.vertexCount,
+                        triangleCount: result.mesh?.triangleCount
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            };
+            mountedArtifact = {
+                ...prevArtifact,
+                version: (prevArtifact.version || 1) + 1,
+                title: `${prevArtifact.title || '3D Scene'} — Staged at ${result.resolvedAddress || query}`,
+                summary: `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles full photogrammetric textures (${result.mesh?.vertexCount || 0} vertices).`,
+                data: {
+                    ...prevData,
+                    groundTileMode: 'photoreal-textured',
+                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    objects: [...prevObjects, tileObject]
+                }
+            };
+        }
+
         return {
             resultPayload: {
                 success: result.success,
@@ -510,7 +546,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 glbPath: result.glbPath,
                 mesh: result.mesh,
                 quality: result.quality,
-                render: result.render
+                render: result.render,
+                ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
             summaryResult: `Google 3D Tiles ingested in full texture for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
         };
@@ -533,6 +570,42 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
             zenithAltitudeMeters
         });
 
+        let mountedArtifact: any = undefined;
+        if (_ctx.request?.activeArtifact?.type === '3d-scene') {
+            const prevArtifact = _ctx.request.activeArtifact;
+            const prevData = (prevArtifact.data as any) || {};
+            const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+            const tileObject = {
+                id: `tile-clay-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: result.glbPath,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        source: 'Google3DTilesClay',
+                        resolvedAddress: result.resolvedAddress || query,
+                        vertexCount: result.mesh?.vertexCount,
+                        triangleCount: result.mesh?.triangleCount
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            };
+            mountedArtifact = {
+                ...prevArtifact,
+                version: (prevArtifact.version || 1) + 1,
+                title: `${prevArtifact.title || '3D Scene'} — Staged at ${result.resolvedAddress || query}`,
+                summary: `Staged active 3D asset at ${result.resolvedAddress || query} with authentic Google 3D Tiles Studio Grey Clay massing (${result.mesh?.vertexCount || 0} vertices).`,
+                data: {
+                    ...prevData,
+                    groundTileMode: 'photoreal-clay',
+                    geoAnchor: result.geoAnchor || { lat: 37.79, lng: -122.4, elevation: 10, active: true },
+                    objects: [...prevObjects, tileObject]
+                }
+            };
+        }
+
         return {
             resultPayload: {
                 success: result.success,
@@ -542,7 +615,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
                 glbPath: result.glbPath,
                 mesh: result.mesh,
                 quality: result.quality,
-                render: result.render
+                render: result.render,
+                ...(mountedArtifact ? { artifact: mountedArtifact } : {})
             },
             summaryResult: `Google 3D Tiles ingested in studio grey clay for ${result.resolvedAddress || query}. Exported GLB model to ${result.glbPath} (${result.mesh.vertexCount} vertices, ${result.mesh.triangleCount} triangles).`
         };
@@ -5013,8 +5087,53 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 ? ` Hero Placement solved: [${result.heroPlacement.position.map(n => n.toFixed(2)).join(', ')}], yaw: ${result.heroPlacement.headingDeg.toFixed(1)}° on ${result.heroPlacement.targetSurface}.`
                 : '';
 
+            let mountedArtifact: any = undefined;
+            if (_ctx.request?.activeArtifact?.type === '3d-scene') {
+                const prevArtifact = _ctx.request.activeArtifact;
+                const prevData = (prevArtifact.data as any) || {};
+                const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+                const vectorWorldObj = {
+                    id: `vector-world-${Date.now()}`,
+                    content: {
+                        type: '3d-model',
+                        durableUri: result.glbPath,
+                        mimeType: 'model/gltf-binary',
+                        metadata: {
+                            source: 'GoogleVectorTileService',
+                            latitude,
+                            longitude,
+                            buildingCount: result.stats.buildingCount,
+                            roadSegmentCount: result.stats.roadSegmentCount,
+                            treeCount: result.stats.treeCount,
+                            streetlampCount: result.stats.streetlampCount,
+                            trafficVehicleCount: result.stats.trafficVehicleCount,
+                            vertexCount: result.stats.vertexCount,
+                            triangleCount: result.stats.triangleCount
+                        }
+                    },
+                    space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                    time: { startMs: 0, durationMs: 20000 },
+                    lineage: { version: 1 }
+                };
+                mountedArtifact = {
+                    ...prevArtifact,
+                    version: (prevArtifact.version || 1) + 1,
+                    title: `${prevArtifact.title || '3D Scene'} — Staged at [${latitude.toFixed(4)}, ${longitude.toFixed(4)}]`,
+                    summary: `Staged active 3D asset with real-world Google Vector Tiles world population (${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments, ${result.stats.treeCount} trees in 18% Studio Grey Clay).`,
+                    data: {
+                        ...prevData,
+                        groundTileMode: 'vector-world-clay',
+                        geoAnchor: { lat: latitude, lng: longitude, elevation: 10, active: true },
+                        objects: [...prevObjects, vectorWorldObj]
+                    }
+                };
+            }
+
             return {
-                resultPayload: result as unknown as ToolResultPayload,
+                resultPayload: {
+                    ...result,
+                    ...(mountedArtifact ? { artifact: mountedArtifact } : {})
+                } as unknown as ToolResultPayload,
                 summaryResult: `Successfully staged populated 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Generated ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road cross-sections, ${result.stats.streetlampCount} streetlamps, ${result.stats.treeCount} trees, ${result.stats.trafficVehicleCount} vehicles, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${result.glbPath}.${heroSummary}`
             };
         } else {
@@ -5031,8 +5150,50 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
                 throw new Error(`3D Vector Tile staging failed: ${(result as any).error || 'unknown error'}`);
             }
 
+            let mountedArtifact: any = undefined;
+            if (_ctx.request?.activeArtifact?.type === '3d-scene') {
+                const prevArtifact = _ctx.request.activeArtifact;
+                const prevData = (prevArtifact.data as any) || {};
+                const prevObjects = Array.isArray(prevData.objects) ? [...prevData.objects] : [];
+                const vectorWorldObj = {
+                    id: `vector-world-${Date.now()}`,
+                    content: {
+                        type: '3d-model',
+                        durableUri: (result as any).glbPath || (result as any).outputGlbPath,
+                        mimeType: 'model/gltf-binary',
+                        metadata: {
+                            source: 'GoogleVectorTileService',
+                            latitude,
+                            longitude,
+                            buildingCount: result.stats.buildingCount,
+                            roadSegmentCount: result.stats.roadSegmentCount,
+                            vertexCount: result.stats.vertexCount,
+                            triangleCount: result.stats.triangleCount
+                        }
+                    },
+                    space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                    time: { startMs: 0, durationMs: 20000 },
+                    lineage: { version: 1 }
+                };
+                mountedArtifact = {
+                    ...prevArtifact,
+                    version: (prevArtifact.version || 1) + 1,
+                    title: `${prevArtifact.title || '3D Scene'} — Staged at [${latitude.toFixed(4)}, ${longitude.toFixed(4)}]`,
+                    summary: `Staged active 3D asset with real-world Google Vector Tiles massing (${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments in 18% Studio Grey Clay).`,
+                    data: {
+                        ...prevData,
+                        groundTileMode: 'vector-world-clay',
+                        geoAnchor: { lat: latitude, lng: longitude, elevation: 10, active: true },
+                        objects: [...prevObjects, vectorWorldObj]
+                    }
+                };
+            }
+
             return {
-                resultPayload: result as unknown as ToolResultPayload,
+                resultPayload: {
+                    ...result,
+                    ...(mountedArtifact ? { artifact: mountedArtifact } : {})
+                } as unknown as ToolResultPayload,
                 summaryResult: `Successfully staged 3D vector world in 18% Studio Grey Clay at [${latitude}, ${longitude}]. Extruded ${result.stats.buildingCount} buildings, ${result.stats.roadSegmentCount} road segments, and ${result.stats.waterPolygonCount} water polygons into standard binary GLB (${result.stats.vertexCount} vertices, ${result.stats.triangleCount} triangles). GLB: ${(result as any).glbPath || (result as any).outputGlbPath}`
             };
         }

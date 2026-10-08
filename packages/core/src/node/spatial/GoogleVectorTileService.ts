@@ -13,6 +13,7 @@ import Pbf from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
 import { GltfBinaryPacker } from '../3d-engine/gltf-binary-packer';
 import { DEFAULT_GOOGLE_MAPS_API_KEY } from './StreetViewPanoramaProjectionService';
+import { LocalTangentPlane } from '../../common/coordinate/LocalTangentPlane';
 
 export interface VectorFeaturePolygon {
     id: string;
@@ -38,6 +39,15 @@ export interface DecodedVectorTileData {
 export interface VectorWorldStagingOptions {
     latitude: number;
     longitude: number;
+    elevation?: number; // anchor ground elevation ASL/MSL in meters
+    terrainElevationGrid?: ((x: number, z: number) => number) | {
+        minX: number;
+        maxX: number;
+        minZ: number;
+        maxZ: number;
+        resolutionMeters: number;
+        elevations: Float32Array | number[][];
+    };
     zoom?: number; // default 16
     radiusTiles?: number; // default 1 (3x3 grid around center tile)
     buildingHeightScale?: number;
@@ -104,21 +114,37 @@ export function latLngToTile(lat: number, lng: number, zoom: number): { x: numbe
     return { x, y };
 }
 
+const ltpCache = new Map<string, LocalTangentPlane>();
+
+export function getCachedLocalTangentPlane(lat: number, lng: number, alt: number = 0): LocalTangentPlane {
+    const key = `${lat.toFixed(6)}_${lng.toFixed(6)}_${alt.toFixed(1)}`;
+    let ltp = ltpCache.get(key);
+    if (!ltp) {
+        ltp = new LocalTangentPlane({ lat, lng, alt });
+        if (ltpCache.size > 50) {
+            ltpCache.clear();
+        }
+        ltpCache.set(key, ltp);
+    }
+    return ltp;
+}
+
 /**
- * Projects geodetic [lat, lng] to local ENU tangent plane meters [x, z] relative to anchor [anchorLat, anchorLng].
+ * Projects geodetic [lat, lng] to local ENU tangent plane meters [x, y, z] relative to anchor [anchorLat, anchorLng].
+ * Backed by canonical LocalTangentPlane for 100% millimeter-precise alignment with Google 3D Photo Tiles.
  */
 export function wgs84ToLocalEnu(
     lat: number,
     lng: number,
     anchorLat: number,
-    anchorLng: number
-): { x: number; z: number } {
-    const dLat = ((lat - anchorLat) * Math.PI) / 180;
-    const dLng = ((lng - anchorLng) * Math.PI) / 180;
-    const avgLat = ((lat + anchorLat) * 0.5 * Math.PI) / 180;
-    const x = dLng * 6378137.0 * Math.cos(avgLat);
-    const z = -dLat * 6378137.0; // South / North
-    return { x, z };
+    anchorLng: number,
+    anchorElevation: number = 0,
+    pointElevation?: number,
+    ltpInstance?: LocalTangentPlane
+): { x: number; y: number; z: number } {
+    const ltp = ltpInstance ?? getCachedLocalTangentPlane(anchorLat, anchorLng, anchorElevation);
+    const local = ltp.toLocal({ lat, lng, alt: pointElevation ?? anchorElevation });
+    return { x: local[0], y: local[1], z: local[2] };
 }
 
 /**
@@ -466,6 +492,28 @@ export class GoogleVectorTileService {
         };
 
         const heightScale = options.buildingHeightScale ?? 1.0;
+        const anchorElevation = options.elevation ?? 0.0;
+        const ltp = getCachedLocalTangentPlane(options.latitude, options.longitude, anchorElevation);
+
+        const sampleElevation = (x: number, z: number): number => {
+            if (typeof options.terrainElevationGrid === 'function') {
+                return options.terrainElevationGrid(x, z);
+            }
+            if (options.terrainElevationGrid && typeof options.terrainElevationGrid === 'object') {
+                const grid = options.terrainElevationGrid;
+                if (Array.isArray(grid.elevations) && grid.elevations.length > 0) {
+                    const normX = Math.max(0, Math.min(1, (x - grid.minX) / (grid.maxX - grid.minX || 1)));
+                    const gx = Math.min(grid.elevations.length - 1, Math.floor(normX * (grid.elevations.length - 1)));
+                    const row = grid.elevations[gx];
+                    if (Array.isArray(row) && row.length > 0) {
+                        const normZ = Math.max(0, Math.min(1, (z - grid.minZ) / (grid.maxZ - grid.minZ || 1)));
+                        const gz = Math.min(row.length - 1, Math.floor(normZ * (row.length - 1)));
+                        return row[gz];
+                    }
+                }
+            }
+            return 0.0;
+        };
 
         // 1. Extrude Buildings (70-20-10 Geometric Form Hierarchy)
         let buildingCount = 0;
@@ -473,7 +521,7 @@ export class GoogleVectorTileService {
             if (b.ring.length < 3) continue;
 
             const localRing = b.ring.map(([lng, lat]) =>
-                wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude)
+                wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp)
             );
 
             // Compute height from properties or default
@@ -493,8 +541,12 @@ export class GoogleVectorTileService {
             }
             height *= heightScale;
 
-            const baseY = 0.0;
-            const topY = baseY + height;
+            const groundElevations = localRing.map(p => sampleElevation(p.x, p.z));
+            const minGroundY = Math.min(...groundElevations);
+            const maxGroundY = Math.max(...groundElevations);
+            // Skirt embeds slightly below ground so slope never exposes gaps
+            const baseY = minGroundY - 0.5;
+            const topY = maxGroundY + height;
             const n = localRing.length;
 
             // Walls
@@ -548,18 +600,18 @@ export class GoogleVectorTileService {
             buildingCount++;
         }
 
-        // 2. Extrude Roads (as ground ribbons elevated slightly at y = 0.05)
+        // 2. Extrude Roads (as ground ribbons elevated slightly at y = 0.05 + ground elevation)
         let roadSegmentCount = 0;
         if (options.includeRoads !== false) {
             for (const r of allRoads) {
                 if (r.points.length < 2) continue;
 
                 const localPoints = r.points.map(([lng, lat]) =>
-                    wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude)
+                    wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp)
                 );
 
                 const roadWidth = 6.0; // 6 meters wide road ribbon
-                const roadY = 0.05;
+                const roadYOffset = 0.05;
 
                 for (let i = 0; i < localPoints.length - 1; i++) {
                     const p0 = localPoints[i];
@@ -573,36 +625,40 @@ export class GoogleVectorTileService {
                     const perpX = (-dz / len) * (roadWidth * 0.5);
                     const perpZ = (dx / len) * (roadWidth * 0.5);
 
-                    const vIdx0 = addVertex(p0.x - perpX, roadY, p0.z - perpZ, 0, 1, 0, 0, 0);
-                    const vIdx1 = addVertex(p0.x + perpX, roadY, p0.z + perpZ, 0, 1, 0, 1, 0);
-                    const vIdx2 = addVertex(p1.x + perpX, roadY, p1.z + perpZ, 0, 1, 0, 1, 1);
-                    const vIdx3 = addVertex(p1.x - perpX, roadY, p1.z - perpZ, 0, 1, 0, 0, 1);
+                    const roadY0 = sampleElevation(p0.x, p0.z) + roadYOffset;
+                    const roadY1 = sampleElevation(p1.x, p1.z) + roadYOffset;
+
+                    const vIdx0 = addVertex(p0.x - perpX, roadY0, p0.z - perpZ, 0, 1, 0, 0, 0);
+                    const vIdx1 = addVertex(p0.x + perpX, roadY0, p0.z + perpZ, 0, 1, 0, 1, 0);
+                    const vIdx2 = addVertex(p1.x + perpX, roadY1, p1.z + perpZ, 0, 1, 0, 1, 1);
+                    const vIdx3 = addVertex(p1.x - perpX, roadY1, p1.z - perpZ, 0, 1, 0, 0, 1);
 
                     indices.push(vIdx0, vIdx1, vIdx2);
                     indices.push(vIdx0, vIdx2, vIdx3);
 
-                    expandBounds(p0.x, roadY, p0.z);
-                    expandBounds(p1.x, roadY, p1.z);
+                    expandBounds(p0.x, roadY0, p0.z);
+                    expandBounds(p1.x, roadY1, p1.z);
                     roadSegmentCount++;
                 }
             }
         }
 
-        // 3. Extrude Water (as reflective basins at y = 0.02)
+        // 3. Extrude Water (as reflective basins at y = 0.02 + ground elevation)
         let waterPolygonCount = 0;
         if (options.includeWater !== false) {
             for (const w of allWater) {
                 if (w.ring.length < 3) continue;
 
                 const localRing = w.ring.map(([lng, lat]) =>
-                    wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude)
+                    wgs84ToLocalEnu(lat, lng, options.latitude, options.longitude, anchorElevation, undefined, ltp)
                 );
 
-                const waterY = 0.02;
+                const waterYOffset = 0.02;
                 const waterTriangles = EarClippingTriangulator.triangulate(localRing);
                 const waterStartIdx = currentVertexCount;
 
                 for (const p of localRing) {
+                    const waterY = sampleElevation(p.x, p.z) + waterYOffset;
                     addVertex(p.x, waterY, p.z, 0, 1, 0, p.x * 0.05, p.z * 0.05);
                     expandBounds(p.x, waterY, p.z);
                 }

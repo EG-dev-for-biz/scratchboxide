@@ -614,10 +614,23 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
     const isSplatPrompt = /(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?)/i.test(request.prompt || '');
 
     let userPrompt = request.prompt;
+    const is3DActive = request.activeArtifact?.type === '3d-scene';
+    const isStagingPrompt = /stage|staging|place|ground|anchor|situate|relocate|location|at\s+[a-z]|on\s+[a-z]|beach|park|city|street|monaco|venice|cyclorama|plinth|pedestal|platform|cove|pavement|asphalt|boardwalk|vector|tiles/i.test(request.prompt || '');
+    const isExplicitDocRequest = /document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article|research\s+paper/i.test(request.prompt || '');
+
     if (isVideoTimelinePrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a multi-track Video NLE Timeline operation (clip split, ripple delete, playhead navigation, or track manipulation). You MUST mount/switch to the "video-timeline" primitive via mount_canvas_primitive({ primitiveType: "video-timeline", ... }) or output JSON with type: "video-timeline". NEVER output "3d-scene", "markdown-document", or "live-code-sandbox" for this request, regardless of any previously active 3D scene!]`;
     } else if (isSplatPrompt) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D Gaussian Splatting (3DGS) radiance field of a location. In Scratchbox IDE, the user NEVER has to invoke or mention "Nano Banana" explicitly — our closed-loop pipeline automatically assumes and employs Nano Banana multi-station restyling, Google 3D Tiles pose-exact blockout captures, SubPixelEdgeAlignmentOptimizer Sobel edge QC, and C++20 metric depth unprojection (station_to_splats). You MUST mount/switch to the "3d-scene" primitive via mount_canvas_primitive({ primitiveType: "3d-scene", title: "<Location Name> — 3D Gaussian Splat", payload: { sceneType: "gaussian_splat", splatUrl: "/models/<location>_splat.splat", splatTilesetUrl: "/tilesets/<location>/tileset.json", splatOptions: { splatScale: 1.0, contactShadow: true, enableSoftZ: true }, ... } }) or dispatch the survey_beautify_to_splats tool. DO NOT ask the user to specify Nano Banana or mention Nano Banana as a requirement.]`;
+    } else if (is3DActive && !isExplicitDocRequest && (isStagingPrompt || !lowerReqPrompt.includes('code'))) {
+        userPrompt += `\n\n[CRITICAL DIRECTIVE: An active 3D scene is present on the canvas ("${request.activeArtifact?.title || '3D Scene'}"). The user is requesting to STAGE, GROUND, or ITERATE on the active 3D asset (e.g. "${request.prompt}").
+1. NEVER output a Markdown document, essay, outline, or text brief. The canvas mode is 3d-scene and MUST remain 3d-scene!
+2. If the user asks to stage at a real-world location (e.g. Venice Beach, Monaco GP, etc.):
+   - Call stage_3d_vector_world with the geocoded coordinates (e.g. for Venice Beach: latitude: 33.9850, longitude: -118.4695, populate: true, heroStaging: { type: 'plaza' }) OR call get_google_3d_tiles_clay / google_3d_tiles_get_clay.
+   - Alternatively, call execute_3d_python_script to update the active scene.
+3. If staging on an environmental plinth (curved cyclorama cove, asphalt road plinth, oceanfront concrete pad, plaza pedestal):
+   - Call execute_3d_python_script to synthesize the plinth and contact-ground the hero asset using sb.layout.
+4. Conclude your response with the next progression step: PBR Materials & Textures (vibrant court acrylics, clearcoat, carbon fiber, etc.).]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
 - UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, organisms, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.

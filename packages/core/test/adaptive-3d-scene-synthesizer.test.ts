@@ -169,5 +169,76 @@ describe('Adaptive Domain Architecture: Adaptive3DSceneSynthesizer', () => {
         // Crucial Invariant: Ephemeral reference image MUST be unlinked / deleted
         expect(fs.existsSync(tempImagePath)).toBe(false);
     }, 180000);
+
+    it('synthesizes Approach A scale entourage figures conforming to Studio Grey Clay Invariant', () => {
+        const prompt = 'arctic research station in snowy mountain basin with an engineer surveyor observing the perimeter';
+        const contract = synthesizer.synthesizeContractFromPrompt(prompt);
+
+        expect(contract.characters).toBeDefined();
+        expect(contract.characters!.length).toBeGreaterThanOrEqual(1);
+
+        const char = contract.characters![0];
+        expect(char.id).toBe('character_entourage_0');
+        expect(char.role).toBe('engineer');
+        expect(char.targetHeightMeters).toBeCloseTo(1.76, 1);
+        expect(char.poseArchetype).toBe('standing_survey');
+        expect(char.clayMaterial).toEqual({
+            roughness: 0.85,
+            metalness: 0.0,
+            color: [0.55, 0.57, 0.60]
+        });
+
+        // Scene graph entity and relation to plinth
+        const charEntity = contract.sceneGraph!.entities.find(e => e.id === 'character_entourage_0');
+        expect(charEntity).toBeDefined();
+        expect(charEntity!.grammarType).toBe('kinetic_articulation');
+        expect(charEntity!.tier).toBe('tertiary');
+
+        const rel = contract.relations!.find(r => r.subjectId === 'character_entourage_0' && r.targetId === 'plinth');
+        expect(rel).toBeDefined();
+        expect(rel!.predicate).toBe('SUPPORTED_BY');
+
+        // C++ source code verification
+        const cppSource = synthesizer.generateCppSource(contract);
+        expect(cppSource).toContain('#include "scratchbox_parametric_human.hpp"');
+        expect(cppSource).toContain('#include "scratchbox_kinematics.hpp"');
+        expect(cppSource).toContain('#include "scratchbox_skinning.hpp"');
+        expect(cppSource).toContain('SbHumanModel::loadStandardModel');
+        expect(cppSource).toContain('posedRig.setJointRotation("LeftShoulder"');
+        expect(cppSource).toContain('posedRig.setJointRotation("LeftKnee"');
+        expect(cppSource).toContain('figureMesh.bounds.min.y');
+        expect(cppSource).toContain('Vec4 clayTone(0.55f, 0.57f, 0.60f, 1.0f)');
+        expect(cppSource).toContain('multiMeshes.push_back(entourageCompound)');
+    });
+
+    it('dynamically compiles C++20 scene with Approach A scale entourage figure into binary .glb', async () => {
+        const prompt = 'arctic outpost in glacial valley with an engineer surveyor standing at the observation point';
+        const contract = synthesizer.synthesizeContractFromPrompt(prompt);
+
+        const outputDir = path.resolve(process.cwd(), 'build/3d-test');
+        const outputGlbPath = path.join(outputDir, 'test_entourage_scene.glb');
+
+        const result = await synthesizer.synthesizeAndCompile(contract, {
+            outputDir,
+            outputGlbPath
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.success).toBe(true);
+        expect(result.glbPath).toBe(outputGlbPath);
+        expect(fs.existsSync(outputGlbPath)).toBe(true);
+
+        const stats = fs.statSync(outputGlbPath);
+        expect(stats.size).toBeGreaterThan(20000);
+
+        // Verify glTF 2.0 magic
+        const buffer = fs.readFileSync(outputGlbPath);
+        expect(buffer.toString('ascii', 0, 4)).toBe('glTF');
+
+        // Entourage mesh increases vertex and triangle counts beyond base scene
+        expect(result.vertexCount).toBeGreaterThan(10000);
+        expect(result.triangleCount).toBeGreaterThan(5000);
+    }, 180000);
 });
+
 

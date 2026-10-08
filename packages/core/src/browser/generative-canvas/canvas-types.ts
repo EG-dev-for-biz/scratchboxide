@@ -720,12 +720,28 @@ export interface VectorRoadmapConfig {
     minimap?: boolean;
     minimapZoom?: number;
     styleJson?: any;
+    groundTileMode?: GroundTileMode;
 }
+
+/**
+ * Universal Ground Tile Representation Mode.
+ * Governs whether the scene floor renders Google Photorealistic 3D Tiles (Textured or Clay),
+ * a high-density 3D Vector World procedural mesh, a 2D Cloud Vector Roadmap Blueprint, or none.
+ * Open-ended string literal to satisfy ADA zero-closed-taxonomies invariant.
+ */
+export type GroundTileMode =
+    | 'photoreal-textured'
+    | 'photoreal-clay'
+    | 'vector-world-clay'
+    | 'vector-roadmap-blueprint'
+    | 'none'
+    | (string & {});
 
 export interface Scene3DData {
     title: string;
     subtitle?: string;
     worldBranch?: string;
+    groundTileMode?: GroundTileMode;
     /**
      * Optional semantic domain or classification token.
      * 
@@ -819,6 +835,7 @@ export interface Scene3DData {
             exposure?: number;
             vignette?: number;
         };
+        groundTileMode?: GroundTileMode;
     };
     geoAnchor?: {
         lat: number;

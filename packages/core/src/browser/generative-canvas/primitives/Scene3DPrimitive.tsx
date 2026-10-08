@@ -19,7 +19,8 @@ import type {
     SculptSettings,
     TransformGizmoMode,
     TransformGizmoSpace,
-    ViewportToolMode
+    ViewportToolMode,
+    GroundTileMode
 } from '../canvas-types';
 import { VideoTimelineTracks } from './video/VideoTimelineTracks';
 import type { TimelineTrack, VideoTimelineData, NleTool } from '../services/video/videoTypes';
@@ -1812,11 +1813,32 @@ int main(int argc, char** argv) {
         sceneData.objects?.some(o => o.content?.type === 'map-3d')
     ), [sceneData.geoAnchor, sceneData.objects]);
 
-    const tilesInput = React.useMemo<TilesLayerInput>(() => ({
+    const effectiveGroundTileMode: GroundTileMode = React.useMemo(() => {
+        if (sceneData.groundTileMode) return sceneData.groundTileMode;
+        if (sceneData.environment?.groundTileMode) return sceneData.environment.groundTileMode;
+        if (sceneData.vectorRoadmap?.groundTileMode) return sceneData.vectorRoadmap.groundTileMode;
+        if (sceneData.vectorRoadmap?.groundBlueprint) return 'vector-roadmap-blueprint';
+        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'GoogleVectorTileService')) return 'vector-world-clay';
+        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'Google3DTilesClay')) return 'photoreal-clay';
+        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'Google3DTilesFullTexture')) return 'photoreal-textured';
+        if (has3DTiles) return renderMode === 'pbr' || renderMode === 'shaded' ? 'photoreal-textured' : 'photoreal-clay';
+        return 'none';
+    }, [
+        sceneData.groundTileMode,
+        sceneData.environment?.groundTileMode,
+        sceneData.vectorRoadmap?.groundTileMode,
+        sceneData.vectorRoadmap?.groundBlueprint,
+        sceneData.objects,
         has3DTiles,
-        geoAnchor: sceneData.geoAnchor ? { lat: sceneData.geoAnchor.lat, lng: sceneData.geoAnchor.lng, elevation: sceneData.geoAnchor.elevation } : null,
         renderMode
-    }), [has3DTiles, sceneData.geoAnchor, renderMode]);
+    ]);
+
+    const tilesInput = React.useMemo<TilesLayerInput>(() => ({
+        has3DTiles: has3DTiles && (effectiveGroundTileMode === 'photoreal-textured' || effectiveGroundTileMode === 'photoreal-clay'),
+        geoAnchor: sceneData.geoAnchor ? { lat: sceneData.geoAnchor.lat, lng: sceneData.geoAnchor.lng, elevation: sceneData.geoAnchor.elevation } : null,
+        renderMode,
+        groundTileMode: effectiveGroundTileMode
+    }), [has3DTiles, sceneData.geoAnchor, renderMode, effectiveGroundTileMode]);
     const tilesFingerprint = React.useMemo(() => JSON.stringify(tilesInput), [tilesInput]);
     const tilesInputRef = useLatest(tilesInput);
 
@@ -1895,13 +1917,14 @@ int main(int argc, char** argv) {
             id: o.id,
             uri: o.content?.durableUri,
             type: o.content?.type,
-            space: o.space?.spatial3d
+            space: o.space?.spatial3d,
+            source: o.content?.metadata?.source
         })) || []);
         if (sceneData.splatUrl) {
             objs.push({ id: '__primary_splat__', uri: sceneData.splatUrl, type: 'gaussian-splat', space: undefined });
         }
-        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions });
-    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions]);
+        return JSON.stringify({ objs, splatOptions: sceneData.splatOptions, effectiveGroundTileMode });
+    }, [sceneData.objects, sceneData.splatUrl, sceneData.splatOptions, effectiveGroundTileMode]);
 
     // ---- 1. Renderer stack, overlays, controls and the render loop (mount once) ----
     React.useEffect(() => {
@@ -2216,7 +2239,8 @@ int main(int argc, char** argv) {
         if (!stack) return;
         const handle = syncVectorRoadmapBlueprint(stack.scene, vectorRoadmapHandleRef.current, {
             config: sceneData.vectorRoadmap,
-            geoAnchor: sceneData.geoAnchor
+            geoAnchor: sceneData.geoAnchor,
+            groundTileMode: effectiveGroundTileMode
         });
         vectorRoadmapHandleRef.current = handle;
         return () => {
@@ -2224,6 +2248,7 @@ int main(int argc, char** argv) {
             vectorRoadmapHandleRef.current = null;
         };
     }, [
+        effectiveGroundTileMode,
         sceneData.vectorRoadmap?.enabled,
         sceneData.vectorRoadmap?.groundBlueprint,
         sceneData.vectorRoadmap?.groundBlueprintOpacity,
@@ -2609,8 +2634,19 @@ int main(int argc, char** argv) {
             if (!isSplat && !isGltf) return;
             activeIds.add(obj.id);
 
+            const source = obj.content?.metadata?.source;
+            let isVisibleForGroundMode = true;
+            if (source === 'GoogleVectorTileService') {
+                isVisibleForGroundMode = effectiveGroundTileMode === 'vector-world-clay';
+            } else if (source === 'Google3DTilesClay') {
+                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-clay';
+            } else if (source === 'Google3DTilesFullTexture') {
+                isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-textured';
+            }
+
             const existing = currentMap.get(obj.id);
             if (existing) {
+                existing.visible = isVisibleForGroundMode;
                 const s = obj.space?.spatial3d;
                 if (s) {
                     existing.position.set(s.x ?? 0, s.y ?? 0, s.z ?? 0);
@@ -2693,6 +2729,7 @@ int main(int argc, char** argv) {
                         }
                     });
 
+                    model.visible = isVisibleForGroundMode;
                     scene.add(model);
                     applyClayRenderMode([model], renderModeRef.current === 'clay');
                     currentMap.set(obj.id, model);
@@ -3100,12 +3137,25 @@ int main(int argc, char** argv) {
     const handleUpdateVectorRoadmap = React.useCallback((updated: Partial<VectorRoadmapConfig>) => {
         mutateSceneData(prev => ({
             ...prev,
+            groundTileMode: updated.groundTileMode !== undefined ? updated.groundTileMode : prev.groundTileMode,
             vectorRoadmap: {
                 ...prev.vectorRoadmap,
                 enabled: true,
                 ...updated
             }
         }), { operator: 'UPDATE_VECTOR_ROADMAP', params: updated });
+    }, [mutateSceneData]);
+
+    const handleSelectGroundTileMode = React.useCallback((mode: GroundTileMode) => {
+        mutateSceneData(prev => ({
+            ...prev,
+            groundTileMode: mode,
+            vectorRoadmap: {
+                ...prev.vectorRoadmap,
+                groundTileMode: mode,
+                groundBlueprint: mode === 'vector-roadmap-blueprint' ? true : prev.vectorRoadmap?.groundBlueprint
+            }
+        }), { operator: 'SET_GROUND_TILE_MODE', params: { groundTileMode: mode } });
     }, [mutateSceneData]);
 
     const refreshSceneBudget = React.useCallback(() => {

@@ -97,18 +97,19 @@ export interface CapabilityOptions {
     hasCameraTrack?: boolean;
     targetEnvironment?: 'local' | 'cloud-run' | 'auto';
     forceComfyUi?: boolean;
+    activeArtifact?: any;
 }
 
 export class TaskCapabilityResolver {
     /**
      * Classifies the primary domain of a task goal.
      */
-    static classifyTaskDomain(taskGoal: string): TaskDomain {
+    static classifyTaskDomain(taskGoal: string, options?: CapabilityOptions): TaskDomain {
         const lower = (taskGoal || '').toLowerCase();
 
         // Generative Diffusion / Neural (Check first so neural diffusion doesn't get masked by generic mesh/video keywords)
         if (
-            /diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.[12]|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana/i.test(lower)
+            /\b(?:diffusion|lora|checkpoint|latent|controlnet|trellis|triposr|marigold|depth-anything|animatediff|omni\s*restyle|svd|cogvideo|wan2\.[12]|inpaint|outpaint|image-to-3d|video-to-video|color\s*transfer|palette|nano\s*banana)\b/i.test(lower)
         ) {
             return 'generative';
         }
@@ -122,7 +123,7 @@ export class TaskCapabilityResolver {
 
         // 3D & XR (Adaptive Domain Architecture: Physical/Spatial Synthesis & Dimensional Representations)
         // 1. Explicit 3D representations, rendering engines, and geospatial/optical formats:
-        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender/i.test(lower);
+        const hasExplicit3DTerms = /3d|mesh|geometry|sdf|marching\s*cubes|terrain|biome|glb|gltf|three\.js|webgl|c\+\+|clang|polygon|voxel|photorealistic\s*3d\s*tiles|cesium|quad\s*remesh|utdra|uldra|tile|void\s*carv|bridge\s*void|underpass|webxr|geospatial\s*anchor|arcore|resect(?:ion)?|geobox|image\s*location|optical\s*center|edge\s*overlap|sub-?pixel|solvepnp|pnp|feature\s*match|point\s*correspondence|lens\s*distortion|barrel\s*distortion|pincushion|chromatic\s*aberration|optical\s*lens|lens\s*shader|anamorphic\s*squeeze|atmosphere|lighting|rayleigh|mie|scattering|turbidity|sky\s*dome|aerial\s*perspective|god\s*rays|diurnal|kelvin|cloud\s*shadow|uv|unwrap|rewrap|pbr|cavitation|texture\s*atlas|splat|gaussian|3dgs|radiance\s*field|blender|\b(?:stage|staging|plinth|pedestal|cyclorama|curved\s*cove|hero\s*staging|vector\s*world|vector\s*tile|population\s*staging)\b/i.test(lower);
 
         if (hasExplicit3DTerms) {
             return '3d';
@@ -131,8 +132,8 @@ export class TaskCapabilityResolver {
         // 2. Open-Domain Spatial Synthesis (ADA):
         // Detect dimensional fabrication verbs operating on structural/spatial envelopes or physical materials
         // rather than closed taxonomies of specific human or alien architectural nouns.
-        const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place)\b/i.test(lower);
-        const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization)\b/i.test(lower);
+        const hasSpatialVerb = /\b(model|sculpt|extrude|carve|mesh|construct|build|render|synthesize|assemble|fabricate|shape|forge|procedural\w*|create|generate|design|place|stage|situate|anchor|ground|relocate|position)\b/i.test(lower);
+        const hasSpatialEntity = /\b(scene|structure|building|tower|facility|station|habitat|outpost|compound|terminal|pavilion|monument|landmark|hall|chamber|room|corridor|interior|exterior|facade|roof|roofs|mansard|window|windows|column|columns|wall|floor|foundation|elevation|canopy|foliage|tree|trees|vegetation|landscape|terrain|topograph\w*|monolith|cavern|subterranean|orbital|fenestration|cantilever|spatial|biome|space[- ]colonization|beach|plinth|pedestal|cyclorama|cove|boardwalk|stage|world|district)\b/i.test(lower);
         const hasPhysicalMaterial = /\b(stone|wood|timber|marble|granite|basalt|obsidian|metal|steel|iron|concrete|ferroconcrete|glass|brick|clay|foliage|water|sand|rock|ice|snow)\b/i.test(lower);
 
         if (hasSpatialVerb && (hasSpatialEntity || hasPhysicalMaterial)) {
@@ -144,6 +145,10 @@ export class TaskCapabilityResolver {
             /\bcode\b|function|\bclass\b|typescript|refactor|compile|\bbuild\b|\btest\b|debug|lint|diagnostics|git|api\s*endpoint|fastapi/i.test(lower)
         ) {
             return 'code';
+        }
+
+        if (options?.activeArtifact?.type === '3d-scene' && !/document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article/i.test(lower)) {
+            return '3d';
         }
 
         return 'general';
@@ -167,9 +172,13 @@ export class TaskCapabilityResolver {
             goal = taskGoal || '';
         }
         const lower = goal.toLowerCase();
-        const domain = (opts.domainHint && opts.domainHint !== 'auto')
+        let domain = (opts.domainHint && opts.domainHint !== 'auto')
             ? opts.domainHint
-            : this.classifyTaskDomain(goal);
+            : this.classifyTaskDomain(goal, opts);
+
+        if (domain === 'general' && opts.activeArtifact?.type === '3d-scene' && !/document|doc\b|spec|write\s+(?:a\s+)?(?:doc|document|spec|essay|report|paper)|article/i.test(lower)) {
+            domain = '3d';
+        }
 
         // Check for specific neural/generative triggers that exceed native algorithmic and Google model capabilities.
         // Trellis can be used to create discrete objects/props in a scene, but scenes themselves are created in codebase.

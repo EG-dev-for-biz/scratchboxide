@@ -471,6 +471,7 @@ export function buildToolDeclarations(
         prompt: request.prompt,
         mode: request.mode,
         domainHint: (request as any).domainHint,
+        activeArtifact: request.activeArtifact,
         enableWorkspaceTools: request.enableWorkspaceTools,
         enableComfyUiTools: request.enableComfyUiTools,
         enableBrowserTools: request.enableBrowserTools,

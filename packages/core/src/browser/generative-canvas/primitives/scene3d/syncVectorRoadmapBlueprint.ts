@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
-import type { VectorRoadmapConfig } from '../../canvas-types';
+import type { VectorRoadmapConfig, GroundTileMode } from '../../canvas-types';
 import { GoogleMapsService } from '../../services/google-maps-service';
 import { LocalTangentPlane } from '../../../../common/coordinate/LocalTangentPlane';
 import { removeAndDispose, type VectorRoadmapHandle } from './types';
@@ -23,6 +23,7 @@ export interface VectorRoadmapBlueprintInput {
         datum?: string;
         active?: boolean;
     } | null;
+    groundTileMode?: GroundTileMode;
 }
 
 export function syncVectorRoadmapBlueprint(
@@ -30,10 +31,17 @@ export function syncVectorRoadmapBlueprint(
     currentHandle: VectorRoadmapHandle | null,
     input: VectorRoadmapBlueprintInput
 ): VectorRoadmapHandle {
-    const { config, geoAnchor } = input;
+    const { config, geoAnchor, groundTileMode } = input;
+    const effectiveGroundMode = groundTileMode ?? config?.groundTileMode;
+    const isExplicitlyBlueprint = effectiveGroundMode === 'vector-roadmap-blueprint';
+    const isExplicitlyDisabled = effectiveGroundMode === 'none' || effectiveGroundMode === 'photoreal-textured' || effectiveGroundMode === 'photoreal-clay' || effectiveGroundMode === 'vector-world-clay';
+
     const isEnabled = Boolean(
-        config?.enabled &&
-        (config?.groundBlueprint ?? true) &&
+        !isExplicitlyDisabled &&
+        (isExplicitlyBlueprint || (
+            config?.enabled &&
+            (config?.groundBlueprint ?? true)
+        )) &&
         geoAnchor?.lat !== undefined &&
         geoAnchor?.lng !== undefined
     );

@@ -21,7 +21,9 @@ import type {
     AdaptiveAtmosphereEphemeris,
     SpatialRelation,
     AdaptiveSceneGraphBlueprint,
-    SceneEntityBlueprint
+    SceneEntityBlueprint,
+    AdaptiveCharacterEntity,
+    AdaptiveCharacterEntourageField
 } from '../../common/spatial/adaptive-3d-scene-contract';
 
 export interface Adaptive3DSceneExecutionResult {
@@ -330,7 +332,74 @@ export class Adaptive3DSceneSynthesizer {
         }
 
         // --------------------------------------------------------------------
-        // 5. ATMOSPHERE (strictly opt-in)
+        // 5. ARCHITECTURAL ENTOURAGE & SCALE FIGURES (continuous inference)
+        // --------------------------------------------------------------------
+        const humanSignal = countMatches([
+            /human|person|people|figure|character|man|woman|pedestrian/gi,
+            /engineer|scientist|researcher|surveyor|explorer|astronaut|worker|guard|monk|wanderer|observer/gi,
+            /entourage|scale figure|inhabitant|citizen|bystander/gi
+        ]);
+
+        const characters: AdaptiveCharacterEntity[] = [];
+        if (humanSignal > 0) {
+            const isFemale = /woman|female|lady/i.test(lower);
+            const isMale = /man|male|guy/i.test(lower);
+            const genderBeta = isFemale ? -0.8 : (isMale ? 0.8 : 0.0);
+            const isTall = /tall|giant/i.test(lower);
+            const targetHeightMeters = isTall ? 1.88 : (isFemale ? 1.66 : 1.76);
+
+            // Grounding: position near the plinth/entrance observation point
+            const charX = buildingWidth * 0.42;
+            const charZ = buildingDepth * 0.52 + 1.5;
+
+            const charEntity: AdaptiveCharacterEntity = {
+                id: 'character_entourage_0',
+                name: 'Scale Entourage Figure',
+                role: /engineer/i.test(lower) ? 'engineer'
+                    : /surveyor/i.test(lower) ? 'surveyor'
+                    : /scientist/i.test(lower) ? 'scientist'
+                    : /observer/i.test(lower) ? 'observer'
+                    : 'scale_figure',
+                targetHeightMeters,
+                genderBeta,
+                poseArchetype: 'standing_survey',
+                position: [charX, 0, charZ],
+                facingAngleDeg: -25.0,
+                groundOffsetMeters: 0.0,
+                clayMaterial: {
+                    roughness: 0.85,
+                    metalness: 0.0,
+                    color: [0.55, 0.57, 0.60]
+                }
+            };
+
+            characters.push(charEntity);
+
+            // Add to scene graph
+            entities.push({
+                id: charEntity.id,
+                name: charEntity.name,
+                grammarType: 'kinetic_articulation',
+                tier: 'tertiary',
+                massingDimensions: [0.55, targetHeightMeters, 0.35],
+                materialProfile: {
+                    roughness: 0.85,
+                    metalness: 0.0,
+                    baseTone: [0.55, 0.57, 0.60]
+                }
+            });
+
+            // Relational support: SUPPORTED_BY plinth
+            relations.push({
+                subjectId: charEntity.id,
+                predicate: 'SUPPORTED_BY',
+                targetId: 'plinth',
+                parameters: { faceAlignment: 'top', clearanceMeters: 0.0 }
+            });
+        }
+
+        // --------------------------------------------------------------------
+        // 6. ATMOSPHERE (strictly opt-in)
         // --------------------------------------------------------------------
         const hasAtmosphere = /atmosphere|atmospheric|sky|clouds?|sunset|dusk|dawn|golden hour|twilight|weather|ephemeris/i.test(lower);
         let atmosphere: AdaptiveAtmosphereEphemeris | undefined = undefined;
@@ -360,9 +429,12 @@ export class Adaptive3DSceneSynthesizer {
             },
             atmosphere,
             relations,
-            sceneGraph
+            sceneGraph,
+            characters: characters.length > 0 ? characters : undefined,
+            entourage: characters.length > 0 ? { characters } : undefined
         };
     }
+
 
     /**
      * Dynamically generates the complete C++20 program implementing the scene contract.
@@ -375,12 +447,16 @@ export class Adaptive3DSceneSynthesizer {
             fenestration: { bayWidth: 3.2, windowRecess: 0.35, sillHeight: 0.85, headerHeight: 2.85 },
             glazing: { emissiveColor: [1.0, 0.65, 0.2] }
         };
+        const charList = contract.characters || contract.entourage?.characters || [];
 
         return `// Generated dynamically via Scratchbox Adaptive Domain Architecture
 // Zero hardcoded scene files. Authoritative procedural synthesis in C++20.
 #include "scratchbox_engine.hpp"
 #include "scratchbox_sb_veggie.hpp"
 #include "scratchbox_architecture.hpp"
+#include "scratchbox_parametric_human.hpp"
+#include "scratchbox_kinematics.hpp"
+#include "scratchbox_skinning.hpp"
 #include "scratchbox_halfedge.hpp"
 #include "scratchbox_infiniti.hpp"
 #include "scratchbox_substrate.hpp"
@@ -397,6 +473,9 @@ using namespace scratchbox::math;
 using namespace scratchbox::geometry;
 using namespace scratchbox::sb_veggie;
 using namespace scratchbox::architecture;
+using namespace scratchbox::parametric;
+using namespace scratchbox::kinematics;
+using namespace scratchbox::skinning;
 using namespace scratchbox::halfedge;
 using namespace scratchbox::infiniti;
 using namespace scratchbox::substrate;
@@ -889,8 +968,147 @@ int main(int argc, char** argv) {
     woodCompound.recomputeBounds();
     foliageCompound.recomputeBounds();
 
-    // 5. Serialize Multi-Mesh Binary glTF 2.0 (.glb)
-    // Blender-Grade Contiguous Memory: Packing the world into 4 unified compound buffers
+    ${charList.length > 0 ? `
+    // 5. Build Architectural Scale Entourage Figures (Approach A: Studio Grey Clay Entourage)
+    ScratchboxMesh entourageCompound("Adaptive_Entourage_Compound");
+    entourageCompound.material.name = "Entourage_Studio_Clay";
+    entourageCompound.material.roughnessFactor = 0.85f;
+    entourageCompound.material.metallicFactor = 0.0f;
+    entourageCompound.material.baseColorFactor = Vec4(0.55f, 0.57f, 0.60f, 1.0f);
+
+    ${charList.map((charDef, idx) => {
+        const charGender = charDef.genderBeta > 0.3 ? 'skinning::GenderMorph::Male'
+                         : charDef.genderBeta < -0.3 ? 'skinning::GenderMorph::Female'
+                         : 'skinning::GenderMorph::Neutral';
+        const targetH = charDef.targetHeightMeters.toFixed(2);
+        const posX = charDef.position[0].toFixed(2);
+        const posZ = charDef.position[2].toFixed(2);
+        const facingAngleDeg = charDef.facingAngleDeg ?? -25.0;
+        const facingRad = (facingAngleDeg * Math.PI / 180.0).toFixed(4);
+        const charName = charDef.name || 'Entourage Figure';
+        const charRole = charDef.role || 'scale_figure';
+
+        return `
+    {
+        // Character ${idx}: ${charName} (${charRole})
+        SbHumanModel charModel = SbHumanModel::loadStandardModel(${charGender}, ${targetH}f);
+        kinematics::Skeleton posedRig = charModel.skeleton;
+
+        // Contrapposto / Natural Survey Stance:
+        // Relax arms from horizontal T/A-pose down to side
+        posedRig.setJointRotation("LeftShoulder", Vec3(0.06f, 0.08f, -1.18f));
+        posedRig.setJointRotation("RightShoulder", Vec3(0.06f, -0.08f, 1.18f));
+        posedRig.setJointRotation("LeftElbow", Vec3(0.18f, 0.15f, -0.12f));
+        posedRig.setJointRotation("RightElbow", Vec3(0.18f, -0.15f, 0.12f));
+        posedRig.setJointRotation("Spine1", Vec3(0.04f, 0.0f, 0.02f));
+        posedRig.setJointRotation("Spine2", Vec3(0.02f, 0.0f, -0.01f));
+        posedRig.setJointRotation("Head", Vec3(-0.06f, 0.12f, 0.0f));
+
+        // Analytical 2-Bone IK Foot-to-Ground Clamp
+        const float targetX = ${posX}f;
+        const float targetZ = ${posZ}f;
+        const float facingAngle = ${facingRad}f;
+
+        // Ground/Surface elevation query (detects plinth or terrain)
+        auto getSurfaceElevation = [&](float x, float z) -> float {
+            float th = getTerrainHeight(x, z);
+            float halfPW = ${(b.dimensions.width * 1.5 * 0.48).toFixed(2)}f;
+            float halfPD = ${(b.dimensions.depth * 1.6 * 0.48).toFixed(2)}f;
+            if (std::abs(x) <= halfPW && std::abs(z) <= halfPD) {
+                return std::max(th, citadelMesh.bounds.min.y + 1.8f);
+            }
+            return th;
+        };
+
+        auto getSurfaceNormal = [&](float x, float z) -> Vec3 {
+            float halfPW = ${(b.dimensions.width * 1.5 * 0.48).toFixed(2)}f;
+            float halfPD = ${(b.dimensions.depth * 1.6 * 0.48).toFixed(2)}f;
+            if (std::abs(x) <= halfPW && std::abs(z) <= halfPD) {
+                return Vec3(0.0f, 1.0f, 0.0f);
+            }
+            return getTerrainNormal(x, z);
+        };
+
+        // Query foot rest positions
+        int32_t lAnkleIdx = posedRig.findJoint("LeftAnkle");
+        int32_t rAnkleIdx = posedRig.findJoint("RightAnkle");
+        Vec3 lAnkleRest = (lAnkleIdx >= 0) ? posedRig.joints[lAnkleIdx].restPosition : Vec3(0.10f, 0.08f, 0.0f);
+        Vec3 rAnkleRest = (rAnkleIdx >= 0) ? posedRig.joints[rAnkleIdx].restPosition : Vec3(-0.10f, 0.08f, 0.0f);
+
+        Vec3 lFootRot = rotateY(Vec3(lAnkleRest.x, 0.0f, lAnkleRest.z), facingAngle);
+        Vec3 rFootRot = rotateY(Vec3(rAnkleRest.x, 0.0f, rAnkleRest.z), facingAngle);
+        float lFootX = targetX + lFootRot.x;
+        float lFootZ = targetZ + lFootRot.z;
+        float rFootX = targetX + rFootRot.x;
+        float rFootZ = targetZ + rFootRot.z;
+
+        float hL = getSurfaceElevation(lFootX, lFootZ);
+        float hR = getSurfaceElevation(rFootX, rFootZ);
+        Vec3 nL = getSurfaceNormal(lFootX, lFootZ);
+        Vec3 nR = getSurfaceNormal(rFootX, rFootZ);
+
+        float hBase = std::min(hL, hR);
+        float deltaL = hL - hBase;
+        float deltaR = hR - hBase;
+
+        // Law of Cosines 2-Bone IK Leg Shortening for the elevated foot
+        float legLength = 0.82f * (${targetH}f / 1.76f);
+        float upperLeg = legLength * 0.52f;
+        float lowerLeg = legLength * 0.48f;
+
+        if (deltaL > 0.002f) {
+            float targetReach = std::clamp(legLength - deltaL, 0.35f * legLength, legLength);
+            float cosKnee = std::clamp((upperLeg * upperLeg + lowerLeg * lowerLeg - targetReach * targetReach) / (2.0f * upperLeg * lowerLeg), -1.0f, 1.0f);
+            float kneeAngle = std::acos(cosKnee);
+            posedRig.setJointRotation("LeftKnee", Vec3(kneeAngle, 0.0f, 0.0f));
+            posedRig.setJointRotation("LeftHip", Vec3(-kneeAngle * 0.5f, 0.0f, 0.0f));
+        }
+        if (deltaR > 0.002f) {
+            float targetReach = std::clamp(legLength - deltaR, 0.35f * legLength, legLength);
+            float cosKnee = std::clamp((upperLeg * upperLeg + lowerLeg * lowerLeg - targetReach * targetReach) / (2.0f * upperLeg * lowerLeg), -1.0f, 1.0f);
+            float kneeAngle = std::acos(cosKnee);
+            posedRig.setJointRotation("RightKnee", Vec3(kneeAngle, 0.0f, 0.0f));
+            posedRig.setJointRotation("RightHip", Vec3(-kneeAngle * 0.5f, 0.0f, 0.0f));
+        }
+
+        // Ankle alignment with local surface normal
+        float pitchL = -std::atan2(nL.z, std::max(0.01f, nL.y));
+        float rollL = std::atan2(nL.x, std::max(0.01f, nL.y));
+        posedRig.setJointRotation("LeftAnkle", Vec3(pitchL, 0.0f, rollL));
+
+        float pitchR = -std::atan2(nR.z, std::max(0.01f, nR.y));
+        float rollR = std::atan2(nR.x, std::max(0.01f, nR.y));
+        posedRig.setJointRotation("RightAnkle", Vec3(pitchR, 0.0f, rollR));
+
+        // Evaluate posed mesh via Linear Blend Skinning
+        ScratchboxMesh figureMesh = charModel.evaluatePosed(posedRig);
+
+        // Ground contact alignment (0.00 mm floating / penetration)
+        float modelMinY = figureMesh.bounds.min.y;
+        float groundPlacementY = hBase - modelMinY;
+
+        // Apply world orientation & 18% Studio Grey Clay tone
+        Vec4 clayTone(0.55f, 0.57f, 0.60f, 1.0f);
+        uint32_t charBaseIdx = static_cast<uint32_t>(entourageCompound.vertices.size());
+
+        for (const auto& v : figureMesh.vertices) {
+            Vec3 rotP = rotateY(v.position, facingAngle);
+            Vec3 rotN = rotateY(v.normal, facingAngle);
+            Vec3 worldP = rotP + Vec3(targetX, groundPlacementY, targetZ);
+            entourageCompound.vertices.push_back(Vertex{worldP, rotN, v.uv, clayTone});
+        }
+        for (uint32_t idx : figureMesh.indices) {
+            entourageCompound.indices.push_back(charBaseIdx + idx);
+        }
+    }
+        `;
+    }).join('\n')}
+
+    entourageCompound.recomputeBounds();
+    ` : ''}
+
+    // 6. Serialize Multi-Mesh Binary glTF 2.0 (.glb)
+    // Blender-Grade Contiguous Memory: Packing the world into unified compound buffers
     // guarantees minimal JavaScript object allocation in Three.js (0 GC stutter on update).
     std::vector<ScratchboxMesh> multiMeshes = {
         terrainMesh,
@@ -898,6 +1116,7 @@ int main(int argc, char** argv) {
         woodCompound,
         foliageCompound
     };
+    ${(charList.length > 0) ? `if (!entourageCompound.vertices.empty()) { multiMeshes.push_back(entourageCompound); }` : ''}
 
     std::vector<uint8_t> glbData = io::GlbWriter::serializeMultiMeshToGlb(multiMeshes);
 
@@ -910,9 +1129,11 @@ int main(int argc, char** argv) {
     glbFile.close();
 
     size_t totalVerts = terrainMesh.vertices.size() + citadelMesh.vertices.size() + 
-                        woodCompound.vertices.size() + foliageCompound.vertices.size();
+                        woodCompound.vertices.size() + foliageCompound.vertices.size()
+                        ${(charList.length > 0) ? `+ entourageCompound.vertices.size()` : ''};
     size_t totalTris = (terrainMesh.indices.size() + citadelMesh.indices.size() + 
-                        woodCompound.indices.size() + foliageCompound.indices.size()) / 3;
+                        woodCompound.indices.size() + foliageCompound.indices.size()
+                        ${(charList.length > 0) ? `+ entourageCompound.indices.size()` : ''}) / 3;
 
     std::cout << "SUCCESS: Wrote " << glbData.size() << " bytes to " << outGlbPath << std::endl;
     std::cout << "TOTAL_VERTS:" << totalVerts << std::endl;
@@ -1053,7 +1274,18 @@ Schema requirements:
 4. Atmosphere (Only if visible in prompt or image):
    - sunAzimuthDeg, sunElevationDeg, fogDensity, skyColor
 
+5. Scale Entourage Figures (Only if people/characters/figures are visible in prompt or image):
+   - characters: array of figures with:
+     - id, name, role
+     - targetHeightMeters (e.g. 1.76)
+     - genderBeta (-1.0 to 1.0)
+     - poseArchetype ('standing_survey', 'ground_inspection', 'seated_rest')
+     - position: [x, y, z]
+     - facingAngleDeg: orientation in degrees
+     - clayMaterial: { roughness: 0.85, metalness: 0.0, color: [0.55, 0.57, 0.60] }
+
 Return ONLY valid JSON strictly matching Adaptive3DSceneContract with zero markdown ticks or commentary.`;
+
     }
 
     /**

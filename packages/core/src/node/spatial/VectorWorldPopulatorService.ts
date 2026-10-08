@@ -17,12 +17,14 @@ import {
     VectorFeatureLine,
     wgs84ToLocalEnu,
     latLngToTile,
-    EarClippingTriangulator
+    EarClippingTriangulator,
+    getCachedLocalTangentPlane
 } from './GoogleVectorTileService';
 
 export interface EnuPoint {
     x: number;
     z: number;
+    y?: number;
 }
 
 export interface EnuRoadCorridor {
@@ -65,6 +67,7 @@ export interface EnuWaterPolygon {
 export interface VectorFeatureGraph {
     anchorLat: number;
     anchorLng: number;
+    anchorElevation?: number;
     roads: EnuRoadCorridor[];
     buildings: EnuBuildingParcel[];
     landuse: EnuLanduseArea[];
@@ -101,6 +104,15 @@ export interface HeroStagingPlacementResult {
 export interface VectorWorldPopulationOptions {
     latitude: number;
     longitude: number;
+    elevation?: number; // anchor ground elevation ASL/MSL in meters
+    terrainElevationGrid?: ((x: number, z: number) => number) | {
+        minX: number;
+        maxX: number;
+        minZ: number;
+        maxZ: number;
+        resolutionMeters: number;
+        elevations: Float32Array | number[][];
+    };
     zoom?: number; // default 16
     radiusTiles?: number; // default 1
     apiKey?: string;
@@ -170,8 +182,10 @@ export class VectorWorldPopulatorService {
     public static extractFeatureGraph(
         anchorLat: number,
         anchorLng: number,
-        decoded: DecodedVectorTileData
+        decoded: DecodedVectorTileData,
+        anchorElevation: number = 0
     ): VectorFeatureGraph {
+        const ltp = getCachedLocalTangentPlane(anchorLat, anchorLng, anchorElevation);
         const roads: EnuRoadCorridor[] = [];
         const buildings: EnuBuildingParcel[] = [];
         const landuse: EnuLanduseArea[] = [];
@@ -193,7 +207,7 @@ export class VectorWorldPopulatorService {
         for (const r of decoded.roads) {
             if (r.points.length < 2) continue;
             const enuPoints: EnuPoint[] = r.points.map(([lng, lat]) => {
-                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng);
+                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng, anchorElevation, undefined, ltp);
                 updateBounds(enu.x, 0.0, enu.z);
                 return enu;
             });
@@ -255,7 +269,7 @@ export class VectorWorldPopulatorService {
         for (const b of decoded.buildings) {
             if (b.ring.length < 3) continue;
             const enuRing: EnuPoint[] = b.ring.map(([lng, lat]) => {
-                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng);
+                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng, anchorElevation, undefined, ltp);
                 updateBounds(enu.x, 0.0, enu.z);
                 return enu;
             });
@@ -307,7 +321,7 @@ export class VectorWorldPopulatorService {
         for (const l of decoded.landuse) {
             if (l.ring.length < 3) continue;
             const enuRing: EnuPoint[] = l.ring.map(([lng, lat]) => {
-                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng);
+                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng, anchorElevation, undefined, ltp);
                 updateBounds(enu.x, 0.0, enu.z);
                 return enu;
             });
@@ -342,7 +356,7 @@ export class VectorWorldPopulatorService {
         for (const w of decoded.water) {
             if (w.ring.length < 3) continue;
             const enuRing: EnuPoint[] = w.ring.map(([lng, lat]) => {
-                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng);
+                const enu = wgs84ToLocalEnu(lat, lng, anchorLat, anchorLng, anchorElevation, undefined, ltp);
                 updateBounds(enu.x, 0.0, enu.z);
                 return enu;
             });
@@ -359,6 +373,7 @@ export class VectorWorldPopulatorService {
         return {
             anchorLat,
             anchorLng,
+            anchorElevation,
             roads,
             buildings,
             landuse,
@@ -375,7 +390,8 @@ export class VectorWorldPopulatorService {
      */
     public static solveHeroStaging(
         graph: VectorFeatureGraph,
-        query: HeroStagingPlacementQuery
+        query: HeroStagingPlacementQuery,
+        elevationSampler?: (x: number, z: number) => number
     ): HeroStagingPlacementResult | undefined {
         const type = query.type || 'lane';
 
@@ -417,7 +433,7 @@ export class VectorWorldPopulatorService {
 
                     const posX = cx + normalX * lateralOffset;
                     const posZ = cz + normalZ * lateralOffset;
-                    const surfaceY = 0.02;
+                    const surfaceY = (elevationSampler ? elevationSampler(posX, posZ) : 0.0) + 0.02;
 
                     const headingRad = Math.atan2(forwardX, forwardZ);
                     const headingDeg = (headingRad * 180) / Math.PI;
@@ -468,7 +484,7 @@ export class VectorWorldPopulatorService {
 
                     const posX = cx + normalX * lateralOffset;
                     const posZ = cz + normalZ * lateralOffset;
-                    const surfaceY = 0.17; // Elevated sidewalk slab
+                    const surfaceY = (elevationSampler ? elevationSampler(posX, posZ) : 0.0) + 0.17; // Elevated sidewalk slab
 
                     const headingRad = Math.atan2(forwardX, forwardZ);
                     const headingDeg = (headingRad * 180) / Math.PI;
@@ -489,12 +505,13 @@ export class VectorWorldPopulatorService {
         } else if (type === 'plaza' && graph.landuse.length > 0) {
             const idx = query.landuseIndex ?? 0;
             const area = graph.landuse[Math.min(graph.landuse.length - 1, idx)];
+            const surfaceY = (elevationSampler ? elevationSampler(area.centroid.x, area.centroid.z) : 0.0) + 0.05;
             return {
-                position: [area.centroid.x, 0.05, area.centroid.z],
+                position: [area.centroid.x, surfaceY, area.centroid.z],
                 headingRad: 0.0,
                 headingDeg: 0.0,
                 targetSurface: 'plaza',
-                surfaceY: 0.05,
+                surfaceY,
                 forwardVec: [0, 0, 1]
             };
         }
@@ -535,8 +552,29 @@ export class VectorWorldPopulatorService {
             }
         }
 
+        const anchorElevation = options.elevation ?? 0.0;
         // Extract topological graph in ENU metric meters
-        const graph = this.extractFeatureGraph(options.latitude, options.longitude, mergedDecoded);
+        const graph = this.extractFeatureGraph(options.latitude, options.longitude, mergedDecoded, anchorElevation);
+
+        const sampleElevation = (x: number, z: number): number => {
+            if (typeof options.terrainElevationGrid === 'function') {
+                return options.terrainElevationGrid(x, z);
+            }
+            if (options.terrainElevationGrid && typeof options.terrainElevationGrid === 'object') {
+                const grid = options.terrainElevationGrid;
+                if (Array.isArray(grid.elevations) && grid.elevations.length > 0) {
+                    const normX = Math.max(0, Math.min(1, (x - grid.minX) / (grid.maxX - grid.minX || 1)));
+                    const gx = Math.min(grid.elevations.length - 1, Math.floor(normX * (grid.elevations.length - 1)));
+                    const row = grid.elevations[gx];
+                    if (Array.isArray(row) && row.length > 0) {
+                        const normZ = Math.max(0, Math.min(1, (z - grid.minZ) / (grid.maxZ - grid.minZ || 1)));
+                        const gz = Math.min(row.length - 1, Math.floor(normZ * (row.length - 1)));
+                        return row[gz];
+                    }
+                }
+            }
+            return 0.0;
+        };
 
         // Geometric stream buffers
         const positions: number[] = [];
@@ -788,8 +826,6 @@ export class VectorWorldPopulatorService {
                 if (r.points.length < 2) continue;
 
                 const halfW = r.widthMeters * 0.5;
-                const roadY = 0.02;
-                const curbTopY = roadY + curbHeight;
                 const swOuterOffset = halfW + (includeSidewalks ? sidewalkWidth : 0);
 
                 let accumulatedDistance = 0;
@@ -810,11 +846,16 @@ export class VectorWorldPopulatorService {
                     const perpX = -forwardZ;
                     const perpZ = forwardX;
 
+                    const roadY0 = sampleElevation(p0.x, p0.z) + 0.02;
+                    const roadY1 = sampleElevation(p1.x, p1.z) + 0.02;
+                    const curbTopY0 = roadY0 + curbHeight;
+                    const curbTopY1 = roadY1 + curbHeight;
+
                     // 1. Asphalt Carriageway
-                    const rL0: [number, number, number] = [p0.x - perpX * halfW, roadY, p0.z - perpZ * halfW];
-                    const rR0: [number, number, number] = [p0.x + perpX * halfW, roadY, p0.z + perpZ * halfW];
-                    const rR1: [number, number, number] = [p1.x + perpX * halfW, roadY, p1.z + perpZ * halfW];
-                    const rL1: [number, number, number] = [p1.x - perpX * halfW, roadY, p1.z - perpZ * halfW];
+                    const rL0: [number, number, number] = [p0.x - perpX * halfW, roadY0, p0.z - perpZ * halfW];
+                    const rR0: [number, number, number] = [p0.x + perpX * halfW, roadY0, p0.z + perpZ * halfW];
+                    const rR1: [number, number, number] = [p1.x + perpX * halfW, roadY1, p1.z + perpZ * halfW];
+                    const rL1: [number, number, number] = [p1.x - perpX * halfW, roadY1, p1.z - perpZ * halfW];
 
                     addQuad(rL0, rR0, rR1, rL1, [0, 1, 0], [0, 0, 1, segLen * 0.2]);
 
@@ -824,12 +865,13 @@ export class VectorWorldPopulatorService {
                         for (let l = 1; l < r.laneCount; l++) {
                             const lOffset = -halfW + l * laneWidth;
                             const markHalfW = 0.08;
-                            const markY = 0.025;
+                            const markY0 = roadY0 + 0.005;
+                            const markY1 = roadY1 + 0.005;
 
-                            const mP0L: [number, number, number] = [p0.x + perpX * (lOffset - markHalfW), markY, p0.z + perpZ * (lOffset - markHalfW)];
-                            const mP0R: [number, number, number] = [p0.x + perpX * (lOffset + markHalfW), markY, p0.z + perpZ * (lOffset + markHalfW)];
-                            const mP1R: [number, number, number] = [p1.x + perpX * (lOffset + markHalfW), markY, p1.z + perpZ * (lOffset + markHalfW)];
-                            const mP1L: [number, number, number] = [p1.x + perpX * (lOffset - markHalfW), markY, p1.z + perpZ * (lOffset - markHalfW)];
+                            const mP0L: [number, number, number] = [p0.x + perpX * (lOffset - markHalfW), markY0, p0.z + perpZ * (lOffset - markHalfW)];
+                            const mP0R: [number, number, number] = [p0.x + perpX * (lOffset + markHalfW), markY0, p0.z + perpZ * (lOffset + markHalfW)];
+                            const mP1R: [number, number, number] = [p1.x + perpX * (lOffset + markHalfW), markY1, p1.z + perpZ * (lOffset + markHalfW)];
+                            const mP1L: [number, number, number] = [p1.x + perpX * (lOffset - markHalfW), markY1, p1.z + perpZ * (lOffset - markHalfW)];
 
                             addQuad(mP0L, mP0R, mP1R, mP1L, [0, 1, 0]);
                         }
@@ -837,42 +879,40 @@ export class VectorWorldPopulatorService {
 
                     // 3. Beveled Granite Curbs & Sidewalk Slabs
                     if (includeCurbs) {
-                        const curbInnerW = halfW - curbBevel;
-
                         // Left curb vertical riser
                         addQuad(
-                            [p0.x - perpX * halfW, roadY, p0.z - perpZ * halfW],
-                            [p1.x - perpX * halfW, roadY, p1.z - perpZ * halfW],
-                            [p1.x - perpX * halfW, curbTopY, p1.z - perpZ * halfW],
-                            [p0.x - perpX * halfW, curbTopY, p0.z - perpZ * halfW],
+                            [p0.x - perpX * halfW, roadY0, p0.z - perpZ * halfW],
+                            [p1.x - perpX * halfW, roadY1, p1.z - perpZ * halfW],
+                            [p1.x - perpX * halfW, curbTopY1, p1.z - perpZ * halfW],
+                            [p0.x - perpX * halfW, curbTopY0, p0.z - perpZ * halfW],
                             [perpX, 0, perpZ]
                         );
 
                         // Right curb vertical riser
                         addQuad(
-                            [p1.x + perpX * halfW, roadY, p1.z + perpZ * halfW],
-                            [p0.x + perpX * halfW, roadY, p0.z + perpZ * halfW],
-                            [p0.x + perpX * halfW, curbTopY, p0.z + perpZ * halfW],
-                            [p1.x + perpX * halfW, curbTopY, p1.z + perpZ * halfW],
+                            [p1.x + perpX * halfW, roadY1, p1.z + perpZ * halfW],
+                            [p0.x + perpX * halfW, roadY0, p0.z + perpZ * halfW],
+                            [p0.x + perpX * halfW, curbTopY0, p0.z + perpZ * halfW],
+                            [p1.x + perpX * halfW, curbTopY1, p1.z + perpZ * halfW],
                             [-perpX, 0, -perpZ]
                         );
 
                         if (includeSidewalks) {
                             // Left sidewalk top slab
                             addQuad(
-                                [p0.x - perpX * swOuterOffset, curbTopY, p0.z - perpZ * swOuterOffset],
-                                [p0.x - perpX * halfW, curbTopY, p0.z - perpZ * halfW],
-                                [p1.x - perpX * halfW, curbTopY, p1.z - perpZ * halfW],
-                                [p1.x - perpX * swOuterOffset, curbTopY, p1.z - perpZ * swOuterOffset],
+                                [p0.x - perpX * swOuterOffset, curbTopY0, p0.z - perpZ * swOuterOffset],
+                                [p0.x - perpX * halfW, curbTopY0, p0.z - perpZ * halfW],
+                                [p1.x - perpX * halfW, curbTopY1, p1.z - perpZ * halfW],
+                                [p1.x - perpX * swOuterOffset, curbTopY1, p1.z - perpZ * swOuterOffset],
                                 [0, 1, 0]
                             );
 
                             // Right sidewalk top slab
                             addQuad(
-                                [p0.x + perpX * halfW, curbTopY, p0.z + perpZ * halfW],
-                                [p0.x + perpX * swOuterOffset, curbTopY, p0.z + perpZ * swOuterOffset],
-                                [p1.x + perpX * swOuterOffset, curbTopY, p1.z + perpZ * swOuterOffset],
-                                [p1.x + perpX * halfW, curbTopY, p1.z + perpZ * halfW],
+                                [p0.x + perpX * halfW, curbTopY0, p0.z + perpZ * halfW],
+                                [p0.x + perpX * swOuterOffset, curbTopY0, p0.z + perpZ * swOuterOffset],
+                                [p1.x + perpX * swOuterOffset, curbTopY1, p1.z + perpZ * swOuterOffset],
+                                [p1.x + perpX * halfW, curbTopY1, p1.z + perpZ * halfW],
                                 [0, 1, 0]
                             );
                         }
@@ -885,7 +925,8 @@ export class VectorWorldPopulatorService {
                     if (includeStreetlamps && (segMidDist - lastLampDist) >= lampPitch) {
                         const lampX = p0.x + perpX * (halfW + 0.45);
                         const lampZ = p0.z + perpZ * (halfW + 0.45);
-                        spawnStreetlamp(lampX, curbTopY, lampZ, [forwardX, forwardZ], [perpX, perpZ]);
+                        const lampY = sampleElevation(lampX, lampZ) + 0.02 + curbHeight;
+                        spawnStreetlamp(lampX, lampY, lampZ, [forwardX, forwardZ], [perpX, perpZ]);
                         lastLampDist = segMidDist;
                     }
 
@@ -893,7 +934,8 @@ export class VectorWorldPopulatorService {
                     if (includeTrees && (segMidDist - lastTreeDist) >= 18.0) {
                         const treeX = p0.x - perpX * (halfW + sidewalkWidth * 0.5);
                         const treeZ = p0.z - perpZ * (halfW + sidewalkWidth * 0.5);
-                        spawnTree(treeX, curbTopY, treeZ, 0.95);
+                        const treeY = sampleElevation(treeX, treeZ) + 0.02 + curbHeight;
+                        spawnTree(treeX, treeY, treeZ, 0.95);
                         lastTreeDist = segMidDist;
                     }
 
@@ -904,7 +946,8 @@ export class VectorWorldPopulatorService {
                         const laneOffset = -halfW + (laneIdx + 0.5) * laneW;
                         const carX = p0.x + perpX * laneOffset + forwardX * (segLen * 0.5);
                         const carZ = p0.z + perpZ * laneOffset + forwardZ * (segLen * 0.5);
-                        spawnVehicle(carX, roadY, carZ, forwardX, forwardZ, perpX, perpZ);
+                        const carY = sampleElevation(carX, carZ) + 0.02;
+                        spawnVehicle(carX, carY, carZ, forwardX, forwardZ, perpX, perpZ);
                     }
 
                     accumulatedDistance += segLen;
@@ -922,8 +965,11 @@ export class VectorWorldPopulatorService {
                 if (b.ring.length < 3) continue;
 
                 const height = b.heightMeters * heightScale;
-                const baseY = 0.0;
-                const topY = baseY + height;
+                const groundElevations = b.ring.map(p => sampleElevation(p.x, p.z));
+                const minGroundY = Math.min(...groundElevations);
+                const maxGroundY = Math.max(...groundElevations);
+                const baseY = minGroundY - 0.5; // Foundation skirt embeds into terrain
+                const topY = maxGroundY + height;
                 const n = b.ring.length;
 
                 // Walls
@@ -1011,7 +1057,8 @@ export class VectorWorldPopulatorService {
                         const dist = Math.random() * Math.sqrt(lu.areaM2 * 0.25);
                         const tx = lu.centroid.x + Math.cos(angle) * dist;
                         const tz = lu.centroid.z + Math.sin(angle) * dist;
-                        spawnTree(tx, 0.05, tz, 1.1 + Math.random() * 0.3);
+                        const ty = sampleElevation(tx, tz) + 0.05;
+                        spawnTree(tx, ty, tz, 1.1 + Math.random() * 0.3);
                     }
                 }
             }
@@ -1024,11 +1071,11 @@ export class VectorWorldPopulatorService {
         if (options.includeWater !== false) {
             for (const w of graph.water) {
                 if (w.ring.length < 3) continue;
-                const waterY = 0.02;
                 const tris = EarClippingTriangulator.triangulate(w.ring);
                 const startIdx = currentVertexCount;
 
                 for (const p of w.ring) {
+                    const waterY = sampleElevation(p.x, p.z) + 0.02;
                     addVertex(p.x, waterY, p.z, 0, 1, 0, p.x * 0.05, p.z * 0.05);
                     expandBounds(p.x, waterY, p.z);
                 }
@@ -1046,16 +1093,17 @@ export class VectorWorldPopulatorService {
             const spanX = Math.abs(maxBounds[0] - minBounds[0]);
             const spanZ = Math.abs(maxBounds[2] - minBounds[2]);
             const plinthRadius = Math.max(150, Math.max(spanX, spanZ) * 0.75 + 100);
+            const plinthY = sampleElevation(0, 0);
             const segments = 64;
-            const centerIdx = addVertex(0, 0, 0, 0, 1, 0, 0.5, 0.5);
+            const centerIdx = addVertex(0, plinthY, 0, 0, 1, 0, 0.5, 0.5);
 
             const ringStart = currentVertexCount;
             for (let i = 0; i <= segments; i++) {
                 const ang = (i / segments) * Math.PI * 2;
                 const px = Math.cos(ang) * plinthRadius;
                 const pz = Math.sin(ang) * plinthRadius;
-                addVertex(px, 0, pz, 0, 1, 0, 0.5 + Math.cos(ang) * 0.5, 0.5 + Math.sin(ang) * 0.5);
-                expandBounds(px, 0, pz);
+                addVertex(px, plinthY, pz, 0, 1, 0, 0.5 + Math.cos(ang) * 0.5, 0.5 + Math.sin(ang) * 0.5);
+                expandBounds(px, plinthY, pz);
             }
             for (let i = 0; i < segments; i++) {
                 indices.push(centerIdx, ringStart + i, ringStart + i + 1);
@@ -1067,7 +1115,7 @@ export class VectorWorldPopulatorService {
         // ------------------------------------------------------------------------
         let heroPlacement: HeroStagingPlacementResult | undefined;
         if (options.heroStaging) {
-            heroPlacement = this.solveHeroStaging(graph, options.heroStaging);
+            heroPlacement = this.solveHeroStaging(graph, options.heroStaging, sampleElevation);
         }
 
         // ------------------------------------------------------------------------
