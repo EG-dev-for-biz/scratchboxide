@@ -28,6 +28,8 @@ export interface CameraStation extends CameraPoseConfig {
     referenceStationIndices: number[]; // Indices of images to pass as references
 }
 
+import { FalTrellisService } from './FalTrellisService';
+
 export interface IsolationOptions {
     /** Whether subject must float in 100% white void with zero ground or pedestal (default: true). */
     floatingVoid?: boolean;
@@ -53,7 +55,7 @@ export interface MultiAngleCaptureOptions {
     /** Output directory for reference image artifacts. */
     outputDir?: string;
     /** Downstream reconstruction pipeline target. */
-    downstreamTarget?: 'trellis-cloud-run' | 'none';
+    downstreamTarget?: 'trellis-fal' | 'trellis-cloud-run' | 'trellis' | 'none';
     /** Enforced real-world metric dimensions for .glb post-processing. */
     metricDimensions?: {
         lengthMeters?: number;
@@ -273,8 +275,37 @@ export class MultiAngleTurnaroundService {
 
         let downstreamGlb: MultiAngleCaptureResult['downstreamGlb'] = undefined;
 
-        // Downstream Cloud Run Trellis Execution
-        if (options.downstreamTarget === 'trellis-cloud-run') {
+        // Downstream Trellis Execution (Fal.ai or Cloud Run)
+        if (options.downstreamTarget === 'trellis-fal' || options.downstreamTarget === 'trellis') {
+            const glbFilename = `trellis_${path.basename(outputDir)}_${Date.now()}.glb`;
+            const glbPath = path.join(outputDir, glbFilename);
+            const falService = new FalTrellisService({ mockExecution: options.mockExecution });
+
+            const falResult = await falService.generate3DFromImages({
+                imagePaths: capturedViews.map(v => v.imagePath),
+                destinationGlbPath: glbPath,
+                ssSamplingSteps: 12,
+                slatSamplingSteps: 12,
+                meshSimplify: 0.95
+            });
+
+            if (falResult.success && falResult.localGlbPath) {
+                const bounds: [number, number, number] = [
+                    options.metricDimensions?.lengthMeters ?? 2.0,
+                    options.metricDimensions?.heightMeters ?? 1.5,
+                    options.metricDimensions?.widthMeters ?? 2.0
+                ];
+
+                downstreamGlb = {
+                    path: falResult.localGlbPath,
+                    url: `/models/${glbFilename}`,
+                    vertexCount: falResult.stats?.totalVertices ?? 0,
+                    triangleCount: falResult.stats?.totalTriangles ?? 0,
+                    byteLength: falResult.stats?.totalBytes ?? 0,
+                    boundingBoxMeters: bounds
+                };
+            }
+        } else if (options.downstreamTarget === 'trellis-cloud-run') {
             const cloudRun = new ComfyUiCloudRunService({ mockExecution: options.mockExecution ?? true });
             const glbFilename = `trellis_${path.basename(outputDir)}_${Date.now()}.glb`;
             const glbPath = path.join(outputDir, glbFilename);

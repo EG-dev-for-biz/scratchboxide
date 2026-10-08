@@ -2351,16 +2351,22 @@ function _synthesizeRawContextual3DSceneInner(
             else if (/concrete|brutalist/i.test(prompt)) clayPreset = 'concrete';
 
             const tileService = Google3DTileService.getInstance();
-            const tileResult = tileService.ingestTileRegionSync({
-                query: realWorldLoc.landmarkName || realWorldLoc.query,
-                lat: realWorldLoc.lat,
-                lng: realWorldLoc.lng,
-                elevation: realWorldLoc.elevation,
-                clayPreset,
-                detailLevel: 'high',
-                includeBuildings: true,
-                includeTerrain: true
-            });
+            let tileResult: any;
+            try {
+                tileResult = tileService.ingestTileRegionSync({
+                    query: realWorldLoc.landmarkName || realWorldLoc.query,
+                    lat: realWorldLoc.lat,
+                    lng: realWorldLoc.lng,
+                    elevation: realWorldLoc.elevation,
+                    clayPreset,
+                    detailLevel: 'high',
+                    includeBuildings: true,
+                    includeTerrain: true
+                });
+            } catch (err: any) {
+                console.warn('[procedural-3d-synthesizer] Google 3D Tile ingestion failed for location:', realWorldLoc, err.message);
+                return synthesizeAdaptiveHeroScene(prompt);
+            }
 
             // Real-world scenes stream authentic Google 3D Tiles in 18% Studio Grey Clay.
             // Synthetic box meshes and uninvited atmospheric skyboxes are strictly suppressed.
@@ -2370,7 +2376,7 @@ function _synthesizeRawContextual3DSceneInner(
 
             return {
                 title: sceneTitle,
-                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult.stats.buildingCount} structures, 18% Studio Grey Clay mode).`,
+                subtitle: `Geospatially grounded 3D architectural model at Lat ${realWorldLoc.lat.toFixed(4)}°, Lng ${realWorldLoc.lng.toFixed(4)}° (${tileResult?.stats?.buildingCount || 0} structures, 18% Studio Grey Clay mode).`,
                 worldBranch: `real-world/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
                 sceneType: 'worldbuilder',
                 renderMode: 'clay',
@@ -2444,16 +2450,22 @@ function _synthesizeRawContextual3DSceneInner(
 
         // Ingest Google 3D Tiles in Studio Grey Clay for the requested location
         const tileService = Google3DTileService.getInstance();
-        const tileResult = tileService.ingestTileRegionSync({
-            query: realWorldLoc.landmarkName || realWorldLoc.query,
-            lat: realWorldLoc.lat,
-            lng: realWorldLoc.lng,
-            elevation: realWorldLoc.elevation,
-            clayPreset: 'studio-grey',
-            detailLevel: 'high',
-            includeBuildings: true,
-            includeTerrain: true
-        });
+        let tileResult: any;
+        try {
+            tileResult = tileService.ingestTileRegionSync({
+                query: realWorldLoc.landmarkName || realWorldLoc.query,
+                lat: realWorldLoc.lat,
+                lng: realWorldLoc.lng,
+                elevation: realWorldLoc.elevation,
+                clayPreset: 'studio-grey',
+                detailLevel: 'high',
+                includeBuildings: true,
+                includeTerrain: true
+            });
+        } catch (err: any) {
+            console.warn('[procedural-3d-synthesizer] Hero location staging tile ingestion failed:', realWorldLoc, err.message);
+            return heroScene;
+        }
 
         const heroBaseTitle = heroScene.title.replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '').trim();
         const stagedTitle = `${heroBaseTitle} — Staged in ${realWorldLoc.landmarkName}`;

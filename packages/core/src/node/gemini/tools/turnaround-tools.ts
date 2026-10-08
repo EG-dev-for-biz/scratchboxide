@@ -57,7 +57,7 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 downstreamTarget: {
                     type: 'STRING',
-                    description: 'Optional downstream 3D reconstruction pipeline: "trellis-cloud-run" or "none".'
+                    description: 'Optional downstream 3D reconstruction pipeline: "trellis-fal" (default when FAL_KEY present), "trellis-cloud-run", or "none".'
                 },
                 lengthMeters: {
                     type: 'NUMBER',
@@ -91,7 +91,7 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
         const floatingVoid = asBoolean(args.floatingVoid, true);
         const suppressShadows = asBoolean(args.suppressShadows, true);
         const suppressText = asBoolean(args.suppressText, true);
-        const downstreamTarget = (asString(args.downstreamTarget) || 'none') as 'trellis-cloud-run' | 'none';
+        const downstreamTarget = (asString(args.downstreamTarget) || (process.env.FAL_KEY ? 'trellis-fal' : 'none')) as 'trellis-fal' | 'trellis-cloud-run' | 'trellis' | 'none';
         const mockExecution = asBoolean(args.mockExecution, false);
 
         const metricDimensions = (args.lengthMeters || args.widthMeters || args.heightMeters)

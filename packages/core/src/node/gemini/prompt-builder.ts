@@ -642,6 +642,15 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
 4. STRICT PROHIBITION ON PROCEDURAL SKYSCRAPERS, BUILDINGS, OR ROADS: NEVER write Python code to generate synthetic skyscrapers, cylindrical towers, buildings, expressway bridges, track slabs, or lollipop trees! The real-world Manhattan/city architecture, street network, and terrain massing are automatically extracted and rendered by Scratchbox's Google 3D Tiles geospatial engine. Writing procedural towers or cylinders when a real-world location is specified violates the Universal First-Request Staging Invariant! Dedicate 100% of your procedural Python script to the requested hero asset.
 5. 70-20-10 APPLIES TO THE HERO OBJECT: Apply the 70-20-10 geometric form hierarchy exclusively to the hero asset (e.g. for race cars: 70% aerodynamic monocoque/cockpit/sidepods with compound curvature, 20% multi-element wings, diffusers, upright rolling wheels, brake discs, 10% panel shutlines, hex grilles, exhaust tips).
 6. FOLLOW-UP SUGGESTIONS: Conclude your response with follow-up suggestions in strict sequence: 1. Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, 2. Textures & PBR Materials.]`;
+        } else {
+            userPrompt += `\n\n[CRITICAL DIRECTIVE — INTELLIGENT STAGING INFERENCE & CHAT PILL BUTTONS:
+The user did not specify a real-world geographic location in their initial request ("${request.prompt}").
+1. STAGE IN 18% STUDIO GREY CLAY VOID: Model the hero asset in 18% Studio Grey Clay inside a clean 3D stage void (skybox: "studio", lighting: "studio", ground: false).
+2. INTELLIGENT CONTEXTUAL STAGING SUGGESTIONS: In your response, analyze the semantic archetype of the hero asset and intelligently propose context-appropriate staging environments:
+   - Minimalist Studio Plinth / Curved Infinity Cyclorama Cove (for neutral CAD/DCC studio inspection).
+   - Authentic Real-World Geographic Location matched to the asset's archetype (e.g. F1 car -> Monaco GP Circuit or Nürburgring; basketball court -> Venice Beach or Rucker Park; urban building/pavilion -> High Line NYC; rover/mech -> Mojave Desert / Jezero Crater) using Google 3D Tiles Clay (google_3d_tiles_get_clay or stage_3d_vector_world).
+   - Procedural 3D Vector World with road lanes, sidewalks, trees, streetlamps, and traffic.
+3. PRESENT OPTIONS IN CHAT AS CLICKABLE PILL BUTTONS: All staging and follow-up options MUST be presented directly in the chat interface as clickable pill buttons (using interactive embeds or markdown pill buttons) and NEVER in the viewport HUD.]`;
         }
 
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.

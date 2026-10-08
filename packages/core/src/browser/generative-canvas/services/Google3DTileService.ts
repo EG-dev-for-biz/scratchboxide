@@ -237,7 +237,7 @@ export function detectRealWorldLocationIntent(
 
   // Check generic map tile / real world scene / 3D model / 3DGS keywords followed by a location name
   const naturalPatterns = [
-    /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)?\s*(?:a|the)?\s*(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)?\s*(?:of|for|at|around|in)\s+)(.+)/i,
+    /(?:build|create|model|show|generate|render|reconstruct|view|explore|simulate|make)\s+(?:a|the)?\s*(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|scene|model|world|view|map|visualization|representation|environment|reconstruction|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i,
     /(?:(?:3d\s*)?(?:gaussian\s*splats?|3dgs|\bsplats?\b|radiance\s*fields?|map\s*tile|photorealistic\s*tile|satellite\s*mesh|city\s*model|real\s*world\s*scene)\s*(?:of|for|at|around|in)\s+)(.+)/i,
     /\b(?:in|at|around|near)\s+([a-zA-Z0-9\s,.-]+?)(?:\s+(?:with|using|in\s+clay|photorealistic|in\s+3d|modeled)|$)/i
   ];
@@ -255,7 +255,7 @@ export function detectRealWorldLocationIntent(
 
       const stripped = target.replace(/^(?:the|a|an)\s+/i, '').trim();
 
-      const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank'];
+      const blacklist = ['me', 'us', 'the scene', 'a building', 'something', 'a world', 'a room', 'an object', 'a cube', 'a sphere', 'generic', 'blank', 'glass', 'plate of glass'];
       if (stripped.length >= 2 && !blacklist.includes(stripped.toLowerCase())) {
         const vAnchor = GoogleVectorMappingService.searchFeatures(target) || GoogleVectorMappingService.searchFeatures(stripped);
         if (vAnchor) {
@@ -271,10 +271,10 @@ export function detectRealWorldLocationIntent(
           };
         }
 
-        const isExplicit3DPattern = pattern === naturalPatterns[0] || pattern === naturalPatterns[1];
+        const isExplicitGeospatialPattern = pattern === naturalPatterns[1];
         const hasGeoQualifier = /\b(?:street|avenue|ave|blvd|boulevard|park|hotel|bridge|tower|plaza|harbor|square|pier|beach|monument|cathedral|hall|building|airport|stadium|museum|courthouse|terminal|station|road|circuit|nyc|new york|manhattan|brooklyn|sf|san francisco|paris|london|tokyo|rome|sydney|boston|chicago|seattle|la|los angeles|monaco|berlin|dubai|toronto)\b/i.test(target);
 
-        if (isExplicit3DPattern || hasGeoQualifier) {
+        if (hasGeoQualifier || isExplicitGeospatialPattern) {
           return {
             isRealWorld: true,
             landmarkName: target,
