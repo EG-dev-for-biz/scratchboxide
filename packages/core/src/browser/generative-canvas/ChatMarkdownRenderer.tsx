@@ -558,9 +558,9 @@ export interface InlineMarkdownProps {
 export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBrowser, onOpenWikilink, onPromptAction }) => {
     if (!text || typeof text !== 'string') return null;
 
-    // Pattern to match inline images (![alt](url)), wikilinks ([[target]]), code (`code`), bold (**bold**), italic (*italic*), and links ([title](url))
+    // Pattern to match inline images (![alt](url)), wikilinks ([[target]]), code (`code`), bold (**bold**), italic (*italic*), links ([title](url)), HTML buttons (<button>...), and standalone bracketed action pills ([Title])
     const parts: React.ReactNode[] = [];
-    const inlineRegex = /(!\[[^\]]*\]\([^)]+\)|\[\[[^\]]+\]\]|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+    const inlineRegex = /(!\[[^\]]*\]\([^)]+\)|\[\[[^\]]+\]\]|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|<button(?:\s+[^>]*)?>[\s\S]*?<\/button>|\[[^\]\n]{2,80}\])/gi;
 
     let lastIdx = 0;
     let match: RegExpExecArray | null;
@@ -700,6 +700,51 @@ export const InlineMarkdown: React.FC<InlineMarkdownProps> = ({ text, onOpenInBr
                 }
             } else {
                 parts.push(matchedStr);
+            }
+        } else if (matchedStr.startsWith('[') && matchedStr.endsWith(']')) {
+            const pillTitle = matchedStr.slice(1, -1).trim();
+            if (pillTitle && onPromptAction) {
+                parts.push(
+                    <button
+                        key={`action-pill-${keyIdx++}`}
+                        type="button"
+                        className="sb-chat-action-pill"
+                        onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onPromptAction(pillTitle);
+                        }}
+                        title={`Click to select: "${pillTitle}"`}
+                    >
+                        <span className="sb-chat-action-pill-icon">✦</span>
+                        <span className="sb-chat-action-pill-text">{pillTitle}</span>
+                    </button>
+                );
+            } else {
+                parts.push(matchedStr);
+            }
+        } else if (/^<button(?:\s+[^>]*)?>[\s\S]*?<\/button>$/i.test(matchedStr)) {
+            const btnMatch = matchedStr.match(/<button(?:\s+[^>]*)?>([\s\S]*?)<\/button>/i);
+            const pillTitle = btnMatch ? btnMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+            if (pillTitle && onPromptAction) {
+                parts.push(
+                    <button
+                        key={`action-btn-${keyIdx++}`}
+                        type="button"
+                        className="sb-chat-action-pill"
+                        onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onPromptAction(pillTitle);
+                        }}
+                        title={`Click to select: "${pillTitle}"`}
+                    >
+                        <span className="sb-chat-action-pill-icon">✦</span>
+                        <span className="sb-chat-action-pill-text">{pillTitle}</span>
+                    </button>
+                );
+            } else {
+                parts.push(pillTitle || matchedStr);
             }
         }
 
@@ -1063,6 +1108,7 @@ export interface ChatMarkdownRendererProps {
     onOpenInBrowser?: (url: string, title?: string) => void;
     onOpenWikilink?: (target: string, anchor?: string) => void;
     onPreviewInCanvas?: (language: string, content: string) => void;
+    onPromptAction?: (prompt: string) => void;
 }
 
 /**
@@ -1075,7 +1121,8 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
     onExecuteCommand,
     onOpenInBrowser,
     onOpenWikilink,
-    onPreviewInCanvas
+    onPreviewInCanvas,
+    onPromptAction
 }) => {
     const safeText = typeof text === 'string' ? text : (text ? String(text) : '');
     const blocks = React.useMemo(() => parseMarkdownBlocks(safeText), [safeText]);
@@ -1115,7 +1162,12 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                             const Tag = `h${Math.min(6, Math.max(1, level))}` as keyof JSX.IntrinsicElements;
                             return (
                                 <Tag key={bIdx} className={`sb-chat-heading sb-chat-h${level}`}>
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
+                                    <InlineMarkdown
+                                        text={block.content || ''}
+                                        onOpenInBrowser={onOpenInBrowser}
+                                        onOpenWikilink={onOpenWikilink}
+                                        onPromptAction={onPromptAction}
+                                    />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </Tag>
                             );
@@ -1123,23 +1175,97 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
 
                         case 'list': {
                             const items = Array.isArray(block.items) ? block.items : [];
+                            const renderListItem = (item: string, iIdx: number) => {
+                                const isLastItem = iIdx === items.length - 1;
+
+                                // 1. Check for raw HTML button tag: <button class="sb-pill" ...>Label</button>
+                                const btnMatch = item.match(/<button(?:\s+[^>]*)?>([\s\S]*?)<\/button>/i);
+                                if (btnMatch && onPromptAction) {
+                                    const rawLabel = btnMatch[1].replace(/<[^>]+>/g, '').trim();
+                                    const promptToSend = rawLabel;
+                                    const trailingText = item.replace(/<button(?:\s+[^>]*)?>[\s\S]*?<\/button>/i, '').replace(/^[—–\-:]\s*/, '').trim();
+
+                                    return (
+                                        <li key={iIdx} className="sb-chat-list-item sb-chat-action-pill-item">
+                                            <button
+                                                type="button"
+                                                className="sb-chat-action-pill"
+                                                onClick={() => onPromptAction(promptToSend)}
+                                                title={`Click to select: "${promptToSend}"`}
+                                            >
+                                                <span className="sb-chat-action-pill-icon">✦</span>
+                                                <span className="sb-chat-action-pill-text">{rawLabel}</span>
+                                            </button>
+                                            {trailingText && (
+                                                <span className="sb-chat-action-desc">
+                                                    <InlineMarkdown
+                                                        text={trailingText}
+                                                        onOpenInBrowser={onOpenInBrowser}
+                                                        onOpenWikilink={onOpenWikilink}
+                                                        onPromptAction={onPromptAction}
+                                                    />
+                                                </span>
+                                            )}
+                                            {isStreaming && isLast && isLastItem && <StreamingCursor />}
+                                        </li>
+                                    );
+                                }
+
+                                const pillRegex = /^(?:[✦►🔘]\s*)?(?:`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\](?:\((?:prompt:|action:)?([^)]*)\))?)\s*(?:[—–\-:]|\s-\s)?\s*(.*)$/;
+                                const m = onPromptAction ? item.match(pillRegex) : null;
+
+                                if (m) {
+                                    const title = (m[1] || m[2] || m[3] || '').trim();
+                                    const customPrompt = m[4] ? decodeURIComponent(m[4].replace(/^(?:prompt|action):/, '')) : '';
+                                    const promptToSend = customPrompt || title;
+                                    const description = (m[5] || '').trim();
+
+                                    return (
+                                        <li key={iIdx} className="sb-chat-list-item sb-chat-action-pill-item">
+                                            <button
+                                                type="button"
+                                                className="sb-chat-action-pill"
+                                                onClick={() => onPromptAction(promptToSend)}
+                                                title={`Click to select: "${promptToSend}"`}
+                                            >
+                                                <span className="sb-chat-action-pill-icon">✦</span>
+                                                <span className="sb-chat-action-pill-text">{title}</span>
+                                            </button>
+                                            {description && (
+                                                <span className="sb-chat-action-desc">
+                                                    <InlineMarkdown
+                                                        text={description}
+                                                        onOpenInBrowser={onOpenInBrowser}
+                                                        onOpenWikilink={onOpenWikilink}
+                                                        onPromptAction={onPromptAction}
+                                                    />
+                                                </span>
+                                            )}
+                                            {isStreaming && isLast && isLastItem && <StreamingCursor />}
+                                        </li>
+                                    );
+                                }
+
+                                return (
+                                    <li key={iIdx} className="sb-chat-list-item">
+                                        <InlineMarkdown
+                                            text={item || ''}
+                                            onOpenInBrowser={onOpenInBrowser}
+                                            onOpenWikilink={onOpenWikilink}
+                                            onPromptAction={onPromptAction}
+                                        />
+                                        {isStreaming && isLast && isLastItem && <StreamingCursor />}
+                                    </li>
+                                );
+                            };
+
                             return block.listType === 'ordered' ? (
                                 <ol key={bIdx} className="sb-chat-ordered-list">
-                                    {items.map((item, iIdx) => (
-                                        <li key={iIdx} className="sb-chat-list-item">
-                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
-                                            {isStreaming && isLast && iIdx === items.length - 1 && <StreamingCursor />}
-                                        </li>
-                                    ))}
+                                    {items.map((item, iIdx) => renderListItem(item, iIdx))}
                                 </ol>
                             ) : (
                                 <ul key={bIdx} className="sb-chat-bullet-list">
-                                    {items.map((item, iIdx) => (
-                                        <li key={iIdx} className="sb-chat-list-item">
-                                            <InlineMarkdown text={item || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
-                                            {isStreaming && isLast && iIdx === items.length - 1 && <StreamingCursor />}
-                                        </li>
-                                    ))}
+                                    {items.map((item, iIdx) => renderListItem(item, iIdx))}
                                 </ul>
                             );
                         }
@@ -1147,7 +1273,12 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                         case 'blockquote':
                             return (
                                 <blockquote key={bIdx} className="sb-chat-blockquote">
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
+                                    <InlineMarkdown
+                                        text={block.content || ''}
+                                        onOpenInBrowser={onOpenInBrowser}
+                                        onOpenWikilink={onOpenWikilink}
+                                        onPromptAction={onPromptAction}
+                                    />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </blockquote>
                             );
@@ -1156,7 +1287,12 @@ export const ChatMarkdownRenderer: React.FC<ChatMarkdownRendererProps> = ({
                         default:
                             return (
                                 <p key={bIdx} className="sb-chat-paragraph">
-                                    <InlineMarkdown text={block.content || ''} onOpenInBrowser={onOpenInBrowser} onOpenWikilink={onOpenWikilink} />
+                                    <InlineMarkdown
+                                        text={block.content || ''}
+                                        onOpenInBrowser={onOpenInBrowser}
+                                        onOpenWikilink={onOpenWikilink}
+                                        onPromptAction={onPromptAction}
+                                    />
                                     {isStreaming && isLast && <StreamingCursor />}
                                 </p>
                             );

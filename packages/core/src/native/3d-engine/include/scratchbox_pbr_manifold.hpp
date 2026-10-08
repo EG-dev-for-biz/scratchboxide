@@ -13,7 +13,6 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_texture.hpp"
 #include "scratchbox_pbr_texture_expert.hpp"
-#include "scratchbox_pbr_50_library.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
@@ -412,12 +411,41 @@ inline PbrTextureSet synthesizeManifoldPbrParallel(
         set.height, desc.roughnessBaseline, 1.0f, 0.02f, 0.98f
     );
 
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float baseR = bioRoughness.getPixelRGB(x, y).x;
-            float modR = set.roughness.getPixelRGB(x, y).x;
-            float finalR = std::clamp(baseR * 0.65f + modR * 0.35f, 0.02f, 0.98f);
-            set.roughness.setPixelRGB(x, y, {finalR, finalR, finalR});
+    {
+        int numThreads = (height >= 512) ? std::max(1, static_cast<int>(std::thread::hardware_concurrency())) : 1;
+        if (numThreads <= 1) {
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    float baseR = bioRoughness.getPixelRGB(x, y).x;
+                    float modR = set.roughness.getPixelRGB(x, y).x;
+                    float finalR = std::clamp(baseR * 0.65f + modR * 0.35f, 0.02f, 0.98f);
+                    set.roughness.setPixelRGB(x, y, {finalR, finalR, finalR});
+                }
+            }
+        } else {
+            int rowsPerThread = (height + numThreads - 1) / numThreads;
+            std::vector<std::future<void>> blendFutures;
+
+            for (int t = 0; t < numThreads; ++t) {
+                int y0 = t * rowsPerThread;
+                int y1 = std::min(height, y0 + rowsPerThread);
+                if (y0 >= height) break;
+
+                blendFutures.push_back(std::async(std::launch::async, [&set, &bioRoughness, width, y0, y1]() {
+                    for (int y = y0; y < y1; ++y) {
+                        for (int x = 0; x < width; ++x) {
+                            float baseR = bioRoughness.getPixelRGB(x, y).x;
+                            float modR = set.roughness.getPixelRGB(x, y).x;
+                            float finalR = std::clamp(baseR * 0.65f + modR * 0.35f, 0.02f, 0.98f);
+                            set.roughness.setPixelRGB(x, y, {finalR, finalR, finalR});
+                        }
+                    }
+                }));
+            }
+
+            for (auto& f : blendFutures) {
+                f.get();
+            }
         }
     }
 

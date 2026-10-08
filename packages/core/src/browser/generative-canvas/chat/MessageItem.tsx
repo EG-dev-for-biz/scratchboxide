@@ -492,6 +492,12 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                                 showToast('Command sent to Scratchbox terminal');
                             }
                         }}
+                        onPromptAction={prompt => {
+                            if (sendMessage) {
+                                sendMessage(prompt);
+                                showToast(`Selected: ${prompt.slice(0, 32)}${prompt.length > 32 ? '...' : ''}`);
+                            }
+                        }}
                     />
                 )}
 

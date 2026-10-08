@@ -5543,6 +5543,86 @@ body.sb-light .sb-chat-link:hover {
     color: #1d4ed8;
 }
 
+/* Interactive Action Selection Pills in Chat */
+.sb-chat-action-pill-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 10px;
+    margin-bottom: 8px;
+    list-style: none !important;
+}
+
+.sb-chat-action-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 9999px;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #93c5fd;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    user-select: none;
+    text-align: left;
+    outline: none;
+}
+
+.sb-chat-action-pill:hover {
+    background: rgba(59, 130, 246, 0.25);
+    border-color: rgba(96, 165, 250, 0.65);
+    color: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.sb-chat-action-pill:active {
+    transform: translateY(0);
+    background: rgba(59, 130, 246, 0.35);
+}
+
+.sb-chat-action-pill-icon {
+    color: #60a5fa;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sb-chat-action-pill-text {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.sb-chat-action-desc {
+    color: var(--sb-text-secondary, #94a3b8);
+    font-size: 12.5px;
+    line-height: 1.5;
+    flex: 1 1 240px;
+}
+
+body.sb-light .sb-chat-action-pill {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.25);
+    color: #1d4ed8;
+}
+
+body.sb-light .sb-chat-action-pill:hover {
+    background: rgba(37, 99, 235, 0.16);
+    border-color: rgba(37, 99, 235, 0.5);
+    color: #0f172a;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+}
+
+body.sb-light .sb-chat-action-desc {
+    color: #475569;
+}
+
 /* Chat Code Block Container & Syntax Styling */
 .sb-chat-code-block-container {
     margin: 12px 0;

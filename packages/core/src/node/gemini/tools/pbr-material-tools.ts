@@ -240,10 +240,6 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
 
         // 5. Handle output formats
         if (format === 'png_pack' || format === 'glb') {
-            const albedoPng = await AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.albedoRgba, width, height, true);
-            const normalPng = await AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.normalRgba, width, height, true);
-            const ormPng = await AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.ormRgba, width, height, true);
-
             // Virtual height into RGBA PNG
             const heightRgba = Buffer.alloc(width * height * 4);
             for (let i = 0; i < width * height; i++) {
@@ -253,7 +249,13 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                 heightRgba[i * 4 + 2] = hVal;
                 heightRgba[i * 4 + 3] = 255;
             }
-            const heightPng = await AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true);
+
+            const [albedoPng, normalPng, ormPng, heightPng] = await Promise.all([
+                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.albedoRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.normalRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(pbrResult.ormRgba, width, height, true),
+                AdaptiveMaterialPbrService.encodeFromRgba(heightRgba, width, height, true)
+            ]);
 
             const albedoPath = path.join(outDir, `${filePrefix}_albedo.png`);
             const normalPath = path.join(outDir, `${filePrefix}_normal.png`);
@@ -405,7 +407,7 @@ export const pbrMaterialHandlers: Record<string, ToolHandler> = {
                     ]
                 };
 
-                const packed = GltfBinaryPacker.pack(gltf, rawBufferViews);
+                const packed = GltfBinaryPacker.packGlb(gltf, rawBufferViews);
                 const glbPath = path.join(outDir, `${filePrefix}.glb`);
                 fs.writeFileSync(glbPath, packed.glbBuffer);
                 writtenFiles.glb = glbPath;

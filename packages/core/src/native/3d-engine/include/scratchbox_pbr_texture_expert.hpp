@@ -164,34 +164,79 @@ inline ImageBuffer computeMultiFrequencyNormalMap(
     int h = heightMap.height;
     ImageBuffer result(w, h, 3);
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            // Macro: 3x3 kernel spaced by 3 pixels
-            float tl_m = heightMap.getLuminance(x - 3, y - 3);
-            float tr_m = heightMap.getLuminance(x + 3, y - 3);
-            float bl_m = heightMap.getLuminance(x - 3, y + 3);
-            float br_m = heightMap.getLuminance(x + 3, y + 3);
-            float dx_macro = (tr_m + br_m - (tl_m + bl_m)) * 0.5f;
-            float dy_macro = (bl_m + br_m - (tl_m + tr_m)) * 0.5f;
-            Vec3 n_macro = Vec3(-dx_macro * bumpStrength * macroWeight, -dy_macro * bumpStrength * macroWeight, 1.0f).normalized();
+    int numThreads = (h >= 512) ? std::max(1, static_cast<int>(std::thread::hardware_concurrency())) : 1;
+    if (numThreads <= 1) {
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float tl_m = heightMap.getLuminance(x - 3, y - 3);
+                float tr_m = heightMap.getLuminance(x + 3, y - 3);
+                float bl_m = heightMap.getLuminance(x - 3, y + 3);
+                float br_m = heightMap.getLuminance(x + 3, y + 3);
+                float dx_macro = (tr_m + br_m - (tl_m + bl_m)) * 0.5f;
+                float dy_macro = (bl_m + br_m - (tl_m + tr_m)) * 0.5f;
+                Vec3 n_macro = Vec3(-dx_macro * bumpStrength * macroWeight, -dy_macro * bumpStrength * macroWeight, 1.0f).normalized();
 
-            // Meso: Standard 1-pixel Scharr kernel
-            Vec3 n_meso = computeScharrNormal(heightMap, x, y, bumpStrength * mesoWeight);
+                Vec3 n_meso = computeScharrNormal(heightMap, x, y, bumpStrength * mesoWeight);
 
-            // Micro: High-pass difference
-            float center = heightMap.getLuminance(x, y);
-            float avg4 = (heightMap.getLuminance(x - 1, y) + heightMap.getLuminance(x + 1, y) +
-                          heightMap.getLuminance(x, y - 1) + heightMap.getLuminance(x, y + 1)) * 0.25f;
-            float microDelta = (center - avg4);
-            Vec3 n_micro = Vec3(-microDelta * bumpStrength * microWeight * 8.0f, -microDelta * bumpStrength * microWeight * 8.0f, 1.0f).normalized();
+                float center = heightMap.getLuminance(x, y);
+                float avg4 = (heightMap.getLuminance(x - 1, y) + heightMap.getLuminance(x + 1, y) +
+                              heightMap.getLuminance(x, y - 1) + heightMap.getLuminance(x, y + 1)) * 0.25f;
+                float microDelta = (center - avg4);
+                Vec3 n_micro = Vec3(-microDelta * bumpStrength * microWeight * 8.0f, -microDelta * bumpStrength * microWeight * 8.0f, 1.0f).normalized();
 
-            // Blend via Reoriented Normal Mapping (RNM)
-            Vec3 n_blend = blendNormalsRNM(n_macro, n_meso);
-            Vec3 n_final = blendNormalsRNM(n_blend, n_micro);
+                Vec3 n_blend = blendNormalsRNM(n_macro, n_meso);
+                Vec3 n_final = blendNormalsRNM(n_blend, n_micro);
 
-            Vec3 rgb = {n_final.x * 0.5f + 0.5f, n_final.y * 0.5f + 0.5f, n_final.z * 0.5f + 0.5f};
-            result.setPixelRGB(x, y, rgb);
+                Vec3 rgb = {n_final.x * 0.5f + 0.5f, n_final.y * 0.5f + 0.5f, n_final.z * 0.5f + 0.5f};
+                result.setPixelRGB(x, y, rgb);
+            }
         }
+        return result;
+    }
+
+    int rowsPerThread = (h + numThreads - 1) / numThreads;
+    std::vector<std::future<void>> futures;
+
+    for (int t = 0; t < numThreads; ++t) {
+        int y0 = t * rowsPerThread;
+        int y1 = std::min(h, y0 + rowsPerThread);
+        if (y0 >= h) break;
+
+        futures.push_back(std::async(std::launch::async, [&heightMap, &result, w, y0, y1, bumpStrength, macroWeight, mesoWeight, microWeight]() {
+            for (int y = y0; y < y1; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    // Macro: 3x3 kernel spaced by 3 pixels
+                    float tl_m = heightMap.getLuminance(x - 3, y - 3);
+                    float tr_m = heightMap.getLuminance(x + 3, y - 3);
+                    float bl_m = heightMap.getLuminance(x - 3, y + 3);
+                    float br_m = heightMap.getLuminance(x + 3, y + 3);
+                    float dx_macro = (tr_m + br_m - (tl_m + bl_m)) * 0.5f;
+                    float dy_macro = (bl_m + br_m - (tl_m + tr_m)) * 0.5f;
+                    Vec3 n_macro = Vec3(-dx_macro * bumpStrength * macroWeight, -dy_macro * bumpStrength * macroWeight, 1.0f).normalized();
+
+                    // Meso: Standard 1-pixel Scharr kernel
+                    Vec3 n_meso = computeScharrNormal(heightMap, x, y, bumpStrength * mesoWeight);
+
+                    // Micro: High-pass difference
+                    float center = heightMap.getLuminance(x, y);
+                    float avg4 = (heightMap.getLuminance(x - 1, y) + heightMap.getLuminance(x + 1, y) +
+                                  heightMap.getLuminance(x, y - 1) + heightMap.getLuminance(x, y + 1)) * 0.25f;
+                    float microDelta = (center - avg4);
+                    Vec3 n_micro = Vec3(-microDelta * bumpStrength * microWeight * 8.0f, -microDelta * bumpStrength * microWeight * 8.0f, 1.0f).normalized();
+
+                    // Blend via Reoriented Normal Mapping (RNM)
+                    Vec3 n_blend = blendNormalsRNM(n_macro, n_meso);
+                    Vec3 n_final = blendNormalsRNM(n_blend, n_micro);
+
+                    Vec3 rgb = {n_final.x * 0.5f + 0.5f, n_final.y * 0.5f + 0.5f, n_final.z * 0.5f + 0.5f};
+                    result.setPixelRGB(x, y, rgb);
+                }
+            }
+        }));
+    }
+
+    for (auto& f : futures) {
+        f.get();
     }
 
     return result;
@@ -218,29 +263,69 @@ inline ImageBuffer computeBiophysicalRoughness(
     int h = heightMap.height;
     ImageBuffer roughnessMap(w, h, 3);
 
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            float center = heightMap.getLuminance(x, y);
-            float n_l = heightMap.getLuminance(x - 1, y);
-            float n_r = heightMap.getLuminance(x + 1, y);
-            float n_t = heightMap.getLuminance(x, y - 1);
-            float n_b = heightMap.getLuminance(x, y + 1);
+    int numThreads = (h >= 512) ? std::max(1, static_cast<int>(std::thread::hardware_concurrency())) : 1;
+    if (numThreads <= 1) {
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float center = heightMap.getLuminance(x, y);
+                float n_l = heightMap.getLuminance(x - 1, y);
+                float n_r = heightMap.getLuminance(x + 1, y);
+                float n_t = heightMap.getLuminance(x, y - 1);
+                float n_b = heightMap.getLuminance(x, y + 1);
 
-            float avgNeighbors = (n_l + n_r + n_t + n_b) * 0.25f;
-            float variance = std::abs(center - avgNeighbors);
+                float avgNeighbors = (n_l + n_r + n_t + n_b) * 0.25f;
+                float variance = std::abs(center - avgNeighbors);
 
-            // Laplacian curvature: κ = 4*center - (sum of 4 neighbors)
-            // κ > 0 => Peak / ridge / convex edge
-            // κ < 0 => Valleys / cracks / concave cavity
-            float laplacian = 4.0f * center - (n_l + n_r + n_t + n_b);
+                float laplacian = 4.0f * center - (n_l + n_r + n_t + n_b);
+                float burnish = std::max(0.0f, laplacian) * edgeWearGain;
+                float dirt = std::max(0.0f, -laplacian) * cavityDirtGain;
 
-            float burnish = std::max(0.0f, laplacian) * edgeWearGain;
-            float dirt = std::max(0.0f, -laplacian) * cavityDirtGain;
-
-            float r = baseRoughness + variance * varianceScale - burnish + dirt;
-            float clampedR = std::clamp(r, 0.04f, 0.98f);
-            roughnessMap.setPixelRGB(x, y, {clampedR, clampedR, clampedR});
+                float r = baseRoughness + variance * varianceScale - burnish + dirt;
+                float clampedR = std::clamp(r, 0.04f, 0.98f);
+                roughnessMap.setPixelRGB(x, y, {clampedR, clampedR, clampedR});
+            }
         }
+        return roughnessMap;
+    }
+
+    int rowsPerThread = (h + numThreads - 1) / numThreads;
+    std::vector<std::future<void>> futures;
+
+    for (int t = 0; t < numThreads; ++t) {
+        int y0 = t * rowsPerThread;
+        int y1 = std::min(h, y0 + rowsPerThread);
+        if (y0 >= h) break;
+
+        futures.push_back(std::async(std::launch::async, [&heightMap, &roughnessMap, w, y0, y1, baseRoughness, varianceScale, edgeWearGain, cavityDirtGain]() {
+            for (int y = y0; y < y1; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    float center = heightMap.getLuminance(x, y);
+                    float n_l = heightMap.getLuminance(x - 1, y);
+                    float n_r = heightMap.getLuminance(x + 1, y);
+                    float n_t = heightMap.getLuminance(x, y - 1);
+                    float n_b = heightMap.getLuminance(x, y + 1);
+
+                    float avgNeighbors = (n_l + n_r + n_t + n_b) * 0.25f;
+                    float variance = std::abs(center - avgNeighbors);
+
+                    // Laplacian curvature: κ = 4*center - (sum of 4 neighbors)
+                    // κ > 0 => Peak / ridge / convex edge
+                    // κ < 0 => Valleys / cracks / concave cavity
+                    float laplacian = 4.0f * center - (n_l + n_r + n_t + n_b);
+
+                    float burnish = std::max(0.0f, laplacian) * edgeWearGain;
+                    float dirt = std::max(0.0f, -laplacian) * cavityDirtGain;
+
+                    float r = baseRoughness + variance * varianceScale - burnish + dirt;
+                    float clampedR = std::clamp(r, 0.04f, 0.98f);
+                    roughnessMap.setPixelRGB(x, y, {clampedR, clampedR, clampedR});
+                }
+            }
+        }));
+    }
+
+    for (auto& f : futures) {
+        f.get();
     }
 
     return roughnessMap;

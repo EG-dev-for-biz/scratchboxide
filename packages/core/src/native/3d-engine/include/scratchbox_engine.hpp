@@ -55,6 +55,7 @@
 #include "scratchbox_headless_realism.hpp"
 #include "scratchbox_pbr_texture_expert.hpp"
 #include "scratchbox_pbr_50_library.hpp"
+#include "scratchbox_pbr_manifold.hpp"
 #include "scratchbox_tiles.hpp"
 #include "scratchbox_photoreal_reconstruction.hpp"
 #include "scratchbox_tile_cleanup.hpp"
