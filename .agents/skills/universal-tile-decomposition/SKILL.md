@@ -41,21 +41,22 @@ Rectification   Carver         Slicer         Stratification
 
 ---
 
-## 2. 9 Macro-Geographic Domains & Probe Telemetry
+## 2. Continuous Morphometric Telemetry & Open Domain Classification
 
-The classification engine analyzes geometric relief ($\Delta Y$), surface normal verticality ($\mathbf{N} \cdot [0, 1, 0]$), horizontal footprint aspect ratio, and slope variance without mutating the input mesh:
+In strict adherence to **Adaptive Domain Architecture (ADA)**, the rectification engine never branches on rigid taxonomies. Diagnostic telemetry labels use open literals (`type MacroDomain = 'UrbanHighRiseCore' | 'SuburbanResidential' | (string & {})`), while all physical operations are driven by **continuous dimensional fields**: geometric relief ($\Delta Y$), surface normal verticality ($\mathbf{N} \cdot [0, 1, 0]$), horizontal footprint aspect ratio, and slope variance:
 
-| Domain | Characteristic Telemetry | Primary Rectification Action |
+| Diagnostic Domain Hint | Dimensional Telemetry Signature | Continuous Physical Rectification Action |
 | :--- | :--- | :--- |
-| **UrbanHighRiseCore** | Relief $> 60\text{m}$, Verticality $> 0.65$ | Planar shaft rectification + sculptural crown preservation |
-| **SuburbanResidential** | Relief $< 25\text{m}$, Pitched roofs $\sim 35^\circ$ | Gable / hip roof facet preservation + eave separation |
+| **UrbanHighRiseCore** | Relief $\Delta Y > 60\text{m}$, Verticality $> 0.65$ | Planar shaft rectification + sculptural crown preservation |
+| **SuburbanResidential** | Relief $\Delta Y < 25\text{m}$, Pitched roofs $\sim 35^\circ$ | Gable / hip roof facet preservation + eave separation |
 | **CivilInfrastructure** | Multi-level elevation variance under decks | Multi-level underpass void carving ($\ge 3.5\text{m}$ clearance) |
-| **MountainAlpineCanyon** | Relief $> 100\text{m}$, High slope variance | Slope-stratified physical PBR biomes (turf to bedrock) |
+| **MountainAlpineCanyon** | Relief $\Delta Y > 100\text{m}$, High slope variance | Slope-stratified physical PBR biomes (turf to bedrock) |
 | **ForestWoodlandCanopy** | Dense high-NDVI foliage domes | Understory trunk synthesis + crown preservation |
 | **IndustrialLogistics** | Expansive low-pitch planar roofs | Large-footprint slab extraction |
-| **CoastalShorelineHarbor** | Flat sea-level planes + piers | Hydrographic clipping and shoreline seam welding |
+| **CoastalShorelineHarbor** | Flat sea-level datum + pier projection | Hydrographic clipping and shoreline seam welding |
 | **AridDesertBadlands** | Layered sedimentary stratigraphy | Stepped bench contour preservation |
 | **OpenAgriculturalPlains** | Continuous low relief ($\Delta Y < 5\text{m}$) | Quad-aligned terrain surface optimization |
+| *(Open-Domain / Alien)* | Dimensional continuous coordinates $(\Delta Y, \kappa, \mathbf{N})$ | Continuous parametric boundary projection |
 
 ---
 

@@ -90,8 +90,9 @@ interface GeoAnchorDeploymentContract {
 ```
 
 ### Road Corridors & Parcel Boundaries
-- `projectRoadCorridorsToWebXR(corridors)`: Transforms WGS-84 waypoint arrays into Three.js `THREE.Line` geometry with standard line materials and embedded corridor metadata.
-- `projectParcelsToWebXR(parcels)`: Polygons are converted into ENU 2D boundary shapes and extruded into 3D volumetric massing meshes (`THREE.ExtrudeGeometry`) elevated by height in meters.
+- `stage_3d_vector_world`: The preferred native method for staging complete urban districts from Google Vector Tiles into 3D geometry (roads, parcels, sidewalks, curbs) with continuous elevation.
+- `projectRoadCorridorsToWebXR(corridors)`: Transforms WGS-84 waypoint arrays into metric carrier paths for AR navigation overlays.
+- `projectParcelsToWebXR(parcels)`: Polygons are converted into ENU 2D boundary polygons with metric heights.
 
 ---
 
@@ -185,11 +186,8 @@ const webxrPos = bridge.geodeticToWebXR({
     altitudeMsl: 18.0
 });
 
-// 4. Position 3D object in Three.js / WebXR scene
-const markerMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ color: 0x00ff88 })
-);
-markerMesh.position.copy(webxrPos);
-scene.add(markerMesh);
+// 4. Position 3D anchor/asset group in Three.js / WebXR scene
+const anchorGroup = new THREE.Group();
+anchorGroup.position.copy(webxrPos);
+scene.add(anchorGroup);
 ```

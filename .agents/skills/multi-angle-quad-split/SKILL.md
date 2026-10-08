@@ -149,7 +149,38 @@ crop=1918:1078:1922:1082,scale=1920:1080:flags=lanczos
 
 ---
 
-## 5. Reverse Workflow: Assembling 4 Angles into a 4K 2x2 Grid (`xstack`)
+## 5. In-App Gemini Agent Tools (`vfx-video-tools.ts`)
+
+Instead of writing raw child-process shell invocations, agents should use the registered VFX video tools:
+
+### 1. `vfx_ffmpeg_split_screen`
+Assembles or slices 2x2, side-by-side (50/50), or picture-in-picture video compositions:
+```json
+{
+  "name": "vfx_ffmpeg_split_screen",
+  "args": {
+    "layout": "2x2",
+    "videoPaths": [
+      "renders/angle_01_front.mp4",
+      "renders/angle_02_side.mp4",
+      "renders/angle_03_low.mp4",
+      "renders/angle_04_top.mp4"
+    ],
+    "outputResolution": "3840x2160",
+    "outputPath": "renders/quad_split_4k_master.mp4"
+  }
+}
+```
+
+### 2. `generate_veo2_multiview_video`
+Directs generative multiview camera angles for character and scene actions with temporal consistency.
+
+### 3. `vfx_ffmpeg_quick_edit`
+Performs precision cuts, cropping, audio re-muxing, and frame-rate conversions on extracted quadrants.
+
+---
+
+## 6. Reverse Workflow: Assembling 4 Angles into a 4K 2x2 Grid (`xstack`)
 
 If starting from 4 separate 1080p camera recordings or 3D viewport renders, assemble them into a master 4K UHD video:
 

@@ -10,6 +10,12 @@ description: >-
 
 The **3D Atmospheric & Radiometric Environment Skill** equips AI agents to construct, calibrate, and render physically-grounded atmospheric lighting, skies, clouds, and participating media within Scratchbox 3D scenes.
 
+> [!IMPORTANT]
+> **Zero Uninvited Defaults Invariant (Opt-In Only)**:
+> In practice, uninvited atmospheric defaults pollute user intent. When building an outpost, hero vehicle, or mechanical asset, unexpected clouds or sunset lighting fight against the composition.
+> - **Neutral Studio Baseline**: Unconfigured scenes default strictly to a clean, neutral studio environment (`skybox: 'studio'`, `lighting: 'studio'`).
+> - **Explicit Opt-In Gate**: Atmospheric sky domes, Rayleigh/Mie scattering, diurnal solar curves, depth fog, and volumetric clouds are ONLY instantiated when the prompt or schema contract explicitly opts into them (`/sky|atmosphere|clouds?|sunset|dusk|dawn|weather/i`) or when following up after staging approval.
+
 ---
 
 ## 1. System Architecture

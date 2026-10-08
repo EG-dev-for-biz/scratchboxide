@@ -6,6 +6,8 @@ import { synthesize3DFallback } from '../src/browser/generative-canvas/hooks/sen
 import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import { synthesizeAdaptiveHeroObjectContract } from '../src/common/spatial/adaptive-hero-synthesizer';
 import { Google3DTileService, detectRealWorldLocationIntent } from '../src/browser/generative-canvas/services/Google3DTileService';
+import { GoogleVectorMappingService } from '../src/browser/generative-canvas/services/google-vector-mapping-service';
+import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { python3DHandlers } from '../src/node/gemini/tools/python-3d-tools';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
@@ -257,6 +259,57 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             const wheelRims = (heroContract.revolvedHarmonics || []).filter(h => h.id.startsWith('wheel_rim'));
             expect(wheelRims.length).toBe(4);
             expect(heroContract.materialAttributes?.renderMode).toBe('clay');
+        });
+
+        it('detects authentic Manhattan location intent and coordinates for "make me a car race in manhattan"', () => {
+            const prompt = 'make me a car race in manhattan';
+            const locIntent = detectRealWorldLocationIntent(prompt);
+
+            expect(locIntent).toBeDefined();
+            expect(locIntent?.isRealWorld).toBe(true);
+            expect(locIntent?.landmarkName).toContain('Manhattan');
+            expect(locIntent?.lat).toBeCloseTo(40.7831, 2);
+            expect(locIntent?.lng).toBeCloseTo(-73.9712, 2);
+        });
+
+        it('resolves Manhattan queries to canonical geodetic anchor via GoogleVectorMappingService', () => {
+            const anchor = GoogleVectorMappingService.searchFeatures('manhattan');
+            expect(anchor).toBeDefined();
+            expect(anchor?.lat).toBeCloseTo(40.7484, 2);
+            expect(anchor?.lng).toBeCloseTo(-73.9857, 2);
+        });
+
+        it('resolves Manhattan queries via Google3DTileBlockoutPipelineService.prototype.resolveAddress', async () => {
+            const service = new Google3DTileBlockoutPipelineService();
+            const resolved = await service.resolveAddress('Manhattan, New York');
+            expect(resolved).toBeDefined();
+            expect(resolved.lat).toBeGreaterThan(40.0);
+            expect(resolved.lng).toBeLessThan(-70.0);
+            expect(resolved.landmarkName).toBeDefined();
+        });
+
+        it('synthesizes scene staged in authentic Manhattan Google 3D tiles for "make me a car race in manhattan"', () => {
+            const prompt = 'make me a car race in manhattan';
+            const scene = synthesizeRawContextual3DScene(prompt);
+
+            expect(scene.title).toContain('Manhattan');
+            expect(scene.geoAnchor).toBeDefined();
+            expect(scene.geoAnchor?.landmarkName).toContain('Manhattan');
+            expect(scene.geoAnchor?.lat).toBeCloseTo(40.7831, 2);
+            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.9712, 2);
+            expect(scene.renderMode).toBe('clay');
+            expect(scene.environment.ground).toBe(true);
+
+            // Objects must contain the Manhattan 3D tile object
+            const tileObject = scene.objects?.find(o => 
+                o.content?.type === 'map-3d' ||
+                o.id.startsWith('tile_mesh_') ||
+                o.id === 'google-3d-tiles-base' ||
+                o.id === 'google-vector-world-base' ||
+                o.content?.metadata?.source?.toLowerCase().includes('tile')
+            );
+            expect(tileObject).toBeDefined();
+            expect(tileObject?.content?.metadata?.source?.toLowerCase()).toContain('tile');
         });
     });
 

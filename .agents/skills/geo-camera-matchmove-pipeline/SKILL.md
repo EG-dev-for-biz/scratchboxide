@@ -63,15 +63,59 @@ node scripts/run_geo_camera_matchmove_pipeline.cjs \
 
 ---
 
-## Location Resolution
+## Location Resolution & Geodetic Grounding
 
-There is no built-in landmark table. `--landmark "<place>"` is geocoded with the Google Geocoding API
-(ground elevation from the Elevation API) via `GeoCameraMatchmovePipelineService.geocodeLandmarkAnchor`,
-which needs `GOOGLE_MAPS_API_KEY`; otherwise pass `--lat/--lng`. A lookup with no result is an error.
-Motion presets use `--heading` (compass degrees of the street grid, e.g. -29 for Manhattan) when given.
+In compliance with the removal of external Geocoding/Solar API dependencies (commit `60b8f35`), location grounding resolves via:
+1. **Explicit Geodetic Coordinates**: Always prefer explicit `latitude` and `longitude` with optional `altitude` and street heading degrees.
+2. **Google Vector Tile Landmark Resolution**: Resolves urban corridors and parcels directly from Google 2D roadmap vector tiles (zoom 16) without external geocoding keys.
 
-Note: motion presets generate a camera path; they do not track the reference video, and their
-`precisionMetrics.measured` is `false`.
+---
+
+## First-Class Gemini Agent Tools
+
+Agents should invoke the dedicated matchmove tools declared in `adaptive-matchmove-tools.ts`:
+
+### 1. `adaptive_matchmove_resect_keyframe`
+Extracts camera optical pose, heading, tilt, and field-of-view from an anchor frame of the input video.
+```json
+{
+  "name": "adaptive_matchmove_resect_keyframe",
+  "args": {
+    "videoPath": "uploads/reference_cinematic.mp4",
+    "timestampSec": 0.0,
+    "geodeticCoords": { "lat": 40.7644, "lng": -73.9745, "alt": 180 }
+  }
+}
+```
+
+### 2. `adaptive_matchmove_solve_spline`
+Fits a continuous, nadir-safe $C^2$ Catmull-Rom spline through resected camera keyframes, enforcing smooth heading/pitch interpolation and gimbal-lock protection.
+```json
+{
+  "name": "adaptive_matchmove_solve_spline",
+  "args": {
+    "keyframeIds": ["kf_0", "kf_mid", "kf_end"],
+    "targetFps": 30,
+    "totalDurationSec": 5.0
+  }
+}
+```
+
+### 3. `adaptive_matchmove_render_blockout`
+Renders the solved 6-DoF camera trajectory through Google Photorealistic 3D Tiles in 4K UHD, producing `<VIDEO_REF_0>` for Omni 1.1 conditioning.
+```json
+{
+  "name": "adaptive_matchmove_render_blockout",
+  "args": {
+    "splineTrackId": "spline_plaza_hotel_01",
+    "resolution": "4k",
+    "renderMode": "textured"
+  }
+}
+```
+
+### 4. `tapir_track_video_points`
+Tracks persistent 2D visual points across video frames to extract camera motion vectors or verify trajectory stability.
 
 ---
 
@@ -89,7 +133,7 @@ Note: motion presets generate a camera path; they do not track the reference vid
    - Maintains focal lock on building centroid while varying elevation.
 
 3. **`canyon-flythrough`**:
-   - Fast low-altitude avenue glide along Manhattan-style street corridors.
+   - Fast low-altitude avenue glide along street corridors.
    - Heading tracks street centerline orientation with perspective depth preservation.
 
 ---
@@ -105,22 +149,25 @@ import {
 
 const pipeline = new GeoCameraMatchmovePipelineService();
 
-// 1. Geocode the location (Google Geocoding + Elevation APIs)
-const anchor = await pipeline.geocodeLandmarkAnchor('The Plaza Hotel, New York', { headingDeg: -29 });
-
-// 2. Configure matchmove request
+// 1. Configure matchmove request with explicit geodetic anchor
 const request: GeoMatchmoveRequest = {
   inputVideoPath: '/path/to/reference_video.mp4',
-  geoAnchor: anchor,
+  geoAnchor: {
+    lat: 40.7644,
+    lng: -73.9745,
+    altitudeMeters: 180,
+    headingDeg: -29,
+    landmarkName: 'The Plaza Hotel, New York'
+  },
   motionType: 'crane-descent-to-nadir',
-  headingDeg: anchor.headingDeg,
+  headingDeg: -29,
   renderMode: 'textured',
   resolution: { width: 3840, height: 2160 },
   outputDir: 'public',
   outputVideoName: 'plaza_hotel_matchmove'
 };
 
-// 3. Execute pipeline
+// 2. Execute pipeline
 const result: GeoMatchmoveResult = await pipeline.execute(request);
 
 console.log('Blockout Video:', result.blockoutVideoPath);

@@ -103,6 +103,23 @@ Applies an explicit array of structured deformation operations:
 }
 ```
 
+### 3. `tile_restructure_via_prompt`
+Restructures, terraforms, and grafts architectural primitives onto real-world 3D tiles or benchmark districts from a natural language prompt:
+```json
+{
+  "name": "tile_restructure_via_prompt",
+  "args": {
+    "prompt": "Terrace the hillside into 3 stepped tiers and graft 4 obelisks at the perimeter",
+    "inputGlbPath": "public/models/hillside.glb",
+    "materialMode": "studio_clay",
+    "clayPreset": "SlateGrey"
+  }
+}
+```
+
+### 4. `tile_apply_terraforming_and_primitives`
+Applies explicit parametric terraforming (terracing, plateau leveling, crater basins, moats) and grafts architectural primitives (colonnades, obelisks, domes, pylons) directly into the 3D tile mesh.
+
 ---
 
 ## 4. TypeScript Codebase APIs

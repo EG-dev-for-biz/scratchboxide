@@ -57,22 +57,23 @@ The **Adaptive Domain Architecture (ADA)** is the foundational architectural par
   - Atmospheric ephemeris: Diurnal solar zenith/azimuth, Rayleigh/Mie scattering coefficients, turbidity, Kelvin color temperatures ($1,000\text{K} - 40,000\text{K}$).
 - The schemas define **structural contracts**, never static content.
 
-### Pillar 4: Ephemeral Compilation
-- **Zero Static Scene `.cpp` Files**: Never write `arctic_outpost.cpp`, `desert_temple.cpp`, or similar one-off files into `scripts/` or `src/`.
-- All C++20 source code is generated dynamically in memory via `Adaptive3DSceneSynthesizer.generateCppSource(contract)`.
-- Code is compiled on the fly using Apple Clang (`clang++ -std=c++20 -O3`) through `NativeCppCompilerService`, executed in a sub-process sandbox, and the binary `.glb` stream is captured directly.
-- Compiling dynamically via `NativeCppCompilerService`, streaming the `.glb` directly, and retaining the source in the scene data metadata (`data.cppGenerator.sourceCode`) guarantees non-destructive reproducibility without polluting the repository. Intermediate objects and binaries are automatically cleaned up.
+### Pillar 4: Ephemeral Execution (Python Nanobind & JIT C++20)
+- **Zero Static Scene Files**: Never write `arctic_outpost.cpp`, `desert_temple.cpp`, or similar one-off generator files into `scripts/` or `src/`.
+- **Dual Execution Engines**:
+  1. *Python Nanobind Dynamic Sandbox (`execute_3d_python_script`)*: Scripts run in a sandboxed Python subprocess importing `scratchbox as sb` (`sb.core`, `sb.shaper`, `sb.plant`, `sb.nature`, `sb.human`, `sb.terrain`), driving native C++20 algorithms directly in memory with sub-millisecond execution.
+  2. *Ephemeral C++20 JIT Compilation (`NativeCppCompilerService`)*: On-the-fly Apple Clang compilation (`clang++ -std=c++20 -O3`) synthesizing temporary procedural modules in memory, streaming binary `.glb` chunks, and cleaning up object files immediately.
+- Both paths preserve non-destructive reproducibility by attaching the procedural source directly to scene metadata (`data.cppGenerator.sourceCode` or `data.pythonGenerator.sourceCode`) without polluting the repo.
 
 ### Pillar 5: Open-Domain Universality
 - The architecture scales seamlessly to any arbitrary prompt from the user without needing codebase modifications, new enum variants, or specialized handlers.
 - New capabilities are added as continuous parameters in the schema contracts, not as new discrete cases in a classifier.
 
 ### Pillar 6: C++20 Bare-Metal Engine vs. Three.js Viewport Separation
-- **Heavy Geometric Work Belongs in C++20**: Native C++ with Apple Clang (`-std=c++20 -O3`) compiles and generates 100,000+ vertices, calculates smooth envelope normals, applies noise algorithms, and serializes a standard binary `.glb` in under 200 milliseconds.
+- **Heavy Geometric Work Belongs in C++20 (via Python nanobind or native Clang)**: Native C++ with Apple Clang (`-std=c++20 -O3`) and nanobind SIMD math generates 100,000+ vertices, calculates smooth envelope normals, applies noise algorithms, and serializes a standard binary `.glb` in under 200 milliseconds.
 - **Three.js is a Pure Renderer/Viewport**: Three.js must never be used to procedurally construct geometry loops in browser JavaScript. Three.js is best utilized as a pure renderer and viewport, mounting the streamed `.glb`, managing the WebGL context, camera choreography, and interactive orbit controls.
 - **Strict Prohibition on Toy JavaScript Primitives ("Tier-0" Ban)**: Viewports and generative pipelines must NEVER catch errors and silently fall back to Three.js primitive boxes, cylinders, or cones (`new THREE.BoxGeometry`, etc.). Stacking flat boxes is strictly banned.
 - **Mandatory Geometric Complexity Floor (`GeometricComplexityGate`)**: Every procedural generative scene must pass `GeometricComplexityGate` with a strict minimum of **25,000 vertices** (5,000 for single isolated props), **15,000 triangles**, and an authentic 70-20-10 multi-mesh hierarchy.
-- **Strict Two-Tier Failover**: If Tier 1 native C++20 fails at runtime, execution must fail over transparently to **Tier 2 ComfyUI (Cloud Run L4 GPU / local)**, never degrading to client-side JavaScript primitives.
+- **Strict Two-Tier Failover**: If Tier 1 native C++20 / Python nanobind fails at runtime, execution must fail over transparently to **Tier 2 ComfyUI (Cloud Run L4 GPU / local)**, never degrading to client-side JavaScript primitives.
 
 ### Pillar 7: Zero Uninvited Defaults (Atmosphere & Clouds Strictly Opt-In)
 - **Preserve Visual Neutrality and User Intent**: In practice, uninvited defaults pollute user intent. When building an outpost or mechanical asset, unexpected clouds or lighting presets fight against the composition. Making atmosphere, ephemeris, and cloud layers strictly opt-in preserves visual neutrality and artistic control.

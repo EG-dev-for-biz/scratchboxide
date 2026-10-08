@@ -1261,7 +1261,15 @@ export class GoogleVectorMappingService {
     const mapping = this.getCanonicalMapping();
 
     // 1. Check anchor
-    if (clean.includes('empire state') || clean.includes('esb') || (clean.includes('34th st') && clean.includes('5th'))) {
+    if (
+      clean.includes('empire state') ||
+      clean.includes('esb') ||
+      clean.includes('manhattan') ||
+      clean.includes('new york') ||
+      clean.includes('nyc') ||
+      clean.includes('midtown') ||
+      (clean.includes('34th st') && clean.includes('5th'))
+    ) {
       return mapping.anchor;
     }
 

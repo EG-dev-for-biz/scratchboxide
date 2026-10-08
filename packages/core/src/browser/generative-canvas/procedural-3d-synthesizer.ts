@@ -2491,7 +2491,24 @@ function _synthesizeRawContextual3DSceneInner(
                 tileResult.customMeshDefinition,
                 ...(tileResult.buildingMeshes || []),
                 ...(heroScene.customMeshes || [])
-            ]
+            ],
+            features: {
+                ...heroScene.features,
+                ...baseFeatures,
+                ...(hasAtmosphere ? {
+                    atmosphericScattering: buildHeadlessAtmosphere({
+                        sunElevation: isSunset ? 12 : 28,
+                        sunAzimuth: 145,
+                        latitude: realWorldLoc.lat,
+                        longitude: realWorldLoc.lng,
+                        aerialPerspectiveEnabled: hasHazeOrFogRequested || isSunset || hasAtmosphere,
+                        inscatteringIntensity: (hasHazeOrFogRequested || isSunset) ? 1.0 : 0.0,
+                        cloudShadowsEnabled: hasCloudsRequested || hasAtmosphere,
+                        cloudShadowIntensity: hasCloudsRequested ? 0.65 : 0.35
+                    }),
+                    godRays: hasGodRays
+                } : {})
+            }
         };
     }
 

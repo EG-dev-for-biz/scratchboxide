@@ -46,78 +46,83 @@ The **Location 3D Object Lighting Skill** equips AI agents to resolve baked phot
 
 ---
 
-## 2. Stone Albedo Colorimetry Standards
+## 2. Continuous Stone Albedo & Radiometric Colorimetry
 
-| Stone Type | RGB Vector | Hex Reference | Common Real-World Landmarks |
+In compliance with **Adaptive Domain Architecture (ADA)**, surface materials are defined by continuous diffuse albedo vectors $\boldsymbol{\rho} \in [0, 1]^3$ rather than closed classifiers. Diagnostic labels use open literals (`type StoneHint = 'travertine' | 'limestone' | 'sandstone' | (string & {})`):
+
+| Diagnostic Reference Hint | Measured Diffuse Albedo $\boldsymbol{\rho}$ | Hex Reference | Common Real-World Lithic Formations |
 | :--- | :--- | :--- | :--- |
 | **Travertine** | `[0.86, 0.82, 0.78]` | `#dcd1c7` | Roman Colosseum, Trevi Fountain, Getty Center |
 | **Limestone** | `[0.88, 0.85, 0.76]` | `#e0d9c2` | Pyramids of Giza, Notre-Dame, Empire State Building |
 | **Sandstone** | `[0.85, 0.68, 0.52]` | `#d9ad85` | Petra, Red Rocks, Sydney Sandstone |
-| **Granite** | `[0.72, 0.73, 0.74]` | `#b8babb` | El Capitan, Mount Rushmore, modern plazas |
+| **Granite** | `[0.72, 0.73, 0.74]` | `#b8babb` | El Capitan, Mount Rushmore, modern structural plazas |
 | **Terracotta** | `[0.80, 0.52, 0.42]` | `#cc856b` | Florence Duomo, Roman tiles, brick monuments |
 | **Marble** | `[0.92, 0.92, 0.93]` | `#ebebee` | Taj Mahal, Lincoln Memorial, Parthenon |
-| **Concrete** | `[0.70, 0.70, 0.68]` | `#b3b3ad` | Sydney Opera House podium, Brutalist structures |
+| **Concrete / Caisson** | `[0.70, 0.70, 0.68]` | `#b3b3ad` | Brutalist monuments, highway caissons, retaining walls |
+| *(Continuous Custom)* | $[\rho_R, \rho_G, \rho_B] \in [0, 1]^3$ | Custom Hex | Continuous physical reflectance spectrum |
 
 ---
 
-## 3. Codebase APIs
+## 3. Native & Server-Side APIs
 
-Importable directly from `@scratchbox/core`, `@scratchbox/core/browser`, or `@scratchbox/core/node`:
+De-lighting and photometric harmonization are executed via native C++20 (`scratchbox_delight.hpp`) and TypeScript services in `@scratchbox/core` and `@scratchbox/core/node`:
 
 ```typescript
-import { LocationObjectLightingService, harmonizeLocationObjectAtmosphere } from '@scratchbox/core';
+import { 
+  matchImageAndLightingToLocation, 
+  LocationObjectLightingService 
+} from '@scratchbox/core/node';
 
-// 1. Calculate lighting & de-lighting parameters
-const harmonization = harmonizeLocationObjectAtmosphere({
-  landmarkName: 'Colosseum, Rome',
-  preset: 'civil_twilight_dusk',
+// 1. Solve photometric lighting and 6-DOF camera pose against matched location
+const matchedRig = await matchImageAndLightingToLocation({
+  imagePath: 'uploads/colosseum_dusk.jpg',
+  locationName: 'Colosseum, Rome',
   stoneType: 'travertine',
-  enableArchitecturalBacklighting: true,
+  autoAlignCamera: true,
+  autoExportUsd: true
 });
 
-// 2. Apply directly to Three.js materials and scene
-mesh.traverse((child) => {
-  if ((child as any).isMesh) {
-    LocationObjectLightingService.applyPhotogrammetricDelightShader(
-      (child as any).material,
-      harmonization.delightUniforms
-    );
-  }
+// 2. High-performance native de-lighting uniform resolution
+const delightParams = LocationObjectLightingService.calculateDelightUniforms({
+  shadowLift: 0.60,
+  highlightCompress: 0.45,
+  albedoTint: [0.86, 0.82, 0.78]
 });
-
-LocationObjectLightingService.applyLocationAtmosphereLighting(
-  scene,
-  harmonization.sceneLighting
-);
-
-LocationObjectLightingService.applyArchitecturalPortalLights(
-  scene,
-  harmonization.architecturalFixtures
-);
 ```
 
 ---
 
-## 4. In-App Agent Tools (Gemini Function Calling)
+## 4. First-Class Gemini Agent Tools
 
-### `geobox_harmonize_location_lighting`
+Agents should invoke the dedicated lighting tools in `lighting-tools.ts`:
+
+### 1. `lighting_match_image_to_location`
+Matches physical scene lighting (sun angle, Kelvin temperature, sky ambient) and 6-DOF camera pose from a reference photograph after 3D location extraction.
 ```json
 {
-  "name": "geobox_harmonize_location_lighting",
-  "description": "Harmonize 3D photogrammetric location tiles with photograph lighting, stone albedo calibration, GLSL de-lighting shaders (shadow lift, highlight compression), dusk atmosphere, and interior window fixtures.",
-  "parameters": {
-    "type": "OBJECT",
-    "properties": {
-      "landmarkName": { "type": "STRING", "description": "Landmark or scene name" },
-      "preset": { "type": "STRING", "enum": ["civil_twilight_dusk", "golden_hour", "midday_clear", "blue_hour", "night_monumental"] },
-      "stoneType": { "type": "STRING", "enum": ["travertine", "limestone", "sandstone", "granite", "terracotta", "marble", "concrete"] },
-      "shadowLift": { "type": "NUMBER", "description": "Shadow lift factor (default: 0.60)" },
-      "highlightCompress": { "type": "NUMBER", "description": "Highlight compression factor (default: 0.45)" },
-      "enableArchitecturalBacklighting": { "type": "BOOLEAN", "description": "Enable 12-portal window backlighting" }
-    }
+  "name": "lighting_match_image_to_location",
+  "args": {
+    "imagePath": "uploads/target_plate.jpg",
+    "locationName": "Empire State Building, NYC",
+    "stoneType": "limestone",
+    "autoAlignCamera": true,
+    "autoExportUsd": true
   }
 }
 ```
 
-### `atmosphere_harmonize_location_3d`
-High-level atmospheric alias exposed under the `nature_atmosphere` toolset.
+### 2. `lighting_estimate_from_photo`
+Performs inverse photometric decomposition to extract primary light direction vector, shadow softness, Kelvin temperature, and order-3 (9×3) Spherical Harmonics ambient irradiance.
+```json
+{
+  "name": "lighting_estimate_from_photo",
+  "args": {
+    "imagePath": "uploads/plate_sunset.png",
+    "hfovDeg": 60,
+    "vfovDeg": 45
+  }
+}
+```
+
+### 3. `atmosphere_harmonize_location_3d`
+Harmonizes atmospheric scattering and diurnal solar ephemeris with the real-world geodetic position.

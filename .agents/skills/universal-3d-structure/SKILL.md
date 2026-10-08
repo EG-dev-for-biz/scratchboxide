@@ -48,7 +48,48 @@ Activate this skill whenever a user or workflow asks to:
 
 ---
 
-## 3. Standard Code Workflow
+## 3. In-App Gemini Agent Tools (`universal-3d-structure-tools.ts`)
+
+Agents can interact directly with the Universal 3D Structure Foundation via function calling:
+
+### 1. `universal_3d_structure_create`
+Synthesizes or initializes a canonical Universal 3D Structure maintaining synchronized solid mesh, 3DGS point cloud, calibrated 6-DoF cameras, physics collision hull, and real-world WGS-84 coordinates:
+```json
+{
+  "name": "universal_3d_structure_create",
+  "args": {
+    "name": "City_District_Block",
+    "proceduralType": "box",
+    "scale": 15.0,
+    "numViews": 32,
+    "pointDensity": 4000,
+    "anchor": { "lat": 40.7484, "lng": -73.9857, "elevationMeters": 10.0 }
+  }
+}
+```
+
+### 2. `universal_3d_structure_export`
+Exports a structure outward to any downstream format (`glb`, `colmap`, `nerfstudio`, `video_blockout`, `collision_hull`, `geojson`, or `all`):
+```json
+{
+  "name": "universal_3d_structure_export",
+  "args": {
+    "name": "City_District_Block",
+    "format": "all",
+    "outputDir": "public/models/export_bundle"
+  }
+}
+```
+
+### 3. `universal_3d_structure_animate`
+Adds continuous-time animation tracks (camera orbits, arcs, push-ins), compiles glTF 2.0 animation samplers, and bridges directly to the Video Timeline NLE.
+
+### 4. `universal_3d_structure_get_collision_hull`
+Extracts metric collision envelopes (AABB, bounding sphere, and simplified convex bumper hull) for physics simulation and collision avoidance.
+
+---
+
+## 4. Standard Code Workflow
 
 ### 1. Ingest or Synthesize the Master Structure
 ```typescript

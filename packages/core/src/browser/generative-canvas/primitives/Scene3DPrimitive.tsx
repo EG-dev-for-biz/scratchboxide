@@ -1818,9 +1818,18 @@ int main(int argc, char** argv) {
         if (sceneData.environment?.groundTileMode) return sceneData.environment.groundTileMode;
         if (sceneData.vectorRoadmap?.groundTileMode) return sceneData.vectorRoadmap.groundTileMode;
         if (sceneData.vectorRoadmap?.groundBlueprint) return 'vector-roadmap-blueprint';
-        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'GoogleVectorTileService')) return 'vector-world-clay';
-        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'Google3DTilesClay')) return 'photoreal-clay';
-        if (sceneData.objects?.some(o => o.content?.metadata?.source === 'Google3DTilesFullTexture')) return 'photoreal-textured';
+        if (sceneData.objects?.some(o => {
+            const s = (o.content?.metadata?.source || '').toLowerCase();
+            return s === 'googlevectortileservice' || s === 'google_vector_tile_service';
+        })) return 'vector-world-clay';
+        if (sceneData.objects?.some(o => {
+            const s = (o.content?.metadata?.source || '').toLowerCase();
+            return s === 'google3dtilesclay' || s === 'google_3d_tiles_clay';
+        })) return 'photoreal-clay';
+        if (sceneData.objects?.some(o => {
+            const s = (o.content?.metadata?.source || '').toLowerCase();
+            return s === 'google3dtilesfulltexture' || s === 'google_3d_tiles_full_texture';
+        })) return 'photoreal-textured';
         if (has3DTiles) return renderMode === 'pbr' || renderMode === 'shaded' ? 'photoreal-textured' : 'photoreal-clay';
         return 'none';
     }, [
@@ -2634,13 +2643,13 @@ int main(int argc, char** argv) {
             if (!isSplat && !isGltf) return;
             activeIds.add(obj.id);
 
-            const source = obj.content?.metadata?.source;
+            const source = (obj.content?.metadata?.source || '').toLowerCase();
             let isVisibleForGroundMode = true;
-            if (source === 'GoogleVectorTileService') {
+            if (source === 'googlevectortileservice' || source === 'google_vector_tile_service') {
                 isVisibleForGroundMode = effectiveGroundTileMode === 'vector-world-clay';
-            } else if (source === 'Google3DTilesClay') {
+            } else if (source === 'google3dtilesclay' || source === 'google_3d_tiles_clay') {
                 isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-clay';
-            } else if (source === 'Google3DTilesFullTexture') {
+            } else if (source === 'google3dtilesfulltexture' || source === 'google_3d_tiles_full_texture') {
                 isVisibleForGroundMode = effectiveGroundTileMode === 'photoreal-textured';
             }
 

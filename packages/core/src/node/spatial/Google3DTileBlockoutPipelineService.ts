@@ -15,6 +15,10 @@ import { promisify } from 'util';
 import { Google3DTileCrawlerBaker } from './Google3DTileCrawlerBaker';
 import { PhysicalCameraModel } from '../../common/optics/PhysicalCameraModel';
 import { GoogleVectorMappingService } from '../../browser/generative-canvas/services/google-vector-mapping-service';
+import {
+  detectRealWorldLocationIntent,
+  Google3DTileService
+} from '../../browser/generative-canvas/services/Google3DTileService';
 import type {
   PhysicalCameraConfig,
   SensorFormatPreset
@@ -399,6 +403,17 @@ export class Google3DTileBlockoutPipelineService {
         lng: vectorAnchor.lng,
         elevation: vectorAnchor.elevation || 15.0,
         landmarkName: vectorAnchor.formattedAddress || rawQuery
+      };
+    }
+
+    // 3. Google 3D Tiles location resolution & real-world intent detection
+    const locResolved = detectRealWorldLocationIntent(rawQuery) || Google3DTileService.getInstance().resolveLocationSync(rawQuery);
+    if (locResolved && locResolved.lat !== 0 && locResolved.lng !== 0) {
+      return {
+        lat: Number(locResolved.lat.toFixed(6)),
+        lng: Number(locResolved.lng.toFixed(6)),
+        elevation: locResolved.elevation || 15.0,
+        landmarkName: locResolved.landmarkName || rawQuery
       };
     }
 

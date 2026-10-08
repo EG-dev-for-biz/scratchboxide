@@ -14,6 +14,7 @@ import { TileClayProcessor, ClayPresetId, CLAY_PRESETS } from './TileClayProcess
 
 export type { ClayPresetId };
 import { GoogleMapsService, GeocodeResult } from './google-maps-service';
+import { GoogleVectorMappingService } from './google-vector-mapping-service';
 import type { Media4DObject, Scene3DData } from '../canvas-types';
 import { GeospatialPhotorealPipeline, PhotorealReconstructionOptions, PhotorealReconstructionResult } from './GeospatialPhotorealPipeline';
 import { UniversalTextureInducer, classifyGeometrySurfaces, ArchitecturalZone } from './UniversalTextureInducer';
@@ -47,9 +48,9 @@ export interface TileIngestionStats {
 
 export interface TileIngestionResult {
   success: boolean;
-  mesh: THREE.Mesh;
+  mesh: THREE.Mesh | THREE.Group;
   media4DObject: Media4DObject;
-  customMeshDefinition: NonNullable<Scene3DData['customMeshes']>[number];
+  customMeshDefinition?: NonNullable<Scene3DData['customMeshes']>[number];
   buildingMeshes?: NonNullable<Scene3DData['customMeshes']>;
   geoAnchor: {
     lat: number;
@@ -63,173 +64,6 @@ export interface TileIngestionResult {
   stats: TileIngestionStats;
   glbBuffer?: ArrayBuffer;
 }
-
-/**
- * ADA Architectural Invariant: OFFLINE_TEST_FIXTURE_COORDINATES
- *
- * Strictly designated as an offline fallback cache for unit/integration tests and zero-latency local development.
- * Under Adaptive Domain Architecture (ADA) Pillar 2 ("Zero Closed Taxonomies / Never Accumulate Noun Dictionaries")
- * and the Zero-Presets invariant, production runtime must NEVER rely on static dictionary lookups.
- * Geodetic coordinates are resolved dynamically through:
- * 1. Direct LLM-supplied geodetic coordinates in tool arguments ({ coordinates: [lat, lng] }) or prompts.
- * 2. Google Vector Tiles and Photorealistic 3D Tiles geospatial querying.
- * 3. Dynamic geocoding via GoogleMapsService.
- */
-export const OFFLINE_TEST_FIXTURE_COORDINATES: Record<string, { lat: number; lng: number; elevation: number; name: string }> = {
-  // New York
-  'the plaza hotel nyc': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'the plaza hotel new york': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'plaza hotel nyc': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'plaza hotel new york': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'the plaza hotel': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'plaza hotel': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'the plaza': { lat: 40.7644, lng: -73.9744, elevation: 18.0, name: 'The Plaza Hotel NYC' },
-  'grand army plaza nyc': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
-  'grand army plaza new york': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
-  'grand army plaza': { lat: 40.7648, lng: -73.9733, elevation: 20.0, name: 'Grand Army Plaza, New York' },
-  'central park nyc': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
-  'central park new york': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
-  'central park': { lat: 40.7829, lng: -73.9654, elevation: 25.0, name: 'Central Park, New York' },
-  'times square': { lat: 40.7580, lng: -73.9855, elevation: 15.0, name: 'Times Square, New York' },
-  'empire state building': { lat: 40.7484, lng: -73.9857, elevation: 15.0, name: 'Empire State Building' },
-  'chrysler building': { lat: 40.7516, lng: -73.9755, elevation: 16.0, name: 'Chrysler Building' },
-  'brooklyn bridge': { lat: 40.7061, lng: -73.9969, elevation: 10.0, name: 'Brooklyn Bridge' },
-  'statue of liberty': { lat: 40.6892, lng: -74.0445, elevation: 5.0, name: 'Statue of Liberty' },
-  'rockefeller center': { lat: 40.7587, lng: -73.9787, elevation: 16.0, name: 'Rockefeller Center' },
-  'grand central terminal': { lat: 40.7527, lng: -73.9772, elevation: 17.0, name: 'Grand Central Terminal' },
-  'grand central': { lat: 40.7527, lng: -73.9772, elevation: 17.0, name: 'Grand Central Terminal' },
-  'one world trade center': { lat: 40.7127, lng: -74.0134, elevation: 10.0, name: 'World Trade Center' },
-  'world trade center': { lat: 40.7127, lng: -74.0134, elevation: 10.0, name: 'World Trade Center' },
-  'wall street': { lat: 40.7069, lng: -74.0090, elevation: 10.0, name: 'Wall Street, New York' },
-  'hudson yards': { lat: 40.7539, lng: -74.0016, elevation: 10.0, name: 'Hudson Yards, New York' },
-  'the high line': { lat: 40.7480, lng: -74.0048, elevation: 12.0, name: 'The High Line, New York' },
-  'high line': { lat: 40.7480, lng: -74.0048, elevation: 12.0, name: 'The High Line, New York' },
-  'washington square park arch': { lat: 40.7308, lng: -73.9973, elevation: 9.8, name: 'Washington Square Park Arch, New York' },
-  'washington square arch': { lat: 40.7308, lng: -73.9973, elevation: 9.8, name: 'Washington Square Park Arch, New York' },
-  'washington square park': { lat: 40.7308, lng: -73.9973, elevation: 9.8, name: 'Washington Square Park, New York' },
-  'washington square': { lat: 40.7308, lng: -73.9973, elevation: 9.8, name: 'Washington Square Park, New York' },
-  'greenwich village': { lat: 40.7336, lng: -74.0027, elevation: 10.0, name: 'Greenwich Village, New York' },
-  'soho': { lat: 40.7233, lng: -74.0030, elevation: 10.0, name: 'SoHo, Manhattan' },
-  'manhattan': { lat: 40.7831, lng: -73.9712, elevation: 10.0, name: 'Manhattan, New York' },
-  'nyc': { lat: 40.7128, lng: -74.0060, elevation: 10.0, name: 'New York City' },
-  'new york city': { lat: 40.7128, lng: -74.0060, elevation: 10.0, name: 'New York City' },
-  'new york': { lat: 40.7128, lng: -74.0060, elevation: 10.0, name: 'New York City' },
-
-  // San Francisco / Bay Area
-  'san francisco ferry building': { lat: 37.7955, lng: -122.3937, elevation: 2.40, name: 'San Francisco Ferry Building' },
-  'ferry building sf': { lat: 37.7955, lng: -122.3937, elevation: 2.40, name: 'San Francisco Ferry Building' },
-  'ferry building': { lat: 37.7955, lng: -122.3937, elevation: 2.40, name: 'San Francisco Ferry Building' },
-  'coit tower': { lat: 37.8024, lng: -122.4058, elevation: 90.48, name: 'Coit Tower' },
-  'golden gate bridge': { lat: 37.8199, lng: -122.4783, elevation: 67.0, name: 'Golden Gate Bridge' },
-  'alcatraz': { lat: 37.8267, lng: -122.4230, elevation: 25.0, name: 'Alcatraz Island' },
-  'transamerica pyramid': { lat: 37.7952, lng: -122.4028, elevation: 12.0, name: 'Transamerica Pyramid' },
-  'salesforce tower': { lat: 37.7897, lng: -122.3972, elevation: 12.0, name: 'Salesforce Tower' },
-  'lombard street': { lat: 37.8021, lng: -122.4187, elevation: 60.0, name: 'Lombard Street, San Francisco' },
-  'palace of fine arts': { lat: 37.8020, lng: -122.4484, elevation: 4.0, name: 'Palace of Fine Arts' },
-  'oracle park': { lat: 37.7786, lng: -122.3893, elevation: 4.0, name: 'Oracle Park' },
-  'chase center': { lat: 37.7680, lng: -122.3877, elevation: 4.0, name: 'Chase Center' },
-  'the presidio': { lat: 37.7989, lng: -122.4662, elevation: 35.0, name: 'The Presidio, San Francisco' },
-  'presidio': { lat: 37.7989, lng: -122.4662, elevation: 35.0, name: 'The Presidio, San Francisco' },
-  'twin peaks': { lat: 37.7544, lng: -122.4477, elevation: 280.0, name: 'Twin Peaks, San Francisco' },
-  'san francisco': { lat: 37.7749, lng: -122.4194, elevation: 15.57, name: 'San Francisco Downtown' },
-  'sf': { lat: 37.7749, lng: -122.4194, elevation: 15.57, name: 'San Francisco Downtown' },
-  'silicon valley': { lat: 37.3875, lng: -122.0575, elevation: 28.77, name: 'Silicon Valley' },
-  'muir woods': { lat: 37.8970, lng: -122.5811, elevation: 124.64, name: 'Muir Woods National Monument' },
-
-  // Boston / Massachusetts
-  'lexington battle green': { lat: 42.4473, lng: -71.2272, elevation: 64.20, name: 'Lexington Battle Green' },
-  'lexington': { lat: 42.4473, lng: -71.2272, elevation: 64.20, name: 'Lexington Battle Green' },
-  'concord': { lat: 42.4604, lng: -71.3489, elevation: 40.0, name: 'Concord, Massachusetts' },
-  'boston common': { lat: 42.3550, lng: -71.0656, elevation: 12.0, name: 'Boston Common' },
-  'fenway park': { lat: 42.3467, lng: -71.0972, elevation: 6.0, name: 'Fenway Park' },
-  'harvard yard': { lat: 42.3744, lng: -71.1169, elevation: 10.0, name: 'Harvard Yard' },
-  'harvard': { lat: 42.3744, lng: -71.1169, elevation: 10.0, name: 'Harvard Yard' },
-  'faneuil hall': { lat: 42.3600, lng: -71.0568, elevation: 6.0, name: 'Faneuil Hall, Boston' },
-  'boston': { lat: 42.3601, lng: -71.0589, elevation: 14.0, name: 'Boston' },
-
-  // World / Archetype Locations
-  'eiffel tower': { lat: 48.8584, lng: 2.2945, elevation: 34.56, name: 'Eiffel Tower' },
-  'the louvre': { lat: 48.8606, lng: 2.3376, elevation: 34.0, name: 'Louvre Museum, Paris' },
-  'louvre': { lat: 48.8606, lng: 2.3376, elevation: 34.0, name: 'Louvre Museum, Paris' },
-  'notre dame paris': { lat: 48.8530, lng: 2.3499, elevation: 35.0, name: 'Notre-Dame de Paris' },
-  'notre dame': { lat: 48.8530, lng: 2.3499, elevation: 35.0, name: 'Notre-Dame de Paris' },
-  'arc de triomphe': { lat: 48.8738, lng: 2.2950, elevation: 50.0, name: 'Arc de Triomphe, Paris' },
-  'paris': { lat: 48.8566, lng: 2.3522, elevation: 35.0, name: 'Paris' },
-  'tokyo tower': { lat: 35.6586, lng: 139.7454, elevation: 23.48, name: 'Tokyo Tower' },
-  'shibuya crossing': { lat: 35.6595, lng: 139.7004, elevation: 15.29, name: 'Shibuya Crossing, Tokyo' },
-  'akihabara': { lat: 35.6983, lng: 139.7731, elevation: 5.63, name: 'Akihabara Electric Town, Tokyo' },
-  'senso-ji': { lat: 35.7148, lng: 139.7967, elevation: 5.0, name: 'Senso-ji Temple, Tokyo' },
-  'sensoji': { lat: 35.7148, lng: 139.7967, elevation: 5.0, name: 'Senso-ji Temple, Tokyo' },
-  'mount fuji': { lat: 35.3606, lng: 138.7274, elevation: 3776.0, name: 'Mount Fuji' },
-  'mt fuji': { lat: 35.3606, lng: 138.7274, elevation: 3776.0, name: 'Mount Fuji' },
-  'tokyo': { lat: 35.6762, lng: 139.6503, elevation: 20.0, name: 'Tokyo' },
-  'big ben': { lat: 51.5007, lng: -0.1246, elevation: 11.0, name: 'Big Ben & Palace of Westminster' },
-  'tower bridge': { lat: 51.5055, lng: -0.0754, elevation: 10.0, name: 'Tower Bridge, London' },
-  'buckingham palace': { lat: 51.5014, lng: -0.1419, elevation: 12.0, name: 'Buckingham Palace' },
-  'london eye': { lat: 51.5033, lng: -0.1195, elevation: 12.0, name: 'London Eye' },
-  'london': { lat: 51.5074, lng: -0.1278, elevation: 11.0, name: 'London' },
-  'colosseum': { lat: 41.8902, lng: 12.4922, elevation: 24.12, name: 'Colosseum' },
-  'pantheon': { lat: 41.8986, lng: 12.4769, elevation: 15.0, name: 'Pantheon, Rome' },
-  'vatican city': { lat: 41.9029, lng: 12.4534, elevation: 25.0, name: 'Vatican City' },
-  'vatican': { lat: 41.9029, lng: 12.4534, elevation: 25.0, name: 'Vatican City' },
-  'rome': { lat: 41.9028, lng: 12.4964, elevation: 20.0, name: 'Rome' },
-  'sydney opera house': { lat: -33.8568, lng: 151.2153, elevation: 17.55, name: 'Sydney Opera House' },
-  'sydney': { lat: -33.8688, lng: 151.2093, elevation: 6.0, name: 'Sydney' },
-  'taj mahal': { lat: 27.1751, lng: 78.0421, elevation: 160.0, name: 'Taj Mahal, Agra' },
-  'great wall of china': { lat: 40.4319, lng: 116.5704, elevation: 500.0, name: 'Great Wall of China' },
-  'great wall': { lat: 40.4319, lng: 116.5704, elevation: 500.0, name: 'Great Wall of China' },
-  'pyramids of giza': { lat: 29.9792, lng: 31.1342, elevation: 181.35, name: 'Pyramids of Giza, Egypt' },
-  'giza pyramids': { lat: 29.9792, lng: 31.1342, elevation: 181.35, name: 'Pyramids of Giza, Egypt' },
-  'pyramids': { lat: 29.9792, lng: 31.1342, elevation: 181.35, name: 'Pyramids of Giza, Egypt' },
-  'burj khalifa': { lat: 25.1972, lng: 55.2744, elevation: 15.0, name: 'Burj Khalifa, Dubai' },
-  'independence hall, philadelphia': { lat: 39.9489, lng: -75.1500, elevation: 11.23, name: 'Independence Hall' },
-  'independence hall': { lat: 39.9489, lng: -75.1500, elevation: 11.23, name: 'Independence Hall' },
-  'liberty bell': { lat: 39.9496, lng: -75.1503, elevation: 11.23, name: 'Liberty Bell, Philadelphia' },
-  'philadelphia': { lat: 39.9526, lng: -75.1652, elevation: 12.0, name: 'Philadelphia' },
-  'space needle': { lat: 47.6205, lng: -122.3493, elevation: 50.0, name: 'Space Needle' },
-  'seattle': { lat: 47.6062, lng: -122.3321, elevation: 53.0, name: 'Seattle' },
-  'millennium park': { lat: 41.8826, lng: -87.6226, elevation: 181.0, name: 'Millennium Park, Chicago' },
-  'chicago': { lat: 41.8781, lng: -87.6298, elevation: 181.0, name: 'Chicago' },
-  'hollywood sign': { lat: 34.1341, lng: -118.3215, elevation: 490.0, name: 'Hollywood Sign, Los Angeles' },
-  'venice beach basketball courts': { lat: 33.9850, lng: -118.4695, elevation: 3.5, name: 'Venice Beach Basketball Courts' },
-  'venice beach': { lat: 33.9850, lng: -118.4695, elevation: 3.5, name: 'Venice Beach, Los Angeles' },
-  'venice': { lat: 33.9850, lng: -118.4695, elevation: 3.5, name: 'Venice Beach, Los Angeles' },
-  'monaco grand prix circuit': { lat: 43.7384, lng: 7.4246, elevation: 15.0, name: 'Monaco Grand Prix Circuit' },
-  'monaco grand prix': { lat: 43.7384, lng: 7.4246, elevation: 15.0, name: 'Monaco Grand Prix Circuit' },
-  'monaco gp': { lat: 43.7384, lng: 7.4246, elevation: 15.0, name: 'Monaco Grand Prix Circuit' },
-  'monaco': { lat: 43.7384, lng: 7.4246, elevation: 15.0, name: 'Monaco Grand Prix Circuit' },
-  'los angeles': { lat: 34.0522, lng: -118.2437, elevation: 89.0, name: 'Los Angeles' },
-  'l.a.': { lat: 34.0522, lng: -118.2437, elevation: 89.0, name: 'Los Angeles' },
-  'red rocks': { lat: 39.6654, lng: -105.2057, elevation: 1960.0, name: 'Red Rocks Amphitheatre, Colorado' },
-  'the white house': { lat: 38.8977, lng: -77.0365, elevation: 16.0, name: 'The White House, Washington DC' },
-  'white house': { lat: 38.8977, lng: -77.0365, elevation: 16.0, name: 'The White House, Washington DC' },
-  'us capitol': { lat: 38.8899, lng: -77.0091, elevation: 25.0, name: 'United States Capitol, Washington DC' },
-  'capitol building': { lat: 38.8899, lng: -77.0091, elevation: 25.0, name: 'United States Capitol, Washington DC' },
-  'lincoln memorial': { lat: 38.8893, lng: -77.0502, elevation: 10.0, name: 'Lincoln Memorial, Washington DC' },
-  'washington d.c.': { lat: 38.9072, lng: -77.0369, elevation: 15.0, name: 'Washington D.C.' },
-  'washington dc': { lat: 38.9072, lng: -77.0369, elevation: 15.0, name: 'Washington D.C.' },
-
-  // Archetype Proving Grounds & Landmarks
-  'the matterhorn': { lat: 45.9763, lng: 7.6586, elevation: 4440.29, name: 'The Matterhorn, Switzerland' },
-  'matterhorn': { lat: 45.9763, lng: 7.6586, elevation: 4440.29, name: 'The Matterhorn, Switzerland' },
-  'cern': { lat: 46.2330, lng: 6.0557, elevation: 436.73, name: 'CERN Large Hadron Collider' },
-  'mauna kea': { lat: 19.8207, lng: -155.4681, elevation: 4196.99, name: 'Mauna Kea Summit Observatories' },
-  'fallingwater': { lat: 39.9063, lng: -79.4678, elevation: 394.03, name: 'Fallingwater, PA' },
-  'badwater basin': { lat: 36.2503, lng: -116.8258, elevation: -84.69, name: 'Badwater Basin, Death Valley' },
-  'death valley': { lat: 36.2503, lng: -116.8258, elevation: -84.69, name: 'Badwater Basin, Death Valley' },
-  'redwood national park': { lat: 41.2132, lng: -124.0046, elevation: 146.09, name: 'Redwood National & State Parks' },
-  'angeles shooting ranges': { lat: 34.3094, lng: -118.3995, elevation: 489.86, name: 'Angeles Shooting Ranges, CA' },
-  'edwards air force base': { lat: 34.9055, lng: -117.8837, elevation: 699.31, name: 'Edwards Air Force Base, CA' },
-  'mojave air and space port': { lat: 35.0589, lng: -118.1519, elevation: 838.84, name: 'Mojave Air and Space Port, CA' },
-  'bonneville salt flats': { lat: 40.7997, lng: -113.8569, elevation: 1284.72, name: 'Bonneville Salt Flats, UT' },
-  'topgolf las vegas': { lat: 36.1097, lng: -115.1638, elevation: 634.65, name: 'Topgolf Driving Range, Las Vegas' },
-  'nurburgring': { lat: 50.3356, lng: 6.9475, elevation: 620.76, name: 'Nürburgring Nordschleife, Germany' },
-  'pinewood studios': { lat: 51.5478, lng: -0.5342, elevation: 65.41, name: 'Pinewood Studios, UK' },
-  'sony pictures studios': { lat: 34.0205, lng: -118.3967, elevation: 28.13, name: 'Sony Pictures Studios, CA' }
-};
-
-// Backwards-compatibility alias for test suites and offline fixtures
-export const GLOBAL_LANDMARK_REGISTRY = OFFLINE_TEST_FIXTURE_COORDINATES;
 
 export interface RealWorldLocationIntent {
   isRealWorld: boolean;
@@ -691,6 +525,7 @@ export class Google3DTileService {
         durableUri: `map-3d://google-tiles/${geo.lat.toFixed(5)}_${geo.lng.toFixed(5)}?zoom=${zoom}&radius=${radius}`,
         mimeType: 'model/gltf-binary',
         metadata: {
+          source: 'Google3DTilesClay',
           vertices: stats.vertexCount,
           dims: {
             width: radius * 2,

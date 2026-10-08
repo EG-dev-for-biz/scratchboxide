@@ -264,7 +264,9 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 const extractionBridge = GeospatialTileExtractionBridge.getInstance();
                 const target = explicitCoords
                     ? { lat: explicitCoords.lat, lng: explicitCoords.lng, elevation: explicitCoords.elevation, formattedAddress: effectiveLocation }
-                    : effectiveLocation;
+                    : (locIntent && locIntent.isRealWorld && locIntent.lat !== 0)
+                        ? { lat: locIntent.lat, lng: locIntent.lng, elevation: locIntent.elevation, formattedAddress: locIntent.landmarkName || effectiveLocation }
+                        : effectiveLocation;
                 const extractResult = await extractionBridge.ingestAndExtract(target, { mode: 'clay' });
                 if (extractResult.success) {
                     extractedManifest = extractResult.manifest;

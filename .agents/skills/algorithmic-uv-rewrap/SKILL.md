@@ -69,23 +69,23 @@ And the triangle normal $\mathbf{N} = \frac{(\mathbf{V}_1 - \mathbf{V}_0) \times
   ├── Compute 2D affine determinant & barycentric weights (w0, w1, w2)
   ├── Reconstruct 3D world position P(wx, wy, wz) and normal N(nx, ny, nz)
   │
-  ├── SEMANTIC CLASSIFICATION:
-  │   ├── Foliage (Green chroma: G > R + 3 && G > B + 3 && G > 45)
+  ├── SEMANTIC & BIOPHYSICAL FIELD CLASSIFICATION:
+  │   ├── Photosynthetic Foliage (Green chroma: G > R + 3 && G > B + 3 && G > 45)
   │   │   └── Chlorophyll micro-dapple: valueNoise3D(P * 16) + hash3D(P * 65)
   │   │
-  │   ├── Ground / Road (wy < 73.5m || (|ny| > 0.70 && wy < 80.0m))
-  │   │   └── Bitumen aggregate tooth: valueNoise3D(P * 40) + hash3D(P * 110)
+  │   ├── Ground / Road Surface (P.y <= y_ground_datum + 1.5m || (|N.y| > 0.75 && P.y <= y_ground_datum + 8.0m))
+  │   │   └── Bitumen / terrain aggregate tooth: valueNoise3D(P * 40) + hash3D(P * 110)
   │   │
-  │   └── Roman Travertine Stone Architecture (All elevated non-ground)
+  │   └── Lithic & Mineral Architecture (Elevated structural facades)
   │       ├── 1. Photographic Joint Deepening: ΔL_joint = -min(26, (|∇L| - 6) * 0.90)
-  │       ├── 2. Analytical Travertine Cavitation Pores:
+  │       ├── 2. Analytical Mineral Cavitation Pores:
   │       │      If valueNoise3D(P * 22) < 0.24:
   │       │        ΔL_pore = -((0.24 - n) / 0.24)^2 * 52.0
   │       ├── 3. Calcite Mineral Grain & Bedding Strata:
   │       │      FBM3D(P * 28, 3 octaves) + hash3D(P * 85) - strataDarken
   │       └── 4. Architectural Ambient Occlusion:
-  │              Soffit shadow (ny < -0.15 => 0.76x)
-  │              Cornice sky bounce (ny > 0.60 => 1.06x)
+  │              Soffit shadow (N.y < -0.15 => 0.76x)
+  │              Cornice sky bounce (N.y > 0.60 => 1.06x)
   │
   ▼
 [1-Pixel Dilated Edge Padding (Bleed Prevention)]
@@ -107,16 +107,16 @@ $$G_x = \begin{bmatrix} -1 & 0 & +1 \\ -2 & 0 & +2 \\ -1 & 0 & +1 \end{bmatrix} 
 $$g = \frac{\sqrt{G_x^2 + G_y^2}}{8.0}$$
 $$\Delta L_{\text{joint}} = -\min(26.0, (g - 6.0) \times 0.90) \quad (\text{for } g > 6.0)$$
 
-### 2. Fast Analytical Travertine Cavitation Micro-Pores
-Geothermal travertine stone naturally contains steep-walled micro-vacuoles and pits formed by outgassing. Evaluating 3D Worley cellular noise requires checking 27 neighboring cubic cells, which is computationally prohibitive across millions of texels.
+### 2. Fast Analytical Lithic Cavitation Micro-Pores
+Natural sedimentary and metamorphic stone structures contain steep-walled micro-vacuoles and pits formed by outgassing and erosion. Evaluating 3D Worley cellular noise requires checking 27 neighboring cubic cells, which is computationally prohibitive across millions of texels.
 
 The **analytical quadratic depression** models the steep crater lip profile in nanoseconds using a single continuous 3D value noise evaluation:
 $$n = \text{valueNoise3D}(\mathbf{P} \cdot 22.0)$$
 $$\Delta L_{\text{pore}} = -\left(\frac{0.24 - n}{0.24}\right)^2 \times 52.0 \quad (\text{when } n < 0.24)$$
 
-### 3. Calcite Mineral Tooth & Sedimentary Bedding Strata
-Roman ashlar masonry blocks were quarried along natural horizontal bedding planes ($0.35\text{ m}$ block courses):
-$$\text{strata} = \sin(w_y \cdot 18.0) \cdot 0.5 + 0.5$$
+### 3. Mineral Tooth & Sedimentary Bedding Strata
+Sedimentary and structural stone facades exhibit periodic horizontal bedding planes at continuous metric pitch $h_{\text{course}}$:
+$$\text{strata} = \sin\left(\frac{2\pi \cdot P_y}{h_{\text{course}}}\right) \cdot 0.5 + 0.5$$
 $$\Delta L_{\text{strata}} = -(\text{strata} - 0.65) \times 16.0 \quad (\text{when } \text{strata} > 0.65)$$
 Combined with multi-scale mineral calcite faceting:
 $$\Delta L_{\text{calcite}} = (\text{FBM3D}(\mathbf{P} \cdot 28.0, 3) - 0.5) \times 30.0 + (\text{hash3D}(\mathbf{P} \cdot 85.0) - 0.5) \times 12.0$$

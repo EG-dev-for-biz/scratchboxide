@@ -65,10 +65,10 @@ The system provides two distinct, separate APIs to prevent mode confusion and cr
 
 1. **Zero Hardcoded Presets**: The pipeline never looks up addresses in a static landmark dictionary. Any location on Earth can be queried.
 2. **Zero Procedural Hash Fallback**: Queries without geodetic coordinates will never fall back to synthetic hash coordinates.
-3. **Geocoding Requirement**:
-   - Provide explicit coordinates: `"40.748400, -73.985700"` or `{ lat: 40.7484, lng: -73.9857 }`.
-   - OR provide an address with an active `GOOGLE_MAPS_API_KEY` configured in the environment.
+3. **Geodetic Requirement**:
+   - Provide explicit geodetic coordinates: `"40.748400, -73.985700"` or `{ lat: 40.7484, lng: -73.9857 }`, OR supply an iconic landmark/district string resolvable against 3D Tile root anchors and Google 2D Roadmap Vector Tiles.
    - If neither is provided, the API throws an explicit, actionable `Error`.
+   - **Zero Uninvited Synthetic Ground Boxes**: When an authentic location is specified, agents MUST NEVER write Python code to stack flat asphalt boxes or lollipop trees in a void; let the geospatial engine extract authentic 3D massing or stage the vector world!
 
 ---
 
@@ -91,43 +91,28 @@ All 3D tile captures adhere to strict photogrammetric standards and architectura
 
 ---
 
-## 5. In-App Agent Tools (Gemini Function Calling)
+## 5. In-App Agent Tools & Geospatial Integrations
 
-The in-app Scratchbox agent has direct access to two registered function declarations:
+### 1. `google_3d_tiles_get_full_texture`
+Ingest real-world geographic coordinates as a photorealistic, full-texture 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality.
 
-### `google_3d_tiles_get_full_texture`
+### 2. `google_3d_tiles_get_clay`
+Ingest real-world geographic coordinates as a studio grey clay 3D GLB object (`clayPreset: 'studio-grey'`), capturing authentic metropolitan massing without texture noise.
+
+### 3. `execute_3d_python_script({ location: "..." })`
+When generating a hero 3D asset described at a specific real-world location (e.g., *"race car in Monaco"* or *"basketball court in Venice Beach"*), passing `location` directly into `execute_3d_python_script` automatically stages the 3D clay tiles underneath the hero object and calculates camera auto-framing over the bounding box:
 ```json
 {
-  "name": "google_3d_tiles_get_full_texture",
-  "description": "Ingest real-world geographic coordinates or address as a photorealistic, full-texture 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality.",
-  "parameters": {
-    "type": "OBJECT",
-    "properties": {
-      "query": { "type": "STRING", "description": "Geographic coordinates or address" },
-      "outputGlbPath": { "type": "STRING", "description": "Optional destination path for .glb file" },
-      "mockExecution": { "type": "BOOLEAN", "description": "Optional offline mock mode" }
-    },
-    "required": ["query"]
+  "name": "execute_3d_python_script",
+  "args": {
+    "script": "import scratchbox as sb\n# Build 18% Studio Grey Clay hero vehicle\n...",
+    "location": "Circuit de Monaco, Monte Carlo"
   }
 }
 ```
 
-### `google_3d_tiles_get_clay`
-```json
-{
-  "name": "google_3d_tiles_get_clay",
-  "description": "Ingest real-world geographic coordinates or address as a studio grey clay 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality.",
-  "parameters": {
-    "type": "OBJECT",
-    "properties": {
-      "query": { "type": "STRING", "description": "Geographic coordinates or address" },
-      "outputGlbPath": { "type": "STRING", "description": "Optional destination path for .glb file" },
-      "mockExecution": { "type": "BOOLEAN", "description": "Optional offline mock mode" }
-    },
-    "required": ["query"]
-  }
-}
-```
+### 4. `stage_3d_vector_world`
+For street-level vehicle and urban corridor staging, stages Google 2D Roadmap Vector Tiles (zoom 16) into 3D geometry: extruded building prisms, 5-tier road cross-sections with beveled granite curbs, sidewalks, streetlamps, and roadside trees in 18% Studio Grey Clay.
 
 ---
 

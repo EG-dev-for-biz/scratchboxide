@@ -62,20 +62,23 @@ Every visual scene or capture must be evaluated against these 8 dimensions. Each
 - **Passing Standard ($\ge 8.5$)**: Hundreds of thousands or millions of densely packed, oriented anisotropic ellipsoids that coalesce seamlessly into a continuous, sharp surface without individual splat visibility.
 
 ### Dimension 3: Material, Texture & Micro-Surface Definition
-- **Criteria**: Do surfaces exhibit authentic physical material properties: fabric weave, leather creasing, hair strands, skin porosity/specularity, weathered stone porosity, glass reflectivity, and asphalt aggregate?
-- **Failure Indicators**:
-  - Flat uniform color fills or plastic-looking diffuse shading.
+- **Evaluation Mode Gate**:
+  - **In Hero Object Clay Void Mode (Default CAD Baseline)**: The object is intentionally modeled in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, roughness 0.85, albedo 0.55–0.60). Evaluate the **70-20-10 geometric form hierarchy**, bevel chamfers, panel shut lines, and curvature continuity. Do NOT penalize for lack of diffuse paint or photographic textures.
+  - **In Full Textured PBR Mode**: Do surfaces exhibit authentic physical material properties: fabric weave, leather creasing, hair strands, skin porosity/specularity, weathered stone porosity, glass reflectivity, and asphalt aggregate?
+- **Failure Indicators (Full Textured Mode)**:
+  - Flat uniform color fills or plastic-looking diffuse shading when PBR texturing was requested.
   - Low-resolution blurry textures stretched over large geometry.
-  - Untextured default grey materials (e.g. `#475569` flat pavement planes).
-- **Passing Standard ($\ge 8.5$)**: Physically grounded micro-surface detail, believable roughness variation, Fresnel specular edge reflections, and authentic material roughness.
+- **Passing Standard ($\ge 8.5$)**: Physically grounded micro-surface detail, believable roughness variation, Fresnel specular edge reflections, and authentic material roughness (or flawless 70-20-10 clay geometry in Clay Mode).
 
 ### Dimension 4: Environmental Context & Scene Grounding
-- **Criteria**: Is the subject situated in a believable, fully realized physical context?
-- **Failure Indicators**:
-  - Pitch-black (`#000000` / `#050811`) or solid uniform void backgrounds.
+- **Evaluation Mode Gate**:
+  - **Hero Asset Void Baseline**: In standard DCC/CAD workflows, standalone hero props and vehicles without an explicit location prompt MUST stage in a clean **3D Studio Void** (`skybox: 'studio'`, `lighting: 'studio'`). Evaluating this as a "void failure" is an anti-pattern. Follow-up sequences proceed: 1. Lighting $\to$ 2. Staging $\to$ 3. Textures.
+  - **Full Environmental Scene Mode**: Applied when an authentic location is specified (e.g. Google 3D Tiles / `stage_3d_vector_world`) or after environmental staging is approved.
+- **Failure Indicators (Full Environmental Mode)**:
+  - Pitch-black (`#000000` / `#050811`) background when an outdoor or real-world environment was requested.
   - Isolated architectural monoliths cut off in mid-air with empty space underneath.
-  - Infinite flat empty planes stretching to a void horizon.
-- **Passing Standard ($\ge 8.5$)**: A complete 360-degree environment: physical sky dome with Rayleigh/Mie atmospheric scattering, horizon aerial perspective haze, surrounding contextual cityscape or landscape, realistic ground pavements with curbs, gutters, street markings, and debris.
+  - Synthetic flat asphalt boxes or procedural lollipop trees in an empty void when an authentic real-world location was specified.
+- **Passing Standard ($\ge 8.5$)**: Either a clean, neutral CAD studio void with grounded contact AO (Hero Object Mode), or an authentic 360-degree environment with real-world Google 3D Tiles / Vector road corridors and physically motivated sky (Scene Mode).
 
 ### Dimension 5: Radiometric Lighting & Analytical Shadows
 - **Criteria**: Are the lighting and shadows consistent, physically plausible, and directional?

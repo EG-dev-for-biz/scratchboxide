@@ -76,21 +76,40 @@ $$\frac{dL(\mathbf{x}, \mathbf{\omega})}{ds} = -\sigma_t(\mathbf{x}) L(\mathbf{x
 
 ## 2. Codebase Tools & Native Engine Integrations
 
-Scratchbox IDE contains production-grade C++20 and TypeScript systems that directly map to these disciplines:
+Scratchbox IDE contains production-grade Python nanobind, native C++20, and TypeScript systems that directly map to these disciplines:
 
-| Discipline | Native C++20 Astro Engine | TypeScript / Three.js Engine |
-| :--- | :--- | :--- |
-| **Volumetric Lighting** | `#include "scratchbox_volumetrics.hpp"` (`marchVolumetrics`, `henyeyGreensteinPhase`, `dualLobePhase`) | `VolumetricGodRays.ts`, `volumetric-participating-media.ts`, `AtmosphereService.ts` |
-| **Subsurface Scattering** | `#include "scratchbox_sss.hpp"` (`evaluateThinWallTransmission`, `PROFILE_GREEN_LEAF`) | Custom Three.js shader chunks injecting dual-sided backface transmission |
-| **Botanical Growth** | `#include "scratchbox_nature.hpp"` (`SpaceColonizationTreeGenerator`, `DetailedLeafGenerator`, `GrassClumpGenerator`, `IvyGrowthGenerator`) | `SbVeggieService`, `UniversalBotanicalBridgeService` |
-| **Procedural Textures** | `#include "scratchbox_botanical_texture.hpp"` & `"scratchbox_pbr_texture_expert.hpp"` | Multi-layer Worley F1/F2 rhytidome, normal maps, and packed ORM textures |
-| **Multi-Mesh glTF** | `#include "scratchbox_io.hpp"` (`GlbWriter::serializeMultiMeshToGlb`) | Dedicated submesh PBR material binding |
+| Discipline | Python Nanobind & Gemini Tools | Native C++20 Engine | TypeScript / Viewport |
+| :--- | :--- | :--- | :--- |
+| **Hero 3D Assets** | `execute_3d_python_script` (`import scratchbox as sb`, `sb.PbrMaterial.clay()`) | `#include "scratchbox_engine.hpp"` | Pure WebGL rendering, camera CAD controls |
+| **Botanical Growth** | `botanical_grow_tree` (`species`, `ageYears`, `trunkTwist`, `branchingIterations`) | `#include "scratchbox_smpl_tree.hpp"`, `"scratchbox_nature.hpp"` | `SbVeggieService`, `UniversalBotanicalBridgeService` |
+| **Volumetric Lighting** | `atmosphere_configure_scene`, `atmosphere_harmonize_location_3d` | `#include "scratchbox_volumetrics.hpp"` (`marchVolumetrics`, `henyeyGreensteinPhase`) | `VolumetricGodRays.ts`, `volumetric-participating-media.ts` |
+| **Thin-Wall SSS** | Subsurface transmission parameters in material shaders | `#include "scratchbox_sss.hpp"` (`evaluateThinWallTransmission`) | Custom GLSL shader chunks injecting backface transmission |
+| **Procedural Textures** | `sb.pbr` continuous material procedural generators | `#include "scratchbox_pbr_texture_expert.hpp"` | Multi-layer Worley F1/F2 rhytidome, packed ORM textures |
+| **Multi-Mesh glTF** | Direct binary GLB streaming via `execute_3d_python_script` | `#include "scratchbox_io.hpp"` (`GlbWriter::serializeMultiMeshToGlb`) | Submesh PBR metallic-roughness material bindings |
 
 ---
 
-## 3. The Master 3D Artist's Verification Gate
+## 3. Mandatory Workflow & Staging Sequence
 
-Before declaring any natural scene complete, evaluate against the **8-Dimension Visual Fidelity Rubric**:
+When creating or sculpting any 3D asset or scene:
+
+1. **Initial Asset in 18% Studio Grey Clay Void (When No Location Given)**:
+   - Always build initial hero models in **18% Studio Grey Clay** (`sb.PbrMaterial.clay()`, roughness 0.85, albedo 0.55–0.60) in a clean studio void.
+   - Enforce the **70-20-10 geometric form hierarchy** across all sub-assemblies.
+2. **Explicit Location Staging Invariant (When Real Location Given)**:
+   - If the user specifies a real-world location (e.g., *"monument in Central Park"*, *"car in Monaco"*), stage immediately using **Google 3D Tiles Studio Grey Clay** (`google_3d_tiles_get_clay` or `execute_3d_python_script({ location: "..." })`) or **Vector World Staging** (`stage_3d_vector_world`).
+   - Zero synthetic ground slabs or lollipop trees in a void!
+3. **Follow-Up Suggestions Sequence (Strictly Staging BEFORE Textures)**:
+   - For standalone hero assets in a void, follow-up suggestions MUST proceed chronologically:
+     1. **Lighting & Atmosphere**: 3-point high-contrast rim lighting, dramatic dusk twilight, or solar ephemeris.
+     2. **Staging & Contextual Placement**: Real-world geographic staging with Google 3D Tiles Clay, vector road corridors, or curved infinity cyclorama cove.
+     3. **Textures & PBR Materials**: Deep clearcoat automotive paint, bark rhytidome, weathered travertine, or carbon fiber weave.
+
+---
+
+## 4. The Master 3D Artist's Verification Gate
+
+Before declaring any scene complete, evaluate against the **8-Dimension Visual Fidelity Rubric**:
 
 1. [ ] **Silhouette Definition**: Trunks flare organically with buttress lobes diving below soil; no floating roots or cylinder primitives.
 2. [ ] **Foliage Softness**: Envelope normals applied to all foliage; zero visible card facets or paper-cut boundaries.
@@ -98,5 +117,7 @@ Before declaring any natural scene complete, evaluate against the **8-Dimension 
 4. [ ] **Subsurface Radiance**: Backlit leaves and fern fronds glow with translucent lime transmission.
 5. [ ] **Volumetric Coherence**: Sunbeams cast from a single motivated light source; forward Henyey-Greenstein Mie scattering softens glare into foreground shadows.
 6. [ ] **Material Tactility**: Normal and ORM maps resolve bark cork fissures and leaf venation at sub-meter inspection.
-7. [ ] **Depth Colonnade**: Clear foreground hero element, midground focus, and receding background corridor (30m+).
-8. [ ] **The Squint Test**: When squinting at the scene thumbnail, values, color contrast, and lighting direction match an authentic photograph.
+7. [ ] **70-20-10 Geometric Form Hierarchy**: Primary structural envelope (70%), articulated secondary elements (20%), fine tertiary micro-details and fasteners (10%).
+8. [ ] **Zero-Primitive Conformance**: Strictly zero flat Three.js client-side primitive constructors (`new THREE.BoxGeometry`, etc.). Generated via Python nanobind `scratchbox` or native C++20 engine.
+9. [ ] **Depth Colonnade**: Clear foreground hero element, midground focus, and receding background corridor (30m+).
+10. [ ] **The Squint Test**: When squinting at the scene thumbnail, values, color contrast, and lighting direction match an authentic photograph.
