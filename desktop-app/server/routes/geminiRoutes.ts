@@ -201,7 +201,7 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
                 res.status(400).json({ success: false, authMethod: 'unauthenticated', error: 'apiKey or credentialsJson is required' });
                 return;
             }
-            if (rawJson && !rawJson.startsWith('AIza')) {
+            if (rawJson && rawJson.startsWith('{')) {
                 const saved = await mediaCredentials.saveServiceAccount(rawJson);
                 res.status(saved.success ? 200 : 400).json(saved);
                 return;

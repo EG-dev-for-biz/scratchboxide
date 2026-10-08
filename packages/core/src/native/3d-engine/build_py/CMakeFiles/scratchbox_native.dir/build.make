@@ -97,6 +97,7 @@ scratchbox_native.cpython-314-darwin.so: CMakeFiles/scratchbox_native.dir/bindin
 scratchbox_native.cpython-314-darwin.so: CMakeFiles/scratchbox_native.dir/build.make
 scratchbox_native.cpython-314-darwin.so: libnanobind-static.a
 scratchbox_native.cpython-314-darwin.so: libscratchbox_core.dylib
+scratchbox_native.cpython-314-darwin.so: /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/libz.tbd
 scratchbox_native.cpython-314-darwin.so: CMakeFiles/scratchbox_native.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/build_py/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX shared module scratchbox_native.cpython-314-darwin.so"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/scratchbox_native.dir/link.txt --verbose=$(VERBOSE)

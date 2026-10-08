@@ -16,8 +16,17 @@ from .structure import Structure
 class World:
     """The central agentic procedural world director."""
 
-    def __init__(self, seed: int = 1337, units: str = "meters"):
-        self.seed = int(seed)
+    def __init__(self, seed: Any = 1337, units: str = "meters"):
+        if isinstance(seed, (int, float)):
+            self.seed = int(seed)
+        elif isinstance(seed, str):
+            try:
+                self.seed = int(seed)
+            except ValueError:
+                import zlib
+                self.seed = zlib.crc32(seed.encode("utf-8")) & 0x7fffffff
+        else:
+            self.seed = 1337
         self.units = str(units)
         self.terrains: List[Terrain] = []
         self.structures: List[Structure] = []
@@ -25,17 +34,29 @@ class World:
         self.scattered_meshes: List[Any] = []
         self._rng = random.Random(self.seed)
 
+    def add(self, entity: Any) -> Any:
+        """Add any standalone mesh, structure, or terrain to the world."""
+        if hasattr(entity, "mesh"):
+            self.standalone_meshes.append(entity.mesh)
+        elif isinstance(entity, Terrain):
+            self.terrains.append(entity)
+        elif isinstance(entity, Structure):
+            self.structures.append(entity)
+        else:
+            self.standalone_meshes.append(entity)
+        return entity
+
     def add_mesh(self, mesh: Any) -> Any:
         """Add any standalone mesh (building, prop, or custom asset) to the world."""
-        if hasattr(mesh, "mesh"):
-            self.standalone_meshes.append(mesh.mesh)
-        else:
-            self.standalone_meshes.append(mesh)
-        return mesh
+        return self.add(mesh)
 
     def add_asset(self, asset: Any) -> Any:
         """Alias for add_mesh."""
-        return self.add_mesh(asset)
+        return self.add(asset)
+
+    def build(self) -> bytes:
+        """Compiles the world directly into glTF 2.0 binary (.glb) in RAM."""
+        return self.compile_to_glb()
 
     def add_terrain(
         self,
@@ -61,7 +82,17 @@ class World:
                 str(archetype),
                 float(domain_warp_scale),
                 int(hydraulic_erosion_steps),
-                int(self.seed)
+                int(self.seed),
+                float(kwargs.get("macro_slope_x", 0.0)),
+                float(kwargs.get("macro_slope_z", 0.0)),
+                float(kwargs.get("warp_freq", 0.0)),
+                int(kwargs.get("warp_octaves", 0)),
+                float(kwargs.get("content_scale", 0.0)),
+                float(kwargs.get("content_freq", 0.0)),
+                float(kwargs.get("strata_dune_scale", 0.0)),
+                float(kwargs.get("strata_dune_freq", 0.0)),
+                float(kwargs.get("slope_scale", 0.0)),
+                float(kwargs.get("suppressing_param", 0.0)),
             )
             terrain = Terrain(
                 native_surface,
@@ -71,10 +102,10 @@ class World:
                 hydraulic_erosion_steps=hydraulic_erosion_steps
             )
         else:
-            # Fallback using geometry plane with noise
-            geom = scratchbox_native.geometry
-            mesh = geom.ScratchboxMesh.createPlane(float(extents[0]), float(extents[1]), int(resolution), int(resolution))
-            terrain = Terrain(mesh, extents, archetype, domain_warp_scale, hydraulic_erosion_steps)
+            raise RuntimeError(
+                "Native geological terrain synthesizer scratchbox_native.core.generate_geological_terrain is required. "
+                "Silent fallback to flat primitives is prohibited under ADA Tier-0 ban."
+            )
 
         # Apply any procedural feature kwargs (e.g. caldera depression, height scaling)
         features = kwargs.get("features", [])
@@ -93,7 +124,7 @@ class World:
                                 dist = math.sqrt(dx*dx + dz*dz)
                                 if dist < c_rad:
                                     factor = (1.0 - dist / c_rad)
-                                    v.position = v.position - scratchbox_native.math.Vec3(0, c_depth * factor, 0)
+                                    v.position = v.position - math.Vec3(0, c_depth * factor, 0)
                             terrain.mesh.recompute_normals()
 
         self.terrains.append(terrain)
@@ -154,10 +185,9 @@ class World:
             )
 
         if mesh is None:
-            # Fallback box
-            geom = scratchbox_native.geometry
-            mesh = geom.ScratchboxMesh.createBox(
-                scratchbox_native.math.Vec3(float(footprint_width), float(column_height + plinth_height), float(footprint_length))
+            raise RuntimeError(
+                f"Structure generation failed for archetype '{archetype}'. "
+                "Silent fallback to flat box primitives is prohibited under ADA Tier-0 ban."
             )
 
         structure = Structure(
@@ -376,6 +406,9 @@ class World:
             "rgb_beauty": list(res.rgb_beauty),
             "linear_depth": list(res.linear_depth),
             "surface_normals": list(res.surface_normals),
+            "rgb_beauty_bytes": getattr(res, "rgb_beauty_bytes", None),
+            "linear_depth_bytes": getattr(res, "linear_depth_bytes", None),
+            "surface_normals_bytes": getattr(res, "surface_normals_bytes", None),
             "geometry_coverage": float(res.geometry_coverage),
             "render_ms": float(res.render_ms),
             "triangle_count": int(res.triangle_count),

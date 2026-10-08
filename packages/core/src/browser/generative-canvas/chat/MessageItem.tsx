@@ -480,9 +480,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     </div>
                 )}
 
-                {cleanText && (
+                {(cleanText || (!isUser && !msg.artifacts?.length && !msg.questionCard && !msg.executionPlanCard && (msg.text || 'Processing completed.'))) && (
                     <ChatMarkdownRenderer
-                        text={cleanText}
+                        text={cleanText || msg.text || 'Processing completed.'}
                         className="sb-bubble-text"
                         onOpenInBrowser={handleOpenInAppBrowser}
                         onPreviewInCanvas={handlePreviewCodeInCanvas}

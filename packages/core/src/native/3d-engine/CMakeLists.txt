@@ -46,8 +46,11 @@ target_include_directories(scratchbox_native PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 
+find_package(ZLIB REQUIRED)
+
 target_link_libraries(scratchbox_native PRIVATE
     scratchbox_core
+    ZLIB::ZLIB
 )
 
 if (MSVC)

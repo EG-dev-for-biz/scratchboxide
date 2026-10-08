@@ -285,15 +285,42 @@ export class GeminiClient {
 
     /** Resolve a Gemini API key from the environment or the encrypted credential store. */
     async resolveApiKey(): Promise<string | undefined> {
-        const fromEnv = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+        const fromEnv = process.env.GEMINI_API_KEY
+            || process.env.GOOGLE_AI_API_KEY
+            || process.env.GOOGLE_GENAI_API_KEY
+            || process.env.GOOGLE_API_KEY;
         if (fromEnv && fromEnv.trim()) {
             return fromEnv.trim();
         }
         try {
-            return await this.keyStore.getPassword(KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT);
+            const stored = await this.keyStore.getPassword(KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT);
+            if (stored && stored.trim()) {
+                return stored.trim();
+            }
         } catch {
-            return undefined;
+            // Key store lookup failed
         }
+        try {
+            const candidatePaths = [
+                path.resolve(process.cwd(), 'secrets.json'),
+                path.resolve(__dirname, '../../secrets.json'),
+                path.resolve(__dirname, '../../../secrets.json'),
+                path.join(os.homedir(), '.scratchbox', 'secrets.json'),
+                path.join(os.homedir(), '.scratchbox-ide', 'config.json')
+            ];
+            for (const p of candidatePaths) {
+                if (fs.existsSync(p)) {
+                    const sec = fs.readJSONSync(p);
+                    const k = sec.GEMINI_API_KEY || sec.GOOGLE_AI_API_KEY || sec.GOOGLE_GENAI_API_KEY || sec.GOOGLE_API_KEY || sec.apiKey;
+                    if (k && typeof k === 'string' && k.trim()) {
+                        return k.trim();
+                    }
+                }
+            }
+        } catch {
+            // Ignore filesystem lookup errors
+        }
+        return undefined;
     }
 
     /**
@@ -343,13 +370,26 @@ export class GeminiClient {
             thinkingBudget: this.thinkingBudget
         };
 
-        if (!this.auth) {
+        const checkApiKeyFallback = async (previousError?: string): Promise<GeminiStatus> => {
+            const apiKey = await this.resolveApiKey();
+            if (apiKey) {
+                return {
+                    connected: true,
+                    ...base,
+                    authMethod: 'api-key',
+                    error: undefined
+                };
+            }
             return {
                 connected: false,
                 ...base,
                 authMethod: 'unauthenticated',
-                error: 'No Google Cloud service account credentials found. Set GOOGLE_APPLICATION_CREDENTIALS or place service-account.json under ~/.scratchbox-ide/'
+                error: previousError || 'No Google Cloud service account or Gemini API key configured.'
             };
+        };
+
+        if (!this.auth) {
+            return checkApiKeyFallback('No Google Cloud service account credentials found. Set GOOGLE_APPLICATION_CREDENTIALS or place service-account.json under ~/.scratchbox-ide/');
         }
 
         const identity = {
@@ -361,21 +401,18 @@ export class GeminiClient {
             const client = await this.auth.getClient();
             const token = await client.getAccessToken();
             const hasToken = !!(token && token.token);
-            return {
-                connected: hasToken,
-                ...identity,
-                ...base,
-                authMethod: 'service-account',
-                error: hasToken ? undefined : 'Failed to retrieve access token from Google Cloud'
-            };
+            if (hasToken) {
+                return {
+                    connected: true,
+                    ...identity,
+                    ...base,
+                    authMethod: 'service-account',
+                    error: undefined
+                };
+            }
+            return await checkApiKeyFallback('Failed to retrieve access token from Google Cloud');
         } catch (err: unknown) {
-            return {
-                connected: false,
-                ...identity,
-                ...base,
-                authMethod: 'service-account',
-                error: errorMessage(err) || 'Authentication error'
-            };
+            return await checkApiKeyFallback(errorMessage(err) || 'Authentication error');
         }
     }
 

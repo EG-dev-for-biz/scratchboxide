@@ -141,6 +141,10 @@ function throwIfAborted(signal?: AbortSignal): void {
     }
 }
 
+export type StreamAuth =
+    | { type: 'vertex'; token: string; projectId: string }
+    | { type: 'api-key'; apiKey: string };
+
 /**
  * The `streamGenerate` core: Vertex SSE consumption, event shaping, the multi-turn tool-call
  * (ReAct) loop, grounding-metadata merging, agent interactions, and final artifact synthesis.
@@ -181,11 +185,35 @@ export class StreamingEngine {
         signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
         throwIfAborted(signal);
-        const { token, projectId } = await this.client.getAccessToken();
+
+        let streamAuth: StreamAuth | undefined;
+        try {
+            const { token, projectId } = await this.client.getAccessToken();
+            if (token && projectId) {
+                streamAuth = { type: 'vertex', token, projectId };
+            }
+        } catch {
+            const apiKey = await this.client.resolveApiKey();
+            if (apiKey) {
+                streamAuth = { type: 'api-key', apiKey };
+            }
+        }
+
+        if (!streamAuth) {
+            const apiKey = await this.client.resolveApiKey();
+            if (apiKey) {
+                streamAuth = { type: 'api-key', apiKey };
+            } else {
+                throw new Error('No Google Cloud service account or Gemini API key configured.');
+            }
+        }
 
         // If agent is specified, route to Agentic Interaction
         if (request.agent) {
-            return this.executeVertexAgentInteraction(request.agent, projectId, token, request, onEvent, signal);
+            if (streamAuth.type !== 'vertex') {
+                throw new Error(`Vertex agent interaction (${request.agent}) requires a Google Cloud service account.`);
+            }
+            return this.executeVertexAgentInteraction(request.agent, streamAuth.projectId, streamAuth.token, request, onEvent, signal);
         }
 
         // Run subagent preprocessing if requested and there are complex multi-skills attached
@@ -214,7 +242,7 @@ export class StreamingEngine {
         throwIfAborted(signal);
         return this.client.withModelFallback(
             this.client.getModelCandidates(request.model),
-            targetModel => this.executeVertexGeneration(targetModel, projectId, token, request, onEvent, signal),
+            targetModel => this.executeVertexGeneration(targetModel, streamAuth!, request, onEvent, signal),
             {
                 onSuccess: model => { this.client.preferredModel = model; },
                 // Partial output may already have been streamed; never replay a turn.
@@ -387,13 +415,14 @@ export class StreamingEngine {
 
     private async executeVertexGeneration(
         model: string,
-        projectId: string,
-        token: string,
+        auth: StreamAuth,
         request: GeminiGenerateRequest,
         onEvent: StreamEventSink,
         signal?: AbortSignal
     ): Promise<GeminiGenerateResponse> {
-        const url = this.client.vertexModelUrl(projectId, model, 'streamGenerateContent');
+        const url = auth.type === 'vertex'
+            ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
+            : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
 
         const systemInstructionText = await buildSystemInstruction(request, this.promptServices());
         const contents = buildContents(request);
@@ -447,6 +476,13 @@ export class StreamingEngine {
             accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
         };
 
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json'
+        };
+        if (auth.type === 'vertex') {
+            headers['Authorization'] = `Bearer ${auth.token}`;
+        }
+
         while (currentTurn < maxTurns) {
             throwIfAborted(signal);
             currentTurn++;
@@ -455,10 +491,7 @@ export class StreamingEngine {
 
             const response = await fetchFn(url, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
+                headers,
                 body: JSON.stringify(payload),
                 signal
             });
@@ -550,12 +583,17 @@ export class StreamingEngine {
             for (const toolCall of turnDetectedToolCalls) {
                 throwIfAborted(signal);
                 const toolName = toolCall.name || '';
+                const rawToolCall = toolCall as any;
+                const sig = rawToolCall.thought_signature ||
+                            rawToolCall.thoughtSignature ||
+                            'skip_thought_signature_validator';
                 modelParts.push({
                     functionCall: {
                         name: toolName,
                         args: toolCall.args || {}
-                    }
-                });
+                    },
+                    thought_signature: sig
+                } as any);
 
                 if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
                     const fp = (toolCall.args as any)?.filePath;
@@ -704,7 +742,20 @@ export class StreamingEngine {
                     accumulatedThoughts.push(part.text || '');
                     onEvent({ type: 'thought', thought: part.text || '', modelUsed: model });
                 } else if (part.functionCall) {
-                    detectedToolCalls.push(part.functionCall);
+                    const rawPart = part as any;
+                    const sig = rawPart.thought_signature ||
+                                rawPart.thoughtSignature ||
+                                rawPart.functionCall?.thought_signature ||
+                                rawPart.functionCall?.thoughtSignature ||
+                                (cand as any)?.thought_signature ||
+                                (cand as any)?.thoughtSignature ||
+                                (chunk as any)?.thought_signature ||
+                                (chunk as any)?.thoughtSignature ||
+                                'skip_thought_signature_validator';
+                    detectedToolCalls.push({
+                        ...part.functionCall,
+                        thought_signature: sig
+                    });
                     const callObj = {
                         id: part.functionCall.id || `call-${Date.now()}`,
                         name: part.functionCall.name || '',

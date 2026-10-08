@@ -1,5 +1,7 @@
 """Scene staging, instance scattering and lighting"""
 
+from collections.abc import Mapping, Sequence
+
 import scratchbox_native.geometry
 import scratchbox_native.math
 
@@ -99,3 +101,47 @@ class StudioLightingRig:
     def floor_bounce(self, arg: StudioLight, /) -> None: ...
 
 def create_cinematic_studio_lighting(target_center: scratchbox_native.math.Vec3 = ..., rig_scale: float = 5.0) -> StudioLightingRig: ...
+
+class ContactAuditViolation:
+    @property
+    def subject(self) -> str: ...
+
+    @property
+    def target(self) -> str: ...
+
+    @property
+    def type(self) -> str: ...
+
+    @property
+    def metric_distance(self) -> float: ...
+
+    @property
+    def resolution_delta(self) -> scratchbox_native.math.Vec3: ...
+
+class SpatialConstraintSolver:
+    def __init__(self) -> None: ...
+
+    def register_mesh(self, name: str, mesh: scratchbox_native.geometry.Mesh) -> None: ...
+
+    def add_constraint(self, subject: str, predicate: str, target: str, face: str = 'top', clearance: float = 0.0, offset: scratchbox_native.math.Vec3 = ...) -> None: ...
+
+    def solve(self, collision_passes: int = 8, min_margin: float = 0.009999999776482582) -> bool: ...
+
+    def relax_collisions(self, iterations: int = 8, min_margin: float = 0.009999999776482582) -> None: ...
+
+    def audit_contacts(self, max_allowed_gap: float = 0.05000000074505806) -> list[ContactAuditViolation]: ...
+
+    def ground_on_terrain(self, name: str, terrain: scratchbox_native.geometry.Mesh, clearance: float = 0.0) -> bool:
+        """
+        Raycast-ground a registered mesh onto a terrain mesh (Moller-Trumbore vertical rays from footprint)
+        """
+
+    def align_to_terrain_normal(self, name: str, terrain: scratchbox_native.geometry.Mesh, max_tilt_deg: float = 45.0) -> bool:
+        """
+        Rotate a registered mesh so its +Y axis aligns with the terrain surface normal at its footprint
+        """
+
+def resolve_constraints(meshes: Mapping[str, scratchbox_native.geometry.Mesh], relations: Sequence[Mapping[str, str]], terrain: scratchbox_native.geometry.Mesh | None = None, collision_passes: int = 8) -> list[ContactAuditViolation]:
+    """
+    Resolve a relational scene graph: register named meshes, apply spatial relations, ground on terrain, relax collisions, return contact violations
+    """

@@ -99,12 +99,19 @@ async function runClientAssertions(): Promise<void> {
     assert.strictEqual(retried, 'recovered');
     assert.strictEqual(attempts, 2);
 
-    // Unauthenticated client reports status without throwing.
+    // Unauthenticated client (no SA, no API key) reports status without throwing.
+    client.resolveApiKey = async () => undefined;
     const status = await client.getStatus();
     assert.strictEqual(status.connected, false);
     assert.strictEqual(status.authMethod, 'unauthenticated');
     assert.ok(!status.error?.includes('Downloads'));
     await assert.rejects(client.getAccessToken(), /not authenticated/);
+
+    // API key fallback reports connected: true with authMethod: 'api-key'.
+    client.resolveApiKey = async () => 'test-api-key-12345';
+    const apiKeyStatus = await client.getStatus();
+    assert.strictEqual(apiKeyStatus.connected, true);
+    assert.strictEqual(apiKeyStatus.authMethod, 'api-key');
 
     assert.strictEqual(maskEmail('robot-account@project.iam.gserviceaccount.com'), 'rob***nt@project.iam.gserviceaccount.com');
 }

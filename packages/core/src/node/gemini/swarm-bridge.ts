@@ -92,14 +92,28 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
 
     /** Execute a subagent background task against the lite model tier with fallbacks. */
     async executeSubagentTask(request: SubagentRequest): Promise<SubagentResponse> {
-        const { token, projectId } = await this.client.getAccessToken();
+        let auth: { type: 'vertex'; token: string; projectId: string } | { type: 'api-key'; apiKey: string };
+        try {
+            const { token, projectId } = await this.client.getAccessToken();
+            auth = { type: 'vertex', token, projectId };
+        } catch {
+            const apiKey = await this.client.resolveApiKey();
+            if (apiKey) {
+                auth = { type: 'api-key', apiKey };
+            } else {
+                throw new Error('No Google Cloud service account or Gemini API key configured.');
+            }
+        }
+
         const candidates = this.getSubagentModelCandidates(request.model);
         const fetchFn = resolveFetch();
 
         return this.client.withModelFallback(
             candidates,
             async targetModel => {
-                const url = this.client.vertexModelUrl(projectId, targetModel, 'generateContent');
+                const url = auth.type === 'vertex'
+                    ? this.client.vertexModelUrl(auth.projectId, targetModel, 'generateContent')
+                    : `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(auth.apiKey)}`;
                 const payload: SubagentGeneratePayload = {
                     contents: [{ role: 'user', parts: [{ text: request.prompt }] }],
                     systemInstruction: { role: 'system', parts: [{ text: this.buildSubagentInstruction(request) }] },
@@ -109,12 +123,16 @@ ${request.context ? `Context:\n${request.context}` : ''}`;
                     payload.tools = [{ googleSearch: {} }];
                 }
 
+                const headers: Record<string, string> = {
+                    'Content-Type': 'application/json'
+                };
+                if (auth.type === 'vertex') {
+                    headers['Authorization'] = `Bearer ${auth.token}`;
+                }
+
                 const response = await fetchFn(url, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
+                    headers,
                     body: JSON.stringify(payload)
                 });
 

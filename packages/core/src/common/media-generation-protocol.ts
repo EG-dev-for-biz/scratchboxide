@@ -265,6 +265,6 @@ export function classifyMediaGenerationError(error: unknown, model?: string): Me
 
 function redactSensitiveMessage(message: string): string {
     return message
-        .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_API_KEY]')
+        .replace(/(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,})/g, '[REDACTED_API_KEY]')
         .replace(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
 }

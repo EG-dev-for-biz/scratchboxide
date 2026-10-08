@@ -12,11 +12,15 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/unordered_map.h>
 
 #include "scratchbox_engine.hpp"
 #include "scratchbox_core.hpp"
+#include "scratchbox_sdf.hpp"
+#include "scratchbox_hair.hpp"
+#include "scratchbox_spz.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -52,8 +56,31 @@ NB_MODULE(scratchbox_native, m) {
     nb::class_<Vec2>(m_math, "Vec2")
         .def(nb::init<>())
         .def(nb::init<float, float>(), "x"_a, "y"_a)
+        .def("__init__", [](Vec2* self, std::tuple<float, float> t) {
+            new (self) Vec2(std::get<0>(t), std::get<1>(t));
+        })
         .def_rw("x", &Vec2::x)
         .def_rw("y", &Vec2::y)
+        .def("__len__", [](const Vec2&) { return 2; })
+        .def("__getitem__", [](const Vec2& v, int64_t idx) {
+            if (idx < 0) idx += 2;
+            if (idx == 0) return v.x;
+            if (idx == 1) return v.y;
+            throw nb::index_error();
+        })
+        .def("__setitem__", [](Vec2& v, int64_t idx, float val) {
+            if (idx < 0) idx += 2;
+            if (idx == 0) { v.x = val; return; }
+            if (idx == 1) { v.y = val; return; }
+            throw nb::index_error();
+        })
+        .def("__iter__", [](const Vec2& v) {
+            return nb::iter(nb::make_tuple(v.x, v.y));
+        })
+        .def("__neg__", [](const Vec2& v) { return Vec2(-v.x, -v.y); })
+        .def("__eq__", [](const Vec2& a, const Vec2& b) {
+            return std::abs(a.x - b.x) < 1e-6f && std::abs(a.y - b.y) < 1e-6f;
+        })
         .def("__repr__", [](const Vec2& v) {
             return "Vec2(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ")";
         });
@@ -61,6 +88,9 @@ NB_MODULE(scratchbox_native, m) {
     nb::class_<Vec3>(m_math, "Vec3")
         .def(nb::init<>())
         .def(nb::init<float, float, float>(), "x"_a, "y"_a, "z"_a)
+        .def("__init__", [](Vec3* self, std::tuple<float, float, float> t) {
+            new (self) Vec3(std::get<0>(t), std::get<1>(t), std::get<2>(t));
+        })
         .def_rw("x", &Vec3::x)
         .def_rw("y", &Vec3::y)
         .def_rw("z", &Vec3::z)
@@ -68,10 +98,34 @@ NB_MODULE(scratchbox_native, m) {
         .def("normalized", &Vec3::normalized)
         .def("dot", &Vec3::dot)
         .def("cross", &Vec3::cross)
+        .def("__len__", [](const Vec3&) { return 3; })
+        .def("__getitem__", [](const Vec3& v, int64_t idx) {
+            if (idx < 0) idx += 3;
+            if (idx == 0) return v.x;
+            if (idx == 1) return v.y;
+            if (idx == 2) return v.z;
+            throw nb::index_error();
+        })
+        .def("__setitem__", [](Vec3& v, int64_t idx, float val) {
+            if (idx < 0) idx += 3;
+            if (idx == 0) { v.x = val; return; }
+            if (idx == 1) { v.y = val; return; }
+            if (idx == 2) { v.z = val; return; }
+            throw nb::index_error();
+        })
+        .def("__iter__", [](const Vec3& v) {
+            return nb::iter(nb::make_tuple(v.x, v.y, v.z));
+        })
+        .def("__neg__", [](const Vec3& v) { return Vec3(-v.x, -v.y, -v.z); })
+        .def("__eq__", [](const Vec3& a, const Vec3& b) {
+            return std::abs(a.x - b.x) < 1e-6f && std::abs(a.y - b.y) < 1e-6f && std::abs(a.z - b.z) < 1e-6f;
+        })
         .def("__add__", [](const Vec3& a, const Vec3& b) { return a + b; })
         .def("__sub__", [](const Vec3& a, const Vec3& b) { return a - b; })
         .def("__mul__", [](const Vec3& a, float s) { return a * s; })
+        .def("__mul__", [](const Vec3& a, const Vec3& b) { return Vec3(a.x * b.x, a.y * b.y, a.z * b.z); })
         .def("__rmul__", [](const Vec3& a, float s) { return a * s; })
+        .def("__truediv__", [](const Vec3& a, float s) { return a * (1.0f / s); })
         .def("__repr__", [](const Vec3& v) {
             return "Vec3(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + ")";
         });
@@ -79,10 +133,38 @@ NB_MODULE(scratchbox_native, m) {
     nb::class_<Vec4>(m_math, "Vec4")
         .def(nb::init<>())
         .def(nb::init<float, float, float, float>(), "x"_a, "y"_a, "z"_a, "w"_a)
+        .def("__init__", [](Vec4* self, std::tuple<float, float, float, float> t) {
+            new (self) Vec4(std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t));
+        })
         .def_rw("x", &Vec4::x)
         .def_rw("y", &Vec4::y)
         .def_rw("z", &Vec4::z)
         .def_rw("w", &Vec4::w)
+        .def("__len__", [](const Vec4&) { return 4; })
+        .def("__getitem__", [](const Vec4& v, int64_t idx) {
+            if (idx < 0) idx += 4;
+            if (idx == 0) return v.x;
+            if (idx == 1) return v.y;
+            if (idx == 2) return v.z;
+            if (idx == 3) return v.w;
+            throw nb::index_error();
+        })
+        .def("__setitem__", [](Vec4& v, int64_t idx, float val) {
+            if (idx < 0) idx += 4;
+            if (idx == 0) { v.x = val; return; }
+            if (idx == 1) { v.y = val; return; }
+            if (idx == 2) { v.z = val; return; }
+            if (idx == 3) { v.w = val; return; }
+            throw nb::index_error();
+        })
+        .def("__iter__", [](const Vec4& v) {
+            return nb::iter(nb::make_tuple(v.x, v.y, v.z, v.w));
+        })
+        .def("__neg__", [](const Vec4& v) { return Vec4(-v.x, -v.y, -v.z, -v.w); })
+        .def("__eq__", [](const Vec4& a, const Vec4& b) {
+            return std::abs(a.x - b.x) < 1e-6f && std::abs(a.y - b.y) < 1e-6f &&
+                   std::abs(a.z - b.z) < 1e-6f && std::abs(a.w - b.w) < 1e-6f;
+        })
         .def("__repr__", [](const Vec4& v) {
             return "Vec4(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " +
                    std::to_string(v.z) + ", " + std::to_string(v.w) + ")";
@@ -95,6 +177,19 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("y", &Quat::y)
         .def_rw("z", &Quat::z)
         .def_rw("w", &Quat::w)
+        .def("__len__", [](const Quat&) { return 4; })
+        .def("__getitem__", [](const Quat& q, int64_t idx) {
+            if (idx < 0) idx += 4;
+            if (idx == 0) return q.x;
+            if (idx == 1) return q.y;
+            if (idx == 2) return q.z;
+            if (idx == 3) return q.w;
+            throw nb::index_error();
+        })
+        .def("__iter__", [](const Quat& q) {
+            return nb::iter(nb::make_tuple(q.x, q.y, q.z, q.w));
+        })
+        .def("__neg__", [](const Quat& q) { return Quat(-q.x, -q.y, -q.z, -q.w); })
         .def_static("from_axis_angle", &Quat::fromAxisAngle, "axis"_a, "angle_radians"_a)
         .def("rotate", &Quat::rotate, "vec"_a)
         .def("__repr__", [](const Quat& q) {
@@ -109,6 +204,11 @@ NB_MODULE(scratchbox_native, m) {
         .def_rw("max", &AABB::max)
         .def_prop_ro("center", &AABB::center)
         .def_prop_ro("size", &AABB::size)
+        .def_prop_ro("surface_area", &AABB::surfaceArea)
+        .def("contains", &AABB::contains, "p"_a)
+        .def("intersects", &AABB::intersects, "other"_a)
+        .def("expand", [](AABB& self, const Vec3& p) { self.expand(p); }, "p"_a)
+        .def("expand_box", [](AABB& self, const AABB& o) { self.expand(o); }, "other"_a)
         .def("__repr__", [](const AABB& b) {
             return "AABB(min=" + std::to_string(b.min.x) + "," + std::to_string(b.min.y) + "," + std::to_string(b.min.z) +
                    ", max=" + std::to_string(b.max.x) + "," + std::to_string(b.max.y) + "," + std::to_string(b.max.z) + ")";
@@ -223,7 +323,7 @@ NB_MODULE(scratchbox_native, m) {
             return PbrMaterial::emissiveGlow(color, intensity);
         }, "color"_a, "intensity"_a = 1.0f);
 
-    nb::class_<ScratchboxMesh>(m_geom, "Mesh")
+    nb::class_<ScratchboxMesh>(m_geom, "Mesh", nb::dynamic_attr(), nb::is_weak_referenceable())
         .def(nb::init<>())
         .def(nb::init<std::string>(), "name"_a = "mesh")
         .def_rw("name", &ScratchboxMesh::name)
@@ -233,30 +333,79 @@ NB_MODULE(scratchbox_native, m) {
         .def_prop_ro("bounds", [](const ScratchboxMesh& self) { return self.bounds; })
         .def_prop_ro("vertices", [](const ScratchboxMesh& self) { return self.vertices; })
         .def_prop_ro("indices", [](const ScratchboxMesh& self) { return self.indices; })
+        .def("get_positions_flat", [](const ScratchboxMesh& self) {
+            std::vector<float> coords;
+            coords.reserve(self.vertices.size() * 3);
+            for (const auto& v : self.vertices) {
+                coords.push_back(v.position.x);
+                coords.push_back(v.position.y);
+                coords.push_back(v.position.z);
+            }
+            return nb::bytes(reinterpret_cast<const char*>(coords.data()), coords.size() * sizeof(float));
+        })
+        .def("get_normals_flat", [](const ScratchboxMesh& self) {
+            std::vector<float> coords;
+            coords.reserve(self.vertices.size() * 3);
+            for (const auto& v : self.vertices) {
+                coords.push_back(v.normal.x);
+                coords.push_back(v.normal.y);
+                coords.push_back(v.normal.z);
+            }
+            return nb::bytes(reinterpret_cast<const char*>(coords.data()), coords.size() * sizeof(float));
+        })
+        .def("get_indices_bytes", [](const ScratchboxMesh& self) {
+            return nb::bytes(reinterpret_cast<const char*>(self.indices.data()), self.indices.size() * sizeof(uint32_t));
+        })
         .def("add_vertex", [](ScratchboxMesh& self, const Vec3& pos, const Vec3& norm, const Vec2& uv, const Vec4& color) {
             self.addVertex(Vertex(pos, norm, uv, color));
         }, "pos"_a, "norm"_a = Vec3(0, 1, 0), "uv"_a = Vec2(0, 0), "color"_a = Vec4(1, 1, 1, 1))
         .def("add_triangle", &ScratchboxMesh::addTriangle, "i0"_a, "i1"_a, "i2"_a)
-        .def("append", &ScratchboxMesh::append, "other"_a, "Merge another mesh into this container")
-        .def("translate", &ScratchboxMesh::translate, "offset"_a)
-        .def("scale", &ScratchboxMesh::scale, "factors"_a)
-        .def("rotate_x", &ScratchboxMesh::rotateX, "angle_deg"_a)
-        .def("rotate_y", &ScratchboxMesh::rotateY, "angle_deg"_a)
-        .def("rotate_z", &ScratchboxMesh::rotateZ, "angle_deg"_a)
-        .def("set_color", &ScratchboxMesh::setColor, "color"_a)
+        .def("append", [](ScratchboxMesh& self, const ScratchboxMesh& other) -> ScratchboxMesh& {
+            self.append(other);
+            return self;
+        }, "other"_a, "Merge another mesh into this container")
+        .def("translate", [](ScratchboxMesh& self, const Vec3& offset) -> ScratchboxMesh& {
+            self.translate(offset);
+            return self;
+        }, "offset"_a)
+        .def("scale", [](ScratchboxMesh& self, const Vec3& factors) -> ScratchboxMesh& {
+            self.scale(factors);
+            return self;
+        }, "factors"_a)
+        .def("rotate_x", [](ScratchboxMesh& self, float angle_deg) -> ScratchboxMesh& {
+            self.rotateX(angle_deg);
+            return self;
+        }, "angle_deg"_a)
+        .def("rotate_y", [](ScratchboxMesh& self, float angle_deg) -> ScratchboxMesh& {
+            self.rotateY(angle_deg);
+            return self;
+        }, "angle_deg"_a)
+        .def("rotate_z", [](ScratchboxMesh& self, float angle_deg) -> ScratchboxMesh& {
+            self.rotateZ(angle_deg);
+            return self;
+        }, "angle_deg"_a)
+        .def("set_color", [](ScratchboxMesh& self, const Vec4& color) -> ScratchboxMesh& {
+            self.setColor(color);
+            return self;
+        }, "color"_a)
         .def_rw("material", &ScratchboxMesh::material)
-        .def("set_material", [](ScratchboxMesh& self, const PbrMaterial& mat) {
+        .def("set_material", [](ScratchboxMesh& self, const PbrMaterial& mat) -> ScratchboxMesh& {
             self.material = mat;
+            return self;
         }, "material"_a)
-        .def("apply_material", [](ScratchboxMesh& self, const PbrMaterial& mat) {
+        .def("apply_material", [](ScratchboxMesh& self, const PbrMaterial& mat) -> ScratchboxMesh& {
             self.material = mat;
+            return self;
         }, "material"_a)
         .def("compute_curvature_ao", [](ScratchboxMesh& self, float intensity) -> ScratchboxMesh& {
             self.computeCurvatureAO(intensity);
             return self;
         }, "intensity"_a = 0.6f)
-        .def("apply_procedural_weathering", &ScratchboxMesh::applyProceduralWeathering, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
-        .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) {
+        .def("apply_procedural_weathering", [](ScratchboxMesh& self, float freq, float amp) -> ScratchboxMesh& {
+            self.applyProceduralWeathering(freq, amp);
+            return self;
+        }, "frequency"_a = 2.0f, "amplitude"_a = 0.15f)
+        .def("displace_along_normals", [](ScratchboxMesh& self, float frequency, float amplitude) -> ScratchboxMesh& {
             math::FastNoise3D noise(42);
             for (auto& v : self.vertices) {
                 float n = noise.fBm(v.position.x * frequency, v.position.y * frequency, v.position.z * frequency, 3, 0.5f, 2.0f);
@@ -264,8 +413,9 @@ NB_MODULE(scratchbox_native, m) {
             }
             self.recomputeNormals();
             self.recomputeBounds();
+            return self;
         }, "frequency"_a = 2.0f, "amplitude"_a = 0.05f)
-        .def("tessellate_and_displace", [](ScratchboxMesh& self, uint32_t tessellationFactor, float displacementScale, float noiseFreq, float noiseAmp) {
+        .def("tessellate_and_displace", [](ScratchboxMesh& self, uint32_t tessellationFactor, float displacementScale, float noiseFreq, float noiseAmp) -> ScratchboxMesh& {
             disp::DisplacementOptions opt;
             opt.tessellationFactor = tessellationFactor;
             opt.displacementScale = displacementScale;
@@ -276,12 +426,25 @@ NB_MODULE(scratchbox_native, m) {
             self.vertices = std::move(displaced.vertices);
             self.indices = std::move(displaced.indices);
             self.bounds = displaced.bounds;
+            return self;
         }, "tessellation_factor"_a = 4, "displacement_scale"_a = 0.06f, "noise_freq"_a = 32.0f, "noise_amp"_a = 0.015f)
         .def("clear", &ScratchboxMesh::clear)
-        .def("recompute_normals", &ScratchboxMesh::recomputeNormals)
-        .def("recompute_smooth_normals", &ScratchboxMesh::recomputeSmoothNormals)
-        .def("weld_vertices", &ScratchboxMesh::weldVertices, "epsilon"_a = 1e-4f)
-        .def("recompute_bounds", &ScratchboxMesh::recomputeBounds)
+        .def("recompute_normals", [](ScratchboxMesh& self) -> ScratchboxMesh& {
+            self.recomputeNormals();
+            return self;
+        })
+        .def("recompute_smooth_normals", [](ScratchboxMesh& self) -> ScratchboxMesh& {
+            self.recomputeSmoothNormals();
+            return self;
+        })
+        .def("weld_vertices", [](ScratchboxMesh& self, float epsilon) -> ScratchboxMesh& {
+            self.weldVertices(epsilon);
+            return self;
+        }, "epsilon"_a = 1e-4f)
+        .def("recompute_bounds", [](ScratchboxMesh& self) -> ScratchboxMesh& {
+            self.recomputeBounds();
+            return self;
+        })
         .def("subdivide", [](ScratchboxMesh& self, int iterations) -> ScratchboxMesh& {
             self = shaper::LoopSubdivision::subdivide(self, iterations);
             return self;
@@ -306,32 +469,36 @@ NB_MODULE(scratchbox_native, m) {
             shaper::Deformer::bulge(self, center, radius, strength, power);
             return self;
         }, "center"_a = Vec3(0, 0, 0), "radius"_a = 1.0f, "strength"_a = 0.3f, "power"_a = 2.0f)
-        .def("taubin_smooth", [](ScratchboxMesh& self, int iterations, float lambdaVal, float muVal, bool preserveBoundaries) {
+        .def("taubin_smooth", [](ScratchboxMesh& self, int iterations, float lambdaVal, float muVal, bool preserveBoundaries) -> ScratchboxMesh& {
             processing::TaubinSmoothOptions opt;
             opt.iterations = iterations;
             opt.lambda = lambdaVal;
             opt.mu = muVal;
             opt.preserveBoundaries = preserveBoundaries;
             processing::TaubinSmoother::smooth(self, opt);
+            return self;
         }, "iterations"_a = 10, "lambda_val"_a = 0.5f, "mu_val"_a = -0.53f, "preserve_boundaries"_a = true)
-        .def("clean", [](ScratchboxMesh& self, float weldEpsilon) {
+        .def("clean", [](ScratchboxMesh& self, float weldEpsilon) -> ScratchboxMesh& {
             processing::CleanMeshOptions opt;
             opt.weldEpsilon = weldEpsilon;
             ScratchboxMesh res = processing::MeshCleaner::clean(self, opt);
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "weld_epsilon"_a = 1e-5f)
-        .def("bake_cavity_ao", [](ScratchboxMesh& self, float intensity) {
+        .def("bake_cavity_ao", [](ScratchboxMesh& self, float intensity) -> ScratchboxMesh& {
             processing::DifferentialGeometryEngine::bakeCavityAO(self, intensity);
+            return self;
         }, "intensity"_a = 0.65f)
-        .def("slice_by_plane", [](ScratchboxMesh& self, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) {
+        .def("slice_by_plane", [](ScratchboxMesh& self, const Vec3& planePoint, const Vec3& planeNormal, bool keepPositive, bool capCut) -> ScratchboxMesh& {
             ScratchboxMesh res = processing::PlanarSlicer::slice(self, planePoint, planeNormal, keepPositive, capCut);
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "plane_point"_a = Vec3(0, 0, 0), "plane_normal"_a = Vec3(0, 1, 0), "keep_positive"_a = true, "cap_cut"_a = true)
-        .def("isotropic_remesh", [](ScratchboxMesh& self, float targetEdgeLength, int iterations, float creaseAngleDeg) {
+        .def("isotropic_remesh", [](ScratchboxMesh& self, float targetEdgeLength, int iterations, float creaseAngleDeg) -> ScratchboxMesh& {
             processing::IsotropicRemeshOptions opt;
             opt.targetEdgeLength = targetEdgeLength;
             opt.iterations = iterations;
@@ -340,8 +507,9 @@ NB_MODULE(scratchbox_native, m) {
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "target_edge_length"_a = 0.25f, "iterations"_a = 4, "crease_angle_deg"_a = 45.0f)
-        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) {
+        .def("decimate_qem", [](ScratchboxMesh& self, size_t targetTriangles, float targetRatio, float maxError, bool preserveBoundary) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
             opt.targetRatio = targetRatio;
@@ -351,8 +519,9 @@ NB_MODULE(scratchbox_native, m) {
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "target_triangles"_a = 0, "target_ratio"_a = 0.5f, "max_error"_a = 1e9f, "preserve_boundary"_a = true)
-        .def("decimate", [](ScratchboxMesh& self, float ratio, size_t targetTriangles) {
+        .def("decimate", [](ScratchboxMesh& self, float ratio, size_t targetTriangles) -> ScratchboxMesh& {
             processing::DecimateOptions opt;
             opt.targetTriangles = targetTriangles;
             opt.targetRatio = ratio;
@@ -360,6 +529,7 @@ NB_MODULE(scratchbox_native, m) {
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "ratio"_a = 0.5f, "target_triangles"_a = 0)
         .def("poisson_sample", [](const ScratchboxMesh& self, size_t count, float minDistance, uint32_t seed) {
             processing::PoissonSampleOptions opt;
@@ -368,13 +538,14 @@ NB_MODULE(scratchbox_native, m) {
             opt.seed = seed;
             return processing::PoissonDiskSampler::sample(self, opt);
         }, "count"_a = 100, "min_distance"_a = 0.0f, "seed"_a = 42)
-        .def("fill_holes", [](ScratchboxMesh& self, size_t maxHoleEdges) {
+        .def("fill_holes", [](ScratchboxMesh& self, size_t maxHoleEdges) -> ScratchboxMesh& {
             processing::HoleFillOptions opt;
             opt.maxHoleEdges = maxHoleEdges;
             ScratchboxMesh res = processing::HoleFiller::fillHoles(self, opt);
             self.vertices = std::move(res.vertices);
             self.indices = std::move(res.indices);
             self.bounds = res.bounds;
+            return self;
         }, "max_hole_edges"_a = 64)
         .def("hausdorff_distance", [](const ScratchboxMesh& self, const ScratchboxMesh& other, size_t samples) {
             return processing::HausdorffDistanceEngine::compute(self, other, samples);
@@ -705,24 +876,43 @@ NB_MODULE(scratchbox_native, m) {
     // ========================================================================
     auto m_shaper = m.def_submodule("shaper", "Non-linear geometric mesh deformers and procedural shaping");
 
-    m_shaper.def("taper", [](ScratchboxMesh& mesh, int axisIdx, float factor) {
+    nb::class_<shaper::Lattice3D>(m_shaper, "Lattice3D")
+        .def(nb::init<>())
+        .def(nb::init<int, int, int, const AABB&>(), "dim_x"_a, "dim_y"_a, "dim_z"_a, "bounds"_a)
+        .def_rw("dim_x", &shaper::Lattice3D::dimX)
+        .def_rw("dim_y", &shaper::Lattice3D::dimY)
+        .def_rw("dim_z", &shaper::Lattice3D::dimZ)
+        .def_rw("rest_bounds", &shaper::Lattice3D::restBounds)
+        .def("get_control_point", &shaper::Lattice3D::getControlPoint, "i"_a, "j"_a, "k"_a)
+        .def("set_control_point", &shaper::Lattice3D::setControlPoint, "i"_a, "j"_a, "k"_a, "pos"_a)
+        .def("offset_control_point", &shaper::Lattice3D::offsetControlPoint, "i"_a, "j"_a, "k"_a, "delta"_a)
+        .def("deform", [](const shaper::Lattice3D& self, ScratchboxMesh& mesh) -> ScratchboxMesh& {
+            self.deform(mesh);
+            return mesh;
+        }, "mesh"_a, "Deforms mesh vertices using trivariate Bernstein tensor product evaluation");
+
+    m_shaper.def("taper", [](ScratchboxMesh& mesh, int axisIdx, float factor) -> ScratchboxMesh& {
         shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
         shaper::Deformer::taper(mesh, axis, factor);
+        return mesh;
     }, "mesh"_a, "axis"_a = 1, "factor"_a = 0.5f);
 
-    m_shaper.def("twist", [](ScratchboxMesh& mesh, int axisIdx, float angleDeg) {
+    m_shaper.def("twist", [](ScratchboxMesh& mesh, int axisIdx, float angleDeg) -> ScratchboxMesh& {
         shaper::Axis axis = axisIdx == 0 ? shaper::Axis::X : (axisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
         shaper::Deformer::twist(mesh, axis, angleDeg);
+        return mesh;
     }, "mesh"_a, "axis"_a = 1, "angle_deg"_a = 45.0f);
 
-    m_shaper.def("bend", [](ScratchboxMesh& mesh, int mainAxisIdx, int bendAxisIdx, float angleDeg, float radius) {
+    m_shaper.def("bend", [](ScratchboxMesh& mesh, int mainAxisIdx, int bendAxisIdx, float angleDeg, float radius) -> ScratchboxMesh& {
         shaper::Axis mainAxis = mainAxisIdx == 0 ? shaper::Axis::X : (mainAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
         shaper::Axis bendAxis = bendAxisIdx == 0 ? shaper::Axis::X : (bendAxisIdx == 1 ? shaper::Axis::Y : shaper::Axis::Z);
         shaper::Deformer::bend(mesh, mainAxis, bendAxis, angleDeg * (math::PI / 180.0f), radius);
+        return mesh;
     }, "mesh"_a, "main_axis"_a = 1, "bend_axis"_a = 0, "angle_deg"_a = 30.0f, "radius"_a = 2.0f);
 
-    m_shaper.def("bulge", [](ScratchboxMesh& mesh, const Vec3& center, float radius, float strength, float power) {
+    m_shaper.def("bulge", [](ScratchboxMesh& mesh, const Vec3& center, float radius, float strength, float power) -> ScratchboxMesh& {
         shaper::Deformer::bulge(mesh, center, radius, strength, power);
+        return mesh;
     }, "mesh"_a, "center"_a = Vec3(0, 0, 0), "radius"_a = 1.0f, "strength"_a = 0.3f, "power"_a = 2.0f);
 
     m_shaper.def("subdivide", [](const ScratchboxMesh& mesh, int iterations) {
@@ -921,6 +1111,15 @@ NB_MODULE(scratchbox_native, m) {
         .def_ro("rgb_beauty", &core::SensorPassesResult::rgbBeauty)
         .def_ro("linear_depth", &core::SensorPassesResult::linearDepth)
         .def_ro("surface_normals", &core::SensorPassesResult::surfaceNormals)
+        .def_prop_ro("rgb_beauty_bytes", [](const core::SensorPassesResult& self) {
+            return nb::bytes(reinterpret_cast<const char*>(self.rgbBeauty.data()), self.rgbBeauty.size());
+        })
+        .def_prop_ro("linear_depth_bytes", [](const core::SensorPassesResult& self) {
+            return nb::bytes(reinterpret_cast<const char*>(self.linearDepth.data()), self.linearDepth.size() * sizeof(float));
+        })
+        .def_prop_ro("surface_normals_bytes", [](const core::SensorPassesResult& self) {
+            return nb::bytes(reinterpret_cast<const char*>(self.surfaceNormals.data()), self.surfaceNormals.size() * sizeof(float));
+        })
         .def_ro("geometry_coverage", &core::SensorPassesResult::geometryCoverage)
         .def_ro("render_ms", &core::SensorPassesResult::renderMs)
         .def_ro("triangle_count", &core::SensorPassesResult::triangleCount)
@@ -1054,4 +1253,124 @@ NB_MODULE(scratchbox_native, m) {
         return processing::HausdorffDistanceEngine::compute(meshA, meshB, samples);
     }, "mesh_a"_a, "mesh_b"_a, "samples"_a = 500,
        "Measure maximum and mean Hausdorff geometric distance between two meshes");
+
+    // ========================================================================
+    // Top-Level Convenience Functions
+    // ========================================================================
+    m.def("export_glb_bytes", [](const ScratchboxMesh& mesh) {
+        auto glb = GlbWriter::writeGlb(mesh);
+        return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
+    }, "mesh"_a, "Export ScratchboxMesh directly as a Python bytes object containing .glb data");
+
+    m.def("export_glb_bytes", [](const std::vector<ScratchboxMesh>& meshes) {
+        auto glb = GlbWriter::serializeMultiMeshToGlb(meshes);
+        return nb::bytes(reinterpret_cast<const char*>(glb.data()), glb.size());
+    }, "meshes"_a, "Export multiple ScratchboxMeshes directly as a Python bytes object containing .glb data");
+
+    // ========================================================================
+    // 9. SDF SUBMODULE (Signed Distance Fields & CSG)
+    // ========================================================================
+    auto m_sdf = m.def_submodule("sdf", "Signed distance field primitives, smooth CSG booleans, and domain deformations");
+
+    // Primitives
+    m_sdf.def("sd_sphere", &sdf::sdSphere, "p"_a, "radius"_a);
+    m_sdf.def("sd_box", &sdf::sdBox, "p"_a, "b"_a);
+    m_sdf.def("sd_round_box", &sdf::sdRoundBox, "p"_a, "b"_a, "r"_a);
+    m_sdf.def("sd_torus", &sdf::sdTorus, "p"_a, "major_radius"_a, "minor_radius"_a);
+    m_sdf.def("sd_cylinder", &sdf::sdCylinder, "p"_a, "radius"_a, "height"_a);
+    m_sdf.def("sd_capsule", &sdf::sdCapsule, "p"_a, "a"_a, "b"_a, "radius"_a);
+    m_sdf.def("sd_gyroid", &sdf::sdGyroid, "p"_a, "scale"_a = 1.0f, "thickness"_a = 0.1f);
+
+    // Booleans
+    m_sdf.def("op_union", &sdf::opUnion, "d1"_a, "d2"_a);
+    m_sdf.def("op_subtraction", &sdf::opSubtraction, "d1"_a, "d2"_a);
+    m_sdf.def("op_intersection", &sdf::opIntersection, "d1"_a, "d2"_a);
+    m_sdf.def("op_smooth_union", &sdf::opSmoothUnion, "d1"_a, "d2"_a, "k"_a = 0.2f);
+    m_sdf.def("op_smooth_subtraction", &sdf::opSmoothSubtraction, "d1"_a, "d2"_a, "k"_a = 0.2f);
+    m_sdf.def("op_smooth_intersection", &sdf::opSmoothIntersection, "d1"_a, "d2"_a, "k"_a = 0.2f);
+
+    // Domain deformations
+    m_sdf.def("op_repeat", &sdf::opRepeat, "p"_a, "c"_a);
+    m_sdf.def("op_twist", &sdf::opTwist, "p"_a, "k"_a);
+    m_sdf.def("op_bend", &sdf::opBend, "p"_a, "k"_a);
+
+    // ========================================================================
+    // 10. HAIR & SPLATS SUBMODULE (Analytical Forward Grooming & Gaussians)
+    // ========================================================================
+    auto m_hair = m.def_submodule("hair", "Analytical forward hair grooming, Marschner reflectance, and Gaussian splat synthesis");
+
+    nb::class_<spz::GaussianSplat>(m_hair, "GaussianSplat")
+        .def(nb::init<>())
+        .def_rw("position", &spz::GaussianSplat::position)
+        .def_rw("scale", &spz::GaussianSplat::scale)
+        .def_rw("rotation", &spz::GaussianSplat::rotation)
+        .def_rw("color", &spz::GaussianSplat::color)
+        .def_rw("opacity", &spz::GaussianSplat::opacity)
+        .def_rw("sh", &spz::GaussianSplat::sh);
+
+    nb::class_<hair::HairGroomConfig>(m_hair, "HairGroomConfig")
+        .def(nb::init<>())
+        .def_rw("guide_count", &hair::HairGroomConfig::guideCount)
+        .def_rw("strand_count", &hair::HairGroomConfig::strandCount)
+        .def_rw("segments_per_strand", &hair::HairGroomConfig::segmentsPerStrand)
+        .def_rw("length", &hair::HairGroomConfig::length)
+        .def_rw("root_width", &hair::HairGroomConfig::rootWidth)
+        .def_rw("tip_width", &hair::HairGroomConfig::tipWidth)
+        .def_rw("clumping", &hair::HairGroomConfig::clumping)
+        .def_rw("curl_radius", &hair::HairGroomConfig::curlRadius)
+        .def_rw("curl_frequency", &hair::HairGroomConfig::curlFrequency)
+        .def_rw("wave_frequency", &hair::HairGroomConfig::waveFrequency)
+        .def_rw("wave_amplitude", &hair::HairGroomConfig::waveAmplitude)
+        .def_rw("eumelanin", &hair::HairGroomConfig::eumelanin)
+        .def_rw("pheomelanin", &hair::HairGroomConfig::pheomelanin)
+        .def_rw("cuticle_tilt", &hair::HairGroomConfig::cuticleTilt)
+        .def_rw("longitudinal_roughness", &hair::HairGroomConfig::longitudinalRoughness)
+        .def_rw("azimuthal_roughness", &hair::HairGroomConfig::azimuthalRoughness);
+
+    nb::class_<hair::HairGuide>(m_hair, "HairGuide")
+        .def(nb::init<>())
+        .def_rw("root", &hair::HairGuide::root)
+        .def_rw("p1", &hair::HairGuide::p1)
+        .def_rw("p2", &hair::HairGuide::p2)
+        .def_rw("tip", &hair::HairGuide::tip)
+        .def_rw("length", &hair::HairGuide::length)
+        .def("evaluate", &hair::HairGuide::evaluate, "t"_a)
+        .def("evaluate_tangent", &hair::HairGuide::evaluateTangent, "t"_a);
+
+    nb::class_<hair::HairStrand>(m_hair, "HairStrand")
+        .def(nb::init<>())
+        .def_rw("guide_index", &hair::HairStrand::guideIndex)
+        .def_rw("curl_phase", &hair::HairStrand::curlPhase)
+        .def_rw("base_color", &hair::HairStrand::baseColor)
+        .def_prop_ro("vertex_count", [](const hair::HairStrand& self) { return self.vertices.size(); });
+
+    m_hair.def("generate_scalp_guides", &hair::HairGroomer::generateScalpGuides,
+               "scalp_center"_a, "scalp_radius"_a, "config"_a, "flow_direction"_a = Vec3(0.0f, -0.6f, 0.8f));
+
+    m_hair.def("generate_surface_guides", &hair::HairGroomer::generateSurfaceGuides,
+               "surface_positions"_a, "surface_normals"_a, "config"_a, "flow_direction"_a = Vec3(0.0f, 0.0f, 0.0f));
+
+    m_hair.def("generate_harmonic_guides", &hair::HairGroomer::generateHarmonicGuides,
+               "center"_a, "base_radius"_a, "harmonic_frequency"_a, "harmonic_amplitude"_a, "config"_a, "axial_taper"_a = 0.0f);
+
+    m_hair.def("synthesize_dense_strands", &hair::HairGroomer::synthesizeDenseStrands,
+               "guides"_a, "config"_a);
+
+    m_hair.def("build_ribbon_mesh", &hair::HairRibbonMeshBuilder::buildRibbonMesh,
+               "strands"_a, "camera_pos"_a = Vec3(0.0f, 0.0f, 5.0f), "mesh_name"_a = "hair_ribbons");
+
+    m_hair.def("build_strand_splats", &hair::HairSplatBuilder::buildStrandSplats,
+               "strands"_a, "splat_scale_multiplier"_a = 1.0f, "base_opacity"_a = 0.92f,
+               "custom_base_color"_a = Vec3(-1.0f, -1.0f, -1.0f), "custom_tip_color"_a = Vec3(-1.0f, -1.0f, -1.0f));
+
+    m_hair.def("build_surfel_mesh", &spz::SplatMeshBuilder::buildSurfelMesh,
+               "splats"_a, "radius_multiplier"_a = 1.25f, "min_opacity_threshold"_a = 0.05f);
+
+    m_hair.def("build_spz", [](const std::vector<hair::HairStrand>& strands, float splatScaleMultiplier, float baseOpacity) {
+        auto bytes = hair::HairSplatBuilder::buildSpz(strands, splatScaleMultiplier, baseOpacity);
+        return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }, "strands"_a, "splat_scale_multiplier"_a = 1.0f, "base_opacity"_a = 0.92f);
+
+    m_hair.def("save_spz_file", &hair::HairSplatBuilder::saveToSpzFile, "filepath"_a, "splats"_a);
+    m_hair.def("save_ply_file", &hair::HairSplatBuilder::saveToPlyFile, "filepath"_a, "splats"_a);
 }

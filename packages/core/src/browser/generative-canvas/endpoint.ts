@@ -7,6 +7,8 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import { getApiBase } from '../../common/api-client-config';
+
 export interface EndpointOptions {
     path: string;
 }
@@ -15,9 +17,11 @@ export class Endpoint {
     constructor(protected readonly options: EndpointOptions) {}
 
     getRestUrl(): { toString(): string } {
+        const base = getApiBase();
         const path = this.options.path.startsWith('/') ? this.options.path : `/${this.options.path}`;
+        const url = base ? `${base.replace(/\/+$/, '')}${path}` : path;
         return {
-            toString: () => path
+            toString: () => url
         };
     }
 }

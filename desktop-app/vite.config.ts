@@ -94,7 +94,9 @@ export default defineConfig(({ mode }) => {
     html: !isDev && cspNonce ? { cspNonce } : undefined,
     define: {
       'process.env.GOOGLE_MAPS_API_KEY': JSON.stringify(googleMapsKey),
-      'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey)
+      'process.env.MAP_TILES_API_KEY': JSON.stringify(googleMapsKey),
+      'process.env.SCRATCHBOX_API_PORT': JSON.stringify(process.env.PORT || process.env.SCRATCHBOX_API_PORT || '3001'),
+      'process.env.SCRATCHBOX_LAUNCH_TOKEN': JSON.stringify(process.env.SCRATCHBOX_LAUNCH_TOKEN || '')
     },
     server: {
       port: parseInt(process.env.SCRATCHBOX_WEB_PORT || '3030', 10),

@@ -1096,6 +1096,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/optional.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/pair.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/string.h \
+  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/tuple.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/unordered_map.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/vector.h \
   /Users/eligreen/dev/scratchbox-ide-master/packages/core/src/native/3d-engine/include/scratchbox_4dgs_humanoid.hpp \
@@ -2777,6 +2778,8 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: /Users/eligreen
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__concepts/constructible.h:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__concepts/common_with.h:
+
+/Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/tuple.h:
 
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__format/format_parse_context.h:
 

@@ -1034,6 +1034,7 @@ CMakeFiles/scratchbox_native.dir/bindings/python_bindings.cpp.o: \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/array.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_array.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/pair.h \
+  /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/tuple.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/optional.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/detail/nb_optional.h \
   /Users/eligreen/dev/scratchbox-ide-master/.venv/lib/python3.14/site-packages/nanobind/include/nanobind/stl/unordered_map.h \

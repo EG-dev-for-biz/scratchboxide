@@ -222,7 +222,8 @@ const OPEN_ROUTES: Array<{ method: string; path: string }> = [
     { method: 'GET', path: '/health' },
     { method: 'GET', path: '/api/browser/status' },
     { method: 'GET', path: '/api/models' },
-    { method: 'GET', path: '/api/models/status' }
+    { method: 'GET', path: '/api/models/status' },
+    { method: 'GET', path: '/api/auth/token' }
 ];
 
 /** GET routes consumed by EventSource, which cannot set headers: accept `?token=`. */
@@ -271,7 +272,7 @@ function createCorsMiddleware(allowedOrigins: Set<string>) {
     };
 }
 
-function createLaunchTokenMiddleware(token: string) {
+function createLaunchTokenMiddleware(token: string, allowedOrigins: Set<string>) {
     return (req: Request, res: Response, next: NextFunction): void => {
         if (req.method === 'OPTIONS') {
             next();
@@ -284,6 +285,13 @@ function createLaunchTokenMiddleware(token: string) {
             return;
         }
         if (OPEN_ROUTES.some(route => route.method === req.method && route.path === routePath)) {
+            next();
+            return;
+        }
+
+        // In dev mode, permit requests from allowed origins (e.g. Vite dev server on :3030)
+        const origin = req.headers.origin;
+        if (process.env.NODE_ENV !== 'production' && typeof origin === 'string' && allowedOrigins.has(origin)) {
             next();
             return;
         }
@@ -371,12 +379,21 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         } catch {}
     }
 
-    app.use(createLaunchTokenMiddleware(launchToken));
+    app.use(createLaunchTokenMiddleware(launchToken, allowedOrigins));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
     app.get('/health', (_req: Request, res: Response) => {
         res.json({ ok: true, service: 'scratchbox-api', timestamp: Date.now() });
+    });
+
+    app.get('/api/auth/token', (req: Request, res: Response) => {
+        const origin = req.headers.origin;
+        if (origin && !allowedOrigins.has(origin)) {
+            res.status(403).json({ error: 'forbidden', message: 'Origin not allowed' });
+            return;
+        }
+        res.json({ success: true, token: launchToken });
     });
 
     /**

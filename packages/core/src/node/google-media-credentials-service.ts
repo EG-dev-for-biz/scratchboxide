@@ -89,7 +89,7 @@ export class GoogleMediaCredentialsService {
 
     async saveApiKey(apiKey: string): Promise<SaveCredentialsResponse> {
         const trimmed = apiKey.trim();
-        if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(trimmed)) {
+        if (!/^(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,}|[0-9A-Za-z_.-]{20,})$/.test(trimmed)) {
             return {
                 success: false,
                 authMethod: 'unauthenticated',
@@ -136,11 +136,11 @@ export class GoogleMediaCredentialsService {
 
     private async getApiKey(): Promise<string | undefined> {
         const envKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY)?.trim();
-        if (envKey && /^AIza[0-9A-Za-z_-]{20,}$/.test(envKey)) {
+        if (envKey && /^(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,}|[0-9A-Za-z_.-]{20,})$/.test(envKey)) {
             return envKey;
         }
         const stored = await this.keyStore?.getPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
-        if (stored && /^AIza[0-9A-Za-z_-]{20,}$/.test(stored.trim())) {
+        if (stored && /^(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,}|[0-9A-Za-z_.-]{20,})$/.test(stored.trim())) {
             return stored.trim();
         }
         return this.migrateLegacyPlaintextKey();

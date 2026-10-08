@@ -41,6 +41,16 @@ test('server-auth: launch token, CORS allowlist and open endpoints', async () =>
         const browserStatus = await fetch(`${baseUrl}/api/browser/status`);
         assert.strictEqual(browserStatus.status, 200, '/api/browser/status must be open');
 
+        // /api/auth/token is open and returns the launch token
+        const tokenFetch = await fetch(`${baseUrl}/api/auth/token`, { headers: { Origin: 'http://127.0.0.1:3030' } });
+        assert.strictEqual(tokenFetch.status, 200, '/api/auth/token must return 200 for allowed origin');
+        const tokenFetchBody = await tokenFetch.json();
+        assert.strictEqual(tokenFetchBody.token, token, '/api/auth/token must match app.locals.launchToken');
+
+        // Dev mode allowed origin bypasses token check
+        const devOriginFetch = await fetch(`${baseUrl}/gemini/models`, { headers: { Origin: 'http://127.0.0.1:3030' } });
+        assert.strictEqual(devOriginFetch.status, 200, 'requests from allowed dev origin must succeed in dev mode');
+
         // No token → 401 JSON
         const noToken = await fetch(`${baseUrl}/gemini/models`);
         assert.strictEqual(noToken.status, 401, 'missing token must be rejected');

@@ -21,7 +21,8 @@ const host = '127.0.0.1';
 const env = {
     ...process.env,
     SCRATCHBOX_LAUNCH_TOKEN: token,
-    NODE_ENV: process.env.NODE_ENV || 'development'
+    NODE_ENV: 'development',
+    SCRATCHBOX_ALLOW_LOCAL_IP: 'true'
 };
 
 const appDir = path.resolve(__dirname, '..');

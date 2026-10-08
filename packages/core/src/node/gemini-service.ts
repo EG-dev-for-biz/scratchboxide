@@ -312,9 +312,10 @@ export class GeminiService {
                 parsedJson = JSON.parse(credentialsRaw);
             } catch {
                 // If not raw JSON, check if it is an API key string
-                if (credentialsRaw.trim().startsWith('AIza')) {
+                const trimmedKey = credentialsRaw.trim();
+                if (/^(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z_-]{20,}|[0-9A-Za-z_.-]{20,})$/.test(trimmedKey)) {
                     // Persist through the encrypted key store instead of plaintext ~/.scratchbox-ide/config.json.
-                    const apiKey = credentialsRaw.trim();
+                    const apiKey = trimmedKey;
                     await new FileKeyStore().setPassword(KEY_STORE_SERVICE, KEY_STORE_GEMINI_ACCOUNT, apiKey);
                     process.env.GEMINI_API_KEY = apiKey;
 

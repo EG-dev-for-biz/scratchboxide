@@ -21,7 +21,20 @@
 export const API_TOKEN_HEADER = 'X-Scratchbox-Token';
 
 /** URL prefixes that belong to the authenticated Scratchbox API. */
-export const API_PATH_PREFIXES = ['/gemini', '/workspace', '/media', '/api/'];
+export const API_PATH_PREFIXES = [
+    '/gemini',
+    '/workspace',
+    '/media',
+    '/api',
+    '/video',
+    '/3d',
+    '/spatial',
+    '/models',
+    '/cpp',
+    '/git',
+    '/memories',
+    '/compiler'
+];
 
 interface ScratchboxWindowConfig {
     launchToken?: string;
@@ -45,23 +58,30 @@ function hostWindow(): HostGlobal | undefined {
 }
 
 function windowConfig(): ScratchboxWindowConfig | undefined {
-    const config = hostWindow()?.scratchbox;
-    return config && typeof config === 'object' ? config : undefined;
+    const host = hostWindow();
+    const config = host?.scratchbox || (globalThis as any).scratchbox;
+    if (config && typeof config === 'object') {
+        return config;
+    }
+    if (typeof process !== 'undefined' && process.env) {
+        const envBase = process.env.SCRATCHBOX_API_BASE;
+        const envToken = process.env.SCRATCHBOX_LAUNCH_TOKEN;
+        if (envBase || envToken) {
+            return { apiBase: envBase, launchToken: envToken };
+        }
+    }
+    return undefined;
 }
 
 let cachedToken: string | undefined;
 
 /** Returns the launch token if the host exposed one (Electron), else undefined. */
 export function getLaunchToken(): string | undefined {
-    if (cachedToken) {
-        return cachedToken;
+    const fromConfig = windowConfig()?.launchToken;
+    if (typeof fromConfig === 'string' && fromConfig) {
+        return fromConfig;
     }
-    const token = windowConfig()?.launchToken;
-    if (typeof token === 'string' && token) {
-        cachedToken = token;
-        return token;
-    }
-    return undefined;
+    return cachedToken;
 }
 
 /** Allows the host shell to provide the token asynchronously (IPC fallback). */
@@ -119,9 +139,11 @@ export function isApiUrl(url: string): boolean {
     let pathname: string;
     try {
         const location = hostWindow()?.location;
-        const parsed = new URL(url, location ? location.href : 'http://127.0.0.1/');
+        const isRelative = url.startsWith('/') || !url.includes('://');
+        const defaultBase = location ? location.href : (getApiBase() || 'http://127.0.0.1/');
+        const parsed = new URL(url, defaultBase);
         const apiBase = getApiBase();
-        const sameOrigin = location ? parsed.origin === location.origin : false;
+        const sameOrigin = location ? parsed.origin === location.origin : isRelative;
         const isApiBase = !!apiBase && parsed.origin === new URL(apiBase).origin;
         if (!sameOrigin && !isApiBase) {
             return false;
@@ -131,6 +153,36 @@ export function isApiUrl(url: string): boolean {
         return false;
     }
     return API_PATH_PREFIXES.some(prefix => pathname === prefix.replace(/\/$/, '') || pathname.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`));
+}
+
+/** Resolves a relative or same-origin API URL to target the configured apiBase when available. */
+export function resolveApiUrl(url: string): string {
+    const apiBase = getApiBase();
+    if (!apiBase) {
+        return url;
+    }
+    try {
+        const location = hostWindow()?.location;
+        const isRelative = url.startsWith('/') || !url.includes('://');
+        const defaultBase = location ? location.href : apiBase;
+        const parsed = new URL(url, defaultBase);
+        const sameOrigin = location ? parsed.origin === location.origin : isRelative;
+        const isApiBase = parsed.origin === new URL(apiBase).origin;
+        if (!sameOrigin && !isApiBase) {
+            return url;
+        }
+        const matches = API_PATH_PREFIXES.some(prefix =>
+            parsed.pathname === prefix.replace(/\/$/, '') ||
+            parsed.pathname.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)
+        );
+        if (matches && (!isApiBase || isRelative)) {
+            const cleanBase = apiBase.replace(/\/+$/, '');
+            return `${cleanBase}${parsed.pathname}${parsed.search}${parsed.hash}`;
+        }
+    } catch {
+        // Fall back to original url if parsing fails
+    }
+    return url;
 }
 
 /** Appends `?token=` for EventSource URLs, which cannot carry headers. */
@@ -145,9 +197,66 @@ export function withApiTokenQuery(url: string): string {
 
 let installed = false;
 
+let acquireTokenPromise: Promise<string | undefined> | undefined;
+
+/**
+ * Proactively fetch the launch token from the backend /api/auth/token endpoint
+ * if not already populated. Safe to call multiple times (memoized while pending).
+ */
+export async function acquireLaunchToken(): Promise<string | undefined> {
+    const existing = getLaunchToken();
+    if (existing) {
+        return existing;
+    }
+    if (acquireTokenPromise) {
+        return acquireTokenPromise;
+    }
+    const win = hostWindow();
+    const desktop = win?.scratchboxDesktop;
+    if (desktop && typeof desktop.getLaunchToken === 'function') {
+        try {
+            const token = await desktop.getLaunchToken();
+            if (typeof token === 'string' && token) {
+                setLaunchToken(token);
+                return token;
+            }
+        } catch {
+            // Ignore desktop IPC error
+        }
+    }
+    const apiBase = getApiBase();
+    if (!apiBase && typeof window === 'undefined') {
+        return undefined;
+    }
+    const targetUrl = apiBase ? `${apiBase}/api/auth/token` : '/api/auth/token';
+    acquireTokenPromise = (async () => {
+        try {
+            const globalFetch = (win && typeof win.fetch === 'function') ? win.fetch.bind(win) : (globalThis as any).fetch;
+            if (typeof globalFetch !== 'function') return undefined;
+            const res = await globalFetch(targetUrl, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && typeof data.token === 'string' && data.token) {
+                    setLaunchToken(data.token);
+                    return data.token;
+                }
+            }
+        } catch {
+            // Ignore network errors
+        } finally {
+            acquireTokenPromise = undefined;
+        }
+        return undefined;
+    })();
+    return acquireTokenPromise;
+}
+
 /**
  * Patches `window.fetch` and `window.EventSource` so same-origin API calls
- * carry the launch token. Idempotent. Call once at renderer startup.
+ * carry the launch token and route to the active API base URL. Idempotent. Call once at renderer startup.
  */
 export function installApiAuth(): void {
     const win = hostWindow();
@@ -158,23 +267,29 @@ export function installApiAuth(): void {
 
     const originalFetch = win.fetch.bind(win);
     const RequestCtor = win.Request;
-    win.fetch = (input: any, init?: RequestInitLike) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input?.url ?? '');
-        if (!isApiUrl(url)) {
+    win.fetch = async (input: any, init?: RequestInitLike) => {
+        const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String(input?.url ?? '');
+        if (!isApiUrl(rawUrl)) {
             return originalFetch(input, init);
         }
+        if (!getLaunchToken()) {
+            await acquireLaunchToken();
+        }
+        const resolvedUrl = resolveApiUrl(rawUrl);
         if (typeof input !== 'string' && !(input instanceof URL) && RequestCtor && input instanceof RequestCtor) {
             // Request object: copy headers onto a new Request so we don't mutate the caller's.
             const headers = mergeHeaders(input.headers, getApiHeaders());
-            return originalFetch(new RequestCtor(input, { headers }), init);
+            return originalFetch(new RequestCtor(resolvedUrl, { ...input, headers }), init);
         }
-        return originalFetch(input, withApiHeaders(init ?? {}));
+        return originalFetch(resolvedUrl, withApiHeaders(init ?? {}));
     };
 
     if (typeof win.EventSource === 'function') {
         const OriginalEventSource = win.EventSource;
         const PatchedEventSource = function (this: unknown, url: string | URL, init?: unknown) {
-            const target = withApiTokenQuery(typeof url === 'string' ? url : url.toString());
+            const rawUrl = typeof url === 'string' ? url : url.toString();
+            const resolved = resolveApiUrl(rawUrl);
+            const target = withApiTokenQuery(resolved);
             return new OriginalEventSource(target, init);
         } as any;
         PatchedEventSource.prototype = OriginalEventSource.prototype;
@@ -184,13 +299,7 @@ export function installApiAuth(): void {
         win.EventSource = PatchedEventSource;
     }
 
-    // Electron fallback: if the preload could not read argv, ask the main process once.
     if (!getLaunchToken()) {
-        const desktop = win.scratchboxDesktop;
-        if (desktop && typeof desktop.getLaunchToken === 'function') {
-            Promise.resolve(desktop.getLaunchToken())
-                .then((token: unknown) => setLaunchToken(typeof token === 'string' ? token : undefined))
-                .catch(() => undefined);
-        }
+        acquireLaunchToken().catch(() => undefined);
     }
 }

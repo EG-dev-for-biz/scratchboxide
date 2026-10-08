@@ -446,7 +446,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 if (signal.aborted) {
                     return;
                 }
-                if (event.text || event.artifact || event.mcpExecution || event.type === 'delta') {
+                if (event.artifact || event.mcpExecution || event.type === 'delta' || (event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done')) {
                     usedBackend = true;
                 }
                 if (event.questionCard || event.type === 'question_card') {
@@ -591,7 +591,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                             return [...prev, step];
                         });
                     }
-                    if (event.text) {
+                    if (event.text && event.type !== 'status' && event.type !== 'thought' && event.type !== 'subagent_start' && event.type !== 'subagent_done') {
                         if (event.type === 'delta') {
                             finalResponseText += event.text;
                         } else {
@@ -639,7 +639,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
             setShowTerminalErrorToast(true);
         }
     }
-    const effectiveUsedBackend = usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
+    const effectiveUsedBackend = !connectionError && usedBackend && (!!generatedArtifact || !!finalResponseText.trim() || !!streamQuestionCard || !!streamExecutionPlanCard);
     return { usedBackend: effectiveUsedBackend, connectionError, generatedArtifact, finalResponseText, streamGroundingMetadata, streamExecs, streamQuestionCard, streamExecutionPlanCard };
 }
 
@@ -657,7 +657,7 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
         finalAssistantMsg = {
             id: `msg-assistant-${Date.now()}`,
             sender: 'assistant',
-            text: cleanMessageText(finalResponseText, generatedArtifact),
+            text: cleanMessageText(finalResponseText, generatedArtifact) || `I've synthesized the **${generatedArtifact.title || 'Canvas Artifact'}** on your visual canvas.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             artifacts: [generatedArtifact],
             mcpExecutions: streamExecs.length > 0 ? streamExecs : undefined,
@@ -672,7 +672,7 @@ function finalizeBackendMessage(d: SendMessageDeps, ctx: GenerationContext, back
         finalAssistantMsg = {
             id: `msg-assistant-${Date.now()}`,
             sender: 'assistant',
-            text: finalResponseText || 'Response received.',
+            text: cleanMessageText(finalResponseText) || 'Response received.',
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             mcpExecutions: streamExecs.length > 0 ? streamExecs : undefined,
             groundingMetadata: streamGroundingMetadata,

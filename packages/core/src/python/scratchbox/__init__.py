@@ -50,6 +50,8 @@ composer = getattr(_native, "composer", None) if _native else None
 plant = getattr(_native, "plant", None) if _native else None
 processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
+sdf = getattr(_native, "sdf", None) if _native else None
+hair = getattr(_native, "hair", None) if _native else None
 random = _random
 py_math = _py_math
 
@@ -63,8 +65,6 @@ def _to_point3(pt):
 # ============================================================================
 # 1. ENHANCED MESH CAPABILITIES (Chaining, Multi-Type Args, Aliases)
 # ============================================================================
-_mesh_sub_parts = {}
-
 if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geometry, "Mesh"):
     _Mesh = _native.geometry.Mesh
     _orig_translate = _Mesh.translate
@@ -104,14 +104,17 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
         return self
 
     def _mesh_append(self, other):
-        # Track sub-meshes for high-fidelity multi-material GLB export
-        mid = id(self)
-        if mid not in _mesh_sub_parts:
-            _mesh_sub_parts[mid] = []
+        # Track sub-meshes per-instance directly on the C++ Mesh via dynamic_attr
+        if not hasattr(self, "_sub_parts"):
+            self._sub_parts = []
             if hasattr(self, "vertex_count") and self.vertex_count > 0:
-                _mesh_sub_parts[mid].append(self)
+                self._sub_parts.append(self)
         target = other.mesh if hasattr(other, "mesh") else other
-        _mesh_sub_parts[mid].append(target)
+        self._sub_parts.append(target)
+        if hasattr(target, "_sub_parts") and target._sub_parts:
+            for sub in target._sub_parts:
+                if sub is not target and sub not in self._sub_parts:
+                    self._sub_parts.append(sub)
 
         # Bake material base_color into vertices if set
         if hasattr(target, "material") and target.material:
@@ -397,7 +400,34 @@ if _native is not None and hasattr(_native, "geometry") and hasattr(_native.geom
             return self
 
         def _mesh_subtract(self, other):
-            # Non-destructive carve approximation: marks cavity & subtracts vertices in intersection
+            if other is None:
+                return self
+            b_self = getattr(self, "bounds", None)
+            b_other = getattr(other, "bounds", None)
+            if b_self and b_other and hasattr(b_self, "intersects") and not b_self.intersects(b_other):
+                return self
+
+            if hasattr(self, "slice_by_plane") and b_other is not None and b_self is not None:
+                c_other = b_other.center() if callable(b_other.center) else b_other.center
+                c_self = b_self.center() if callable(b_self.center) else b_self.center
+                delta_x = c_other.x - c_self.x
+                delta_y = c_other.y - c_self.y
+                delta_z = c_other.z - c_self.z
+                length = (delta_x**2 + delta_y**2 + delta_z**2)**0.5
+                if length > 1e-4 and math is not None:
+                    normal = math.Vec3(delta_x / length, delta_y / length, delta_z / length)
+                    b_size = b_other.size() if callable(b_other.size) else b_other.size
+                    cut_plane_pt = math.Vec3(
+                        c_other.x - normal.x * (b_size.x * 0.4),
+                        c_other.y - normal.y * (b_size.y * 0.4),
+                        c_other.z - normal.z * (b_size.z * 0.4),
+                    )
+                    self.slice_by_plane(cut_plane_pt, normal, True, True)
+
+            if hasattr(self, "recompute_smooth_normals"):
+                self.recompute_smooth_normals()
+            if hasattr(self, "recompute_bounds"):
+                self.recompute_bounds()
             return self
 
         _orig_taubin_smooth = getattr(_NativeMesh, "taubin_smooth", None)
@@ -633,6 +663,7 @@ if _native is not None and hasattr(_native, "geometry"):
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box
     _geom.create_cube = create_box
+    create_cube = create_box
 
     _orig_create_sphere = getattr(_geom, "create_sphere", None)
     def create_sphere(radius=1.0, rings=16, sectors=32, color=None, segments=None, material=None, **kwargs):
@@ -1238,9 +1269,9 @@ if _native is not None and hasattr(_native, "io"):
             if _orig_write_glb:
                 return _orig_write_glb(out_path, mesh_list)
         else:
-            mid = id(target)
-            if mid in _mesh_sub_parts and len(_mesh_sub_parts[mid]) > 1:
-                mesh_list = [getattr(m, "mesh", m) for m in _mesh_sub_parts[mid] if m is not None]
+            sub_parts = getattr(target, "_sub_parts", None)
+            if sub_parts and len(sub_parts) > 1:
+                mesh_list = [getattr(m, "mesh", m) for m in sub_parts if m is not None]
                 if _orig_write_glb:
                     return _orig_write_glb(out_path, mesh_list)
 
@@ -1249,13 +1280,31 @@ if _native is not None and hasattr(_native, "io"):
             return _orig_write_glb(out_path, target_mesh)
         raise RuntimeError("Native io.write_glb not available")
 
+    _orig_export_glb_bytes = getattr(_native.io, "export_glb_bytes", None) if _native and hasattr(_native, "io") else None
+
     def export_glb(arg1, arg2=None):
         if arg2 is None and not isinstance(arg1, str):
+            target = arg1
+            if isinstance(target, (list, tuple)):
+                mesh_list = [getattr(m, "mesh", m) for m in target if m is not None]
+                if _orig_export_glb_bytes:
+                    return _orig_export_glb_bytes(mesh_list)
+            else:
+                sub_parts = getattr(target, "_sub_parts", None)
+                if sub_parts and len(sub_parts) > 1:
+                    mesh_list = [getattr(m, "mesh", m) for m in sub_parts if m is not None]
+                    if _orig_export_glb_bytes:
+                        return _orig_export_glb_bytes(mesh_list)
+
+            target_mesh = target.mesh if hasattr(target, "mesh") else target
+            if _orig_export_glb_bytes:
+                return _orig_export_glb_bytes(target_mesh)
+
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".glb", delete=False) as tf:
                 tmp_path = tf.name
             try:
-                write_glb(tmp_path, arg1)
+                write_glb(tmp_path, target)
                 with open(tmp_path, "rb") as f:
                     return f.read()
             finally:
@@ -1333,5 +1382,7 @@ __all__ = [
     "composer",
     "plant",
     "processing",
-    "topology"
+    "topology",
+    "sdf",
+    "hair"
 ]
