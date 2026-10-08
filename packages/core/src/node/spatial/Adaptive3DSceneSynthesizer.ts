@@ -381,6 +381,9 @@ export class Adaptive3DSceneSynthesizer {
 #include "scratchbox_engine.hpp"
 #include "scratchbox_sb_veggie.hpp"
 #include "scratchbox_architecture.hpp"
+#include "scratchbox_halfedge.hpp"
+#include "scratchbox_infiniti.hpp"
+#include "scratchbox_substrate.hpp"
 #include "scratchbox_io.hpp"
 
 #include <iostream>
@@ -394,6 +397,9 @@ using namespace scratchbox::math;
 using namespace scratchbox::geometry;
 using namespace scratchbox::sb_veggie;
 using namespace scratchbox::architecture;
+using namespace scratchbox::halfedge;
+using namespace scratchbox::infiniti;
+using namespace scratchbox::substrate;
 using namespace scratchbox::io;
 
 /// ============================================================================
@@ -473,6 +479,26 @@ static ScratchboxMesh buildTerrainMesh() {
         }
     }
 
+    // Particle-based hydraulic erosion and talus slope thermal settling
+    std::vector<float> hGrid(gridSize * gridSize);
+    for (int i = 0; i < gridSize; ++i) {
+        for (int j = 0; j < gridSize; ++j) {
+            hGrid[i * gridSize + j] = positions[i][j].y;
+        }
+    }
+
+    HydraulicErosionConfig ecfg;
+    ecfg.iterations = 2500;
+    ecfg.thermalIterations = 3;
+    ecfg.talusAngleThresholdDeg = 33.0f;
+    std::vector<float> erosionDeltas = HydraulicErosionSimulator::simulate(hGrid, gridSize, gridSize, step, ecfg);
+
+    for (int i = 0; i < gridSize; ++i) {
+        for (int j = 0; j < gridSize; ++j) {
+            positions[i][j].y = hGrid[i * gridSize + j];
+        }
+    }
+
     for (int i = 0; i < gridSize; ++i) {
         for (int j = 0; j < gridSize; ++j) {
             float x = positions[i][j].x;
@@ -510,6 +536,16 @@ static ScratchboxMesh buildTerrainMesh() {
                     std::clamp(snowColor.z + shadowCool, 0.0f, 1.0f),
                     1.0f
                 );
+            }
+
+            // Deposition sediment tints warmer ochre, carved talwegs tint cooler moisture
+            float ed = erosionDeltas.empty() ? 0.0f : erosionDeltas[i * gridSize + j];
+            if (ed > 0.04f) {
+                float dep = std::clamp(ed * 1.5f, 0.0f, 0.5f);
+                vColor = math::lerp(vColor, Vec4(0.52f, 0.46f, 0.38f, 1.0f), dep);
+            } else if (ed < -0.04f) {
+                float carve = std::clamp(-ed * 1.5f, 0.0f, 0.5f);
+                vColor = math::lerp(vColor, Vec4(0.20f, 0.22f, 0.26f, 1.0f), carve);
             }
 
             colors[i][j] = vColor;
@@ -682,9 +718,24 @@ static ScratchboxMesh buildArchitecturalCompound() {
     ${contract.sceneGraph?.entities.some(e => e.id === 'hvac_unit') ? `appendMesh(compound, hvacUnit);` : ''}
     ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_east') ? `appendMesh(compound, solarEast);` : ''}
     ${contract.sceneGraph?.entities.some(e => e.id === 'solar_array_west') ? `appendMesh(compound, solarWest);` : ''}
-
     compound.recomputeBounds();
-    return compound;
+
+    // Multi-Scale 70-20-10 Geometric Detail & Micro-Topography Enhancement:
+    // 1. Continuous Edge Beveling & Filleting (kill infinite razor edges, catch specular glints)
+    BevelConfig bcfg;
+    bcfg.bevelRadius = 0.04f;
+    bcfg.dihedralThresholdDeg = 35.0f;
+    bcfg.segments = 2;
+    ScratchboxMesh beveledCompound = ContinuousEdgeBeveler::bevelSharpEdges(compound, bcfg);
+
+    // 2. Discrete Laplace-Beltrami Mean Curvature & Cavity Ambient Obscurance Baking
+    LaplaceBeltramiCurvatureEngine::computeAndBake(beveledCompound);
+
+    // 3. Multi-layer Physical Weathering, Patina, Edge Scuffing & Crevice Grime Stratification
+    ProceduralWearAndGrimeShader::applyWearAndGrimeToMesh(beveledCompound);
+
+    beveledCompound.recomputeBounds();
+    return beveledCompound;
 }
 
 // ============================================================================

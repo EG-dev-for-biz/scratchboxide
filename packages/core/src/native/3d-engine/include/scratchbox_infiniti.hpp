@@ -289,6 +289,269 @@ public:
 };
 
 // ============================================================================
+// 2b. Full Hydraulic & Thermal Morphogenetic Erosion Engine
+// ============================================================================
+struct HydraulicErosionConfig {
+    int iterations{20000};             // Number of simulated water droplets
+    int maxDropletLifetime{35};
+    float inertia{0.15f};              // Flow momentum preservation factor
+    float sedimentCapacityFactor{4.0f};// Sediment carriage capacity
+    float minSedimentCapacity{0.01f};
+    float depositSpeed{0.3f};          // Deposition coefficient
+    float erodeSpeed{0.3f};            // Erosion cutting coefficient
+    float evaporateSpeed{0.02f};       // Droplet evaporation rate
+    float gravity{9.81f};
+    float initialWaterVolume{1.0f};
+    float initialSpeed{1.0f};
+
+    // Thermal weathering (talus scree formation)
+    bool enableThermalWeathering{true};
+    int thermalIterations{4};
+    float talusAngleThresholdDeg{33.0f}; // Angle of repose (~33 deg)
+    float thermalTalusRate{0.35f};
+
+    uint32_t seed{4242};
+};
+
+class HydraulicErosionSimulator {
+private:
+    struct HeightAndGrad {
+        float height;
+        float gradX;
+        float gradZ;
+    };
+
+    static inline HeightAndGrad sampleHeightAndGrad(
+        const std::vector<float>& hmap, int cols, int rows, float x, float z
+    ) {
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::clamp(x0, 0, cols - 2);
+        z0 = std::clamp(z0, 0, rows - 2);
+
+        float u = x - static_cast<float>(x0);
+        float v = z - static_cast<float>(z0);
+
+        float h00 = hmap[z0 * cols + x0];
+        float h10 = hmap[z0 * cols + (x0 + 1)];
+        float h01 = hmap[(z0 + 1) * cols + x0];
+        float h11 = hmap[(z0 + 1) * cols + (x0 + 1)];
+
+        float gx = (h10 - h00) * (1.0f - v) + (h11 - h01) * v;
+        float gz = (h01 - h00) * (1.0f - u) + (h11 - h10) * u;
+        float h = math::lerp(math::lerp(h00, h10, u), math::lerp(h01, h11, u), v);
+
+        return { h, gx, gz };
+    }
+
+public:
+    /**
+     * Runs particle-based hydraulic droplet erosion and thermal weathering
+     * directly mutates the 2D heightmap in place, and returns an erosion delta map.
+     */
+    static std::vector<float> simulate(
+        std::vector<float>& heights,
+        int cols, int rows, float step,
+        const HydraulicErosionConfig& cfg = {}
+    ) {
+        if (cols < 3 || rows < 3 || heights.size() != static_cast<size_t>(cols * rows)) {
+            return {};
+        }
+
+        std::vector<float> originalHeights = heights;
+        std::mt19937 rng(cfg.seed);
+        std::uniform_real_distribution<float> distX(1.0f, static_cast<float>(cols - 2));
+        std::uniform_real_distribution<float> distZ(1.0f, static_cast<float>(rows - 2));
+
+        for (int iter = 0; iter < cfg.iterations; ++iter) {
+            float px = distX(rng);
+            float pz = distZ(rng);
+            float dirX = 0.0f;
+            float dirZ = 0.0f;
+            float speed = cfg.initialSpeed;
+            float water = cfg.initialWaterVolume;
+            float sediment = 0.0f;
+
+            for (int lifetime = 0; lifetime < cfg.maxDropletLifetime; ++lifetime) {
+                int nodeX = static_cast<int>(px);
+                int nodeZ = static_cast<int>(pz);
+                if (nodeX < 1 || nodeX >= cols - 2 || nodeZ < 1 || nodeZ >= rows - 2) break;
+
+                HeightAndGrad hg = sampleHeightAndGrad(heights, cols, rows, px, pz);
+
+                // Update momentum vector
+                dirX = dirX * cfg.inertia - hg.gradX * (1.0f - cfg.inertia);
+                dirZ = dirZ * cfg.inertia - hg.gradZ * (1.0f - cfg.inertia);
+
+                float dirLen = std::sqrt(dirX * dirX + dirZ * dirZ);
+                if (dirLen < 1e-5f) break;
+
+                dirX /= dirLen;
+                dirZ /= dirLen;
+
+                float newPx = px + dirX;
+                float newPz = pz + dirZ;
+
+                if (newPx < 1.0f || newPx >= static_cast<float>(cols - 2) ||
+                    newPz < 1.0f || newPz >= static_cast<float>(rows - 2)) {
+                    break;
+                }
+
+                HeightAndGrad newHg = sampleHeightAndGrad(heights, cols, rows, newPx, newPz);
+                float deltaH = newHg.height - hg.height;
+
+                // Carry capacity
+                float sedimentCapacity = std::max(
+                    -deltaH * speed * water * cfg.sedimentCapacityFactor,
+                    cfg.minSedimentCapacity
+                );
+
+                if (sediment > sedimentCapacity || deltaH > 0.0f) {
+                    // Deposit
+                    float amountToDeposit = (deltaH > 0.0f)
+                        ? std::min(deltaH, sediment)
+                        : (sediment - sedimentCapacity) * cfg.depositSpeed;
+
+                    sediment -= amountToDeposit;
+
+                    float cellU = px - static_cast<float>(nodeX);
+                    float cellV = pz - static_cast<float>(nodeZ);
+
+                    heights[nodeZ * cols + nodeX] += amountToDeposit * (1.0f - cellU) * (1.0f - cellV);
+                    heights[nodeZ * cols + (nodeX + 1)] += amountToDeposit * cellU * (1.0f - cellV);
+                    heights[(nodeZ + 1) * cols + nodeX] += amountToDeposit * (1.0f - cellU) * cellV;
+                    heights[(nodeZ + 1) * cols + (nodeX + 1)] += amountToDeposit * cellU * cellV;
+                } else {
+                    // Erode
+                    float amountToErode = std::min((sedimentCapacity - sediment) * cfg.erodeSpeed, -deltaH);
+
+                    float cellU = px - static_cast<float>(nodeX);
+                    float cellV = pz - static_cast<float>(nodeZ);
+
+                    heights[nodeZ * cols + nodeX] -= amountToErode * (1.0f - cellU) * (1.0f - cellV);
+                    heights[nodeZ * cols + (nodeX + 1)] -= amountToErode * cellU * (1.0f - cellV);
+                    heights[(nodeZ + 1) * cols + nodeX] -= amountToErode * (1.0f - cellU) * cellV;
+                    heights[(nodeZ + 1) * cols + (nodeX + 1)] -= amountToErode * cellU * cellV;
+
+                    sediment += amountToErode;
+                }
+
+                speed = std::sqrt(std::max(0.0f, speed * speed + deltaH * cfg.gravity));
+                water *= (1.0f - cfg.evaporateSpeed);
+                px = newPx;
+                pz = newPz;
+            }
+        }
+
+        // Thermal weathering (talus scree formation on steep slopes exceeding repose angle)
+        if (cfg.enableThermalWeathering && cfg.thermalIterations > 0) {
+            float maxTalusDelta = std::tan(cfg.talusAngleThresholdDeg * (math::PI / 180.0f)) * step;
+
+            for (int t = 0; t < cfg.thermalIterations; ++t) {
+                for (int z = 1; z < rows - 1; ++z) {
+                    for (int x = 1; x < cols - 1; ++x) {
+                        int idx = z * cols + x;
+                        float curH = heights[idx];
+
+                        int nbrs[4] = { idx + 1, idx - 1, idx + cols, idx - cols };
+                        for (int nIdx : nbrs) {
+                            float diff = curH - heights[nIdx];
+                            if (diff > maxTalusDelta) {
+                                float excess = (diff - maxTalusDelta) * 0.25f * cfg.thermalTalusRate;
+                                heights[idx] -= excess;
+                                heights[nIdx] += excess;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return per-vertex height delta
+        std::vector<float> deltaMap(heights.size());
+        for (size_t i = 0; i < heights.size(); ++i) {
+            deltaMap[i] = heights[i] - originalHeights[i];
+        }
+        return deltaMap;
+    }
+
+    /**
+     * Synthesizes a high-fidelity eroded terrain ScratchboxMesh directly.
+     */
+    static ScratchboxMesh generateErodedTerrainMesh(
+        int cols, int rows, float minX, float minZ, float step,
+        const WarpedTerrainConfig& terrainCfg,
+        const HydraulicErosionConfig& erosionCfg,
+        const std::string& meshName = "ErodedTerrain"
+    ) {
+        ScratchboxMesh mesh(meshName);
+
+        // 1. Evaluate baseline warped terrain heightfield
+        std::vector<float> heights(cols * rows);
+        for (int z = 0; z < rows; ++z) {
+            for (int x = 0; x < cols; ++x) {
+                float wx = minX + static_cast<float>(x) * step;
+                float wz = minZ + static_cast<float>(z) * step;
+                heights[z * cols + x] = DomainWarpedTerrain::sampleHeight(wx, wz, terrainCfg);
+            }
+        }
+
+        // 2. Simulate hydraulic and thermal erosion
+        std::vector<float> deltas = simulate(heights, cols, rows, step, erosionCfg);
+
+        // 3. Assemble indexed mesh with baked erosion vertex colors
+        for (int z = 0; z < rows; ++z) {
+            for (int x = 0; x < cols; ++x) {
+                int idx = z * cols + x;
+                float wx = minX + static_cast<float>(x) * step;
+                float wz = minZ + static_cast<float>(z) * step;
+                float wy = heights[idx];
+
+                // Compute normal via finite differences
+                float hL = (x > 0) ? heights[z * cols + (x - 1)] : wy;
+                float hR = (x < cols - 1) ? heights[z * cols + (x + 1)] : wy;
+                float hD = (z > 0) ? heights[(z - 1) * cols + x] : wy;
+                float hU = (z < rows - 1) ? heights[(z + 1) * cols + x] : wy;
+
+                Vec3 norm(-(hR - hL) / (2.0f * step), 1.0f, -(hU - hD) / (2.0f * step));
+                norm = norm.normalized();
+
+                float u = static_cast<float>(x) / static_cast<float>(cols - 1);
+                float v = static_cast<float>(z) / static_cast<float>(rows - 1);
+
+                // Vertex colors:
+                // R: Sediment deposition (> 0)
+                // G: Moisture / carved talweg (< 0)
+                // B: Terrain height normalized
+                float d = deltas.empty() ? 0.0f : deltas[idx];
+                float rDep = std::clamp(d * 3.0f, 0.0f, 1.0f);
+                float gErode = std::clamp(-d * 3.0f, 0.0f, 1.0f);
+                float bElev = std::clamp((wy + 10.0f) / 30.0f, 0.0f, 1.0f);
+
+                Vec4 color(0.45f + rDep * 0.35f, 0.42f - gErode * 0.25f, 0.38f + bElev * 0.25f, 1.0f);
+                mesh.addVertex(Vertex(Vec3(wx, wy, wz), norm, Vec2(u * 8.0f, v * 8.0f), color));
+            }
+        }
+
+        // Generate triangle indices
+        for (int z = 0; z < rows - 1; ++z) {
+            for (int x = 0; x < cols - 1; ++x) {
+                uint32_t i00 = static_cast<uint32_t>(z * cols + x);
+                uint32_t i10 = static_cast<uint32_t>(z * cols + (x + 1));
+                uint32_t i01 = static_cast<uint32_t>((z + 1) * cols + x);
+                uint32_t i11 = static_cast<uint32_t>((z + 1) * cols + (x + 1));
+
+                mesh.addTriangle(i00, i01, i10);
+                mesh.addTriangle(i10, i01, i11);
+            }
+        }
+
+        mesh.recomputeBounds();
+        return mesh;
+    }
+};
+
+// ============================================================================
 // 3. Two-Stage Keypoint Proximity Clustered Scatter Engine
 // (Derived from Infiniti assets/scatters/utils/cluster.py & density.py)
 // ============================================================================

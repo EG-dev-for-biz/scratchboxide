@@ -913,6 +913,328 @@ public:
     }
 };
 
+// ============================================================================
+// 7. Continuous Edge Bevel & Chamfer Engine (Half-Edge Topology Modifier)
+// ============================================================================
+
+struct BevelConfig {
+    float bevelRadius{0.03f};
+    float dihedralThresholdDeg{30.0f};
+    int segments{2}; // 1 = flat chamfer, >=2 = cylindrical multi-segment fillet
+};
+
+class ContinuousEdgeBeveler {
+public:
+    /**
+     * Splits sharp interior manifold edges and inserts cylindrical fillet ribbons
+     * or planar chamfers, rounding hard transitions and enabling specular highlights.
+     */
+    static ScratchboxMesh bevelSharpEdges(const ScratchboxMesh& input, const BevelConfig& config = {}) {
+        if (input.indices.empty() || input.vertices.empty()) return input;
+        if (config.bevelRadius <= 1e-5f) return input;
+
+        ScratchboxMesh outMesh(input.name + "_beveled");
+        outMesh.material = input.material;
+
+        size_t triCount = input.indices.size() / 3;
+        float cosThreshold = std::cos(config.dihedralThresholdDeg * (math::PI / 180.0f));
+
+        // Precompute face normals and centers
+        std::vector<Vec3> faceNormals(triCount);
+        for (size_t f = 0; f < triCount; ++f) {
+            Vec3 p0 = input.vertices[input.indices[f * 3 + 0]].position;
+            Vec3 p1 = input.vertices[input.indices[f * 3 + 1]].position;
+            Vec3 p2 = input.vertices[input.indices[f * 3 + 2]].position;
+            Vec3 n = (p1 - p0).cross(p2 - p0);
+            float len = n.length();
+            faceNormals[f] = len > 1e-7f ? n / len : Vec3(0, 1, 0);
+        }
+
+        struct EdgeKey {
+            uint32_t u, v;
+            bool operator==(const EdgeKey& o) const { return u == o.u && v == o.v; }
+        };
+        struct EdgeKeyHash {
+            size_t operator()(const EdgeKey& k) const {
+                return (static_cast<size_t>(k.u) * 73856093) ^ (static_cast<size_t>(k.v) * 19349663);
+            }
+        };
+
+        struct EdgeIncident {
+            uint32_t face;
+            int localEdgeIndex;
+        };
+        std::unordered_map<EdgeKey, std::vector<EdgeIncident>, EdgeKeyHash> edgeFaceMap;
+
+        for (size_t f = 0; f < triCount; ++f) {
+            uint32_t idx[3] = {
+                input.indices[f * 3 + 0],
+                input.indices[f * 3 + 1],
+                input.indices[f * 3 + 2]
+            };
+            for (int k = 0; k < 3; ++k) {
+                uint32_t u = std::min(idx[k], idx[(k + 1) % 3]);
+                uint32_t v = std::max(idx[k], idx[(k + 1) % 3]);
+                edgeFaceMap[{u, v}].push_back({static_cast<uint32_t>(f), k});
+            }
+        }
+
+        // Identify sharp edges
+        std::unordered_map<EdgeKey, bool, EdgeKeyHash> isSharpEdge;
+        for (const auto& pair : edgeFaceMap) {
+            if (pair.second.size() == 2) {
+                uint32_t fA = pair.second[0].face;
+                uint32_t fB = pair.second[1].face;
+                float dotVal = faceNormals[fA].dot(faceNormals[fB]);
+                if (dotVal < cosThreshold) {
+                    isSharpEdge[pair.first] = true;
+                }
+            }
+        }
+
+        if (isSharpEdge.empty()) return input;
+
+        // Inset each face's vertices
+        struct FaceVertOffsets {
+            Vec3 pos[3];
+            Vec3 norm[3];
+            Vec2 uv[3];
+            Vec4 col[3];
+        };
+        std::vector<FaceVertOffsets> insetFaces(triCount);
+
+        for (size_t f = 0; f < triCount; ++f) {
+            uint32_t idx[3] = {
+                input.indices[f * 3 + 0],
+                input.indices[f * 3 + 1],
+                input.indices[f * 3 + 2]
+            };
+            Vec3 fn = faceNormals[f];
+
+            Vec3 edgeInward[3];
+            bool edgeIsSharp[3];
+            for (int k = 0; k < 3; ++k) {
+                Vec3 pA = input.vertices[idx[k]].position;
+                Vec3 pB = input.vertices[idx[(k + 1) % 3]].position;
+                Vec3 edgeDir = (pB - pA).normalized();
+                edgeInward[k] = fn.cross(edgeDir).normalized();
+                uint32_t u = std::min(idx[k], idx[(k + 1) % 3]);
+                uint32_t v = std::max(idx[k], idx[(k + 1) % 3]);
+                edgeIsSharp[k] = isSharpEdge.find({u, v}) != isSharpEdge.end();
+            }
+
+            for (int k = 0; k < 3; ++k) {
+                int prevEdge = (k + 2) % 3;
+                int nextEdge = k;
+                Vec3 shift{0, 0, 0};
+                if (edgeIsSharp[prevEdge]) shift = shift + edgeInward[prevEdge] * config.bevelRadius;
+                if (edgeIsSharp[nextEdge]) shift = shift + edgeInward[nextEdge] * config.bevelRadius;
+
+                insetFaces[f].pos[k] = input.vertices[idx[k]].position + shift;
+                insetFaces[f].norm[k] = fn;
+                insetFaces[f].uv[k] = input.vertices[idx[k]].uv;
+                insetFaces[f].col[k] = input.vertices[idx[k]].color;
+            }
+
+            uint32_t baseIdx = static_cast<uint32_t>(outMesh.vertices.size());
+            for (int k = 0; k < 3; ++k) {
+                outMesh.addVertex(Vertex(insetFaces[f].pos[k], insetFaces[f].norm[k], insetFaces[f].uv[k], insetFaces[f].col[k]));
+            }
+            outMesh.addTriangle(baseIdx, baseIdx + 1, baseIdx + 2);
+        }
+
+        // Bridge sharp edges with cylindrical / chamfer fillets
+        for (const auto& pair : edgeFaceMap) {
+            if (pair.second.size() != 2) continue;
+            if (isSharpEdge.find(pair.first) == isSharpEdge.end()) continue;
+
+            const auto& incA = pair.second[0];
+            const auto& incB = pair.second[1];
+
+            uint32_t fA = incA.face;
+            uint32_t fB = incB.face;
+            int eA = incA.localEdgeIndex;
+            int eB = incB.localEdgeIndex;
+
+            Vec3 pA0 = insetFaces[fA].pos[eA];
+            Vec3 pA1 = insetFaces[fA].pos[(eA + 1) % 3];
+            Vec3 nA = faceNormals[fA];
+
+            Vec3 pB0 = insetFaces[fB].pos[(eB + 1) % 3];
+            Vec3 pB1 = insetFaces[fB].pos[eB];
+            Vec3 nB = faceNormals[fB];
+
+            uint32_t vA0 = input.indices[fA * 3 + eA];
+            uint32_t vB0 = input.indices[fB * 3 + eB];
+            if (vA0 == vB0) {
+                std::swap(pB0, pB1);
+            }
+
+            int segments = std::max(1, config.segments);
+            uint32_t prevRow[2];
+
+            uint32_t startIdx = static_cast<uint32_t>(outMesh.vertices.size());
+            outMesh.addVertex(Vertex(pA0, nA, Vec2(0, 0), input.vertices[pair.first.u].color));
+            outMesh.addVertex(Vertex(pA1, nA, Vec2(1, 0), input.vertices[pair.first.v].color));
+            prevRow[0] = startIdx;
+            prevRow[1] = startIdx + 1;
+
+            for (int s = 1; s <= segments; ++s) {
+                float t = static_cast<float>(s) / static_cast<float>(segments);
+                Vec3 curP0 = math::lerp(pA0, pB0, t);
+                Vec3 curP1 = math::lerp(pA1, pB1, t);
+                Vec3 curN = math::lerp(nA, nB, t).normalized();
+
+                uint32_t curRow[2];
+                uint32_t curIdx = static_cast<uint32_t>(outMesh.vertices.size());
+                outMesh.addVertex(Vertex(curP0, curN, Vec2(0, t), input.vertices[pair.first.u].color));
+                outMesh.addVertex(Vertex(curP1, curN, Vec2(1, t), input.vertices[pair.first.v].color));
+                curRow[0] = curIdx;
+                curRow[1] = curIdx + 1;
+
+                outMesh.addTriangle(prevRow[0], prevRow[1], curRow[1]);
+                outMesh.addTriangle(prevRow[0], curRow[1], curRow[0]);
+
+                prevRow[0] = curRow[0];
+                prevRow[1] = curRow[1];
+            }
+        }
+
+        outMesh.recomputeBounds();
+        return outMesh;
+    }
+};
+
+// ============================================================================
+// 8. Laplace-Beltrami Discrete Curvature & Cavity Ambient Obscurance Engine
+// ============================================================================
+
+class LaplaceBeltramiCurvatureEngine {
+public:
+    struct CurvatureResult {
+        std::vector<float> meanCurvature;
+        std::vector<float> signedCurvature;
+        std::vector<float> cavityOcclusion;
+    };
+
+    /**
+     * Evaluates discrete Laplace-Beltrami operator via cotangent weights
+     * and bakes normalized curvature (Red) and cavity AO (Green) into COLOR_0.
+     */
+    static CurvatureResult computeAndBake(ScratchboxMesh& mesh) {
+        CurvatureResult res;
+        size_t vertCount = mesh.vertices.size();
+        size_t triCount = mesh.indices.size() / 3;
+
+        res.meanCurvature.assign(vertCount, 0.0f);
+        res.signedCurvature.assign(vertCount, 0.0f);
+        res.cavityOcclusion.assign(vertCount, 1.0f);
+
+        if (vertCount == 0 || triCount == 0) return res;
+
+        std::vector<std::vector<uint32_t>> vertFaces(vertCount);
+        std::vector<float> faceAreas(triCount);
+
+        for (size_t f = 0; f < triCount; ++f) {
+            uint32_t i0 = mesh.indices[f * 3 + 0];
+            uint32_t i1 = mesh.indices[f * 3 + 1];
+            uint32_t i2 = mesh.indices[f * 3 + 2];
+
+            Vec3 p0 = mesh.vertices[i0].position;
+            Vec3 p1 = mesh.vertices[i1].position;
+            Vec3 p2 = mesh.vertices[i2].position;
+
+            float area = 0.5f * (p1 - p0).cross(p2 - p0).length();
+            faceAreas[f] = area;
+
+            vertFaces[i0].push_back(static_cast<uint32_t>(f));
+            vertFaces[i1].push_back(static_cast<uint32_t>(f));
+            vertFaces[i2].push_back(static_cast<uint32_t>(f));
+        }
+
+        std::vector<Vec3> laplaceVectors(vertCount, Vec3(0, 0, 0));
+        std::vector<float> voronoiAreas(vertCount, 0.0f);
+
+        for (size_t f = 0; f < triCount; ++f) {
+            uint32_t idx[3] = {
+                mesh.indices[f * 3 + 0],
+                mesh.indices[f * 3 + 1],
+                mesh.indices[f * 3 + 2]
+            };
+
+            for (int k = 0; k < 3; ++k) {
+                uint32_t i = idx[k];
+                uint32_t j = idx[(k + 1) % 3];
+                uint32_t opp = idx[(k + 2) % 3];
+
+                Vec3 pi = mesh.vertices[i].position;
+                Vec3 pj = mesh.vertices[j].position;
+                Vec3 popp = mesh.vertices[opp].position;
+
+                Vec3 u = pi - popp;
+                Vec3 v = pj - popp;
+                float dotUV = u.dot(v);
+                float crossLen = u.cross(v).length();
+                float cotTheta = crossLen > 1e-7f ? (dotUV / crossLen) : 0.0f;
+
+                float weight = 0.5f * std::clamp(cotTheta, -10.0f, 10.0f);
+                laplaceVectors[i] += (pj - pi) * weight;
+                laplaceVectors[j] += (pi - pj) * weight;
+            }
+
+            for (int k = 0; k < 3; ++k) {
+                voronoiAreas[idx[k]] += faceAreas[f] * (1.0f / 3.0f);
+            }
+        }
+
+        float maxCurv = 1e-5f;
+
+        for (size_t i = 0; i < vertCount; ++i) {
+            float area = std::max(1e-6f, voronoiAreas[i]);
+            Vec3 deltaX = laplaceVectors[i] * (0.5f / area);
+            float h = 0.5f * deltaX.length();
+            res.meanCurvature[i] = h;
+            if (h > maxCurv) maxCurv = h;
+
+            float signDot = deltaX.dot(mesh.vertices[i].normal);
+            res.signedCurvature[i] = (signDot < 0.0f) ? h : -h;
+
+            float occludedSum = 0.0f;
+            int neighborCount = 0;
+            const auto& vf = vertFaces[i];
+            Vec3 ni = mesh.vertices[i].normal;
+            Vec3 pi = mesh.vertices[i].position;
+
+            for (uint32_t fid : vf) {
+                for (int k = 0; k < 3; ++k) {
+                    uint32_t nIdx = mesh.indices[fid * 3 + k];
+                    if (nIdx != i) {
+                        Vec3 toNeighbor = mesh.vertices[nIdx].position - pi;
+                        float dist = toNeighbor.length();
+                        if (dist > 1e-6f) {
+                            float proj = ni.dot(toNeighbor / dist);
+                            if (proj > 0.05f) {
+                                occludedSum += proj;
+                            }
+                            neighborCount++;
+                        }
+                    }
+                }
+            }
+
+            float cavity = (neighborCount > 0)
+                ? std::clamp(1.0f - (occludedSum / static_cast<float>(neighborCount)) * 2.0f, 0.0f, 1.0f)
+                : 1.0f;
+            res.cavityOcclusion[i] = cavity;
+
+            float normCurv = std::clamp(h / maxCurv, 0.0f, 1.0f);
+            mesh.vertices[i].color = Vec4(normCurv, cavity, 1.0f - cavity * 0.5f, 1.0f);
+        }
+
+        return res;
+    }
+};
+
 } // namespace halfedge
 } // namespace scratchbox
 

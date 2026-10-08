@@ -329,6 +329,36 @@ public:
 
         return WearGrimeResult{albedo, roughness, edgeWearMask, creviceGrimeMask, dustMask};
     }
+
+    /**
+     * Bakes curvature-driven mechanical edge wear and cavity crevice grime
+     * directly into the mesh vertex colors and materials.
+     */
+    static void applyWearAndGrimeToMesh(geometry::ScratchboxMesh& mesh) {
+        WearGrimeParameters params;
+        applyWearAndGrimeToMesh(mesh, params, Vec3(0.55f, 0.57f, 0.60f), 0.5f);
+    }
+
+    static void applyWearAndGrimeToMesh(
+        geometry::ScratchboxMesh& mesh,
+        const WearGrimeParameters& defaultParams,
+        const Vec3& defaultAlbedo = Vec3(0.55f, 0.57f, 0.60f),
+        float defaultRoughness = 0.5f
+    ) {
+        for (auto& v : mesh.vertices) {
+            WearGrimeParameters p = defaultParams;
+            // Pointiness from vertex color R channel (scaled from [0,1] normalized to [-1, 1])
+            float normCurv = v.color.x;
+            p.pointiness = (normCurv - 0.25f) * 2.0f;
+            // Ambient occlusion cavity factor from vertex color G channel
+            p.ambientOcclusion = v.color.y;
+            p.worldNormal = v.normal;
+
+            WearGrimeResult res = evaluate(defaultAlbedo, defaultRoughness, p);
+            // Bake back into vertex color RGB
+            v.color = Vec4(res.finalAlbedo.x, res.finalAlbedo.y, res.finalAlbedo.z, 1.0f);
+        }
+    }
 };
 
 } // namespace substrate
