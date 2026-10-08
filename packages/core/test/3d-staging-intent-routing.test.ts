@@ -3,6 +3,7 @@ import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolv
 import { resolveDomainToolPacks } from '../src/node/gemini/domain-tool-packs';
 import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 import { synthesize3DFallback } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
+import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () => {
@@ -157,6 +158,67 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(fallback.artifact?.type).toBe('3d-scene');
             const data = fallback.artifact?.data as Scene3DData;
             expect(data.title).toContain('Staged on Studio Plinth');
+        });
+    });
+
+    describe('5. Initial Prompt with Explicit Location Invariant', () => {
+        it('synthesizes hero object staged in real-world location tiles for "build a 3d scene of race car in central park"', () => {
+            const scene = synthesizeRawContextual3DScene('build a 3d scene of race car in central park');
+
+            expect(scene.title).toContain('Central Park');
+            expect(scene.geoAnchor).toBeDefined();
+            expect(scene.geoAnchor?.landmarkName).toContain('Central Park');
+            expect(scene.geoAnchor?.lat).toBeCloseTo(40.78, 1);
+            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.96, 1);
+            expect(scene.geoAnchor?.active).toBe(true);
+            expect(scene.renderMode).toBe('clay');
+            expect(scene.environment.ground).toBe(true);
+            expect(scene.objects?.length).toBeGreaterThan(0);
+        });
+
+        it('synthesizes hero object staged in real-world location tiles for "F1 car in monaco"', () => {
+            const scene = synthesizeRawContextual3DScene('F1 car in monaco');
+
+            expect(scene.title).toContain('Monaco');
+            expect(scene.geoAnchor).toBeDefined();
+            expect(scene.geoAnchor?.landmarkName).toContain('Monaco');
+            expect(scene.geoAnchor?.active).toBe(true);
+            expect(scene.renderMode).toBe('clay');
+            expect(scene.environment.ground).toBe(true);
+        });
+
+        it('mounts hero GLB and location GLB when execute_3d_python_script runs with location staging', () => {
+            const mockExecutions = [
+                {
+                    toolName: 'execute_3d_python_script',
+                    callId: 'call_python_1',
+                    status: 'success' as const,
+                    resultPayload: {
+                        success: true,
+                        glbPath: '/models/race_car.glb',
+                        locationGlbPath: '/build/3d-geospatial/central_park_tiles.glb',
+                        locationQuery: 'Central Park, New York',
+                        description: 'Race car'
+                    }
+                }
+            ];
+
+            const result = parseOrSynthesizeArtifact(
+                'build a 3d scene of race car in central park',
+                'Synthesized race car staged in Central Park in studio grey clay.',
+                {
+                    prompt: 'build a 3d scene of race car in central park'
+                },
+                mockExecutions,
+                undefined
+            );
+
+            expect(result.type).toBe('3d-scene');
+            const data = result.data as Scene3DData;
+            expect(data.title).toContain('Central Park');
+            expect(data.geoAnchor?.landmarkName).toContain('Central Park');
+            expect(data.objects?.some(o => o.content?.durableUri === '/models/race_car.glb')).toBe(true);
+            expect(data.objects?.some(o => o.content?.durableUri === '/build/3d-geospatial/central_park_tiles.glb')).toBe(true);
         });
     });
 });

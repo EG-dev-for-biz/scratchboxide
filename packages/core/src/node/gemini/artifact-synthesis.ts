@@ -3348,26 +3348,47 @@ export function parseOrSynthesizeArtifact(
         let finalTitle = active3DData?.title || sceneTitle;
         let finalSubtitle = (isAnimateOnly && active3DData?.subtitle) ? active3DData.subtitle : (active3DData?.subtitle || sceneSummary);
         if (hasRealWorldStaging) {
-            finalTitle = active3DData?.title ? `${active3DData.title} — Staged at ${locIntent.landmarkName}` : `3D Scene — Staged at ${locIntent.landmarkName}`;
+            const cleanBaseTitle = active3DData?.title
+                ? active3DData.title.replace(/\s*—\s*Staged.*$/i, '')
+                : sceneTitle.replace(/\s*—\s*Staged.*$/i, '').replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '');
+            finalTitle = `${cleanBaseTitle} — Staged in ${locIntent.landmarkName}`;
             finalSubtitle = `Real-World Geospatial Staging | [${locIntent.lat.toFixed(4)}°, ${locIntent.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
-            sceneSummary = `Staged active 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
+            sceneSummary = `Staged 3D asset at ${locIntent.landmarkName} with real-world geospatial grounding.`;
         }
 
         const resolvedObjects = active3DData?.objects ? [...active3DData.objects] : [...defaultObjects];
         for (const exec of _mcpExecutions) {
-            if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay') {
+            if (exec.toolName === 'stage_3d_vector_world' || exec.toolName === 'google_3d_tiles_get_clay' || exec.toolName === 'execute_3d_python_script') {
                 const res = ((exec as any).resultPayload || (exec as any).result || (exec as any).payload || {}) as any;
                 const glbPath = res?.glbPath || res?.outputGlbPath;
                 if (glbPath && !resolvedObjects.some(o => o.content?.durableUri === glbPath)) {
                     resolvedObjects.push({
-                        id: `staged-env-${Date.now()}`,
+                        id: `hero-${Date.now()}`,
                         content: {
                             type: '3d-model',
                             durableUri: glbPath,
                             mimeType: 'model/gltf-binary',
                             metadata: {
                                 source: exec.toolName,
-                                resolvedAddress: res?.resolvedAddress
+                                description: res?.description
+                            }
+                        },
+                        space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                        time: { startMs: 0, durationMs: 20000 },
+                        lineage: { version: 1 }
+                    });
+                }
+                const locGlbPath = res?.locationGlbPath;
+                if (locGlbPath && !resolvedObjects.some(o => o.content?.durableUri === locGlbPath)) {
+                    resolvedObjects.push({
+                        id: `staged-location-${Date.now()}`,
+                        content: {
+                            type: '3d-model',
+                            durableUri: locGlbPath,
+                            mimeType: 'model/gltf-binary',
+                            metadata: {
+                                source: 'google_3d_tiles_clay',
+                                location: res?.locationQuery || locIntent?.landmarkName
                             }
                         },
                         space: { spatial3d: { x: 0, y: 0, z: 0 } },

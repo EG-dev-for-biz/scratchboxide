@@ -31,6 +31,7 @@ from .world import World
 from .terrain import Terrain
 from .structure import Structure
 from .plant import PlantPreset, Flora, create_vegetation
+from .human import Human, create_human
 
 # Classical Roman Orders
 RomanOrder = None
@@ -52,6 +53,7 @@ processing = getattr(_native, "processing", None) if _native else None
 topology = getattr(_native, "topology", None) if _native else None
 sdf = getattr(_native, "sdf", None) if _native else None
 hair = getattr(_native, "hair", None) if _native else None
+human = getattr(_native, "human", None) if _native else None
 random = _random
 py_math = _py_math
 

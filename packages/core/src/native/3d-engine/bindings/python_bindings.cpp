@@ -21,6 +21,9 @@
 #include "scratchbox_sdf.hpp"
 #include "scratchbox_hair.hpp"
 #include "scratchbox_spz.hpp"
+#include "scratchbox_parametric_human.hpp"
+#include "scratchbox_kinematics.hpp"
+#include "scratchbox_skinning.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -34,6 +37,9 @@ using namespace scratchbox::composer;
 using namespace scratchbox::io;
 using namespace scratchbox::sb_archi;
 using namespace scratchbox::core;
+using namespace scratchbox::parametric;
+using namespace scratchbox::kinematics;
+using namespace scratchbox::skinning;
 
 NB_MODULE(scratchbox_native, m) {
     nb::set_leak_warnings(false);
@@ -1373,4 +1379,169 @@ NB_MODULE(scratchbox_native, m) {
 
     m_hair.def("save_spz_file", &hair::HairSplatBuilder::saveToSpzFile, "filepath"_a, "splats"_a);
     m_hair.def("save_ply_file", &hair::HairSplatBuilder::saveToPlyFile, "filepath"_a, "splats"_a);
+
+    // ========================================================================
+    // 12. HUMAN & ENTOURAGE SUBMODULE
+    // ========================================================================
+    auto m_human = m.def_submodule("human", "Parametric human anatomy, kinematics, and scale entourage");
+
+    nb::enum_<skinning::GenderMorph>(m_human, "GenderMorph")
+        .value("Male", skinning::GenderMorph::Male)
+        .value("Female", skinning::GenderMorph::Female)
+        .value("Neutral", skinning::GenderMorph::Neutral);
+
+    nb::class_<kinematics::Skeleton>(m_human, "Skeleton")
+        .def("find_joint", &kinematics::Skeleton::findJoint, "name"_a)
+        .def("set_joint_rotation", [](kinematics::Skeleton& self, const std::string& name, const Vec3& rot) {
+            self.setJointRotation(name, rot);
+        }, "name"_a, "rotation"_a)
+        .def("get_joint_rotation", [](const kinematics::Skeleton& self, const std::string& name) -> Vec3 {
+            int32_t idx = self.findJoint(name);
+            if (idx >= 0 && idx < static_cast<int32_t>(self.joints.size())) {
+                return self.joints[idx].localRotation;
+            }
+            return Vec3(0.0f, 0.0f, 0.0f);
+        }, "name"_a);
+
+    nb::class_<parametric::SbHumanModel>(m_human, "SbHumanModel")
+        .def_static("load_standard", &parametric::SbHumanModel::loadStandardModel, "gender"_a, "target_height"_a = 1.76f)
+        .def("evaluate_posed", [](parametric::SbHumanModel& self, kinematics::Skeleton& skeleton) {
+            return self.evaluatePosed(skeleton);
+        }, "skeleton"_a)
+        .def_rw("skeleton", &parametric::SbHumanModel::skeleton);
+
+    m_human.def("create_grounded_character", [](
+        float genderBeta,
+        float targetHeight,
+        const Vec3& position,
+        float facingAngleDeg,
+        const std::string& poseArchetype,
+        const std::string& role,
+        const ScratchboxMesh* surfaceMesh,
+        float surfaceYOffset
+    ) -> ScratchboxMesh {
+        skinning::GenderMorph gender = (genderBeta > 0.3f) ? skinning::GenderMorph::Male
+                                     : (genderBeta < -0.3f) ? skinning::GenderMorph::Female
+                                     : skinning::GenderMorph::Neutral;
+
+        parametric::SbHumanModel charModel = parametric::SbHumanModel::loadStandardModel(gender, targetHeight);
+        kinematics::Skeleton posedRig = charModel.skeleton;
+
+        // Apply natural survey/standing contrapposto pose
+        posedRig.setJointRotation("LeftShoulder", Vec3(0.06f, 0.08f, -1.18f));
+        posedRig.setJointRotation("RightShoulder", Vec3(0.06f, -0.08f, 1.18f));
+        posedRig.setJointRotation("LeftElbow", Vec3(0.18f, 0.15f, -0.12f));
+        posedRig.setJointRotation("RightElbow", Vec3(0.18f, -0.15f, 0.12f));
+        posedRig.setJointRotation("Spine1", Vec3(0.04f, 0.0f, 0.02f));
+        posedRig.setJointRotation("Spine2", Vec3(0.02f, 0.0f, -0.01f));
+        posedRig.setJointRotation("Head", Vec3(-0.06f, 0.12f, 0.0f));
+
+        if (poseArchetype == "ground_inspection") {
+            posedRig.setJointRotation("Spine1", Vec3(0.18f, 0.0f, 0.0f));
+            posedRig.setJointRotation("Spine2", Vec3(0.15f, 0.0f, 0.0f));
+            posedRig.setJointRotation("Head", Vec3(0.25f, 0.0f, 0.0f));
+        }
+
+        float facingRad = facingAngleDeg * (3.14159265f / 180.0f);
+        auto rotateY = [](const Vec3& p, float rad) -> Vec3 {
+            float cosA = std::cos(rad);
+            float sinA = std::sin(rad);
+            return Vec3(p.x * cosA + p.z * sinA, p.y, -p.x * sinA + p.z * cosA);
+        };
+
+        // Query foot rest positions
+        int32_t lAnkleIdx = posedRig.findJoint("LeftAnkle");
+        int32_t rAnkleIdx = posedRig.findJoint("RightAnkle");
+        Vec3 lAnkleRest = (lAnkleIdx >= 0) ? posedRig.joints[lAnkleIdx].restPosition : Vec3(0.10f, 0.08f, 0.0f);
+        Vec3 rAnkleRest = (rAnkleIdx >= 0) ? posedRig.joints[rAnkleIdx].restPosition : Vec3(-0.10f, 0.08f, 0.0f);
+
+        Vec3 lFootRot = rotateY(Vec3(lAnkleRest.x, 0.0f, lAnkleRest.z), facingRad);
+        Vec3 rFootRot = rotateY(Vec3(rAnkleRest.x, 0.0f, rAnkleRest.z), facingRad);
+        float lFootX = position.x + lFootRot.x;
+        float lFootZ = position.z + lFootRot.z;
+        float rFootX = position.x + rFootRot.x;
+        float rFootZ = position.z + rFootRot.z;
+
+        // Sample surface mesh elevation if provided, else rely on position.y
+        auto sampleSurfaceElevation = [&](float x, float z) -> float {
+            if (surfaceMesh != nullptr && !surfaceMesh->vertices.empty()) {
+                float bestY = position.y;
+                float bestDistSq = 1e9f;
+                for (const auto& sv : surfaceMesh->vertices) {
+                    float dx = sv.position.x - x;
+                    float dz = sv.position.z - z;
+                    float dSq = dx * dx + dz * dz;
+                    if (dSq < bestDistSq) {
+                        bestDistSq = dSq;
+                        bestY = sv.position.y;
+                    }
+                }
+                if (bestDistSq < 25.0f) {
+                    return bestY + surfaceYOffset;
+                }
+            }
+            return position.y + surfaceYOffset;
+        };
+
+        float hL = sampleSurfaceElevation(lFootX, lFootZ);
+        float hR = sampleSurfaceElevation(rFootX, rFootZ);
+        float hBase = std::min(hL, hR);
+        float deltaL = hL - hBase;
+        float deltaR = hR - hBase;
+
+        // Law of Cosines 2-Bone IK Leg Shortening for elevated foot
+        float legLength = 0.82f * (targetHeight / 1.76f);
+        float upperLeg = legLength * 0.52f;
+        float lowerLeg = legLength * 0.48f;
+
+        if (deltaL > 0.002f) {
+            float targetReach = std::clamp(legLength - deltaL, 0.35f * legLength, legLength);
+            float cosKnee = std::clamp((upperLeg * upperLeg + lowerLeg * lowerLeg - targetReach * targetReach) / (2.0f * upperLeg * lowerLeg), -1.0f, 1.0f);
+            float kneeAngle = std::acos(cosKnee);
+            posedRig.setJointRotation("LeftKnee", Vec3(kneeAngle, 0.0f, 0.0f));
+            posedRig.setJointRotation("LeftHip", Vec3(-kneeAngle * 0.5f, 0.0f, 0.0f));
+        }
+        if (deltaR > 0.002f) {
+            float targetReach = std::clamp(legLength - deltaR, 0.35f * legLength, legLength);
+            float cosKnee = std::clamp((upperLeg * upperLeg + lowerLeg * lowerLeg - targetReach * targetReach) / (2.0f * upperLeg * lowerLeg), -1.0f, 1.0f);
+            float kneeAngle = std::acos(cosKnee);
+            posedRig.setJointRotation("RightKnee", Vec3(kneeAngle, 0.0f, 0.0f));
+            posedRig.setJointRotation("RightHip", Vec3(-kneeAngle * 0.5f, 0.0f, 0.0f));
+        }
+
+        posedRig.updateTransforms();
+        ScratchboxMesh figure = charModel.evaluatePosed(posedRig);
+
+        // Ground contact alignment (0.00 mm floating / penetration)
+        float modelMinY = figure.bounds.min.y;
+        float groundPlacementY = hBase - modelMinY;
+
+        // 18% Studio Grey Clay Invariant
+        Vec4 clayTone(0.55f, 0.57f, 0.60f, 1.0f);
+        ScratchboxMesh outMesh("Character_" + role);
+        outMesh.material.name = "Entourage_Studio_Clay";
+        outMesh.material.roughnessFactor = 0.85f;
+        outMesh.material.metallicFactor = 0.0f;
+        outMesh.material.baseColorFactor = clayTone;
+
+        outMesh.vertices.reserve(figure.vertices.size());
+        for (const auto& v : figure.vertices) {
+            Vec3 rotP = rotateY(v.position, facingRad);
+            Vec3 rotN = rotateY(v.normal, facingRad);
+            Vec3 worldP = rotP + Vec3(position.x, groundPlacementY, position.z);
+            outMesh.vertices.push_back(Vertex{worldP, rotN, v.uv, clayTone});
+        }
+        outMesh.indices = figure.indices;
+        outMesh.recomputeBounds();
+
+        return outMesh;
+    }, "gender_beta"_a = 0.0f,
+       "target_height"_a = 1.76f,
+       "position"_a = Vec3(0.0f, 0.0f, 0.0f),
+       "facing_angle_deg"_a = 0.0f,
+       "pose_archetype"_a = "standing_survey",
+       "role"_a = "scale_figure",
+       "surface_mesh"_a = nullptr,
+       "surface_y_offset"_a = 0.0f,
+       "Procedurally synthesizes and grounds an architectural scale entourage figure conforming to the 18% Studio Grey Clay Invariant");
 }

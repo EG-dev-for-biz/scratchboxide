@@ -254,7 +254,8 @@ export class NativePythonRunnerService {
             ...process.env,
             ...options.env,
             PYTHONPATH: pythonPaths,
-            PYTHONUNBUFFERED: '1'
+            PYTHONUNBUFFERED: '1',
+            SCRATCHBOX_HUMAN_ASSETS_DIR: path.resolve(repoRoot, 'packages/core/assets/models')
         };
 
         const argsStr = (options.args || []).map(a => `"${a}"`).join(' ');

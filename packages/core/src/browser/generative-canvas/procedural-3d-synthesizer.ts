@@ -2164,6 +2164,14 @@ function _synthesizeRawContextual3DSceneInner(
             }
         }
     }
+
+    // Determine procedural, object, and hero location classification
+    const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astro|astra|nanobind)\b/i.test(prompt);
+    const isObjectPrompt = theme === 'vehicle' ||
+        /\b(?:build|create|model|design|generate|sculpt|construct|synthesize)\b/i.test(prompt) ||
+        /\b(?:probe|rover|robot|machine|drone|vehicle|car|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite)\b/i.test(prompt);
+    const isHeroWithLocation = isObjectPrompt && Boolean(realWorldLoc?.isRealWorld);
+
     if (realWorldLoc && realWorldLoc.isRealWorld) {
         if (isSplatRequested) {
             const locName = realWorldLoc.landmarkName || realWorldLoc.query;
@@ -2282,9 +2290,10 @@ function _synthesizeRawContextual3DSceneInner(
         }
 
         // Only run tile ingest if explicitly requesting Google 3D tile models or geospatial photogrammetry
-        const isExplicitProcedural = /\b(?:procedural|scratchbox|create_building|create_tree|python|c\+\+|script|mansard|hip\s*roof|fenestration|promenade|pedestal|building|architecture|plaza|botanical|astro|astra|nanobind)\b/i.test(prompt);
-        const isExplicitTileIngest = /\b(?:tile|tiles|map\s*data|satellite|photogrammetr|geospatial|real\s*world\s*clay|google\s*maps)\b/i.test(prompt) ||
-            (!isExplicitProcedural && detectRealWorldLocationIntent(prompt, context)?.isRealWorld);
+        const isExplicitTileIngest = !isHeroWithLocation && (
+            /\b(?:tile|tiles|map\s*data|satellite|photogrammetr|geospatial|real\s*world\s*clay|google\s*maps)\b/i.test(prompt) ||
+            (!isExplicitProcedural && Boolean(realWorldLoc?.isRealWorld))
+        );
 
         if (isExplicitTileIngest) {
             // Extract clay preset preference if specified
@@ -2387,9 +2396,58 @@ function _synthesizeRawContextual3DSceneInner(
         }
     }
 
-    const isObjectPrompt = theme === 'vehicle' ||
-        /\b(?:build|create|model|design|generate|sculpt|construct|synthesize)\b/i.test(prompt) ||
-        /\b(?:probe|rover|robot|machine|drone|vehicle|car|ship|craft|submersible|harvester|penetrator|device|apparatus|mechanism|weapon|tool|engine|reactor|walker|crawler|limb|coring|drill|auger|satellite)\b/i.test(prompt);
+    if (isObjectPrompt && realWorldLoc) {
+        // Synthesize the hero object (e.g. race car / vehicle / rover)
+        const heroScene = synthesizeAdaptiveHeroScene(prompt);
+
+        // Ingest Google 3D Tiles in Studio Grey Clay for the requested location
+        const tileService = Google3DTileService.getInstance();
+        const tileResult = tileService.ingestTileRegionSync({
+            query: realWorldLoc.landmarkName || realWorldLoc.query,
+            lat: realWorldLoc.lat,
+            lng: realWorldLoc.lng,
+            elevation: realWorldLoc.elevation,
+            clayPreset: 'studio-grey',
+            detailLevel: 'high',
+            includeBuildings: true,
+            includeTerrain: true
+        });
+
+        const heroBaseTitle = heroScene.title.replace(/\s*—\s*ADA Hero Asset/i, '').replace(/\s*—\s*Procedural Vehicle/i, '').trim();
+        const stagedTitle = `${heroBaseTitle} — Staged in ${realWorldLoc.landmarkName}`;
+        const stagedSubtitle = `Real-World Geospatial Staging | [${realWorldLoc.lat.toFixed(4)}°, ${realWorldLoc.lng.toFixed(4)}°] | Studio Grey Clay Grounding`;
+
+        return {
+            ...heroScene,
+            title: stagedTitle,
+            subtitle: stagedSubtitle,
+            worldBranch: `geospatial/${realWorldLoc.landmarkName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+            sceneType: 'real_world_landmark',
+            renderMode: 'clay',
+            environment: {
+                ...heroScene.environment,
+                ground: true
+            },
+            geoAnchor: {
+                lat: realWorldLoc.lat,
+                lng: realWorldLoc.lng,
+                elevation: realWorldLoc.elevation,
+                elevationSource: 'google_elevation',
+                datum: 'MSL_EGM96',
+                active: true,
+                landmarkName: realWorldLoc.landmarkName
+            },
+            objects: [
+                tileResult.media4DObject,
+                ...(heroScene.objects || [])
+            ],
+            customMeshes: [
+                tileResult.customMeshDefinition,
+                ...(tileResult.buildingMeshes || []),
+                ...(heroScene.customMeshes || [])
+            ]
+        };
+    }
 
     if (isObjectPrompt && !realWorldLoc) {
         return synthesizeAdaptiveHeroScene(prompt);

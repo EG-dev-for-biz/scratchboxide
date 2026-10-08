@@ -201,6 +201,37 @@ class World:
         self.structures.append(structure)
         return structure
 
+    def add_human(
+        self,
+        role: str = "scale_figure",
+        height: float = 1.76,
+        gender_beta: float = 0.0,
+        pose: str = "standing_survey",
+        position: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        facing_deg: float = 0.0,
+        surface: Optional[Any] = None,
+        surface_y_offset: float = 0.0,
+        **kwargs
+    ) -> Any:
+        """
+        Synthesizes and adds an architectural scale entourage figure to the world.
+        Conforms strictly to 18% Studio Grey Clay Invariant and analytical 2-bone IK foot grounding.
+        """
+        from .human import Human
+        human = Human(
+            role=role,
+            height=height,
+            gender_beta=gender_beta,
+            pose=pose,
+            position=position,
+            facing_deg=facing_deg,
+            surface=surface,
+            surface_y_offset=surface_y_offset,
+            **kwargs
+        )
+        self.add(human)
+        return human
+
     def scatter(
         self,
         asset: Any,

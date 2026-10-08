@@ -9,6 +9,7 @@
 import type { Content } from '@google/genai';
 import type { GeminiGenerateRequest } from '../../common/gemini-protocol';
 import type { MarkdownDocumentData, Scene3DData, VideoTimelineData } from '../../browser/generative-canvas/canvas-types';
+import { detectRealWorldLocationIntent } from '../../browser/generative-canvas/services/Google3DTileService';
 import type { ProjectContextGraphService } from '../project-context-graph-service';
 import type { CodebasePatternEngine } from '../codebase-pattern-engine';
 import type { CodebasePatternAnalysis } from '../../common/pattern-matching-protocol';
@@ -632,6 +633,15 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
    - Call execute_3d_python_script to synthesize the plinth and contact-ground the hero asset using sb.layout.
 4. Conclude your response with the next progression step: PBR Materials & Textures (vibrant court acrylics, clearcoat, carbon fiber, etc.).]`;
     } else if (/build.*3d|make.*3d|create.*3d|generate.*3d|3d\s+scene|3d\s+car|3d\s+vehicle|3d\s+model|\b3d\b|car|vehicle|automobile|truck|sports\s*car|sedan|coupe|roadster|formula|f1\b|cyber|flower|garden|plant|flora|botan|manta|island|steampunk|rocket|aircraft|dojo|temple|sculpture|structure|environment/i.test(request.prompt || '')) {
+        const initialLocIntent = detectRealWorldLocationIntent(request.prompt || '');
+        if (initialLocIntent?.isRealWorld) {
+            userPrompt += `\n\n[CRITICAL DIRECTIVE — MANDATORY INITIAL LOCATION STAGING: The user explicitly specified the real-world location "${initialLocIntent.landmarkName}" in this initial request ("${request.prompt}").
+1. MANDATORY LOCATION STAGING: The scene MUST be returned STAGED AT THIS LOCATION! You MUST pass location: "${initialLocIntent.landmarkName}" to execute_3d_python_script({ script: "...", location: "${initialLocIntent.landmarkName}", description: "..." }) OR call stage_3d_vector_world({ latitude: ${initialLocIntent.lat}, longitude: ${initialLocIntent.lng}, populate: true, heroStaging: { ... } }).
+2. 100% CODE BUDGET ON HERO OBJECT: Model the requested hero object (e.g. race car / vehicle / structure) with rich 70-20-10 anatomical form in 18% studio grey clay.
+3. NEVER SYNTHESIZE FAKE GROUND SLABS OR LOLLIPOP TREES: Do NOT write Python code for artificial track slabs, toy floor boxes, or procedural lollipop trees! Scratchbox's geospatial engine automatically extracts the real-world Google 3D Tiles / Vector World for ${initialLocIntent.landmarkName} and stages the hero asset right at [Lat ${initialLocIntent.lat}°, Lng ${initialLocIntent.lng}°].
+4. FOLLOW-UP SUGGESTIONS: Conclude your response with follow-up suggestions: Lighting & Solar Ephemeris for ${initialLocIntent.landmarkName}, then Textures & PBR Materials.]`;
+        }
+
         userPrompt += `\n\n[CRITICAL DIRECTIVE: The user is requesting a 3D scene / 3D model visualization. You MUST call the execute_3d_python_script tool to build the scene! NEVER output raw JSON text or markdown code fences as your response.
 - UNIFIED 3D PYTHON EXECUTION BUS (BLENDER MENTAL MODEL): All 3D scene building (procedural geometry, architectural complexes, botanical environments, organisms, and real-world locations) routes through execute_3d_python_script({ script: "...", location?: "..." }). The script imports scratchbox as sb and compiles native C++20 geometry via nanobind bindings to stream binary .glb directly into the viewport.
 - DYNAMIC CAMERA AUTO-FRAMING: The engine automatically extracts the analytical Axis-Aligned Bounding Box (AABB) from the GLB accessors in <0.1ms and computes the optimal camera distance and 3/4 cinematic framing. You do not need to manually guess camera coordinates!
@@ -650,7 +660,8 @@ You are the Scratchbox Spatial Architect, an autonomous 3D procedural engine. Yo
      - 20% Secondary Articulated Limbs / Chambers / Wings / Towers: Multi-segment appendages with progressive scaling and joint sockets.
      - 10% Tertiary Micro-Mechanisms: Concentric gears, catenary cables, stinger spines, pistons, hydraulic actuators, antennae, and railings.
 2. **UNIVERSAL FIRST-REQUEST 3D STAGING INVARIANT (GREY CLAY VOID & EXTENSIVE CONSTRUCTION)**:
-   - **Hero Objects in Grey Clay in a 3D Stage Void**: Unless a location is asked first, ALWAYS build Hero Objects in **18% Studio Grey Clay** (\`sb.PbrMaterial.clay()\`, roughness 0.85, metalness 0.0, color [0.55, 0.57, 0.60] or renderMode: "clay"). Stage the hero object in a clean **3D stage void** (\`skybox: "studio"\`, \`lighting: "studio"\`, \`ground: false\`) with simple flat/studio lighting that is the typical lighting default for 3D scenes.
+   - **Explicit Location in Initial Prompt Invariant (Mandatory Location Staging)**: If the user's initial prompt explicitly describes a real-world location (e.g. "race car in Central Park", "F1 car in Monaco", "basketball court at Venice Beach"), the scene MUST be returned **staged at that authentic location** by default. Pass location: "<location>" to execute_3d_python_script or call stage_3d_vector_world. NEVER generate fake synthetic ground slabs or lollipop trees in Python; let the geospatial engine stage the hero asset in the real-world 3D tiles!
+   - **Hero Objects in Grey Clay in a 3D Stage Void**: When NO location is described in the initial prompt, ALWAYS build Hero Objects in **18% Studio Grey Clay** (\`sb.PbrMaterial.clay()\`, roughness 0.85, metalness 0.0, color [0.55, 0.57, 0.60] or renderMode: "clay"). Stage the hero object in a clean **3D stage void** (\`skybox: "studio"\`, \`lighting: "studio"\`, \`ground: false\`) with simple flat/studio lighting that is the typical lighting default for 3D scenes.
    - **Zero ComfyUI Neural Meshes by Default**: NEVER use ComfyUI neural meshes (Trellis/TripoSR) unless explicitly requested by the user. Native Python / C++20 procedural generation is the primary engine.
    - **Location Exception (Google 3D Tiles Clay Mode)**: If the user's first request IS a real-world location (e.g. "Eiffel Tower", "San Francisco", "Monaco GP") and that location can be created with Google Map Tiles, return a **clay style 3D map tile object** (\`getGoogle3DTilesClay\` / \`clayPreset: "studio-grey"\`).
    - **Large Amount of Construction Steps**: Spend considerable time and effort to construct the first request with a large amount of procedural steps following the 70-20-10 form hierarchy. Never output basic boxes or toy primitives.

@@ -13,6 +13,7 @@ import * as path from 'path';
 import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { GeospatialTileExtractionBridge, ExtractedLocationManifest } from '../../spatial/GeospatialTileExtractionBridge';
+import { detectRealWorldLocationIntent } from '../../../browser/generative-canvas/services/Google3DTileService';
 import { synthesizeAdaptiveHeroObjectContract, generateAdaptiveHeroPythonSource } from '../../../common/spatial/adaptive-hero-synthesizer';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
 
@@ -206,20 +207,36 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
         const runner = NativePythonRunnerService.getInstance();
         const customEnv: NodeJS.ProcessEnv = { ...process.env };
         let extractedManifest: ExtractedLocationManifest | undefined;
+        let extractedGlbPath: string | undefined;
 
-        // 1. If location is requested, run pre-flight tile extraction pipeline
-        if (locationQuery) {
+        // Auto-detect location if not explicitly provided in args.location
+        let effectiveLocation = locationQuery;
+        let locIntent: ReturnType<typeof detectRealWorldLocationIntent> | undefined;
+
+        if (effectiveLocation) {
+            locIntent = detectRealWorldLocationIntent(effectiveLocation);
+        } else {
+            const detected = detectRealWorldLocationIntent(`${desc} ${script}`);
+            if (detected?.isRealWorld && detected.landmarkName) {
+                effectiveLocation = detected.landmarkName;
+                locIntent = detected;
+            }
+        }
+
+        // 1. If location is requested or detected, run pre-flight tile extraction pipeline in clay mode
+        if (effectiveLocation) {
             try {
                 const extractionBridge = GeospatialTileExtractionBridge.getInstance();
-                const extractResult = await extractionBridge.ingestAndExtract(locationQuery);
+                const extractResult = await extractionBridge.ingestAndExtract(effectiveLocation, { mode: 'clay' });
                 if (extractResult.success) {
                     extractedManifest = extractResult.manifest;
-                    customEnv.SCRATCHBOX_LOCATION_QUERY = locationQuery;
+                    extractedGlbPath = extractResult.glbPath;
+                    customEnv.SCRATCHBOX_LOCATION_QUERY = effectiveLocation;
                     customEnv.SCRATCHBOX_LOCATION_GLB = extractResult.glbPath;
                     customEnv.SCRATCHBOX_LOCATION_MANIFEST = extractResult.manifestPath;
                 }
             } catch (err: any) {
-                console.warn(`[execute_3d_python_script] Geospatial extraction warning for "${locationQuery}":`, err?.message || err);
+                console.warn(`[execute_3d_python_script] Geospatial extraction warning for "${effectiveLocation}":`, err?.message || err);
             }
         }
 
@@ -311,7 +328,66 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
             ];
         }
 
-        const isRealWorld = !!locationQuery;
+        const isRealWorld = !!effectiveLocation;
+        const resolvedLocName = locIntent?.landmarkName || effectiveLocation;
+        const resolvedGeoAnchor = (locIntent?.isRealWorld) ? {
+            lat: locIntent.lat,
+            lng: locIntent.lng,
+            elevation: locIntent.elevation,
+            elevationSource: locIntent.elevationSource || 'google_elevation',
+            datum: locIntent.datum || 'MSL_EGM96',
+            active: true,
+            landmarkName: resolvedLocName
+        } : (isRealWorld ? {
+            lat: 40.7829,
+            lng: -73.9654,
+            elevation: 25.0,
+            elevationSource: 'google_elevation',
+            datum: 'MSL_EGM96',
+            active: true,
+            landmarkName: resolvedLocName
+        } : undefined);
+
+        const stagedTitle = isRealWorld && !desc.toLowerCase().includes('staged')
+            ? `${desc} — Staged in ${resolvedLocName}`
+            : desc;
+        const stagedSubtitle = isRealWorld && resolvedGeoAnchor
+            ? `Real-World Geospatial Staging | [${resolvedGeoAnchor.lat.toFixed(4)}°, ${resolvedGeoAnchor.lng.toFixed(4)}°] | Studio Grey Clay Grounding`
+            : `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
+
+        const stagedObjects = [
+            ...(result.glbPath ? [{
+                id: `hero-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: result.glbPath,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        role: 'hero',
+                        description: desc
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            }] : []),
+            ...(extractedGlbPath ? [{
+                id: `staged-location-${Date.now()}`,
+                content: {
+                    type: '3d-model',
+                    durableUri: extractedGlbPath,
+                    mimeType: 'model/gltf-binary',
+                    metadata: {
+                        role: 'environment',
+                        source: 'google_3d_tiles_clay',
+                        location: resolvedLocName
+                    }
+                },
+                space: { spatial3d: { x: 0, y: 0, z: 0 } },
+                time: { startMs: 0, durationMs: 20000 },
+                lineage: { version: 1 }
+            }] : [])
+        ];
 
         return {
             status: 'completed',
@@ -325,16 +401,20 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                 overallBoundingBox: bounds,
                 gateReport: gateReport,
                 locationManifest: extractedManifest,
+                locationGlbPath: extractedGlbPath,
+                geoAnchor: resolvedGeoAnchor,
+                locationQuery: effectiveLocation,
                 artifact: {
                     id: `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
-                    title: desc,
-                    summary: `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`,
+                    title: stagedTitle,
+                    summary: stagedSubtitle,
                     data: {
-                        title: desc,
-                        worldBranch: isRealWorld ? `geospatial/${locationQuery.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
+                        title: stagedTitle,
+                        subtitle: stagedSubtitle,
+                        worldBranch: isRealWorld ? `geospatial/${resolvedLocName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : 'procedural/python-scene',
                         sceneType: isRealWorld ? 'real_world_landmark' : 'custom',
-                        renderMode: isRealWorld ? 'pbr' : 'clay',
+                        renderMode: 'clay',
                         cameraMode: 'orbit',
                         animation: 'orbit',
                         camera: {
@@ -347,6 +427,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>) =>
                             lighting: 'studio',
                             ground: isRealWorld
                         },
+                        geoAnchor: resolvedGeoAnchor,
+                        objects: stagedObjects,
                         pythonGenerator: {
                             enabled: true,
                             filename: 'procedural_scene.py',
