@@ -1172,6 +1172,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     React.useEffect(() => {
         (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
+        (window as any).__scratchbox_new_chat = () => handleNewChat();
         const handleSendPromptEvent = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.prompt) {
@@ -1181,9 +1182,10 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         window.addEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         return () => {
             delete (window as any).__scratchbox_send_prompt;
+            delete (window as any).__scratchbox_new_chat;
             window.removeEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         };
-    }, [handleSendMessage]);
+    }, [handleSendMessage, handleNewChat]);
 
     React.useEffect(() => {
         (window as any).__scratchbox_is_generating = isGenerating;

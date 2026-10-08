@@ -101,6 +101,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: parseInt(process.env.SCRATCHBOX_WEB_PORT || '3030', 10),
       host: '127.0.0.1',
+      watch: {
+        ignored: ['**/public/**', '**/public/s4d_tile_blockout_runner*', '**/dist/**', '**/node_modules/**']
+      },
       fs: {
         allow: [
           path.resolve(__dirname, '..')

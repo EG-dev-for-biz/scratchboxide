@@ -1698,13 +1698,6 @@ export class Google3DTileBlockoutPipelineService {
 
     const htmlContent = this.generateRunnerHtml(resolvedRequest, cameraPathData);
     const runnerFileName = `s4d_tile_blockout_runner_${Date.now()}_${Math.floor(Math.random() * 100000)}.html`;
-    const runnerPath = path.join(process.cwd(), 'public', runnerFileName);
-    fs.writeFileSync(runnerPath, htmlContent);
-
-    // Also write legacy runner for backwards-compatibility
-    try {
-      fs.writeFileSync(path.join(process.cwd(), 'public/s4d_tile_blockout_runner.html'), htmlContent);
-    } catch (_) {}
 
     const requestedPort = request.port ?? 0;
     let actualPort = requestedPort;
@@ -1942,9 +1935,6 @@ export class Google3DTileBlockoutPipelineService {
 
       const cleanup = () => {
         try {
-          if (fs.existsSync(runnerPath)) {
-            fs.unlinkSync(runnerPath);
-          }
           const legacyPath = path.join(process.cwd(), 'public/s4d_tile_blockout_runner.html');
           if (fs.existsSync(legacyPath)) {
             fs.unlinkSync(legacyPath);
