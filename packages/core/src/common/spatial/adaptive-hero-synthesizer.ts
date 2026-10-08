@@ -26,7 +26,8 @@ import type {
     AdaptiveRevolvedHarmonicFeature,
     AdaptiveMetricReplicatorFeature,
     AdaptiveNormalReliefFeature,
-    AdaptiveGroundingInterface
+    AdaptiveGroundingInterface,
+    AdaptiveAerodynamicSurface
 } from './adaptive-3d-object-contract';
 import type { Scene3DData } from '../../browser/generative-canvas/canvas-types';
 
@@ -85,6 +86,10 @@ function analyzeContinuousParameters(prompt: string, seed: number = 42): Continu
         scaleLength = 4.2;
         scaleWidth = 3.2;
         scaleHeight = 2.4;
+    } else if (/\b(?:racer|race\s*car|gt|formula|f1|supercar|drift|chassis|aerodynamic\s*vehicle|high-speed\s*car|speed\s*car)\b/i.test(lower)) {
+        scaleLength = 4.8;
+        scaleWidth = 2.1;
+        scaleHeight = 1.18;
     }
 
     const aspectRatio = scaleLength / Math.max(0.1, scaleWidth);
@@ -94,7 +99,9 @@ function analyzeContinuousParameters(prompt: string, seed: number = 42): Continu
 
     // 2. Curvature & Loft profile
     let superellipseExponent = 2.4;
-    if (/\b(?:hex|faceted|angular|stealth|wedge|chisel|chiseled|sharp)\b/i.test(lower)) {
+    if (/\b(?:racer|race\s*car|gt|formula|f1|supercar|drift|aerodynamic|coke-bottle)\b/i.test(lower)) {
+        superellipseExponent = 2.1;
+    } else if (/\b(?:hex|faceted|angular|stealth|wedge|chisel|chiseled|sharp)\b/i.test(lower)) {
         superellipseExponent = 1.4;
     } else if (/\b(?:round|torpedo|cylindr|tubular|sphere|spherical)\b/i.test(lower)) {
         superellipseExponent = 2.0;
@@ -303,6 +310,38 @@ export function synthesizeAdaptiveHeroObjectContract(
         helixPitchMeters: 0.0
     });
 
+    const isWheeledVehicle = /\b(?:car|racer|gt|wheel|wheels|drift|formula|f1|coupe|vehicle|kart|speed\s*car|chicane)\b/i.test(prompt.toLowerCase());
+
+    // Upright forged alloy wheel assemblies with center-lock hubs (Harmonic Solids of Revolution)
+    if (isWheeledVehicle) {
+        const wheelBaseZ = halfL * 0.65;
+        const wheelTrackX = halfW * 0.95;
+        const wheelY = -halfH * 0.35;
+        const wheelPositions: [number, number, number][] = [
+            [-wheelTrackX, wheelY, wheelBaseZ],
+            [wheelTrackX, wheelY, wheelBaseZ],
+            [-wheelTrackX, wheelY, -wheelBaseZ],
+            [wheelTrackX, wheelY, -wheelBaseZ]
+        ];
+        wheelPositions.forEach((pos, idx) => {
+            revolvedHarmonics.push({
+                id: `wheel_rim_assembly_${idx + 1}`,
+                anchorPoint: [parseFloat(pos[0].toFixed(3)), parseFloat(pos[1].toFixed(3)), parseFloat(pos[2].toFixed(3))],
+                axis: [pos[0] > 0 ? 1.0 : -1.0, 0.0, 0.0],
+                profileCurve: [
+                    [0.0, 0.35],
+                    [0.08, 0.35],
+                    [0.12, 0.33],
+                    [0.18, 0.14],
+                    [0.22, 0.04]
+                ],
+                harmonicLobeCount: 7, // 7-spoke forged alloy wheel rim
+                harmonicDepthRatio: 0.25,
+                helixPitchMeters: 0.0
+            });
+        });
+    }
+
     // Kinematics (Structural Trusses & Hydraulic Actuators)
     const kinematics: AdaptiveKinematicLink[] = [];
     for (let k = 0; k < 2; ++k) {
@@ -318,8 +357,18 @@ export function synthesizeAdaptiveHeroObjectContract(
         });
     }
 
-    // Grounding Interface (Skids / Runners)
-    const grounding: AdaptiveGroundingInterface[] = [
+    // Grounding Interface (Wheels vs Skids)
+    const grounding: AdaptiveGroundingInterface[] = isWheeledVehicle ? [
+        {
+            id: 'grounding_multilink_wheels',
+            type: 'MULTILINK_WHEEL',
+            stanceWidthMeters: parseFloat((halfW * 1.85).toFixed(3)),
+            wheelbaseMeters: parseFloat((halfL * 1.45).toFixed(3)),
+            groundClearanceMeters: 0.045, // 45mm race clearance
+            camberAngleDeg: -2.5, // Authentic negative camber for track grip
+            toeAngleDeg: 0.2
+        }
+    ] : [
         {
             id: 'grounding_skids',
             type: 'RUNNER_SKID',
@@ -329,6 +378,34 @@ export function synthesizeAdaptiveHeroObjectContract(
             tubularRadiusMeters: 0.038
         }
     ];
+
+    // Aerodynamic Surfaces (Swan-neck GT wing and front dive planes)
+    const aerodynamics: AdaptiveAerodynamicSurface[] = [];
+    if (/\b(?:wing|spoiler|aero|downforce|gt|racer|formula|canard|splitter|chicane|high-speed)\b/i.test(prompt.toLowerCase())) {
+        aerodynamics.push({
+            id: 'swan_neck_rear_gt_wing',
+            mountPosition: [0.0, halfH * 0.95, -halfL * 0.88],
+            chordRootMeters: 0.38,
+            chordTipMeters: 0.32,
+            spanMeters: parseFloat((halfW * 1.75).toFixed(3)),
+            sweepAngleDeg: 4.5,
+            dihedralAngleDeg: 0.0,
+            incidenceAngleDeg: -12.0,
+            endplateDimensions: [0.42, 0.28]
+        });
+        for (const side of [-1.0, 1.0]) {
+            aerodynamics.push({
+                id: `front_dive_plane_${side > 0 ? 'r' : 'l'}`,
+                mountPosition: [parseFloat((side * halfW * 0.92).toFixed(3)), -halfH * 0.15, halfL * 0.82],
+                chordRootMeters: 0.22,
+                chordTipMeters: 0.14,
+                spanMeters: 0.28,
+                sweepAngleDeg: 28.0,
+                dihedralAngleDeg: 12.0,
+                incidenceAngleDeg: -8.0
+            });
+        }
+    }
 
     // ------------------------------------------------------------------------
     // 3. 10% TERTIARY MICRO-DETAIL
@@ -414,6 +491,7 @@ export function synthesizeAdaptiveHeroObjectContract(
         kinematics,
         propulsion: undefined,
         grounding,
+        aerodynamics: aerodynamics.length > 0 ? aerodynamics : undefined,
         microDetail,
         curveSweeps,
         revolvedHarmonics,

@@ -4,6 +4,7 @@ import { resolveDomainToolPacks } from '../src/node/gemini/domain-tool-packs';
 import { parseOrSynthesizeArtifact } from '../src/node/gemini/artifact-synthesis';
 import { synthesize3DFallback } from '../src/browser/generative-canvas/hooks/sendMessageFallbacks';
 import { synthesizeRawContextual3DScene } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { synthesizeAdaptiveHeroObjectContract } from '../src/common/spatial/adaptive-hero-synthesizer';
 import type { CanvasArtifact, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 
 describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () => {
@@ -220,5 +221,41 @@ describe('3D Staging Intent Routing & Active Scene Preservation Invariants', () 
             expect(data.objects?.some(o => o.content?.durableUri === '/models/race_car.glb')).toBe(true);
             expect(data.objects?.some(o => o.content?.durableUri === '/build/3d-geospatial/central_park_tiles.glb')).toBe(true);
         });
+
+        it('synthesizes hero GT race cars staged in Washington Square Park Arch tiles with 70-20-10 form', () => {
+            const prompt = 'High-speed car race around Washington Square Park Arch with chicane';
+            const scene = synthesizeRawContextual3DScene(prompt);
+
+            expect(scene.title).toContain('Washington Square Park Arch');
+            expect(scene.geoAnchor).toBeDefined();
+            expect(scene.geoAnchor?.landmarkName).toContain('Washington Square Park Arch');
+            expect(scene.geoAnchor?.lat).toBeCloseTo(40.7308, 2);
+            expect(scene.geoAnchor?.lng).toBeCloseTo(-73.9973, 2);
+            expect(scene.renderMode).toBe('clay');
+            expect(scene.environment.ground).toBe(true);
+            expect(scene.objects?.length).toBeGreaterThan(0);
+        });
+
+        it('synthesizes adaptive hero GT racer with 70-20-10 form hierarchy and upright wheels', () => {
+            const prompt = 'High-speed car race around Washington Square Park Arch with chicane';
+            const heroContract = synthesizeAdaptiveHeroObjectContract(prompt);
+
+            // 70% Primary Edifice: Aerodynamic GT proportions
+            expect(heroContract.boundingScaleMeters[2]).toBeGreaterThanOrEqual(4.5); // Length >= 4.5m
+            expect(heroContract.boundingScaleMeters[1]).toBeLessThanOrEqual(1.3);    // Low-slung height <= 1.3m
+            expect(heroContract.primaryHull.stations.length).toBeGreaterThanOrEqual(7);
+
+            // 20% Secondary Articulated Assemblies: Aerodynamics & Grounding
+            expect(heroContract.aerodynamics).toBeDefined();
+            expect(heroContract.aerodynamics?.some(a => a.id.includes('wing'))).toBe(true);
+            expect(heroContract.grounding?.[0].type).toBe('MULTILINK_WHEEL');
+            expect(heroContract.grounding?.[0].camberAngleDeg).toBeLessThan(0); // Negative camber
+
+            // 10% Tertiary Micro-Detail & Differential Operators: 4 upright forged wheel rims
+            const wheelRims = (heroContract.revolvedHarmonics || []).filter(h => h.id.startsWith('wheel_rim'));
+            expect(wheelRims.length).toBe(4);
+            expect(heroContract.materialAttributes?.renderMode).toBe('clay');
+        });
     });
 });
+
